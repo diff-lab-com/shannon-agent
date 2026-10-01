@@ -1748,6 +1748,7 @@
   "chat.attach.reason.unresolvable": "文件无法读取（不存在或不可读）",
   "chat.attach.reason.tooLarge": "超过该类型文件的大小上限",
   "chat.attach.reason.noWorkingDir": "尚未设置工作目录——请先在设置中选择",
+  "chat.attach.reason.unsupportedType": "该图片格式不会发送给模型（支持：PNG、JPG、GIF、WebP）",
   "chat.attach.issue.tooltip": "发送时将被拒绝：{reason}",
   "chat.attach.extraction.office": "已提取 {total} 段，内联前 {inlined} 段",
   "chat.attach.extraction.pdfTruncated": "PDF 只读前 50KiB，模型可续读缓存全文",

@@ -1729,6 +1729,7 @@
   "chat.attach.reason.unresolvable": "файл не удалось прочитать (отсутствует или недоступен)",
   "chat.attach.reason.tooLarge": "превышен лимит размера для этого типа файлов",
   "chat.attach.reason.noWorkingDir": "рабочая директория не задана — сначала выберите её в настройках",
+  "chat.attach.reason.unsupportedType": "этот формат изображения не отправляется модели (поддерживаются: PNG, JPG, GIF, WebP)",
   "chat.attach.issue.tooltip": "Будет отклонено при отправке: {reason}",
   "chat.attach.extraction.office": "Извлечено разделов: {total}, встроено первых: {inlined}",
   "chat.attach.extraction.pdfTruncated": "PDF встраивает только первые 50 КиБ — модель может дочитать остальное из кэша извлечения",

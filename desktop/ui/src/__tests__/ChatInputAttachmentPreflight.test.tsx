@@ -111,6 +111,34 @@ describe('ChatInput — attachment preflight flagging (G3 P0-3)', () => {
     expect(screen.getByText('notes.txt')).toBeInTheDocument()
   })
 
+  it('flags a dragged-in svg/bmp chip as unsupported — the model never sees it (R2-P1-2)', async () => {
+    // Drag-drop bypasses the picker's image filter, so a .svg/.bmp lands on
+    // the chip list unfiltered. The backend preflight now returns the same
+    // `unsupported_type` verdict its send gate enforces, and the chip says
+    // out loud that the content will not reach the model.
+    vi.mocked(api.checkAttachmentPaths).mockResolvedValue([
+      { path: '/tmp/project/logo.svg', ok: false, reason: 'unsupported_type' },
+      { path: '/tmp/project/scan.bmp', ok: false, reason: 'unsupported_type' },
+      { path: '/tmp/project/photo.png', ok: true },
+    ])
+    const onAttach = vi.fn()
+    renderChatInput({
+      attachedFiles: ['/tmp/project/logo.svg', '/tmp/project/scan.bmp', '/tmp/project/photo.png'],
+      onAttach,
+    })
+    await dropPaths(
+      ['/tmp/project/logo.svg', '/tmp/project/scan.bmp', '/tmp/project/photo.png'],
+      onAttach,
+    )
+
+    const warnings = await screen.findAllByTestId('attachment-chip-issue')
+    expect(warnings).toHaveLength(2)
+    // The tooltip carries the honest "will not be sent to the model" clause.
+    expect(warnings[0]).toHaveAttribute('title', expect.stringContaining('image format'))
+    expect(warnings[0]).toHaveAttribute('title', expect.stringContaining('PNG'))
+    expect(screen.getByText('photo.png')).toBeInTheDocument()
+  })
+
   it('shows the no-working-dir banner with a /settings deep link when the domain is undefined', async () => {
     vi.mocked(api.checkAttachmentPaths).mockResolvedValue([
       { path: '/home/u/Downloads/report.pdf', ok: false, reason: 'no_working_dir' },

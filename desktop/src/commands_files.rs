@@ -530,6 +530,14 @@ fn classify_attachment_path(
     let Ok(meta) = std::fs::metadata(&canonical) else {
         return Some(RejectedAttachmentReason::Unresolvable);
     };
+    // R2-P1-2 attachment honesty — same verdict as the send gate
+    // (`collect_attachments`): image formats outside the vision whitelist
+    // (svg/bmp/…) are flagged here BEFORE the send, so a dragged-in .svg
+    // can never read as "the model will see this" while the multimodal path
+    // silently drops its content.
+    if crate::commands::is_unsupported_image_extension(&canonical.to_string_lossy()) {
+        return Some(RejectedAttachmentReason::UnsupportedType);
+    }
     // Same size caps as the send path (see `collect_attachments`), with the
     // same image detection so the preflight never disagrees with the gate
     // that fires on send.
@@ -1570,6 +1578,45 @@ mod tests {
             checks[0].reason,
             Some(crate::commands::RejectedAttachmentReason::TooLarge)
         );
+    }
+
+    // ── R2-P1-2: preflight flags unsupported image types like the send path ──
+
+    #[test]
+    fn preflight_flags_unsupported_image_types_like_the_send_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let svg = dir.path().join("logo.svg");
+        std::fs::write(&svg, "<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
+        let bmp = dir.path().join("scan.bmp");
+        std::fs::write(&bmp, b"BMfake").unwrap();
+        let png = dir.path().join("real.png");
+        std::fs::write(&png, b"pretend-png").unwrap();
+
+        let checks = check_attachment_paths_inner(
+            Some(dir.path().to_string_lossy().into_owned()),
+            vec![
+                svg.to_string_lossy().into_owned(),
+                bmp.to_string_lossy().into_owned(),
+                png.to_string_lossy().into_owned(),
+            ],
+        );
+
+        // svg/bmp: the chip is flagged with the SAME reason the send gate
+        // reports — a dragged-in file can never look "model-visible" while
+        // the multimodal path drops it.
+        assert!(!checks[0].ok);
+        assert_eq!(
+            checks[0].reason,
+            Some(crate::commands::RejectedAttachmentReason::UnsupportedType)
+        );
+        assert!(!checks[1].ok);
+        assert_eq!(
+            checks[1].reason,
+            Some(crate::commands::RejectedAttachmentReason::UnsupportedType)
+        );
+        // Vision-whitelisted formats stay clean.
+        assert!(checks[2].ok, "png must preflight clean");
+        assert_eq!(checks[2].reason, None);
     }
 
     // ── G3b P1-4: preflight extraction summaries ────────────────────────

@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
-import ChatInput, { UNPARSED_EXTENSIONS, pathExtension } from '@/components/chat/ChatInput'
+import ChatInput, { UNPARSED_EXTENSIONS, IMAGE_EXTENSIONS, pathExtension } from '@/components/chat/ChatInput'
 import type * as ReactRouterDom from 'react-router-dom'
 import type { WebviewFileDropEvent } from '@/lib/tauri-api'
 
@@ -85,6 +85,19 @@ describe('ChatInput — unsupported attachment notice (A1a)', () => {
     // Parsed formats and everything else must NOT be flagged.
     for (const ext of ['docx', 'xlsx', 'pptx', 'ods', 'csv', 'pdf', 'txt', 'md', 'png']) {
       expect(UNPARSED_EXTENSIONS.has(ext), ext).toBe(false)
+    }
+  })
+
+  it('picker advertises only the vision-supported image formats (R2-P1-2)', () => {
+    // The backend's multimodal whitelist is png/jpeg/gif/webp (commands.rs
+    // is_vision_image_mime). bmp/svg sat in the picker filter while the
+    // backend dropped their content from the image blocks with no rejected
+    // receipt — the filter must never advertise a format the model cannot
+    // see. Drag-drop bypasses this set by design; the backend preflight
+    // badge + send receipt catch those.
+    expect([...IMAGE_EXTENSIONS].sort()).toEqual(['gif', 'jpeg', 'jpg', 'png', 'webp'])
+    for (const ext of ['svg', 'bmp', 'ico', 'tif', 'tiff', 'heic', 'heif', 'avif']) {
+      expect(IMAGE_EXTENSIONS.has(ext), ext).toBe(false)
     }
   })
 

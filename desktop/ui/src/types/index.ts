@@ -677,12 +677,16 @@ export interface TranscriptionResult {
  * `RejectedAttachmentReason` (snake_case serde tags). `no_working_dir`
  * comes from the `check_attachment_paths` preflight only; the send path
  * hard-rejects that state with an explicit error instead.
+ * `unsupported_type` (R2-P1-2) marks image formats the multimodal
+ * whitelist never sends (svg/bmp/…) — flagged by the preflight badge and
+ * refused with a receipt on send, never silently dropped.
  */
 export type RejectedAttachmentReason =
   | 'out_of_working_dir'
   | 'unresolvable'
   | 'too_large'
   | 'no_working_dir'
+  | 'unsupported_type'
 
 /** P0-3 — one attachment the send pipeline refused (partial success). */
 export interface RejectedAttachment {

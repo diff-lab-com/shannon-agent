@@ -569,6 +569,47 @@ pub enum RejectedAttachmentReason {
     /// configured, so the attachment domain is undefined. The send path
     /// hard-rejects with an explicit error instead of using this variant.
     NoWorkingDir,
+    /// R2-P1-2 attachment honesty — an image format the multimodal whitelist
+    /// never forwards (svg/bmp/tiff/…; see
+    /// [`is_unsupported_image_extension`]). Left alone, the file attached as
+    /// a display-only chip while its content silently never reached the
+    /// model — the exact "user thinks the model saw the picture" lie the
+    /// honesty contract forbids, so both gates refuse it instead.
+    UnsupportedType,
+}
+
+/// Image extensions the OS and file pickers treat as pictures but the vision
+/// send whitelist ([`is_vision_image_mime`]) never forwards to the model —
+/// svg (XML, not a raster the providers accept) plus the raster formats
+/// outside png/jpeg/gif/webp. One table shared by the send gate
+/// (`collect_attachments`) and the preflight
+/// (`classify_attachment_path`) so the two can never disagree about a path.
+pub(crate) const UNSUPPORTED_IMAGE_EXTENSIONS: &[&str] =
+    &["svg", "bmp", "ico", "tif", "tiff", "avif", "heic", "heif"];
+
+/// The exact mime set the multimodal path turns into image blocks. Single
+/// source of truth: `send_message`'s `image_blocks` builder filters with it
+/// and both attachment gates refuse everything image-like outside it.
+pub(crate) fn is_vision_image_mime(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    )
+}
+
+/// True when `path`'s extension names an image format the vision whitelist
+/// does not support — a file the user plausibly expects the model to see
+/// but that would otherwise ride the chat as a display-only chip. Matching
+/// is ASCII-case-insensitive, same as `detect_media_type`.
+pub(crate) fn is_unsupported_image_extension(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| {
+            UNSUPPORTED_IMAGE_EXTENSIONS
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        })
 }
 
 /// P0-3 — one attachment the send pipeline refused, reported to the frontend
@@ -930,6 +971,19 @@ pub(crate) fn collect_attachments(
             });
             continue;
         };
+        // R2-P1-2 attachment honesty — image formats outside the vision
+        // whitelist (svg/bmp/tiff/…) are refused here, with the same
+        // `UnsupportedType` verdict the preflight shows at attach time.
+        // Collecting them would put a chip on the message whose content
+        // never reaches the model; the old image-blocks filter below then
+        // dropped them silently, with no rejected receipt at all.
+        if is_unsupported_image_extension(&canonical_str) {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::UnsupportedType,
+            });
+            continue;
+        }
         // Hard size caps: images over the shared 10 MiB limit and PDFs over
         // 100 MiB are refused per-file. The metadata check fires before any
         // read; the post-read base64 gate below re-checks what was actually
@@ -1099,8 +1153,12 @@ pub async fn send_message(
     // Route image attachments into the multimodal query path so the model
     // actually sees them. The `FileAttachment`s stored on the ChatMessage
     // below are display-only (chat history / UI chips); only these content
-    // blocks reach the LLM. SVG is excluded — vision providers accept
-    // png/jpeg/gif/webp only.
+    // blocks reach the LLM. R2-P1-2: formats outside the whitelist are no
+    // longer silently filtered here — `collect_attachments` refuses them up
+    // front with a reported `UnsupportedType` receipt (svg/bmp and friends,
+    // see `is_unsupported_image_extension`). This filter stays as
+    // defense-in-depth keyed on the SAME `is_vision_image_mime` table, so
+    // the two can never drift apart again.
     let image_blocks: Vec<shannon_engine::api::ContentBlock> = attachments
         .as_ref()
         .map(|list| {
@@ -1108,10 +1166,7 @@ pub async fn send_message(
                 .filter_map(|att| {
                     let b64 = att.base64_data.as_ref()?;
                     let media_type = att.media_type.as_deref()?;
-                    if !matches!(
-                        media_type,
-                        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
-                    ) {
+                    if !is_vision_image_mime(media_type) {
                         return None;
                     }
                     Some(shannon_engine::api::ContentBlock::Image {
@@ -3204,6 +3259,87 @@ fn collect_attachments_reports_oversized_image_per_file() {
     assert!(collected.is_empty(), "oversized image must not attach");
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0].reason, RejectedAttachmentReason::TooLarge);
+}
+
+// ── R2-P1-2: attachment honesty for svg/bmp-class formats ───────────────
+
+#[test]
+fn collect_attachments_refuses_unsupported_image_types() {
+    let tmp = tempfile::tempdir().unwrap();
+    let svg = tmp.path().join("logo.svg");
+    std::fs::write(&svg, "<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
+    let bmp = tmp.path().join("scan.BMP");
+    std::fs::write(&bmp, b"BMfake").unwrap();
+    let png = tmp.path().join("real.png");
+    std::fs::write(
+        &png,
+        [
+            0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, // magic + tail
+            0, 0, 0, 13, b'I', b'H', b'D', b'R',
+        ],
+    )
+    .unwrap();
+
+    let (collected, rejected) = collect_attachments(
+        &[
+            svg.to_string_lossy().into_owned(),
+            bmp.to_string_lossy().into_owned(),
+            png.to_string_lossy().into_owned(),
+        ],
+        tmp.path(),
+    );
+
+    // Only the vision-whitelisted format survives…
+    assert_eq!(collected.len(), 1, "png must still attach");
+    assert_eq!(collected[0].name, "real.png");
+    // …and BOTH unsupported formats come back with an explicit receipt —
+    // the old behavior collected them and dropped them from the image
+    // blocks silently (no rejected_attachments entry at all).
+    assert_eq!(rejected.len(), 2, "svg + bmp must be reported");
+    assert_eq!(rejected[0].reason, RejectedAttachmentReason::UnsupportedType);
+    assert!(rejected[0].path.ends_with("logo.svg"));
+    assert_eq!(rejected[1].reason, RejectedAttachmentReason::UnsupportedType);
+    assert!(rejected[1].path.ends_with("scan.BMP"));
+}
+
+#[test]
+fn unsupported_image_predicate_and_vision_mime_share_one_table() {
+    // Case-insensitive on the extension (same convention as
+    // `detect_media_type`), dotless names never match.
+    assert!(is_unsupported_image_extension("a/icon.svg"));
+    assert!(is_unsupported_image_extension("a/icon.SVG"));
+    assert!(is_unsupported_image_extension("a/photo.bmp"));
+    assert!(is_unsupported_image_extension("a/photo.heic"));
+    assert!(!is_unsupported_image_extension("a/photo.png"));
+    assert!(!is_unsupported_image_extension("a/photo.jpeg"));
+    assert!(!is_unsupported_image_extension("notes.txt"));
+    assert!(!is_unsupported_image_extension("noext"));
+
+    // The image-blocks whitelist and the extension table must agree on the
+    // formats both accept: every detectable vision mime is a vision mime…
+    for (ext, mime) in [
+        ("png", "image/png"),
+        ("jpg", "image/jpeg"),
+        ("gif", "image/gif"),
+        ("webp", "image/webp"),
+    ] {
+        assert!(
+            is_vision_image_mime(mime),
+            "{ext} must stay vision-supported"
+        );
+        assert!(
+            !is_unsupported_image_extension(&format!("f.{ext}")),
+            "{ext} must not be flagged unsupported"
+        );
+    }
+    // …and svg's mime (the one `detect_media_type` knows) is NOT vision.
+    assert!(!is_vision_image_mime("image/svg+xml"));
+}
+
+#[test]
+fn unsupported_type_reason_serializes_as_snake_case_tag() {
+    let json = serde_json::to_string(&RejectedAttachmentReason::UnsupportedType).unwrap();
+    assert_eq!(json, "\"unsupported_type\"");
 }
 
 #[test]

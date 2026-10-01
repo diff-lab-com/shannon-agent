@@ -32,7 +32,16 @@ import { cn } from '@/lib/utils'
 import { modelPickerMeta } from '@/components/settings/models-settings/types'
 import { APPROVAL_MODES, approvalModeOption } from '@/lib/approvalModes'
 
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
+/**
+ * R2-P1-2 attachment honesty — exactly the image formats the backend's
+ * multimodal whitelist turns into image blocks (png/jpeg/gif/webp; see
+ * `is_vision_image_mime` in commands.rs). bmp/svg used to sit here too, so
+ * the picker advertised formats the model never sees: the file attached,
+ * the backend dropped it from the image blocks with no rejected receipt.
+ * The drag-drop and paste paths bypass this filter by design — the backend
+ * gate + preflight badge (`unsupported_type`) catch those.
+ */
+export const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp'])
 
 /**
  * Office Wave 1 A1a, narrowed by G3 P1-5 — extensions whose content the
