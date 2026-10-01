@@ -516,11 +516,14 @@ function ComposerRetryButton() {
     return null
   }, [messages])
   if (!lastUser) return null
+  // A-3 fix: the retry resend carries the last user message's attachment
+  // paths — previously it re-sent the text only and silently dropped them.
+  const paths = (lastUser.file_attachments ?? []).map(a => a.path)
   return (
     <Button
       variant="ghost"
       className="mt-sm text-error hover:bg-error/10 text-label-md cursor-pointer"
-      onClick={() => void sendMessage(lastUser.content)}
+      onClick={() => void sendMessage(lastUser.content, paths.length > 0 ? paths : undefined)}
     >
       {t('chat.error.retry')}
     </Button>

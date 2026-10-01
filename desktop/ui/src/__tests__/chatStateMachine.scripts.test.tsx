@@ -209,9 +209,7 @@ describe('ChatScript fixtures — YAML ↔ JSON two-layer parity (R2 §C)', () =
     })
   }
 
-  it('knownIssue markers survive the YAML→JSON round-trip (A-3 / A-19 anchors)', () => {
-    const fail = loadFixture('mid-stream-fail')
-    expect(fail.turns[1]!.script[0]!.knownIssue).toBe('A-3')
+  it('knownIssue markers survive the YAML→JSON round-trip (A-19 anchor; A-3 marker removed by the R4 attachment fix)', () => {
     const cancel = loadFixture('cancel-text-stream')
     expect(cancel.onCancel?.emit[0]!.knownIssue).toBe('A-19')
   })
@@ -436,7 +434,7 @@ describe('L1 state machine — failure journeys (#5)', () => {
     expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
   })
 
-  it('mid-stream-fail: "other" classification + retry resends TEXT only (A-3 anchored)', async () => {
+  it('mid-stream-fail: "other" classification + retry preserves attachments and replays the reply (A-3 fixed)', async () => {
     const script = loadFixture('mid-stream-fail')
     const h = await makeHarness()
     h.player.load(script)
@@ -460,25 +458,40 @@ describe('L1 state machine — failure journeys (#5)', () => {
     expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
     expect(h.player.snapshot().sentTurns).toBe(1)
 
-    // Retry — exactly what ComposerRetryButton does: sendMessage(lastUser
-    // content) with NO attachments. A-3 current behavior: the attachment is
-    // DROPPED. Flip this block to "attachments preserved" when R4 lands and
-    // remove the knownIssue marker on the retry turn in the YAML.
-    await act(async () => { await h.result.current.sendMessage(script.turns[0]!.user) })
+    // Retry — exactly what ComposerRetryButton does: resend the last user
+    // message WITH its attachment paths. A-3 fixed: the attachment survives.
+    await act(async () => {
+      await h.result.current.sendMessage(script.turns[0]!.user, script.turns[0]!.attachments)
+    })
     expect(api.sendMessage).toHaveBeenLastCalledWith(
       script.turns[0]!.user,
-      undefined,
+      ['/Users/demo/Downloads/story-notes.md'],
       undefined,
       SESSION_A,
     )
     await act(async () => {
-      expect(h.player.handleSendMessage({ sessionId: SESSION_A })).toEqual({ query_id: 'q-1' })
+      expect(h.player.handleSendMessage({
+        sessionId: SESSION_A,
+        message: script.turns[0]!.user,
+        filePaths: script.turns[0]!.attachments,
+      })).toEqual({ query_id: 'q-1' })
     })
-    await drainWaits(h.player)
-    // The retry turn is consumed (its knownIssue'd chunk step is skipped —
-    // the player annotates and settles it immediately).
+    await awaitSettled(h)
+    // The retried turn replays its scripted chunk step (the knownIssue
+    // marker is gone) and commits the reply; the wire log carries the
+    // preserved attachment.
     expect(h.player.snapshot().sentTurns).toBe(2)
+    expect(h.player.snapshot().sends[1]!.attachments).toEqual(['/Users/demo/Downloads/story-notes.md'])
     expect(h.result.current.error).toBeNull()
+    // A-4 rides along: the optimistic retry bubble carries the attachment in
+    // the backend ChatMessage's wire shape.
+    const retryUser = h.result.current.messages.filter(m => m.role === 'user').at(-1)
+    expect(retryUser?.file_attachments).toEqual([
+      { name: 'story-notes.md', path: '/Users/demo/Downloads/story-notes.md', size: 0 },
+    ])
+    const assistants = h.result.current.messages.filter(m => m.role === 'assistant')
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0]!.content).toBe(textChunksOf(script, 1).join(''))
   })
 })
 
@@ -514,7 +527,7 @@ describe('L1 state machine — cancel-text-stream (journey #6)', () => {
 // ───────────────────────── R3 journeys (#7 – #14) ─────────────────────────
 
 describe('L1 state machine — budget-exceeded (journey #7)', () => {
-  it('budget:exceeded auto-cancels the run; Continue once resends with budgetBypass and drops attachments (A-2 anchored)', async () => {
+  it('budget:exceeded auto-cancels the run; Continue once resends with budgetBypass and the original attachments (A-2 fixed)', async () => {
     const script = loadFixture('budget-exceeded')
     const h = await makeHarness()
     h.player.load(script)
@@ -536,32 +549,36 @@ describe('L1 state machine — budget-exceeded (journey #7)', () => {
     expect(h.player.snapshot().sentTurns).toBe(1)
 
     // "Continue once" — exactly what Chat.tsx's continuePastBudget does:
-    // resend the last user message with the bypass flag. The harness passes
-    // the same invoke args the real send_message carries.
+    // resend the last user message with the bypass flag AND its attachment
+    // paths (the seeded user turn carries report-draft.md). The harness
+    // passes the same invoke args the real send_message carries.
     await act(async () => {
-      await h.result.current.sendMessage(script.turns[0]!.user, undefined, { budgetBypass: true })
+      await h.result.current.sendMessage(
+        script.turns[0]!.user,
+        ['/Users/demo/Downloads/report-draft.md'],
+        { budgetBypass: true },
+      )
     })
     await act(async () => {
       expect(h.player.handleSendMessage({
         sessionId: SESSION_A,
         message: script.turns[0]!.user,
-        filePaths: null,
+        filePaths: ['/Users/demo/Downloads/report-draft.md'],
         budgetBypass: true,
       })).toEqual({ query_id: 'q-1' })
     })
     await awaitSettled(h)
     const sends = h.player.snapshot().sends
     expect(sends[1]).toMatchObject({ turnIndex: 1, budgetBypass: true, sessionId: SESSION_A })
-    // A-2 current behavior: the budget-bypass resend DROPS the original
-    // message's attachments (seeded user message carries one). Flip to
-    // `attachments: ['/Users/demo/Downloads/report-draft.md']` when R4 lands.
-    expect(sends[1]!.attachments).toBeNull()
+    // A-2 fixed: the budget-bypass resend preserves the original message's
+    // attachments.
+    expect(sends[1]!.attachments).toEqual(['/Users/demo/Downloads/report-draft.md'])
     expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(1)
   })
 })
 
 describe('L1 state machine — attachments (journey #8)', () => {
-  it('sends ride attachment paths; the turn returns rejected receipts (P0 anchor) and the optimistic bubble stays bare (A-4 anchored)', async () => {
+  it('sends ride attachment paths; the turn returns rejected receipts (P0 anchor) and the optimistic bubble carries the attachment (A-4 fixed)', async () => {
     const script = loadFixture('attachments')
     const outsidePath = script.turns[0]!.rejectedAttachments![0]!.path
     const h = await makeHarness()
@@ -588,11 +605,13 @@ describe('L1 state machine — attachments (journey #8)', () => {
       rejected_attachments: [{ path: outsidePath, reason: 'out_of_working_dir' }],
     })
     await awaitSettled(h)
-    // A-4 current behavior: the optimistic user message carries NO
-    // file_attachments — attachment previews only come back on reload.
-    // Flip to `user.file_attachments` being present when R4 lands.
+    // A-4 fixed: the optimistic user message carries file_attachments in the
+    // backend ChatMessage's wire shape (name/path/size) — previews render
+    // immediately, no reload needed. Size is the pre-send placeholder.
     const user = h.result.current.messages.find(m => m.role === 'user')
-    expect(user?.file_attachments).toBeUndefined()
+    expect(user?.file_attachments).toEqual([
+      { name: 'outside-notes.md', path: outsidePath, size: 0 },
+    ])
     expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(1)
   })
 })

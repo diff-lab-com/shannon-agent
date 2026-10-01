@@ -13,8 +13,9 @@
 // stays null and the fallback ("resend the LAST recorded user turn") is
 // the delivery path. Every copy assertion references en.json by key.
 //
-// Finding anchors: A-2 (RESOLVED on dev — see the annotation below) and the
-// R2 walkthrough's budget-continuation finding.
+// Finding anchors: A-2 (RESOLVED on dev — see the annotation below; the
+// draft-restored attachment below keeps the forwarding a live, failing-capable
+// regression anchor) and the R2 walkthrough's budget-continuation finding.
 //
 // ─── Ledger issue CHAT-TEST-1 (裁定修复波) ─────────────────────────────────
 // Five consecutive CI rounds on GitHub 2-core runners (incl. jobs
@@ -48,6 +49,12 @@ import type { ChatScript } from '../src/lib/mock/scripted/schema'
 
 const script = readChatScript('budget-exceeded') as ChatScript
 
+// The seeded user turn's attachment — the A-2 regression payload. It reaches
+// the turn-0 send through the same draft-restore path the attachments
+// journey uses (native file dialogs aren't drivable in the harness).
+const REPORT_PATH = script.seed?.sessions?.[0]?.messages?.[0]?.attachments?.[0] ?? ''
+const DRAFT_KEY = 'shannon.draft.script-sess-budget'
+
 // en.json read from disk (same pattern as scriptLoader — import-safe outside
 // Vite). Flat dotted keys: the assertion IS the key→copy mapping, so a copy
 // drift fails by name instead of silently passing on a stale literal.
@@ -71,26 +78,43 @@ const ACTIONS = [
 const EXCEEDED_BODY_SUFFIX = en['budget.exceeded.body'].split('{budget}')[1]!.trim()
 
 test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
-  test('exceeded banner three actions, auto-cancel at the cap, Continue once rides budgetBypass', async ({ page }) => {
+  test('exceeded banner three actions, auto-cancel at the cap, Continue once rides budgetBypass with the attachments', async ({ page }) => {
     test.setTimeout(60_000)
     annotateKnownIssues(test.info(), {
       'A-2': 'RESOLVED upstream (dev d3d40452): Chat.tsx continuePastBudget\'s mid-turn fallback '
         + 'now forwards the last RECORDED user turn\'s file_attachments with the bypass resend. '
-        + 'This scenario\'s final recorded turn is the just-cancelled attachment-less send, so '
-        + 'the wire assertion below stays attachments === null (nothing to forward — not a '
-        + 'drop), and sends[1].message pins the resend-the-LAST-recorded-turn semantics.',
+        + 'This scenario keeps that forwarding a live anchor: the turn-0 send goes out WITH the '
+        + 'draft-restored chip, so the last recorded turn carries it and the wire assertion below '
+        + 'pins sends[1].attachments === [REPORT_PATH] — which additionally requires the '
+        + 'optimistic append to carry file_attachments (A-4).',
     })
     const chat = new ChatPage(page)
+    // Pre-seed the session draft with the attachment (plus the turn-0 text):
+    // opening the session restores the chip, so the budget-blocked send goes
+    // out WITH the attachment and "Continue once" must preserve it.
+    await page.addInitScript(([key, path, text]) => {
+      localStorage.setItem(key, JSON.stringify({ text, attachments: [path], updatedAt: Date.now() }))
+    }, [DRAFT_KEY, REPORT_PATH, script.turns[0]!.user] as const)
     await loadChatScript(page, 'budget-exceeded', test.info())
 
     // Open the seeded session: the banner re-derives from the persisted pair
     // (get_session_budget 5 / get_session_usage 6.4) without any event.
-    // Same row-click-swallow guard as cancel-matrix's openSession — a click
-    // landing during hydration switches nothing; retry until it does.
+    // The Chat page must be mounted BEFORE the row click (the draft-restore
+    // effect keys on the visible-session CHANGE — a click landing before the
+    // page mounted leaves the restore effect nothing to observe), and the
+    // click itself needs the row-click-swallow guard (same as cancel-matrix's
+    // openSession — a click landing during hydration switches nothing; retry
+    // until it does).
+    await expect(chat.composer()).toBeVisible({ timeout: 10_000 })
     await expect(async () => {
       await page.getByTestId('desktop-session-row-script-sess-budget').click()
       await expect(page.getByRole('heading', { name: 'Over budget' })).toBeVisible()
     }).toPass({ timeout: 15_000 })
+
+    // The draft-restore put the attachment chip back into the composer —
+    // the turn-0 send carries it (wire proof below), which is exactly the
+    // message "Continue once" will have to preserve.
+    await expect(page.getByRole('button', { name: `Remove ${REPORT_PATH.split('/').pop()}` })).toBeVisible({ timeout: 10_000 })
 
     // ── CI-must-pass part 1: banner presence via the exceeded-only body. ──
     // VARIANT ANCHOR (CI fix): the $-body text alone is ambiguous —
@@ -123,6 +147,11 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     // Seeded history (2) + the new user bubble; cancelled commits no reply.
     await expect(chat.bubbles()).toHaveCount(3)
     await expect(page.getByRole('img', { name: 'Last run failed' })).toHaveCount(0)
+    // Wire proof: the blocked turn went out WITH the draft-restored chip.
+    expect((await mockSnapshot(page)).sends[0]).toMatchObject({
+      turnIndex: 0,
+      attachments: [REPORT_PATH],
+    })
 
     // ── Forensics (CHAT-TEST-1) — kept from the round-4 diagnostics. ──
     // Dumps the on-page state (alert bodies, dialog open/connect state,
@@ -220,7 +249,8 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     // Continue once (the 'last-message' label — see the header): the bar
     // clears, the fallback resends the LAST RECORDED user turn with the
     // bypass flag — the snapshot proves the wire args, the resend target,
-    // and the (vacuously empty) attachment shape.
+    // and the forwarded attachment (A-2's preservation, upstream since
+    // d3d40452).
     await actionButtons.filter({ hasText: en['budget.exceeded.continueLast'] }).click()
     await expect(banner).toHaveCount(0)
     const snapshot = await mockSnapshot(page)
@@ -230,7 +260,11 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
       // contract's "never replay an earlier turn" pin.
       message: script.turns[0]!.user,
       budgetBypass: true,
-      attachments: null, // nothing to forward — A-2 resolved upstream, see the annotation
+      // A-2 positive pin (upstream forwarding): the last recorded turn is the
+      // just-cancelled draft-RESTORED send, so its attachment must ride the
+      // bypass resend. dev d3d40452 forwards it; the optimistic append
+      // carrying file_attachments (A-4) is what makes it forwardable.
+      attachments: [REPORT_PATH],
       sessionId: 'script-sess-budget',
     })
     // The bypass turn streams to completion.

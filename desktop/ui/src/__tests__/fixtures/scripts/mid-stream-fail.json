@@ -1,6 +1,6 @@
 {
   "name": "mid-stream-fail",
-  "description": "流中失败 — 横幅 + Retry → 重发（A-3 附件丢失现状锚定）→ 会话继续",
+  "description": "流中失败 — 横幅 + Retry → 重发（A-3 已修复：附件保留）→ 会话继续",
   "seed": {
     "config": {
       "hasKey": true
@@ -43,9 +43,8 @@
         {
           "event": "query:text",
           "chunks": [
-            "（A-3 翻转后此段恢复）重试后的流式回复"
-          ],
-          "knownIssue": "A-3"
+            "重试后的流式回复"
+          ]
         }
       ]
     }

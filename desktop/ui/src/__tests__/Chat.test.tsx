@@ -309,7 +309,9 @@ describe('Chat page', () => {
     renderChat()
     fireEvent.click(screen.getByText('Retry'))
     expect(ctx.sendMessage).toHaveBeenCalledTimes(1)
-    expect(ctx.sendMessage).toHaveBeenCalledWith('failing question')
+    // A-3 fix: the retry carries the last user message's attachment paths —
+    // `undefined` here (no attachments on that message), never a dropped set.
+    expect(ctx.sendMessage).toHaveBeenCalledWith('failing question', undefined)
   })
 
   it('retry is hidden when there is no previous user message to resend', () => {

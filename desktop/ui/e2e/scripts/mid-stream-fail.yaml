@@ -2,10 +2,17 @@
 #
 # 第一轮：2 个分片后 query:failed (error_kind:'other') → 普通错误横幅 +
 # ComposerRetryButton、无 ghost bubble。点击 Retry → send_message 再次被
-# 调用（snapshot().sentTurns === 2 断言）→ 第二轮消费（附件丢弃 = A-3 现状，
-# 见下方锚点）。断言在 spec（chat-script.errors.spec.ts）。
+# 调用（snapshot().sentTurns === 2 断言）→ 第二轮消费。断言在 spec
+# （chat-script.errors.spec.ts）。
+#
+# 草稿预置附件（spec 用 addInitScript 写 localStorage `shannon.draft.<id>`，
+# 同 attachments journey）→ 第一轮发送携带附件，Retry 重发必须保留它。
+#
+# A-3 已修复（R4 组1）：Retry 重发保留最后一条用户消息的附件——第二轮的
+# knownIssue 标记已移除（chunk 步骤恢复执行），spec/L1 断言已翻转为
+# 「重发的 send_message 携带原附件路径 + 重试轮正常播放回复」。
 name: mid-stream-fail
-description: 流中失败 — 横幅 + Retry → 重发（A-3 附件丢失现状锚定）→ 会话继续
+description: 流中失败 — 横幅 + Retry → 重发（A-3 已修复：附件保留）→ 会话继续
 seed:
   config:
     hasKey: true
@@ -27,13 +34,9 @@ turns:
         payload:
           error: "upstream connection reset while streaming"
           error_kind: "other"
-  # Retry 轮：ComposerRetryButton 只重发最后一条用户文本。现状 bug A-3
-  # （retry 丢弃附件）：这里用 knownIssue 标记锚定——R4 实现「retry 保留
-  # 附件」后，移除下方 knownIssue 标记（本 chunk 步骤恢复执行），并把
-  # spec/L1 断言翻转为「重发的 send_message 携带原附件路径」。
+  # Retry 轮：ComposerRetryButton 重发最后一条用户消息 + 其附件路径。
   - user: "给我讲一个关于海的故事"
     script:
       - event: query:text
         chunks:
-          - "（A-3 翻转后此段恢复）重试后的流式回复"
-        knownIssue: "A-3"
+          - "重试后的流式回复"
