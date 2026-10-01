@@ -571,7 +571,7 @@ pub enum RejectedAttachmentReason {
     NoWorkingDir,
     /// R2-P1-2 attachment honesty — an image format the multimodal whitelist
     /// never forwards (svg/bmp/tiff/…; see
-    /// [`is_unsupported_image_extension`]). Left alone, the file attached as
+    /// the private `is_unsupported_image_extension`). Left alone, the file attached as
     /// a display-only chip while its content silently never reached the
     /// model — the exact "user thinks the model saw the picture" lie the
     /// honesty contract forbids, so both gates refuse it instead.
