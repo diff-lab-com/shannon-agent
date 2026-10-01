@@ -100,6 +100,12 @@ pub struct AppState {
     /// map edits + one small atomic file write, no `await` inside.
     pub(crate) session_overrides:
         std::sync::Mutex<crate::session_override_store::SessionOverrideSidecar>,
+    /// P2-5 — durable "temporary chat" sidecar
+    /// (`~/.shannon/desktop/session-memory-bypass.json`). Same load/prune/
+    /// hydrate/write-through contract as `session_overrides`; see
+    /// [`crate::session_memory_bypass`].
+    pub(crate) session_memory_bypass:
+        std::sync::Mutex<crate::session_memory_bypass::SessionMemoryBypassSidecar>,
     /// LLM client config — used to build clients on demand. P1.2-B:
     /// this is the single source of truth for the active `model` /
     /// `provider`; the legacy `Arc<Mutex<String>>` mirrors were
@@ -582,10 +588,28 @@ impl AppState {
             }
             override_sidecar.apply_to_registry(&registry);
         }
+        // P2-5 — same load/prune/hydrate for the "temporary chat" flags.
+        let mut memory_bypass_sidecar =
+            crate::session_memory_bypass::SessionMemoryBypassSidecar::load_default();
+        if !memory_bypass_sidecar.is_empty() {
+            let sessions_dir = state_manager.sessions_dir().to_path_buf();
+            let pruned = memory_bypass_sidecar.prune(|id| {
+                shannon_core::session_log::session_log_container_path(&sessions_dir, id).exists()
+            });
+            if pruned > 0 {
+                tracing::info!(
+                    pruned,
+                    kept = memory_bypass_sidecar.len(),
+                    "pruned session memory bypass flags for deleted sessions"
+                );
+            }
+            memory_bypass_sidecar.apply_to_registry(&registry);
+        }
 
         Self {
             registry,
             session_overrides: std::sync::Mutex::new(override_sidecar),
+            session_memory_bypass: std::sync::Mutex::new(memory_bypass_sidecar),
             client_config: Arc::new(RwLock::new(client_config)),
             agent_tool_context: agent_context_handle,
             provider_store: Arc::new(tokio::sync::Mutex::new(provider_store)),
@@ -1181,9 +1205,15 @@ pub async fn send_message(
     let _state_mgr = state.state_manager.clone();
     let _qe_config = state.qe_config.read().await.clone();
 
-    let mut engine = crate::commands_memory::attach_shared_memory(
+    // P2-5: session-level "temporary chat" — read the flag BEFORE the engine
+    // is built so the memory layer (injection + auto-extraction) is attached
+    // only when this session actually uses memory. The engine is rebuilt per
+    // turn, so a toggle takes effect on the next send without restart.
+    let memory_disabled = active_session.memory_disabled_snapshot();
+    let mut engine = crate::commands_memory::attach_shared_memory_if(
         QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
         &state.memory_store,
+        memory_disabled,
     );
     // G1 Imp-3 — advertise installed skills in the system prompt: the same
     // `format_skills_for_llm()` listing the REPL injects, plus the

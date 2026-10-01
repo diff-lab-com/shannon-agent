@@ -263,6 +263,10 @@ pub mod session_registry;
 #[cfg(feature = "tauri")]
 pub mod session_override_store;
 
+// P2-5 — durable sidecar for the session-level "temporary chat" flag.
+#[cfg(feature = "tauri")]
+pub mod session_memory_bypass;
+
 // P1-1 — session multi-window commands/registry/restore.
 #[cfg(feature = "tauri")]
 pub mod session_window_commands;

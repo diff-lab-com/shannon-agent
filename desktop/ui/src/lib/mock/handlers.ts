@@ -319,6 +319,10 @@ function findTask(id: string) {
 const demoSessionModels = new Map<string, { provider: string; model: string }>()
 const demoSessionKey = (id?: string | null) => id ?? '__active__'
 
+// P2-5: per-session "temporary chat" demo state — same bucketing as the
+// model overrides (null sessionId resolves to the active session).
+const demoMemoryBypass = new Set<string>()
+
 // R2-2: fake models.dev overlay generation — bumped on every demo refresh so
 // the Settings button's success payload visibly changes.
 let demoCatalogGeneration = 1
@@ -704,6 +708,19 @@ export const handlers: Record<string, MockHandler> = {
   async get_session_model(args: { sessionId?: string | null }) {
     await delay()
     return demoSessionModels.get(demoSessionKey(args.sessionId)) ?? null
+  },
+  // P2-5: session-level "temporary chat" — demo mirrors the backend's
+  // durable sidecar with an in-memory set so the composer toggle persists
+  // within a demo session.
+  async set_session_memory_bypass(args: { sessionId?: string | null; disabled: boolean }) {
+    await delay(30)
+    const key = demoSessionKey(args.sessionId)
+    if (args.disabled) demoMemoryBypass.add(key)
+    else demoMemoryBypass.delete(key)
+  },
+  async get_session_memory_bypass(args: { sessionId?: string | null }) {
+    await delay()
+    return demoMemoryBypass.has(demoSessionKey(args.sessionId))
   },
   // R2-2: demo refresh pretends to re-fetch models.dev — reports the seeded
   // catalog size and bumps the generation so the success line moves.
@@ -1501,6 +1518,17 @@ export const handlers: Record<string, MockHandler> = {
     await delay()
     const m = MOCK_MEMORIES.find((x) => x.id === args.memoryId)
     return m?.source_session_id ? { sessionId: m.source_session_id } : null
+  },
+  // P2-5: the memories injected into a session's current context — demo
+  // projects the newest memory entries through the same title/source shape.
+  async get_session_injected_memories() {
+    await delay()
+    return MOCK_MEMORIES.slice(0, 3).map((m) => ({
+      id: m.id,
+      title: m.content.split('\n')[0].slice(0, 80),
+      category: m.category,
+      sourceSessionId: m.source_session_id ?? null,
+    }))
   },
   async get_memory_graph(args?: { project?: string | null }) {
     await delay()

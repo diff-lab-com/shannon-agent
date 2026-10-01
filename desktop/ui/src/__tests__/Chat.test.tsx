@@ -45,9 +45,15 @@ const ctx = vi.hoisted(() => ({
 vi.mock('@/context/ChatContext', () => ({
   useChat: () => ctx,
 }))
-vi.mock('@/context/SessionContext', () => ({
-  useSessions: () => ctx,
-}))
+// The real `SessionContext` export stays (ContextBreakdownCard consumes it
+// via useContext) — only the hook is overridden.
+vi.mock('@/context/SessionContext', async (importOriginal) => {
+  const actual = await importOriginal<object>()
+  return {
+    ...actual,
+    useSessions: () => ctx,
+  }
+})
 vi.mock('@/context/CatalogContext', () => ({
   useCatalog: () => ctx,
 }))

@@ -206,6 +206,11 @@ pub struct SessionState {
     /// R2-1: session-level model override ([`SessionModelOverride`]).
     /// `None` = inherit the global default (`AppState::client_config`).
     pub model_override: std::sync::Mutex<Option<SessionModelOverride>>,
+    /// P2-5: session-level "temporary chat" bypass — `true` = this session's
+    /// queries are built WITHOUT the memory layer (no injection, no
+    /// auto-extraction). A plain `std::sync::Mutex<bool>` like
+    /// `model_override`: the critical sections never span an `await`.
+    pub memory_disabled: std::sync::Mutex<bool>,
     /// Per-session `QueryEngine` — lazy-initialised on the first
     /// `send_message` so we don't pay the construction cost for
     /// `SessionState`s that never receive a query (e.g. a freshly listed
@@ -245,6 +250,7 @@ impl SessionState {
             cancellation_token: Mutex::new(None),
             session_id,
             model_override: std::sync::Mutex::new(None),
+            memory_disabled: std::sync::Mutex::new(false),
             query_engine: tokio::sync::Mutex::new(None),
             events_tx,
             events_rx: Mutex::new(Some(events_rx)),
@@ -275,6 +281,25 @@ impl SessionState {
     /// session then inherits the global default rather than failing sends.
     pub fn model_override_snapshot(&self) -> Option<SessionModelOverride> {
         self.model_override.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// P2-5: snapshot the session's "temporary chat" flag. A poisoned lock
+    /// degrades to `false` — the session keeps using memory rather than
+    /// failing sends (the bypass must never turn itself into data loss).
+    pub fn memory_disabled_snapshot(&self) -> bool {
+        match self.memory_disabled.lock() {
+            Ok(g) => *g,
+            Err(_) => false,
+        }
+    }
+
+    /// P2-5: write the session's "temporary chat" flag in place.
+    pub fn set_memory_disabled(&self, disabled: bool) {
+        let mut guard = self
+            .memory_disabled
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = disabled;
     }
 }
 
@@ -516,6 +541,19 @@ mod tests {
             "get_or_create must return the same Arc for the same key"
         );
         assert_eq!(reg.list().len(), 1, "no duplicate SessionState created");
+    }
+
+    #[test]
+    fn session_memory_disabled_flag_defaults_off_and_round_trips() {
+        // P2-5: the "temporary chat" flag — default off, set/clear visible
+        // through the snapshot, poisoned lock degrades to off.
+        let reg = SessionRegistry::new();
+        let state = reg.get_or_create(SessionKey::new());
+        assert!(!state.memory_disabled_snapshot(), "default is off");
+        state.set_memory_disabled(true);
+        assert!(state.memory_disabled_snapshot(), "set → on");
+        state.set_memory_disabled(false);
+        assert!(!state.memory_disabled_snapshot(), "clear → off");
     }
 
     #[tokio::test]

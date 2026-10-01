@@ -317,6 +317,37 @@ export default function ChatInput({
     }
   }
 
+  // P2-5 — session-level "temporary chat" toggle: while active, this
+  // session's queries are built without the memory layer (no injection of
+  // past memories, no auto-extraction). Mirrors the sessionOverride block:
+  // re-read per focused session so the control never shows a stale flag
+  // after a switch; the flag itself lives backend-side (durable sidecar).
+  // Presence of the prop (not truthiness) gates the toggle: `null` means
+  // "no focused id — the backend resolves the ACTIVE session".
+  const [memoryBypassed, setMemoryBypassed] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    if (!sessionScoped) {
+      setMemoryBypassed(false)
+      return
+    }
+    api.getSessionMemoryBypass(sessionId ?? null)
+      .then(disabled => { if (!cancelled) setMemoryBypassed(Boolean(disabled)) })
+      .catch(() => { if (!cancelled) setMemoryBypassed(false) })
+    return () => { cancelled = true }
+  }, [sessionScoped, sessionId])
+  const handleMemoryBypassToggle = async () => {
+    const next = !memoryBypassed
+    setMemoryBypassed(next)
+    try {
+      await api.setSessionMemoryBypass(sessionId ?? null, next)
+    } catch (err) {
+      // Optimistic flip rolled back — the backend state stays authoritative.
+      setMemoryBypassed(!next)
+      toastError(t('chat.input.memoryBypass.failed'), err)
+    }
+  }
+
   // Audit D8 — reasoning-effort picker. The engine already persists
   // `effort_level` (CLI /effort → config) and maps it to the provider's
   // reasoning parameter; the desktop composer previously had no surface for it.
@@ -733,6 +764,20 @@ export default function ChatInput({
         </div>
       )}
 
+      {memoryBypassed && (
+        // P2-5 — the explicit "this session does not use memory" notice.
+        // Rendered above the input (plan-banner shape) so the bypass is
+        // spelled out, not just color-coded on the toggle.
+        <div
+          role="status"
+          data-testid="memory-bypass-banner"
+          className="flex items-center gap-xs px-md py-xs bg-primary-container/50 border-b border-primary/20 rounded-t-2xl text-on-primary-container"
+        >
+          <span className="material-symbols-outlined icon-sm shrink-0">psychology</span>
+          <span className="font-label-sm truncate flex-1">{t('chat.input.memoryBypass.banner')}</span>
+        </div>
+      )}
+
       {voice.state !== 'idle' && (
         <div className="flex items-center justify-center py-sm bg-primary/5 rounded-t-2xl">
           <VoiceOrb state={voice.state} />
@@ -921,6 +966,30 @@ export default function ChatInput({
               onClick={() => setUsageOpen(true)}
             >
               <span className="material-symbols-outlined icon-md" aria-hidden="true">data_usage</span>
+            </Button>
+
+            {/* P2-5 — 临时会话 toggle (memory bypass). aria-pressed + a
+                distinct active treatment so the state is never silent; the
+                status strip below spells it out. */}
+            <Button
+              variant="ghost"
+              aria-pressed={memoryBypassed}
+              data-testid="memory-bypass-toggle"
+              aria-label={memoryBypassed
+                ? t('chat.input.memoryBypass.on.aria')
+                : t('chat.input.memoryBypass.off.aria')}
+              title={memoryBypassed
+                ? t('chat.input.memoryBypass.on.title')
+                : t('chat.input.memoryBypass.off.title')}
+              className={cn(
+                'p-md shrink-0 transition-colors',
+                memoryBypassed
+                  ? 'bg-primary-container/70 text-on-primary-container hover:bg-primary-container'
+                  : 'text-on-surface-variant hover:text-primary',
+              )}
+              onClick={() => void handleMemoryBypassToggle()}
+            >
+              <span className="material-symbols-outlined icon-md" aria-hidden="true">psychology</span>
             </Button>
 
             <Select
