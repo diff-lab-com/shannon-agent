@@ -618,19 +618,28 @@ describe('L1 state machine — queue-steer (journey #9)', () => {
     })
     expect(h.result.current.promptQueue).toHaveLength(3)
 
-    // The chips' up-control moves 第二条 to the head (sends sooner).
+    // The chips' up-control moves 第二条 to the head (sends sooner)…
     const secondId = h.result.current.promptQueue[1]!.id
     act(() => { h.result.current.moveQueuedPrompt(secondId, -1) })
     expect(h.result.current.promptQueue.map(i => i.text)).toEqual(['队列第二条', '队列第一条', '队列第三条'])
+    // …and the down-control sends it later again (FIFO restored).
+    act(() => { h.result.current.moveQueuedPrompt(secondId, 1) })
+    expect(h.result.current.promptQueue.map(i => i.text)).toEqual(['队列第一条', '队列第二条', '队列第三条'])
+    // The chip's ✕ drops an item outright (removeQueuedPrompt).
+    const thirdId = h.result.current.promptQueue[2]!.id
+    act(() => { h.result.current.removeQueuedPrompt(thirdId) })
+    expect(h.result.current.promptQueue.map(i => i.text)).toEqual(['队列第一条', '队列第二条'])
+    // Guard rails: moving a removed (or unknown) id is a no-op.
+    act(() => { h.result.current.moveQueuedPrompt(thirdId, -1) })
+    expect(h.result.current.promptQueue.map(i => i.text)).toEqual(['队列第一条', '队列第二条'])
 
     // The turn settles; the Chat-page drain effect consumes the FIFO head
     // first (page-level loop — its ordering contract is pinned here through
     // dequeuePrompt and E2E-side through the reply-bubble order).
     await awaitSettled(h)
     await act(async () => {
-      expect(h.result.current.dequeuePrompt()!.text).toBe('队列第二条')
       expect(h.result.current.dequeuePrompt()!.text).toBe('队列第一条')
-      expect(h.result.current.dequeuePrompt()!.text).toBe('队列第三条')
+      expect(h.result.current.dequeuePrompt()!.text).toBe('队列第二条')
       expect(h.result.current.dequeuePrompt()).toBeNull()
     })
   })

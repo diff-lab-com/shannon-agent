@@ -42,21 +42,40 @@ test.describe('scripted chat backend — queue-steer (journey #9)', () => {
     await expect(chat.composer()).toHaveValue('第四条（应溢出）')
     await expect(page.getByTestId('prompt-queue-chip')).toHaveCount(3)
 
-    // The chips are steerable: move 第二条 to the head (sends sooner).
+    // The chips are steerable (GB P2-10a): up moves 第二条 to the head…
     const chip2 = page.getByTestId('prompt-queue-chip').filter({ hasText: '队列第二条' })
+    const DOWN = 'Move queued message down (sends later)'
     await chip2.getByRole('button', { name: UP }).click()
     const chips = page.getByTestId('prompt-queue-chip')
     await expect(chips.nth(0)).toContainText('队列第二条')
     await expect(chips.nth(1)).toContainText('队列第一条')
     await expect(chips.nth(2)).toContainText('队列第三条')
+    // …down sends it later again — the original FIFO order is restored.
+    await chip2.getByRole('button', { name: DOWN }).click()
+    await expect(chips.nth(0)).toContainText('队列第一条')
+    await expect(chips.nth(1)).toContainText('队列第二条')
+    await expect(chips.nth(2)).toContainText('队列第三条')
+    // The chip's ✕ drops a queued item outright (the overflow draft above
+    // stayed in the composer — clear it first so the re-queue below is the
+    // only text).
+    const chip3 = page.getByTestId('prompt-queue-chip').filter({ hasText: '队列第三条' })
+    await chip3.getByRole('button', { name: 'Remove queued message' }).click()
+    await expect(page.getByTestId('prompt-queue')).toContainText('2 queued')
+    await expect(chip3).toHaveCount(0)
+    // Re-queue it: after the removal there is room again, and the item
+    // joins at the TAIL — so the drain order below stays 一 → 二 → 三.
+    await chat.composer().fill('队列第三条')
+    await chat.composer().press('Enter')
+    await expect(page.getByTestId('prompt-queue-chip').filter({ hasText: '队列第三条' })).toBeVisible()
+    await expect(chips.nth(2)).toContainText('队列第三条')
 
     // The long turn settles → the drain auto-sends the queue in ITS order:
-    // 第二条 → 第一条 → 第三条. The drained ORDER is pinned on the USER
+    // 第一条 → 第二条 → 第三条. The drained ORDER is pinned on the USER
     // bubbles (each carries the text actually sent); the replies come from
     // the script by turn position, so they are order-neutral.
     await expect(chat.bubbles()).toHaveCount(8, { timeout: 30_000 })
-    await expect(chat.bubbleAt(2)).toContainText('队列第二条')
-    await expect(chat.bubbleAt(4)).toContainText('队列第一条')
+    await expect(chat.bubbleAt(2)).toContainText('队列第一条')
+    await expect(chat.bubbleAt(4)).toContainText('队列第二条')
     await expect(chat.bubbleAt(6)).toContainText('队列第三条')
     await expect(page.getByTestId('prompt-queue')).toHaveCount(0)
     expect((await mockSnapshot(page)).sentTurns).toBe(4)
