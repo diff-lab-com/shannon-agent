@@ -595,14 +595,16 @@ jobs:
         run: node scripts/contrast-audit.mjs
       - name: Run unit tests
         # `pnpm test` is vitest in watch mode; `vitest run` is the one-shot
-        # form. CI=1 keeps workers deterministic. --coverage enforces the
-        # vitest.config.ts thresholds (80/75/60/80; actual 83.28/80.64/
-        # 69.44/83.28 after D1 excluded the demo mock layer) — before D1
-        # these thresholds were checked only by a local `pnpm test:coverage`.
+        # form. CI=1 keeps workers deterministic. Coverage moved to the
+        # Nightly Coverage workflow (2026-10-01, P3 of the CI speed plan):
+        # V8 instrumentation tripled this job (~13.5 of ~14 min) and UI PRs
+        # paid it on every run. The vitest.config.ts thresholds
+        # (80/75/60/80; actual 83.28/80.64/69.44/83.28) are now enforced by
+        # the desktop-coverage job in coverage.yml — see it for the tradeoff.
         working-directory: desktop/ui
         env:
           CI: "1"
-        run: pnpm exec vitest run --coverage
+        run: pnpm exec vitest run
 
   clippy:
     name: Clippy

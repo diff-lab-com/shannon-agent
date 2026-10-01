@@ -392,7 +392,11 @@ describe('ConnectionsSettings', () => {
     })
     render(<ConnectionsSettings />)
     const hint = await screen.findByTestId('mobile-dispatch-url-hint')
-    expect(hint).toHaveTextContent('https://192.168.1.10:33430/')
+    // pageUrl renders in two phases: the hint first paints with http://
+    // and switches to https:// once mobileTlsStatus resolves. Assert on
+    // the settled phase — the first paint raced here under CI timing
+    // (unmasked when the PR gate dropped vitest coverage instrumentation).
+    await waitFor(() => expect(hint).toHaveTextContent('https://192.168.1.10:33430/'))
     // The live fingerprint renders alongside.
     expect(screen.getByTestId('mobile-tls-fingerprint')).toBeInTheDocument()
   })
