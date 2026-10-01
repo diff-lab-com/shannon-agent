@@ -1047,7 +1047,7 @@ fn detect_tray_lang() -> String {
 /// Localized tray strings for one of [`TRAY_LANGS`] (unknown → English).
 #[cfg(feature = "tauri")]
 fn tray_texts(lang: &str) -> TrayTexts {
-    let texts = match lang {
+    match lang {
         "zh-CN" => TrayTexts {
             show: "显示 Shannon",
             new_session: "新建会话",
