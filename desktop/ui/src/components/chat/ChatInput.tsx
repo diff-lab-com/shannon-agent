@@ -16,8 +16,9 @@ import PptOutlineDialog from '@/components/chat/PptOutlineDialog'
 import { useComposerDraftListener } from '@/lib/composerBridge'
 import { isSlashQuery, type SlashCommand } from '@/lib/slash/commands'
 import { fetchSlashSkills, mergeSlashMenu, type SlashMenuItem, type SlashSkillEntry } from '@/lib/slash/skills'
+import { imageFilesFromClipboard, blobToBase64, PASTE_IMAGE_MIME_TO_EXT, MAX_PASTED_IMAGE_BYTES } from '@/lib/pasteImage'
 import * as api from '@/lib/tauri-api'
-import type { RejectedAttachmentReason } from '@/types'
+import type { RejectedAttachmentReason, AttachmentExtractionReport } from '@/types'
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
 import { modelPickerMeta } from '@/components/settings/models-settings/types'
@@ -172,6 +173,11 @@ export default function ChatInput({
   // tooltip) instead of letting the file silently vanish on send. Advisory:
   // a failed preflight call just means no marking.
   const [pathIssues, setPathIssues] = useState<Record<string, RejectedAttachmentReason>>({})
+  // G3b P1-4 — extraction summaries the preflight returned for parseable
+  // attachments (docx/pdf/…): rendered as chip badges so "extracted N
+  // sections / PDF truncates at 50 KiB" is visible BEFORE the send. Same
+  // lifecycle as the issue flags: advisory and pruned with the chips.
+  const [pathReports, setPathReports] = useState<Record<string, AttachmentExtractionReport>>({})
   useEffect(() => {
     // Prune issues for chips the parent removed (detach-all, edit restore).
     setPathIssues(prev => {
@@ -180,6 +186,16 @@ export default function ChatInput({
       let changed = false
       for (const [p, reason] of Object.entries(prev)) {
         if (alive.has(p)) next[p] = reason
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+    setPathReports(prev => {
+      const alive = new Set(attachedFiles)
+      const next: typeof prev = {}
+      let changed = false
+      for (const [p, report] of Object.entries(prev)) {
+        if (alive.has(p)) next[p] = report
         else changed = true
       }
       return changed ? next : prev
@@ -364,6 +380,16 @@ export default function ChatInput({
           }
           return next
         })
+        // G3b P1-4 — chip badges from the same advisory response.
+        setPathReports(prev => {
+          const next = { ...prev }
+          for (const c of checks) {
+            if (!c || typeof c.path !== 'string') continue
+            if (c.extraction) next[c.path] = c.extraction
+            else delete next[c.path]
+          }
+          return next
+        })
       })
       .catch(() => {})
     // B9' Files page: index the attachment references so they surface in the
@@ -380,6 +406,46 @@ export default function ChatInput({
   useEffect(() => {
     mergePathsRef.current = mergePaths
   })
+
+  // G3b P1-6 — clipboard-image paste. Screenshot tools put `image/*` File
+  // items on `clipboardData`; those are persisted via `save_pasted_image`
+  // and funneled into the normal attachment list (preflight included). A
+  // paste with NO image items falls through untouched — the default text
+  // insertion (and IME composition) behavior is never intercepted.
+  const handlePastedImages = async (files: File[]) => {
+    for (const file of files) {
+      const ext = PASTE_IMAGE_MIME_TO_EXT[file.type]
+      if (!ext) {
+        toastError(
+          t('chat.input.paste.failed'),
+          intl.formatMessage({ id: 'chat.input.paste.unsupported' }, { type: file.type || 'unknown' }),
+        )
+        continue
+      }
+      if (file.size > MAX_PASTED_IMAGE_BYTES) {
+        // Over the shared image cap: fail fast client-side with the i18n
+        // message (the backend re-checks via the same 10 MiB limit).
+        toastError(
+          t('chat.input.paste.failed'),
+          intl.formatMessage({ id: 'chat.input.paste.tooLarge' }),
+        )
+        continue
+      }
+      try {
+        const dataBase64 = await blobToBase64(file)
+        const savedPath = await api.savePastedImage(dataBase64, ext)
+        mergePathsRef.current([savedPath])
+      } catch (err) {
+        toastError(t('chat.input.paste.failed'), err)
+      }
+    }
+  }
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const images = imageFilesFromClipboard(e.clipboardData)
+    if (images.length === 0) return
+    e.preventDefault()
+    void handlePastedImages(images)
+  }
 
   // B0 P0-2 — file drag-drop via the webview's own Tauri v2 events. With
   // `dragDropEnabled` (the default) HTML5 dragover/drop never fire and
@@ -804,6 +870,7 @@ export default function ChatInput({
                 key={path}
                 path={path}
                 issue={pathIssues[path]}
+                extraction={pathReports[path]}
                 onRemove={() => onAttach(attachedFiles.filter((_, idx) => idx !== i))}
               />
             ))}
@@ -833,6 +900,7 @@ export default function ChatInput({
             value={value}
             onChange={e => onChange(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             onCompositionStart={() => {
               isComposingRef.current = true
               compositionEndedAtRef.current = 0

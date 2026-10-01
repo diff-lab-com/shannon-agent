@@ -125,7 +125,15 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   // action was "Open externally" wasted a click on the common case. The
   // lightbox stays image-only.
   if (!isImage) {
-    return <FileCard name={attachment.name} path={attachment.path} sizeBytes={attachment.size} source="attachment" />
+    return (
+      <FileCard
+        name={attachment.name}
+        path={attachment.path}
+        sizeBytes={attachment.size}
+        source="attachment"
+        extraction={attachment.extraction}
+      />
+    )
   }
 
   const handleClick = () => setOpen(true)

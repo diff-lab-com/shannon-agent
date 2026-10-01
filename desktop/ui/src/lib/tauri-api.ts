@@ -140,6 +140,16 @@ export async function checkAttachmentPaths(paths: string[]): Promise<AttachmentP
   return invoke('check_attachment_paths', { paths })
 }
 
+/**
+ * G3b P1-6 — persist a clipboard image (base64, no data-URL prefix) to
+ * `~/.shannon/cache/pasted/<timestamp>-<rand>.<ext>` and return its absolute
+ * path, so a pasted image can ride the regular attachment pipeline. The
+ * backend validates the 10 MiB cap and magic-bytes-vs-extension match.
+ */
+export async function savePastedImage(dataBase64: string, ext: string): Promise<string> {
+  return invoke('save_pasted_image', { dataBase64, ext })
+}
+
 export async function getConversation(): Promise<ChatMessage[]> {
   return invoke('get_conversation')
 }

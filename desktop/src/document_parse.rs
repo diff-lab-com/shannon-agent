@@ -643,16 +643,34 @@ fn write_extracted_cache(
 
 /// Best-effort cache write: `None` on any failure (no home dir, unwritable
 /// dir, ...) — the injection block then says the cache is unavailable rather
-/// than failing the whole send.
-fn cache_extracted_text(source_path: &Path, full_text: &str) -> Option<PathBuf> {
+/// than failing the whole send. `pub(crate)` since G3b P1-4: the PDF
+/// injection block in `commands.rs` reuses this exact helper for its own
+/// truncated-text escape hatch (same directory, same hash key).
+pub(crate) fn cache_extracted_text(source_path: &Path, full_text: &str) -> Option<PathBuf> {
     let dir = extracted_cache_dir()?;
     write_extracted_cache(&dir, source_path, full_text).ok()
 }
 
 // ── Injection block builder ─────────────────────────────────────────────────
 
+/// What one office injection block ended up inlining, reported alongside the
+/// block itself so the caller can surface "extracted N sections, first M
+/// inlined" to the USER (G3b P1-4) without re-parsing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OfficeInlineSummary {
+    /// The injection block text (identical to what the model receives).
+    pub block: String,
+    /// Sections fully included in the inline window (1 when only a cut
+    /// preview of the first section fit).
+    pub sections_inlined: usize,
+    /// `true` when any section was dropped from the inline window or the
+    /// first section was cut at the byte budget.
+    pub truncated: bool,
+}
+
 /// Build the text block injected into the model context for one office
-/// attachment. Shape (spec example wording preserved):
+/// attachment, with the user-visible inline summary. Shape (spec example
+/// wording preserved):
 ///
 /// ```text
 /// Attached Office document "report.docx" (12345 bytes). Extracted text: 23 section(s).
@@ -665,18 +683,22 @@ fn cache_extracted_text(source_path: &Path, full_text: &str) -> Option<PathBuf> 
 /// first section is never skipped (if it alone exceeds the budget it is cut
 /// at the byte limit with an explicit note). `cache_path: None` (cache write
 /// failed) degrades honestly instead of pretending a path exists.
-pub(crate) fn build_office_injection_block(
+pub(crate) fn build_office_injection_block_checked(
     file_name: &str,
     size: u64,
     doc: &ExtractedDocument,
     cache_path: Option<&str>,
     inline_limit: usize,
-) -> String {
+) -> OfficeInlineSummary {
     let total = doc.sections.len();
     if total == 0 {
-        return format!(
-            "Attached Office document \"{file_name}\" ({size} bytes). No extractable text found."
-        );
+        return OfficeInlineSummary {
+            block: format!(
+                "Attached Office document \"{file_name}\" ({size} bytes). No extractable text found."
+            ),
+            sections_inlined: 0,
+            truncated: false,
+        };
     }
     let cut_notice = "\n[Section 1 cut off at the inline byte limit — read the full extracted text file above for the rest.]\n";
     let mut body = String::new();
@@ -716,12 +738,16 @@ pub(crate) fn build_office_injection_block(
         Some(path) => format!("Full extracted text: {path} — use Read/Grep on it for the rest."),
         None => "Full extracted text: unavailable (cache write failed).".to_string(),
     };
-    format!(
-        "Attached Office document \"{file_name}\" ({size} bytes). Extracted text: {total} section(s).\n\
-         {range_line}{cache_line}\n{body}"
-    )
-    .trim_end()
-    .to_string()
+    OfficeInlineSummary {
+        truncated: first_section_cut || shown < total,
+        sections_inlined: shown,
+        block: format!(
+            "Attached Office document \"{file_name}\" ({size} bytes). Extracted text: {total} section(s).\n\
+             {range_line}{cache_line}\n{body}"
+        )
+        .trim_end()
+        .to_string(),
+    }
 }
 
 /// Placeholder block injected when extraction fails (unreadable file,
@@ -733,23 +759,59 @@ pub(crate) fn office_extraction_error_block(file_name: &str, size: u64, reason: 
     )
 }
 
-/// Full per-attachment pipeline used by `send_message` (runs inside
-/// `spawn_blocking` there): extract → cache → build the injection block, or
-/// produce the failure placeholder. Never panics.
-pub(crate) fn office_block_for_file(path: &Path, file_name: &str, size: u64) -> String {
+/// What one office attachment's extraction produced: the injection block the
+/// model receives plus the per-file summary the frontend renders as a chip
+/// badge / FileCard detail (G3b P1-4). Shape mirrors the brief's
+/// `{extracted, sections_total, sections_inlined, truncated, cache_path}`
+/// payload; the caller adds `path` and `kind`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OfficeExtractionOutcome {
+    pub block: String,
+    /// `false` when extraction failed (the block is then the failure
+    /// placeholder stating the reason).
+    pub extracted: bool,
+    pub sections_total: usize,
+    pub sections_inlined: usize,
+    pub truncated: bool,
+    pub cache_path: Option<String>,
+}
+
+/// Extract → cache → block + summary in one pass. Failure degrades to
+/// `extracted: false` with the placeholder block — never an `Err`, so the
+/// send pipeline cannot be broken by one hostile document.
+pub(crate) fn office_extraction_for_file(
+    path: &Path,
+    file_name: &str,
+    size: u64,
+) -> OfficeExtractionOutcome {
     match extract_document(path) {
         Ok(doc) => {
             let cache = cache_extracted_text(path, &doc.full_text())
                 .map(|p| p.to_string_lossy().into_owned());
-            build_office_injection_block(
+            let summary = build_office_injection_block_checked(
                 file_name,
                 size,
                 &doc,
                 cache.as_deref(),
                 OFFICE_INLINE_INJECT_LIMIT,
-            )
+            );
+            OfficeExtractionOutcome {
+                sections_total: doc.sections.len(),
+                extracted: true,
+                sections_inlined: summary.sections_inlined,
+                truncated: summary.truncated,
+                block: summary.block,
+                cache_path: cache,
+            }
         }
-        Err(reason) => office_extraction_error_block(file_name, size, &reason),
+        Err(reason) => OfficeExtractionOutcome {
+            block: office_extraction_error_block(file_name, size, &reason),
+            extracted: false,
+            sections_total: 0,
+            sections_inlined: 0,
+            truncated: false,
+            cache_path: None,
+        },
     }
 }
 
@@ -1265,13 +1327,14 @@ mod tests {
     fn injection_block_truncates_with_ranges_and_cache_hint() {
         // ~40 sections x ~1 KiB = far over the 16 KiB budget.
         let doc = doc_with_n_sections(40, 200);
-        let block = build_office_injection_block(
+        let block = build_office_injection_block_checked(
             "report.docx",
             90_000,
             &doc,
             Some("/home/u/.shannon/cache/extracted/abc123.txt"),
             OFFICE_INLINE_INJECT_LIMIT,
-        );
+        )
+        .block;
         assert!(
             block.starts_with(
                 "Attached Office document \"report.docx\" (90000 bytes). Extracted text: 40 section(s)."
@@ -1320,7 +1383,9 @@ mod tests {
     #[test]
     fn injection_block_all_sections_fit() {
         let doc = doc_with_n_sections(2, 5);
-        let block = build_office_injection_block("a.docx", 10, &doc, Some("/tmp/x.txt"), 16_384);
+        let block =
+            build_office_injection_block_checked("a.docx", 10, &doc, Some("/tmp/x.txt"), 16_384)
+                .block;
         assert!(block.contains("Showing all 2 sections. "), "{block}");
         assert!(block.contains("[Section 2/2] Heading: Section 1"));
         assert!(
@@ -1332,7 +1397,8 @@ mod tests {
     fn injection_block_first_section_over_limit_is_cut_with_note() {
         let sections = vec![("Heading: Huge".to_string(), "x".repeat(100_000))];
         let doc = ExtractedDocument::from_sections(sections);
-        let block = build_office_injection_block("big.docx", 200_000, &doc, None, 16_384);
+        let block =
+            build_office_injection_block_checked("big.docx", 200_000, &doc, None, 16_384).block;
         assert!(
             block.contains("first section cut off at the 16384-byte inline limit"),
             "{block}"
@@ -1347,7 +1413,7 @@ mod tests {
     #[test]
     fn injection_block_empty_document() {
         let doc = ExtractedDocument::from_sections(vec![]);
-        let block = build_office_injection_block("e.docx", 5, &doc, None, 1024);
+        let block = build_office_injection_block_checked("e.docx", 5, &doc, None, 1024).block;
         assert_eq!(
             block,
             "Attached Office document \"e.docx\" (5 bytes). No extractable text found."
@@ -1359,7 +1425,7 @@ mod tests {
         // Multi-byte content: the cut path must not split a UTF-8 char.
         let sections = vec![("Heading: 中文".to_string(), "中文内容".repeat(10_000))];
         let doc = ExtractedDocument::from_sections(sections);
-        let block = build_office_injection_block("cjk.docx", 1, &doc, None, 1024);
+        let block = build_office_injection_block_checked("cjk.docx", 1, &doc, None, 1024).block;
         // Would panic on slice if boundaries were ignored.
         assert!(block.contains("[Section 1/1]"));
     }
@@ -1379,7 +1445,7 @@ mod tests {
         let cache_home = tempfile::tempdir().expect("cache tempdir");
         let prev_home = std::env::var("SHANNON_HOME").ok();
         unsafe { std::env::set_var("SHANNON_HOME", cache_home.path()) };
-        let block = office_block_for_file(&path, "plan.docx", bytes.len() as u64);
+        let block = office_extraction_for_file(&path, "plan.docx", bytes.len() as u64).block;
         match prev_home {
             Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
             None => unsafe { std::env::remove_var("SHANNON_HOME") },
@@ -1407,7 +1473,7 @@ mod tests {
     fn office_block_for_file_failure_is_a_placeholder() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = temp_file(dir.path(), "junk.docx", b"not a zip at all");
-        let block = office_block_for_file(&path, "junk.docx", 16);
+        let block = office_extraction_for_file(&path, "junk.docx", 16).block;
         assert_eq!(
             block,
             format!(
@@ -1415,6 +1481,80 @@ mod tests {
                 extract_document(&path).expect_err("same reason")
             )
         );
+    }
+
+    #[test]
+    fn office_extraction_for_file_reports_summary() {
+        // G3b P1-4 — the block and the user-visible summary come from one
+        // pass: 3 tiny sections fit the 16 KiB budget, so nothing is
+        // truncated and the cache path is reported.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let body = [
+            w_heading("Heading1", "One"),
+            w_p(&w_run_text("first")),
+            w_heading("Heading2", "Two"),
+            w_p(&w_run_text("second")),
+            w_heading("Heading3", "Three"),
+            w_p(&w_run_text("third")),
+        ]
+        .join("");
+        let bytes = docx_document_xml(&body);
+        let path = temp_file(dir.path(), "summary.docx", &bytes);
+        let cache_home = tempfile::tempdir().expect("cache tempdir");
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        unsafe { std::env::set_var("SHANNON_HOME", cache_home.path()) };
+        let outcome = office_extraction_for_file(&path, "summary.docx", bytes.len() as u64);
+        match prev_home {
+            Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
+            None => unsafe { std::env::remove_var("SHANNON_HOME") },
+        }
+        assert!(outcome.extracted);
+        assert_eq!(outcome.sections_total, 3);
+        assert_eq!(outcome.sections_inlined, 3);
+        assert!(!outcome.truncated);
+        let cache_path = outcome.cache_path.expect("cache written");
+        assert!(std::fs::metadata(&cache_path).is_ok(), "cache exists");
+        assert!(outcome.block.contains("Showing all 3 sections."));
+        // The block names the same cache file the summary reports.
+        assert!(outcome.block.contains(&cache_path));
+    }
+
+    #[test]
+    fn office_extraction_for_file_flags_truncation_and_failure() {
+        let cache_home = tempfile::tempdir().expect("cache tempdir");
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        unsafe { std::env::set_var("SHANNON_HOME", cache_home.path()) };
+        // Over-budget document → truncated: true with an inline window < total.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut body = String::new();
+        for i in 0..80 {
+            body.push_str(&w_heading("Heading1", &format!("H{i}")));
+            body.push_str(&w_p(&w_run_text(&"word ".repeat(200))));
+        }
+        let bytes = docx_document_xml(&body);
+        let path = temp_file(dir.path(), "big.docx", &bytes);
+        let outcome = office_extraction_for_file(&path, "big.docx", bytes.len() as u64);
+        assert!(outcome.extracted);
+        assert!(outcome.truncated);
+        assert!(outcome.sections_inlined < outcome.sections_total);
+        assert!(
+            outcome.cache_path.is_some(),
+            "cache written even when the inline window covers the head"
+        );
+
+        // Malformed container → extracted: false, no cache, placeholder block.
+        let junk = temp_file(dir.path(), "junk2.docx", b"not a zip");
+        let failed = office_extraction_for_file(&junk, "junk2.docx", 9);
+        match prev_home {
+            Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
+            None => unsafe { std::env::remove_var("SHANNON_HOME") },
+        }
+        assert!(!failed.extracted);
+        assert!(!failed.truncated);
+        assert_eq!(failed.sections_total, 0);
+        assert_eq!(failed.sections_inlined, 0);
+        assert!(failed.cache_path.is_none());
+        assert!(failed.block.contains("Text extraction failed"));
     }
 
     // ── section marker format lock ──────────────────────────────────────

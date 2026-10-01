@@ -181,10 +181,35 @@ export interface ResearchCitation {
   accessed_at?: number
 }
 
+/**
+ * G3b P1-4 — per-file extraction summary for parseable attachments
+ * (pdf/docx/xlsx/pptx/ods/csv). Mirrors the Rust
+ * `AttachmentExtractionReport`: the send pipeline stamps it onto the
+ * message's `FileAttachment`s (and the attach-time preflight) so the UI can
+ * show what actually reached the model instead of keeping extraction
+ * model-only.
+ */
+export interface AttachmentExtractionReport {
+  path: string
+  /** Lowercased source extension: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'ods' | 'csv'. */
+  kind: string
+  /** false when parsing failed — the model got a failure placeholder. */
+  extracted: boolean
+  /** Sectioned documents only (office formats); pdf reports 0/0. */
+  sections_total: number
+  sections_inlined: number
+  /** true when the inline injection had to cut content. */
+  truncated: boolean
+  /** `~/.shannon/cache/extracted/<sha256>.txt` holding the full text, when written. */
+  cache_path?: string
+}
+
 export interface FileAttachment {
   name: string
   path: string
   size: number
+  /** G3b P1-4 — present when the send pipeline parsed this file for the model. */
+  extraction?: AttachmentExtractionReport
 }
 
 export interface SessionInfo {
@@ -670,6 +695,8 @@ export interface AttachmentPathCheck {
   path: string
   ok: boolean
   reason?: RejectedAttachmentReason
+  /** G3b P1-4 — extraction summary for parseable ok paths (best-effort). */
+  extraction?: AttachmentExtractionReport
 }
 
 export interface SendMessageResponse {

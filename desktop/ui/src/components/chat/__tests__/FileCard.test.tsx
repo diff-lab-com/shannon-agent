@@ -144,4 +144,60 @@ describe('FileCard', () => {
     render(<FileCard {...PROPS} />)
     expect(screen.queryByTestId('file-card-batch-run')).not.toBeInTheDocument()
   })
+
+  // ── G3b P1-4: extraction detail area ──
+
+  const OFFICE_EXTRACTION = {
+    path: '/tmp/shannon/report.docx',
+    kind: 'docx',
+    extracted: true,
+    sections_total: 23,
+    sections_inlined: 8,
+    truncated: true,
+    cache_path: '/home/u/.shannon/cache/extracted/abc123.txt',
+  }
+
+  it('a card with an extraction report shows the summary, cache path and view action', () => {
+    render(<FileCard {...PROPS} extraction={OFFICE_EXTRACTION} />)
+    const detail = screen.getByTestId('file-card-extraction')
+    expect(detail).toHaveTextContent('Extracted 23 sections, first 8 inlined')
+    expect(detail).toHaveTextContent('/home/u/.shannon/cache/extracted/abc123.txt')
+    expect(screen.getByTestId('file-card-view-extracted')).toBeInTheDocument()
+  })
+
+  it('"View extracted text" opens the cached file, not the source', () => {
+    render(<FileCard {...PROPS} extraction={OFFICE_EXTRACTION} />)
+    fireEvent.click(screen.getByTestId('file-card-view-extracted'))
+    expect(openWithDefaultApp).toHaveBeenCalledWith('/home/u/.shannon/cache/extracted/abc123.txt')
+  })
+
+  it('a truncated PDF report carries the 50 KiB wording; failure reports say the model got nothing', () => {
+    const { rerender } = render(
+      <FileCard
+        {...PROPS}
+        name="manual.pdf"
+        path="/tmp/shannon/manual.pdf"
+        extraction={{ ...OFFICE_EXTRACTION, path: '/tmp/shannon/manual.pdf', kind: 'pdf', sections_total: 0, sections_inlined: 0 }}
+      />,
+    )
+    expect(screen.getByTestId('file-card-extraction')).toHaveTextContent('PDF inlines the first 50 KiB')
+
+    rerender(
+      <FileCard
+        {...PROPS}
+        extraction={{ ...OFFICE_EXTRACTION, extracted: false, sections_total: 0, sections_inlined: 0, cache_path: undefined }}
+      />,
+    )
+    expect(screen.getByTestId('file-card-extraction')).toHaveTextContent(
+      'Text extraction failed — no content reached the model',
+    )
+    // No cache → no view action.
+    expect(screen.queryByTestId('file-card-view-extracted')).not.toBeInTheDocument()
+  })
+
+  it('cards without an extraction report keep the plain layout', () => {
+    render(<FileCard {...PROPS} />)
+    expect(screen.queryByTestId('file-card-extraction')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('file-card-view-extracted')).not.toBeInTheDocument()
+  })
 })

@@ -969,6 +969,13 @@ export const handlers: Record<string, MockHandler> = {
     await delay(10)
     return args.paths.map(path => ({ path, ok: true }))
   },
+  // G3b P1-6 composer clipboard-image paste — demo mode persists nothing;
+  // return a plausible absolute path so the pasted image enters the demo
+  // attachment list like a real one would.
+  async save_pasted_image(args: { dataBase64: string; ext: string }) {
+    await delay(10)
+    return `/Users/demo/.shannon/cache/pasted/${Date.now()}-demo.${args.ext || 'png'}`
+  },
   // office Wave 2: the Files page's missing-detection probe (and FileRefChip's
   // anti-hallucination backstop) — in demo mode only indexed demo paths exist.
   async path_exists(args: { path: string }) {
