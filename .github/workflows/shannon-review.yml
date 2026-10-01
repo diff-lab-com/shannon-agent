@@ -3,6 +3,18 @@ name: Shannon Code Review
 on:
   pull_request:
     types: [opened, synchronize]
+    # R6 of the round-2 CI plan (2026-10-01): the review costs a runner for
+    # its release build (cold: ~40 min; warm: ~7-10 min) on EVERY PR push.
+    # Docs/website/locale-only PRs get no review value out of a Rust agent
+    # — skip them. Workflow-level filtering is safe here: this check is NOT
+    # a required context on any branch, so a skipped run cannot wedge a
+    # merge (unlike ci.yml, which must use job-level conditions for exactly
+    # that reason).
+    paths-ignore:
+      - 'website/**'
+      - 'docs/**'
+      - 'locales/**'
+      - '**/*.md'
 
 # The paid-model review is expensive (40-min release build per push) — run
 # once per PR head, supersede superseded pushes.
