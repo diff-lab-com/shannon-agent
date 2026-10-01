@@ -2454,6 +2454,9 @@ export interface RoutineTemplate {
   trigger_type: string
   cron_expr?: string | null
   interval_secs?: number | null
+  github_event?: string | null
+  github_repo?: string | null
+  github_action?: string | null
   timezone?: string | null
 }
 

@@ -496,6 +496,42 @@ describe('NotificationsSettings — send test webhook (P1-7)', () => {
     fireEvent.click(within(getWebhookSection()).getByRole('button', { name: /Send test webhook/ }))
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
   })
+
+  // W1-E review (Important): the dirty gate relies on webhookSnapshotFromDto
+  // hand-expanding the persisted DTO (template → preset + custom body,
+  // timeout_ms || 5000, secret ?? ''). This walks the full loop so a
+  // regression in that expansion — or in the re-baseline after save — shows
+  // up as a stuck or prematurely lit test button.
+  it('gates the test button on the dirty form, then relights it after save', async () => {
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    const testBtn = () => within(section).getByRole('button', { name: /Send test webhook/ })
+    // Persisted config loaded and the form matches it → the test button is lit.
+    expect(testBtn()).toBeEnabled()
+
+    // Edit the form (rotate the secret) → dirty → test disabled + hint shown.
+    fireEvent.change(within(section).getByLabelText(/HMAC signing secret/), {
+      target: { value: 'rotated-secret' },
+    })
+    expect(testBtn()).toBeDisabled()
+    expect(within(section).getByText(/Testing uses the saved configuration/)).toBeTruthy()
+
+    // Save → the snapshot is re-baselined against the new form state → the
+    // test button lights up again, and the hint disappears.
+    fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
+    expect(saveWebhookConfig.mock.calls[0]![0].secret).toBe('rotated-secret')
+    await waitFor(() => expect(testBtn()).toBeEnabled())
+    expect(within(section).queryByText(/Testing uses the saved configuration/)).toBeNull()
+  })
 })
 
 describe('NotificationsSettings — desktop-notification test button (P1-7, moved from General)', () => {
