@@ -74,9 +74,9 @@ jobs:
   #     this fix). Community discussion #26945 documents the semantics.
   #   • pull_request: this job classifies changed paths and each downstream
   #     job runs only when its output matched:
-  #       rust        → test, test-features, eval-dry-run, clippy,
-  #                     fast-checks, doc, cross-platform, check-linux-musl,
-  #                     semver-check
+  #       rust        → test, test-features, clippy (with the doc build),
+  #                     fast-checks (with the eval dry-run), cross-platform
+  #                     (incl. the advisory musl check), semver-check
   #       desktop-ui  → desktop-e2e, desktop-visual-audit, desktop-unit
   #       gateway     → gateway
   #       website     → website
@@ -150,6 +150,14 @@ jobs:
     # required-for-merge on dev and main, but neither branch's protection
     # actually listed it (drift found and fixed 2026-10-01; the comment's
     # intent won over the status quo).
+    #
+    # Round-2 CI plan (R4, 2026-10-01): the Eval Dry-Run Gate merged in as
+    # the last steps (parallel job → gate-neutral), saving its runner setup
+    # + slot. The old job's "standalone for retry isolation" rationale is
+    # partially traded away: a cold-cache stall in the eval compile now
+    # costs this whole job's re-run (~5 min, still the cheapest slot in the
+    # gate) instead of a 4-min solo job. rust-cache was added for the eval
+    # compile — the fast checks themselves are metadata-only and unaffected.
     name: Fast checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -161,6 +169,12 @@ jobs:
         with:
           toolchain: "1.88"
           components: rustfmt
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Only the eval steps below compile; the metadata checks are
+          # cache-agnostic. Shared workspace-compile cache — see the
+          # rationale on the Test job.
+          shared-key: ci-v3
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Generated facade facts are fresh
@@ -226,6 +240,38 @@ jobs:
         # advisories to errors; the ignored IDs are each vetted as
         # non-exploitable + ecosystem-blocked (see audit.toml rationale).
         run: cargo audit --deny warnings
+      - name: Install just
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: just
+      - name: Install nextest
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-nextest
+      - name: Eval dry-run suite (no API key)
+        # Formerly the standalone Eval Dry-Run Gate job (R4 merge,
+        # 2026-10-01). W1 §7① PR quick gate (design:
+        # docs/plans/2026-08-28-eval-system-design.md): the zero-API-key
+        # dry-run rehearsal of the L1 suite (`just eval`) plus the
+        # eval-harness unit tests. This gates the EVAL ASSETS themselves —
+        # task TOMLs parse/validate, the runner + assertion vocabulary +
+        # rule table don't regress, dry_run stubs stay in sync. Real-model
+        # capability is deliberately NEVER a PR gate (cost, variance,
+        # flakiness).
+        #
+        # `just eval` = cargo run -p shannon-core --example eval_runner
+        # (dry-run stub executor over the full tests/eval/tasks suite;
+        # exits non-zero when any rehearsal fails).
+        run: just eval
+      - name: Eval CLI entry
+        # The user-facing `shannon eval` subcommand (crates/shannon-cli) must
+        # stay in sync with the suite: list parses every task, and a single
+        # dry-run task rehearses the full CLI run path.
+        run: |
+          cargo run -q -p shannon-cli -- eval run --list
+          cargo run -q -p shannon-cli -- eval run --task read_01
+      - name: Eval harness tests
+        run: cargo nextest run -p shannon-core -E 'test(eval)' --profile ci
   test-shards:
     # The suite split across two runners (P5 of the CI speed plan,
     # 2026-10-01): nextest's hash partition cut the ~8.5 min execution
@@ -253,11 +299,12 @@ jobs:
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
           # One cache entry shared across the workspace-compile family (this
-          # job, test-features, clippy, doc, eval-dry-run — see each
-          # job's rust-cache step). rust-cache's default key is per-JOB, which
+          # job, test-features, clippy (with the doc build), fast-checks
+          # (with the eval dry-run) — see each job's rust-cache step. rust-cache's
+          # default key is per-JOB, which
           # fragmented GitHub's 10 GB repo cache budget into ~8 near-duplicate
           # entries; heavy eviction under that budget was the likely root
-          # cause of the "GHA cold-cache stall" flakes noted on eval-dry-run.
+          # cause of the "GHA cold-cache stall" flakes noted on the eval gate.
           # Bump to ci-v3 to invalidate every pre-split cache (ci-v2's
           # feature-isolation rationale, see git history).
           shared-key: ci-v3
@@ -427,53 +474,6 @@ jobs:
           CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools \
             --features local-browser --test browser_e2e -- --nocapture
 
-  eval-dry-run:
-    # W1 §7① PR quick gate (design: docs/plans/2026-08-28-eval-system-design.md):
-    # the zero-API-key dry-run rehearsal of the L1 suite (`just eval`) plus
-    # the eval-harness unit tests. This gates the EVAL ASSETS themselves —
-    # task TOMLs parse/validate, the runner + assertion vocabulary + rule
-    # table don't regress, dry_run stubs stay in sync. Real-model capability
-    # is deliberately NEVER a PR gate (cost, variance, flakiness).
-    # Standalone on purpose: no `needs:` coupling and a bounded timeout, so
-    # a GHA cold-cache stall (known runner flake) can be retried in
-    # isolation without re-running the rest of CI.
-    name: Eval Dry-Run Gate
-    runs-on: ubuntu-latest
-    needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
-        with:
-          # Shared workspace-compile cache — see the rationale on the Test job.
-          shared-key: ci-v3
-      - name: Install just
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
-        with:
-          tool: just
-      - name: Install nextest
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
-        with:
-          tool: cargo-nextest
-      - name: Eval dry-run suite (no API key)
-        # `just eval` = cargo run -p shannon-core --example eval_runner
-        # (dry-run stub executor over the full tests/eval/tasks suite;
-        # exits non-zero when any rehearsal fails).
-        run: just eval
-      - name: Eval CLI entry
-        # The user-facing `shannon eval` subcommand (crates/shannon-cli) must
-        # stay in sync with the suite: list parses every task, and a single
-        # dry-run task rehearses the full CLI run path.
-        run: |
-          cargo run -q -p shannon-cli -- eval run --list
-          cargo run -q -p shannon-cli -- eval run --task read_01
-      - name: Eval harness tests
-        run: cargo nextest run -p shannon-core -E 'test(eval)' --profile ci
-
   desktop-e2e:
     name: Desktop E2E
     runs-on: ubuntu-latest
@@ -607,6 +607,13 @@ jobs:
         run: pnpm exec vitest run
 
   clippy:
+    # Round-2 CI plan (R4, 2026-10-01): the Doc Build check merged into this
+    # job — both are compile-family checks that each paid a full runner
+    # setup (~1 min) and a concurrency slot. The job id AND the "Clippy"
+    # required context name are UNCHANGED (no branch-protection switch);
+    # Doc Build was never a required context, it rides along as a named
+    # step. Serial total ~10-11 min — under the Test-shard critical path,
+    # so gate wall time is unchanged.
     name: Clippy
     runs-on: ubuntu-latest
     needs: changes
@@ -644,6 +651,21 @@ jobs:
           -A clippy::manual_is_multiple_of
           -A clippy::manual_checked_div
           -A clippy::unnecessary_sort_by
+      - name: Build docs
+        # Formerly the standalone `doc` job (required-for-merge gate). The
+        # workspace's intra-doc-link debt (~96 errors across 11 crates) was
+        # fixed in the P2-4 CI cleanup; the check then ran one more cycle
+        # with `continue-on-error: true` while the eval-era doc comments
+        # landed, was repaired again (2026-09-04, commit 95d90224), and the
+        # team confirmed the flip. Keep new doc comments link-clean: broken
+        # intra-doc links fail the build here before they ship to docs.rs.
+        #
+        # `--no-deps` skips documenting the entire ecosystem; we only
+        # care about our own intra-doc links. `RUSTDOCFLAGS="-D warnings"`
+        # upgrades doc warnings to compile-time errors.
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
 
   # review §P1-E1: ci.yml previously claimed in a header comment that it
   # typechecked/tested the gateway but had no such job. Without this, a
@@ -699,43 +721,6 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm build
-
-  doc:
-    # Required-for-merge gate. The workspace's intra-doc-link debt (~96
-    # errors across 11 crates) was fixed in the P2-4 CI cleanup; the job
-    # then ran one more cycle with `continue-on-error: true` while the
-    # eval-era doc comments landed, was repaired again (2026-09-04, commit
-    # 95d90224), and the team confirmed the flip. Keep new doc comments
-    # link-clean: broken intra-doc links fail the build here before they
-    # ship to docs.rs.
-    name: Doc Build
-    runs-on: ubuntu-latest
-    needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
-        with:
-          # Shared workspace-compile cache — see the rationale on the Test job.
-          shared-key: ci-v3
-      - name: Install Tauri system deps
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev libgbm-dev libdrm-dev libpipewire-0.3-dev patchelf
-      - name: Build docs
-        # `--no-deps` skips documenting the entire ecosystem; we only
-        # care about our own intra-doc links. `RUSTDOCFLAGS="-D warnings"`
-        # upgrades doc warnings to compile-time errors.
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps
 
   cross-platform:
     # Required-for-merge gate on `dev` and `main` for the three primary
@@ -818,46 +803,26 @@ jobs:
         run: |
           cargo check -p shannon-tools --features computer-use,local-browser
           cargo check -p shannon-cli --features computer-use,local-browser
-
-  check-linux-musl:
-    # Linux-only musl smoke test. Renamed from `check-cross-platform` so
-    # the new `cross-platform` matrix is the obvious OS-coverage gate
-    # and this job reads as what it actually does: confirm the workspace
-    # still compiles against the statically-linked musl libc target.
-    # `continue-on-error: true` because musl-portable webkit/gtk deps
-    # are blocked upstream — see shannon-desktop exclude below.
-    name: Linux musl Check
-    runs-on: ubuntu-latest
-    needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
-    timeout-minutes: 40
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - name: Install targets
-        run: rustup target add x86_64-unknown-linux-musl
-      - name: Install musl cross-compiler
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
-        with:
-          # Shared workspace-compile cache — see the rationale on the Test job.
-          shared-key: ci-v3
-      - name: Install Tauri system deps (musl)
+      - name: Install musl cross-compiler (Linux only, advisory)
+        # Formerly the standalone `check-linux-musl` job (R4 merge,
+        # 2026-10-01: one fewer concurrency slot; the job paid a full
+        # runner setup for a ~2 min check). The rust-cache step above
+        # already ran; musl artifacts land in
+        # target/x86_64-unknown-linux-musl/ — a separate dir, no pollution
+        # of the host check above.
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev libgbm-dev libdrm-dev libpipewire-0.3-dev patchelf
-      # shannon-desktop depends on Tauri/webkit2gtk-4.1 which is not musl-portable.
-      # shannon-mcp-saas depends on keyring → libdbus-sys, whose C build
-      # cannot cross-compile to musl without a musl-linked libdbus (not
-      # packaged on ubuntu). Cross-compile the remaining workspace as a
-      # smoke test.
-      - name: Check Linux x86_64 musl
+        run: rustup target add x86_64-unknown-linux-musl && sudo apt-get install -y --no-install-recommends musl-tools
+      - name: Check Linux x86_64 musl (advisory)
+        # Confirm the workspace still compiles against the statically-linked
+        # musl libc target. Step-level continue-on-error keeps the REQUIRED
+        # Cross-platform Check green when musl breaks (musl-portable
+        # webkit/gtk deps are blocked upstream) — same advisory semantics
+        # the standalone job had via job-level continue-on-error.
+        # shannon-desktop: Tauri/webkit2gtk-4.1 is not musl-portable.
+        # shannon-mcp-saas: keyring → libdbus-sys needs a musl-linked
+        # libdbus (not packaged on ubuntu).
+        if: runner.os == 'Linux'
+        continue-on-error: true
         run: cargo check --workspace --exclude shannon-desktop --exclude shannon-mcp-saas --target x86_64-unknown-linux-musl
 
   semver-check:
