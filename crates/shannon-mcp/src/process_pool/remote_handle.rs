@@ -18,6 +18,62 @@ use crate::transport::Transport;
 // Remote Server Handle (HTTP/SSE transports)
 // ---------------------------------------------------------------------------
 
+/// Classified failure of a remote MCP connection (A2 failure presentation).
+///
+/// The desktop maps each kind to a distinct UI state — `NeedsAuth` offers
+/// re-authentication, `Unreachable` offers retry, `ServerError` offers
+/// retry plus a detail view — so the three never collapse into one generic
+/// Offline badge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteFailureKind {
+    /// The server answered 401/403 — stored credentials are missing,
+    /// expired, and (when a refresh was attempted) no longer accepted.
+    NeedsAuth,
+    /// Timeout, DNS failure, refused connection, or another transport-level
+    /// problem — retrying is meaningful.
+    Unreachable,
+    /// The server answered with a non-auth HTTP error status or a JSON-RPC
+    /// / parse error — a server-side problem.
+    ServerError,
+}
+
+impl RemoteFailureKind {
+    /// Stable wire token for the desktop IPC surface.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RemoteFailureKind::NeedsAuth => "needs_auth",
+            RemoteFailureKind::Unreachable => "unreachable",
+            RemoteFailureKind::ServerError => "server_error",
+        }
+    }
+}
+
+/// Classify a remote connection error message into a [`RemoteFailureKind`].
+///
+/// The patterns mirror the error strings `RemoteMcpServerHandle` produces
+/// in this file (kept adjacent so the two evolve together); unknown
+/// messages classify as `Unreachable` — the retryable default.
+pub fn classify_remote_failure(message: &str) -> RemoteFailureKind {
+    if message.contains("HTTP 401") || message.contains("HTTP 403") {
+        RemoteFailureKind::NeedsAuth
+    } else if message.contains("timed out")
+        || message.contains("HTTP request failed")
+        || message.contains("SSE stream error")
+        || message.contains("WebSocket")
+        || message.contains("connection refused")
+    {
+        RemoteFailureKind::Unreachable
+    } else if message.contains("returned HTTP")
+        || message.contains("' error: ")
+        || message.contains("response parse error")
+        || message.contains("SSE stream ended")
+    {
+        RemoteFailureKind::ServerError
+    } else {
+        RemoteFailureKind::Unreachable
+    }
+}
+
 /// Manages a remote MCP server connection via HTTP.
 ///
 /// Unlike `McpServerHandle` (which manages a child process over stdio),
@@ -1139,6 +1195,71 @@ mod tests {
     async fn protocol_version_initially_empty() {
         let handle = make_remote_handle("proto-test");
         assert!(handle.protocol_version.read().await.is_empty());
+    }
+
+    // -- failure classification --------------------------------------------
+
+    #[test]
+    fn classifies_auth_failures_as_needs_auth() {
+        for msg in [
+            "Remote MCP server 'x' returned HTTP 401 (unauthorized).",
+            "Remote MCP server 'x' returned HTTP 403",
+        ] {
+            assert_eq!(
+                classify_remote_failure(msg),
+                RemoteFailureKind::NeedsAuth,
+                "{msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_transport_failures_as_unreachable() {
+        for msg in [
+            "Remote MCP server 'x' request timed out after 30s",
+            "Remote MCP server 'x' HTTP request failed: error sending request",
+            "SSE stream error: connection reset",
+            "WebSocket connect failed for 'x': refused",
+            "Remote MCP server 'x' HTTP request failed: connection refused",
+        ] {
+            assert_eq!(
+                classify_remote_failure(msg),
+                RemoteFailureKind::Unreachable,
+                "{msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_server_side_failures_as_server_error() {
+        for msg in [
+            "Remote MCP server 'x' returned HTTP 500",
+            "Remote MCP server 'x' returned HTTP 503",
+            "Remote MCP server 'x' error: rate limited",
+            "Remote MCP server 'x' response parse error: eof",
+            "Remote MCP server 'x' SSE stream ended without JSON-RPC response",
+        ] {
+            assert_eq!(
+                classify_remote_failure(msg),
+                RemoteFailureKind::ServerError,
+                "{msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_messages_default_to_retryable_unreachable() {
+        assert_eq!(
+            classify_remote_failure("something entirely unexpected"),
+            RemoteFailureKind::Unreachable
+        );
+    }
+
+    #[test]
+    fn failure_kinds_have_stable_wire_tokens() {
+        assert_eq!(RemoteFailureKind::NeedsAuth.as_str(), "needs_auth");
+        assert_eq!(RemoteFailureKind::Unreachable.as_str(), "unreachable");
+        assert_eq!(RemoteFailureKind::ServerError.as_str(), "server_error");
     }
 
     // -- header commands safety check --------------------------------------

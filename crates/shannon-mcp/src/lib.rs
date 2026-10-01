@@ -55,7 +55,7 @@ pub mod webhook;
 
 pub use auth::{
     ApiKeyProvider, AuthProvider, DcrRegistrationResult, OAuth2Provider, OAuthDiscoveryResult,
-    auto_register_oauth, discover_oauth_endpoints, register_client,
+    OAuthTokenSnapshot, auto_register_oauth, discover_oauth_endpoints, register_client,
 };
 pub use client::{McpClient, McpClientError};
 pub use config::{
@@ -63,9 +63,10 @@ pub use config::{
     discover_config, expand_env_vars, expand_server_config,
 };
 pub use process_pool::{
-    ChunkResult, McpProcessPool, PooledDiscoveryResult, PooledMcpToolAdapter, ServerState,
-    ServerStatus, UserPromptCallback, discover_pooled_remote_tools, discover_pooled_tools,
-    make_elicitation_provider, make_sampling_provider,
+    ChunkResult, McpProcessPool, PooledDiscoveryResult, PooledMcpToolAdapter, RemoteFailureKind,
+    ServerState, ServerStatus, StoredOAuthCredentials, UserPromptCallback, classify_remote_failure,
+    discover_pooled_remote_tools, discover_pooled_tools, make_elicitation_provider,
+    make_sampling_provider,
 };
 pub use protocol::{
     ClientCapabilities, ClientInfo, Completion, CompletionRef, CompletionRequest, CompletionResult,
