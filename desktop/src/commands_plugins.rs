@@ -801,7 +801,7 @@ mod lifecycle_tests {
                 .is_file()
         );
         assert!(homes.commands_root.join("go.md").is_file());
-        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path);
+        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path).unwrap();
         assert!(
             servers.iter().any(|s| s.name == "bundle-relay"),
             "{servers:?}"
