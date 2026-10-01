@@ -131,7 +131,15 @@ fn test_attach_repeats_allowed() {
     // test_target_flag_is_accepted) — no real headless session (this test
     // was the single worst offender: >60s per CI run).
     shannon()
-        .args(["--attach", "/a.png", "--attach", "/b.jpg", "--prompt", "x", "--version"])
+        .args([
+            "--attach",
+            "/a.png",
+            "--attach",
+            "/b.jpg",
+            "--prompt",
+            "x",
+            "--version",
+        ])
         .assert()
         .success()
         .stderr(predicate::str::contains("unexpected argument").not());
