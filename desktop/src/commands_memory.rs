@@ -386,8 +386,10 @@ pub async fn get_memory_source(
 // ─── Injected-memory introspection (P2-5: "which memories did this turn use") ─
 
 /// One injected memory as the ContextBreakdownCard renders it: a display
-/// title plus the provenance fields the source-jump needs.
-#[derive(Debug, Clone, serde::Serialize)]
+/// title plus the provenance fields the source-jump needs. `Deserialize` is
+/// derived only so `SendMessageResponse` can carry the same DTO back with
+/// `#[serde(default)]` (W3-4); the command itself never deserializes one.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InjectedMemoryDto {
     pub id: String,
@@ -423,8 +425,27 @@ pub async fn get_session_injected_memories(
             _ => None,
         }
     });
-    Ok(engine
-        .injected_memories(last_user_message.as_deref())
+    Ok(turn_injected_memories(
+        &engine,
+        last_user_message.as_deref(),
+    ))
+}
+
+/// The per-turn citation snapshot (W3-4): the entries THIS turn's system
+/// prompt injects, as DTOs. Shared by `get_session_injected_memories` (the
+/// RightDock introspection replay) and `send_message` (which calls it right
+/// after building the turn's engine — same store, same frozen project key,
+/// same shared selection pipeline as the engine's own
+/// `format_for_injection`, so the citation can never name an entry the
+/// prompt did not carry). Empty when no store is attached (the P2-5
+/// "temporary chat" bypass) or nothing qualified — the frontend renders no
+/// citation chips for an empty list.
+pub(crate) fn turn_injected_memories(
+    engine: &QueryEngine,
+    query: Option<&str>,
+) -> Vec<InjectedMemoryDto> {
+    engine
+        .injected_memories(query)
         .into_iter()
         .map(|selected| InjectedMemoryDto {
             id: selected.entry.id,
@@ -432,7 +453,7 @@ pub async fn get_session_injected_memories(
             category: selected.entry.category.to_string(),
             source_session_id: selected.entry.source_session_id,
         })
-        .collect())
+        .collect()
 }
 
 /// First line of a memory's content as the display title, char-capped at
@@ -952,6 +973,71 @@ mod tests {
             std::sync::Arc::ptr_eq(&handle, &shared),
             "enabled path must attach the shared store instance"
         );
+    }
+
+    #[test]
+    fn turn_injected_memories_empty_without_store_or_entries() {
+        use shannon_core::query_engine::QueryEngine;
+        use shannon_engine::api::client::LlmClient;
+        use shannon_engine::api::types::LlmClientConfig;
+        use shannon_engine::permissions::PermissionManager;
+        use shannon_engine::state::StateManager;
+
+        let build = || {
+            QueryEngine::with_defaults_arc(
+                LlmClient::new(LlmClientConfig::default()),
+                std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+                PermissionManager::new(),
+                StateManager::new(),
+            )
+        };
+        // W3-4 citation snapshot: a bypassed (no-store) engine — exactly the
+        // shape `attach_shared_memory_if(.., true)` returns — yields an empty
+        // list, which the frontend renders as zero chips.
+        let bypassed = build();
+        assert!(turn_injected_memories(&bypassed, Some("anything")).is_empty());
+
+        // An attached but empty store also yields nothing (0-injection turn).
+        let dir = tempfile::TempDir::new().unwrap();
+        let shared = open_shared_store_at(dir.path().to_path_buf());
+        let attached = attach_shared_memory(build(), &shared);
+        assert!(turn_injected_memories(&attached, Some("anything")).is_empty());
+    }
+
+    #[test]
+    fn turn_injected_memories_names_seeded_entries_with_provenance() {
+        use shannon_core::query_engine::QueryEngine;
+        use shannon_engine::api::client::LlmClient;
+        use shannon_engine::api::types::LlmClientConfig;
+        use shannon_engine::permissions::PermissionManager;
+        use shannon_engine::state::StateManager;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let shared = open_shared_store_at(dir.path().to_path_buf());
+        // Seed through the shared handle with the engine's project key so the
+        // selection scopes to it (same trick as
+        // `attach_shared_memory_attaches_one_shared_handle`).
+        let engine = attach_shared_memory(
+            QueryEngine::with_defaults_arc(
+                LlmClient::new(LlmClientConfig::default()),
+                std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+                PermissionManager::new(),
+                StateManager::new(),
+            ),
+            &shared,
+        );
+        let project = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "default".to_string());
+        let mut entry = MemoryEntry::new(&project, MemoryCategory::Preference, "use pnpm");
+        entry.source_session_id = Some("sess-9".to_string());
+        shared.write().unwrap().add(entry).unwrap();
+
+        let dtos = turn_injected_memories(&engine, Some("pnpm"));
+        assert_eq!(dtos.len(), 1);
+        assert_eq!(dtos[0].title, "use pnpm");
+        assert_eq!(dtos[0].category, "preference");
+        assert_eq!(dtos[0].source_session_id.as_deref(), Some("sess-9"));
     }
 
     #[test]

@@ -704,6 +704,10 @@ pub struct SendMessageResponse {
     pub query_id: String,
     #[serde(default)]
     pub rejected_attachments: Vec<RejectedAttachment>,
+    /// W3-4 — the memories injected into THIS turn's prompt (the citation
+    /// chip list; empty for the temporary-chat bypass / zero selections).
+    #[serde(default)]
+    pub injected_memories: Vec<crate::commands_memory::InjectedMemoryDto>,
 }
 
 impl Default for AppState {
@@ -1533,6 +1537,15 @@ pub async fn send_message(
         &state.memory_store,
         memory_disabled,
     );
+    // W3-4 — per-turn citation snapshot: the entries this turn's system
+    // prompt is about to inject. Computed right after the store is attached
+    // (which refreshes from disk), so it is the same store + frozen project
+    // key + shared selection pipeline the engine's own
+    // `format_for_injection` runs microseconds later in the spawned task —
+    // the chips therefore cite exactly what the prompt carried. Empty for
+    // the P2-5 temporary-chat bypass (no store attached) and for a
+    // zero-selection turn; the frontend renders no chips for an empty list.
+    let injected_memories = crate::commands_memory::turn_injected_memories(&engine, Some(&message));
     // G1 Imp-3 — advertise installed skills in the system prompt: the same
     // `format_skills_for_llm()` listing the REPL injects, plus the
     // `/name` ↔ `skill_<name>` tool mapping, so a user's `/trigger` text
@@ -2193,6 +2206,7 @@ pub async fn send_message(
     Ok(SendMessageResponse {
         query_id: return_qid,
         rejected_attachments,
+        injected_memories,
     })
 }
 
@@ -2775,11 +2789,21 @@ mod tests {
                 path: "/etc/hosts".to_string(),
                 reason: RejectedAttachmentReason::OutOfWorkingDir,
             }],
+            injected_memories: vec![crate::commands_memory::InjectedMemoryDto {
+                id: "m1".to_string(),
+                title: "use pnpm not npm".to_string(),
+                category: "preference".to_string(),
+                source_session_id: Some("sess-9".to_string()),
+            }],
         };
         let json = serde_json::to_string(&resp).unwrap();
         // P0-3: the reason serializes as a snake_case tag the frontend can
         // switch on.
         assert!(json.contains("\"reason\":\"out_of_working_dir\""));
+        // W3-4: the citation list rides camelCase (InjectedMemoryDto) so the
+        // chips render the same shape the RightDock introspection returns.
+        assert!(json.contains("\"injectedMemories\":[{"));
+        assert!(json.contains("\"sourceSessionId\":\"sess-9\""));
         let deserialized: SendMessageResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.query_id, "abc-123");
         assert_eq!(deserialized.rejected_attachments.len(), 1);
@@ -2787,10 +2811,13 @@ mod tests {
             deserialized.rejected_attachments[0].reason,
             RejectedAttachmentReason::OutOfWorkingDir
         );
+        assert_eq!(deserialized.injected_memories.len(), 1);
+        assert_eq!(deserialized.injected_memories[0].id, "m1");
         // Back-compat: payloads / callers from before P0-3 omit the field.
         let legacy: SendMessageResponse =
             serde_json::from_str("{\"query_id\":\"abc-123\"}").unwrap();
         assert!(legacy.rejected_attachments.is_empty());
+        assert!(legacy.injected_memories.is_empty());
     }
 
     // ── G3b P1-4: PDF escape hatch + extraction summary ─────────────────
