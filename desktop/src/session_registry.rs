@@ -303,6 +303,23 @@ impl SessionState {
     }
 }
 
+/// Registry-level view of the P2-5 bypass flags.
+impl SessionRegistry {
+    /// The session ids whose "temporary chat" flag is on — the exclusion set
+    /// every consumer of session CONTENT must filter by (prompt injection is
+    /// only one consumer: the dream pass and skill detection excerpt session
+    /// bodies too, and a bypassed session's text must never reach either).
+    /// The registry is authoritative: the sidecar hydrates into it at
+    /// startup and `set_session_memory_bypass` keeps it live.
+    pub fn memory_disabled_ids(&self) -> std::collections::HashSet<Uuid> {
+        self.sessions
+            .iter()
+            .filter(|entry| entry.value().memory_disabled_snapshot())
+            .map(|entry| entry.key().0)
+            .collect()
+    }
+}
+
 /// Session-scoped state registry.
 ///
 /// Two collaborators:

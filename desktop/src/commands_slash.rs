@@ -53,9 +53,16 @@ pub(crate) async fn restored_engine(
         .ok_or_else(|| format!("unknown session {session_id}"))?;
 
     let stashed = session.query_engine.lock().await.clone();
+    // P2-5 fix: honor the session's "temporary chat" flag on the cold path
+    // too. Before this, a session whose engine was no longer stashed
+    // (restart, eviction) got a freshly memory-attached engine, so the
+    // introspection surfaces (context breakdown, injected memories) started
+    // reporting memory content again while the composer banner still said
+    // "this session doesn't use memory". The registry is authoritative: the
+    // sidecar hydrates into it at startup.
     let mut engine = match stashed {
         Some(engine) => engine,
-        None => crate::commands_memory::attach_shared_memory(
+        None => crate::commands_memory::attach_shared_memory_if(
             QueryEngine::with_defaults_arc(
                 LlmClient::new(state.client_config.read().await.clone()),
                 state.tools.clone(),
@@ -63,6 +70,7 @@ pub(crate) async fn restored_engine(
                 StateManager::new(),
             ),
             &state.memory_store,
+            session.memory_disabled_snapshot(),
         ),
     };
     engine.set_session_id(session_id);
@@ -600,5 +608,109 @@ mod tests {
                 "{bad:?} must be invalid"
             );
         }
+    }
+
+    // === P2-5 fix (I1): the cold-start engine honors the bypass flag ===
+
+    /// The restart story: no engine stashed on the session (fresh
+    /// `AppState`, nothing sent yet) + the flag hydrated from the sidecar
+    /// (set directly here). `restored_engine` must build a memory-less
+    /// engine, so the introspection surfaces report an EMPTY memory
+    /// segment — same as the live path (`send_message`), same as the
+    /// composer banner promises. A control session without the flag still
+    /// sees the shared store.
+    #[tokio::test]
+    async fn restored_engine_skips_memory_for_bypassed_session_on_cold_start() {
+        use shannon_core::memory::MemoryCategory;
+
+        let temp = std::env::temp_dir().join(format!(
+            "shannon-slash-restore-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let mut state = AppState::new();
+        // Redirect the stores the test touches off the real HOME.
+        state.memory_store = crate::commands_memory::open_shared_store_at(temp.join("memories"));
+        state.state_manager = std::sync::Arc::new(
+            shannon_engine::state::StateManager::with_sessions_dir(temp.join("sessions"))
+                .expect("temp sessions dir"),
+        );
+
+        // A memory entry keyed to the engine's project key (the process cwd,
+        // the same freeze `attach_shared_memory` performs) so the CONTROL
+        // session has something to inject; the bypassed one must not.
+        let project = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "default".to_string());
+        {
+            let mut store_guard = state.memory_store.write().unwrap();
+            store_guard
+                .add(shannon_core::memory::MemoryEntry::new(
+                    &project,
+                    MemoryCategory::Preference,
+                    "restart-visible memory fact",
+                ))
+                .unwrap();
+        }
+
+        // Two sessions with an L0 log each (the restore input); one carries
+        // the bypass flag as a post-restart hydrate would leave it.
+        let bypassed = uuid::Uuid::new_v4();
+        let control = uuid::Uuid::new_v4();
+        for id in [bypassed, control] {
+            shannon_core::session_log::SessionTee::open_in_container(
+                state.state_manager.sessions_dir(),
+                &id.to_string(),
+                "test-model",
+                None,
+            )
+            .close();
+            state.registry.insert(id);
+        }
+        state
+            .registry
+            .get(crate::session_registry::SessionKey(bypassed))
+            .unwrap()
+            .set_memory_disabled(true);
+
+        // Cold start: neither session has a stashed engine.
+        let restored_bypassed = restored_engine(&state, bypassed).await.unwrap();
+        assert!(
+            restored_bypassed.memory().is_none(),
+            "the bypassed session's cold engine carries no memory store"
+        );
+        let breakdown = restored_bypassed.context_breakdown();
+        let memory_tokens = breakdown
+            .categories
+            .iter()
+            .find(|c| c.key == "memory")
+            .map(|c| c.tokens)
+            .unwrap_or(0);
+        assert_eq!(
+            memory_tokens, 0,
+            "context breakdown reports an empty memory segment for the bypassed session"
+        );
+        assert!(
+            restored_bypassed.injected_memories(None).is_empty(),
+            "no injected memories are reported for the bypassed session"
+        );
+
+        // Control: same state, no flag — the shared store is attached and
+        // the seeded entry shows up in the memory segment.
+        let restored_control = restored_engine(&state, control).await.unwrap();
+        assert!(restored_control.memory().is_some());
+        let breakdown = restored_control.context_breakdown();
+        let memory_tokens = breakdown
+            .categories
+            .iter()
+            .find(|c| c.key == "memory")
+            .map(|c| c.tokens)
+            .unwrap_or(0);
+        assert!(
+            memory_tokens > 0,
+            "the control session still sees memory: {breakdown:?}"
+        );
+
+        std::fs::remove_dir_all(&temp).ok();
     }
 }
