@@ -1056,6 +1056,9 @@ fn mirror_drained_run(
         finished_at_ms: (status == "cancelled").then_some(now_ms),
         duration_ms: None,
         inbox_item_id: None,
+        // Drained scheduler tombstones never executed — no spend.
+        cost_usd: None,
+        token_usage: None,
     };
     if let Err(e) = inbox.import_run(&record) {
         tracing::warn!(

@@ -23,13 +23,13 @@
 
 use std::path::PathBuf;
 
-use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Local, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use shannon_core::notifier::{Notification, NotificationLevel, Notifier};
 use shannon_core::scheduled_runs::{ScheduledRun, ScheduledRunsStore};
 
 use crate::commands::AppState;
-use crate::commands_usage::{UsageRecord, scheduled_run_to_record};
+use crate::commands_usage::UsageRecord;
 
 /// Share of the monthly budget at which the first advisory fires (the hard
 /// notice is at 100%). Same 80/100 split the session budget uses
@@ -196,32 +196,12 @@ pub(crate) fn summarize_windows(
     (month_cost, week_cost)
 }
 
-/// Chat-ledger records plus scheduled-routine spend folded in — the exact
-/// merge `get_usage_stats` does, narrowed to the windows this module needs
-/// (a 40-day lookback always covers the month-to-date window). The runs
-/// store is injected so tests never touch the real `~/.shannon` tree.
-fn collect_governance_records(
-    usage: &crate::commands_usage::UsageStore,
-    runs_store: &ScheduledRunsStore,
-    now_ms: u64,
-) -> Vec<UsageRecord> {
-    let mut records = usage.load();
-    let now_dt = DateTime::<Utc>::from_timestamp_millis(now_ms as i64).unwrap_or_else(Utc::now);
-    let start = now_dt - Duration::days(40);
-    match runs_store.list_by_time_range(start, now_dt) {
-        Ok(runs) => {
-            for run in &runs {
-                if let Some(r) = scheduled_run_to_record(run) {
-                    records.push(r);
-                }
-            }
-        }
-        Err(e) => tracing::warn!(
-            error = %e,
-            "scheduled-runs store unreadable; governance will omit scheduled spend"
-        ),
-    }
-    records
+/// The chat ledger verbatim — the windows this module sums over (R2-W2-2).
+/// The former scheduled-runs fold would now double-count routine spend:
+/// every routine run writes session-attributed ledger lines, and since the
+/// run records carry the same cost the fold's lump sums would count it twice.
+fn collect_governance_records(usage: &crate::commands_usage::UsageStore) -> Vec<UsageRecord> {
+    usage.load()
 }
 
 // ── get_usage_governance ──────────────────────────────────────────────────
@@ -275,8 +255,7 @@ pub async fn get_usage_governance(
 
     let now = Local::now();
     let now_ms = now.timestamp_millis().max(0) as u64;
-    let records =
-        collect_governance_records(&state.usage_store, &ScheduledRunsStore::new(), now_ms);
+    let records = collect_governance_records(&state.usage_store);
     let (month_cost, week_cost) = summarize_windows(&records, now_ms, month_start_ms(now));
     let month = month_key(now);
 
@@ -436,6 +415,7 @@ pub async fn estimate_task_cost(task_id: Option<String>) -> Result<TaskCostEstim
 mod tests {
     use super::*;
     use crate::commands_usage::UsageStore;
+    use chrono::Duration;
 
     fn rec(ts_ms: u64, cost: f64) -> UsageRecord {
         UsageRecord {
@@ -556,30 +536,27 @@ mod tests {
     }
 
     #[test]
-    fn governance_records_fold_scheduled_runs_from_the_real_store() {
+    fn governance_records_are_the_ledger_only() {
+        // R2-W2-2: routine runs now carry their own cost on the run records
+        // AND session-attributed ledger lines — folding the JSONL mirror in
+        // would double-count that spend, so governance reads the ledger
+        // verbatim even when cost-bearing run records exist beside it.
         let tmp = tempfile::tempdir().unwrap();
         let usage = UsageStore::with_path(tmp.path().join("usage.jsonl"));
         usage.append(&rec(1, 0.10)).unwrap();
 
-        let runs_dir = tmp.path().join("runs");
         let mut run = ScheduledRun::start("t1", "Digest");
-        // Backdate a little: list_by_time_range's end bound is exclusive and
-        // computed after start(), so a just-created run could race past it.
         run.started_at = Utc::now() - Duration::seconds(1);
         run.cost_usd = Some(0.42);
-        ScheduledRunsStore::with_base(runs_dir)
+        ScheduledRunsStore::with_base(tmp.path().join("runs"))
             .record(&run)
             .unwrap();
 
         let now_ms = Utc::now().timestamp_millis().max(0) as u64;
-        let records = collect_governance_records(
-            &usage,
-            &ScheduledRunsStore::with_base(tmp.path().join("runs")),
-            now_ms,
-        );
-        assert_eq!(records.len(), 2, "chat ledger + folded scheduled run");
+        let records = collect_governance_records(&usage);
+        assert_eq!(records.len(), 1, "ledger only — no folded run lump");
         let (month, _) = summarize_windows(&records, now_ms, 0);
-        assert!((month - 0.52).abs() < 1e-9, "{month}");
+        assert!((month - 0.10).abs() < 1e-9, "{month}");
     }
 
     // ── estimate_from_runs ───────────────────────────────────────────────

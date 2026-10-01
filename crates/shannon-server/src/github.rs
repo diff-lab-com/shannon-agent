@@ -446,7 +446,17 @@ fn finalize_run(
     } else {
         "failed"
     };
-    if let Err(e) = inbox.record_run_finish(run_id, status, failure.as_deref(), inbox_item_id) {
+    // Serve-side runs carry no cost/token accounting (the engine's Usage
+    // ledger is the desktop-side source of truth) — the columns stay NULL so
+    // the UI hides their cost cells.
+    if let Err(e) = inbox.record_run_finish(
+        run_id,
+        status,
+        failure.as_deref(),
+        inbox_item_id,
+        None,
+        None,
+    ) {
         tracing::warn!(run_id, error = %e, "could not record run finish");
     }
 }

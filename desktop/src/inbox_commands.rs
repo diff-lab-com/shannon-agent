@@ -189,8 +189,9 @@ fn ms_to_secs(ms: Option<i64>) -> Option<i64> {
 /// - `error_message` ↔ `error`
 /// - `task_name` ↔ `task_name`, falling back to the task id (JSONL always
 ///   carried a name; the column is nullable)
-/// - `cost_usd`/`token_usage` ↔ `None` — never tracked in `routine_runs`;
-///   the JSONL fields existed but no write path ever populated them either.
+/// - `cost_usd`/`token_usage` ↔ the run's cost columns verbatim (R2-W2-2:
+///   the finalize path populates them; runs from before cost tracking read
+///   back `None` and the UI keeps hiding their cost cells — no estimates).
 pub(crate) fn run_record_to_execution(run: &RunRecord) -> TaskExecution {
     TaskExecution {
         run_id: run.id.clone(),
@@ -204,8 +205,8 @@ pub(crate) fn run_record_to_execution(run: &RunRecord) -> TaskExecution {
         finished_at: ms_to_secs(run.finished_at_ms),
         status: run.status.clone(),
         error_message: run.error.clone(),
-        cost_usd: None,
-        token_usage: None,
+        cost_usd: run.cost_usd,
+        token_usage: run.token_usage,
     }
 }
 
@@ -226,6 +227,8 @@ pub(crate) fn scheduled_run_to_record(run: &ScheduledRun) -> RunRecord {
         finished_at_ms: finished_ms,
         duration_ms: finished_ms.map(|f| (f - started_ms).max(0)),
         inbox_item_id: None,
+        cost_usd: run.cost_usd,
+        token_usage: run.token_usage,
     }
 }
 
@@ -475,6 +478,8 @@ where
                     error: Some(format!("routine run timed out after {}s", limit.as_secs())),
                     output: String::new(),
                     session_id: None,
+                    cost_usd: None,
+                    token_usage: None,
                 }
             }
         },
@@ -693,12 +698,14 @@ pub(crate) fn resolve_run_working_dir(
 pub(crate) trait RunMirror: Send + Sync {
     /// Append the initial `Running` record.
     fn record_start(&self, run: &ScheduledRun) -> Result<(), String>;
-    /// Append the finish revision for `run_id`.
+    /// Append the finish revision for `run_id`, carrying the run's cost/token
+    /// totals (R2-W2-2 — `None`s keep the legacy "not tracked" shape).
     fn record_finish(
         &self,
         run_id: &str,
         status: RunStatus,
         error: Option<String>,
+        spend: RunSpend,
     ) -> Result<(), String>;
 }
 
@@ -712,9 +719,16 @@ impl RunMirror for shannon_core::scheduled_runs::ScheduledRunsStore {
         run_id: &str,
         status: RunStatus,
         error: Option<String>,
+        spend: RunSpend,
     ) -> Result<(), String> {
-        self.update(run_id, |r| r.finish(status, error))
-            .map_err(|e| e.to_string())
+        self.update(run_id, |r| {
+            // The mirror carries the same spend the authoritative SQLite row
+            // gets; the Usage page keeps reading the ledger, not the mirror.
+            r.cost_usd = spend.cost_usd;
+            r.token_usage = spend.token_usage;
+            r.finish(status, error);
+        })
+        .map_err(|e| e.to_string())
     }
 }
 
@@ -822,13 +836,27 @@ pub(crate) struct RunFinishContext {
     pub(crate) notify_webhook: bool,
 }
 
+/// A run's observed spend, as persisted on the run records (SQLite
+/// `routine_runs` + the legacy JSONL mirror). `None` = "nothing observed" —
+/// the UI hides the cell; estimates are never fabricated (R2-P0-3 ruling).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct RunSpend {
+    pub(crate) cost_usd: Option<f64>,
+    pub(crate) token_usage: Option<u64>,
+}
+
 /// What the engine phase of a run produced. `session_id` is `None` when the
 /// engine phase never got far enough to open a session (e.g. panic).
+///
+/// R2-W2-2: `cost_usd`/`token_usage` carry the run's Usage-event totals —
+/// `None` when nothing was consumed/observed (never an estimate).
 pub(crate) struct RunOutcome {
     pub(crate) failed: bool,
     pub(crate) error: Option<String>,
     pub(crate) output: String,
     pub(crate) session_id: Option<String>,
+    pub(crate) cost_usd: Option<f64>,
+    pub(crate) token_usage: Option<u64>,
 }
 
 impl RunOutcome {
@@ -839,6 +867,8 @@ impl RunOutcome {
             error: Some(format!("routine task panicked: {join_error}")),
             output: String::new(),
             session_id: None,
+            cost_usd: None,
+            token_usage: None,
         }
     }
 }
@@ -933,7 +963,10 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
                 error: Some(reason),
                 output: String::new(),
                 session_id: None,
+                cost_usd: None,
+                token_usage: None,
             },
+            RunSpend::default(),
         );
         return Ok(run_id);
     }
@@ -1090,6 +1123,13 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
 
             let mut final_output = String::new();
             let mut failure: Option<String> = None;
+            // R2-W2-2: this attempt's Usage-event totals — persisted on the
+            // run record so the OPC/History cost columns carry real data.
+            // (What is NOT covered: spend from earlier, retried attempts —
+            // each attempt sums only itself; see the W2-3 budget-abort
+            // accounting note for the known undercount.)
+            let mut attempt_cost_usd = 0.0f64;
+            let mut attempt_tokens = 0u64;
 
             let stream = engine.process_query(context, None).await;
             use futures::StreamExt;
@@ -1106,6 +1146,11 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
                             cache_read_tokens,
                             ..
                         } => {
+                            attempt_cost_usd += cost_usd;
+                            attempt_tokens += input_tokens
+                                + output_tokens
+                                + cache_creation_tokens
+                                + cache_read_tokens;
                             // Best-effort ledger write, mirroring background tasks.
                             // P1-2: the write is attributed to this run's session so
                             // the routine budget gate can aggregate per-routine spend
@@ -1143,6 +1188,8 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
                 error: failure,
                 output: final_output,
                 session_id: Some(session_id.to_string()),
+                cost_usd: Some(attempt_cost_usd),
+                token_usage: Some(attempt_tokens),
             }
         }
     };
@@ -1154,7 +1201,12 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     let run_policy = RunExecutionPolicy::of(&routine);
     tokio::spawn(async move {
         let outcome = execute_with_policy(make_engine_future, &run_policy).await;
-        finalize_run(&finish_deps, &app, ctx, outcome);
+        // R2-W2-2: persist the run's observed spend on both run records.
+        let spend = RunSpend {
+            cost_usd: outcome.cost_usd,
+            token_usage: outcome.token_usage,
+        };
+        finalize_run(&finish_deps, &app, ctx, outcome, spend);
     });
 
     Ok(run_id)
@@ -1231,14 +1283,16 @@ fn stamp_session_working_dir(
 }
 
 /// Close out a run: legacy JSONL finish (best-effort), inbox item, SQLite
-/// `routine_runs` finish (with `inbox_item_id` back-link), and the refresh
-/// event. Every path through here terminates the SQLite run — this is the
-/// single choke point that prevents `running` rows from wedging.
+/// `routine_runs` finish (with `inbox_item_id` back-link and the run's
+/// cost/token totals, R2-W2-2), and the refresh event. Every path through
+/// here terminates the SQLite run — this is the single choke point that
+/// prevents `running` rows from wedging.
 fn finalize_run<R: tauri::Runtime>(
     deps: &RoutineRunDeps,
     app: &tauri::AppHandle<R>,
     ctx: RunFinishContext,
     outcome: RunOutcome,
+    spend: RunSpend,
 ) {
     let finished_ms = chrono::Utc::now().timestamp_millis();
     let duration_secs = (finished_ms - ctx.started_ms).max(0) / 1000;
@@ -1258,9 +1312,9 @@ fn finalize_run<R: tauri::Runtime>(
     } else {
         RunStatus::Succeeded
     };
-    if let Err(e) = deps
-        .runs_store
-        .record_finish(&ctx.run_id, jsonl_status, run_error.clone())
+    if let Err(e) =
+        deps.runs_store
+            .record_finish(&ctx.run_id, jsonl_status, run_error.clone(), spend)
     {
         tracing::warn!(
             run_id = %ctx.run_id,
@@ -1305,10 +1359,14 @@ fn finalize_run<R: tauri::Runtime>(
             None
         }
     };
-    if let Err(e) = deps
-        .inbox
-        .record_run_finish(&ctx.run_id, status, run_error.as_deref(), item_id)
-    {
+    if let Err(e) = deps.inbox.record_run_finish(
+        &ctx.run_id,
+        status,
+        run_error.as_deref(),
+        item_id,
+        spend.cost_usd,
+        spend.token_usage,
+    ) {
         tracing::warn!(run_id = %ctx.run_id, error = %e, "inbox: failed to finish run record");
     }
 
@@ -1649,6 +1707,7 @@ mod tests {
             _run_id: &str,
             _status: RunStatus,
             _error: Option<String>,
+            _spend: RunSpend,
         ) -> Result<(), String> {
             self.record_finish_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1792,7 +1851,10 @@ mod tests {
                 error: None,
                 output: "run finished fine".into(),
                 session_id: Some("0195abcd-0000-7000-8000-000000000000".into()),
+                cost_usd: None,
+                token_usage: None,
             },
+            RunSpend::default(),
         );
 
         let runs = inbox.list_runs(10).unwrap();
@@ -1825,7 +1887,10 @@ mod tests {
                 error: Some("provider unreachable".into()),
                 output: String::new(),
                 session_id: Some("0195abcd-0000-7000-8000-000000000001".into()),
+                cost_usd: None,
+                token_usage: None,
             },
+            RunSpend::default(),
         );
 
         let runs = inbox.list_runs(10).unwrap();
@@ -1836,6 +1901,59 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].status, "pending");
         assert_eq!(items[0].error.as_deref(), Some("provider unreachable"));
+    }
+
+    #[test]
+    fn finalize_persists_cost_and_tokens_to_both_run_stores() {
+        // R2-W2-2: the finalize chain writes the run's observed spend to the
+        // authoritative SQLite row AND the legacy JSONL mirror, and the
+        // History read path (`run_record_to_execution`) carries it back out —
+        // the OPC/History cost columns recover without UI changes.
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, _inbox) = webhook_deps(
+            tmp.path(),
+            std::sync::Arc::new(RecordingWebhookPort::default()),
+        );
+        let jsonl = jsonl_store(tmp.path());
+
+        let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
+        // spawn_routine_run mirrors the start into the JSONL store before the
+        // run; reproduce that here (record_finish updates the existing run).
+        let mut jsonl_run = ScheduledRun::start("task-1", "Task One");
+        jsonl_run.run_id = run_id.clone();
+        jsonl.record(&jsonl_run).unwrap();
+        let spend = RunSpend {
+            cost_usd: Some(0.1234),
+            token_usage: Some(42_000),
+        };
+        finalize_run(
+            &deps,
+            app.handle(),
+            finish_ctx(&run_id, chrono::Utc::now().timestamp_millis() - 1_000),
+            RunOutcome {
+                failed: false,
+                error: None,
+                output: "done".into(),
+                session_id: Some("0195abcd-0000-7000-8000-000000000003".into()),
+                cost_usd: spend.cost_usd,
+                token_usage: spend.token_usage,
+            },
+            spend,
+        );
+
+        // SQLite (authoritative).
+        let record = &deps.inbox.list_runs(10).unwrap()[0];
+        assert_eq!(record.cost_usd, Some(0.1234));
+        assert_eq!(record.token_usage, Some(42_000));
+        // Read path projects the spend through to the UI contract.
+        let exec = run_record_to_execution(record);
+        assert_eq!(exec.cost_usd, Some(0.1234));
+        assert_eq!(exec.token_usage, Some(42_000));
+        // JSONL mirror carries the same totals.
+        let mirrored = jsonl.find_by_id(&run_id).unwrap().expect("mirrored run");
+        assert_eq!(mirrored.cost_usd, Some(0.1234));
+        assert_eq!(mirrored.token_usage, Some(42_000));
     }
 
     // ── B6': routine-finish webhook routing ─────────────────────────────
@@ -1943,7 +2061,10 @@ mod tests {
                 error: None,
                 output: "weekly numbers are in\nsecond line".into(),
                 session_id: Some("0195abcd-0000-7000-8000-000000000002".into()),
+                cost_usd: None,
+                token_usage: None,
             },
+            RunSpend::default(),
         );
 
         let deliveries = port.deliveries();
@@ -1980,7 +2101,10 @@ mod tests {
                 error: Some("provider unreachable".into()),
                 output: String::new(),
                 session_id: None,
+                cost_usd: None,
+                token_usage: None,
             },
+            RunSpend::default(),
         );
 
         let deliveries = port.deliveries();
@@ -2013,7 +2137,10 @@ mod tests {
                 error: None,
                 output: "did the thing".into(),
                 session_id: None,
+                cost_usd: None,
+                token_usage: None,
             },
+            RunSpend::default(),
         );
 
         // Nothing delivered, nothing raised — but the run record notes why.
@@ -2048,7 +2175,10 @@ mod tests {
                 error: None,
                 output: "plain run".into(),
                 session_id: None,
+                cost_usd: None,
+                token_usage: None,
             },
+            RunSpend::default(),
         );
 
         assert!(port.deliveries().is_empty(), "flag off = no delivery");
@@ -2106,6 +2236,8 @@ mod tests {
             error: None,
             output: "done".into(),
             session_id: Some("0195abcd-0000-7000-8000-00000000ffff".into()),
+            cost_usd: None,
+            token_usage: None,
         }
     }
 
@@ -2115,6 +2247,8 @@ mod tests {
             error: Some(error.into()),
             output: String::new(),
             session_id: None,
+            cost_usd: None,
+            token_usage: None,
         }
     }
 
@@ -2282,7 +2416,7 @@ mod tests {
             })
             .unwrap();
         inbox
-            .record_run_finish(&run_id, "succeeded", None, Some(item.id))
+            .record_run_finish(&run_id, "succeeded", None, Some(item.id), None, None)
             .unwrap();
         let usage = crate::commands_usage::UsageStore::with_path(tmp.join("usage.jsonl"));
         (inbox, usage)
@@ -2550,6 +2684,8 @@ mod tests {
             Some((finished - started.timestamp_millis()).max(0))
         );
         assert_eq!(record.inbox_item_id, None);
+        assert_eq!(record.cost_usd, None, "legacy mirror had no spend");
+        assert_eq!(record.token_usage, None);
 
         // Tombstone statuses render exactly like the JSONL projection.
         let mut queued = ScheduledRun::start("t", "T");
@@ -2572,6 +2708,8 @@ mod tests {
             finished_at_ms: Some(1_700_000_005_000),
             duration_ms: Some(4_877),
             inbox_item_id: Some(7),
+            cost_usd: None,
+            token_usage: None,
         };
         let exec = run_record_to_execution(&record);
         // The run id is the real SQLite/JSONL id — get_execution_detail
@@ -2582,7 +2720,7 @@ mod tests {
         assert_eq!(exec.finished_at, Some(1_700_000_005));
         assert_eq!(exec.status, "succeeded");
         assert!(exec.error_message.is_none());
-        assert_eq!(exec.cost_usd, None, "never tracked in routine_runs");
+        assert_eq!(exec.cost_usd, None, "untracked run stays cost-less");
         assert_eq!(exec.token_usage, None);
 
         // A missing/blank task_name falls back to the task id.
@@ -2606,7 +2744,7 @@ mod tests {
 
         let run_id = inbox.record_run_start("task-a", "Alpha").unwrap();
         inbox
-            .record_run_finish(&run_id, "succeeded", None, None)
+            .record_run_finish(&run_id, "succeeded", None, None, None, None)
             .unwrap();
         // Decoy: JSONL rows must be ignored while the inbox reads fine.
         jsonl.start_run("task-a", "Alpha").unwrap();
@@ -2676,7 +2814,7 @@ mod tests {
 
         let run_id = inbox.record_run_start("task-a", "Alpha").unwrap();
         inbox
-            .record_run_finish(&run_id, "failed", Some("boom"), None)
+            .record_run_finish(&run_id, "failed", Some("boom"), None, None, None)
             .unwrap();
         // Decoy: a same-id JSONL row must be ignored while the inbox row
         // resolves (the SQLite row is authoritative).
