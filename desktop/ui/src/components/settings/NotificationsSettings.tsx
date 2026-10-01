@@ -70,6 +70,50 @@ function presetFromTemplate(template: string | undefined): WebhookPreset {
   return PRESET_IDS.includes(template as WebhookPreset) ? (template as WebhookPreset) : 'custom'
 }
 
+/** Form-state snapshot of the webhook config as it is currently PERSISTED.
+ * R2-P1-7: `test_webhook` re-loads the saved config from disk, so the test
+ * verdict only matches what the form shows when the two agree — the diff
+ * below is the "dirty" gate for the test button. */
+interface WebhookSnapshot {
+  url: string
+  preset: WebhookPreset
+  customBody: string
+  secret: string
+  timeoutMs: number
+  includeBody: boolean
+}
+
+const WEBHOOK_DEFAULTS: WebhookSnapshot = {
+  url: '',
+  preset: 'custom',
+  customBody: '',
+  secret: '',
+  timeoutMs: 5000,
+  includeBody: false,
+}
+
+function webhookSnapshotFromDto(dto: api.WebhookConfigDto): WebhookSnapshot {
+  return {
+    url: dto.url,
+    preset: presetFromTemplate(dto.template),
+    customBody: dto.template?.startsWith('custom:') ? dto.template.slice('custom:'.length) : '',
+    secret: dto.secret ?? '',
+    timeoutMs: dto.timeout_ms || 5000,
+    includeBody: dto.include_body,
+  }
+}
+
+function webhookSnapshotDiffers(a: WebhookSnapshot, b: WebhookSnapshot): boolean {
+  return (
+    a.url !== b.url ||
+    a.preset !== b.preset ||
+    a.customBody !== b.customBody ||
+    a.secret !== b.secret ||
+    a.timeoutMs !== b.timeoutMs ||
+    a.includeBody !== b.includeBody
+  )
+}
+
 function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
   const t = useT()
 
@@ -84,19 +128,30 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
   const [secret, setSecret] = useState('')
   const [timeoutMs, setTimeoutMs] = useState(5000)
   const [includeBody, setIncludeBody] = useState(false)
+  // R2-P1-7: what the backend currently has persisted (`null` = nothing
+  // saved). The test button is gated on the form matching this snapshot.
+  const [saved, setSaved] = useState<WebhookSnapshot | null>(null)
+  // R2-P1-7: timeout input that is not a positive number — surfaced inline
+  // instead of being silently swallowed (the last valid value still sticks).
+  const [timeoutInvalid, setTimeoutInvalid] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     api
       .getWebhookConfig()
       .then((dto) => {
-        if (cancelled || !dto) return
+        if (cancelled) return
+        if (!dto) {
+          setSaved(null)
+          return
+        }
         setUrl(dto.url)
         setPreset(presetFromTemplate(dto.template))
         if (dto.template?.startsWith('custom:')) setCustomBody(dto.template.slice('custom:'.length))
         setSecret(dto.secret ?? '')
         setTimeoutMs(dto.timeout_ms || 5000)
         setIncludeBody(dto.include_body)
+        setSaved(webhookSnapshotFromDto(dto))
       })
       .catch((e) => console.warn('getWebhookConfig error:', e))
       .finally(() => {
@@ -107,12 +162,21 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
     }
   }, [])
 
+  // R2-P1-7: true whenever the form no longer matches the persisted config —
+  // a webhook test fired in this state would exercise the OLD config, so the
+  // button is disabled and an inline hint asks for a save first.
+  const webhookDirty = webhookSnapshotDiffers(
+    { url, preset, customBody, secret, timeoutMs, includeBody },
+    saved ?? WEBHOOK_DEFAULTS,
+  )
+
   const handlePresetChange = (next: WebhookPreset) => {
     setPreset(next)
-    // Only pre-fill the URL when the user hasn't typed one yet.
-    if (!url.trim()) {
-      setUrl(PRESET_META[next].urlPlaceholder)
-    }
+    // R2-P1-7: the preset's example URL (`…/<token>`) is NOT pre-filled into
+    // `url` anymore — it lives only in the input's placeholder attribute, so
+    // a placeholder can never be saved as a real URL (it used to pass
+    // validation once percent-encoded and made every save/test verdict
+    // meaningless).
   }
 
   const handleSave = async () => {
@@ -149,6 +213,16 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
         timeout_ms: timeoutMs,
         include_body: includeBody,
       })
+      // R2-P1-7: re-baseline the persisted snapshot so the test button
+      // lights up again immediately (the form now matches disk).
+      setSaved({
+        url: url.trim(),
+        preset,
+        customBody: preset === 'custom' ? customBody : '',
+        secret: secret.trim(),
+        timeoutMs,
+        includeBody,
+      })
       toast.success(t('settings.notifications.saved'))
       onSaved?.()
     } catch (e) {
@@ -167,6 +241,8 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
       setSecret('')
       setTimeoutMs(5000)
       setIncludeBody(false)
+      setSaved(null)
+      setTimeoutInvalid(false)
       toast.success(t('settings.notifications.cleared'))
       onSaved?.()
     } catch (e) {
@@ -176,11 +252,17 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
   }
 
   // P1-7: the timeout had state that participated in saves but no control —
-  // expose it. Non-positive / non-numeric input is ignored (keeps the last
-  // valid value) so the saved `timeout_ms` can never degrade to 0.
+  // expose it. Non-positive / non-numeric input keeps the last valid value
+  // (so the saved `timeout_ms` can never degrade to 0) and is now surfaced
+  // inline instead of being silently ignored (R2-P1-7).
   const handleTimeoutChange = (raw: string) => {
     const n = Number.parseInt(raw, 10)
-    if (Number.isFinite(n) && n > 0) setTimeoutMs(n)
+    if (Number.isFinite(n) && n > 0) {
+      setTimeoutMs(n)
+      setTimeoutInvalid(false)
+    } else {
+      setTimeoutInvalid(true)
+    }
   }
 
   // P1-7: send a one-shot test payload through the saved webhook config
@@ -326,8 +408,15 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
             step={500}
             value={timeoutMs}
             onChange={(e) => handleTimeoutChange(e.target.value)}
+            aria-invalid={timeoutInvalid}
+            aria-describedby={timeoutInvalid ? 'webhook-timeout-error' : undefined}
             className="w-40 px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 font-mono"
           />
+          {timeoutInvalid && (
+            <p id="webhook-timeout-error" className="mt-xs font-label-sm text-error">
+              {t('settings.notifications.error.timeoutInvalid')}
+            </p>
+          )}
         </div>
         <div className="flex items-center justify-between gap-md pb-sm">
           <span className="font-label-md text-on-surface">
@@ -369,17 +458,26 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
         >
           {saving ? t('settings.notifications.saving') : t('settings.notifications.save')}
         </Button>
-        {/* P1-7: one-shot test send — uses the SAVED config, so save first. */}
+        {/* R2-P1-7: the test POSTs the SAVED config, so it is only enabled
+            when the form matches what is persisted (not dirty) — otherwise
+            the verdict would describe the old config, not what the user
+            sees. */}
         <Button
           variant="outline"
           onClick={handleTestWebhook}
-          disabled={testingWebhook || !url.trim()}
+          disabled={testingWebhook || !url.trim() || webhookDirty}
+          aria-describedby={webhookDirty && url.trim() ? 'webhook-test-dirty-hint' : undefined}
         >
           {testingWebhook
             ? t('settings.notifications.sending')
             : t('settings.notifications.webhookTest.button')}
         </Button>
       </div>
+      {webhookDirty && url.trim() && (
+        <p id="webhook-test-dirty-hint" className="text-on-surface-variant font-body-sm -mt-xs">
+          {t('settings.notifications.webhookTest.dirtyHint')}
+        </p>
+      )}
 
       <div className="pt-md mt-sm border-t border-error/20 space-y-sm">
         <p className="font-label-sm text-error font-bold uppercase tracking-wide">
