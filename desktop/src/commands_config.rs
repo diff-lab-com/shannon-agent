@@ -271,6 +271,26 @@ fn parse_session_retention_days(value: &str) -> Result<Option<u32>, String> {
     })
 }
 
+/// P2-1: parse the `monthly_budget_usd` wire value into the stored budget.
+/// `""` / `"null"` / `"0"` (and any parsed non-positive or non-finite
+/// amount) clear the budget — `None` = no cap, the standing default; a
+/// non-numeric non-empty value is an error so a typo can't silently drop
+/// the user's budget.
+fn parse_monthly_budget_usd(value: &str) -> Result<Option<f64>, String> {
+    let raw = value.trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("null") {
+        return Ok(None);
+    }
+    let usd: f64 = raw
+        .parse()
+        .map_err(|e| format!("Invalid monthly_budget_usd `{raw}`: {e}"))?;
+    Ok(if usd.is_finite() && usd > 0.0 {
+        Some(usd)
+    } else {
+        None
+    })
+}
+
 /// Configuration update payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigUpdate {
@@ -907,6 +927,29 @@ pub async fn configure(
                 events::ConfigUpdatedPayload {
                     key: "plan".into(),
                     value: update.value,
+                },
+            );
+
+            Ok(())
+        }
+        "monthly_budget_usd" => {
+            // P2-1: the user-set monthly spend budget the sidebar % bar and
+            // the 80/100% threshold alerts key on (see
+            // `usage_governance::get_usage_governance`). Empty/`null`/`0`
+            // clears it — the sidebar then shows the trailing 7-day cost.
+            let parsed = parse_monthly_budget_usd(&update.value)?;
+            let mut desktop_cfg = state.desktop_config.write().await;
+            desktop_cfg.monthly_budget_usd = parsed;
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "monthly_budget_usd".into(),
+                    value: parsed.map(|b| b.to_string()).unwrap_or_default(),
                 },
             );
 
@@ -2365,6 +2408,23 @@ mod tests {
         assert!(parse_session_retention_days("-1").is_err());
         assert!(parse_session_retention_days("soon").is_err());
         assert!(parse_session_retention_days("").is_err());
+    }
+
+    #[test]
+    fn monthly_budget_usd_wire_value_clears_on_zero_and_rejects_typos() {
+        // P2-1: empty/null are the UI's "no budget" gear; "0" also clears.
+        assert_eq!(parse_monthly_budget_usd("").unwrap(), None);
+        assert_eq!(parse_monthly_budget_usd("null").unwrap(), None);
+        assert_eq!(parse_monthly_budget_usd("0").unwrap(), None);
+        // Parsed non-positive and non-finite amounts clear too (lenient,
+        // like the retention gear) — never persist a meaningless cap.
+        assert_eq!(parse_monthly_budget_usd("-5").unwrap(), None);
+        assert_eq!(parse_monthly_budget_usd("inf").unwrap(), None);
+        // Positive amounts survive trimming.
+        assert_eq!(parse_monthly_budget_usd(" 25.5 ").unwrap(), Some(25.5));
+        // A non-numeric non-empty value errors — a typo must not silently
+        // drop the user's budget.
+        assert!(parse_monthly_budget_usd("lots").is_err());
     }
 
     #[test]

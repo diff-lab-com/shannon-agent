@@ -73,6 +73,8 @@ Things deferred to future work.
 | [0009](0009-provider-store-read-facade.md) | Provider Store Read Facade (desktop read-path consolidation) | Accepted | 2026-08-06 |
 | [0010](0010-memory-curated-layer-jsonl-injection.md) | Memory Curated-Layer Alignment to JSONL-Append + Scoped Injection | Accepted | 2026-08-12 |
 | [0011](0011-single-product-multi-surface-distribution.md) | Single Product, Multiple Surfaces — Identity & Distribution Unification | Accepted | 2026-08-19 |
+| [0012](0012-secret-guard-coverage-and-persistence.md) | Secret-Guard Coverage Boundaries & Persistence Posture | Accepted | 2026-09-25 |
+| [0013](0013-ia-task-and-agent-stores.md) | Task & Agent IA — Declared Store Roles and Seam Rules, Not a Data Migration | Accepted | 2026-10-01 |
 
 ## Numbering
 

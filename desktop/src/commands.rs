@@ -317,6 +317,41 @@ pub struct FileAttachment {
     pub media_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base64_data: Option<String>,
+    /// G3b P1-4 — per-file extraction summary for parseable documents
+    /// (pdf/docx/xlsx/pptx/ods/csv). Set by the send pipeline when the file
+    /// was parsed for the model; `None` for images/unparsed formats and for
+    /// messages sent before this field existed (`serde(default)` keeps old
+    /// persisted history deserializable). The UI renders it as a chip badge
+    /// and a FileCard detail (cache path + "view extracted text").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction: Option<AttachmentExtractionReport>,
+}
+
+/// G3b P1-4 — what the attachment parse pipeline produced for ONE file,
+/// reported to the frontend so extraction/truncation is user-visible instead
+/// of model-only. `path` matches the `FileAttachment.path` it belongs to;
+/// `kind` is the lowercased source extension ("pdf", "docx", ...).
+///
+/// `sections_total`/`sections_inlined` count sectioned documents (office
+/// formats); PDFs are not sectioned, so they report 0/0 and carry their
+/// story in `truncated` (>50 KiB of extracted text cut at the inline budget,
+/// full text cached) + `cache_path`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentExtractionReport {
+    pub path: String,
+    pub kind: String,
+    /// `false` when parsing failed — the model received a failure placeholder
+    /// naming the reason instead of text.
+    pub extracted: bool,
+    pub sections_total: usize,
+    pub sections_inlined: usize,
+    /// `true` when the inline injection had to cut content (office: sections
+    /// dropped from the 16 KiB window; pdf: >50 KiB trimmed at the budget).
+    pub truncated: bool,
+    /// Absolute path of `~/.shannon/cache/extracted/<sha256>.txt` holding the
+    /// full extracted text (present whenever the cache write succeeded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_path: Option<String>,
 }
 
 /// Detect media type from file extension.
@@ -352,6 +387,106 @@ const PDF_TEXT_INJECT_LIMIT: usize = 50 * 1024;
 /// P0-3: `pub(crate)` so the `check_attachment_paths` preflight applies the
 /// exact same caps and never disagrees with the send path.
 pub(crate) const MAX_PDF_BYTES: u64 = 100 * 1024 * 1024;
+
+/// What the PDF extraction pipeline produced for one attachment: the
+/// injection block plus the user-visible summary (G3b P1-4). Mirrors
+/// `document_parse::OfficeExtractionOutcome`; PDFs are not sectioned, so no
+/// section counts are reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PdfExtractionOutcome {
+    pub block: String,
+    /// `false` for the extraction-failure placeholder and for scanned PDFs
+    /// with no extractable text.
+    pub extracted: bool,
+    /// `true` when the extracted text exceeded the inline budget and was cut.
+    pub truncated: bool,
+    /// Cache file holding the FULL extracted text — written only when
+    /// truncated (a fitting text needs no escape hatch).
+    pub cache_path: Option<String>,
+}
+
+/// Build the PDF injection block + extraction summary for one attachment
+/// (pure over its inputs; the cache write is the only side effect, and only
+/// on the truncated path).
+///
+/// G3b P1-4 — aligns the PDF path with the office escape hatch: the inline
+/// block always carries the PDF's ABSOLUTE path (so the model can `Read` the
+/// original), and when the extracted text exceeds `PDF_TEXT_INJECT_LIMIT`
+/// the full text is written to `~/.shannon/cache/extracted/<sha256>.txt` via
+/// the SAME helper the office path uses, with the cache path + "use
+/// Read/Grep" hint injected so the model can page through the rest.
+pub(crate) fn pdf_extraction_outcome(
+    file_name: &str,
+    source_path: &std::path::Path,
+    size: u64,
+    pages: Option<u32>,
+    text: &str,
+) -> PdfExtractionOutcome {
+    let trimmed = text.trim();
+    let pages_meta = pages.map(|p| format!(", {p} pages")).unwrap_or_default();
+    // The absolute path rides EVERY block shape (failure, scanned, truncated
+    // or not) so the model can always try to Read the original file itself.
+    let source_line = format!(
+        "Source PDF: {} — use Read on it if you need the original file.",
+        source_path.to_string_lossy()
+    );
+    if crate::commands_files::is_pdf_unavailable_placeholder(trimmed) {
+        return PdfExtractionOutcome {
+            block: format!(
+                "Attached PDF \"{file_name}\" ({size} bytes{pages_meta}). {trimmed}\n{source_line}"
+            ),
+            extracted: false,
+            truncated: false,
+            cache_path: None,
+        };
+    }
+    if trimmed.is_empty() {
+        return PdfExtractionOutcome {
+            block: format!(
+                "Attached PDF \"{file_name}\" ({size} bytes{pages_meta}). No extractable text — the PDF is likely scanned/image-only; OCR is not available.\n{source_line}"
+            ),
+            extracted: false,
+            truncated: false,
+            cache_path: None,
+        };
+    }
+    let truncated = trimmed.len() > PDF_TEXT_INJECT_LIMIT;
+    // Escape hatch: the full text goes to the same extracted-cache the office
+    // path uses (hash of path+mtime, so re-saves rotate the name). Only the
+    // truncated case pays the write — a fitting text is already fully inline.
+    let cache_path = if truncated {
+        crate::document_parse::cache_extracted_text(source_path, trimmed)
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+    let mut end = PDF_TEXT_INJECT_LIMIT;
+    while !trimmed.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    let cut = &trimmed[..end];
+    let trunc_suffix = if truncated {
+        format!(
+            "\n*[Truncated — showing first {end} of {} bytes]*",
+            trimmed.len()
+        )
+    } else {
+        String::new()
+    };
+    let cache_line = match cache_path.as_deref() {
+        Some(path) => format!("\nFull extracted text: {path} — use Read/Grep on it for the rest."),
+        None if truncated => "\nFull extracted text: unavailable (cache write failed).".to_string(),
+        None => String::new(),
+    };
+    PdfExtractionOutcome {
+        block: format!(
+            "Attached PDF \"{file_name}\" ({size} bytes{pages_meta}). Extracted text:\n```text\n{cut}\n```{trunc_suffix}{cache_line}\n{source_line}"
+        ),
+        extracted: true,
+        truncated,
+        cache_path,
+    }
+}
 
 fn file_to_base64(path: &str) -> Result<(String, String), String> {
     use base64::Engine;
@@ -762,7 +897,11 @@ pub(crate) fn collect_attachments(
         // Security: reject any attachment path that resolves outside the
         // working directory. A compromised frontend must not be able to
         // exfiltrate `~/.ssh/id_rsa`, `~/.shannon/desktop/config.json`, or
-        // any other sensitive file via the attachment pipeline.
+        // any other sensitive file via the attachment pipeline. (One narrow,
+        // documented exception: `$SHANNON_HOME/cache/pasted/` — where the
+        // backend itself persists clipboard images the webview already
+        // holds. See `classify_path_in_working_dir` in lib.rs for why that
+        // is safe and how narrowly it is scoped.)
         let canonical = match crate::classify_path_in_working_dir(path, working_dir) {
             Ok(c) => c,
             Err(crate::WorkingDirScopeError::OutsideWorkingDir(_)) => {
@@ -856,6 +995,7 @@ pub(crate) fn collect_attachments(
             size: meta.len(),
             media_type: Some(media_type),
             base64_data: Some(base64_data),
+            extraction: None,
         });
     }
     (collected, rejected)
@@ -926,7 +1066,7 @@ pub async fn send_message(
     // applied here (a Dock-launched GUI runs with CWD `/`, which made the
     // attachment domain launch-method dependent and effectively meaningless).
     // An unset working_dir is an explicit, actionable error instead.
-    let (attachments, rejected_attachments) = match file_paths.as_deref() {
+    let (mut attachments, rejected_attachments) = match file_paths.as_deref() {
         None | Some([]) => (None, Vec::new()),
         Some(paths) => {
             let working_dir = {
@@ -999,9 +1139,16 @@ pub async fn send_message(
     // request at this entry point, so `pdftotext` stays whole-document; the
     // `pdfinfo` page count is added as honest metadata (the byte truncation
     // below already states exactly how much was cut).
+    //
+    // G3b P1-4: the block builder now also returns the per-file extraction
+    // summary (extracted / truncated / cache_path) — stashed per path and
+    // stamped onto the message's `FileAttachment`s below so the UI can show
+    // what actually reached the model.
     let mut attachment_blocks = image_blocks;
+    let mut extraction_by_path: std::collections::HashMap<String, AttachmentExtractionReport> =
+        std::collections::HashMap::new();
     {
-        let pdf_futs = attachments
+        let pdf_atts: Vec<(String, String, u64)> = attachments
             .as_ref()
             .map(|list| {
                 list.iter()
@@ -1011,48 +1158,59 @@ pub async fn send_message(
                             .and_then(|e| e.to_str())
                             .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
                     })
-                    .map(|att| async move {
-                        let path = std::path::Path::new(&att.path);
-                        let (text, pages) = tokio::join!(
-                            crate::commands_files::extract_pdf_text_best_effort(path),
-                            crate::commands_files::pdf_page_count_best_effort(path),
-                        );
-                        (att.name.clone(), att.size, text, pages)
-                    })
-                    .collect::<Vec<_>>()
+                    .map(|att| (att.name.clone(), att.path.clone(), att.size))
+                    .collect()
             })
             .unwrap_or_default();
-        for (name, size, text, pages) in futures::future::join_all(pdf_futs).await {
-            let pages_meta = pages.map(|p| format!(", {p} pages")).unwrap_or_default();
-            let trimmed = text.trim();
-            let body = if crate::commands_files::is_pdf_unavailable_placeholder(trimmed) {
-                // Extraction failed (no poppler / pdftotext error): surface
-                // the placeholder as-is instead of framing it as extracted
-                // text.
-                format!("Attached PDF \"{name}\" ({size} bytes{pages_meta}). {trimmed}")
-            } else if trimmed.is_empty() {
-                format!(
-                    "Attached PDF \"{name}\" ({size} bytes{pages_meta}). No extractable text — the PDF is likely scanned/image-only; OCR is not available."
-                )
-            } else {
-                let mut end = PDF_TEXT_INJECT_LIMIT;
-                while !trimmed.is_char_boundary(end) && end > 0 {
-                    end -= 1;
-                }
-                let truncated = &trimmed[..end];
-                let suffix = if trimmed.len() > end {
-                    format!(
-                        "\n*[Truncated — showing first {end} of {} bytes]*",
-                        trimmed.len()
-                    )
-                } else {
-                    String::new()
-                };
-                format!(
-                    "Attached PDF \"{name}\" ({size} bytes{pages_meta}). Extracted text:\n```text\n{truncated}\n```{suffix}"
-                )
-            };
-            attachment_blocks.push(shannon_engine::api::ContentBlock::Text { text: body });
+        let pdf_futs = pdf_atts
+            .iter()
+            .map(|(name, path, size)| async move {
+                let p = std::path::Path::new(path.as_str());
+                let (text, pages) = tokio::join!(
+                    crate::commands_files::extract_pdf_text_best_effort(p),
+                    crate::commands_files::pdf_page_count_best_effort(p),
+                );
+                (name.clone(), path.clone(), *size, text, pages)
+            })
+            .collect::<Vec<_>>();
+        let extracted_pdfs = futures::future::join_all(pdf_futs).await;
+        // Block build + cache write are plain blocking I/O over the already
+        // extracted text — keep them off the async runtime like the office
+        // path below.
+        let built = tokio::task::spawn_blocking(move || {
+            extracted_pdfs
+                .into_iter()
+                .map(|(name, path, size, text, pages)| {
+                    let outcome = pdf_extraction_outcome(
+                        &name,
+                        std::path::Path::new(&path),
+                        size,
+                        pages,
+                        &text,
+                    );
+                    (path, outcome)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await;
+        if let Ok(built) = built {
+            for (path, outcome) in built {
+                extraction_by_path.insert(
+                    path.clone(),
+                    AttachmentExtractionReport {
+                        path,
+                        kind: "pdf".to_string(),
+                        extracted: outcome.extracted,
+                        sections_total: 0,
+                        sections_inlined: 0,
+                        truncated: outcome.truncated,
+                        cache_path: outcome.cache_path,
+                    },
+                );
+                attachment_blocks.push(shannon_engine::api::ContentBlock::Text {
+                    text: outcome.block,
+                });
+            }
         }
     }
 
@@ -1065,6 +1223,10 @@ pub async fn send_message(
     // sections (16 KiB budget per file) plus the cache path
     // (~/.shannon/cache/extracted/<sha256-of-path+mtime>.txt) so the model
     // can page through the rest with its existing Read/Grep tools.
+    //
+    // G3b P1-4: the per-file extraction summary now rides along into
+    // `extraction_by_path` (sections total/inlined, truncated, cache path)
+    // the same way the PDF section feeds it.
     {
         let office_atts: Vec<(String, String, u64)> = attachments
             .as_ref()
@@ -1082,18 +1244,47 @@ pub async fn send_message(
                 office_atts
                     .into_iter()
                     .map(|(name, path, size)| {
-                        crate::document_parse::office_block_for_file(
-                            std::path::Path::new(&path),
-                            &name,
-                            size,
-                        )
+                        let p = std::path::Path::new(&path);
+                        let kind = crate::document_parse::extension_lowercase(p)
+                            .unwrap_or_else(|| "office".to_string());
+                        let outcome =
+                            crate::document_parse::office_extraction_for_file(p, &name, size);
+                        (path, kind, outcome)
                     })
                     .collect::<Vec<_>>()
             })
             .await;
             if let Ok(blocks) = blocks {
-                for block in blocks {
-                    attachment_blocks.push(shannon_engine::api::ContentBlock::Text { text: block });
+                for (path, kind, outcome) in blocks {
+                    extraction_by_path.insert(
+                        path.clone(),
+                        AttachmentExtractionReport {
+                            path,
+                            kind,
+                            extracted: outcome.extracted,
+                            sections_total: outcome.sections_total,
+                            sections_inlined: outcome.sections_inlined,
+                            truncated: outcome.truncated,
+                            cache_path: outcome.cache_path,
+                        },
+                    );
+                    attachment_blocks.push(shannon_engine::api::ContentBlock::Text {
+                        text: outcome.block,
+                    });
+                }
+            }
+        }
+    }
+
+    // G3b P1-4 — stamp the extraction summaries onto the attachments BEFORE
+    // the ChatMessage is recorded, so the metadata is durable in the session
+    // history and every conversation reload renders the FileCard details
+    // (cache path + view action) without an extra lookup.
+    if !extraction_by_path.is_empty() {
+        if let Some(list) = attachments.as_mut() {
+            for att in list.iter_mut() {
+                if let Some(report) = extraction_by_path.get(&att.path) {
+                    att.extraction = Some(report.clone());
                 }
             }
         }
@@ -2446,6 +2637,178 @@ mod tests {
         assert!(legacy.rejected_attachments.is_empty());
     }
 
+    // ── G3b P1-4: PDF escape hatch + extraction summary ─────────────────
+
+    /// Run `pdf_extraction_outcome` with the cache redirected at a temp
+    /// `SHANNON_HOME` (same save/restore pattern as the document_parse
+    /// tests), so the test never touches the real `~/.shannon`. Returns the
+    /// outcome plus the temp guard (the cache file lives inside it).
+    fn pdf_outcome_in_temp_cache(
+        source: &std::path::Path,
+        text: &str,
+        pages: Option<u32>,
+    ) -> (PdfExtractionOutcome, tempfile::TempDir) {
+        let cache_home = tempfile::tempdir().expect("cache tempdir");
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        unsafe { std::env::set_var("SHANNON_HOME", cache_home.path()) };
+        let outcome = pdf_extraction_outcome("report.pdf", source, 123_456, pages, text);
+        match prev_home {
+            Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
+            None => unsafe { std::env::remove_var("SHANNON_HOME") },
+        }
+        (outcome, cache_home)
+    }
+
+    #[test]
+    fn pdf_over_limit_truncates_caches_and_names_both_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("report.pdf");
+        std::fs::write(&source, b"%PDF-1.7 fake").unwrap();
+        // ~150 KiB > 50 KiB budget. Pre-trimmed so it equals what the
+        // pipeline caches (the cache holds the TRIMMED text).
+        let big = "word ".repeat(30_000).trim_end().to_string();
+        let (outcome, _cache_home) = pdf_outcome_in_temp_cache(&source, &big, Some(12));
+
+        assert!(outcome.extracted);
+        assert!(outcome.truncated);
+        let cache_path = outcome.cache_path.expect("truncated text must be cached");
+        // The injection block carries the cache path with the Read hint…
+        assert!(
+            outcome.block.contains(&format!(
+                "Full extracted text: {cache_path} — use Read/Grep on it for the rest."
+            )),
+            "{block}",
+            block = outcome.block
+        );
+        // …the absolute source path (truncated or not)…
+        assert!(
+            outcome.block.contains(&format!(
+                "Source PDF: {} — use Read on it",
+                source.to_string_lossy()
+            )),
+            "{block}",
+            block = outcome.block
+        );
+        // …the truncation note…
+        assert!(
+            outcome
+                .block
+                .contains("*[Truncated — showing first 51200 of"),
+            "{block}",
+            block = outcome.block
+        );
+        // …and the cached file really holds the FULL text.
+        let cached = std::fs::read_to_string(&cache_path).expect("cache readable");
+        assert_eq!(cached, big, "cache holds the untruncated text");
+        // The inline window stays at the budget.
+        assert!(
+            outcome.block.len() < big.len(),
+            "block is a prefix, not the whole text"
+        );
+    }
+
+    #[test]
+    fn pdf_under_limit_is_fully_inlined_and_never_cached() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("small.pdf");
+        std::fs::write(&source, b"%PDF-1.7 fake").unwrap();
+        let cache_home = tempfile::tempdir().expect("cache tempdir");
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        unsafe { std::env::set_var("SHANNON_HOME", cache_home.path()) };
+        let outcome = pdf_extraction_outcome("small.pdf", &source, 42, Some(2), "hello pdf body");
+        match prev_home {
+            Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
+            None => unsafe { std::env::remove_var("SHANNON_HOME") },
+        }
+        assert!(outcome.extracted);
+        assert!(!outcome.truncated);
+        assert!(
+            outcome.cache_path.is_none(),
+            "small PDF must not pay a cache write"
+        );
+        assert!(outcome.block.contains("```text\nhello pdf body\n```"));
+        assert!(!outcome.block.contains("Truncated"));
+        assert!(!outcome.block.contains("Full extracted text"));
+        // Absolute path still present so the model can Read proactively.
+        assert!(
+            outcome
+                .block
+                .contains(&format!("Source PDF: {}", source.to_string_lossy()))
+        );
+        // No cache file was created anywhere under the redirected home.
+        let cache_dir = cache_home.path().join("cache").join("extracted");
+        assert!(
+            !cache_dir.exists()
+                || std::fs::read_dir(&cache_dir)
+                    .expect("read dir")
+                    .next()
+                    .is_none(),
+            "no cache entries expected"
+        );
+    }
+
+    #[test]
+    fn pdf_placeholder_and_scanned_blocks_carry_the_source_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("scan.pdf");
+        std::fs::write(&source, b"%PDF-1.7 fake").unwrap();
+
+        // Extraction failure (pdftotext unavailable) keeps the placeholder
+        // framing and still names the absolute path.
+        let placeholder = crate::commands_files::pdf_unavailable_placeholder("pdftotext missing");
+        let failed = pdf_extraction_outcome("scan.pdf", &source, 7, None, &placeholder);
+        assert!(!failed.extracted);
+        assert!(!failed.truncated);
+        assert!(failed.cache_path.is_none());
+        assert!(failed.block.contains(&placeholder));
+        assert!(
+            failed
+                .block
+                .contains(&format!("Source PDF: {}", source.to_string_lossy()))
+        );
+
+        // Scanned PDF (no extractable text) — same contract.
+        let scanned = pdf_extraction_outcome("scan.pdf", &source, 7, Some(3), "   \n  ");
+        assert!(!scanned.extracted);
+        assert!(scanned.block.contains("No extractable text"));
+        assert!(
+            scanned
+                .block
+                .contains(&format!("Source PDF: {}", source.to_string_lossy()))
+        );
+    }
+
+    #[test]
+    fn pdf_extraction_report_round_trips_with_file_attachment() {
+        let report = AttachmentExtractionReport {
+            path: "/tmp/report.pdf".to_string(),
+            kind: "pdf".to_string(),
+            extracted: true,
+            sections_total: 0,
+            sections_inlined: 0,
+            truncated: true,
+            cache_path: Some("/home/u/.shannon/cache/extracted/abc.txt".to_string()),
+        };
+        let att = FileAttachment {
+            name: "report.pdf".to_string(),
+            path: "/tmp/report.pdf".to_string(),
+            size: 10,
+            media_type: None,
+            base64_data: None,
+            extraction: Some(report.clone()),
+        };
+        let json = serde_json::to_string(&att).unwrap();
+        assert!(json.contains("\"truncated\":true"));
+        assert!(json.contains("\"cache_path\""));
+        let back: FileAttachment = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.extraction, Some(report));
+        // Old persisted history (field absent) still deserializes.
+        let legacy: FileAttachment =
+            serde_json::from_str("{\"name\":\"a.pdf\",\"path\":\"/tmp/a.pdf\",\"size\":1}")
+                .unwrap();
+        assert!(legacy.extraction.is_none());
+    }
+
     #[test]
     fn test_chrono_timestamp_reasonable() {
         let ts = chrono_timestamp();
@@ -3101,7 +3464,8 @@ mod pure_function_tests {
         unsafe { std::env::set_var("SHANNON_HOME", cache_home.path()) };
         // This is the exact call the send_message office branch makes inside
         // spawn_blocking.
-        let block = crate::document_parse::office_block_for_file(&path, "plan.docx", size);
+        let block =
+            crate::document_parse::office_extraction_for_file(&path, "plan.docx", size).block;
         match prev_home {
             Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
             None => unsafe { std::env::remove_var("SHANNON_HOME") },
@@ -3150,7 +3514,7 @@ mod pure_function_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("junk.docx");
         std::fs::write(&path, b"definitely not a zip container").expect("write");
-        let block = crate::document_parse::office_block_for_file(&path, "junk.docx", 29);
+        let block = crate::document_parse::office_extraction_for_file(&path, "junk.docx", 29).block;
         assert!(
             block.starts_with(
                 "Attached Office document \"junk.docx\" (29 bytes). Text extraction failed: "

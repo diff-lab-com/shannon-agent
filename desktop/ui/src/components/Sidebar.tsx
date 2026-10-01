@@ -10,6 +10,7 @@ import { cn } from '../lib/utils';
 import { useSessions } from '@/context/SessionContext';
 import { useCatalog } from '@/context/CatalogContext';
 import { SessionsSection } from './SidebarSessions';
+import SidebarUsageMeter from './usage/SidebarUsageMeter';
 import * as api from '@/lib/tauri-api';
 import { useSidebar } from './Layout';
 import { useInboxStats } from '@/hooks/inbox';
@@ -409,6 +410,10 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
       </nav>
 
       <div className="mt-auto pt-lg border-t border-outline-variant/20 space-y-0.5">
+        {/* P2-1 — the persistent usage % bar (Claude 侧栏 pattern): month
+            cost vs the user-set budget, 7-day cost fallback without one.
+            Renders nothing until the governance snapshot lands. */}
+        <SidebarUsageMeter onNavigate={handleNavClick} />
         {/* Batch B5 (ZCode 底部账号区的 BYOK 表达): the active provider·model
             badge replaces the subscription-plan badge — clicking it opens the
             models settings where BYOK users manage keys/providers. */}

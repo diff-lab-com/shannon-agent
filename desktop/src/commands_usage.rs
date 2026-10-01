@@ -347,8 +347,9 @@ const SCHEDULED_LABEL: &str = "Scheduled tasks";
 /// model/provider, so the lump is counted under `input_tokens` and both
 /// attribution fields fall back to `SCHEDULED_LABEL`. Runs that tracked
 /// neither cost nor tokens (e.g. never reached the accounting point) are
-/// dropped.
-fn scheduled_run_to_record(run: &ScheduledRun) -> Option<UsageRecord> {
+/// dropped. `pub(crate)` so `usage_governance` folds the same spend into
+/// its month/week windows.
+pub(crate) fn scheduled_run_to_record(run: &ScheduledRun) -> Option<UsageRecord> {
     if run.cost_usd.is_none() && run.token_usage.is_none() {
         return None;
     }

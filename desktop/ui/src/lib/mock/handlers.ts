@@ -986,6 +986,13 @@ export const handlers: Record<string, MockHandler> = {
     await delay(10)
     return args.paths.map(path => ({ path, ok: true }))
   },
+  // G3b P1-6 composer clipboard-image paste — demo mode persists nothing;
+  // return a plausible absolute path so the pasted image enters the demo
+  // attachment list like a real one would.
+  async save_pasted_image(args: { dataBase64: string; ext: string }) {
+    await delay(10)
+    return `/Users/demo/.shannon/cache/pasted/${Date.now()}-demo.${args.ext || 'png'}`
+  },
   // office Wave 2: the Files page's missing-detection probe (and FileRefChip's
   // anti-hallucination backstop) — in demo mode only indexed demo paths exist.
   async path_exists(args: { path: string }) {
@@ -1296,6 +1303,28 @@ export const handlers: Record<string, MockHandler> = {
       ],
       by_day: byDay,
     }
+  },
+  // --- Usage governance (P2-1 — sidebar % bar + budget card, demo at 62%) ---
+  async get_usage_governance() {
+    await delay()
+    const monthCostUsd = 6.2
+    const budgetUsd = 10.0
+    const percent = (monthCostUsd / budgetUsd) * 100
+    return {
+      month: new Date().toISOString().slice(0, 7),
+      monthCostUsd,
+      last7dCostUsd: 1.84,
+      budgetUsd,
+      percent,
+      warned80: percent >= 80,
+      hit100: percent >= 100,
+      thresholdReached: percent >= 100 ? '100' : percent >= 80 ? '80' : null,
+    }
+  },
+  // --- Pre-task cost estimate (P2-6 — creation-confirm hints) ---
+  async estimate_task_cost() {
+    await delay()
+    return { hasHistory: true, runsCounted: 6, minUsd: 0.08, maxUsd: 0.41, avgUsd: 0.19, lastUsd: 0.14 }
   },
   // --- Goal runs (P0-2 desktop goal runner) ---
   async list_goal_runs() {

@@ -181,10 +181,35 @@ export interface ResearchCitation {
   accessed_at?: number
 }
 
+/**
+ * G3b P1-4 — per-file extraction summary for parseable attachments
+ * (pdf/docx/xlsx/pptx/ods/csv). Mirrors the Rust
+ * `AttachmentExtractionReport`: the send pipeline stamps it onto the
+ * message's `FileAttachment`s (and the attach-time preflight) so the UI can
+ * show what actually reached the model instead of keeping extraction
+ * model-only.
+ */
+export interface AttachmentExtractionReport {
+  path: string
+  /** Lowercased source extension: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'ods' | 'csv'. */
+  kind: string
+  /** false when parsing failed — the model got a failure placeholder. */
+  extracted: boolean
+  /** Sectioned documents only (office formats); pdf reports 0/0. */
+  sections_total: number
+  sections_inlined: number
+  /** true when the inline injection had to cut content. */
+  truncated: boolean
+  /** `~/.shannon/cache/extracted/<sha256>.txt` holding the full text, when written. */
+  cache_path?: string
+}
+
 export interface FileAttachment {
   name: string
   path: string
   size: number
+  /** G3b P1-4 — present when the send pipeline parsed this file for the model. */
+  extraction?: AttachmentExtractionReport
 }
 
 export interface SessionInfo {
@@ -578,6 +603,10 @@ export interface DesktopConfig {
   /** R3-3: act-phase model tier — same contract as `plan_tier` for the
    *  execution phase (every approval mode except `plan`). */
   act_tier?: string | null
+  /** P2-1: user-set monthly spend budget (USD, all sources). null/undefined
+   *  = unset — the sidebar shows the trailing 7-day cost and no threshold
+   *  alerts fire. Written via `configure('monthly_budget_usd')`. */
+  monthly_budget_usd?: number | null
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
@@ -666,6 +695,8 @@ export interface AttachmentPathCheck {
   path: string
   ok: boolean
   reason?: RejectedAttachmentReason
+  /** G3b P1-4 — extraction summary for parseable ok paths (best-effort). */
+  extraction?: AttachmentExtractionReport
 }
 
 export interface SendMessageResponse {
@@ -1050,6 +1081,43 @@ export interface UsageStats {
   by_model: UsageBucket[]
   by_provider: UsageBucket[]
   by_day: UsageBucket[]
+}
+
+// --- Usage governance (P2-1) ---
+//
+// Field names mirror Rust structs in shannon-desktop/src/usage_governance.rs
+// exactly (camelCase via serde rename on the wire).
+
+/** Sidebar % bar + /usage budget card snapshot (`get_usage_governance`). */
+export interface UsageGovernance {
+  /** Calendar month the snapshot is keyed to, `"YYYY-MM"`. */
+  month: string
+  /** Month-to-date spend across all sources (chat + scheduled routines). */
+  monthCostUsd: number
+  /** Trailing 7-day spend — the no-budget fallback the sidebar shows. */
+  last7dCostUsd: number
+  /** User-set monthly budget (`null` = unset). */
+  budgetUsd: number | null
+  /** `monthCost / budget * 100`, unclamped; `null` without a budget. */
+  percent: number | null
+  /** The 80% desktop notification already fired this month. */
+  warned80: boolean
+  /** The 100% desktop notification already fired this month. */
+  hit100: boolean
+  /** Live banner level for /usage: `'100'` at/over the cap, `'80'` at/over
+   *  the warn line, `null` below both or without a budget. */
+  thresholdReached: '80' | '100' | null
+}
+
+/** Pre-task cost estimate (`estimate_task_cost`, P2-6). */
+export interface TaskCostEstimate {
+  /** `false` = no cost-tracked history → "first run, no estimate yet". */
+  hasHistory: boolean
+  runsCounted: number
+  minUsd: number | null
+  maxUsd: number | null
+  avgUsd: number | null
+  lastUsd: number | null
 }
 
 // --- Scheduled Tasks (Sprint 2) ---

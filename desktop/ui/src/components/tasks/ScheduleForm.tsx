@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import ScheduleTemplates from './ScheduleTemplates'
+import CostEstimateHint from './CostEstimateHint'
 import { weekdayName, DEFAULT_POLICY } from './shared'
 import { parseNlCron, type CronDescription } from '@/lib/nl-cron'
 import * as api from '@/lib/tauri-api'
@@ -528,6 +529,11 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
           {error}
         </div>
       ) : null}
+
+      {/* P2-6 — pre-task cost estimate in the create-confirm area. A new
+          routine has no run history of its own, so the estimate is the
+          all-routines baseline (taskId omitted). Read-only, never blocks. */}
+      {valid && <CostEstimateHint />}
 
       <div className="flex justify-end gap-sm">
         <Button

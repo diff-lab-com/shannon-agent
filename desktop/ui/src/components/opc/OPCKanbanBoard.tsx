@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
 import type { TaskItem } from '@/types'
 import { KanbanBoard } from '@/components/shared/KanbanBoard'
+import CostEstimateHint from '@/components/tasks/CostEstimateHint'
 import {
   classifyStatus,
   canonicalStatusFor,
@@ -116,22 +117,28 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
   }
 
   const toolbar = (
-    <div className="relative">
-      <Input
-        type="text"
-        placeholder={t('opc.kanban.addTaskPlaceholder')}
-        value={quickTask}
-        onChange={e => setQuickTask(e.target.value)}
-        className="bg-surface-container-low border-none rounded-lg py-1.5 pl-3 pr-xl w-[200px] text-label-sm font-body-md focus:ring-2 focus:ring-primary/20 transition-all outline-none"
-        aria-label={t('opc.kanban.addTaskAria')}
-      />
-      <Button
-        aria-label={t('opc.kanban.createTaskAria')}
-        className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 bg-primary text-on-primary rounded-[4px] flex items-center justify-center hover:bg-primary/90 transition-colors"
-        onClick={handleQuickTask}
-      >
-        <span className="material-symbols-outlined icon-sm">add</span>
-      </Button>
+    // P2-6 — the estimate rides under the quick-add input (all-routines
+    // baseline; the task has no id before it exists) so it is read BEFORE
+    // the created toast, without blocking the create.
+    <div className="flex flex-col gap-1 items-end">
+      <div className="relative">
+        <Input
+          type="text"
+          placeholder={t('opc.kanban.addTaskPlaceholder')}
+          value={quickTask}
+          onChange={e => setQuickTask(e.target.value)}
+          className="bg-surface-container-low border-none rounded-lg py-1.5 pl-3 pr-xl w-[200px] text-label-sm font-body-md focus:ring-2 focus:ring-primary/20 transition-all outline-none"
+          aria-label={t('opc.kanban.addTaskAria')}
+        />
+        <Button
+          aria-label={t('opc.kanban.createTaskAria')}
+          className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 bg-primary text-on-primary rounded-[4px] flex items-center justify-center hover:bg-primary/90 transition-colors"
+          onClick={handleQuickTask}
+        >
+          <span className="material-symbols-outlined icon-sm">add</span>
+        </Button>
+      </div>
+      {quickTask.trim() !== '' && <CostEstimateHint className="max-w-[240px] leading-snug" />}
     </div>
   )
 
