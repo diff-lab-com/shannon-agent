@@ -16,8 +16,8 @@
 //!    lands in a follow-up).
 //! 8. **Discord** — queries Discord channel history via the REST API (config-only).
 //! 9. **Telegram** — queries Telegram bot chats via the Bot API (config-only).
-//! 10. **RSS Feed** — fetches and parses any RSS/Atom feed.
-//! 11. **Web Calendar (iCal)** — fetches and parses any .ics feed.
+//! 10. **RSS Feed** — connects an RSS/Atom feed (config-only; query in a follow-up).
+//! 11. **Web Calendar (iCal)** — connects an .ics feed (config-only).
 
 use serde::{Deserialize, Serialize};
 
@@ -366,7 +366,9 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
             slug: "rss".into(),
             kind: DataSourceKind::Rss,
             name: "RSS / Atom Feed".into(),
-            description: "Fetch and search any RSS or Atom feed.".into(),
+            description: "Connect an RSS or Atom feed to attach results into your workflow \
+                          (config-only; query coming soon)."
+                .into(),
             homepage_url: Some("https://www.rssboard.org/rss-specification".into()),
             fields: vec![
                 DataSourceField {
@@ -383,7 +385,7 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                     kind: "number".into(),
                     required: false,
                     placeholder: Some("50".into()),
-                    help: Some("Optional: cap items returned per query.".into()),
+                    help: Some("Optional: cap items returned once query support lands.".into()),
                 },
             ],
         },
@@ -391,7 +393,9 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
             slug: "ical".into(),
             kind: DataSourceKind::Ical,
             name: "Web Calendar (iCal)".into(),
-            description: "Fetch and search events from any .ics feed.".into(),
+            description: "Connect an iCal (.ics) feed to attach events into your workflow \
+                          (config-only; query coming soon)."
+                .into(),
             homepage_url: Some("https://datatracker.ietf.org/doc/html/rfc5545".into()),
             fields: vec![DataSourceField {
                 key: "feed_url".into(),
