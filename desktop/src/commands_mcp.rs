@@ -48,6 +48,12 @@ pub struct McpServerInfo {
     /// differently (re-authenticate vs retry vs retry+details).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_kind: Option<&'static str>,
+    /// F5 (A8): where this row's credential lives — `"keyring"` (migrated
+    /// into the OS keyring) or `"plaintext_file"` (keyring unavailable;
+    /// owner-only 0600 file). `None` on rows without a credential. Drives
+    /// the MCP page's credential-storage status line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_storage: Option<&'static str>,
 }
 
 /// Skill information for the skill browser UI.
@@ -93,6 +99,21 @@ pub(crate) fn mcp_server_info(
     } else {
         None
     };
+    // F5 (A8): the credential-storage verdict for rows carrying a
+    // credential — keyring when the store holds the token (migrated), the
+    // degraded plaintext-file token otherwise.
+    let store = crate::secret_store::global();
+    let keyring_hit = matches!(
+        store
+            .as_deref()
+            .map(|s| s.get(&crate::secret_store::mcp_oauth_key(&server.name))),
+        Some(Ok(Some(_)))
+    );
+    let credential_storage = if keyring_hit || server.has_auth_headers {
+        Some(crate::secret_store::storage_mode(keyring_hit))
+    } else {
+        None
+    };
     McpServerInfo {
         name: server.name.clone(),
         command: server.command.clone(),
@@ -105,6 +126,7 @@ pub(crate) fn mcp_server_info(
         has_auth_headers: server.has_auth_headers,
         last_error,
         failure_kind,
+        credential_storage,
     }
 }
 
@@ -403,6 +425,22 @@ pub async fn list_mcp_servers(
             (0, Vec::new())
         };
 
+        // F5 (A8): same credential-storage verdict as mcp_server_info —
+        // keyring when the store holds this server's token, the degraded
+        // plaintext-file token otherwise, nothing on credential-less rows.
+        let store = crate::secret_store::global();
+        let keyring_hit = matches!(
+            store
+                .as_deref()
+                .map(|st| st.get(&crate::secret_store::mcp_oauth_key(&s.name))),
+            Some(Ok(Some(_)))
+        );
+        let credential_storage = if keyring_hit || s.has_auth_headers {
+            Some(crate::secret_store::storage_mode(keyring_hit))
+        } else {
+            None
+        };
+
         server_infos.push(McpServerInfo {
             name: s.name,
             command: s.command,
@@ -415,6 +453,7 @@ pub async fn list_mcp_servers(
             has_auth_headers: s.has_auth_headers,
             last_error,
             failure_kind,
+            credential_storage,
         });
     }
 

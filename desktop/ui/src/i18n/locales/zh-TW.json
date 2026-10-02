@@ -3913,5 +3913,8 @@
   "tasks.scheduleForm.activating": "啟用中…",
   "tasks.scheduleForm.backToEdit": "返回修改",
   "inbox.needsAction": "需要處理",
-  "inbox.runStatus.succeeded": "已成功"
+  "inbox.runStatus.succeeded": "已成功",
+  "extensions.credentialStorage.label": "憑證儲存位置",
+  "extensions.credentialStorage.keyring": "OS 鑰匙圈",
+  "extensions.credentialStorage.file": "本機檔案（受限）"
 }

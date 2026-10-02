@@ -117,6 +117,16 @@ beforeEach(() => {
   toastError.mockReset()
 })
 
+// F5 (A8): an installed row whose credentials live in the OS keyring.
+const installedKeyringSource = {
+  slug: 'imap-home',
+  kind: 'email_imap',
+  name: 'Home',
+  path: '/home/user/.shannon/data-sources/imap-home.toml',
+  installed_at: '2026-06-15T00:00:00Z',
+  credential_storage: 'keyring',
+}
+
 describe('DataSources (P5 native adapters)', () => {
   it('renders catalog and installed headers', async () => {
     listDataSourceCatalog.mockResolvedValue([])
@@ -285,6 +295,27 @@ describe('DataSources (P5 native adapters)', () => {
     expect(args[1]).toBe('obsidian')
     expect(args[2]).toBe('Obsidian Vault')
     expect(args[3]).toMatchObject({ vault_path: '/home/me/Vault' })
+  })
+
+  // F5 (A8): the credential-storage status line — OS keychain mode.
+  it('shows the OS-keychain credential-storage line when sources migrated', async () => {
+    listDataSourceCatalog.mockResolvedValue([emailEntry])
+    listInstalledDataSources.mockResolvedValue([installedKeyringSource])
+    renderWithRouter()
+    const line = await screen.findByTestId('datasources-credential-storage')
+    expect(line).toHaveTextContent('Credential storage')
+    expect(line).toHaveTextContent('OS keychain')
+  })
+
+  // F5 (A8): the honest degraded mode — keyring unavailable.
+  it('shows the local-file credential-storage line when degraded', async () => {
+    listDataSourceCatalog.mockResolvedValue([emailEntry])
+    listInstalledDataSources.mockResolvedValue([
+      { ...installedKeyringSource, credential_storage: 'plaintext_file' },
+    ])
+    renderWithRouter()
+    const line = await screen.findByTestId('datasources-credential-storage')
+    expect(line).toHaveTextContent('Local file (restricted)')
   })
 
   it('renders installed section with adapter slug and Remove button', async () => {

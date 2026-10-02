@@ -200,6 +200,14 @@ export default function DataSources() {
     }
   }
 
+  // F5 (A8): the page's credential-storage status line — where the
+  // sources' passwords/tokens live. Derived from the rows the backend
+  // already reports; a degraded (`plaintext_file`) row wins over a keyring
+  // one so the honest mode is what the page shows.
+  const storageMode = installed.some((row) => row.credential_storage === 'plaintext_file')
+    ? 'plaintext_file'
+    : (installed.find((row) => row.credential_storage)?.credential_storage ?? null);
+
   const installedSlugs = new Set(installed.map((row) => row.slug));
   const filtered = search
     ? catalog.filter(
@@ -235,6 +243,20 @@ export default function DataSources() {
             </span>
           </button>
         </p>
+        {storageMode && (
+          <p
+            className="text-body-sm text-on-surface-variant mt-xs flex items-center gap-xs"
+            data-testid="datasources-credential-storage"
+          >
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+              key
+            </span>
+            {t('extensions.credentialStorage.label')}:{' '}
+            {storageMode === 'keyring'
+              ? t('extensions.credentialStorage.keyring')
+              : t('extensions.credentialStorage.file')}
+          </p>
+        )}
       </header>
 
       <div className="flex gap-md border-b border-outline-variant/30">

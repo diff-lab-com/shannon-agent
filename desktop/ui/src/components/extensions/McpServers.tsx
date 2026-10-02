@@ -91,6 +91,15 @@ export default function McpServers() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
+  // F5 (A8): the page's credential-storage status line — where the
+  // servers' OAuth tokens live. Derived from the rows the backend already
+  // reports (any credential-bearing row answers for the page; the backend
+  // marks a degraded row `plaintext_file` even while other rows are in the
+  // keyring, so the honest mode wins).
+  const storageMode = installed.some((s) => s.credential_storage === 'plaintext_file')
+    ? 'plaintext_file'
+    : (installed.find((s) => s.credential_storage)?.credential_storage ?? null);
+
   const refreshInstalled = () => {
     listMcpServers()
       .then((rows) => {
@@ -202,6 +211,20 @@ export default function McpServers() {
         <p className="text-body-md text-on-surface-variant">
           {t("extensions.mcp.subtitle")}
         </p>
+        {storageMode && (
+          <p
+            className="text-body-sm text-on-surface-variant mt-xs flex items-center gap-xs"
+            data-testid="mcp-credential-storage"
+          >
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+              key
+            </span>
+            {t("extensions.credentialStorage.label")}:{" "}
+            {storageMode === "keyring"
+              ? t("extensions.credentialStorage.keyring")
+              : t("extensions.credentialStorage.file")}
+          </p>
+        )}
       </header>
 
       <InstalledSection

@@ -209,6 +209,38 @@ describe('McpServers (Cursor-style UX)', () => {
     expect(screen.getByText('npx')).toBeInTheDocument()
   })
 
+  // F5 (A8): the credential-storage status line — keyring mode.
+  it('shows the OS-keychain credential-storage line when rows migrated', async () => {
+    listMcpServers.mockResolvedValue([
+      { ...sampleOAuthConnected, credential_storage: 'keyring' },
+    ])
+    renderWithRouter()
+    const line = await screen.findByTestId('mcp-credential-storage')
+    expect(line).toHaveTextContent('Credential storage')
+    expect(line).toHaveTextContent('OS keychain')
+  })
+
+  // F5 (A8): the honest degraded mode — keyring unavailable, credentials
+  // stay in the owner-only local file.
+  it('shows the local-file credential-storage line when degraded', async () => {
+    listMcpServers.mockResolvedValue([
+      { ...sampleOAuthConnected, credential_storage: 'plaintext_file' },
+    ])
+    renderWithRouter()
+    const line = await screen.findByTestId('mcp-credential-storage')
+    expect(line).toHaveTextContent('Local file (restricted)')
+  })
+
+  // No credential-bearing rows → no verdict to show.
+  it('omits the credential-storage line when nothing carries a credential', async () => {
+    listMcpServers.mockResolvedValue([sampleInstalled])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText(/Installed · 1/)).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('mcp-credential-storage')).not.toBeInTheDocument()
+  })
+
   it('shows empty state title when no servers installed', async () => {
     listMcpServers.mockResolvedValue([])
     renderWithRouter()

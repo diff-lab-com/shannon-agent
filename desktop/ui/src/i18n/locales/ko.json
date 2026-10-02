@@ -3913,5 +3913,8 @@
   "tasks.scheduleForm.activating": "활성화 중…",
   "tasks.scheduleForm.backToEdit": "편집으로 돌아가기",
   "inbox.needsAction": "조치 필요",
-  "inbox.runStatus.succeeded": "성공"
+  "inbox.runStatus.succeeded": "성공",
+  "extensions.credentialStorage.label": "자격 증명 저장 위치",
+  "extensions.credentialStorage.keyring": "OS 키체인",
+  "extensions.credentialStorage.file": "로컬 파일(제한됨)"
 }
