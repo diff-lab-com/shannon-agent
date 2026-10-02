@@ -66,7 +66,14 @@ describe('ChatScript fixtures — W2 chrome journeys YAML ↔ JSON parity', () =
 
   it('the new seed capabilities survive the round-trip (W2 schema extension)', () => {
     const model = loadYaml('model-mode-switch')
-    expect(model.seed?.config?.approvalMode).toBe('bypass_permissions')
+    // The rawLabel leg mutates the config in memory (the e2e arm) — the
+    // mutated object is legal schema input and carries the engine-only value.
+    const rawLabelArm: ChatScript = {
+      ...model,
+      seed: { ...model.seed, config: { ...model.seed?.config, approvalMode: 'bypass_permissions' } },
+    }
+    expect(validateScript(rawLabelArm).ok).toBe(true)
+    expect(rawLabelArm.seed?.config?.approvalMode).toBe('bypass_permissions')
     expect(model.seed?.sessions?.[0]?.modelOverride).toEqual({
       provider: 'anthropic',
       model: 'claude-haiku-4-5-20251001',
