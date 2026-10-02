@@ -1526,12 +1526,10 @@ mod tests {
         {
             let mut tee = open_tee(&dir);
             tee.record_turn_start(None);
-            for content in ["第一步回答。"] {
-                tee.record_query_event(&QueryEvent::Text {
-                    query_id: query_id(),
-                    content: content.into(),
-                });
-            }
+            tee.record_query_event(&QueryEvent::Text {
+                query_id: query_id(),
+                content: "第一步回答。".into(),
+            });
             let q = query_id();
             tee.record_query_event(&QueryEvent::ToolUseRequest {
                 query_id: q,

@@ -1374,8 +1374,8 @@ mod tests {
             .collect();
         assert_eq!(rendered[1]["role"], "assistant");
         assert_eq!(rendered[1]["content"][0]["text"], "full answer");
-        assert_eq!(
-            loaded.message_interrupted[1], false,
+        assert!(
+            !loaded.message_interrupted[1],
             "a completed turn is not marked"
         );
         assert_eq!(rendered[3]["role"], "assistant");
@@ -1383,8 +1383,8 @@ mod tests {
             rendered[3]["content"][0]["text"], "海浪拍岸，月光洒落，",
             "the reload projection carries the cancelled turn's partial text"
         );
-        assert_eq!(
-            loaded.message_interrupted[3], true,
+        assert!(
+            loaded.message_interrupted[3],
             "the partial assistant message keeps its interrupted (stopped) flag"
         );
     }
