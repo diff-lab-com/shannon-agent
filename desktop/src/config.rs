@@ -771,12 +771,33 @@ pub fn save_config(config: &DesktopConfig) -> Result<(), String> {
 /// reset a corrupt store, so the load side must not silently swallow it
 /// as an empty list either (that masqueraded as "nothing installed").
 pub fn load_mcp_servers() -> Result<Vec<McpServerConfig>, String> {
-    load_mcp_servers_from(&user_settings_path())
+    load_mcp_servers_with_store(
+        &user_settings_path(),
+        crate::secret_store::global().as_deref(),
+    )
 }
 
 /// `load_mcp_servers` against an explicit `settings.json` path (tests inject
 /// a tempdir so they never touch the user's HOME).
 pub fn load_mcp_servers_from(path: &std::path::Path) -> Result<Vec<McpServerConfig>, String> {
+    load_mcp_servers_with_store(path, crate::secret_store::global().as_deref())
+}
+
+/// `load_mcp_servers` with an injected
+/// [`SecretStore`](crate::secret_store::SecretStore) (tests pass a
+/// [`MockSecretStore`](crate::secret_store::MockSecretStore) — never the
+/// real keyring; `None` = degraded plaintext-only read).
+///
+/// F5 read-path tolerance window: **keyring first, plaintext fallback**.
+/// A migrated server keeps its OAuth token block under
+/// `shannon/mcp-oauth/<name>`; the plaintext copy was deleted on migration,
+/// so the keyring hit is the only source left. A not-yet-migrated (or
+/// degraded-mode) entry falls through to the on-disk `shannonOAuth` block /
+/// legacy Bearer header exactly as before.
+pub fn load_mcp_servers_with_store(
+    path: &std::path::Path,
+    store: Option<&dyn crate::secret_store::SecretStore>,
+) -> Result<Vec<McpServerConfig>, String> {
     let root = read_settings_json_root(path)?;
     let Some(root_obj) = root.as_object() else {
         return Err(format!(
@@ -795,10 +816,45 @@ pub fn load_mcp_servers_from(path: &std::path::Path) -> Result<Vec<McpServerConf
     };
     let mut servers: Vec<McpServerConfig> = map
         .iter()
-        .filter_map(|(name, value)| mcp_server_config_from_json(name, value))
+        .filter_map(|(name, value)| {
+            let mut config = mcp_server_config_from_json(name, value)?;
+            // Keyring first, plaintext fallback (A8 tolerance window): while
+            // both sources exist — e.g. a migration interrupted between the
+            // keyring put and the file rewrite — the store entry is the
+            // live credential the refresh path keeps updating.
+            if let Some(oauth) = oauth_from_secret_store(store, name) {
+                config.oauth = Some(oauth);
+                config.has_auth_headers = true;
+            }
+            Some(config)
+        })
         .collect();
     servers.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(servers)
+}
+
+/// Read one server's OAuth token block from the secret store, if present.
+/// A store miss/unavailability is indistinguishable from "not migrated yet" —
+/// the plaintext fallback applies (never an error).
+fn oauth_from_secret_store(
+    store: Option<&dyn crate::secret_store::SecretStore>,
+    server: &str,
+) -> Option<McpStoredOAuth> {
+    let raw = match store?.get(&crate::secret_store::mcp_oauth_key(server)) {
+        Ok(Some(raw)) => raw,
+        Ok(None) | Err(_) => return None,
+    };
+    match serde_json::from_str::<McpStoredOAuth>(&raw) {
+        Ok(block) => Some(block),
+        Err(e) => {
+            tracing::warn!(
+                server,
+                error = %e,
+                "keyring OAuth block for MCP server is not valid JSON — treating as absent"
+            );
+            None
+        }
+    }
 }
 
 /// Convert one `mcpServers.<name>` JSON entry into a [`McpServerConfig`].
@@ -1002,10 +1058,30 @@ pub fn save_mcp_servers_to(
     write_settings_json_atomic(path, &root)
 }
 
-/// Remove one MCP server entry from the unified store by name. Returns
-/// `Ok(false)` when no entry with that name existed.
+/// Remove one MCP server entry from the unified store by name, and delete
+/// its keyring OAuth entry with it (F5: an orphaned keyring entry after
+/// uninstall is a new leak surface). Returns `Ok(false)` when no entry with
+/// that name existed.
 pub fn remove_mcp_server_entry(name: &str) -> Result<bool, String> {
-    remove_mcp_server_entry_from(&user_settings_path(), name)
+    remove_mcp_server_entry_with_store(
+        &user_settings_path(),
+        name,
+        crate::secret_store::global().as_deref(),
+    )
+}
+
+/// [`remove_mcp_server_entry`] with an injected secret store (tests pass a
+/// mock; `None` = degraded mode, nothing to clean).
+pub fn remove_mcp_server_entry_with_store(
+    path: &std::path::Path,
+    name: &str,
+    store: Option<&dyn crate::secret_store::SecretStore>,
+) -> Result<bool, String> {
+    let removed = remove_mcp_server_entry_from(path, name)?;
+    if removed {
+        crate::secret_store::delete_mcp_oauth_secret(store, name);
+    }
+    Ok(removed)
 }
 
 /// `remove_mcp_server_entry` against an explicit `settings.json` path.
@@ -1054,22 +1130,66 @@ pub fn set_mcp_server_enabled_to(
 }
 
 /// Persist refreshed OAuth credentials for one `mcpServers.<name>` entry
-/// (W3-B, A2 token lifecycle; ruling R6: inside the existing entry blob,
-/// no keychain). Writes the `shannonOAuth` block and mirrors the new
-/// access token into `headers.Authorization` so every consumer of the
-/// shared store sees the live credential. Edits the raw JSON in place —
-/// url-only rows keep the rest of their blob — and writes atomically.
-/// Returns `Ok(false)` when no entry with that name exists.
+/// (W3-B, A2 token lifecycle). F5: with a working secret store the token
+/// block lives **in the keyring** (`shannon/mcp-oauth/<name>`) and the
+/// entry's plaintext secret material (`shannonOAuth` block + the mirrored
+/// `Authorization` header) is stripped from settings.json — a refresh must
+/// never re-introduce plaintext after the migration deleted it. Without a
+/// store (degraded mode) the legacy in-file shape is written, protected by
+/// the R6 0600 atomic writer. Returns `Ok(false)` when no entry with that
+/// name exists.
 pub fn update_mcp_server_oauth_tokens(name: &str, tokens: &McpStoredOAuth) -> Result<bool, String> {
-    update_mcp_server_oauth_tokens_to(&user_settings_path(), name, tokens)
+    update_mcp_server_oauth_tokens_with_store(
+        &user_settings_path(),
+        name,
+        tokens,
+        crate::secret_store::global().as_deref(),
+    )
 }
 
-/// `update_mcp_server_oauth_tokens` against an explicit `settings.json` path.
+/// `update_mcp_server_oauth_tokens` against an explicit `settings.json` path
+/// and an injected secret store (tests use a mock; `None` = degraded
+/// plaintext write).
 pub fn update_mcp_server_oauth_tokens_to(
     path: &std::path::Path,
     name: &str,
     tokens: &McpStoredOAuth,
 ) -> Result<bool, String> {
+    update_mcp_server_oauth_tokens_with_store(
+        path,
+        name,
+        tokens,
+        crate::secret_store::global().as_deref(),
+    )
+}
+
+/// Store-injected core of [`update_mcp_server_oauth_tokens`].
+pub fn update_mcp_server_oauth_tokens_with_store(
+    path: &std::path::Path,
+    name: &str,
+    tokens: &McpStoredOAuth,
+    store: Option<&dyn crate::secret_store::SecretStore>,
+) -> Result<bool, String> {
+    // Keyring mode: the store is the source of truth for the credential.
+    // A failed write keeps the plaintext fallback honest — the block is
+    // then written into the file below instead (0600), never dropped.
+    let mut keyring_write_ok = false;
+    if let Some(store) = store {
+        match serde_json::to_string(tokens)
+            .map_err(|e| format!("oauth tokens serialize: {e}"))
+            .and_then(|raw| store.put(&crate::secret_store::mcp_oauth_key(name), &raw))
+        {
+            Ok(()) => keyring_write_ok = true,
+            Err(e) => tracing::warn!(
+                domain = "mcp-oauth",
+                server = name,
+                error = %e,
+                "keyring write failed for refreshed OAuth tokens — keeping the \
+                 plaintext block in settings.json (0600)"
+            ),
+        }
+    }
+
     let mut root = read_settings_json_root(path)?;
     let Some(entry) = root
         .get_mut("mcpServers")
@@ -1081,20 +1201,43 @@ pub fn update_mcp_server_oauth_tokens_to(
     let Some(entry_obj) = entry.as_object_mut() else {
         return Err(format!("settings.json#mcpServers.{name} is not an object"));
     };
-    entry_obj.insert(
-        "shannonOAuth".to_string(),
-        serde_json::to_value(tokens).map_err(|e| format!("oauth tokens serialize: {e}"))?,
-    );
-    if let Some(access) = tokens.access_token.as_deref().filter(|t| !t.is_empty()) {
-        if let Some(headers) = entry_obj.get_mut("headers").and_then(|h| h.as_object_mut()) {
-            headers.insert(
-                "Authorization".to_string(),
-                serde_json::Value::String(format!("Bearer {access}")),
-            );
+    if keyring_write_ok {
+        // Strip any plaintext secret material — including a mirrored
+        // Authorization header left over from the pre-migration shape.
+        entry_obj.remove("shannonOAuth");
+        strip_bearer_authorization(entry_obj);
+    } else {
+        entry_obj.insert(
+            "shannonOAuth".to_string(),
+            serde_json::to_value(tokens).map_err(|e| format!("oauth tokens serialize: {e}"))?,
+        );
+        if let Some(access) = tokens.access_token.as_deref().filter(|t| !t.is_empty()) {
+            if let Some(headers) = entry_obj.get_mut("headers").and_then(|h| h.as_object_mut()) {
+                headers.insert(
+                    "Authorization".to_string(),
+                    serde_json::Value::String(format!("Bearer {access}")),
+                );
+            }
         }
     }
     write_settings_json_atomic(path, &root)?;
     Ok(true)
+}
+
+/// Remove the OAuth-mirrored `Authorization` header from an entry's
+/// `headers` object, preserving every other (user-configured) header and
+/// dropping the object entirely when nothing remains. Only the exact
+/// OAuth-mirror keys (`Authorization` / lowercase spelling) are touched —
+/// manual custom headers stay in the file verbatim.
+fn strip_bearer_authorization(entry_obj: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(headers) = entry_obj.get_mut("headers").and_then(|h| h.as_object_mut()) else {
+        return;
+    };
+    headers.remove("Authorization");
+    headers.remove("authorization");
+    if headers.is_empty() {
+        entry_obj.remove("headers");
+    }
 }
 
 /// One-time, idempotent migration of the legacy
@@ -1187,6 +1330,132 @@ pub fn migrate_legacy_mcp_servers_to(
         count = migrated,
         "migrated legacy MCP servers into settings.json"
     );
+    migrated
+}
+
+/// One-time, idempotent migration of plaintext MCP OAuth credentials into
+/// the OS keyring (R7-④ batch 2 / A8). Runs at startup (and after an OAuth
+/// install/re-authentication) before anything reads the store.
+///
+/// Per entry, in order:
+/// 1. Keyring already has the block (`shannon/mcp-oauth/<name>`) → any
+///    leftover plaintext secret material is stripped (crash-recovery for a
+///    run interrupted between the keyring put and the file rewrite).
+/// 2. Otherwise, plaintext credentials present → write the token block to
+///    the keyring, then strip the plaintext and atomically rewrite the
+///    file. A **failed keyring write keeps the plaintext** (the file is
+///    already 0600) and warns — loading is never blocked.
+///
+/// Migration scope (A8 ruling): the `shannonOAuth` token block, plus the
+/// W3-B legacy shape it derives from — a url-only entry's
+/// `Authorization: Bearer …` header. Only the exact OAuth-mirror
+/// `Authorization` key is removed; user-configured custom headers
+/// (`X-API-Key`, proxy headers, …) are never migrated and stay in
+/// settings.json with their fail-safe semantics intact. Stdio `env`
+/// secrets are likewise out of scope.
+///
+/// Returns the number of entries whose plaintext secret material was
+/// removed this run (re-runs are no-ops).
+pub fn migrate_mcp_oauth_secrets() -> usize {
+    migrate_mcp_oauth_secrets_to(
+        &user_settings_path(),
+        crate::secret_store::global().as_deref(),
+    )
+}
+
+/// Store-injected core of [`migrate_mcp_oauth_secrets`] (tests pass a
+/// [`MockSecretStore`](crate::secret_store::MockSecretStore); `None` = the
+/// degraded plaintext fallback, a no-op).
+pub fn migrate_mcp_oauth_secrets_to(
+    settings_path: &std::path::Path,
+    store: Option<&dyn crate::secret_store::SecretStore>,
+) -> usize {
+    let Some(store) = store else {
+        return 0; // degraded mode: credentials deliberately stay in the 0600 file
+    };
+    let mut root = match read_settings_json_root(settings_path) {
+        Ok(root) => root,
+        Err(e) => {
+            tracing::warn!(
+                domain = "mcp-oauth",
+                error = %e,
+                "settings.json unreadable — skipping OAuth keyring migration"
+            );
+            return 0;
+        }
+    };
+    let Some(mcp_obj) = root.get_mut("mcpServers").and_then(|m| m.as_object_mut()) else {
+        return 0;
+    };
+
+    let mut migrated = 0;
+    for (name, entry) in mcp_obj.iter_mut() {
+        let Some(entry_obj) = entry.as_object_mut() else {
+            continue;
+        };
+        // The credential payload: the stored block, or the W3-B legacy
+        // derivation from the Authorization bearer header (the exact shape
+        // the loader derives from — anything else is a manual custom header
+        // and stays put).
+        let block =
+            match parse_stored_oauth(entry_obj).or_else(|| oauth_from_bearer_header(entry_obj)) {
+                Some(block) if block.has_credential() => block,
+                _ => continue,
+            };
+        let had_plaintext =
+            entry_obj.get("shannonOAuth").is_some() || entry_obj.get("headers").is_some();
+        let raw = match serde_json::to_string(&block) {
+            Ok(raw) => raw,
+            Err(e) => {
+                tracing::warn!(
+                    domain = "mcp-oauth",
+                    server = name,
+                    error = %e,
+                    "OAuth token block serialization failed — entry left as-is"
+                );
+                continue;
+            }
+        };
+        if let Err(e) = store.put(&crate::secret_store::mcp_oauth_key(name), &raw) {
+            // Degraded write: keep the plaintext (0600 file) and warn —
+            // migration must never block loading or lose a credential.
+            tracing::warn!(
+                domain = "mcp-oauth",
+                server = name,
+                error = %e,
+                "keyring write failed — OAuth token stays as plaintext in \
+                 settings.json (owner-only 0600)"
+            );
+            continue;
+        }
+        if had_plaintext {
+            entry_obj.remove("shannonOAuth");
+            strip_bearer_authorization(entry_obj);
+            migrated += 1;
+        }
+    }
+
+    if migrated > 0 {
+        if let Err(e) = write_settings_json_atomic(settings_path, &root) {
+            // The keyring already holds every migrated credential, so the
+            // next startup's crash-recovery leg (keyring hit → strip
+            // plaintext) finishes the job. Warn loudly either way: the
+            // plaintext copies are still on disk until then.
+            tracing::warn!(
+                domain = "mcp-oauth",
+                error = %e,
+                "post-migration settings.json rewrite failed — plaintext \
+                 OAuth copies remain (0600) and will be stripped on the \
+                 next startup"
+            );
+            return 0;
+        }
+        tracing::info!(
+            domain = "mcp-oauth",
+            count = migrated,
+            "migrated MCP OAuth tokens into the OS keyring"
+        );
+    }
     migrated
 }
 
@@ -2067,6 +2336,281 @@ mod tests {
         assert_eq!(root["other"], 1);
 
         assert!(!update_mcp_server_oauth_tokens_to(&path, "ghost", &updated).unwrap());
+    }
+
+    // ── F5 (R7-④ batch 2 / A8): OAuth tokens → OS keyring ─────────────────
+
+    use crate::secret_store::{MockSecretStore, SecretStore};
+
+    fn linear_entry_json() -> String {
+        r#"{"other":1,"mcpServers":{
+            "linear":{"type":"http","url":"https://mcp.linear.app/sse","enabled":false,
+                      "headers":{"Authorization":"Bearer old","X-Custom":"keep-me"},
+                      "shannonOAuth":{"client_id":"cid","token_url":"https://t/token","refresh_token":"rt1","access_token":"old"}}
+        }}"#
+        .replace('\n', "")
+    }
+
+    /// Acceptance ①: plaintext token block → migrate → the block lands in
+    /// the keyring under `shannon/mcp-oauth/<name>`, the plaintext secret
+    /// material (block + mirrored Authorization) is deleted from the file,
+    /// everything else (custom headers, url, enabled, foreign keys) stays,
+    /// and a re-run is a no-op. The load path then reads the token back
+    /// from the keyring.
+    #[test]
+    fn migrate_oauth_moves_block_to_keyring_and_strips_plaintext() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(&path, linear_entry_json()).unwrap();
+
+        let store = MockSecretStore::new();
+        let migrated = migrate_mcp_oauth_secrets_to(&path, Some(&store));
+        assert_eq!(migrated, 1);
+
+        // The keyring holds the full token block, keyed by namespace.
+        let key = crate::secret_store::mcp_oauth_key("linear");
+        let raw = store.value(&key).expect("keyring entry after migration");
+        let block: McpStoredOAuth = serde_json::from_str(&raw).unwrap();
+        assert_eq!(block.access_token.as_deref(), Some("old"));
+        assert_eq!(block.refresh_token.as_deref(), Some("rt1"));
+        assert_eq!(block.token_url, "https://t/token");
+
+        // The file: plaintext secret material gone, everything else kept.
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let entry = &root["mcpServers"]["linear"];
+        assert!(entry.get("shannonOAuth").is_none(), "{entry}");
+        assert_eq!(
+            entry["headers"]["X-Custom"], "keep-me",
+            "manual custom headers are never migrated away"
+        );
+        assert!(
+            entry["headers"].get("Authorization").is_none(),
+            "the OAuth-mirrored Authorization header goes with the block: {entry}"
+        );
+        assert_eq!(entry["url"], "https://mcp.linear.app/sse");
+        assert_eq!(entry["enabled"], false);
+        assert_eq!(root["other"], 1);
+
+        // Idempotent: a second pass is a no-op.
+        assert_eq!(migrate_mcp_oauth_secrets_to(&path, Some(&store)), 0);
+
+        // Read path (tolerance window closed): the token comes back from
+        // the keyring and the row stays an OAuth entry.
+        let servers = load_mcp_servers_with_store(&path, Some(&store)).unwrap();
+        let linear = servers.iter().find(|s| s.name == "linear").unwrap();
+        let oauth = linear.oauth.as_ref().expect("oauth restored from keyring");
+        assert_eq!(oauth.access_token.as_deref(), Some("old"));
+        assert!(linear.has_auth_headers);
+        assert_eq!(oauth.token_url, "https://t/token");
+    }
+
+    /// Acceptance ② (W3-B legacy shape): a header-only pre-A2 entry — the
+    /// exact storage form `oauth_from_bearer_header` derives from —
+    /// migrates too, while a manual entry with only custom headers stays
+    /// untouched (fail-safe semantics unchanged).
+    #[test]
+    fn migrate_oauth_handles_legacy_bearer_but_leaves_manual_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{
+                "legacy":{"type":"http","url":"https://mcp.example","headers":{"Authorization":"Bearer leg"}},
+                "manual":{"type":"http","url":"https://mcp.example","headers":{"X-API-Key":"k3y"}}
+            }}"#,
+        )
+        .unwrap();
+
+        let store = MockSecretStore::new();
+        assert_eq!(migrate_mcp_oauth_secrets_to(&path, Some(&store)), 1);
+
+        let raw = store
+            .value(&crate::secret_store::mcp_oauth_key("legacy"))
+            .expect("legacy bearer migrated");
+        let block: McpStoredOAuth = serde_json::from_str(&raw).unwrap();
+        assert_eq!(block.access_token.as_deref(), Some("leg"));
+        assert!(!block.can_refresh(), "derived shape keeps its honesty");
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            root["mcpServers"]["legacy"]["headers"],
+            serde_json::Value::Null,
+            "mirrored Authorization stripped with the (empty) headers object"
+        );
+        let manual = &root["mcpServers"]["manual"];
+        assert_eq!(manual["headers"]["X-API-Key"], "k3y", "manual headers stay");
+        assert!(!store.contains(&crate::secret_store::mcp_oauth_key("manual")));
+    }
+
+    /// Acceptance ③: a failed keyring write keeps the plaintext (the file is
+    /// 0600) and warns — migration never blocks loading and never loses a
+    /// credential.
+    #[test]
+    fn failed_keyring_write_keeps_plaintext_and_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(&path, linear_entry_json()).unwrap();
+        let original = std::fs::read_to_string(&path).unwrap();
+
+        let store = MockSecretStore::failing_writes();
+        let (capture, migrated) = crate::secret_store::test_support::capture_warnings(|| {
+            migrate_mcp_oauth_secrets_to(&path, Some(&store))
+        });
+        assert_eq!(migrated, 0);
+        assert!(
+            store
+                .value(&crate::secret_store::mcp_oauth_key("linear"))
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "degraded write: the plaintext credential must survive"
+        );
+        let warnings = capture.warnings();
+        assert!(
+            warnings.iter().any(|w| w.contains("keyring write failed")),
+            "degradation must be visible: {warnings:?}"
+        );
+
+        // Loading still works (from plaintext).
+        let servers = load_mcp_servers_with_store(&path, Some(&store)).unwrap();
+        let linear = servers.iter().find(|s| s.name == "linear").unwrap();
+        assert_eq!(
+            linear.oauth.as_ref().unwrap().access_token.as_deref(),
+            Some("old")
+        );
+    }
+
+    /// `None` store (probe failed / pre-init) = the migration is a no-op and
+    /// the plaintext stays — the documented degraded mode.
+    #[test]
+    fn migrate_without_store_is_a_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(&path, linear_entry_json()).unwrap();
+        let original = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(migrate_mcp_oauth_secrets_to(&path, None), 0);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    /// Read-path precedence within the tolerance window: keyring wins over
+    /// a leftover plaintext copy, and the plaintext fallback still serves
+    /// entries the store doesn't know.
+    #[test]
+    fn load_prefers_keyring_but_falls_back_to_plaintext() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{
+                "both":{"type":"http","url":"https://mcp.example","shannonOAuth":{"client_id":"c","token_url":"","refresh_token":"file-rt","access_token":"file-token"}},
+                "plain":{"type":"http","url":"https://mcp.example","shannonOAuth":{"client_id":"c","token_url":"","access_token":"plain-token"}}
+            }}"#,
+        )
+        .unwrap();
+
+        let store = MockSecretStore::new();
+        store
+            .put(
+                &crate::secret_store::mcp_oauth_key("both"),
+                r#"{"client_id":"c","token_url":"","refresh_token":"kr-rt","access_token":"kr-token"}"#,
+            )
+            .unwrap();
+
+        let servers = load_mcp_servers_with_store(&path, Some(&store)).unwrap();
+        let both = servers.iter().find(|s| s.name == "both").unwrap();
+        assert_eq!(
+            both.oauth.as_ref().unwrap().refresh_token.as_deref(),
+            Some("kr-rt"),
+            "keyring must win while the tolerance window is open"
+        );
+        let plain = servers.iter().find(|s| s.name == "plain").unwrap();
+        assert_eq!(
+            plain.oauth.as_ref().unwrap().access_token.as_deref(),
+            Some("plain-token"),
+            "plaintext fallback keeps not-yet-migrated entries working"
+        );
+
+        // Degraded mode (`None` store): plaintext-only, as before F5.
+        let servers = load_mcp_servers_with_store(&path, None).unwrap();
+        let both = servers.iter().find(|s| s.name == "both").unwrap();
+        assert_eq!(
+            both.oauth.as_ref().unwrap().refresh_token.as_deref(),
+            Some("file-rt")
+        );
+    }
+
+    /// A handshake-time refresh in keyring mode updates the keyring and
+    /// strips the plaintext copy instead of re-introducing it; the degraded
+    /// mode keeps writing the file (0600).
+    #[test]
+    fn update_oauth_tokens_with_store_writes_keyring_and_strips_plaintext() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(&path, linear_entry_json()).unwrap();
+
+        let store = MockSecretStore::new();
+        let updated = McpStoredOAuth {
+            client_id: "cid".into(),
+            token_url: "https://t/token".into(),
+            refresh_token: Some("rt2".into()),
+            access_token: Some("new".into()),
+            expires_at: Some(1735689600),
+        };
+        assert!(
+            update_mcp_server_oauth_tokens_with_store(&path, "linear", &updated, Some(&store))
+                .unwrap()
+        );
+
+        let raw = store
+            .value(&crate::secret_store::mcp_oauth_key("linear"))
+            .expect("refresh lands in the keyring");
+        let block: McpStoredOAuth = serde_json::from_str(&raw).unwrap();
+        assert_eq!(block.access_token.as_deref(), Some("new"));
+        assert_eq!(block.refresh_token.as_deref(), Some("rt2"));
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let entry = &root["mcpServers"]["linear"];
+        assert!(entry.get("shannonOAuth").is_none(), "{entry}");
+        assert!(entry["headers"].get("Authorization").is_none(), "{entry}");
+        assert_eq!(entry["headers"]["X-Custom"], "keep-me");
+
+        // Degraded mode keeps the legacy in-file shape (existing test).
+        assert!(
+            update_mcp_server_oauth_tokens_with_store(&path, "linear", &updated, None).unwrap()
+        );
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            root["mcpServers"]["linear"]["shannonOAuth"]["access_token"],
+            "new"
+        );
+    }
+
+    /// Uninstall cleanup: deleting a server removes its keyring entry with
+    /// the store row.
+    #[test]
+    fn remove_mcp_server_entry_cleans_the_keyring() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(&path, linear_entry_json()).unwrap();
+
+        let store = MockSecretStore::new();
+        store
+            .put(&crate::secret_store::mcp_oauth_key("linear"), "{}")
+            .unwrap();
+
+        assert!(remove_mcp_server_entry_with_store(&path, "linear", Some(&store)).unwrap());
+        assert!(
+            !store.contains(&crate::secret_store::mcp_oauth_key("linear")),
+            "uninstall must not orphan the keyring entry"
+        );
+        // A missing entry stays success and cleans nothing extra.
+        assert!(!remove_mcp_server_entry_with_store(&path, "linear", Some(&store)).unwrap());
     }
 
     /// W1-1 (R2-P0-1(B)): url-only store entries keep their `url` on load,

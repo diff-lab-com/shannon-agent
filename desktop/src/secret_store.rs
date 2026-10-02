@@ -154,18 +154,30 @@ impl MockSecretStore {
 
     /// Test assertion helper: does an entry exist under `key`?
     pub fn contains(&self, key: &str) -> bool {
-        self.entries.lock().expect("mock store lock").contains_key(key)
+        self.entries
+            .lock()
+            .expect("mock store lock")
+            .contains_key(key)
     }
 
     /// Test assertion helper: the stored value under `key`.
     pub fn value(&self, key: &str) -> Option<String> {
-        self.entries.lock().expect("mock store lock").get(key).cloned()
+        self.entries
+            .lock()
+            .expect("mock store lock")
+            .get(key)
+            .cloned()
     }
 }
 
 impl SecretStore for MockSecretStore {
     fn get(&self, key: &str) -> Result<Option<String>, String> {
-        Ok(self.entries.lock().expect("mock store lock").get(key).cloned())
+        Ok(self
+            .entries
+            .lock()
+            .expect("mock store lock")
+            .get(key)
+            .cloned())
     }
 
     fn put(&self, key: &str, value: &str) -> Result<(), String> {
@@ -194,9 +206,7 @@ fn probe_keyring() -> Result<KeyringStore, String> {
     store.put(PROBE_KEY, PROBE_VALUE)?;
     let read_back = store.get(PROBE_KEY)?;
     if read_back.as_deref() != Some(PROBE_VALUE) {
-        return Err(format!(
-            "keyring probe read-back mismatch: {read_back:?}"
-        ));
+        return Err(format!("keyring probe read-back mismatch: {read_back:?}"));
     }
     store.delete(PROBE_KEY)?;
     Ok(store)
@@ -223,10 +233,11 @@ impl CredentialStorage {
     }
 }
 
-/// Wire token for the UI's "credential storage" status line, given whether a
-/// working keyring store is in play. `false` → the honest degraded token.
-pub fn storage_mode(store_available: bool) -> &'static str {
-    if store_available {
+/// Wire token for the UI's "credential storage" status line: `"keyring"`
+/// when `store_hit` — the row's credential lives in the secret store —
+/// else the honest degraded `"plaintext_file"` token.
+pub fn storage_mode(store_hit: bool) -> &'static str {
+    if store_hit {
         "keyring"
     } else {
         "plaintext_file"
@@ -368,7 +379,8 @@ pub(crate) mod test_support {
             let mut message = String::new();
             event.record(&mut MessageVisitor {
                 message: &mut message,
-            });            self.warnings
+            });
+            self.warnings
                 .lock()
                 .expect("warn capture lock")
                 .push(message);
@@ -397,12 +409,21 @@ mod tests {
     /// the connections default service is `shannon-gateway`).
     #[test]
     fn key_namespace_is_scoped_and_disjoint_from_connections() {
-        assert_eq!(mcp_oauth_key("linear-oauth"), "shannon/mcp-oauth/linear-oauth");
+        assert_eq!(
+            mcp_oauth_key("linear-oauth"),
+            "shannon/mcp-oauth/linear-oauth"
+        );
         assert_eq!(datasource_key("imap-home"), "shannon/datasource/imap-home");
 
         // Split at the first '/' → service is exactly `shannon`.
-        assert_eq!(split_key("shannon/mcp-oauth/linear-oauth"), ("shannon", "mcp-oauth/linear-oauth"));
-        assert_eq!(split_key("shannon/datasource/imap-home"), ("shannon", "datasource/imap-home"));
+        assert_eq!(
+            split_key("shannon/mcp-oauth/linear-oauth"),
+            ("shannon", "mcp-oauth/linear-oauth")
+        );
+        assert_eq!(
+            split_key("shannon/datasource/imap-home"),
+            ("shannon", "datasource/imap-home")
+        );
 
         // The gateway tenants' service names (see PlatformsCard.tsx
         // SECRET_MODEL + commands_connections DEFAULT_SERVICE) never equal
@@ -427,10 +448,7 @@ mod tests {
     #[test]
     fn key_namespace_tolerates_special_characters() {
         let weird = "My Server (prod)/v2 测试 & <friends>";
-        assert_eq!(
-            mcp_oauth_key(weird),
-            format!("shannon/mcp-oauth/{weird}")
-        );
+        assert_eq!(mcp_oauth_key(weird), format!("shannon/mcp-oauth/{weird}"));
         assert_eq!(
             split_key(&mcp_oauth_key(weird)),
             ("shannon", format!("mcp-oauth/{weird}").as_str())
@@ -447,7 +465,10 @@ mod tests {
         let key = mcp_oauth_key("srv");
         assert_eq!(store.get(&key).unwrap(), None);
         store.put(&key, "{\"access_token\":\"t\"}").unwrap();
-        assert_eq!(store.get(&key).unwrap().as_deref(), Some("{\"access_token\":\"t\"}"));
+        assert_eq!(
+            store.get(&key).unwrap().as_deref(),
+            Some("{\"access_token\":\"t\"}")
+        );
         assert!(store.contains(&key));
         store.delete(&key).unwrap();
         assert!(!store.contains(&key));
@@ -467,12 +488,15 @@ mod tests {
     /// per affected domain — never silently degrade.
     #[test]
     fn failed_probe_falls_back_with_one_warn_per_domain() {
-        let (capture, resolved) = test_support::capture_warnings(|| {
-            init_from_probe(Err("no secret service".into()))
-        });
+        let (capture, resolved) =
+            test_support::capture_warnings(|| init_from_probe(Err("no secret service".into())));
         assert_eq!(resolved, CredentialStorage::FileFallback);
         let warnings = capture.warnings();
-        assert_eq!(warnings.len(), 2, "one warn per affected domain: {warnings:?}");
+        assert_eq!(
+            warnings.len(),
+            2,
+            "one warn per affected domain: {warnings:?}"
+        );
         assert!(warnings[0].contains("keyring unavailable"), "{warnings:?}");
         assert!(warnings[1].contains("keyring unavailable"), "{warnings:?}");
     }
@@ -480,7 +504,8 @@ mod tests {
     /// A working probe resolves to the keyring backend (no warn).
     #[test]
     fn working_probe_resolves_keyring_without_warn() {
-        let (capture, resolved) = test_support::capture_warnings(|| init_from_probe(Ok(KeyringStore)));
+        let (capture, resolved) =
+            test_support::capture_warnings(|| init_from_probe(Ok(KeyringStore)));
         assert_eq!(resolved, CredentialStorage::Keyring);
         assert!(capture.warnings().is_empty());
     }
