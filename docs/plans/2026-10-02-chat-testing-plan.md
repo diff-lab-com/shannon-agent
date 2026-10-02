@@ -389,3 +389,11 @@ MVP = P0+P1+P2 ≈ **1.5 周**；全量 ≈ **3 周**。每 Phase 独立成 PR�
 - resume 代理前必须核对 worktree 所在分支（两次提交落错分支）
 - Rust 组验收三件套 = cargo check + nextest + fmt --check（fmt 违规与 ACL 缺失都从缺口漏过）
 - rebase 后必须 git log 确认预期提交在分支上（测试绿可能是旧断言）
+
+### 留存清单处置 (2026-10-02，用户批准分层方案后执行)
+- **已修（P0）**：F-1 composer 锁死（#231，owner 路由）；4 条 a11y serious 债务清零（#231）；`started` 帧补发射（#240）；sidebar-sessions flake 原子化（#241）
+- **已采纳实施（P1）**：D6 取消保留半截（#232，前后端一体：tee interrupted 落盘 + stopped-chip 气泡）；A-22 输入历史回溯（#232，ArrowUp 环形缓冲）
+- **已采纳实施（P2）**：Vitest 并行化 spike 成功（#242，3.2-3.4x，CI 全绿即转正）
+- **文档化（P2/P3）**：D7 队列不持久化为有意设计（AppContext PROMPT_QUEUE_CAP 注释，含"勿无产品裁定修复"警示）；A-10 后台完成态瞬态不可见、tauri-driver 真壳测试延后、QUERY_FAILED 半截不一致（D6 邻接项）均记录为接受现状
+- **流程**：CONTRIBUTING 新增长生命分支每日 rebase 规则；Rust 验收升级为四件套（+clippy）
+- **仍开放的观察项**：QUERY_FAILED 半截重载无标记不一致（D6 邻接，tee 侧扩 reason 即可统一）；`continueTarget` undefined 锐边（组件测试已钉）；3 个非矩阵主题的 on-error 对比度（contrast-audit PAIRS 外，建议另立项）

@@ -67,9 +67,17 @@ suite (L1). Rules:
 - **`UNMOCKED_ALLOWLIST` / armed-vs-unarmed**: any new mock handler must keep
   the un-scripted demo path byte-identical (covered by
   `mock-handlers-coverage.test.ts` and the seed-handlers comparison tests).
-- **Rust touching desktop commands**: acceptance = `cargo check` + relevant
-  `cargo nextest` + `cargo fmt --check`. A fmt slip or a missing ACL entry in
-  `desktop/acl/app-permissions.json` has both landed via this gap before.
+- **Rust touching desktop commands**: acceptance is the FOUR-piece gate —
+  `cargo check` + relevant `cargo nextest` + `cargo fmt --check` +
+  `cargo clippy --all-targets`. A fmt slip, a missing ACL entry in
+  `desktop/acl/app-permissions.json`, and a clippy warning have each landed
+  via this gap before.
+
+## Long-lived branches
+
+- Rebase onto `dev` **daily**. Parallel sessions merge to `dev` continuously —
+  a stale branch once burned five CI rounds before the base drift (a contract
+  change in an unrelated PR) was identified.
 
 ## Releases
 
