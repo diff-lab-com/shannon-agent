@@ -90,6 +90,79 @@ export function seededMessages(sessionId?: string | null): ChatMessage[] | null 
   }))
 }
 
+// ── S-4 fix (R4 group 3): sent-message durability ──────────────────────────
+//
+// The real backend records a turn's user message into the session's L0 log
+// BEFORE the model sees anything (`agent_loop.rs` — record_user_message + 
+// record_turn_start precede the first request), so `switch_session`/`load_session`
+// reload from the log always include it — even mid-run or after a cancel.
+// The scripted backend never modeled this: a send left no trace, so
+// switching away and back dropped the just-sent bubble (cancel-matrix
+// scenario 9's "bubble does not survive"). This overlay closes that
+// fidelity gap: each scripted/fall-through send appends the user message to
+// its session's runtime tail, and the seeded conversation readers project
+// seed + recorded tail.
+
+interface RecordedSendsBox {
+  bySession: Map<string, ChatMessage[]>
+}
+
+function recordedSends(): RecordedSendsBox {
+  return realmSingleton<RecordedSendsBox>('__shannonMockRecordedSends', () => ({
+    bySession: new Map(),
+  }))
+}
+
+/** Resolve the seeded session a send with this explicit id targets.
+ *  `null` keeps the scripted "current conversation" = first seeded session
+ *  (the same fallback seededMessages applies to get_conversation). An id
+ *  that matches no seeded session records nothing — the demo rail is
+ *  seeded-only while a script is armed, so this cannot diverge in practice. */
+function targetSession(sessionId: string | null | undefined) {
+  const seed = seedState().seed
+  if (!seed?.sessions?.length) return null
+  return sessionId == null ? seed.sessions[0] : seed.sessions.find(s => s.id === sessionId)
+}
+
+/** Record one accepted send's user message into its session's tail. A
+ *  REJECTED send must NOT reach this (the UI rolls its bubble back; the
+ *  real backend's guards reject before recording either). */
+export function recordSeedUserSend(sessionId: string | null | undefined, message: string | null): void {
+  if (message == null || message === '') return
+  const session = targetSession(sessionId)
+  if (!session) return
+  const box = recordedSends()
+  const tail = box.bySession.get(session.id) ?? []
+  tail.push({ role: 'user', content: message, timestamp: Date.now() })
+  box.bySession.set(session.id, tail)
+}
+
+/** Clear the recorded tails (player load/reset — a fresh script lifecycle). */
+export function resetRecordedSends(): void {
+  recordedSends().bySession.clear()
+}
+
+/** Drop ONE session's recorded tail — /rewind rewrites the session history
+ *  (the mock truncates to the checkpoint boundary), so the pre-rewind tail
+ *  must not resurrect on the next reload. */
+export function clearRecordedSends(sessionId: string | null | undefined): void {
+  const session = targetSession(sessionId ?? null)
+  if (session) recordedSends().bySession.delete(session.id)
+}
+
+/**
+ * seededMessages + the session's recorded send tail — the durability-aware
+ * read behind get_conversation / load_session / switch_session. Null when
+ * no seed is armed (callers fall back to demo state, byte-identical).
+ */
+export function seededMessagesWithRecorded(sessionId?: string | null): ChatMessage[] | null {
+  const base = seededMessages(sessionId)
+  if (base == null) return null
+  const session = targetSession(sessionId ?? null)
+  const tail = session ? recordedSends().bySession.get(session.id) : undefined
+  return tail?.length ? [...base, ...tail] : base
+}
+
 /** `budgetUsd` override for `get_session_budget`; undefined = not seeded.
  *  Applies when no session id is given (active-session fallback) or when the
  *  id matches a seeded session; unknown sessions fall back to demo state. */

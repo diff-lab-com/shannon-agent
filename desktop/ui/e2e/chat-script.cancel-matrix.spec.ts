@@ -341,10 +341,15 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expect(page.getByRole('alert')).toHaveCount(0)
     await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
 
-    // Back to A: switching reloads the seeded conversation (the pre-switch
-    // optimistic bubble does not survive a round trip), and the cancelled
-    // run left no residue — no cursor, no assistant bubble.
+    // Back to A (S-4 fixed in R4 group 3): the pre-switch user bubble
+    // survives the round trip — the scripted backend now records accepted
+    // sends at turn start (seed.ts overlay), matching the real backend's L0
+    // tee (agent_loop records the user message before the model sees
+    // anything, so a log-backed reload always includes it). The cancelled
+    // run left no residue beyond that — no cursor, no assistant bubble.
     await openSession(page, 'desktop-session-row-script-sess-bg-a', 'Background A')
+    await expect(chat.bubbles()).toHaveCount(1)
+    await expect(chat.bubbleAt(0)).toContainText('A 的长任务')
     await expect(chat.streamingCursor()).toHaveCount(0)
     await expect(page.locator('[data-tool-name]')).toHaveCount(0)
     await expectNoConsoleErrors(page)

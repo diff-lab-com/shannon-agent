@@ -25,6 +25,22 @@ pub async fn get_conversation(
     Ok(messages.clone())
 }
 
+/// A-6 fix (R4 group 3): the id of the ACTIVE session — the one
+/// [`get_conversation`] answers for. The main window's cold start loaded the
+/// conversation but had no way to learn WHICH session it came from (the
+/// `Vec<ChatMessage>` return carries no identity), leaving the UI's
+/// `currentSessionId` null until the first manual switch. Read-only by
+/// design: `SessionRegistry::active_key` never materializes a session, so
+/// calling this after `get_conversation` (which does the materializing)
+/// reports exactly the session the rendered messages belong to.
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn get_active_session_id(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    Ok(state.registry.active_key().map(|key| key.0.to_string()))
+}
+
 /// List available models for the current provider.
 ///
 /// Routed through `shannon_core::model_registry::merged_models_for_provider`

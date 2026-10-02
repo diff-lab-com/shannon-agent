@@ -220,4 +220,95 @@ describe('AppContext', () => {
     expect(result.current.messages).toEqual([])
     spy.mockRestore()
   })
+
+  // ── R4 group 3 — session binding ────────────────────────────────────────
+
+  // A-5 fix: the error banner is a visible-session readout, but nothing
+  // cleared it when the user moved to another session — the previous
+  // session's failure banner (auth included) followed them there.
+  it('clears the chat error when the user switches to another session (A-5)', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    // A rejected send leaves its error on screen…
+    const sendSpy = vi.spyOn(api, 'sendMessage').mockRejectedValue(new Error('401 Unauthorized'))
+    await act(async () => {
+      await result.current.sendMessage('Hello')
+    })
+    expect(result.current.error).toBe('Error: 401 Unauthorized')
+    sendSpy.mockRestore()
+
+    // …and switching sessions must not carry it over.
+    const switchSpy = vi.spyOn(api, 'switchSession').mockResolvedValue([])
+    await act(async () => {
+      await result.current.switchSession('11111111-2222-4333-8444-555555555555')
+    })
+    expect(result.current.error).toBeNull()
+    // Kept in lockstep with `error` by the single writer.
+    expect(result.current.errorKind).toBeNull()
+    switchSpy.mockRestore()
+  })
+
+  // A-5 semantics pin: a SAME-session reload (Chat remount re-running the
+  // switch against the current id) belongs to the session still on screen —
+  // its error banner must survive the reload.
+  it('keeps the error banner on a same-session reload (A-5)', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    const switchSpy = vi.spyOn(api, 'switchSession').mockResolvedValue([])
+    await act(async () => {
+      await result.current.switchSession('11111111-2222-4333-8444-555555555555')
+    })
+    const sendSpy = vi.spyOn(api, 'sendMessage').mockRejectedValue(new Error('boom'))
+    await act(async () => {
+      await result.current.sendMessage('Hello')
+    })
+    expect(result.current.error).toBe('Error: boom')
+
+    await act(async () => {
+      await result.current.switchSession('11111111-2222-4333-8444-555555555555')
+    })
+    expect(result.current.error).toBe('Error: boom')
+    switchSpy.mockRestore()
+    sendSpy.mockRestore()
+  })
+
+  // A-6 fix: the cold-start conversation comes from the backend's ACTIVE
+  // session, but `currentSessionId` stayed null — RunStatusLine had no
+  // session to time against and every currentSessionId-gated action stayed
+  // half-bound until the first manual switch.
+  it('binds currentSessionId to the active session on cold start (A-6)', async () => {
+    const convSpy = vi.spyOn(api, 'getConversation').mockResolvedValue([
+      { role: 'user', content: 'recorded history', timestamp: 1 },
+    ])
+    const activeSpy = vi.spyOn(api, 'getActiveSessionId').mockResolvedValue('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
+    const { result } = renderHook(() => useApp(), { wrapper })
+
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    expect(result.current.messages).toEqual([
+      { role: 'user', content: 'recorded history', timestamp: 1 },
+    ])
+    expect(result.current.currentSessionId).toBe('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
+
+    // The bound id is the composer's explicit routing target from the very
+    // first send (P1-1's explicit-session path, no null fallback).
+    const sendSpy = vi.spyOn(api, 'sendMessage').mockResolvedValue({ query_id: 'q1' })
+    await act(async () => {
+      await result.current.sendMessage('Hello')
+    })
+    expect(sendSpy).toHaveBeenCalledWith('Hello', undefined, undefined, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
+    sendSpy.mockRestore()
+    convSpy.mockRestore()
+    activeSpy.mockRestore()
+  })
+
+  // A-6 guard: when the backend reports no active session (the mock's demo
+  // world), the cold start stays unbound — no fabricated id.
+  it('leaves currentSessionId null when the backend has no active session (A-6)', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.currentSessionId).toBeNull()
+  })
 })

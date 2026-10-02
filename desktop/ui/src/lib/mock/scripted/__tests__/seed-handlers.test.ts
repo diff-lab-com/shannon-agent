@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { handlers } from '@/lib/mock/handlers'
 import { MOCK_SESSIONS } from '@/lib/mock/data/core'
-import { setScriptSeed } from '../seed'
+import { recordSeedUserSend, resetRecordedSends, setScriptSeed } from '../seed'
 import type { ScriptSeed } from '../schema'
 
 const seed: ScriptSeed = {
@@ -65,6 +65,8 @@ const toolSeed: ScriptSeed = {
 afterEach(() => {
   // Handlers are module-level singletons — never leak a seed across tests.
   setScriptSeed(null)
+  // S-4 overlay: the recorded send tails are realm-global too.
+  resetRecordedSends()
 })
 
 describe('unarmed handlers keep the default demo behavior', () => {
@@ -214,5 +216,45 @@ describe('armed handlers answer from the script seed', () => {
     // Unknown session id → demo default.
     const demo = await handlers.rewind_session({ sessionId: 'unknown', turnIndex: 0 })
     expect(demo.length).toBeGreaterThan(0)
+  })
+
+  // ── S-4 fix (R4 group 3): sent-message durability ────────────────────────
+
+  it('a recorded send survives switch_session / load_session (S-4)', async () => {
+    setScriptSeed(seed)
+    // The send lands in ITS session's tail (null id = the first seeded
+    // session — the scripted "current conversation").
+    recordSeedUserSend('script-sess-2', '在途的那条')
+    recordSeedUserSend(null, '主窗的当前会话消息')
+
+    for (const read of [
+      () => handlers.switch_session({ id: 'script-sess-2' }),
+      () => handlers.load_session({ id: 'script-sess-2' }),
+    ]) {
+      const messages = await read()
+      expect(messages).toHaveLength(1)
+      expect(messages[0]).toMatchObject({ role: 'user', content: '在途的那条' })
+    }
+    // The first session's tail is separate (session-scoped, not global).
+    const first = await handlers.get_conversation({})
+    expect(first.map(m => m.content)).toEqual(['hello', 'hi there', '主窗的当前会话消息'])
+  })
+
+  it('a send to an unknown session records nothing (S-4)', async () => {
+    setScriptSeed(seed)
+    recordSeedUserSend('not-a-seeded-id', '迷路的消息')
+    expect(await handlers.switch_session({ id: 'script-sess-2' })).toEqual([])
+    // Unarmed (demo) sends are no-ops too.
+    setScriptSeed(null)
+    recordSeedUserSend('script-sess-1', 'demo 的消息')
+    const demo = await handlers.get_conversation({})
+    expect(demo.every(m => m.content !== 'demo 的消息')).toBe(true)
+  })
+
+  it('rewind_session drops the session\u2019s recorded tail (S-4 consistency)', async () => {
+    setScriptSeed(seed)
+    recordSeedUserSend('script-sess-2', '将被回滚的尾巴')
+    await handlers.rewind_session({ sessionId: 'script-sess-2', turnIndex: 0 })
+    expect(await handlers.switch_session({ id: 'script-sess-2' })).toEqual([])
   })
 })

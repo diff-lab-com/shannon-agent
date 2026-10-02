@@ -1,12 +1,12 @@
 # ChatScript: session-switch-race — journey #11★（矩阵#11）。
 #
 # 会话 A 长流式中切到 B：A 停止投影、B 不受污染（per-session bucket 隔离，
-# §P2-18）→ 切回 A 恢复投影 → 本轮 failed → 错误横幅切到 B 是否残留按
-# knownIssue: "A-5" 锚现状（AppContext switchToSession 不清 error/errorKind，
-# 现状=残留；断言在 spec，R4 修复后翻转为「B 上无横幅」）。
+# §P2-18）→ 切回 A 恢复投影 → 本轮 failed → 错误横幅留在 A（A-5 已修复于
+# R4 group 3 / feat/chat-fix-session-binding：switchToSession 切换即清
+# error/errorKind，spec 断言已翻转为「B 上无横幅」）。
 # draft 各自保留（草稿跨会话隔离，B1 §4-11）也是本 journey 的断言。
 name: session-switch-race
-description: 会话切换竞态 journey — A 流中切 B 不串流 → 切回恢复 → 错误横幅跨会话残留（A-5 锚点）→ draft 隔离
+description: 会话切换竞态 journey — A 流中切 B 不串流 → 切回恢复 → 错误横幅留在 A（A-5 已修复）→ draft 隔离
 seed:
   config:
     hasKey: true

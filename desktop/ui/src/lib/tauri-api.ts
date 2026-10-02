@@ -155,6 +155,17 @@ export async function getConversation(): Promise<ChatMessage[]> {
   return invoke('get_conversation')
 }
 
+/**
+ * A-6 fix — the id of the backend's ACTIVE session (the one
+ * `get_conversation` answers for), or null before any session exists.
+ * Read-only: unlike get_conversation this never materializes a session.
+ * The main window's cold start calls it AFTER get_conversation to bind
+ * `currentSessionId` to the conversation it just rendered.
+ */
+export async function getActiveSessionId(): Promise<string | null> {
+  return invoke<string | null>('get_active_session_id')
+}
+
 export async function cancelQuery(sessionId?: string): Promise<void> {
   await invoke('cancel_query', { sessionId: sessionId ?? null })
 }

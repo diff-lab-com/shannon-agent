@@ -184,11 +184,28 @@ export default function Chat() {
   // previous session left in the composer) and cancel any in-flight message
   // edit — editing is scoped to the session it started in. The prev-ref
   // guard keeps a same-session remount from resetting the composer.
-  const prevDraftSessionRef = useRef(visibleSessionId)
+  //
+  // A-6 fix follow-up: the MAIN WINDOW now cold-starts BOUND to the active
+  // session (AppContext.loadInitialData), so Chat's first render can already
+  // sit in the session whose draft is persisted — the old change-only
+  // trigger never fired for it (clicking the same session is a no-op), and
+  // the §4-11 restart anchor died. The effect's FIRST run therefore restores
+  // the arrival session's draft too (mount = arriving in that session; the
+  // composer state is brand-new, so there is nothing to flush over it).
+  const prevDraftSessionRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
-    if (prevDraftSessionRef.current === visibleSessionId) return
+    const firstRun = prevDraftSessionRef.current === undefined
     const previousId = prevDraftSessionRef.current
     prevDraftSessionRef.current = visibleSessionId
+    if (firstRun) {
+      // Mount: restore whatever the arrival session kept (no-op when the
+      // boot is unbound — null has no draft).
+      const draft = visibleSessionId ? readDraft(visibleSessionId) : null
+      setInput(draft?.text ?? '')
+      setAttachedFiles(draft?.attachments ?? [])
+      return
+    }
+    if (previousId === visibleSessionId) return
     // Flush synchronously so the old session's last keystrokes survive.
     // While an edit is in flight the composer holds the MESSAGE text, not
     // the user's draft — flush the pre-edit draft instead, or the switch

@@ -162,6 +162,9 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   // override per scenario.
   checkAttachmentPaths: vi.fn().mockResolvedValue([]),
   getConversation: vi.fn().mockResolvedValue([]),
+  // A-6 fix default: no active session in the bare render — cold start stays
+  // unbound exactly as before; the binding test overrides this per scenario.
+  getActiveSessionId: vi.fn().mockResolvedValue(null),
   cancelQuery: vi.fn().mockResolvedValue(undefined),
   // B0 P0-2 — webview file drag-drop. Default: registration resolves with a
   // no-op unlisten and no events ever fire; drag-flow tests override it.

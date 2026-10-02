@@ -691,7 +691,7 @@ describe('L1 state machine — edit-rewind (journey #10)', () => {
 })
 
 describe('L1 state machine — session-switch-race (journey #11)', () => {
-  it('buckets stay per-session across a switch; the projection resumes on return; the error banner persists across sessions (A-5 anchored)', async () => {
+  it('buckets stay per-session across a switch; the projection resumes on return; the error banner stays with A (A-5 fixed)', async () => {
     const script = loadFixture('session-switch-race')
     const h = await makeHarness()
     h.player.load(script)
@@ -725,12 +725,13 @@ describe('L1 state machine — session-switch-race (journey #11)', () => {
     await waitFor(() => expect(h.result.current.error).toBe('upstream exploded after the switch'))
     expect(h.result.current.errorKind).toBe('other')
 
-    // A-5 current behavior: switchToSession does NOT clear error/errorKind —
-    // A's failure banner follows the user onto B. Flip BOTH expects to
-    // `toBeNull()` when R4 lands.
+    // A-5 fixed (R4 group 3, feat/chat-fix-session-binding): switchToSession
+    // clears error/errorKind when the switch to a DIFFERENT session starts —
+    // A's failure banner does not follow the user onto B. (Was: both expects
+    // pinned the leak; the banner now belongs to the session on screen.)
     await act(async () => { await h.result.current.switchSession(SESSION_B) })
-    expect(h.result.current.error).toBe('upstream exploded after the switch')
-    expect(h.result.current.errorKind).toBe('other')
+    expect(h.result.current.error).toBeNull()
+    expect(h.result.current.errorKind).toBeNull()
   })
 })
 
