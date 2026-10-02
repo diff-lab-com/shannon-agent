@@ -439,6 +439,24 @@ fn adapter_to_entry(adapter: &DataSourceAdapter) -> CatalogEntry {
     }
 }
 
+/// The union of every adapter's credential fields — the keys declared
+/// `kind: "password"` in the catalog (IMAP `password`, Notion
+/// `integration_token`, Linear `api_key`, GitHub/Slack/Telegram `token`,
+/// Jira `api_token`, Discord/`bot_token`s).
+///
+/// F5 migration scope: exactly these fields move into the OS keyring
+/// (`shannon/datasource/<slug>`, JSON map). Host/port/user/enabled-style
+/// fields stay in the TOML — they are not credentials and their plaintext
+/// presence is what makes the file readable when the keyring is gone.
+pub fn secret_field_keys() -> std::collections::BTreeSet<String> {
+    data_source_adapters()
+        .iter()
+        .flat_map(|a| a.fields.iter())
+        .filter(|f| f.kind == "password")
+        .map(|f| f.key.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

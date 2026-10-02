@@ -19,6 +19,10 @@ pub mod provider_read_snapshot;
 pub mod routine_templates;
 /// Unified 0600 atomic writer for plaintext-secret-bearing files (R6).
 pub mod secret_files;
+/// OS-keyring credential storage behind the `SecretStore` trait seam
+/// (R7-④ batch 2 / A8): MCP OAuth tokens + data-source credentials, mock
+/// store for tests, never-silent plaintext fallback.
+pub mod secret_store;
 /// G1 P0-2.1 — skill → chat-tool bridge (installed skills become
 /// model-callable `skill_<id>` tools).
 pub mod skill_tools;

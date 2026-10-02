@@ -3914,5 +3914,8 @@
   "tasks.scheduleForm.activating": "Активация…",
   "tasks.scheduleForm.backToEdit": "Вернуться к правке",
   "inbox.needsAction": "Требуется действие",
-  "inbox.runStatus.succeeded": "Успешно"
+  "inbox.runStatus.succeeded": "Успешно",
+  "extensions.credentialStorage.label": "Хранилище учётных данных",
+  "extensions.credentialStorage.keyring": "Связка ключей ОС",
+  "extensions.credentialStorage.file": "Локальный файл (ограниченный)"
 }

@@ -1570,6 +1570,13 @@ export interface InstalledDataSource {
   name: string
   path: string
   installed_at: string | null
+  /**
+   * F5 (A8): where this source's credentials live — `keyring` (OS keyring)
+   * or `plaintext_file` (degraded owner-only 0600 TOML), `null` when the
+   * source has no credential fields. Drives the page's credential-storage
+   * status line.
+   */
+  credential_storage?: 'keyring' | 'plaintext_file' | null
 }
 
 export async function listDataSourceCatalog(): Promise<DataSourceCatalogEntry[]> {

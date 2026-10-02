@@ -828,6 +828,13 @@ export interface McpServerInfo {
    * detail view. `null`/absent on stdio rows and healthy remotes.
    */
   failure_kind?: 'needs_auth' | 'unreachable' | 'server_error' | null
+  /**
+   * F5 (A8): where this row's credential lives — `keyring` (migrated into
+   * the OS keyring) or `plaintext_file` (keyring unavailable; owner-only
+   * 0600 file). `null`/absent on rows without a credential. Drives the
+   * page's credential-storage status line.
+   */
+  credential_storage?: 'keyring' | 'plaintext_file' | null
 }
 
 // --- Skill Types ---

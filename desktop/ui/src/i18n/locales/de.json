@@ -3914,5 +3914,8 @@
   "tasks.scheduleForm.activating": "Wird aktiviert…",
   "tasks.scheduleForm.backToEdit": "Zurück zum Bearbeiten",
   "inbox.needsAction": "Handlung erforderlich",
-  "inbox.runStatus.succeeded": "Erfolgreich"
+  "inbox.runStatus.succeeded": "Erfolgreich",
+  "extensions.credentialStorage.label": "Anmeldedaten-Speicher",
+  "extensions.credentialStorage.keyring": "OS-Schlüsselbund",
+  "extensions.credentialStorage.file": "Lokale Datei (eingeschränkt)"
 }

@@ -3914,5 +3914,8 @@
   "tasks.scheduleForm.activating": "Ativando…",
   "tasks.scheduleForm.backToEdit": "Voltar para editar",
   "inbox.needsAction": "Requer ação",
-  "inbox.runStatus.succeeded": "Bem-sucedida"
+  "inbox.runStatus.succeeded": "Bem-sucedida",
+  "extensions.credentialStorage.label": "Armazenamento de credenciais",
+  "extensions.credentialStorage.keyring": "Chaveiro do sistema",
+  "extensions.credentialStorage.file": "Arquivo local (restrito)"
 }

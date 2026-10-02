@@ -3914,5 +3914,8 @@
   "tasks.scheduleForm.activating": "有効化中…",
   "tasks.scheduleForm.backToEdit": "編集に戻る",
   "inbox.needsAction": "要対応",
-  "inbox.runStatus.succeeded": "成功"
+  "inbox.runStatus.succeeded": "成功",
+  "extensions.credentialStorage.label": "認証情報の保存先",
+  "extensions.credentialStorage.keyring": "OSキーチェーン",
+  "extensions.credentialStorage.file": "ローカルファイル（制限付き）"
 }

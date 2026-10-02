@@ -3914,5 +3914,8 @@
   "tasks.scheduleForm.activating": "激活中…",
   "tasks.scheduleForm.backToEdit": "返回修改",
   "inbox.needsAction": "需要处理",
-  "inbox.runStatus.succeeded": "已成功"
+  "inbox.runStatus.succeeded": "已成功",
+  "extensions.credentialStorage.label": "凭据存储位置",
+  "extensions.credentialStorage.keyring": "OS 钥匙串",
+  "extensions.credentialStorage.file": "本地文件（受限）"
 }

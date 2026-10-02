@@ -183,6 +183,11 @@ pub async fn install_mcp_oauth_complete(
     let server_name = format!("{vendor_slug}-oauth");
     let path =
         extensions::write_mcp_server_config(&server_name, config).map_err(|e| e.to_string())?;
+    // F5: with a working keyring, move the fresh token out of settings.json
+    // immediately — the plaintext file is only the degraded fallback. Best
+    // effort: a keyring write failure keeps the 0600 plaintext (the startup
+    // migration retries), never fails the install.
+    crate::config::migrate_mcp_oauth_secrets();
     Ok(InstallResult {
         id: format!("oauth:{vendor_slug}"),
         name: server_name,
@@ -367,6 +372,9 @@ pub async fn install_mcp_oauth_loopback(
     );
     let path =
         extensions::write_mcp_server_config(&server_name, config).map_err(|e| e.to_string())?;
+    // F5: straight into the keyring when it's available (see
+    // install_mcp_oauth_complete).
+    crate::config::migrate_mcp_oauth_secrets();
     Ok(InstallResult {
         id: format!("oauth:{vendor_slug}"),
         name: server_name,
@@ -423,6 +431,10 @@ pub async fn reauthenticate_mcp_server(
     // Full entry rewrite — preserve the user's enabled flag.
     config["enabled"] = serde_json::Value::Bool(existing.enabled);
     extensions::write_mcp_server_config(&name, config).map_err(|e| e.to_string())?;
+    // F5: the fresh pair lands in the keyring when it's available (see
+    // install_mcp_oauth_complete); the re-connect below then loads it from
+    // there.
+    crate::config::migrate_mcp_oauth_secrets();
 
     // Reconnect now: stop the stale handle, start from the fresh tokens.
     let pool = state.mcp_pool.clone();

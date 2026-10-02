@@ -34,16 +34,25 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 /// Seed the MCP process pool from the given desktop server configs against
-/// the real user `settings.json` (refreshed tokens persist there).
+/// the real user `settings.json` (refreshed tokens persist there or in the
+/// OS keyring, per the startup-secret-store resolution).
 pub async fn seed_pool_from_config(
     pool: &Arc<McpProcessPool>,
     desktop_servers: Vec<crate::config::McpServerConfig>,
 ) -> McpInitResult {
-    seed_pool_from_config_in(pool, desktop_servers, &crate::config::user_settings_path()).await
+    seed_pool_from_config_in(
+        pool,
+        desktop_servers,
+        &crate::config::user_settings_path(),
+        crate::secret_store::global().as_deref(),
+    )
+    .await
 }
 
-/// `seed_pool_from_config` against an explicit `settings.json` path (tests
-/// inject a tempdir so they never touch the user's HOME).
+/// `seed_pool_from_config` against an explicit `settings.json` path and an
+/// injected secret store (tests pass a
+/// [`MockSecretStore`](crate::secret_store::MockSecretStore) or `None` —
+/// never the real keyring).
 ///
 /// Disabled entries are skipped. Url-only entries are classified by the
 /// loader's single-source verdict (`McpServerConfig::has_auth_headers`,
@@ -54,6 +63,7 @@ pub async fn seed_pool_from_config_in(
     pool: &Arc<McpProcessPool>,
     desktop_servers: Vec<crate::config::McpServerConfig>,
     settings_path: &Path,
+    store: Option<&dyn crate::secret_store::SecretStore>,
 ) -> McpInitResult {
     let mut servers_started = Vec::new();
     let mut total_tools = 0;
@@ -78,7 +88,8 @@ pub async fn seed_pool_from_config_in(
                 // W3-B (A2): connect with the stored credential. A row with
                 // no credential at all stays honestly unconnected (never
                 // started anonymously).
-                let outcome = start_oauth_remote_row_in(pool, &server_config, settings_path).await;
+                let outcome =
+                    start_oauth_remote_row_in(pool, &server_config, settings_path, store).await;
                 match outcome.error {
                     None if outcome.connected => {
                         info!(
@@ -197,12 +208,18 @@ pub struct OAuthStartOutcome {
 }
 
 /// Start one OAuth remote row against the real user `settings.json`
-/// (refreshed tokens persist there).
+/// (refreshed tokens persist there or in the OS keyring).
 pub async fn start_oauth_remote_row(
     pool: &McpProcessPool,
     server: &crate::config::McpServerConfig,
 ) -> OAuthStartOutcome {
-    start_oauth_remote_row_in(pool, server, &crate::config::user_settings_path()).await
+    start_oauth_remote_row_in(
+        pool,
+        server,
+        &crate::config::user_settings_path(),
+        crate::secret_store::global().as_deref(),
+    )
+    .await
 }
 
 /// Connect one OAuth entry with its stored credential.
@@ -210,13 +227,16 @@ pub async fn start_oauth_remote_row(
 /// Seeds the pool's OAuth provider from the entry's `shannonOAuth` block
 /// (or the legacy in-memory block derived from the `Authorization` header)
 /// and starts the remote server. On success the provider's token snapshot
-/// is diffed against what was stored: a handshake-time refresh is written
-/// back into the entry (ruling R6: `settings.json#mcpServers` blob, atomic
-/// write) so the next start reconnects without another refresh round-trip.
+/// is diffed against what was stored: a handshake-time refresh is persisted
+/// through [`crate::config::update_mcp_server_oauth_tokens_with_store`] —
+/// into the keyring (`shannon/mcp-oauth/<name>`) when `store` is `Some`,
+/// else into the settings.json entry (R6 0600 atomic write) — so the next
+/// start reconnects without another refresh round-trip.
 pub async fn start_oauth_remote_row_in(
     pool: &McpProcessPool,
     server: &crate::config::McpServerConfig,
     settings_path: &Path,
+    store: Option<&dyn crate::secret_store::SecretStore>,
 ) -> OAuthStartOutcome {
     let Some(url) = server.url.clone() else {
         return OAuthStartOutcome {
@@ -272,8 +292,12 @@ pub async fn start_oauth_remote_row_in(
             access_token: Some(snap.access_token.clone()),
             expires_at: snap.expires_at.map(|e| e.timestamp()),
         };
-        match crate::config::update_mcp_server_oauth_tokens_to(settings_path, &server.name, &stored)
-        {
+        match crate::config::update_mcp_server_oauth_tokens_with_store(
+            settings_path,
+            &server.name,
+            &stored,
+            store,
+        ) {
             Ok(true) => info!(server = %server.name, "Persisted refreshed OAuth tokens"),
             Ok(false) => {
                 warn!(server = %server.name, "Refreshed OAuth tokens not persisted: entry vanished")
@@ -755,7 +779,8 @@ mod tests {
         );
         let pool = Arc::new(McpProcessPool::new());
         let result =
-            seed_pool_from_config_in(&pool, vec![row], &tmp.path().join("settings.json")).await;
+            seed_pool_from_config_in(&pool, vec![row], &tmp.path().join("settings.json"), None)
+                .await;
 
         assert_eq!(result.servers_started, vec!["notion-oauth".to_string()]);
         assert_eq!(result.total_tools, 1);
@@ -794,7 +819,7 @@ mod tests {
             Some("Bearer stale-token"),
         );
         let pool = Arc::new(McpProcessPool::new());
-        let result = seed_pool_from_config_in(&pool, vec![row], &settings_path).await;
+        let result = seed_pool_from_config_in(&pool, vec![row], &settings_path, None).await;
 
         assert_eq!(result.servers_started, vec!["linear-oauth".to_string()]);
         assert_eq!(result.total_tools, 1);
@@ -843,7 +868,7 @@ mod tests {
             Some("Bearer expired-token"),
         );
         let pool = Arc::new(McpProcessPool::new());
-        let result = seed_pool_from_config_in(&pool, vec![row], &settings_path).await;
+        let result = seed_pool_from_config_in(&pool, vec![row], &settings_path, None).await;
 
         assert!(result.servers_started.is_empty());
         assert_eq!(result.needs_auth_servers, vec!["slack-oauth".to_string()]);
@@ -894,7 +919,7 @@ mod tests {
         pool.set_connection_timeout(std::time::Duration::from_millis(200));
         pool.set_request_timeout(std::time::Duration::from_millis(200));
         let pool = Arc::new(pool);
-        let result = seed_pool_from_config_in(&pool, vec![row], &settings_path).await;
+        let result = seed_pool_from_config_in(&pool, vec![row], &settings_path, None).await;
 
         assert!(result.servers_started.is_empty());
         assert!(result.needs_auth_servers.is_empty());
@@ -933,7 +958,7 @@ mod tests {
         assert!(!row.oauth.as_ref().unwrap().can_refresh());
 
         let pool = Arc::new(McpProcessPool::new());
-        let result = seed_pool_from_config_in(&pool, vec![row], &settings_path).await;
+        let result = seed_pool_from_config_in(&pool, vec![row], &settings_path, None).await;
         assert_eq!(result.servers_started, vec!["legacy-oauth".to_string()]);
 
         let before = std::fs::read_to_string(&settings_path).unwrap();
@@ -942,6 +967,162 @@ mod tests {
         assert_eq!(
             root["mcpServers"]["legacy-oauth"]["headers"]["Authorization"],
             "Bearer legacy-token"
+        );
+    }
+
+    /// F5 (R7-④ batch 2) W3-B regression: a **migrated** OAuth entry —
+    /// plaintext secret material deleted, token only in the (mock)
+    /// keyring — connects with the keyring token (the mock only accepts
+    /// exactly that bearer), and a handshake-time refresh rotates the pair
+    /// into the keyring while the file stays plaintext-free.
+    #[tokio::test]
+    async fn migrated_oauth_entry_connects_and_refreshes_from_keyring() {
+        use crate::secret_store::{MockSecretStore, SecretStore, mcp_oauth_key};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let settings_path = tmp.path().join("settings.json");
+        let mock = MockRemoteMcp::start_with_auth(Some("Bearer fresh-token")).await;
+        let token_url = spawn_token_endpoint(
+            r#"{"access_token":"fresh-token","refresh_token":"rotated-refresh","expires_in":3600,"token_type":"Bearer"}"#,
+            false,
+        )
+        .await;
+
+        // The migrated on-disk shape: NO shannonOAuth, NO Authorization —
+        // everything a downgrade would need to pretend otherwise is gone.
+        std::fs::write(
+            &settings_path,
+            serde_json::json!({
+                "mcpServers": {
+                    "linear-oauth": {
+                        "type": "http",
+                        "url": mock.url,
+                        "enabled": true,
+                        "shannon:transport": "oauth_remote",
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // The keyring holds the pre-migration (stale) token pair.
+        let store = MockSecretStore::new();
+        store
+            .put(
+                &mcp_oauth_key("linear-oauth"),
+                &format!(
+                    r#"{{"client_id":"shannon-desktop","token_url":{token_url_json},"refresh_token":"stale-refresh","access_token":"stale-token"}}"#,
+                    token_url_json = serde_json::to_string(&token_url).unwrap(),
+                ),
+            )
+            .unwrap();
+
+        // Load through the real loader (keyring-first), then seed.
+        let row = crate::config::load_mcp_servers_with_store(&settings_path, Some(&store))
+            .unwrap()
+            .into_iter()
+            .find(|s| s.name == "linear-oauth")
+            .unwrap();
+        assert_eq!(
+            row.oauth.as_ref().unwrap().access_token.as_deref(),
+            Some("stale-token"),
+            "the token must come from the keyring"
+        );
+
+        let pool = Arc::new(McpProcessPool::new());
+        let result = seed_pool_from_config_in(&pool, vec![row], &settings_path, Some(&store)).await;
+
+        assert_eq!(result.servers_started, vec!["linear-oauth".to_string()]);
+        assert_eq!(result.total_tools, 1);
+        assert!(result.needs_auth_servers.is_empty());
+
+        // The refresh rotated the pair into the keyring…
+        let raw = store.value(&mcp_oauth_key("linear-oauth")).unwrap();
+        let rotated: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(rotated["access_token"], "fresh-token");
+        assert_eq!(rotated["refresh_token"], "rotated-refresh");
+
+        // …and the file stayed plaintext-free.
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let entry = &root["mcpServers"]["linear-oauth"];
+        assert!(entry.get("shannonOAuth").is_none(), "{entry}");
+        assert!(entry.get("headers").is_none(), "{entry}");
+
+        // Healthy proves the refreshed keyring credential was actually sent.
+        let state = pool
+            .list_servers()
+            .await
+            .into_iter()
+            .find(|(name, _)| name == "linear-oauth")
+            .map(|(_, state)| state);
+        assert!(matches!(state, Some(ServerState::Healthy)), "{state:?}");
+    }
+
+    /// F5 honesty: an OAuth entry whose keyring entry vanished (restored
+    /// backup / reset keychain) has no stored credential of its own — the
+    /// row falls back to the W2-A header-less remote handling, the server
+    /// rejects the anonymous handshake, and the row lands in the classified
+    /// "needs re-authentication" state. Never a fake success.
+    #[tokio::test]
+    async fn migrated_entry_without_keyring_token_lands_in_honest_needs_auth() {
+        use crate::secret_store::MockSecretStore;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let settings_path = tmp.path().join("settings.json");
+        // The mock rejects every anonymous handshake with 401 — exactly
+        // what a real OAuth remote does.
+        let mock = MockRemoteMcp::start_with_auth(Some("Bearer never-issued")).await;
+        std::fs::write(
+            &settings_path,
+            serde_json::json!({
+                "mcpServers": {
+                    "ghost-oauth": {
+                        "type": "http",
+                        "url": mock.url,
+                        "enabled": true,
+                        "shannon:transport": "oauth_remote",
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let store = MockSecretStore::new();
+        let row = crate::config::load_mcp_servers_with_store(&settings_path, Some(&store))
+            .unwrap()
+            .into_iter()
+            .find(|s| s.name == "ghost-oauth")
+            .unwrap();
+        assert!(
+            row.oauth.is_none(),
+            "no keyring entry, no stored credential"
+        );
+        assert!(
+            !row.has_auth_headers,
+            "honest: no credential in the file either"
+        );
+
+        let pool = Arc::new(McpProcessPool::new());
+        let result = seed_pool_from_config_in(&pool, vec![row], &settings_path, Some(&store)).await;
+        assert!(result.servers_started.is_empty());
+
+        // The 401 surfaces as the classified NeedsAuth state — the same
+        // honest presentation an expired credential gets.
+        let state = pool
+            .list_servers()
+            .await
+            .into_iter()
+            .find(|(name, _)| name == "ghost-oauth")
+            .map(|(_, state)| state);
+        let Some(ServerState::Unhealthy(msg)) = state else {
+            panic!("expected Unhealthy handle, got {state:?}");
+        };
+        assert_eq!(
+            shannon_mcp::classify_remote_failure(&msg),
+            shannon_mcp::RemoteFailureKind::NeedsAuth,
+            "{msg}"
         );
     }
 

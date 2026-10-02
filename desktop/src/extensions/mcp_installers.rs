@@ -79,13 +79,25 @@ pub fn write_mcp_server_config_to(
         std::fs::create_dir_all(parent).map_err(|e| InstallError::Io(e.to_string()))?;
     }
     let bytes = serde_json::to_vec_pretty(&root)?;
-    std::fs::write(path, bytes).map_err(|e| InstallError::Io(e.to_string()))?;
+    // The blob carries OAuth bearer tokens (headers / shannonOAuth block
+    // until the F5 migration moves them into the keyring) — owner-only
+    // atomic write (R6/F5: even the degraded plaintext shape is 0600 from
+    // the instant it exists).
+    crate::secret_files::write_atomic_owner_only(path, &bytes)?;
     Ok(path.to_path_buf())
 }
 
 /// Remove an MCP server entry. Returns Ok(()) if the entry didn't exist.
+///
+/// F5 uninstall cleanup: the server's keyring OAuth entry
+/// (`shannon/mcp-oauth/<name>`) is deleted with the store row — an orphaned
+/// credential nobody can see through the UI anymore would be a new leak
+/// surface. Best-effort: a delete failure warns but never blocks the
+/// uninstall.
 pub fn remove_mcp_server_config(name: &str) -> Result<(), InstallError> {
-    remove_mcp_server_config_from(&user_settings_path()?, name)
+    remove_mcp_server_config_from(&user_settings_path()?, name)?;
+    crate::secret_store::delete_mcp_oauth_secret(crate::secret_store::global().as_deref(), name);
+    Ok(())
 }
 
 /// `remove_mcp_server_config` against an explicit `settings.json` `path` (see
@@ -104,7 +116,7 @@ pub fn remove_mcp_server_config_from(path: &Path, name: &str) -> Result<(), Inst
         .is_some();
     if removed {
         let bytes = serde_json::to_vec_pretty(&root)?;
-        std::fs::write(path, bytes).map_err(|e| InstallError::Io(e.to_string()))?;
+        crate::secret_files::write_atomic_owner_only(path, &bytes)?;
     }
     Ok(())
 }

@@ -6,8 +6,16 @@
 //! `data_source_catalog::DataSourceField`, then `install_data_source` writes
 //! the file. At query time the native adapter loads the file and connects.
 //!
-//! For the MVP, credentials live in the same TOML file. A future iteration
-//! should move secrets to the OS keychain (`InstallTarget::Keychain`).
+//! For the MVP the credentials lived in the same TOML file; F5 (R7-④
+//! batch 2) moves them into the OS keyring (`InstallTarget::Keychain`,
+//! realised): credential fields (the catalog's `password`-kind keys — IMAP
+//! password, Notion integration token, …) live under
+//! `shannon/datasource/<slug>` (JSON map field → value) whenever the
+//! keyring is available; the TOML keeps only the non-secret config
+//! (host/port/user/enabled). Plaintext in the TOML is a *fallback*: the
+//! startup migration drains it into the keyring, a failed keyring write
+//! keeps it (owner-only 0600) with a warn, and reads prefer the keyring
+//! while it still exists (tolerance window).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -38,20 +46,76 @@ pub struct InstalledDataSource {
     /// RFC3339 install timestamp.
     #[serde(default)]
     pub installed_at: Option<String>,
+    /// F5 (A8): where this source's credentials live — `"keyring"` when the
+    /// secret store holds them, `"plaintext_file"` for the degraded
+    /// owner-only-0600 fallback, `None` for sources without credential
+    /// fields. Drives the data-sources page's credential-storage line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_storage: Option<&'static str>,
+}
+
+/// Split a form-value map into (non-secret fields, secret fields) — the
+/// secret set comes from the catalog's `password`-kind field keys.
+fn split_secret_fields(
+    config: &BTreeMap<String, String>,
+) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+    let secret_keys = super::data_source_catalog::secret_field_keys();
+    let mut plain = BTreeMap::new();
+    let mut secrets = BTreeMap::new();
+    for (key, value) in config {
+        if secret_keys.contains(key) {
+            secrets.insert(key.clone(), value.clone());
+        } else {
+            plain.insert(key.clone(), value.clone());
+        }
+    }
+    (plain, secrets)
+}
+
+/// Serialize one source's secret fields into the keyring payload (a JSON
+/// object so multiple credential fields travel atomically).
+fn secrets_payload(secrets: &BTreeMap<String, String>) -> Result<String, serde_json::Error> {
+    serde_json::to_string(secrets)
+}
+
+/// Deserialize a keyring payload back into the secret-field map. An
+/// unparseable payload is a degraded read (treated as absent), never a
+/// hard error — the plaintext fallback still applies.
+fn parse_secrets_payload(raw: &str) -> Option<BTreeMap<String, String>> {
+    match serde_json::from_str::<BTreeMap<String, String>>(raw) {
+        Ok(map) => Some(map),
+        Err(e) => {
+            tracing::warn!(
+                domain = "datasource",
+                error = %e,
+                "keyring data-source payload is not valid JSON — treating as absent"
+            );
+            None
+        }
+    }
 }
 
 /// Persist a data source config to disk.
 ///
 /// `slug` becomes the file name. `config` is the user-supplied form values
 /// (vault_path, imap_host, password, etc.). Each value is written into the
-/// TOML file under its key.
+/// TOML file under its key. With a working keyring the credential fields
+/// move into `shannon/datasource/<slug>` immediately and the file is
+/// written without them.
 pub fn install_data_source(
     slug: &str,
     kind: &str,
     name: &str,
     config: &BTreeMap<String, String>,
 ) -> Result<InstalledDataSource, InstallError> {
-    install_data_source_in(&shannon_data_sources_root(), slug, kind, name, config)
+    install_data_source_in_with_store(
+        &shannon_data_sources_root(),
+        slug,
+        kind,
+        name,
+        config,
+        crate::secret_store::global().as_deref(),
+    )
 }
 
 /// Implementation that writes to an explicit `root` directory instead of
@@ -59,12 +123,17 @@ pub fn install_data_source(
 /// tempdir so they never mutate the process-global `HOME` env var — that
 /// mutation raced with unrelated tests reading `dirs::home_dir()` on another
 /// thread, which was the source of a pre-existing parallel-test flake.
-fn install_data_source_in(
+/// [`install_data_source`] against an explicit `root` with an injected
+/// secret store (`None` = the degraded plaintext-only shape; tests inject a
+/// mock, never the real keyring; `root` instead of `$HOME` keeps tests off
+/// the process-global HOME env var — see the history of this module).
+fn install_data_source_in_with_store(
     root: &Path,
     slug: &str,
     kind: &str,
     name: &str,
     config: &BTreeMap<String, String>,
+    store: Option<&dyn crate::secret_store::SecretStore>,
 ) -> Result<InstalledDataSource, InstallError> {
     if slug.trim().is_empty() {
         return Err(InstallError::Format("data source slug is required".into()));
@@ -76,12 +145,54 @@ fn install_data_source_in(
     }
     std::fs::create_dir_all(root)?;
 
+    // F5: with a store, the credential fields go straight to the keyring —
+    // the TOML carries only the non-secret config. A failed keyring write
+    // keeps the plaintext in the file (0600) and warns; the startup
+    // migration retries on the next launch.
+    let (mut file_config, secrets) = split_secret_fields(config);
+    if !secrets.is_empty() && store.is_none() {
+        // Degraded mode: the whole form (secrets included) stays in the file.
+        file_config = config.clone();
+    }
+    if let Some(store) = store {
+        if !secrets.is_empty() {
+            match secrets_payload(&secrets)
+                .map_err(|e| e.to_string())
+                .and_then(|raw| store.put(&crate::secret_store::datasource_key(slug), &raw))
+            {
+                Ok(()) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        domain = "datasource",
+                        slug,
+                        error = %e,
+                        "keyring write failed — data source credentials stay \
+                         as plaintext in the TOML (owner-only 0600)"
+                    );
+                    file_config = config.clone();
+                }
+            }
+        }
+    }
+
     let file_path = root.join(format!("{slug}.toml"));
-    let body = render_toml(slug, kind, name, config);
-    // The TOML carries plaintext credentials (IMAP password, Notion
-    // integration token) — owner-only atomic write (R6): the file is 0600
-    // from the instant it exists.
+    let body = render_toml(slug, kind, name, &file_config);
+    // Whatever plaintext remains carries credentials — owner-only atomic
+    // write (R6): the file is 0600 from the instant it exists.
     crate::secret_files::write_atomic_owner_only(&file_path, body.as_bytes())?;
+
+    // The row's storage verdict mirrors what actually landed.
+    let keyring_hit = matches!(
+        store.map(|s| s.get(&crate::secret_store::datasource_key(slug))),
+        Some(Ok(Some(_)))
+    );
+    let credential_storage = if keyring_hit {
+        Some("keyring")
+    } else if secrets.is_empty() {
+        None
+    } else {
+        Some("plaintext_file")
+    };
 
     let installed_at = file_metadata_rfc3339(&file_path);
     Ok(InstalledDataSource {
@@ -90,6 +201,7 @@ fn install_data_source_in(
         name: name.to_string(),
         path: file_path.display().to_string(),
         installed_at,
+        credential_storage,
     })
 }
 
@@ -153,6 +265,16 @@ pub fn list_installed_data_sources() -> Vec<InstalledDataSource> {
 /// `list_installed_data_sources` against an explicit `root` (see
 /// [`install_data_source_in`] for why tests avoid `$HOME`).
 fn list_installed_data_sources_in(root: &Path) -> Vec<InstalledDataSource> {
+    list_installed_data_sources_in_with_store(root, crate::secret_store::global().as_deref())
+}
+
+/// [`list_installed_data_sources_in`] with an injected secret store (tests
+/// inject a mock; `None` = degraded plaintext-only listing).
+fn list_installed_data_sources_in_with_store(
+    root: &Path,
+    store: Option<&dyn crate::secret_store::SecretStore>,
+) -> Vec<InstalledDataSource> {
+    let secret_keys = super::data_source_catalog::secret_field_keys();
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(root) else {
         return out;
@@ -165,7 +287,26 @@ fn list_installed_data_sources_in(root: &Path) -> Vec<InstalledDataSource> {
         let Ok(body) = std::fs::read_to_string(&path) else {
             continue;
         };
-        if let Some(parsed) = parse_data_source_toml(&body, &path) {
+        if let Some(mut parsed) = parse_data_source_toml(&body, &path) {
+            // F5 (A8) per-row credential-storage verdict: keyring when the
+            // store holds this source's secrets, the degraded plaintext-file
+            // token when the TOML still carries a credential (pre-migration
+            // or a failed keyring write), nothing for secret-less sources.
+            let config = parse_config_section(&body);
+            let has_plain_secret = config
+                .iter()
+                .any(|(k, v)| secret_keys.contains(k) && !v.is_empty());
+            let keyring_hit = matches!(
+                store.map(|s| s.get(&crate::secret_store::datasource_key(&parsed.slug))),
+                Some(Ok(Some(_)))
+            );
+            parsed.credential_storage = if keyring_hit {
+                Some(crate::secret_store::storage_mode(true))
+            } else if has_plain_secret {
+                Some(crate::secret_store::storage_mode(false))
+            } else {
+                None
+            };
             out.push(parsed);
         }
     }
@@ -185,6 +326,9 @@ fn parse_data_source_toml(body: &str, path: &Path) -> Option<InstalledDataSource
         name,
         path: path.display().to_string(),
         installed_at,
+        // Filled in by the list path (store-aware); the bare parse is
+        // store-less by construction.
+        credential_storage: None,
     })
 }
 
@@ -240,14 +384,27 @@ fn file_metadata_rfc3339(path: &Path) -> Option<String> {
 }
 
 /// Remove a data source config file by slug. Refuses paths outside the
-/// data-sources root as a traversal guard.
+/// data-sources root as a traversal guard. F5: the source's keyring entry
+/// (`shannon/datasource/<slug>`) is deleted with the file — an orphaned
+/// credential nobody can see through the UI anymore would be a new leak
+/// surface (best-effort: a delete failure warns, never blocks).
 pub fn remove_installed_data_source(slug: &str) -> Result<(), InstallError> {
-    remove_installed_data_source_in(&shannon_data_sources_root(), slug)
+    remove_installed_data_source_in_with_store(
+        &shannon_data_sources_root(),
+        slug,
+        crate::secret_store::global().as_deref(),
+    )
 }
 
-/// `remove_installed_data_source` against an explicit `root` (see
-/// [`install_data_source_in`] for why tests avoid `$HOME`).
-fn remove_installed_data_source_in(root: &Path, slug: &str) -> Result<(), InstallError> {
+/// [`remove_installed_data_source`] against an explicit `root` with an
+/// injected secret store: the keyring entry is deleted together with the
+/// file (tests inject a mock; `None` = degraded mode, nothing to clean;
+/// explicit `root` keeps tests off the process-global HOME env var).
+fn remove_installed_data_source_in_with_store(
+    root: &Path,
+    slug: &str,
+    store: Option<&dyn crate::secret_store::SecretStore>,
+) -> Result<(), InstallError> {
     if slug.contains('/') || slug.contains('\\') || slug.contains("..") {
         return Err(InstallError::Format(format!(
             "invalid data source slug: {slug}"
@@ -273,6 +430,7 @@ fn remove_installed_data_source_in(root: &Path, slug: &str) -> Result<(), Instal
         )));
     }
     std::fs::remove_file(&canonical_target)?;
+    crate::secret_store::delete_datasource_secret(store, slug);
     Ok(())
 }
 
@@ -290,8 +448,16 @@ fn is_data_source_installed_in(root: &Path, slug: &str) -> bool {
 /// Read the config block of an installed data source. Empty map if missing.
 ///
 /// Used by the test-connection command and by the adapter at query time.
+/// F5: credential fields resolve **keyring-first** — the keyring payload
+/// (`shannon/datasource/<slug>` JSON map) wins over any plaintext leftover;
+/// the TOML value is the tolerance-window fallback (and the only source in
+/// degraded mode).
 pub fn read_data_source_config(slug: &str) -> Result<BTreeMap<String, String>, InstallError> {
-    read_data_source_config_in(&shannon_data_sources_root(), slug)
+    read_data_source_config_in_with_store(
+        &shannon_data_sources_root(),
+        slug,
+        crate::secret_store::global().as_deref(),
+    )
 }
 
 /// Read the `kind` of an installed data source from its `[data_source]`
@@ -327,16 +493,184 @@ fn read_data_source_kind_in(root: &Path, slug: &str) -> Result<String, InstallEr
     )))
 }
 
-/// `read_data_source_config` against an explicit `root` (see
-/// [`install_data_source_in`] for why tests avoid `$HOME`).
-fn read_data_source_config_in(
+/// One-time, idempotent migration of data-source credential fields into the
+/// OS keyring (R7-④ batch 2 / A8). Runs at startup over every
+/// `data-sources/*.toml`, syncing the keyring against the plaintext:
+///
+/// 1. Keyring already holds an **equal** payload → the plaintext is just a
+///    leftover from a run interrupted between the keyring put and the file
+///    rewrite — strip it (crash-recovery).
+/// 2. Keyring holds a **different** payload (or none) → the TOML is what the
+///    user last successfully wrote, i.e. the newer state (a password change
+///    whose keyring put failed last session, or a first migration) — push
+///    the plaintext into the keyring, then strip it.
+/// 3. Keyring **read** failure (locked keychain, …) → the source is left
+///    as-is (plaintext kept, nothing overwritten) and the failure warns —
+///    retried on the next startup.
+///
+/// A **failed keyring write keeps the plaintext** (owner-only 0600) and
+/// warns — loading is never blocked.
+///
+/// Only the catalog's `password`-kind fields migrate; host/port/user/enabled
+/// stay in the TOML verbatim (the file is re-rendered through the same
+/// `render_toml` the installer uses, so its shape is unchanged).
+///
+/// Returns the number of sources whose plaintext credentials were removed
+/// this run (re-runs are no-ops).
+pub fn migrate_data_source_secrets() -> usize {
+    migrate_data_source_secrets_in(
+        &shannon_data_sources_root(),
+        crate::secret_store::global().as_deref(),
+    )
+}
+
+/// Store-injected core of [`migrate_data_source_secrets`] (tests pass a
+/// [`MockSecretStore`](crate::secret_store::MockSecretStore); `None` = the
+/// degraded plaintext fallback, a no-op).
+pub fn migrate_data_source_secrets_in(
+    root: &Path,
+    store: Option<&dyn crate::secret_store::SecretStore>,
+) -> usize {
+    let Some(store) = store else {
+        return 0; // degraded mode: credentials deliberately stay in the 0600 file
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let secret_keys = super::data_source_catalog::secret_field_keys();
+    let mut migrated = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("toml") {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(meta) = parse_data_source_toml(&body, &path) else {
+            continue;
+        };
+        let config = parse_config_section(&body);
+        let (_, secrets) = split_secret_fields(&config);
+        if secrets.is_empty() {
+            continue;
+        }
+        let key = crate::secret_store::datasource_key(&meta.slug);
+        let raw = match secrets_payload(&secrets) {
+            Ok(raw) => raw,
+            Err(e) => {
+                tracing::warn!(
+                    domain = "datasource",
+                    slug = %meta.slug,
+                    error = %e,
+                    "data-source credential serialization failed — file left as-is"
+                );
+                continue;
+            }
+        };
+        // Sync the keyring against the plaintext (the file is what the user
+        // last successfully wrote, so it is the newer state whenever the two
+        // disagree — e.g. a password change whose keyring put failed last
+        // session): no entry yet → first migration; differing entry → the
+        // plaintext overwrites it; equal → already in sync, strip only. A
+        // keyring READ failure never overwrites an entry we cannot see and
+        // never strips the plaintext behind it — the source is left as-is
+        // for the next startup, loudly.
+        match store.get(&key) {
+            Err(e) => {
+                tracing::warn!(
+                    domain = "datasource",
+                    slug = %meta.slug,
+                    error = %e,
+                    "keyring read failed during migration — data source left \
+                     as-is (plaintext kept, retried on next startup)"
+                );
+                continue;
+            }
+            Ok(Some(stored)) if stored == raw => {}
+            Ok(_) => {
+                if let Err(e) = store.put(&key, &raw) {
+                    tracing::warn!(
+                        domain = "datasource",
+                        slug = %meta.slug,
+                        error = %e,
+                        "keyring write failed — data source credentials stay as \
+                         plaintext in the TOML (owner-only 0600)"
+                    );
+                    continue;
+                }
+            }
+        }
+        // Rewrite the TOML without the credential fields.
+        let plain: BTreeMap<String, String> = config
+            .iter()
+            .filter(|(k, _)| !secret_keys.contains(*k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let new_body = render_toml(&meta.slug, &meta.kind, &meta.name, &plain);
+        if let Err(e) = crate::secret_files::write_atomic_owner_only(&path, new_body.as_bytes()) {
+            // The keyring already holds the credential, so the next
+            // startup's crash-recovery leg finishes the job. Warn loudly:
+            // the plaintext copy is still on disk until then.
+            tracing::warn!(
+                domain = "datasource",
+                slug = %meta.slug,
+                error = %e,
+                "post-migration TOML rewrite failed — plaintext credentials \
+                 remain (0600) and will be stripped on the next startup"
+            );
+            continue;
+        }
+        migrated += 1;
+    }
+    if migrated > 0 {
+        tracing::info!(
+            domain = "datasource",
+            count = migrated,
+            "migrated data-source credentials into the OS keyring"
+        );
+    }
+    migrated
+}
+
+/// [`read_data_source_config`] against an explicit `root` with an injected
+/// secret store (tests inject a mock; `None` = degraded plaintext-only
+/// read; explicit `root` keeps tests off the process-global HOME env var).
+fn read_data_source_config_in_with_store(
     root: &Path,
     slug: &str,
+    store: Option<&dyn crate::secret_store::SecretStore>,
 ) -> Result<BTreeMap<String, String>, InstallError> {
     let file = root.join(format!("{slug}.toml"));
     let body = std::fs::read_to_string(&file)
         .map_err(|e| InstallError::Io(format!("read {}: {e}", file.display())))?;
-    Ok(parse_config_section(&body))
+    let mut config = parse_config_section(&body);
+    if let Some(store) = store {
+        // Keyring first, plaintext fallback. A keyring READ failure (locked
+        // keychain, …) must never masquerade as "no stored credential"
+        // silently — warn loudly, then let the plaintext fallback serve.
+        match store.get(&crate::secret_store::datasource_key(slug)) {
+            Ok(Some(raw)) => {
+                if let Some(secrets) = parse_secrets_payload(&raw) {
+                    // Keyring values win; plaintext leftovers are the fallback.
+                    for (key, value) in secrets {
+                        config.insert(key, value);
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    domain = "datasource",
+                    slug,
+                    error = %e,
+                    "keyring read failed — falling back to the plaintext copy \
+                     in the TOML (credentials may be stale)"
+                );
+            }
+        }
+    }
+    Ok(config)
 }
 
 fn parse_config_section(body: &str) -> BTreeMap<String, String> {
@@ -379,12 +713,13 @@ mod tests {
         let root = tmp.path();
         let mut config = BTreeMap::new();
         config.insert("vault_path".into(), "/home/user/MyVault".into());
-        let installed = install_data_source_in(
+        let installed = install_data_source_in_with_store(
             root,
             "obsidian-vault",
             "obsidian",
             "Obsidian Vault",
             &config,
+            None,
         )
         .expect("install");
         assert_eq!(installed.slug, "obsidian-vault");
@@ -398,22 +733,35 @@ mod tests {
         assert!(body.contains("[config]"));
         assert!(body.contains("vault_path = \"/home/user/MyVault\""));
 
-        remove_installed_data_source_in(root, "obsidian-vault").expect("remove");
+        remove_installed_data_source_in_with_store(root, "obsidian-vault", None).expect("remove");
         assert!(!is_data_source_installed_in(root, "obsidian-vault"));
     }
 
     #[test]
     fn install_data_source_rejects_traversal_slug() {
         let tmp = tempfile::tempdir().expect("tmp");
-        let result =
-            install_data_source_in(tmp.path(), "../escape", "obsidian", "x", &BTreeMap::new());
+        let result = install_data_source_in_with_store(
+            tmp.path(),
+            "../escape",
+            "obsidian",
+            "x",
+            &BTreeMap::new(),
+            None,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn install_data_source_rejects_empty_slug() {
         let tmp = tempfile::tempdir().expect("tmp");
-        let result = install_data_source_in(tmp.path(), "", "obsidian", "x", &BTreeMap::new());
+        let result = install_data_source_in_with_store(
+            tmp.path(),
+            "",
+            "obsidian",
+            "x",
+            &BTreeMap::new(),
+            None,
+        );
         assert!(result.is_err());
     }
 
@@ -430,8 +778,15 @@ mod tests {
         let mut config = BTreeMap::new();
         config.insert("password".into(), "hunter2".into());
 
-        let first = install_data_source_in(root, "imap-home", "email_imap", "Home", &config)
-            .expect("install");
+        let first = install_data_source_in_with_store(
+            root,
+            "imap-home",
+            "email_imap",
+            "Home",
+            &config,
+            None,
+        )
+        .expect("install");
         let mode = |p: &str| std::fs::metadata(p).expect("metadata").permissions().mode() & 0o777;
         assert_eq!(mode(&first.path), 0o600, "fresh install must be 0600");
 
@@ -444,8 +799,15 @@ mod tests {
         .expect("set 0644");
         assert_eq!(mode(&first.path), 0o644);
 
-        let second = install_data_source_in(root, "imap-home", "email_imap", "Home", &config)
-            .expect("reinstall");
+        let second = install_data_source_in_with_store(
+            root,
+            "imap-home",
+            "email_imap",
+            "Home",
+            &config,
+            None,
+        )
+        .expect("reinstall");
         assert_eq!(second.path, first.path);
         assert_eq!(mode(&second.path), 0o600, "rewrite must land 0600");
     }
@@ -461,8 +823,10 @@ mod tests {
     fn list_installed_returns_sorted_rows() {
         let tmp = tempfile::tempdir().expect("tmp");
         let root = tmp.path();
-        install_data_source_in(root, "zeta", "obsidian", "Z", &BTreeMap::new()).unwrap();
-        install_data_source_in(root, "alpha", "obsidian", "A", &BTreeMap::new()).unwrap();
+        install_data_source_in_with_store(root, "zeta", "obsidian", "Z", &BTreeMap::new(), None)
+            .unwrap();
+        install_data_source_in_with_store(root, "alpha", "obsidian", "A", &BTreeMap::new(), None)
+            .unwrap();
         let rows = list_installed_data_sources_in(root);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].slug, "alpha");
@@ -472,7 +836,8 @@ mod tests {
     #[test]
     fn remove_rejects_missing_slug() {
         let tmp = tempfile::tempdir().expect("tmp");
-        let result = remove_installed_data_source_in(tmp.path(), "never-installed");
+        let result =
+            remove_installed_data_source_in_with_store(tmp.path(), "never-installed", None);
         assert!(result.is_err());
     }
 
@@ -483,8 +848,9 @@ mod tests {
         let mut config = BTreeMap::new();
         config.insert("imap_host".into(), "imap.example.com".into());
         config.insert("username".into(), "you@example.com".into());
-        install_data_source_in(root, "email-imap", "email_imap", "Email", &config).unwrap();
-        let loaded = read_data_source_config_in(root, "email-imap").expect("read");
+        install_data_source_in_with_store(root, "email-imap", "email_imap", "Email", &config, None)
+            .unwrap();
+        let loaded = read_data_source_config_in_with_store(root, "email-imap", None).expect("read");
         assert_eq!(loaded.get("imap_host").unwrap(), "imap.example.com");
         assert_eq!(loaded.get("username").unwrap(), "you@example.com");
     }
@@ -549,5 +915,443 @@ kind = "should-not-win"
             .unwrap_err()
             .to_string();
         assert!(err.contains("missing kind"), "got: {err}");
+    }
+
+    // ── F5 (R7-④ batch 2 / A8): data-source credentials → OS keyring ──────
+
+    use crate::secret_store::{MockSecretStore, SecretStore};
+
+    /// A "credential-less" secret set for the catalog's password-kind keys.
+    fn secret_field_keys_now() -> std::collections::BTreeSet<String> {
+        super::super::data_source_catalog::secret_field_keys()
+    }
+
+    /// Catalog truth: the IMAP password and the Notion integration token are
+    /// among the secret-kind fields (the three plaintext faces A8 names).
+    #[test]
+    fn catalog_marks_imap_password_and_notion_token_as_secrets() {
+        let keys = secret_field_keys_now();
+        assert!(
+            keys.contains("password"),
+            "IMAP password must be a secret field"
+        );
+        assert!(
+            keys.contains("integration_token"),
+            "Notion integration token must be a secret field"
+        );
+        assert!(!keys.contains("imap_host"), "host is not a credential");
+        assert!(!keys.contains("username"), "user is not a credential");
+    }
+
+    /// Acceptance ① (IMAP password): install with a working store → the
+    /// password lands in the keyring (`shannon/datasource/<slug>` JSON
+    /// map), the TOML keeps host/port/user but not the password, the file
+    /// stays 0600, and reads resolve the password from the keyring.
+    #[cfg(unix)]
+    #[test]
+    fn install_imap_password_moves_to_keyring_and_toml_stays_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("imap_host".into(), "imap.example.com".into());
+        config.insert("imap_port".into(), "993".into());
+        config.insert("username".into(), "you@example.com".into());
+        config.insert("password".into(), "hunter2".into());
+
+        let store = MockSecretStore::new();
+        let installed = install_data_source_in_with_store(
+            root,
+            "imap-home",
+            "email_imap",
+            "Home",
+            &config,
+            Some(&store),
+        )
+        .expect("install");
+
+        // Keyring payload: exactly the secret fields.
+        let key = crate::secret_store::datasource_key("imap-home");
+        let raw = store.value(&key).expect("password in keyring");
+        let secrets: BTreeMap<String, String> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(secrets.get("password").map(String::as_str), Some("hunter2"));
+        assert_eq!(secrets.len(), 1, "only credential fields migrate");
+
+        // The TOML keeps the non-secret config only — and stays 0600.
+        let body = std::fs::read_to_string(&installed.path).unwrap();
+        assert!(body.contains("imap_host = \"imap.example.com\""), "{body}");
+        assert!(body.contains("username = \"you@example.com\""), "{body}");
+        assert!(
+            !body.contains("hunter2"),
+            "password must not remain on disk: {body}"
+        );
+        let mode = std::fs::metadata(&installed.path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "the fallback file shape stays owner-only");
+
+        // The row reports where its credential lives.
+        assert_eq!(installed.credential_storage, Some("keyring"));
+
+        // Read path resolves the password from the keyring.
+        let resolved =
+            read_data_source_config_in_with_store(root, "imap-home", Some(&store)).unwrap();
+        assert_eq!(
+            resolved.get("password").map(String::as_str),
+            Some("hunter2")
+        );
+        assert_eq!(
+            resolved.get("imap_host").map(String::as_str),
+            Some("imap.example.com")
+        );
+    }
+
+    /// Acceptance ① (Notion token): same contract for the integration token,
+    /// including the startup migration path over a pre-existing plaintext
+    /// TOML (the F3-era shape): migrate → keyring payload → plaintext
+    /// stripped → read back from the keyring → idempotent re-run.
+    #[test]
+    fn migrate_notion_token_drains_plaintext_toml() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("database_id".into(), "abc".into());
+        config.insert("integration_token".into(), "secret_123".into());
+        // Seed the F3-era plaintext shape through the store-less installer.
+        install_data_source_in_with_store(root, "notion-work", "notion", "Work", &config, None)
+            .expect("seed plaintext install");
+
+        let store = MockSecretStore::new();
+        assert_eq!(migrate_data_source_secrets_in(root, Some(&store)), 1);
+
+        let raw = store
+            .value(&crate::secret_store::datasource_key("notion-work"))
+            .expect("token in keyring after migration");
+        let secrets: BTreeMap<String, String> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            secrets.get("integration_token").map(String::as_str),
+            Some("secret_123")
+        );
+
+        let body =
+            std::fs::read_to_string(root.join("notion-work.toml")).expect("read migrated toml");
+        assert!(
+            !body.contains("secret_123"),
+            "plaintext token must be gone: {body}"
+        );
+        assert!(
+            body.contains("database_id = \"abc\""),
+            "non-secret fields stay: {body}"
+        );
+        assert!(
+            body.contains("[data_source]"),
+            "meta section survives the rewrite: {body}"
+        );
+
+        // Idempotent.
+        assert_eq!(migrate_data_source_secrets_in(root, Some(&store)), 0);
+
+        // Read path (fetchers see the resolved credential).
+        let resolved =
+            read_data_source_config_in_with_store(root, "notion-work", Some(&store)).unwrap();
+        assert_eq!(
+            resolved.get("integration_token").map(String::as_str),
+            Some("secret_123")
+        );
+    }
+
+    /// Acceptance ③: a failed keyring write keeps the plaintext (0600) and
+    /// warns; reads fall back to the TOML copy.
+    #[test]
+    fn failed_keyring_write_keeps_toml_plaintext_and_warns() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("imap_host".into(), "imap.example.com".into());
+        config.insert("password".into(), "hunter2".into());
+
+        let store = MockSecretStore::failing_writes();
+        let (capture, installed) = crate::secret_store::test_support::capture_warnings(|| {
+            install_data_source_in_with_store(
+                root,
+                "imap-home",
+                "email_imap",
+                "Home",
+                &config,
+                Some(&store),
+            )
+        });
+        let installed = installed.expect("install must not fail on a degraded keyring");
+        let body = std::fs::read_to_string(&installed.path).unwrap();
+        assert!(
+            body.contains("hunter2"),
+            "plaintext must survive the failed write: {body}"
+        );
+        assert_eq!(installed.credential_storage, Some("plaintext_file"));
+        assert!(
+            capture
+                .warnings()
+                .iter()
+                .any(|w| w.contains("keyring write failed")),
+            "degradation must be visible: {:?}",
+            capture.warnings()
+        );
+        // The read path falls back to the plaintext copy.
+        let resolved =
+            read_data_source_config_in_with_store(root, "imap-home", Some(&store)).unwrap();
+        assert_eq!(
+            resolved.get("password").map(String::as_str),
+            Some("hunter2")
+        );
+    }
+
+    /// Regression (review Important#2): the TOML carries NEWER user input —
+    /// a password change whose keyring put failed last session left the new
+    /// password in the file while the keyring still holds the old one — so
+    /// the migration must push the plaintext INTO the keyring, never strip
+    /// it into oblivion.
+    #[test]
+    fn migration_overwrites_a_stale_keyring_with_the_newer_plaintext() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("imap_host".into(), "imap.example.com".into());
+        config.insert("password".into(), "new-password".into());
+        // Seed the changed-password plaintext through the store-less installer.
+        install_data_source_in_with_store(root, "imap-home", "email_imap", "Home", &config, None)
+            .expect("seed plaintext install");
+
+        // The keyring still holds the OLD password from before the change.
+        let store = MockSecretStore::new();
+        let old_payload = serde_json::json!({ "password": "old-password" }).to_string();
+        store
+            .put(
+                &crate::secret_store::datasource_key("imap-home"),
+                &old_payload,
+            )
+            .unwrap();
+
+        assert_eq!(migrate_data_source_secrets_in(root, Some(&store)), 1);
+
+        // The newer user input won; the old credential is gone.
+        let raw = store
+            .value(&crate::secret_store::datasource_key("imap-home"))
+            .expect("entry present after migration");
+        let secrets: BTreeMap<String, String> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            secrets.get("password").map(String::as_str),
+            Some("new-password")
+        );
+        assert_ne!(raw, old_payload);
+
+        // And the file converges to keyring-only.
+        let body = std::fs::read_to_string(root.join("imap-home.toml")).unwrap();
+        assert!(!body.contains("new-password"), "{body}");
+    }
+
+    /// The in-sync leg of review Important#2: an equal keyring payload is
+    /// only stripped from the TOML (the interrupted-migration leftover) —
+    /// no redundant churn, value untouched.
+    #[test]
+    fn migration_with_equal_keyring_payload_strips_without_rewriting_the_entry() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("password".into(), "hunter2".into());
+        install_data_source_in_with_store(root, "imap-home", "email_imap", "Home", &config, None)
+            .expect("seed plaintext install");
+
+        let store = MockSecretStore::new();
+        let payload = serde_json::json!({ "password": "hunter2" }).to_string();
+        store
+            .put(&crate::secret_store::datasource_key("imap-home"), &payload)
+            .unwrap();
+
+        assert_eq!(migrate_data_source_secrets_in(root, Some(&store)), 1);
+        assert_eq!(
+            store
+                .value(&crate::secret_store::datasource_key("imap-home"))
+                .as_deref(),
+            Some(payload.as_str()),
+            "in-sync payload must not be rewritten"
+        );
+        let body = std::fs::read_to_string(root.join("imap-home.toml")).unwrap();
+        assert!(!body.contains("hunter2"), "{body}");
+    }
+
+    /// A keyring READ failure during migration leaves the source untouched
+    /// (plaintext kept, nothing overwritten, nothing stripped) and warns.
+    #[test]
+    fn migration_with_unreadable_keyring_leaves_sources_and_warns() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("password".into(), "hunter2".into());
+        install_data_source_in_with_store(root, "imap-home", "email_imap", "Home", &config, None)
+            .expect("seed plaintext install");
+        let before = std::fs::read_to_string(root.join("imap-home.toml")).unwrap();
+
+        let store = MockSecretStore::failing_reads();
+        let (capture, migrated) = crate::secret_store::test_support::capture_warnings(|| {
+            migrate_data_source_secrets_in(root, Some(&store))
+        });
+        assert_eq!(migrated, 0);
+        assert_eq!(
+            std::fs::read_to_string(root.join("imap-home.toml")).unwrap(),
+            before,
+            "an unreadable keyring must not be answered with a stripped TOML"
+        );
+        assert!(
+            capture
+                .warnings()
+                .iter()
+                .any(|w| w.contains("keyring read failed during migration")),
+            "read failure must be visible: {:?}",
+            capture.warnings()
+        );
+    }
+
+    /// Regression (review Important#3): a keyring read failure on the
+    /// resolve path warns instead of silently answering "no credential";
+    /// the plaintext fallback semantics are unchanged.
+    #[test]
+    fn read_with_unreadable_keyring_warns_and_falls_back_to_toml() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("imap_host".into(), "imap.example.com".into());
+        config.insert("password".into(), "hunter2".into());
+        // Plaintext TOML shape (degraded install).
+        install_data_source_in_with_store(root, "imap-home", "email_imap", "Home", &config, None)
+            .expect("seed plaintext install");
+
+        let store = MockSecretStore::failing_reads();
+        let (capture, resolved) = crate::secret_store::test_support::capture_warnings(|| {
+            read_data_source_config_in_with_store(root, "imap-home", Some(&store))
+        });
+        let resolved = resolved.expect("read must not fail on a degraded keyring");
+        assert_eq!(
+            resolved.get("password").map(String::as_str),
+            Some("hunter2")
+        );
+        assert!(
+            capture
+                .warnings()
+                .iter()
+                .any(|w| w.contains("keyring read failed")),
+            "a locked keychain must not silently look like 'no stored credential': {:?}",
+            capture.warnings()
+        );
+    }
+
+    /// Degraded mode (`None` store): the whole form — secrets included —
+    /// stays in the 0600 TOML, exactly the F3 status quo.
+    #[test]
+    fn install_without_store_keeps_the_f3_plaintext_shape() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("password".into(), "hunter2".into());
+        let installed = install_data_source_in_with_store(
+            root,
+            "imap-home",
+            "email_imap",
+            "Home",
+            &config,
+            None,
+        )
+        .expect("install");
+        let body = std::fs::read_to_string(&installed.path).unwrap();
+        assert!(body.contains("password = \"hunter2\""), "{body}");
+        assert_eq!(installed.credential_storage, Some("plaintext_file"));
+    }
+
+    /// Acceptance ④ (uninstall cleanup): removing a source deletes its
+    /// keyring entry with the file.
+    #[test]
+    fn uninstall_deletes_the_keyring_entry() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("password".into(), "hunter2".into());
+        let store = MockSecretStore::new();
+        install_data_source_in_with_store(
+            root,
+            "imap-home",
+            "email_imap",
+            "Home",
+            &config,
+            Some(&store),
+        )
+        .expect("install");
+        assert!(store.contains(&crate::secret_store::datasource_key("imap-home")));
+
+        remove_installed_data_source_in_with_store(root, "imap-home", Some(&store))
+            .expect("remove");
+        assert!(
+            !store.contains(&crate::secret_store::datasource_key("imap-home")),
+            "uninstall must not orphan the keyring entry"
+        );
+    }
+
+    /// The per-row credential-storage verdict on the list path: keyring
+    /// rows say "keyring", a plaintext leftover (failed write) says
+    /// "plaintext_file", secret-less rows say nothing.
+    #[test]
+    fn list_reports_credential_storage_per_row() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut with_secret = BTreeMap::new();
+        with_secret.insert("imap_host".into(), "h".into());
+        with_secret.insert("password".into(), "p".into());
+        let store = MockSecretStore::new();
+        install_data_source_in_with_store(
+            root,
+            "alpha-imap",
+            "email_imap",
+            "A",
+            &with_secret,
+            Some(&store),
+        )
+        .unwrap();
+        install_data_source_in_with_store(
+            root,
+            "vault",
+            "obsidian",
+            "B",
+            &BTreeMap::from([("vault_path".into(), "/v".into())]),
+            None,
+        )
+        .unwrap();
+        // A plaintext leftover: keyring exists but the write failed.
+        let failing = MockSecretStore::failing_writes();
+        install_data_source_in_with_store(
+            root,
+            "beta-imap",
+            "email_imap",
+            "C",
+            &with_secret,
+            Some(&failing),
+        )
+        .unwrap();
+
+        // Seed the keyring entry for alpha via a working store re-install.
+        let rows = list_installed_data_sources_in_with_store(root, Some(&store));
+        let alpha = rows.iter().find(|r| r.slug == "alpha-imap").unwrap();
+        assert_eq!(alpha.credential_storage, Some("keyring"));
+        let vault = rows.iter().find(|r| r.slug == "vault").unwrap();
+        assert_eq!(
+            vault.credential_storage, None,
+            "secret-less rows carry no verdict"
+        );
+        let beta = rows.iter().find(|r| r.slug == "beta-imap").unwrap();
+        assert_eq!(
+            beta.credential_storage,
+            Some("plaintext_file"),
+            "a plaintext leftover must be visible as the degraded mode"
+        );
     }
 }
