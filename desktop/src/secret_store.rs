@@ -1,4 +1,4 @@
-//! OS-keyring credential storage behind a [`SecretStore`] trait seam
+//! OS-keyring credential storage behind a [`SecretStore`](crate::secret_store::SecretStore) trait seam
 //! (R7-④ batch 2, adversarial-review A8): MCP OAuth tokens and data-source
 //! credentials move out of the plaintext `settings.json` / `data-sources/*.toml`
 //! files into the OS keyring, with the plaintext kept only as a migration
@@ -13,7 +13,7 @@
 //! | `mcp-oauth`  | `shannon/mcp-oauth/<server>`   | JSON `McpStoredOAuth` token block |
 //! | `datasource` | `shannon/datasource/<slug>`    | JSON map of secret field → value  |
 //!
-//! The [`KeyringStore`] maps a key onto the `keyring` crate's
+//! The [`KeyringStore`](crate::secret_store::KeyringStore) maps a key onto the `keyring` crate's
 //! `(service, account)` pair by splitting at the **first** `/`: service
 //! `"shannon"`, account `"<domain>/<name>"`. The gateway social connections
 //! (the pre-existing keyring tenants, `commands_connections.rs`) key their
@@ -25,22 +25,22 @@
 //!
 //! # Degradation is never silent
 //!
-//! [`init_global`] probes the keyring once at startup (write → read → delete
+//! [`init_global`](crate::secret_store::init_global) probes the keyring once at startup (write → read → delete
 //! a probe entry). When the probe fails, the process falls back to the F3
 //! `0600` plaintext helper — and emits one structured
-//! [`tracing::warn!`] **per affected domain** so the downgrade is visible in
+//! `tracing::warn!` **per affected domain** so the downgrade is visible in
 //! logs. The UI mirrors the same fact: the MCP Servers and Data Sources
 //! pages each render a "credential storage" line driven by the
 //! `"keyring"` / `"plaintext_file"` wire tokens produced by
-//! [`storage_mode`].
+//! [`storage_mode`](crate::secret_store::storage_mode).
 //!
 //! # Tests never touch the real keyring
 //!
-//! CI has no Secret Service. Every test injects a [`MockSecretStore`] through
+//! CI has no Secret Service. Every test injects a [`MockSecretStore`](crate::secret_store::MockSecretStore) through
 //! the explicit `*_with_store` / `*_{from,to,in}_with_store` parameter
 //! variants of the domain functions; the production wrappers resolve
-//! [`global()`], which stays `None` in tests (only the Tauri `setup` calls
-//! [`init_global`]). A test that reached the real keyring would be wrong by
+//! [`global()`](crate::secret_store::global), which stays `None` in tests (only the
+//! Tauri `setup` calls [`init_global`](crate::secret_store::init_global)). A test that reached the real keyring would be wrong by
 //! construction — the mock is the only store implementation tests may use.
 
 use std::collections::BTreeMap;
