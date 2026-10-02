@@ -1418,7 +1418,13 @@ mod tests {
 
         assert!(token.is_cancelled(), "the token must still fire");
         assert!(
-            *state.registry.get(key).unwrap().querying.try_lock().unwrap(),
+            *state
+                .registry
+                .get(key)
+                .unwrap()
+                .querying
+                .try_lock()
+                .unwrap(),
             "the querying latch must STAY HELD across cancel — the old loop is \
              still draining; resetting here reopens the A-17 pollution window"
         );
