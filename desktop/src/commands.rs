@@ -21,8 +21,6 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
-#[cfg(test)]
-use crate::commands_billing::iso_days_ago;
 use crate::commands_permissions::PendingPermission;
 use crate::config::{self, DesktopConfig};
 use crate::events::event_names;
@@ -3838,6 +3836,17 @@ mod pure_function_tests {
     }
 
     // ── iso_days_ago ──────────────────────────────────────────────────
+    // Moved here from the removed `commands_billing` demo module (R2 F4);
+    // test-only helper used by the date-format assertions below.
+
+    fn iso_days_ago(days: i64) -> String {
+        use chrono::{DateTime, Days, Utc};
+        let now: DateTime<Utc> = Utc::now();
+        let target = now
+            .checked_sub_days(Days::new(days.max(0) as u64))
+            .unwrap_or(now);
+        target.format("%Y-%m-%d").to_string()
+    }
 
     #[test]
     fn iso_days_ago_returns_iso_date_string() {

@@ -2,7 +2,8 @@
 //
 // Reads `~/.shannon/usage.jsonl` (appended on every engine Usage event in
 // `commands.rs::send_message`) via the `get_usage_stats` command and
-// aggregates by model / provider / day. Local-only; no billing backend.
+// aggregates by model / provider / day. Billing commands removed (R2 F4);
+// the local usage ledger is the source of record.
 //
 // 2026-09 review: charts are the default surface — they answer "where did
 // my tokens go this week?" at a glance. The audit (table) view sits next

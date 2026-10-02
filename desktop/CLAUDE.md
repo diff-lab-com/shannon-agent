@@ -101,8 +101,7 @@ The app follows the standard Tauri v2 split:
    - `commands_mcp.rs` — MCP server lifecycle, skills, addons.
    - `commands_plugins.rs` — plugin marketplace + catalog upstreams.
    - `commands_agents.rs` — agent definitions + inter-agent message history.
-   - `commands_billing.rs` — billing demo data (plan, cost history,
-     invoices) plus `iso_days_ago` helper.
+   - `commands_usage.rs` — local usage stats aggregation (plan/cost-history demo data removed in R2 F4 — no billing backend; the usage ledger is the source of record)
    - `commands_permissions.rs` — permission request/respond commands.
    - `commands_files.rs` — text save, file diff/apply, file tree,
      working-dir info.
