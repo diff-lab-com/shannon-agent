@@ -33,6 +33,10 @@ export const testids = {
   // ── Composer (components/chat/ChatInput.tsx) ──────────────────────────
   /** Model chip trigger button (composer, single model surface on /chat). */
   modelChipTrigger: 'model-chip-trigger',
+  /** Model chip "Set as default" action (promotes session model to global). */
+  modelActionSetDefault: 'model-action-set-default',
+  /** Model chip "Reset to default" action (clears the session override). */
+  modelActionClearOverride: 'model-action-clear-override',
   /** Plan-mode status strip above the input (role=status). */
   planModeBanner: 'plan-mode-banner',
   /** Approval-mode pill trigger (SelectTrigger, rounded). */
