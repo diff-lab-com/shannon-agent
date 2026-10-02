@@ -1051,6 +1051,17 @@ impl RunSpend {
     }
 }
 
+/// Fold one engine `Usage` event into an attempt's spend totals. The first
+/// event flips both totals from `None` to `Some`; an attempt that never
+/// sees a Usage event keeps `RunSpend::default()` (`None`/`None`) — the run
+/// record then says "no data" instead of a fabricated zero (R2-W2-B Minor:
+/// the engine path used to write `Some(0.0)`/`Some(0)`; the github serve
+/// path already wrote `None`).
+pub(crate) fn fold_attempt_usage(spend: &mut RunSpend, cost_usd: f64, tokens: u64) {
+    spend.cost_usd = Some(spend.cost_usd.unwrap_or(0.0) + cost_usd);
+    spend.token_usage = Some(spend.token_usage.unwrap_or(0) + tokens);
+}
+
 /// In-flight spend tracker for one routine run (W2-3). The engine future
 /// feeds every Usage event into it; the budget watcher polls the totals and
 /// the finalize path records them. Interior-mutable and `Send + Sync`, so
@@ -1427,8 +1438,12 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
             // (What is NOT covered: spend from earlier, retried attempts —
             // each attempt sums only itself; see the W2-3 budget-abort
             // accounting note for the known undercount.)
-            let mut attempt_cost_usd = 0.0f64;
-            let mut attempt_tokens = 0u64;
+            //
+            // 花费口径: the totals stay `None` until the engine's FIRST
+            // Usage event — a run whose engine emitted no Usage events
+            // finalizes `None`/`None` ("no data"), never a fabricated
+            // `Some(0)` (review Minor, R2-W2-B).
+            let mut attempt_spend = RunSpend::default();
 
             let stream = engine.process_query(context, None).await;
             use futures::StreamExt;
@@ -1445,11 +1460,14 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
                             cache_read_tokens,
                             ..
                         } => {
-                            attempt_cost_usd += cost_usd;
-                            attempt_tokens += input_tokens
-                                + output_tokens
-                                + cache_creation_tokens
-                                + cache_read_tokens;
+                            fold_attempt_usage(
+                                &mut attempt_spend,
+                                cost_usd,
+                                input_tokens
+                                    + output_tokens
+                                    + cache_creation_tokens
+                                    + cache_read_tokens,
+                            );
                             // W2-3: feed the cross-attempt tracker (budget
                             // guard + finalize spend source of truth).
                             spend_tracker.add_usage(
@@ -1496,8 +1514,8 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
                 error: failure,
                 output: final_output,
                 session_id: Some(session_id.to_string()),
-                cost_usd: Some(attempt_cost_usd),
-                token_usage: Some(attempt_tokens),
+                cost_usd: attempt_spend.cost_usd,
+                token_usage: attempt_spend.token_usage,
             }
         }
     };
@@ -2963,15 +2981,21 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let _ = stop.send(true);
         });
-        let outcome = run_with_timeout(
-            async {
-                std::future::pending::<()>().await;
-                ok_outcome()
-            },
-            None,
-            Some(rx),
+        // Hang guard (Wave 2 CI incident): if the abort path ever wedges,
+        // fail here instead of parking the runner until a global timeout.
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_with_timeout(
+                async {
+                    std::future::pending::<()>().await;
+                    ok_outcome()
+                },
+                None,
+                Some(rx),
+            ),
         )
-        .await;
+        .await
+        .expect("budget trip must abort the attempt, not park the test");
         assert!(outcome.failed, "a budget trip must fail the attempt");
         let error = outcome.error.expect("abort reason recorded");
         assert!(
@@ -3010,6 +3034,41 @@ mod tests {
         assert_eq!(calls, 1, "a budget stop is never retried");
         let error = outcome.error.expect("error");
         assert!(error.contains(BUDGET_ABORT_MARKER), "{error}");
+    }
+
+    /// R2-W2-B Minor regression: an attempt whose engine emitted NO Usage
+    /// events finalizes `None`/`None` — "no data", never a fabricated
+    /// `Some(0.0)`/`Some(0)`. The github serve path already wrote `None`.
+    #[test]
+    fn zero_usage_events_keep_the_attempt_spend_none() {
+        // No events → untouched default: both totals stay None.
+        let mut spend = RunSpend::default();
+        assert_eq!(
+            spend,
+            RunSpend::default(),
+            "no Usage events must read as no data"
+        );
+
+        // The first event flips both totals to Some…
+        fold_attempt_usage(&mut spend, 0.0, 0);
+        assert_eq!(
+            spend,
+            RunSpend {
+                cost_usd: Some(0.0),
+                token_usage: Some(0),
+            },
+            "real zero-cost usage IS data — Some(0) is honest here"
+        );
+
+        // …and later events accumulate on top.
+        fold_attempt_usage(&mut spend, 0.25, 4_096);
+        assert_eq!(
+            spend,
+            RunSpend {
+                cost_usd: Some(0.25),
+                token_usage: Some(4_096),
+            }
+        );
     }
 
     #[test]
