@@ -117,4 +117,97 @@ test.describe('scripted chat backend — approval journeys (#4)', () => {
     await expect(page.getByRole('img', { name: 'Waiting for approval' })).toHaveCount(0)
     await expectNoConsoleErrors(page)
   })
+
+  // ── W2 G22 扩展：risk 四级配色/aria、reason 三源、legacy 兼容 ──────────
+
+  test('risk tiers low/medium render their aria labels; llm/default/legacy reasons hit their branches', async ({ page }) => {
+    test.setTimeout(90_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'approval-allow', test.info())
+    await page.getByTestId('desktop-session-row-script-sess-approval').click()
+    await expect(page.getByRole('heading', { name: 'Approval flow' })).toBeVisible({ timeout: 10_000 })
+
+    const allowOnce = () => page.getByRole('alertdialog').getByRole('button', { name: 'Allow Once' })
+    /** Allow + release the scripted waitFor park, so the turn settles and
+     *  the composer is free for the next leg's send. */
+    const allowAndSettle = async () => {
+      await allowOnce().click()
+      await expect(dialog).toHaveCount(0, { timeout: 5_000 })
+      await page.evaluate(() => {
+        (window as unknown as {
+          __shannonMock: { control: { resume(): void } }
+        }).__shannonMock.control.resume()
+      })
+      await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
+    }
+
+    // Turn 1 (the original high/rule request) first — sends consume turns
+    // in order, so the W2 legs start at the second send.
+    const dialog = page.getByRole('alertdialog')
+    await chat.send('运行 ls -la 看看当前目录里有什么')
+    await expectMockPhase(page, 'waitingPermission', 10_000)
+    await expect(dialog).toBeVisible({ timeout: 5_000 })
+    await allowAndSettle()
+
+    // Turn 2 — LOW risk + llm confidence reason (rounded to a whole %).
+    await chat.send('读取 notes.txt（低风险，分类器判定）')
+    await expectMockPhase(page, 'waitingPermission', 10_000)
+    await expect(dialog.locator('[aria-label="Risk level: Low"]')).toBeVisible({ timeout: 5_000 })
+    await expect(dialog.getByText('Safety classifier — confidence 87%')).toBeVisible()
+    await allowAndSettle()
+
+    // Turn 3 — MEDIUM risk + default-policy reason (no matched rule).
+    await chat.send('写 build artifact（中风险，无匹配规则）')
+    await expectMockPhase(page, 'waitingPermission', 10_000)
+    await expect(dialog.locator('[aria-label="Risk level: Medium"]')).toBeVisible({ timeout: 5_000 })
+    await expect(dialog.getByText('No specific rule matched — policy default')).toBeVisible()
+    await allowAndSettle()
+
+    // Turn 4 — legacy payload without a reason: no reason row at all (the
+    // "Why this prompt was raised" region is absent, never a wrong label).
+    await chat.send('列目录（legacy 载荷，无 reason）')
+    await expectMockPhase(page, 'waitingPermission', 10_000)
+    await expect(dialog.locator('[aria-label="Risk level: Low"]')).toBeVisible({ timeout: 5_000 })
+    await expect(dialog.locator('[aria-label="Why this prompt was raised"]')).toHaveCount(0)
+    await expect(dialog.getByText('Matched rule:')).toHaveCount(0)
+    await expect(dialog.getByText('Safety classifier')).toHaveCount(0)
+    await expect(dialog.getByText('No specific rule matched')).toHaveCount(0)
+    await allowAndSettle()
+    await expectNoConsoleErrors(page)
+  })
+
+  test('clicking the scrim backdrop denies (respond_permission allow:false recorded)', async ({ page }) => {
+    test.setTimeout(60_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'approval-deny', test.info())
+    await page.getByTestId('desktop-session-row-script-sess-approval-deny').click()
+    await expect(page.getByRole('heading', { name: 'Approval deny' })).toBeVisible({ timeout: 10_000 })
+
+    // Turn 2's permission-request parks the player; the scrim click (the
+    // fixed inset-0 backdrop BEHIND the centered panel) routes through the
+    // Modal's onClose = respond Deny. It records under the FIRST turn's
+    // request id — this test's single send consumes turn 0 (pr-deny-1).
+    await chat.send('删除 build 目录')
+    await expectMockPhase(page, 'waitingPermission', 10_000)
+    const dialog = page.getByRole('alertdialog')
+    await expect(dialog).toBeVisible({ timeout: 5_000 })
+
+    await page.mouse.click(12, 400)
+
+    // Denial recorded in the player ledger, dialog gone, run resumes into
+    // the denied tool card.
+    await expect
+      .poll(async () => (await mockSnapshot(page)).permissionLog, { timeout: 5_000 })
+      .toEqual([expect.objectContaining({ requestId: 'pr-deny-1', allow: false })])
+    await expect(dialog).toHaveCount(0)
+    await expect(page.locator('[data-tool-name="Bash"][data-tool-status="error"]')).toBeVisible({ timeout: 10_000 })
+
+    await page.evaluate(() => {
+      (window as unknown as {
+        __shannonMock: { control: { resume(): void } }
+      }).__shannonMock.control.resume()
+    })
+    await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
+    await expectNoConsoleErrors(page)
+  })
 })

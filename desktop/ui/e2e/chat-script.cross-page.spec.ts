@@ -63,4 +63,63 @@ test.describe('scripted chat backend — journey-cross-page (#13)', () => {
     await expect(page).toHaveURL(/\/files$/)
     await expectNoConsoleErrors(page)
   })
+
+  // ── W2 G21 扩展：terminal 四角 ────────────────────────────────────────────
+  // Ctrl+` 开终端面板；代码块 "Run in terminal" → 抽屉打开 + spawn 首个 tab
+  // 并复用（existing tab never spawned twice）；关抽屉后事件三连不断链（再跑
+  // 一次仍重开+写入）；选中「发给代理」走 shannon:composer-draft 缝（无选择时
+  // 按钮禁用；e2e 用 seam 派发断言 composer 的 fenced prefill —— xterm 选择
+  // 面在真实浏览器不可编程，见报告 G21 节）。
+  test('G21 terminal corner: Ctrl+` drawer, run-in-terminal spawn+reuse, closed-drawer chain, agent prefill seam', async ({ page }) => {
+    test.setTimeout(90_000)
+    await loadChatScript(page, 'cross-page', test.info())
+    await page.getByTestId('desktop-session-row-script-sess-cross').click()
+    await expect(page.getByRole('heading', { name: 'Cross page' })).toBeVisible({ timeout: 10_000 })
+
+    // The seeded bash fence carries the run affordance in its header chrome.
+    const runButton = page.getByRole('button', { name: 'Run in terminal' })
+    await expect(runButton).toBeVisible({ timeout: 10_000 })
+
+    // 1. Run → the CLOSED drawer opens exactly like the toggle, spawns the
+    // first terminal and executes the code (the PTY echoes the typed line
+    // AND its output — containment is the assertion; exact match counts are
+    // meaningless, xterm only renders the visible scrollback window).
+    await runButton.click()
+    const surface = page.getByTestId('terminal-surface')
+    await expect(surface).toBeVisible({ timeout: 10_000 })
+    const tabs = page.locator('[role="tab"][id^="terminal-tab-"]')
+    await expect(tabs).toHaveCount(1, { timeout: 10_000 })
+    await expect(page.locator('.xterm-rows')).toContainText('terminal-journey-ok', { timeout: 15_000 })
+
+    // 2. Second run reuses the SAME tab (no duplicate spawn — the tab count
+    // is the reuse contract) and the shell runs the code again.
+    await runButton.click()
+    await expect(tabs).toHaveCount(1, { timeout: 10_000 })
+    await expect(page.locator('.xterm-rows')).toContainText('$ echo terminal-journey-ok', { timeout: 15_000 })
+
+    // 3. 发给代理 prefill: without an xterm selection the toolbar button is
+    // honestly disabled; the SAME bridge it drives is the shannon:composer-draft
+    // window seam — dispatching it must land the fenced prefill in the
+    // composer without ever auto-sending.
+    const sendToAgent = page.getByRole('button', { name: 'Send to agent' })
+    await expect(sendToAgent).toBeDisabled()
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent('shannon:composer-draft', {
+        detail: { text: '```\nterminal-journey-ok\n```' },
+      }))
+    })
+    await expect(page.getByRole('textbox', { name: 'Message' })).toContainText('```', { timeout: 10_000 })
+    await expect(page.getByRole('textbox', { name: 'Message' })).toContainText('terminal-journey-ok')
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeVisible()
+
+    // 4. Ctrl+` closes the drawer; a run from the CLOSED state reopens it
+    // and the chain (open → select/spawn → write) still lands the output.
+    await page.keyboard.press('Control+`')
+    await expect(surface).toHaveCount(0, { timeout: 10_000 })
+    await runButton.click()
+    await expect(surface).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('[role="tab"][id^="terminal-tab-"]')).toHaveCount(1, { timeout: 10_000 })
+    await expect(page.locator('.xterm-rows')).toContainText('$ echo terminal-journey-ok', { timeout: 15_000 })
+    await expectNoConsoleErrors(page)
+  })
 })

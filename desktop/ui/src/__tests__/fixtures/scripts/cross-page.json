@@ -16,7 +16,7 @@
           },
           {
             "role": "assistant",
-            "content": "已创建 todo.md，共 3 条待办。",
+            "content": "已创建 todo.md，共 3 条待办。可以用下面的命令核对：\n\n```bash\necho terminal-journey-ok\n```",
             "toolCalls": [
               {
                 "toolUseId": "tool-write-todo",
