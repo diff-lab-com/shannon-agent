@@ -7,6 +7,7 @@ import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import { parseSlashInput, type SlashCommand, type SlashResult } from '@/lib/slash/commands'
+import { recordInputHistory } from '@/lib/inputHistory'
 import { clearDiffStatsCache } from '@/components/chat/diffStats'
 import { toastError } from '@/lib/errorToast'
 import { setActiveWorkingDir } from '@/lib/fileRefs'
@@ -532,6 +533,10 @@ export default function Chat() {
     if (isQuerying) {
       const accepted = enqueuePrompt(trimmed, hasAttachments ? attachedFiles : [])
       if (accepted) {
+        // A-22: an accepted queue join is "sent" in the user's mental model
+        // ("what did I just send") — record it for ArrowUp recall now. The
+        // drain replay must not re-record it (same single send).
+        if (trimmed) recordInputHistory(trimmed)
         setInput('')
         setAttachedFiles([])
       }
@@ -549,6 +554,9 @@ export default function Chat() {
     setAttachedFiles([])
     void sendMessage(trimmed, filePaths).then(ok => {
       if (ok) {
+        // A-22: the send was accepted — global input history for ArrowUp
+        // recall. Attachments-only sends record nothing (empty text).
+        if (trimmed) recordInputHistory(trimmed)
         setBlockedPayload(null)
         if (visibleSessionId) clearDraft(visibleSessionId)
       } else {

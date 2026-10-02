@@ -8,8 +8,9 @@
 // 重启丢失（knownIssue A-20 —— reload 后队列蒸发）。
 // cap/排序/移除/drain 顺序在 journey #9 的 spec；本文件只锚「存续策略」。
 //
-// A-22（输入历史回溯不存在）：产品 gap 记录，不建测试 —— ArrowUp 仅用于
-// mention/slash 菜单导航（ChatInput.tsx handleKeyDown），除非产品立项。
+// A-22（输入历史回溯，已实施）：全局环 shannon.inputHistory（cap 50，
+// MRU），发送/排队被接受后由 Chat.tsx 录入；ArrowUp 在 composer 空/光标
+// 处于文本起点时调出最近一条，Down 到末尾恢复现场。锚点测试在最下方。
 import { expect, test } from '@playwright/test'
 
 import { ChatPage } from './helpers/ChatPage'
@@ -150,6 +151,31 @@ test.describe('scripted chat backend — input persistence (§4.2)', () => {
     await page.reload()
     await openDraftSession(page, 'desktop-session-row-script-sess-race-a', 'Race A')
     await expect(page.getByTestId('prompt-queue')).toHaveCount(0)
+    await expectNoConsoleErrors(page)
+  })
+
+  // A-22 — the sent-prompt ring (shannon.inputHistory): an accepted send is
+  // recorded; an empty composer's ArrowUp recalls the newest entry; Down
+  // past it restores the pre-browse现场; the ring lives in localStorage, so
+  // a reload keeps it recallable (restart anchor, same shape as the drafts).
+  test('input history: ArrowUp recalls the last sent prompt, Down restores, survives a reload (A-22)', async ({ page }) => {
+    test.setTimeout(60_000)
+    await loadChatScript(page, 'input-persistence', test.info())
+    const chat = await openDraftSession(page, ROW_A, 'Drafts A')
+    await chat.send('回溯我的一条')
+    await expect(chat.bubbles()).toHaveCount(2, { timeout: 15_000 })
+    await expect(chat.composer()).toHaveValue('')
+
+    await chat.composer().press('ArrowUp')
+    await expect(chat.composer()).toHaveValue('回溯我的一条')
+    // Down past the newest entry → back to the empty pre-browse composer.
+    await chat.composer().press('ArrowDown')
+    await expect(chat.composer()).toHaveValue('')
+
+    await page.reload()
+    const chatAfterRestart = await openDraftSession(page, ROW_A, 'Drafts A')
+    await chatAfterRestart.composer().press('ArrowUp')
+    await expect(chatAfterRestart.composer()).toHaveValue('回溯我的一条')
     await expectNoConsoleErrors(page)
   })
 })

@@ -14,6 +14,7 @@ import AttachmentChip from '@/components/chat/AttachmentChip'
 import SessionUsageDialog from '@/components/chat/SessionUsageDialog'
 import PptOutlineDialog from '@/components/chat/PptOutlineDialog'
 import { useComposerDraftListener } from '@/lib/composerBridge'
+import { loadInputHistory } from '@/lib/inputHistory'
 import { isSlashQuery, type SlashCommand } from '@/lib/slash/commands'
 import { fetchSlashSkills, mergeSlashMenu, type SlashMenuItem, type SlashSkillEntry } from '@/lib/slash/skills'
 import {
@@ -657,6 +658,45 @@ export default function ChatInput({
     (e.nativeEvent as KeyboardEvent).isComposing ||
     Date.now() - compositionEndedAtRef.current < COMPOSITION_END_GRACE_MS
 
+  // A-22 — terminal-style input-history recall (ArrowUp/ArrowDown). The ring
+  // itself is global (`shannon.inputHistory`, maintained by Chat.tsx on every
+  // accepted send/queue join); this component only walks it. Entering is
+  // allowed only when BOTH menus are closed (guaranteed structurally: the
+  // mention/slash blocks above capture the arrows while open) AND the input
+  // is empty or the caret sits at the very start of the text (position 0 =
+  // first line, first column) — exactly the states where ArrowUp has no
+  // caret-moving job, so multi-line navigation is never hijacked and screen
+  // readers keep their line-by-line textbox behavior.
+  const [historyBrowse, setHistoryBrowse] = useState<{
+    index: number // position in historyRef.current — length-1 is the newest
+    snapshot: string // composer text (+ caret) from before browsing started;
+    snapshotCaret: number // Down past the newest entry restores this现场.
+  } | null>(null)
+  // Re-read once per ENTRY into history mode (not cached per mount) so an
+  // entry recorded by a send during this mount is always recallable.
+  const historyRef = useRef<string[]>([])
+  // The value the last recall wrote. A `value` change NOT authored by the
+  // browse cursor (send clear, draft push, skill fill, session switch) ends
+  // the browse session — the on-screen text is no longer what the cursor
+  // points at, and Down-restore would clobber it.
+  const historyShownRef = useRef<string | null>(null)
+  // Push an entry (or the entry snapshot) into the composer, caret at its
+  // end — or at `caret` when restoring the pre-browse snapshot.
+  const showHistoryEntry = (text: string, caret?: number) => {
+    historyShownRef.current = text
+    onChange(text)
+    const pos = caret ?? text.length
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(pos, pos)
+    })
+  }
+  useEffect(() => {
+    setHistoryBrowse(prev => (prev && value !== historyShownRef.current ? null : prev))
+  }, [value])
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // IME guard first: swallow only the send/execute keys so the candidate
     // window keeps them; navigation keys pass through untouched.
@@ -707,6 +747,49 @@ export default function ChatInput({
         setSlashDismissed(true)
         return
       }
+    }
+    // A-22 — input-history recall. Reachable only when both menus are closed
+    // (each captures the arrows above). While browsing, Up/Down walk the
+    // ring; Down past the newest entry restores the pre-browse text + caret
+    // and exits. Every branch prevents the default so the caret stays where
+    // the recall put it. The IME guard at the top already swallowed arrows
+    // belonging to an in-flight composition.
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      const history = historyRef.current
+      if (historyBrowse && history.length > 0) {
+        e.preventDefault()
+        if (e.key === 'ArrowUp') {
+          // At the oldest entry Up is a no-op (terminal-ring semantics).
+          if (historyBrowse.index > 0) {
+            const idx = historyBrowse.index - 1
+            setHistoryBrowse({ ...historyBrowse, index: idx })
+            showHistoryEntry(history[idx])
+          }
+        } else if (historyBrowse.index >= history.length - 1) {
+          setHistoryBrowse(null)
+          showHistoryEntry(historyBrowse.snapshot, historyBrowse.snapshotCaret)
+        } else {
+          const idx = historyBrowse.index + 1
+          setHistoryBrowse({ ...historyBrowse, index: idx })
+          showHistoryEntry(history[idx])
+        }
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        const el = textareaRef.current
+        const caret = el?.selectionStart ?? value.length
+        if (value.length === 0 || caret === 0) {
+          const ring = loadInputHistory()
+          if (ring.length > 0) {
+            e.preventDefault()
+            historyRef.current = ring
+            const idx = ring.length - 1
+            setHistoryBrowse({ index: idx, snapshot: value, snapshotCaret: caret })
+            showHistoryEntry(ring[idx])
+          }
+        }
+      }
+      return
     }
     // Enter -> send (while streaming: queue, GB P2-10a); Shift+Enter ->
     // newline; Ctrl/Cmd+Enter -> send — or, while streaming, the IMMEDIATE
@@ -1140,6 +1223,11 @@ export default function ChatInput({
             value={value}
             onChange={e => {
               trackCaret(e.currentTarget)
+              // A-22: a DOM-level change is user input (typed, pasted, IME)
+              // — history browsing ends and the snapshot is abandoned.
+              // Programmatic value writes (the recall itself) never fire
+              // this handler, so navigation is unaffected.
+              setHistoryBrowse(null)
               onChange(e.target.value)
             }}
             onKeyUp={e => trackCaret(e.currentTarget)}
