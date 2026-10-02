@@ -847,6 +847,14 @@ describe('L1 state machine — cancel-matrix #4 (approval-wait stop)', () => {
 })
 
 describe('L1 state machine — cancel-matrix #3 (stop → instant resend, A-17)', () => {
+  // De-race note (裁定修复波): CI shard2 failed this test with
+  // `expected '' to contain '新流丁'` — the chunk flush orchestration (real
+  // setTimeout macrotasks, capped at 60ms each) is itself asynchronous and,
+  // under 2-core CI CPU contention, slower than a direct assertion. Every
+  // streamingText / committed-reply point below is therefore a WAITING
+  // assertion (this file's established RTL waitFor — act-integrated, same
+  // semantics as vi.waitFor/expect.poll) with an explicit 5s window; the
+  // assertion objects and semantics are unchanged.
   it('a late old-turn cancelled WIPES the new turn\'s stream and idles the composer (A-17 pollution, recorded)', async () => {
     const script = loadFixture('cancel-then-resend')
     const h = await makeHarness()
@@ -857,14 +865,14 @@ describe('L1 state machine — cancel-matrix #3 (stop → instant resend, A-17)'
     // the real backend delivers them: after the latch reopens).
     h.player.pauseAt(1)
     await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
-    await waitFor(() => expect(h.result.current.streamingText).toContain('旧流'))
+    await waitFor(() => expect(h.result.current.streamingText).toContain('旧流'), { timeout: 5_000 })
     await act(async () => { await h.result.current.cancelQuery() })
     await act(async () => { expect(h.player.handleCancelQuery()).toBe(true) })
     await awaitSettled(h)
 
     // Instant resend — the new turn streams (its own query id).
     await sendAndPlay(h, { text: script.turns[1]!.user, expectedQueryId: 'q-1' })
-    await waitFor(() => expect(h.result.current.streamingText).toContain('新流甲'))
+    await waitFor(() => expect(h.result.current.streamingText).toContain('新流甲'), { timeout: 5_000 })
     expect(h.result.current.isQuerying).toBe(true)
 
     // The old query's boundary events land INSIDE the new turn's window:
@@ -880,17 +888,25 @@ describe('L1 state machine — cancel-matrix #3 (stop → instant resend, A-17)'
     // emitted before the pollution point (and the injected late chunk —
     // both were in the wiped bucket). Flip these to the no-pollution
     // asserts (stream intact, isQuerying stays true, full reply) when R4
-    // lands.
-    expect(h.result.current.streamingText).not.toContain('新流甲')
-    expect(h.result.current.isQuerying).toBe(false)
+    // lands. The flush handlers run synchronously, but the projection
+    // wait below rides out any throttled state propagation on a starved CI
+    // core instead of asserting against a mid-flight frame.
+    await waitFor(() => {
+      expect(h.result.current.streamingText).not.toContain('新流甲')
+      expect(h.result.current.isQuerying).toBe(false)
+    }, { timeout: 5_000 })
     // q-1 keeps streaming into the wiped bucket — it commits WITHOUT the
-    // pre-pollution chunks.
+    // pre-pollution chunks. Waiting (5s) rather than direct: the commit is
+    // the tail of the chunk macrotask chain, the exact thing CI contention
+    // stretches past a direct read.
     await waitFor(() => {
       const reply = h.result.current.messages.filter(m => m.role === 'assistant').at(-1)
       expect(reply?.content ?? '').toContain('新流丁')
-    })
-    const reply = h.result.current.messages.filter(m => m.role === 'assistant').at(-1)
-    expect(reply!.content).not.toContain('新流甲')
-    expect(reply!.content).not.toContain('旧流迟到')
+    }, { timeout: 5_000 })
+    await waitFor(() => {
+      const reply = h.result.current.messages.filter(m => m.role === 'assistant').at(-1)
+      expect(reply!.content).not.toContain('新流甲')
+      expect(reply!.content).not.toContain('旧流迟到')
+    }, { timeout: 5_000 })
   })
 })
