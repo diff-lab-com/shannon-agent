@@ -1,0 +1,34 @@
+{
+  "name": "send-rejected",
+  "description": "发送被拒 — invoke reject → composer 文本/草稿保留（A-1）→ 重发成功",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-reject",
+        "title": "Send rejected",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "这条会被 pre-turn 守卫拒绝",
+      "sendRejects": true,
+      "script": []
+    },
+    {
+      "user": "这条会被 pre-turn 守卫拒绝",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "重发成功的流式回复"
+          ]
+        }
+      ]
+    }
+  ]
+}

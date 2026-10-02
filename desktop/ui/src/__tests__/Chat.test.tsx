@@ -653,6 +653,60 @@ describe('Chat page', () => {
     }
   })
 
+  // A-1 fix: an idle direct send the backend REJECTS (budget / concurrent /
+  // goal guards — sendMessage resolves false) must hand the text back to
+  // the composer instead of discarding it (the same recovery as commitEdit),
+  // and the debounced draft write re-persists the cleared draft key.
+  it('restores the composer text and draft when the send is rejected (A-1)', async () => {
+    vi.useFakeTimers()
+    try {
+      resetCtx()
+      ctx.currentSessionId = 'sess-1'
+      ctx.sendMessage = vi.fn().mockResolvedValue(false)
+      renderChat()
+      const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+      fireEvent.change(input, { target: { value: 'survive the rejection' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(ctx.sendMessage).toHaveBeenCalledWith('survive the rejection', undefined)
+      // The optimistic clear still happens synchronously (it keeps a
+      // double-Enter from racing a second send through the empty-text gate).
+      expect(input).toHaveValue('')
+      expect(localStorage.getItem('shannon.draft.sess-1')).toBeNull()
+
+      // The rejection lands → the composer gets its text back…
+      await act(async () => {})
+      expect(input).toHaveValue('survive the rejection')
+      // …and the debounced draft write re-persists it.
+      act(() => { vi.advanceTimersByTime(300) })
+      expect(JSON.parse(localStorage.getItem('shannon.draft.sess-1')!).text).toBe('survive the rejection')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // A-1 fix, attachment half: the rejected send's attachment chips come
+  // back with the text — the composer is restored to its pre-send state.
+  it('restores attachments alongside the text when the send is rejected (A-1)', async () => {
+    resetCtx()
+    ctx.currentSessionId = 'sess-1'
+    ctx.sessions = [{ id: 'sess-1', title: 'S' }]
+    ctx.sendMessage = vi.fn().mockResolvedValue(false)
+    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
+    renderChat()
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    await screen.findByText('report.pdf')
+
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    fireEvent.change(input, { target: { value: 'with files' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(ctx.sendMessage).toHaveBeenCalledWith('with files', ['/home/alice/Downloads/report.pdf'])
+
+    await act(async () => {})
+    expect(input).toHaveValue('with files')
+    expect(screen.getByText('report.pdf')).toBeInTheDocument()
+  })
+
   // ── B1 P2-3: session-switch skeleton ────────────────────────────────────
   it('shows the switch overlay only while a session swap is in flight', () => {
     resetCtx()

@@ -529,12 +529,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // previews immediately instead of only after the next reload. The size
     // is unknowable client-side pre-send — 0 renders as a placeholder until
     // a reload brings the recorded message (with real metadata) back.
-    setMessages(prev => [...prev, {
+    //
+    // A-11 fix: the append's exact object doubles as the rollback handle.
+    // The old rollback matched role+content and deleted the LAST match,
+    // which can be the WRONG bubble: two identical texts in flight at once
+    // (double-Enter before isQuerying flips, drain vs manual send) let the
+    // first send's failure delete the second send's bubble, and a session
+    // switch that reloaded backend truth between the append and the
+    // rejection made it delete the recorded copy of the same text. Rolling
+    // back by reference is exact on both counts (the pending-id variant
+    // without the success-side promotion pass — the reference IS the unique
+    // pending marker, and a settled message simply keeps it, inert: no code
+    // reads it and the next switch/reload replaces it with backend truth).
+    // After such a reload the optimistic object is no longer in state, so
+    // the rollback is a no-op — there is nothing left to roll back.
+    const optimistic: ChatMessage = {
       role: 'user',
       content: message,
       timestamp: Date.now(),
       file_attachments: filePaths?.map(p => ({ name: basenameOf(p), path: p, size: 0 })),
-    }])
+    }
+    setMessages(prev => [...prev, optimistic])
     try {
       // P1-1 fix: explicit session routing — the window targets its own
       // session, the main window its current one; the backend never routes
@@ -565,15 +580,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // concurrent-query guard — see `send_message`), so roll back the
       // optimistic append above. Without this, "Continue (ignore once)"
       // re-sends the same text and the rejected message renders twice.
+      // A-11 fix: by the append's own reference — never by content (see the
+      // comment on `optimistic` above).
       setMessages(prev => {
-        for (let i = prev.length - 1; i >= 0; i--) {
-          if (prev[i].role === 'user' && prev[i].content === message) {
-            const next = [...prev]
-            next.splice(i, 1)
-            return next
-          }
-        }
-        return prev
+        const idx = prev.lastIndexOf(optimistic)
+        if (idx < 0) return prev
+        const next = [...prev]
+        next.splice(idx, 1)
+        return next
       })
       setChatError(describeBackendError(String(e), messageFor))
       setSessionQuerying(targetSessionId, false)

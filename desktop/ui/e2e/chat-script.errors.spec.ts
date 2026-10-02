@@ -110,4 +110,53 @@ test.describe('scripted chat backend — failure journeys (#5)', () => {
     await expect(chat.bubbleAt(2)).toContainText('重试后的流式回复')
     await expectNoConsoleErrors(page)
   })
+
+  // A-1 fixed (R4 group 2): an idle direct send whose invoke REJECTS (the
+  // scripted counterpart of the backend's pre-turn budget/concurrent/goal
+  // guards) used to clear the composer unconditionally — the rejection
+  // silently ate the user's input. Now the text comes back (same recovery
+  // as the edit flow) and the debounced draft write re-persists it, so the
+  // obvious retry (Enter again) sends exactly what was lost.
+  test('a rejected send keeps the composer text and draft; resending succeeds (A-1 fixed)', async ({ page }) => {
+    test.setTimeout(60_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'send-rejected', test.info())
+
+    await expect(chat.composer()).toBeVisible({ timeout: 10_000 })
+    await page.getByTestId('desktop-session-row-script-sess-reject').click()
+    await expect(page.getByRole('heading', { name: 'Send rejected' })).toBeVisible({ timeout: 10_000 })
+
+    const STORY = '这条会被 pre-turn 守卫拒绝'
+    await chat.send(STORY)
+
+    // The invoke rejection surfaces on the plain error banner (String(e) of
+    // the thrown guard — no query ever started, so no stream/cursor).
+    await expect(page.getByText('send rejected by scripted backend guard')).toBeVisible({ timeout: 10_000 })
+    await expect(chat.streamingCursor()).toHaveCount(0)
+
+    // A-1 fixed: the composer still holds the rejected text…
+    await expect(chat.composer()).toHaveValue(STORY)
+    // …and its draft key is back (the send cleared it; the restore's
+    // debounced write re-persists it within ~300ms).
+    await expect.poll(
+      async () => page.evaluate(() => localStorage.getItem('shannon.draft.script-sess-reject')),
+      { timeout: 5_000 },
+    ).toContain(STORY)
+
+    // The rejected send consumed the turn and logged its args, but played
+    // nothing and committed no bubbles (the optimistic one was rolled back).
+    const preRetry = await mockSnapshot(page)
+    expect(preRetry.sentTurns).toBe(1)
+    expect(preRetry.sends).toHaveLength(1)
+    await expect(chat.bubbles()).toHaveCount(0)
+
+    // The obvious retry — Enter again on the restored text — consumes the
+    // next turn and settles clean: user + reply bubbles, banner gone.
+    await chat.send(STORY)
+    await expect(chat.bubbles()).toHaveCount(2, { timeout: 15_000 })
+    await expect(page.getByText('send rejected by scripted backend guard')).toHaveCount(0)
+    await expect(chat.bubbleAt(1)).toContainText('重发成功的流式回复')
+    expect((await mockSnapshot(page)).sentTurns).toBe(2)
+    await expectNoConsoleErrors(page)
+  })
 })

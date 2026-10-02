@@ -434,6 +434,60 @@ describe('fallback and multi-turn sequencing', () => {
   })
 })
 
+// A-1 anchor (R4 group 2): a `sendRejects` turn models the real backend's
+// pre-turn guards — the `send_message` invoke itself rejects before any
+// query exists, so the composer-recovery journey (chat-script.errors.spec)
+// can exercise a rejected send without fabricating events.
+describe('sendRejects turns (A-1 anchor)', () => {
+  it('accepts sendRejects in the schema and rejects malformed variants', () => {
+    expect(validateScript({
+      name: 'rejecting',
+      turns: [{ user: 'u', sendRejects: true, script: [] }],
+    }).ok).toBe(true)
+    expect(validateScript({
+      name: 'bad-rejects',
+      turns: [{ user: 'u', sendRejects: 'yes', script: [] }],
+    }).ok).toBe(false)
+  })
+
+  it('handleSendMessage throws for a sendRejects turn, consumes it, and emits nothing', () => {
+    const { player, names } = makeHarness()
+    player.load({
+      name: 'reject-then-succeed',
+      turns: [
+        { user: 'nope', sendRejects: true, script: [] },
+        { user: 'retry', script: [{ event: 'query:completed' }] },
+      ],
+    })
+    expect(() => player.handleSendMessage({ message: 'nope', sessionId: 'sess-a' }))
+      .toThrowError(/send rejected by scripted backend guard/)
+    // The turn was consumed and its args logged — but no events played and
+    // no query id was ever allocated.
+    expect(player.snapshot().sentTurns).toBe(1)
+    expect(player.snapshot().sends).toEqual([
+      { turnIndex: 0, message: 'nope', attachments: null, budgetBypass: false, sessionId: 'sess-a' },
+    ])
+    expect(names()).toEqual([])
+    expect(player.snapshot().phase).toBe('armed')
+    // The retry plays the NEXT turn (ids keep incrementing past the
+    // rejected one).
+    expect(player.handleSendMessage({ message: 'retry', sessionId: 'sess-a' })).toEqual({ query_id: 'q-1' })
+    expect(names()).toEqual(['query:completed'])
+    expect(player.snapshot().phase).toBe('done')
+  })
+
+  it('a sendRejects final turn leaves the player done (fallback thereafter)', () => {
+    const { player } = makeHarness()
+    player.load({
+      name: 'reject-last',
+      turns: [{ user: 'u', sendRejects: true, script: [] }],
+    })
+    expect(() => player.handleSendMessage({})).toThrowError(/turn 0/)
+    expect(player.snapshot().phase).toBe('done')
+    expect(player.handleSendMessage({})).toBeNull()
+  })
+})
+
 describe('payload auto-fill', () => {
   it('fills query_id/session_id and lets payload shallow-merge over them', () => {
     const { player, events } = makeHarness()
