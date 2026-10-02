@@ -102,7 +102,6 @@ The app follows the standard Tauri v2 split:
    - `commands_plugins.rs` — plugin marketplace + catalog upstreams.
    - `commands_agents.rs` — agent definitions + inter-agent message history.
    - `commands_usage.rs` — local usage stats aggregation (plan/cost-history demo data removed in R2 F4 — no billing backend; the usage ledger is the source of record)
-     invoices) plus `iso_days_ago` helper.
    - `commands_permissions.rs` — permission request/respond commands.
    - `commands_files.rs` — text save, file diff/apply, file tree,
      working-dir info.
