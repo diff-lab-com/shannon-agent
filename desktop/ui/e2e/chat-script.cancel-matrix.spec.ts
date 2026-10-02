@@ -36,6 +36,20 @@ function invokeMock(page: Page, cmd: string, args: Record<string, unknown>): voi
   }, [cmd, args] as const)
 }
 
+/**
+ * Open a sidebar session and only accept the outcome when its heading is
+ * up — the same retry-until-landed loop the R3 hardening (f8e7f0c1) gave
+ * queue-steer/session-switch, applied here after a 4-core-stress rerun
+ * reproduced the row-click swallow on this file (the click lands during
+ * hydration and switches nothing; re-clicking is idempotent).
+ */
+async function openSession(page: Page, rowTestId: string, headingName: string): Promise<void> {
+  await expect(async () => {
+    await page.getByTestId(rowTestId).click()
+    await expect(page.getByRole('heading', { name: headingName })).toBeVisible()
+  }).toPass({ timeout: 15_000 })
+}
+
 test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', () => {
   // ── 1. 文本流中 stop ──────────────────────────────────────────────────
   test('1. stop in a text stream: cancelled converges, stop→send swaps back, no residue', async ({ page }) => {
@@ -60,8 +74,7 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     test.setTimeout(60_000)
     const chat = new ChatPage(page)
     await loadChatScript(page, 'cancel-tool-run', test.info())
-    await page.getByTestId('desktop-session-row-script-sess-cancel-tool').click()
-    await expect(page.getByRole('heading', { name: 'Cancel tool run' })).toBeVisible({ timeout: 10_000 })
+    await openSession(page, 'desktop-session-row-script-sess-cancel-tool', 'Cancel tool run')
 
     await chat.send('跑一个很慢的命令')
     await expect(page.locator('[data-tool-name="Bash"][data-tool-status="running"]')).toBeVisible({ timeout: 5_000 })
@@ -98,8 +111,7 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     })
     const chat = new ChatPage(page)
     await loadChatScript(page, 'cancel-then-resend', test.info())
-    await page.getByTestId('desktop-session-row-script-sess-resend').click()
-    await expect(page.getByRole('heading', { name: 'Cancel then resend' })).toBeVisible({ timeout: 10_000 })
+    await openSession(page, 'desktop-session-row-script-sess-resend', 'Cancel then resend')
 
     // q-0 streams → stop → cancelled settles.
     await chat.send('第一条（将被取消）')
@@ -136,8 +148,7 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     test.setTimeout(60_000)
     const chat = new ChatPage(page)
     await loadChatScript(page, 'cancel-approval-wait', test.info())
-    await page.getByTestId('desktop-session-row-script-sess-cancel-approval').click()
-    await expect(page.getByRole('heading', { name: 'Cancel approval wait' })).toBeVisible({ timeout: 10_000 })
+    await openSession(page, 'desktop-session-row-script-sess-cancel-approval', 'Cancel approval wait')
 
     await chat.send('删掉临时目录')
     const dialog = page.getByRole('alertdialog')
@@ -174,8 +185,7 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     test.setTimeout(90_000)
     const chat = new ChatPage(page)
     await loadChatScript(page, 'edit-rewind', test.info())
-    await page.getByTestId('desktop-session-row-script-sess-edit').click()
-    await expect(page.getByRole('heading', { name: 'Edit and rewind' })).toBeVisible({ timeout: 10_000 })
+    await openSession(page, 'desktop-session-row-script-sess-edit', 'Edit and rewind')
     await expect(chat.bubbles()).toHaveCount(4)
 
     // Tier 1: editing → Escape exits the edit, nothing is cancelled.
@@ -199,7 +209,14 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
 
   // ── 6. steer 竞态：15s 超时还稿 ───────────────────────────────────────
   test('6. steer whose cancel never settles hands the draft back after 15s with a notice', async ({ page }) => {
-    test.setTimeout(60_000)
+    // Budget math (CI-hardened): fill+press actionability ≈2s under load,
+    // then useSteerSend's REAL window.setTimeout(15s) (useSteerSend.ts:70)
+    // — a page-side timer that can fire late by seconds on a starved
+    // 2-core runner — then the restored draft + toast mount in the same
+    // callback commit. 90s ceiling = those waits plus the 60s poll window
+    // below, with slack; the toast assert rides right behind the poll, so
+    // its age is ~0 when reached.
+    test.setTimeout(90_000)
     const chat = new ChatPage(page)
     // first-chat: one quick scripted turn. After it is consumed, further
     // sends fall through to the default handler (no events) — a run that
@@ -218,15 +235,18 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await chat.composer().fill('加急（超时还稿）')
     await chat.composer().press('Control+Enter')
     await expect(chat.composer()).toHaveValue('')
-    // CI fix (job 110627367229): the persistent OUTCOME is asserted first —
-    // onSendRejected restores the draft, and the composer value survives —
-    // with a window that tolerates a late fire on a loaded runner. The
-    // notice toast rides the SAME callback (it mounts in that commit), so
-    // by the time the composer assert passes the toast is at age ~0 and a
-    // fresh window cannot miss it; its sonner lifetime is ~4s, so the
-    // old order (polling for the toast from t+0 with 20s) raced a slow
-    // runner instead.
-    await expect(chat.composer()).toHaveValue('加急（超时还稿）', { timeout: 35_000 })
+    // CI fix (job 110627367229, then 110656923971's 35s toHaveValue miss):
+    // the persistent OUTCOME is polled with expect.poll — the composer
+    // value flips exactly once when onSendRejected('timeout') fires, and
+    // polling (not a single-pass windowed match) cannot miss a late fire
+    // on a loaded runner. The notice toast rides the SAME callback (it
+    // mounts in that commit), so by the time the poll passes the toast is
+    // at age ~0 and a fresh window cannot miss it; its sonner lifetime is
+    // ~4s, so the original order (polling for the toast from t+0 with 20s)
+    // was the only racy variant.
+    await expect
+      .poll(async () => chat.composer().inputValue(), { timeout: 60_000, interval: 250 })
+      .toBe('加急（超时还稿）')
     const toast = page.locator('[data-sonner-toast]').filter({ hasText: 'Steered message could not be delivered' })
     await expect(toast).toBeVisible({ timeout: 20_000 })
     await expectNoConsoleErrors(page)
@@ -237,8 +257,7 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     test.setTimeout(60_000)
     const chat = new ChatPage(page)
     await loadChatScript(page, 'budget-exceeded', test.info())
-    await page.getByTestId('desktop-session-row-script-sess-budget').click()
-    await expect(page.getByRole('heading', { name: 'Over budget' })).toBeVisible({ timeout: 10_000 })
+    await openSession(page, 'desktop-session-row-script-sess-budget', 'Over budget')
 
     // The banner is already up (seed re-derivation) when the run starts.
     // Exceeded-only body suffix — variant anchor (see chat-script.budget
@@ -287,14 +306,12 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     test.setTimeout(60_000)
     const chat = new ChatPage(page)
     await loadChatScript(page, 'cancel-background', test.info())
-    await page.getByTestId('desktop-session-row-script-sess-bg-a').click()
-    await expect(page.getByRole('heading', { name: 'Background A' })).toBeVisible({ timeout: 10_000 })
+    await openSession(page, 'desktop-session-row-script-sess-bg-a', 'Background A')
     await chat.send('A 的长任务')
     await chat.expectStreamingCursor()
 
     // Switch to B: A keeps streaming in the background, nothing bleeds.
-    await page.getByTestId('desktop-session-row-script-sess-bg-b').click()
-    await expect(page.getByRole('heading', { name: 'Foreground B' })).toBeVisible({ timeout: 10_000 })
+    await openSession(page, 'desktop-session-row-script-sess-bg-b', 'Foreground B')
     await expect(page.getByText('后台一', { exact: true })).toHaveCount(0)
     await expect(chat.stopButton()).toHaveCount(0)
 
@@ -310,8 +327,7 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     // Back to A: switching reloads the seeded conversation (the pre-switch
     // optimistic bubble does not survive a round trip), and the cancelled
     // run left no residue — no cursor, no assistant bubble.
-    await page.getByTestId('desktop-session-row-script-sess-bg-a').click()
-    await expect(page.getByRole('heading', { name: 'Background A' })).toBeVisible({ timeout: 10_000 })
+    await openSession(page, 'desktop-session-row-script-sess-bg-a', 'Background A')
     await expect(chat.streamingCursor()).toHaveCount(0)
     await expect(page.locator('[data-tool-name]')).toHaveCount(0)
     await expectNoConsoleErrors(page)

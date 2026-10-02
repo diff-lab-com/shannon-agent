@@ -30,8 +30,12 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
 
     // Open the seeded session: the banner re-derives from the persisted pair
     // (get_session_budget 5 / get_session_usage 6.4) without any event.
-    await page.getByTestId('desktop-session-row-script-sess-budget').click()
-    await expect(page.getByRole('heading', { name: 'Over budget' })).toBeVisible({ timeout: 10_000 })
+    // Same row-click-swallow guard as cancel-matrix's openSession — a click
+    // landing during hydration switches nothing; retry until it does.
+    await expect(async () => {
+      await page.getByTestId('desktop-session-row-script-sess-budget').click()
+      await expect(page.getByRole('heading', { name: 'Over budget' })).toBeVisible()
+    }).toPass({ timeout: 15_000 })
 
     // Red exceeded banner with the frozen three actions. VARIANT ANCHOR
     // (CI fix): the $-body text alone is ambiguous — budget.warning.body and
@@ -51,30 +55,67 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     await expect(banner).toBeVisible({ timeout: 15_000 })
     await expect(banner.getByText(/\$6\.40 of \$5\.00 used/)).toBeVisible({ timeout: 15_000 })
 
-    // The three frozen actions. CI incident 110627367229 (two runs, every
-    // retry): the banner + body stood for the full window while the
-    // ROLE-based button query ran empty — so the actions pair DOM-first
-    // (the buttons are inseparable JSX from the body they follow), and ONE
-    // role-based a11y terminal check is kept below, wrapped in a
-    // self-healing toPass that dumps pruning-source evidence
-    // ([aria-modal]/[inert]/[aria-hidden]) into the log for as long as the
-    // mismatch lasts.
+    // The three frozen actions. CI incidents 110627367229 (two runs, every
+    // retry) AND 110656923971 (which also dropped the DOM-anchored pair
+    // below): the banner + body stood for the full window while the button
+    // queries ran empty — so BOTH assertion paths now run inside a
+    // self-healing toPass that dumps forensic evidence into the log for as
+    // long as the mismatch lasts: [role=alert] count + each alert's
+    // outerHTML head, every dialog's open/aria-modal state (the S-3
+    // a11y-pruning source family), and the total live button count. If the
+    // next CI run goes red, this dump must identify the on-page state
+    // directly — no more blind retries.
+    let lastDumpAt = 0
+    const dumpBannerDiagnosticsNow = async (path: string): Promise<void> => {
+      const evidence = await page.evaluate(() => {
+        const alerts = [...document.querySelectorAll('[role="alert"]')]
+        const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')]
+        return {
+          alertCount: alerts.length,
+          alerts: alerts.map((a) => a.outerHTML.slice(0, 300)),
+          buttonsTotal: document.querySelectorAll('button').length,
+          dialogs: dialogs.map((d) => ({
+            label: d.getAttribute('aria-label') ?? d.getAttribute('data-testid') ?? d.tagName.toLowerCase(),
+            ariaModal: d.getAttribute('aria-modal'),
+            // offsetParent null = hidden (closed dialogs unmount entirely,
+            // so "in DOM" already means open for this UI).
+            connected: d.isConnected && d.offsetParent !== null,
+          })),
+          pruners: [...document.querySelectorAll('[aria-modal="true"], [inert], [aria-hidden="true"]')]
+            .map((e) => `${e.tagName.toLowerCase()}[${e.getAttribute('aria-label') ?? e.getAttribute('data-testid') ?? (e.getAttribute('class') ?? '').split(' ')[0]}]`)
+            .slice(0, 12),
+        }
+      })
+      // eslint-disable-next-line no-console
+      console.info(`[budget-dom] assertion path="${path}" mismatch persists — on-page state:`, JSON.stringify(evidence))
+    }
+    // Rate-limit: toPass re-runs its body several times a second for up to
+    // 30s — one dump per second is forensics, sixty is log flood.
+    const dumpBannerDiagnostics = (path: string): Promise<void> | undefined => {
+      if (Date.now() - lastDumpAt < 1000) return undefined
+      lastDumpAt = Date.now()
+      return dumpBannerDiagnosticsNow(path)
+    }
+
     const actionButtons = banner.locator('button')
-    await expect(actionButtons.filter({ hasText: 'Continue (ignore once)' })).toBeVisible({ timeout: 15_000 })
-    await expect(actionButtons.filter({ hasText: 'Raise budget…' })).toBeVisible({ timeout: 15_000 })
-    await expect(actionButtons.filter({ hasText: 'Stop' })).toBeVisible({ timeout: 15_000 })
+    await expect(async () => {
+      const missing: string[] = []
+      for (const name of ['Continue (ignore once)', 'Raise budget…', 'Stop']) {
+        if ((await actionButtons.filter({ hasText: name }).count()) === 0) missing.push(name)
+      }
+      if (missing.length > 0) {
+        await dumpBannerDiagnostics(`dom:${missing.join('|')}`)
+        throw new Error(`action buttons absent from the banner DOM: ${missing.join(', ')}`)
+      }
+      for (const name of ['Continue (ignore once)', 'Raise budget…', 'Stop']) {
+        await expect(actionButtons.filter({ hasText: name }).first()).toBeVisible()
+      }
+    }).toPass({ timeout: 30_000 })
 
     await expect(async () => {
       const roleButton = banner.getByRole('button', { name: 'Continue (ignore once)' })
       if ((await roleButton.count()) === 0) {
-        const evidence = await page.evaluate(() => ({
-          alertHtml: document.querySelector('[role="alert"]')?.outerHTML.slice(0, 500) ?? null,
-          pruners: [...document.querySelectorAll('[aria-modal="true"], [inert], [aria-hidden="true"]')]
-            .map(e => `${e.tagName.toLowerCase()}[${e.getAttribute('aria-label') ?? e.getAttribute('data-testid') ?? (e.getAttribute('class') ?? '').split(' ')[0]}]`)
-            .slice(0, 12),
-        }))
-        // eslint-disable-next-line no-console
-        console.info('[budget-a11y] role query empty while the DOM anchor stands:', JSON.stringify(evidence))
+        await dumpBannerDiagnostics('role:Continue (ignore once)')
       }
       await expect(roleButton).toBeVisible()
     }).toPass({ timeout: 30_000 })
