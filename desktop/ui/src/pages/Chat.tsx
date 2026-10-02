@@ -65,14 +65,17 @@ function readDraft(sessionId: string): { text: string; attachments: string[] } |
   } catch { return null }
 }
 
-function writeDraft(sessionId: string, text: string, attachments: string[]): void {
+function writeDraft(sessionId: string, text: string, attachments: string[]): 'saved' | 'oversize' | 'failed' {
   try {
     const payload = JSON.stringify({ text, attachments, updatedAt: Date.now() })
     // Size cap: a runaway draft must not crowd the quota for the dock's
-    // persisted keys. Oversized drafts simply stay in-memory.
-    if (payload.length > DRAFT_MAX_BYTES) return
+    // persisted keys. Oversized drafts simply stay in-memory — A-21 fix:
+    // the skip used to be silent; the caller now warns (console + a
+    // one-shot toast) instead of letting a reload eat the text unnoticed.
+    if (payload.length > DRAFT_MAX_BYTES) return 'oversize'
     localStorage.setItem(draftKey(sessionId), payload)
-  } catch { /* quota / private mode — drafts are best-effort */ }
+    return 'saved'
+  } catch { return 'failed' /* quota / private mode — drafts are best-effort */ }
 }
 
 function clearDraft(sessionId: string): void {
@@ -171,14 +174,28 @@ export default function Chat() {
   // persists per session under `shannon.draft.<id>`: debounced write while
   // typing, synchronous flush on switch, cleared when emptied (send).
   const visibleSessionId = windowSessionId ?? currentSessionId
+  // A-21 fix: an oversized draft silently never reached localStorage — the
+  // user found out only when a reload ate the text. Every skipped write now
+  // console.warns and a one-shot toast (once per mount — the debounced
+  // writer would otherwise nag on every keystroke past the cap) tells the
+  // user the draft is window-bound. The input itself is never blocked: the
+  // draft keeps living in the composer state.
+  const oversizeDraftToastedRef = useRef(false)
+  const persistDraft = useCallback((sessionId: string, text: string, attachments: string[]) => {
+    if (writeDraft(sessionId, text, attachments) !== 'oversize') return
+    console.warn(`[Chat] draft for session ${sessionId} exceeds the ${Math.round(DRAFT_MAX_BYTES / 1024)}KB persistence cap — kept in memory only, lost on reload`)
+    if (oversizeDraftToastedRef.current) return
+    oversizeDraftToastedRef.current = true
+    toast.warning(t('chat.draft.oversize'))
+  }, [t])
   useEffect(() => {
     if (!visibleSessionId) return
     const id = window.setTimeout(() => {
       if (!input.trim() && attachedFiles.length === 0) clearDraft(visibleSessionId)
-      else writeDraft(visibleSessionId, input, attachedFiles)
+      else persistDraft(visibleSessionId, input, attachedFiles)
     }, DRAFT_DEBOUNCE_MS)
     return () => window.clearTimeout(id)
-  }, [input, attachedFiles, visibleSessionId])
+  }, [input, attachedFiles, visibleSessionId, persistDraft])
 
   // ── B1 §4-8: message edit (composer-based) ─────────────────────────────
   // One message editable at a time; the composer is prefilled and a banner
@@ -226,7 +243,7 @@ export default function Chat() {
     // would permanently overwrite the draft with the edit prefill.
     if (previousId) {
       const prev = editing ? editing.draft : { text: input, attachments: attachedFiles }
-      writeDraft(previousId, prev.text, prev.attachments)
+      persistDraft(previousId, prev.text, prev.attachments)
     }
     const draft = visibleSessionId ? readDraft(visibleSessionId) : null
     setInput(draft?.text ?? '')

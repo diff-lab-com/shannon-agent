@@ -1768,6 +1768,7 @@
   "chat.input.queue.title": "予約送信 — 現在のターン終了後に送信されます",
   "chat.input.steer.aria": "今すぐ送信（現在のターンに割り込み）",
   "chat.input.steer.title": "今すぐ送信 — 現在のターンを中断してすぐ送信（Ctrl+Enter）",
+  "chat.draft.oversize": "下書きが64KBの保存上限を超えています——このウィンドウ内にのみ保持され、再読み込みで失われます",
   "chat.steer.timeout": "割り込みメッセージを送信できませんでした — 入力欄に戻しました",
   "chat.input.placeholder": "Shannon に何でも聞いてください…",
   "chat.input.stop.aria": "生成を停止",

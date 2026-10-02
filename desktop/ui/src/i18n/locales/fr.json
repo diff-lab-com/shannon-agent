@@ -1768,6 +1768,7 @@
   "chat.input.queue.title": "En file — sera envoyé après la fin du tour actuel",
   "chat.input.steer.aria": "Envoyer maintenant (interrompre le tour en cours)",
   "chat.input.steer.title": "Envoyer maintenant — interrompt le tour en cours et envoie immédiatement (Ctrl+Entrée)",
+  "chat.draft.oversize": "Le brouillon dépasse la limite de persistance de 64 Ko — conservé uniquement dans cette fenêtre ; il sera perdu au rechargement",
   "chat.steer.timeout": "Le message d'interruption n'a pas pu être délivré — restauré dans le champ de saisie",
   "chat.input.placeholder": "Demande ce que tu veux à Shannon...",
   "chat.input.stop.aria": "Arrêter la génération",

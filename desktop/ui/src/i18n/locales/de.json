@@ -1768,6 +1768,7 @@
   "chat.input.queue.title": "Einreihen — wird nach dem aktuellen Zug gesendet",
   "chat.input.steer.aria": "Sofort senden (aktuellen Zug unterbrechen)",
   "chat.input.steer.title": "Sofort senden — unterbricht den aktuellen Zug und sendet sofort (Ctrl+Enter)",
+  "chat.draft.oversize": "Entwurf überschreitet das 64KB-Speicherlimit — nur in diesem Fenster vorhanden und geht beim Neuladen verloren",
   "chat.steer.timeout": "Unterbrechungsnachricht konnte nicht zugestellt werden — ins Eingabefeld zurückgelegt",
   "chat.input.placeholder": "Frag Shannon alles...",
   "chat.input.stop.aria": "Generierung stoppen",

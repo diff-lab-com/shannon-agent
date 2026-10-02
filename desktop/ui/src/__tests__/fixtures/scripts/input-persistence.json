@@ -1,6 +1,6 @@
 {
   "name": "input-persistence",
-  "description": "输入缓存锚点 — 双会话草稿隔离/flush/清空/重启恢复 + 队列 parked/重启丢失（A-20/A-21 锚点）",
+  "description": "输入缓存锚点 — 双会话草稿隔离/flush/清空/重启恢复 + >64KB warn+toast（A-21 已修复） + 队列 parked/重启丢失（A-20 锚点）",
   "seed": {
     "config": {
       "hasKey": true

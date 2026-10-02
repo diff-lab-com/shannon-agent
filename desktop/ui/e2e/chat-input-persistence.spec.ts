@@ -1,7 +1,9 @@
 // R3 §4.2 — 输入缓存锚点（chat-input-persistence）。
 //
 // 草稿（shannon.draft.<id>，300ms 防抖 + 切换同步 flush）：跨会话隔离、
-// 发送清空、重启（reload）恢复、>64KB 仅内存（knownIssue A-21）。
+// 发送清空、重启（reload）恢复、>64KB 仅内存（A-21 已修复：仍不落盘，
+// 但不再静默——console.warn + 一次性 toast，不阻塞输入；断言翻转为
+// 检查提示出现，重启后仍为空输入框）。
 // 队列（纯内存，AppContext PROMPT_QUEUE_*）：跨会话 parked 返回仍在、
 // 重启丢失（knownIssue A-20 —— reload 后队列蒸发）。
 // cap/排序/移除/drain 顺序在 journey #9 的 spec；本文件只锚「存续策略」。
@@ -91,13 +93,15 @@ test.describe('scripted chat backend — input persistence (§4.2)', () => {
     await expectNoConsoleErrors(page)
   })
 
-  test('drafts over 64KB stay in memory only (A-21 anchored) — gone after reload', async ({ page }) => {
+  // A-21 fixed (flip): an oversized draft is still not persisted (the 64KB
+  // localStorage cap), but the skip is no longer silent — the composer warns
+  // on console and raises exactly one toast, without blocking the input.
+  // The restart anchor below is unchanged: a reload comes back empty.
+  test('drafts over 64KB stay in memory only, with a one-shot warning (A-21 fixed) — gone after reload', async ({ page }) => {
     test.setTimeout(60_000)
-    annotateKnownIssues(test.info(), {
-      'A-21': 'Drafts over the 64KB payload cap are silently NOT persisted '
-        + '(Chat.tsx writeDraft size guard) — memory-only, no user-facing hint. Current '
-        + 'behavior asserted below (no localStorage key, empty composer after reload); '
-        + 'flip when the product decides on a hint or a chunked write.',
+    const consoleWarnings: string[] = []
+    page.on('console', msg => {
+      if (msg.type() === 'warning') consoleWarnings.push(msg.text())
     })
     await loadChatScript(page, 'input-persistence', test.info())
     const chat = await openDraftSession(page, ROW_A, 'Drafts A')
@@ -106,6 +110,11 @@ test.describe('scripted chat backend — input persistence (§4.2)', () => {
     // past any write attempt, then assert the key never appeared.
     await page.waitForTimeout(900)
     expect(await page.evaluate(k => localStorage.getItem(k), DRAFT_A)).toBeNull()
+    // A-21: the skip surfaces — the composer keeps the text and the user is
+    // told the draft is window-bound (one toast, no re-notify spam).
+    await expect(chat.composer()).toHaveValue(/大/)
+    await expect(page.getByText(/64KB persistence cap/)).toBeVisible()
+    expect(consoleWarnings.filter(w => w.includes('persistence cap'))).toHaveLength(1)
     await page.reload()
     await openDraftSession(page, ROW_A, 'Drafts A')
     await expect(chat.composer()).toHaveValue('')

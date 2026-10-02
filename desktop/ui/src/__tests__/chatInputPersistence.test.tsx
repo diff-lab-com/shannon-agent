@@ -6,7 +6,8 @@
 //   - 切换 flush 竞态：防抖窗口内切走，旧会话草稿必须已落盘（R2-W1 丢稿
 //     修复的回归锚点，finding: composer-draft）；
 //   - 发送清空草稿；
-//   - >64KB 仅内存（A-21）。
+//   - >64KB 仅内存 + 一次性 warn/toast 提示（A-21 已修复：仍不落盘，
+//     但不再静默——console.warn 每次提示、toast 每挂载一次）。
 // 队列（A-20 重启丢失）是 AppContext 内存态，重启语义只能在浏览器层锚
 // ——见 e2e spec；drain/cap/排序已由 journey #9 双层覆盖。
 //
@@ -17,6 +18,11 @@ import { MemoryRouter } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
 import Chat from '@/pages/Chat'
+
+const { toastMock } = vi.hoisted(() => ({
+  toastMock: { error: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
+}))
+vi.mock('sonner', () => ({ toast: toastMock }))
 
 const ctx = vi.hoisted(() => ({
   messages: [] as any[],
@@ -144,13 +150,34 @@ describe('input persistence L1 (§4.2) — per-session drafts (Chat.tsx)', () =>
     expect(localStorage.getItem(keyOf(SESSION_A))).toBeNull()
   })
 
-  it('drafts over the 64KB payload cap stay memory-only (A-21 anchored)', async () => {
-    renderOn(SESSION_A)
-    fireEvent.change(composer(), { target: { value: '大'.repeat(40_000) + '字'.repeat(30_000) } })
-    // Past the debounce: the write ran — and skipped the oversized payload.
-    await act(async () => { await new Promise(r => setTimeout(r, 400)) })
-    expect(localStorage.getItem(keyOf(SESSION_A))).toBeNull()
-    // The in-memory composer still holds it (no data loss while mounted).
-    expect(composer().value.length).toBe(70_000)
+  // A-21 flipped: an oversized draft is still not persisted (the 64KB cap
+  // protects the localStorage quota; the not-persisted behavior stays pinned
+  // here and by the e2e restart anchor), but the skip is no longer SILENT —
+  // every skipped write console.warns and the user gets exactly one toast
+  // per mount. The input itself is never blocked: the draft keeps living in
+  // the composer.
+  it('drafts over the 64KB payload cap stay memory-only and warn once via toast (A-21 fixed)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      renderOn(SESSION_A)
+      fireEvent.change(composer(), { target: { value: '大'.repeat(40_000) + '字'.repeat(30_000) } })
+      // Past the debounce: the write ran — and skipped the oversized payload.
+      await act(async () => { await new Promise(r => setTimeout(r, 400)) })
+      expect(localStorage.getItem(keyOf(SESSION_A))).toBeNull()
+      // The in-memory composer still holds it (no data loss while mounted).
+      expect(composer().value.length).toBe(70_000)
+      // A-21: the skip surfaces — one warn per skipped write, one toast.
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      expect(toastMock.warning).toHaveBeenCalledTimes(1)
+
+      // Another oversized debounced write warns again but never re-toasts.
+      fireEvent.change(composer(), { target: { value: '大'.repeat(40_000) + '字'.repeat(30_001) } })
+      await act(async () => { await new Promise(r => setTimeout(r, 400)) })
+      expect(composer().value.length).toBe(70_001)
+      expect(warnSpy).toHaveBeenCalledTimes(2)
+      expect(toastMock.warning).toHaveBeenCalledTimes(1)
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 })
