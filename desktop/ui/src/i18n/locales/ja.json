@@ -1751,6 +1751,7 @@
   "chat.attach.reason.noWorkingDir": "作業ディレクトリが未設定です — まず設定で選択してください",
   "chat.attach.reason.unsupportedType": "この画像形式はモデルに送信されません（対応: PNG、JPG、GIF、WebP）",
   "chat.attach.issue.tooltip": "送信時に拒否されます：{reason}",
+  "chat.attach.deferredParse.tooltip": "大きなファイル · 送信時に解析されます",
   "chat.attach.extraction.office": "{total} セクションを抽出し、先頭 {inlined} 件をインライン化",
   "chat.attach.extraction.pdfTruncated": "PDF は先頭 50 KiB のみインライン化 — モデルは抽出キャッシュから続きを読めます",
   "chat.attach.extraction.pdfFull": "PDF テキストを全文抽出してインライン化しました",

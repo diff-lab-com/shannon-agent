@@ -22,11 +22,18 @@ interface AttachmentChipProps {
    * the first 50 KiB — the model can read the rest"). Advisory, like `issue`.
    */
   extraction?: AttachmentExtractionReport
+  /**
+   * R7-③ threshold hybrid — parseable document over the large-file
+   * threshold: the preflight skipped the attach-time full parse, so instead
+   * of an extraction badge the chip shows the honest "large file — parsed on
+   * send" placeholder. The real badge lights from the send receipt.
+   */
+  deferredParse?: boolean
 }
 
 // B4 P2-11: the remove affordance is announced with the file's name; the
 // dead `size`/`formatSize` display (no consumer ever passed one) is gone.
-export function AttachmentChip({ path, onRemove, issue, extraction }: AttachmentChipProps) {
+export function AttachmentChip({ path, onRemove, issue, extraction, deferredParse }: AttachmentChipProps) {
   const intl = useIntl()
   const name = path.split(/[/\\]/).pop() || path
   const image = /\.(png|jpe?g|webp|gif)$/i.test(name)
@@ -60,6 +67,16 @@ export function AttachmentChip({ path, onRemove, issue, extraction }: Attachment
           className="material-symbols-outlined icon-sm text-tertiary shrink-0"
         >
           text_snippet
+        </span>
+      )}
+      {deferredParse && (
+        <span
+          data-testid="attachment-chip-deferred"
+          aria-label={intl.formatMessage({ id: 'chat.attach.deferredParse.tooltip' })}
+          title={intl.formatMessage({ id: 'chat.attach.deferredParse.tooltip' })}
+          className="material-symbols-outlined icon-sm text-on-surface-variant shrink-0"
+        >
+          hourglass_top
         </span>
       )}
       <span className="truncate">{name}</span>

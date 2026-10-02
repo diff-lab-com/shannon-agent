@@ -1751,6 +1751,7 @@
   "chat.attach.reason.noWorkingDir": "尚未設定工作目錄 — 請先在設定中選擇一個",
   "chat.attach.reason.unsupportedType": "該圖片格式不會傳送給模型（支援：PNG、JPG、GIF、WebP）",
   "chat.attach.issue.tooltip": "送出時將被拒絕：{reason}",
+  "chat.attach.deferredParse.tooltip": "大檔案 · 將於傳送時解析",
   "chat.attach.extraction.office": "已擷取 {total} 段，內嵌前 {inlined} 段",
   "chat.attach.extraction.pdfTruncated": "PDF 只讀前 50KiB，模型可續讀快取全文",
   "chat.attach.extraction.pdfFull": "PDF 文字已全文擷取並內嵌",

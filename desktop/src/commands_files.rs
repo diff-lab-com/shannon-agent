@@ -17,6 +17,29 @@ use crate::resolve_write_target_in_working_dir;
 const MAX_ATTACHMENT_SIZE: u64 = 25 * 1024 * 1024;
 const MAX_ATTACHMENT_COUNT: usize = 10;
 
+/// R7-③ threshold hybrid — parseable documents (PDF / office) heavier than
+/// this are NOT fully parsed by the attach preflight; their parse is deferred
+/// to the send pipeline (which already parses every PDF/office attachment
+/// unconditionally, see `send_message`). Size only — no page counting, which
+/// would need exactly the fake-lightweight parse this threshold exists to
+/// avoid. Rationale: attaching a 100 MiB PDF used to fire the full
+/// fire-and-forget parse immediately (a CPU spike with no timeout and no
+/// visible result), AND the send parsed it again — the attach-time pass was
+/// pure duplicated work (the bulk of the R1 I1 double-parse debt). Below the
+/// threshold nothing changes: small documents keep the attach-time parse and
+/// its preflight badge.
+const LARGE_DOCUMENT_PARSE_THRESHOLD: u64 = 10 * 1024 * 1024;
+
+/// R7-③ predicate: `true` when `path` is a parseable document (PDF or office
+/// format) over the private `LARGE_DOCUMENT_PARSE_THRESHOLD` — the size class whose
+/// attach-time full parse is skipped in favor of the send-time parse. Pure
+/// over (extension, length) so the threshold boundary is unit-testable.
+fn defers_document_parse(path: &Path, len: u64) -> bool {
+    let parseable_kind = crate::document_parse::extension_lowercase(path)
+        .is_some_and(|e| e == "pdf" || crate::document_parse::is_office_document(path));
+    parseable_kind && len > LARGE_DOCUMENT_PARSE_THRESHOLD
+}
+
 /// Prefix + wording of the placeholder returned when PDF text extraction is
 /// unavailable. Kept next to the builder so the two cannot drift.
 const PDF_UNAVAILABLE_PREFIX: &str = "[PDF text extraction unavailable: ";
@@ -259,7 +282,10 @@ pub async fn read_attachments(
 /// send pipeline stamps onto `FileAttachment`s (only for parseable documents
 /// and only when the path passed the classification), so the composer chip
 /// can badge "extracted N sections, first M inlined" / "PDF truncates at
-/// 50 KiB" BEFORE the send. Best-effort: `None` for everything else.
+/// 50 KiB" BEFORE the send. Best-effort: `None` for everything else — and,
+/// since R7-③, also for large documents, where the parse is deferred to the
+/// send (`deferred_parse`) and the badge lights from the send receipt
+/// instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttachmentPathCheck {
     pub path: String,
@@ -268,6 +294,13 @@ pub struct AttachmentPathCheck {
     pub reason: Option<crate::commands::RejectedAttachmentReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extraction: Option<crate::commands::AttachmentExtractionReport>,
+    /// R7-③ threshold hybrid — a parseable, ok document over
+    /// the private `LARGE_DOCUMENT_PARSE_THRESHOLD`: the preflight skipped the
+    /// attach-time full parse, and the chip shows the honest "parsed on
+    /// send" placeholder instead of an extraction badge. Absent/false for
+    /// everything the preflight still parses at attach time.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deferred_parse: bool,
 }
 
 /// P0-3 preflight — classify attachment paths exactly the way the
@@ -282,29 +315,68 @@ pub struct AttachmentPathCheck {
 /// silently dropped. With no configured working directory the attachment
 /// domain is UNDEFINED — every path reports `no_working_dir` so the UI can
 /// point at Settings instead of pretending the files will be read.
+///
+/// R7-③ threshold hybrid (see the private `LARGE_DOCUMENT_PARSE_THRESHOLD`): the
+/// attach-time full parse below this doc comment used to run for EVERY
+/// parseable document — a 100 MiB PDF fired the whole
+/// pdftotext/office pipeline fire-and-forget the moment it was attached,
+/// with no timeout and a badge that could be minutes away, and the send then
+/// parsed the same file again (the double-parse debt R1 I1). Above the
+/// threshold the preflight now only runs the cheap size/type/working-dir
+/// classification, marks the check `deferred_parse`, and the chip shows the
+/// honest "large file — parsed on send" placeholder; the send pipeline's
+/// existing unconditional PDF/office parse injects the text and the send
+/// receipt lights the real extraction badge. Below the threshold the
+/// behavior is exactly as before.
 #[tauri::command]
 pub async fn check_attachment_paths(
     state: tauri::State<'_, AppState>,
     paths: Vec<String>,
 ) -> Result<Vec<AttachmentPathCheck>, String> {
     let configured = state.desktop_config.read().await.working_dir.clone();
-    let mut checks = check_attachment_paths_inner(configured, paths);
-    // G3b P1-4 — best-effort extraction summaries for the parseable paths
-    // that passed classification. Runs on the blocking pool (pdftotext
-    // spawn + container parse); a failure or a slow parse can only delay
-    // this advisory response, never fail it: the command keeps its
-    // "always Ok" contract and un-summarized paths degrade to `None`.
-    let parseable: Vec<(usize, PathBuf)> = checks
-        .iter()
-        .enumerate()
-        .filter(|(_, check)| {
-            let p = std::path::Path::new(&check.path);
-            check.ok
-                && crate::document_parse::extension_lowercase(p)
-                    .is_some_and(|e| e == "pdf" || crate::document_parse::is_office_document(p))
-        })
-        .map(|(i, check)| (i, PathBuf::from(&check.path)))
-        .collect();
+    Ok(check_attachments_with_extraction(configured, paths).await)
+}
+
+/// Body of [`check_attachment_paths`] minus the Tauri state: classification,
+/// then best-effort extraction summaries for the small parseable paths, with
+/// large documents deferred (`deferred_parse`) instead of parsed. Split out
+/// so tests can drive the whole preflight — including the threshold split —
+/// without mocking `tauri::State`.
+///
+/// G3b P1-4 — extraction summaries run on the blocking pool (pdftotext
+/// spawn + container parse); a failure or a slow parse can only delay this
+/// advisory response, never fail it: the command keeps its "always Ok"
+/// contract and un-summarized paths degrade to `None`.
+async fn check_attachments_with_extraction(
+    configured_working_dir: Option<String>,
+    paths: Vec<String>,
+) -> Vec<AttachmentPathCheck> {
+    let mut checks = check_attachment_paths_inner(configured_working_dir, paths);
+    // Split the parseable ok paths by the R7-③ threshold: small documents
+    // get the attach-time extraction summary (unchanged), large ones are
+    // only MARKED — deferring is what keeps a 100 MiB attach from spiking
+    // the CPU and what kills the large-file half of the double parse.
+    let mut parseable: Vec<(usize, PathBuf)> = Vec::new();
+    for (i, check) in checks.iter_mut().enumerate() {
+        if !check.ok {
+            continue;
+        }
+        let p = Path::new(&check.path);
+        let is_parseable_kind = crate::document_parse::extension_lowercase(p)
+            .is_some_and(|e| e == "pdf" || crate::document_parse::is_office_document(p));
+        if !is_parseable_kind {
+            continue;
+        }
+        // The path just passed classification (which stats it), so a failed
+        // re-stat here is transient at worst; size 0 routes it to the small
+        // side where `extraction_report_for_path` degrades to `None` anyway.
+        let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        if defers_document_parse(p, size) {
+            check.deferred_parse = true;
+        } else {
+            parseable.push((i, PathBuf::from(&check.path)));
+        }
+    }
     if !parseable.is_empty() {
         let reports = tokio::task::spawn_blocking(move || {
             parseable
@@ -320,7 +392,7 @@ pub async fn check_attachment_paths(
             }
         }
     }
-    Ok(checks)
+    checks
 }
 
 /// G3b P1-4 — the per-file extraction summary for one parseable attachment
@@ -482,6 +554,7 @@ pub(crate) fn check_attachment_paths_inner(
                 ok: false,
                 reason: Some(crate::commands::RejectedAttachmentReason::NoWorkingDir),
                 extraction: None,
+                deferred_parse: false,
             })
             .collect();
     };
@@ -496,12 +569,14 @@ pub(crate) fn check_attachment_paths_inner(
                     ok: true,
                     reason: None,
                     extraction: None,
+                    deferred_parse: false,
                 },
                 Some(reason) => AttachmentPathCheck {
                     path,
                     ok: false,
                     reason: Some(reason),
                     extraction: None,
+                    deferred_parse: false,
                 },
             }
         })
@@ -1665,6 +1740,160 @@ mod tests {
         assert!(extraction_report_for_path(&txt).is_none());
         // Missing file -> None (metadata stat fails).
         assert!(extraction_report_for_path(&dir.path().join("gone.pdf")).is_none());
+    }
+
+    // ── R7-③: threshold hybrid — large documents defer the full parse ──
+    // Size-only threshold (no page counting, which would need exactly the
+    // fake-lightweight parse this exists to avoid). Strictly over the
+    // threshold: a file AT the threshold still parses at attach time.
+
+    #[test]
+    fn defers_document_parse_threshold_is_size_only_and_strictly_over() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf = dir.path().join("doc.pdf");
+        let docx = dir.path().join("sheet.docx");
+        let csv = dir.path().join("data.csv");
+        let png = dir.path().join("pic.png");
+
+        // At the threshold: NOT deferred (small-path behavior unchanged).
+        assert!(!defers_document_parse(&pdf, LARGE_DOCUMENT_PARSE_THRESHOLD));
+        // One byte over: deferred — PDF and office alike.
+        assert!(defers_document_parse(
+            &pdf,
+            LARGE_DOCUMENT_PARSE_THRESHOLD + 1
+        ));
+        assert!(defers_document_parse(
+            &docx,
+            LARGE_DOCUMENT_PARSE_THRESHOLD + 1
+        ));
+        assert!(defers_document_parse(
+            &csv,
+            LARGE_DOCUMENT_PARSE_THRESHOLD * 2
+        ));
+        // Well under: not deferred.
+        assert!(!defers_document_parse(&docx, 1024));
+        // Non-parseable kinds are never deferred, however large.
+        assert!(!defers_document_parse(&png, u64::MAX));
+        // Extension matching is case-insensitive, same as the kind check.
+        let big_pdf = dir.path().join("DOC.PDF");
+        assert!(defers_document_parse(
+            &big_pdf,
+            LARGE_DOCUMENT_PARSE_THRESHOLD + 1
+        ));
+    }
+
+    /// Sparse file of exactly `len` bytes (metadata size without the disk
+    /// write — the 10 MiB boundary cases stay instant).
+    fn sparse_file(dir: &Path, name: &str, len: u64) -> PathBuf {
+        let path = dir.join(name);
+        let f = std::fs::File::create(&path).expect("create");
+        f.set_len(len).expect("set_len");
+        path
+    }
+
+    #[tokio::test]
+    async fn preflight_defers_large_documents_parse_and_summarizes_small_ones() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let big_pdf = sparse_file(dir.path(), "big.pdf", LARGE_DOCUMENT_PARSE_THRESHOLD + 1);
+        let big_docx = sparse_file(dir.path(), "big.docx", LARGE_DOCUMENT_PARSE_THRESHOLD + 1);
+        let small_docx = dir.path().join("small.docx");
+        std::fs::write(&small_docx, b"not a zip").unwrap();
+        let notes = dir.path().join("notes.txt");
+        std::fs::write(&notes, "plain").unwrap();
+
+        let checks = check_attachments_with_extraction(
+            Some(dir.path().to_string_lossy().into_owned()),
+            vec![
+                big_pdf.to_string_lossy().into_owned(),
+                big_docx.to_string_lossy().into_owned(),
+                small_docx.to_string_lossy().into_owned(),
+                notes.to_string_lossy().into_owned(),
+            ],
+        )
+        .await;
+
+        // Large PDF/office: classified ok, but the full parse entry
+        // (`extraction_report_for_path` — the pdftotext/pdfinfo/container
+        // spawn) was NOT invoked: `extraction` stays None and the check is
+        // marked `deferred_parse` so the chip can show the honest "parsed on
+        // send" placeholder.
+        assert!(checks[0].ok);
+        assert!(checks[0].deferred_parse, "big pdf must defer");
+        assert!(checks[0].extraction.is_none(), "big pdf must not parse");
+        assert!(checks[1].ok);
+        assert!(checks[1].deferred_parse, "big office doc must defer");
+        assert!(
+            checks[1].extraction.is_none(),
+            "big office doc must not parse"
+        );
+
+        // Small office document: unchanged small-file behavior — attach-time
+        // summary present, no defer marker.
+        assert!(checks[2].ok);
+        assert!(!checks[2].deferred_parse);
+        let report = checks[2].extraction.as_ref().expect("small docx parsed");
+        assert_eq!(report.kind, "docx");
+
+        // Non-parseable kinds: no badge, no defer marker either way.
+        assert!(checks[3].ok);
+        assert!(!checks[3].deferred_parse);
+        assert!(checks[3].extraction.is_none());
+    }
+
+    #[tokio::test]
+    async fn preflight_parses_document_exactly_at_the_threshold() {
+        // Boundary: AT the threshold the attach-time parse still runs — the
+        // extraction summary is populated and `deferred_parse` stays false.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let at_limit = sparse_file(dir.path(), "manual.pdf", LARGE_DOCUMENT_PARSE_THRESHOLD);
+
+        let checks = check_attachments_with_extraction(
+            Some(dir.path().to_string_lossy().into_owned()),
+            vec![at_limit.to_string_lossy().into_owned()],
+        )
+        .await;
+
+        assert!(checks[0].ok);
+        assert!(!checks[0].deferred_parse, "at-threshold is small-path");
+        let report = checks[0].extraction.as_ref().expect("pdf parsed at attach");
+        assert_eq!(report.kind, "pdf");
+        // A zero-filled "pdf" is not a real PDF — the parse runs but reports
+        // the failure placeholder honestly.
+        assert!(!report.extracted);
+    }
+
+    #[test]
+    fn attachment_path_check_deferred_flag_wire_shape() {
+        // The frontend reads the flag as the snake_case `deferred_parse` key
+        // (no camelCase transform on this command) and treats absence as
+        // false — pin both sides of the wire contract.
+        let deferred = AttachmentPathCheck {
+            path: "/tmp/big.pdf".into(),
+            ok: true,
+            reason: None,
+            extraction: None,
+            deferred_parse: true,
+        };
+        let json = serde_json::to_value(&deferred).unwrap();
+        assert_eq!(json["deferred_parse"], serde_json::Value::Bool(true));
+
+        let small = AttachmentPathCheck {
+            path: "/tmp/small.pdf".into(),
+            ok: true,
+            reason: None,
+            extraction: None,
+            deferred_parse: false,
+        };
+        let json = serde_json::to_value(&small).unwrap();
+        assert!(
+            json.get("deferred_parse").is_none(),
+            "false must omit the key, exactly like the other optional fields"
+        );
+        // Old payloads (and the mocked test payloads) without the key
+        // deserialize to `false`.
+        let back: AttachmentPathCheck =
+            serde_json::from_value(serde_json::json!({ "path": "/x.pdf", "ok": true })).unwrap();
+        assert!(!back.deferred_parse);
     }
 
     // ── G3b P1-6: save_pasted_image ─────────────────────────────────────

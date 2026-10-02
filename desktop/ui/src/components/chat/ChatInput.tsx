@@ -240,6 +240,11 @@ export default function ChatInput({
   // sections / PDF truncates at 50 KiB" is visible BEFORE the send. Same
   // lifecycle as the issue flags: advisory and pruned with the chips.
   const [pathReports, setPathReports] = useState<Record<string, AttachmentExtractionReport>>({})
+  // R7-③ threshold hybrid — paths the preflight deferred (large parseable
+  // documents): the chip shows the "parsed on send" placeholder instead of
+  // an extraction badge; the real badge lights from the send receipt. Same
+  // advisory lifecycle as the flags above.
+  const [deferredParsePaths, setDeferredParsePaths] = useState<Record<string, boolean>>({})
   useEffect(() => {
     // Prune issues for chips the parent removed (detach-all, edit restore).
     setPathIssues(prev => {
@@ -258,6 +263,16 @@ export default function ChatInput({
       let changed = false
       for (const [p, report] of Object.entries(prev)) {
         if (alive.has(p)) next[p] = report
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+    setDeferredParsePaths(prev => {
+      const alive = new Set(attachedFiles)
+      const next: typeof prev = {}
+      let changed = false
+      for (const p of Object.keys(prev)) {
+        if (alive.has(p)) next[p] = prev[p]
         else changed = true
       }
       return changed ? next : prev
@@ -506,6 +521,19 @@ export default function ChatInput({
           for (const c of checks) {
             if (!c || typeof c.path !== 'string') continue
             if (c.extraction) next[c.path] = c.extraction
+            else delete next[c.path]
+          }
+          return next
+        })
+        // R7-③ threshold hybrid — large parseable documents come back with
+        // `deferred_parse` and NO extraction: the chip shows the honest
+        // "parsed on send" placeholder until the send receipt lights the
+        // real badge.
+        setDeferredParsePaths(prev => {
+          const next = { ...prev }
+          for (const c of checks) {
+            if (!c || typeof c.path !== 'string') continue
+            if (c.deferred_parse) next[c.path] = true
             else delete next[c.path]
           }
           return next
@@ -1077,6 +1105,7 @@ export default function ChatInput({
                 path={path}
                 issue={pathIssues[path]}
                 extraction={pathReports[path]}
+                deferredParse={Boolean(deferredParsePaths[path])}
                 onRemove={() => onAttach(attachedFiles.filter((_, idx) => idx !== i))}
               />
             ))}

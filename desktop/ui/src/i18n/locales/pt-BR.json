@@ -1751,6 +1751,7 @@
   "chat.attach.reason.noWorkingDir": "nenhum diretório de trabalho definido — escolha um nas configurações primeiro",
   "chat.attach.reason.unsupportedType": "este formato de imagem não é enviado ao modelo (compatíveis: PNG, JPG, GIF, WebP)",
   "chat.attach.issue.tooltip": "Será recusado ao enviar: {reason}",
+  "chat.attach.deferredParse.tooltip": "Arquivo grande · será analisado ao enviar",
   "chat.attach.extraction.office": "{total} seções extraídas, primeiras {inlined} embutidas",
   "chat.attach.extraction.pdfTruncated": "O PDF embute apenas os primeiros 50 KiB — o modelo pode ler o restante no cache extraído",
   "chat.attach.extraction.pdfFull": "Texto do PDF totalmente extraído e embutido",

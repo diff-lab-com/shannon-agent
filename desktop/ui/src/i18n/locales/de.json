@@ -1751,6 +1751,7 @@
   "chat.attach.reason.noWorkingDir": "kein Arbeitsverzeichnis gesetzt — wähle zuerst eines in den Einstellungen",
   "chat.attach.reason.unsupportedType": "dieses Bildformat wird nicht an das Modell gesendet (unterstützt: PNG, JPG, GIF, WebP)",
   "chat.attach.issue.tooltip": "Wird beim Senden abgelehnt: {reason}",
+  "chat.attach.deferredParse.tooltip": "Große Datei · wird beim Senden analysiert",
   "chat.attach.extraction.office": "{total} Abschnitte extrahiert, erste {inlined} eingebettet",
   "chat.attach.extraction.pdfTruncated": "PDF bettet nur die ersten 50 KiB ein — das Modell kann den Rest aus dem Extrakt-Cache lesen",
   "chat.attach.extraction.pdfFull": "PDF-Text vollständig extrahiert und eingebettet",
