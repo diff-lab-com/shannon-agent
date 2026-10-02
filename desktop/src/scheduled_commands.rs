@@ -703,7 +703,9 @@ pub async fn update_scheduled_task(
         };
     }
     if let Some(enabled) = payload.enabled {
-        routine.enabled = enabled;
+        // R7-②: stamp `enabled_at` on a disabled→enabled update, same as a
+        // toggle.
+        routine.set_enabled(enabled);
     }
     if let Some(ts) = payload.expires_at {
         routine.expires_at = Some(ts_to_dt(ts));
@@ -788,7 +790,9 @@ pub async fn toggle_scheduled_task(
         .load(&id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("task not found: {id}"))?;
-    routine.enabled = enabled.unwrap_or(!routine.enabled);
+    // R7-②: the disabled→enabled transition stamps `enabled_at`, the zero
+    // point of the auto-pause failure streak — re-enabling clears it.
+    routine.set_enabled(enabled.unwrap_or(!routine.enabled));
     let enabled = routine.enabled;
     store.save(&routine).map_err(|e| e.to_string())?;
     Ok(enabled)
@@ -826,7 +830,9 @@ pub async fn trigger_task_now(
 /// Testable core of [`trigger_task_now`] (Tauri-state-free): fire an
 /// already-loaded routine through [`spawn_routine_run`] and shape the
 /// [`TriggerResponse`]. Spawn failures propagate as `Err` so the frontend
-/// shows the failure instead of toasting success.
+/// shows the failure instead of toasting success. Runs are tagged
+/// `run_now` (R7-①) — user-initiated, never counted by the auto-pause
+/// streak.
 pub(crate) async fn trigger_routine_with_deps<R: tauri::Runtime>(
     deps: &RoutineRunDeps,
     app: tauri::AppHandle<R>,
@@ -838,6 +844,7 @@ pub(crate) async fn trigger_routine_with_deps<R: tauri::Runtime>(
         routine.clone(),
         shannon_core::inbox_store::SOURCE_TRIGGER,
         None,
+        crate::inbox_commands::RunTrigger::RunNow,
     )
     .await?;
 
@@ -1059,6 +1066,8 @@ fn mirror_drained_run(
         // Drained scheduler tombstones never executed — no spend.
         cost_usd: None,
         token_usage: None,
+        // Tombstones are not terminal failures; the tag stays unset.
+        trigger: None,
     };
     if let Err(e) = inbox.import_run(&record) {
         tracing::warn!(
@@ -1196,13 +1205,15 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
         let Some(routine) = mgr.get(&d.task_id).cloned() else {
             continue;
         };
-        // 3. Spawn, then reconcile run ids.
+        // 3. Spawn, then reconcile run ids. Tagged `scheduled` (R7-①) —
+        // these are the only fires that advance the auto-pause streak.
         match spawn_routine_run(
             deps,
             app.clone(),
             routine,
             shannon_core::inbox_store::SOURCE_ROUTINE,
             None,
+            crate::inbox_commands::RunTrigger::Scheduled,
         )
         .await
         {

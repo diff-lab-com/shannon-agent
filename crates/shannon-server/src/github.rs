@@ -33,7 +33,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use shannon_core::github_triggers::{GitHubEventInfo, matching_github_routines};
-use shannon_core::inbox_store::{InboxItemNew, InboxStore};
+use shannon_core::inbox_store::{InboxItemNew, InboxStore, RunTrigger};
 use shannon_core::query_engine::{QueryContext, QueryEvent};
 use shannon_core::scheduled_routines::ScheduledRoutine;
 
@@ -299,7 +299,15 @@ async fn spawn_github_routine_run(
     payload: &serde_json::Value,
 ) -> String {
     let inbox = state.inbox.clone();
-    let run_id = match inbox.record_run_start(&routine.id, &routine.name) {
+    // R7-①: a GitHub-event fire is system-initiated automation, not a user
+    // action — it is tagged `scheduled`, so its failures keep counting
+    // toward the desktop's consecutive-failure auto-pause streak exactly as
+    // they did before the trigger tag existed.
+    let run_id = match inbox.record_run_start_with_trigger(
+        &routine.id,
+        &routine.name,
+        Some(RunTrigger::Scheduled),
+    ) {
         Ok(id) => id,
         Err(e) => {
             tracing::warn!(
@@ -916,6 +924,10 @@ mod tests {
             items[0].session_id.is_some(),
             "session id recorded for continue"
         );
+        // R7-①: serve-side event fires are tagged `scheduled` —
+        // system-initiated automation keeps counting toward the streak.
+        let runs = harness.inbox.list_runs(10).unwrap();
+        assert_eq!(runs[0].trigger, Some(RunTrigger::Scheduled));
     }
 
     #[tokio::test]

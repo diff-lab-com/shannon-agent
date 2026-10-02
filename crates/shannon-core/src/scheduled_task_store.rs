@@ -546,6 +546,46 @@ mod tests {
         assert!(store.load("nonexistent").unwrap().is_none());
     }
 
+    // ── enabled_at migration (R7-②) ─────────────────────────────────────
+
+    /// A `task.json` persisted before the `enabled_at` field existed must
+    /// keep loading (`None` = count streak history from epoch), and the next
+    /// toggle-to-enabled + save persists the stamped field for good.
+    #[test]
+    fn task_json_without_enabled_at_loads_and_resaves_with_stamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ScheduledTaskStore::with_base(tmp.path().to_path_buf());
+
+        let legacy_task_json = r#"{
+            "id": "abc12345",
+            "name": "Legacy Task",
+            "prompt": "p",
+            "interval_secs": 60,
+            "trigger_type": "interval",
+            "created_at": "2026-01-01T00:00:00Z",
+            "last_fired": null,
+            "enabled": true,
+            "fire_count": 0
+        }"#;
+        let task_dir = tmp.path().join("legacy-task-abc12345");
+        std::fs::create_dir_all(&task_dir).unwrap();
+        std::fs::write(task_dir.join("SKILL.md"), "p").unwrap();
+        std::fs::write(task_dir.join("task.json"), legacy_task_json).unwrap();
+
+        // Pre-field record loads…
+        let mut routine = store.load("abc12345").unwrap().unwrap();
+        assert_eq!(routine.enabled_at, None, "old record reads enabled_at=None");
+
+        // …survives a disable→re-enable + save with the stamp in place.
+        // (Only the disabled→enabled transition stamps — a redundant true
+        // on this already-enabled record must not move the zero point.)
+        routine.set_enabled(false);
+        routine.set_enabled(true);
+        store.save(&routine).unwrap();
+        let reloaded = store.load("abc12345").unwrap().unwrap();
+        assert!(reloaded.enabled_at.is_some(), "stamped field persisted");
+    }
+
     #[test]
     fn test_list_empty_when_no_dir() {
         let tmp = tempfile::tempdir().unwrap();

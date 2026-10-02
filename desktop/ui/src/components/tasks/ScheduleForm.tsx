@@ -587,15 +587,23 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
               className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </label>
-          <label className="flex items-center gap-sm md:col-span-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={policy.notify_on_failure}
-              onChange={e => setPolicy({ ...policy, notify_on_failure: e.target.checked })}
-              className="cursor-pointer"
-            />
-            <span className="font-label-md text-on-surface">{t('tasks.scheduleForm.notifyOnFailure')}</span>
-          </label>
+          <div className="flex flex-col gap-xs md:col-span-2">
+            <label className="flex items-center gap-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={policy.notify_on_failure}
+                onChange={e => setPolicy({ ...policy, notify_on_failure: e.target.checked })}
+                className="cursor-pointer"
+              />
+              <span className="font-label-md text-on-surface">{t('tasks.scheduleForm.notifyOnFailure')}</span>
+            </label>
+            {/* R7-③ boundary note: the auto-pause alert is deliberately NOT
+                governed by the switch — an unattended opt-out must still
+                learn when the system switches a routine off. */}
+            <span className="font-label-sm text-on-surface-variant pl-lg">
+              {t('tasks.scheduleForm.notifyOnFailureHint')}
+            </span>
+          </div>
           <label className="flex items-center gap-sm md:col-span-2 cursor-pointer">
             <input
               type="checkbox"

@@ -540,6 +540,7 @@
   "tasks.scheduleForm.worktreePath": "worktree パス（任意）",
   "tasks.scheduleForm.worktreePlaceholder": "/path/to/worktree",
   "tasks.scheduleForm.notifyOnFailure": "失敗時に通知",
+  "tasks.scheduleForm.notifyOnFailureHint": "失敗時の通知はこのスイッチに従います。ルーティンが自動一時停止された場合は、常に 1 回通知が送信されます。",
   "tasks.scheduleForm.autoArchive": "worktree が空になったら自動アーカイブ",
   "tasks.scheduleForm.offpeak.toggle": "オフピーク実行",
   "tasks.scheduleForm.offpeak.toggleAria": "オフピーク実行窓の切り替え",
