@@ -936,3 +936,59 @@ describe('L1 state machine — cancel-matrix #3 (stop → instant resend, A-17 f
     expect(reply!.content).not.toContain('旧流迟到')
   })
 })
+
+// F-1 fix isomorph — the frozen browser repro (e2e/scripts/fuzz-found-cross-session.yaml
+// + chat-script.fuzz-found.spec.ts) replayed at this layer: the SAME event
+// stream through the REAL player into the REAL provider, asserting the fix's
+// contract (terminal events settle the SENDING session — by query_id owner,
+// not the claimed session_id) so the two layers cannot drift apart.
+describe('L1 state machine — fuzz-found-cross-session (F-1 fixed)', () => {
+  it('a completed re-stamped with a foreign session_id settles the sending session, commits the bubble and warns exactly once', { timeout: 30_000 }, async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const yaml = parse(
+        readFileSync(resolve(yamlRoot, 'fuzz-found-cross-session.yaml'), 'utf8'),
+      ) as ChatScript
+      expect(validateScript(yaml).ok).toBe(true)
+      const reply1 = textChunksOf(yaml, 0).join('')
+      const h = await makeHarness()
+      h.player.load(yaml)
+
+      // Turn 1 streams normally into the visible session, but its scripted
+      // terminal re-stamps fuzz-sess-b (the payload merges over the player's
+      // auto session_id — the query id stays the turn's own q-0). Pre-fix
+      // this exact stream wedged the composer forever.
+      await sendAndPlay(h, { text: yaml.turns[0]!.user, expectedQueryId: 'q-0' })
+      expect(h.result.current.isQuerying).toBe(true)
+      // (No mid-stream projection assert here — 2 chunks at the 60ms cap
+      // give the throttled projection a ~70ms visibility window, too tight
+      // to poll reliably; the committed bubble below is the lossless proof
+      // that the stream landed in the SENDING session's bucket.)
+
+      // Fixed settle: the latch releases on the SENDING session (owner of
+      // q-0), the reply commits from that session's bucket, and the anomaly
+      // leaves exactly one console.warn (watchdog-compatible — warn, not
+      // error).
+      await awaitSettled(h)
+      expect(h.result.current.streamingText).toBe('')
+      const assistants = h.result.current.messages.filter(m => m.role === 'assistant')
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0]!.content).toBe(reply1)
+      const mismatchWarns = warn.mock.calls.filter(c => String(c[0]).includes('session_id mismatch'))
+      expect(mismatchWarns).toHaveLength(1)
+      expect(mismatchWarns[0]![0]).toContain('q-0')
+
+      // The composer is immediately reusable: turn 2 (correctly-stamped
+      // events) streams and settles normally — no lingering wedge, and no
+      // additional warns (only the truly mis-stamped event is an anomaly).
+      await sendAndPlay(h, { text: yaml.turns[1]!.user, expectedQueryId: 'q-1' })
+      await awaitSettled(h, 20_000)
+      const assistants2 = h.result.current.messages.filter(m => m.role === 'assistant')
+      expect(assistants2).toHaveLength(2)
+      expect(assistants2[1]!.content).toBe(textChunksOf(yaml, 1).join(''))
+      expect(warn.mock.calls.filter(c => String(c[0]).includes('session_id mismatch'))).toHaveLength(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})

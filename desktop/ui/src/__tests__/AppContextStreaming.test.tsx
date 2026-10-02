@@ -586,3 +586,102 @@ describe('AppContext — S-2 pure-text stream drives the sidebar running state',
     await waitFor(() => expect(screen.queryByRole('img', { name: 'Running' })).not.toBeInTheDocument())
   })
 })
+
+// F-1 fix — a query:* event belongs to the session THAT SENT the query (the
+// A-17 records reverse-lookup by query_id), never the one its session_id
+// claims. Pre-fix, a terminal stamped with a foreign session settled the
+// wrong latch (a no-op there) and the sending session's composer wedged
+// forever. The frozen browser repro is e2e/scripts/fuzz-found-cross-session.yaml
+// + chat-script.fuzz-found.spec.ts; these are the handler-level isomorphs.
+describe('AppContext — F-1 fix: query events route by owner, not the claimed session_id', () => {
+  const mismatchWarns = (spy: ReturnType<typeof vi.spyOn>) =>
+    spy.mock.calls.filter(c => String(c[0]).includes('session_id mismatch'))
+
+  it('a completed re-stamped with a foreign session_id settles the SENDING session and warns exactly once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { result } = renderHook(() => useApp(), { wrapper })
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      await flushUntilRegistered()
+      await act(async () => { await result.current.createSession() })
+      await act(async () => { await result.current.sendMessage('Hello') })
+      expect(result.current.isQuerying).toBe(true)
+
+      // Correctly-stamped stream events warn about nothing.
+      act(() => { flush(EVENT_NAMES.QUERY_TEXT, { query_id: 'q1', content: 'A1', session_id: SESSION_A }) })
+      await waitFor(() => expect(result.current.streamingText).toBe('A1'))
+      expect(mismatchWarns(warn)).toHaveLength(0)
+
+      // The terminal lies about its session — the SENDING session must
+      // settle anyway: latch released, ITS OWN bucket committed as the
+      // bubble, exactly one warn (warn, not error: watchdog-compatible).
+      act(() => { flush(EVENT_NAMES.QUERY_COMPLETED, { query_id: 'q1', session_id: SESSION_B }) })
+      expect(result.current.isQuerying).toBe(false)
+      expect(result.current.streamingText).toBe('')
+      const assistants = result.current.messages.filter(m => m.role === 'assistant')
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0].content).toBe('A1')
+      expect(mismatchWarns(warn)).toHaveLength(1)
+      expect(result.current.error).toBeNull()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a stream event carrying our query_id but a foreign sid lands in the sending session\'s bucket', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { result } = renderHook(() => useApp(), { wrapper })
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      await flushUntilRegistered()
+      await act(async () => { await result.current.createSession() })
+      await act(async () => { await result.current.sendMessage('Hello') })
+
+      // Same pollution, stream flavor: our query id under B's stamp still
+      // routes to the sender (A) — one warn per lying event.
+      act(() => {
+        flush(EVENT_NAMES.QUERY_TEXT, { query_id: 'q1', content: 'A-own', session_id: SESSION_B })
+        flush(EVENT_NAMES.QUERY_THINKING, { query_id: 'q1', content: 'deep', session_id: SESSION_B })
+      })
+      await waitFor(() => expect(result.current.streamingText).toBe('A-own'))
+      await waitFor(() => expect(result.current.thinkingText).toBe('deep'))
+      expect(mismatchWarns(warn)).toHaveLength(2)
+
+      // An event WITHOUT our query_id keeps the sid routing (old shapes):
+      // B's own bucket, untouched by the owner logic.
+      act(() => { flush(EVENT_NAMES.QUERY_TEXT, { content: 'B-own', session_id: SESSION_B }) })
+      await act(async () => { await result.current.switchSession(SESSION_B) })
+      expect(result.current.streamingText).toBe('B-own')
+      expect(result.current.thinkingText).toBe('')
+      expect(mismatchWarns(warn)).toHaveLength(2)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('an auth-kind failure with a lying sid surfaces the banner on the sending (visible) session', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { result } = renderHook(() => useApp(), { wrapper })
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      await flushUntilRegistered()
+      await act(async () => { await result.current.createSession() })
+      await act(async () => { await result.current.sendMessage('Hello') })
+
+      act(() => {
+        flush(EVENT_NAMES.QUERY_FAILED, {
+          query_id: 'q1', error: 'Authentication failed', error_kind: 'auth', session_id: SESSION_B,
+        })
+      })
+      // The failure settles AND is attributed to the sender: latch released,
+      // auth banner on the visible (sending) session, no ghost bubble.
+      expect(result.current.isQuerying).toBe(false)
+      expect(result.current.error).toBe('Authentication failed')
+      expect(result.current.errorKind).toBe('auth')
+      expect(result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
+      expect(mismatchWarns(warn)).toHaveLength(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
