@@ -29,6 +29,12 @@ export interface ModalProps {
   description?: string
   size?: VariantProps<typeof modalSizes>["size"]
   role?: "dialog" | "alertdialog"
+  /** id of an element INSIDE the popup that names the dialog. Use when the
+   * caller renders its own header instead of the built-in `title` block —
+   * role=alertdialog/dialog must carry an accessible name (axe
+   * aria-dialog-name). Takes precedence over `aria-label` in accname
+   * resolution, so the visible heading text becomes the name. */
+  ariaLabelledBy?: string
   closeOnBackdrop?: boolean
   closeOnEscape?: boolean
   showCloseButton?: boolean
@@ -47,6 +53,7 @@ export function Modal({
   description,
   size = "md",
   role = "dialog",
+  ariaLabelledBy,
   closeOnBackdrop = true,
   closeOnEscape = true,
   showCloseButton = true,
@@ -85,6 +92,7 @@ export function Modal({
           role={role}
           aria-modal="true"
           aria-label={title}
+          aria-labelledby={ariaLabelledBy}
           data-testid={testId}
           className={cn(
             // G3 (UI review 2026-09-29): the floating-layer family shares one

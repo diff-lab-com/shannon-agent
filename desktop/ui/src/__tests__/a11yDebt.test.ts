@@ -5,6 +5,14 @@
 // must flag fix-landed entries as stale. The real ledger KNOWN_A11Y_DEBT is
 // asserted for hygiene so a malformed entry (empty targets, duplicate
 // state+rule) fails here instead of silently weakening the nightly gate.
+//
+// P0-A2 (2026-10-03): the ledger was EMPTIED — all four catalogued nodes
+// were fixed at the source (see a11yDebt.ts). The suite is now
+// semantics-preserving: the matcher contract tests below run entirely on
+// local fixtures and keep matchA11yDebt locked so FUTURE debt can still be
+// catalogued safely, and the ledger-hygiene block guards whatever entries
+// (if any) exist at that time — with an empty ledger it passes vacuously,
+// which is exactly the clean-baseline contract.
 import { describe, expect, it } from 'vitest'
 
 import { KNOWN_A11Y_DEBT, matchA11yDebt, type A11yDebtEntry, type A11yViolationInput } from '../../e2e/helpers/a11yDebt'
@@ -129,7 +137,9 @@ describe('matchA11yDebt — stale detection (Minor 2)', () => {
 })
 
 describe('KNOWN_A11Y_DEBT — ledger hygiene', () => {
-  it('entries have at least one catalogued slot and no duplicate state+rule', () => {
+  it('is a well-formed ledger: every entry has catalogued slots, no duplicate state+rule', () => {
+    // Vacuously true while the ledger stays empty (P0-A2 baseline); the
+    // invariants hold the line the day debt is re-catalogued.
     const seen = new Set<string>()
     for (const entry of KNOWN_A11Y_DEBT) {
       expect(entry.targets.length, `${entry.state}/${entry.rule} must catalogue >=1 target`).toBeGreaterThan(0)
@@ -160,5 +170,17 @@ describe('KNOWN_A11Y_DEBT — ledger hygiene', () => {
         ).toBe(true)
       }
     }
+  })
+
+  it('an empty ledger is a pure gate: every violation is novel, nothing is stale', () => {
+    // Pins the P0-A2 clean-baseline semantics: with no entries the nightly
+    // fails on ANY critical/serious node and stale-debt can never fire.
+    const { known, novel, stale } = matchA11yDebt(KNOWN_A11Y_DEBT, 'approval-dialog', [
+      v('color-contrast', [['.anything']]),
+    ])
+    expect(KNOWN_A11Y_DEBT).toEqual([])
+    expect(known).toEqual([])
+    expect(novel).toHaveLength(1)
+    expect(stale).toEqual([])
   })
 })

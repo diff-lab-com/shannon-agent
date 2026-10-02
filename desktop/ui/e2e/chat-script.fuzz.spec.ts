@@ -78,17 +78,16 @@ const KNOWN_FUZZ_CRASHES: Record<string, RegExp[]> = {}
  * annotation. Removing the entry flips the mutant back to asserting the
  * settled contract — the R2/R4 one-marker flip, done from the spec side.
  *
- * F-1 (found by this suite, R5): a terminal `query:completed` whose
- * session_id points at ANY other session settles the WRONG session's
- * querying latch (AppContext QUERY_COMPLETED keys the settle on
- * `p.session_id ?? visibleKey`, while the send latched the SENDING
- * session) — the sending session's composer never resets. Frozen minimal
- * repro: e2e/scripts/fuzz-found-cross-session.yaml +
- * chat-script.fuzz-found.spec.ts.
+ * Empty today. F-1 (found by this suite, R5 — a terminal `query:completed`
+ * whose session_id pointed at ANY other session wedged the sending
+ * session's composer latch) was FIXED by the p0a1 round: query:* events
+ * route/settle by their query_id's OWNER session (the A-17/G6 send
+ * records), so `cross-session-wrong-session-id` now passes the standard
+ * settled contract like every other mutant. The frozen repro stays as the
+ * regression pin, flipped to the fixed contract:
+ * e2e/scripts/fuzz-found-cross-session.yaml + chat-script.fuzz-found.spec.ts.
  */
-const KNOWN_FUZZ_WEDGES: Record<string, string> = {
-  'cross-session-wrong-session-id': 'F-1: terminal event with a foreign session_id wedges the sending session\'s composer latch (setSessionQuerying keys on the event\'s session_id, not the query owner)',
-}
+const KNOWN_FUZZ_WEDGES: Record<string, string> = {}
 
 /** Wait until the player settled the turn (armed = next turn, done = last). */
 async function expectSettled(page: import('@playwright/test').Page): Promise<string> {
@@ -134,17 +133,16 @@ test.describe('chat-script fuzz — mutated events must never crash nor wedge th
       //    the PRECISE reproduction of the wedge that is the finding.
       const wedgeReason = KNOWN_FUZZ_WEDGES[mutant.name]
       if (wedgeReason) {
-        // F-1 reproduction: every event was re-stamped with a foreign
-        // session_id, so the streamed text landed in the OTHER session's
-        // bucket and the terminal settled the OTHER session's latch — the
-        // visible session stays querying forever: stop up, send gone,
-        // transcript frozen at the optimistic user bubble, no crash.
+        // Tracked-wedge reproduction (generic shape, F-1 was the only
+        // occupant): the visible session stays querying forever — stop up,
+        // send gone, transcript frozen, no crash. The precise story of the
+        // wedge lives in the registry entry's reason text.
         test.info().annotations.push({ type: 'suspectedBug', description: `${mutant.name}: ${wedgeReason}` })
         // eslint-disable-next-line no-console
         console.warn(`[fuzz][suspectedBug] ${mutant.name}: ${wedgeReason}`)
         await expect(chat.stopButton()).toBeVisible({ timeout: 15_000 })
         await expect(chat.sendButton()).toHaveCount(0)
-        await expect(chat.streamingCursor()).toHaveCount(0) // empty visible bucket — the text went to the other session
+        await expect(chat.streamingCursor()).toHaveCount(0)
         await expect(page.locator('[data-tool-status="running"]')).toHaveCount(0)
         const wedgedBubbles = await chat.messageCount()
         await page.waitForTimeout(800)

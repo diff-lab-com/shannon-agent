@@ -132,30 +132,18 @@ export function matchA11yDebt(
  * the slot matcher above, and a new element / extra node / drifted target
  * fails the nightly. Entries carry the reason and are removed when the
  * underlying fix lands (warned; A11Y_FAIL_ON_STALE_DEBT=1 enforces).
+ *
+ * EMPTIED 2026-10-03 (P0-A2 fix round): all four catalogued nodes were fixed
+ * at the source —
+ *   - aria-dialog-name (approval-dialog): the permission alertdialog is now
+ *     named via aria-labelledby → its visible h3 (Header.tsx / Modal
+ *     `ariaLabelledBy`).
+ *   - color-contrast ×3: the sidebar live-elapsed badge uses the gated
+ *     on-primary-container pair on active rows (SidebarSessions.tsx); the
+ *     approval stop pill went from bg-error/80 to opaque bg-error
+ *     (Header.tsx). Both ≥4.5:1 in the light and dark matrix themes.
+ * The matcher stays: if a future regression needs cataloguing, re-add an
+ * entry here (state + rule + real axe node targets, one slot per node) and
+ * the hygiene tests in src/__tests__/a11yDebt.test.ts will hold it to shape.
  */
-export const KNOWN_A11Y_DEBT: A11yDebtEntry[] = [
-  {
-    state: 'approval-dialog',
-    rule: 'aria-dialog-name',
-    reason: 'Header.tsx permission Modal (role="alertdialog") carries no accessible name — the visible h3 title is not wired via aria-labelledby / aria-label. serious; fix = label the dialog (business component, out of R5 scope).',
-    // The Base UI portal mounts with a React useId-derived id whose suffix
-    // shifts across runs (`#_r_l_` / `#_r_p_` observed on the same build) —
-    // hence the RegExp segment; still exactly one count-bounded slot.
-    targets: [[/^#_r_[0-9a-z_]+$/i]],
-  },
-  {
-    state: 'approval-dialog',
-    rule: 'color-contrast',
-    reason: 'Two mid-run contrast failures while the permission dialog is up: (1) SidebarSessions live-elapsed badge (font-mono text-label-2xs text-secondary, aria-hidden) at 3.8:1 (#af94df on #3b4261) — only rendered mid-run, the static walkthrough never sees it; (2) Header stop-while-waiting pill (header-stop-while-waiting, bg-error/80 + text-on-error) at 4.41:1 (#1a1b26 on #c86176) — surfaced by fix round 1/5, silently absorbed by the old (state, rule) matcher before. Both serious; fix = token contrast adjustments (business components, out of R5 scope).',
-    targets: [
-      ['.text-secondary.tabular-nums.font-mono'],
-      ['.pointer-events-auto'],
-    ],
-  },
-  {
-    state: 'streaming',
-    rule: 'color-contrast',
-    reason: 'Same SidebarSessions live-elapsed badge as approval-dialog (the row runs live during the parked stream). serious.',
-    targets: [['.text-secondary.tabular-nums.font-mono']],
-  },
-]
+export const KNOWN_A11Y_DEBT: A11yDebtEntry[] = []

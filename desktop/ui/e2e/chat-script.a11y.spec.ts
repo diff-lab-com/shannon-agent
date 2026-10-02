@@ -18,6 +18,11 @@
 // under an already-catalogued rule. Entries carry the reason and are removed
 // when the underlying fix lands.
 //
+// P0-A2 (2026-10-03): the ledger is EMPTY — all four catalogued nodes were
+// fixed at the source, so this gate is now a pure zero-violation bar (see
+// matchA11yDebt's empty-ledger semantics). Re-cataloguing remains possible
+// via a11yDebt.ts after human review.
+//
 // NIGHTLY-ONLY: excluded from the PR gate by playwright.config.ts
 // testIgnore; run via playwright.chat-nightly.config.ts.
 import { expect, test } from '@playwright/test'

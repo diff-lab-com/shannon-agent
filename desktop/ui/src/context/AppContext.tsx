@@ -370,6 +370,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
     else retiredQueryIdsRef.current.set(sessionKey, new Set([queryId]))
   }, [])
 
+  // F-1 fix: which session does a query:* event BELONG to? The one that sent
+  // the query — not the one the payload's session_id claims. `currentQueryIdsRef`
+  // (the A-17 records) maps session → the id of the query we sent from it, so
+  // the reverse lookup turns a query_id back into its owning session. Ids
+  // with no record (old backend shapes, goal runs, another window's sends)
+  // return null and the caller keeps the pure sid routing.
+  const ownerSessionKeyOfQuery = useCallback((queryId: unknown): string | null => {
+    if (typeof queryId !== 'string' || queryId === '') return null
+    for (const [sessionKey, id] of currentQueryIdsRef.current) {
+      if (id === queryId) return sessionKey
+    }
+    return null
+  }, [])
+
+  // F-1 fix: one resolution point for every query:* handler. A resolvable
+  // query_id outranks the payload's session_id — a terminal (or stream)
+  // event stamped with a foreign session used to settle/route the WRONG
+  // session (a no-op there) while the sending session's composer latch
+  // leaked forever (stop stuck, no send button). The mismatch is itself an
+  // anomaly — conforming backends stamp the sender — so each such event
+  // leaves exactly one console.warn (warn, not error: the watchdog must
+  // stay green; the run is absorbed, not crashed).
+  const resolveQueryEventSession = useCallback((
+    sid: string | null | undefined,
+    visibleKey: string,
+    queryId: unknown,
+    label: string,
+  ): string => {
+    const claimedKey = sid ?? visibleKey
+    const ownerKey = ownerSessionKeyOfQuery(queryId)
+    if (ownerKey === null || ownerKey === claimedKey) return claimedKey
+    const origin = sid == null ? 'no session_id' : `claims session_id ${JSON.stringify(sid)}`
+    console.warn(
+      `[chat] ${label}: session_id mismatch — payload ${origin} but query`
+        + ` ${JSON.stringify(queryId)} was sent from session ${JSON.stringify(ownerKey)};`
+        + ' routing the event to the sending session',
+    )
+    return ownerKey
+  }, [ownerSessionKeyOfQuery])
+
   // P0 sidebar telemetry: record one query-stream observation for a session.
   // A state update publishes only when the sidebar-VISIBLE projection flips
   // (membership / running / activeTool / failed / awaitingApproval) or the
@@ -1021,13 +1061,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const handlers = [
         listen(EVENT_NAMES.QUERY_TEXT, (e) => {
           const p = e.payload as { query_id?: string; content: string; session_id?: string }
-          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          // F-1 fix: a session window also admits an event whose stamp lies
+          // when its query_id names a query this window itself sent — the
+          // owner routing below lands it on this window's session anyway.
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           // A-17 fix: windowSession routing (above) and query-id staleness
           // (here) are two independent filters — both must pass.
           const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = p.session_id ?? visibleKey
+          const claimedKey = p.session_id ?? visibleKey
+          const key = resolveQueryEventSession(p.session_id, visibleKey, p.query_id, 'query:text')
           if (isStaleQueryEvent(key, p.query_id)) return
-          noteSessionActivity(p.session_id, 'event')
+          // F-1 fix: on a lying stamp the rail credits the OWNER session.
+          noteSessionActivity(key === claimedKey ? p.session_id : key, 'event')
           // §P2-18: append to this session's own bucket; only the visible
           // session's bucket is projected into state, so tokens from a
           // background session never land in the on-screen stream.
@@ -1039,11 +1084,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }),
         listen(EVENT_NAMES.QUERY_TOOL_START, (e) => {
           const p = e.payload as { query_id?: string; tool_use_id: string; tool_name: string; tool_input: unknown; session_id?: string }
-          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = p.session_id ?? visibleKey
+          const claimedKey = p.session_id ?? visibleKey
+          const key = resolveQueryEventSession(p.session_id, visibleKey, p.query_id, 'query:tool-start')
           if (isStaleQueryEvent(key, p.query_id)) return
-          noteSessionActivity(p.session_id, 'tool-start', p.tool_name)
+          noteSessionActivity(key === claimedKey ? p.session_id : key, 'tool-start', p.tool_name)
           // B1 P1-5: tool cards belong to the session that runs them — a
           // background session's tools never bleed into the visible list
           // (same visibility rule as the text/thinking buckets).
@@ -1071,11 +1117,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }),
         listen(EVENT_NAMES.QUERY_TOOL_RESULT, (e) => {
           const p = e.payload as { query_id?: string; tool_use_id: string; result: string; is_error: boolean; meta?: unknown; tokens_used?: number; session_id?: string }
-          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = p.session_id ?? visibleKey
+          const claimedKey = p.session_id ?? visibleKey
+          const key = resolveQueryEventSession(p.session_id, visibleKey, p.query_id, 'query:tool-result')
           if (isStaleQueryEvent(key, p.query_id)) return
-          noteSessionActivity(p.session_id, 'tool-end')
+          noteSessionActivity(key === claimedKey ? p.session_id : key, 'tool-end')
           if (key !== visibleKey) return
           setActiveToolCalls(prev => prev.map(tc => {
             if (tc.tool_use_id !== p.tool_use_id) return tc
@@ -1086,11 +1133,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }),
         listen(EVENT_NAMES.QUERY_TOOL_PROGRESS, (e) => {
           const p = e.payload as { query_id?: string; tool_use_id: string; progress: number; message: string; session_id?: string }
-          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = p.session_id ?? visibleKey
+          const claimedKey = p.session_id ?? visibleKey
+          const key = resolveQueryEventSession(p.session_id, visibleKey, p.query_id, 'query:tool-progress')
           if (isStaleQueryEvent(key, p.query_id)) return
-          noteSessionActivity(p.session_id, 'event')
+          noteSessionActivity(key === claimedKey ? p.session_id : key, 'event')
           if (key !== visibleKey) return
           setActiveToolCalls(prev => prev.map(tc =>
             tc.tool_use_id === p.tool_use_id
@@ -1117,9 +1165,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // informational). Per-session bucket like the stream text; only
           // the visible session's bucket is projected into state.
           const p = e.payload as QueryNoticeEvent
-          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = p.session_id ?? visibleKey
+          const key = resolveQueryEventSession(p.session_id, visibleKey, p.query_id, 'query:notice')
           if (isStaleQueryEvent(key, p.query_id)) return
           const notice: StreamNotice = {
             id: ++streamNoticeIdRef.current,
@@ -1141,42 +1189,49 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }),
         listen(EVENT_NAMES.QUERY_THINKING, (e) => {
           const p = e.payload as { query_id?: string; content: string; session_id?: string }
-          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           // §P2-18: same per-session bucketing as QUERY_TEXT (B1 P2-13: and
           // the same throttled projection).
           const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = p.session_id ?? visibleKey
+          const claimedKey = p.session_id ?? visibleKey
+          const key = resolveQueryEventSession(p.session_id, visibleKey, p.query_id, 'query:thinking')
           if (isStaleQueryEvent(key, p.query_id)) return
-          noteSessionActivity(p.session_id, 'event')
+          noteSessionActivity(key === claimedKey ? p.session_id : key, 'event')
           const next = (thinkingBucketsRef.current.get(key) ?? '') + p.content
           thinkingBucketsRef.current.set(key, next)
           if (key === visibleKey) scheduleStreamFlush()
         }),
         listen(EVENT_NAMES.QUERY_USAGE, (e) => {
           const p = e.payload as UsagePayload
-          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           // B1-16 (review §5 骨架): the footer's token/cost line is a
           // visible-session readout — a background session's usage must not
           // overwrite it (same visibleKey projection as QUERY_TEXT).
           const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = p.session_id ?? visibleKey
+          const claimedKey = p.session_id ?? visibleKey
+          const key = resolveQueryEventSession(p.session_id, visibleKey, p.query_id, 'query:usage')
           if (isStaleQueryEvent(key, p.query_id)) return
-          noteSessionActivity(p.session_id, 'event')
+          noteSessionActivity(key === claimedKey ? p.session_id : key, 'event')
           if (key !== visibleKey) return
           setUsage(p)
         }),
         listen(EVENT_NAMES.QUERY_COMPLETED, (e) => {
           const p = e.payload as { query_id?: string; session_id?: string }
           const sid = p.session_id
-          if (!isEventForCurrentWindow(sid, windowSessionId)) return
+          if (!isEventForCurrentWindow(sid, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = sid ?? visibleKey
+          // F-1 fix: the settle target is the session THIS window sent the
+          // query from (reverse lookup of the A-17 records), never the stamp
+          // — a completed claiming another session used to release the wrong
+          // latch (a no-op there) and wedge the sender's composer forever.
+          const claimedKey = sid ?? visibleKey
+          const key = resolveQueryEventSession(sid, visibleKey, p.query_id, 'query:completed')
           // A-17 fix: check staleness FIRST (this terminal event itself is
           // legitimate for its own query), then retire the id — any LATER
           // event under it is a late delivery.
           if (isStaleQueryEvent(key, p.query_id)) return
           retireQueryEvent(key, p.query_id)
-          noteSessionActivity(sid, 'end')
+          noteSessionActivity(key === claimedKey ? sid : key, 'end')
           // §P2-18: the completed session commits ITS OWN bucket, and UI
           // mutations only fire when it is the one on screen — a background
           // session finishing must not append to (or clear) another
@@ -1225,13 +1280,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // text (events::classify_query_error_kind), so the JS side never
           // string-matches provider errors.
           const p = e.payload as { query_id?: string; error: string; error_kind?: string; session_id?: string }
-          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = p.session_id ?? visibleKey
+          // F-1 fix: same owner-settle as QUERY_COMPLETED — a failed (and its
+          // auth banner, below) belongs to the session that sent the query.
+          const claimedKey = p.session_id ?? visibleKey
+          const key = resolveQueryEventSession(p.session_id, visibleKey, p.query_id, 'query:failed')
           // A-17 fix: staleness first, then retire (mirrors QUERY_COMPLETED).
           if (isStaleQueryEvent(key, p.query_id)) return
           retireQueryEvent(key, p.query_id)
-          noteSessionActivity(p.session_id, 'fail')
+          noteSessionActivity(key === claimedKey ? p.session_id : key, 'fail')
           // §P2-18: like QUERY_COMPLETED, failure state is scoped to the
           // session that owns the run — a background run failing must not
           // overwrite the on-screen session's composer/error state (its
@@ -1261,16 +1319,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         listen(EVENT_NAMES.QUERY_CANCELLED, (e) => {
           const p = e.payload as { query_id?: string; session_id?: string }
           const sid = p.session_id
-          if (!isEventForCurrentWindow(sid, windowSessionId)) return
+          if (!isEventForCurrentWindow(sid, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = sid ?? visibleKey
+          // F-1 fix: same owner-settle as QUERY_COMPLETED.
+          const claimedKey = sid ?? visibleKey
+          const key = resolveQueryEventSession(sid, visibleKey, p.query_id, 'query:cancelled')
           // A-17 fix: a cancelled event for an OLD query id (stop→instant
           // resend race) must not settle the NEW turn — the new query's own
           // terminal event is the only thing that may end it. Staleness
           // first (this event is legitimate for its own query), then retire.
           if (isStaleQueryEvent(key, p.query_id)) return
           retireQueryEvent(key, p.query_id)
-          noteSessionActivity(sid, 'end')
+          noteSessionActivity(key === claimedKey ? sid : key, 'end')
           // B0 P1-2: same ghost-bubble cleanup as QUERY_FAILED — the
           // cancelled session's buckets and, when visible, the projections.
           setSessionQuerying(key, false)

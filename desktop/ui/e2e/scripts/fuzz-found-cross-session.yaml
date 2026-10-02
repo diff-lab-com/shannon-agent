@@ -1,20 +1,23 @@
-# ChatScript: fuzz-found-cross-session — R5 fuzz 收获 F-1 的最小固定复现。
+# ChatScript: fuzz-found-cross-session — R5 fuzz 收获 F-1 的最小固定复现
+#（p0a1 修复轮已翻转：从「楔死现状」翻转为「修复后契约」）。
 #
-# 疑似 bug（未打 knownIssue 标记 — 标记会跳过步骤，而这里每个步骤都必须真实播放）：
-#   F-1: query:completed 的 session_id 指向别的会话时，AppContext 的
-#   QUERY_COMPLETED 以 `p.session_id ?? visibleKey` 为结算 key ——
-#   setSessionQuerying(错误会话, false)，而发送时闩上的是发送会话
-#   （sendMessage 里 setSessionQuerying(targetSessionId, true)）。发送会话的
-#   querying 锁因此永不释放：stop 按钮常驻、composer 永不复位，直到刷新。
+# 原 bug（F-1，已修复）：query:completed 的 session_id 指向别的会话时，
+# AppContext 的 QUERY_COMPLETED 以 `p.session_id ?? visibleKey` 为结算 key ——
+# setSessionQuerying(错误会话, false) 是 no-op，而发送时闩上的是发送会话
+# （sendMessage 里 setSessionQuerying(targetSessionId, true)）。发送会话的
+# querying 锁因此永不释放：stop 常驻、composer 永不复位。
 #
-# 最小化：文本分片保持默认路由（正常流入当前会话），只有 completed 盖成
-# fuzz-sess-b —— 屏幕上是「冻结的流 + 永不复位的 stop」。
+# 修复语义（p0a1，控制器裁定）：query:* 事件的归属 = 发送该 query 的会话
+# （按 query_id 反查 A-17/G6 的发送记录），事件自带的 session_id 只在
+# query_id 无法归属（旧形状/别人的 run）时兜底。错盖的 sid 本身是异常信号，
+# 每个此类事件留恰好一条 console.warn（warn 非 error，watchdog 兼容）。
 #
-# 翻转条件（fix 落地后）：completed 改为按 query_id 归属（或回退发送会话）
-# 结算 → 把 chat-script.fuzz-found.spec.ts 的楔死断言翻回「composer 复位 +
-# 气泡提交」的终态契约，并在疑似 bug 清单里销掉 F-1。
+# 最小化：turn 1 的文本分片保持默认路由（正常流入当前会话），只有
+# completed 盖成 fuzz-sess-b —— 修复后该终态仍结算回发送会话：composer
+# 解锁、气泡提交、恰好一条 warn。turn 2 证明解锁是「立即可再发」：
+# 正常盖戳的第二轮照常流式并落定。
 name: fuzz-found-cross-session
-description: R5 疑似 bug F-1 — completed 盖错 session_id，发送会话的 composer 锁永不释放
+description: R5 疑似 bug F-1（已修复）— completed 盖错 session_id 仍结算回发送会话
 seed:
   config:
     hasKey: true
@@ -32,7 +35,14 @@ turns:
         chunks:
           - "流式文本正常进入当前会话，"
           - "但终态会被盖成别人的 session_id。"
-        chunkDelayMs: 120
+        chunkDelayMs: 200
       - event: query:completed
         payload:
           session_id: fuzz-sess-b
+  - user: 立即再发一轮（composer 已解锁）
+    script:
+      - event: query:text
+        chunks:
+          - "第二轮正常流转，"
+          - "composer 全程可用。"
+        chunkDelayMs: 200

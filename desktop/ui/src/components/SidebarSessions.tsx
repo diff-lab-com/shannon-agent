@@ -1352,7 +1352,19 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                   time-ago on idle rows — the rail answers "which session is
                   live, how long, and when was the rest last active". */}
               {elapsed ? (
-                <span className="font-mono text-label-2xs tabular-nums text-secondary shrink-0" aria-hidden="true">
+                <span
+                  // P0-A2 (axe color-contrast 3.8:1): on the ACTIVE row the
+                  // backdrop is bg-primary-container and text-secondary fails
+                  // AA there (3.80:1 in the default dark theme) — use the
+                  // gated on-primary-container pair instead (4.53:1+ in every
+                  // theme, both matrix themes included). Inactive rows keep
+                  // text-secondary on the rail surface (≥6.2:1).
+                  className={cn(
+                    'font-mono text-label-2xs tabular-nums shrink-0',
+                    isActive ? 'text-on-primary-container' : 'text-secondary',
+                  )}
+                  aria-hidden="true"
+                >
                   {elapsed}
                 </span>
               ) : agoBadge ? (
