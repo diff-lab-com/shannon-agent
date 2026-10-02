@@ -143,7 +143,9 @@ async function attachViaMenu(path: string) {
 }
 
 function composerInput() {
-  return screen.getByPlaceholderText(/Try: "Explain this repo"/)
+  // The placeholder flips with query state ("Reply generating — press Enter
+  // to queue" while streaming) — match the shared prefix.
+  return screen.getByPlaceholderText(/Try: "Explain this repo"|Reply generating/)
 }
 
 /**
@@ -307,5 +309,41 @@ describe('A-25: clearing the text during an edit and pressing Enter commits atta
     await waitFor(() => expect(screen.getByTestId('edit-banner')).toBeInTheDocument())
     expect(ctx.rewindSession).not.toHaveBeenCalled()
     expect(ctx.sendMessage).not.toHaveBeenCalled()
+  })
+})
+
+// ───────────── D9-b — attachments-only queue chip pin ─────────────
+
+describe('D9-b: the attachments-only queue chip placeholder and its drain (pin, no code change)', () => {
+  it('queues with the "1 attachment" placeholder while streaming and drains into a real send', async () => {
+    ctx.isQuerying = true
+    ctx.currentSessionId = 'sess-1'
+    ctx.sessions = [{ id: 'sess-1', title: 'S' }]
+    const view = renderChat()
+
+    // Composer holds ONLY an attachment (no text) while the session streams.
+    await attachViaMenu('/Users/demo/workspace/my-startup/report-a.md')
+    fireEvent.keyDown(composerInput(), { key: 'Enter' })
+    // A-9: the attachments-only input joins the FIFO; the accepted enqueue
+    // clears the composer.
+    expect(ctx.enqueuePrompt).toHaveBeenCalledWith('', ['/Users/demo/workspace/my-startup/report-a.md'])
+    await waitFor(() => expect(composerInput()).toHaveValue(''))
+
+    // The chip renders through the REAL QueueChips: a blank queued text (the
+    // enqueue path stores the TRIMMED input — '' for attachments-only) must
+    // show the attachmentsOnly count placeholder, never an empty label.
+    ctx.promptQueue = [{ id: 9, text: '', attachments: ['/Users/demo/workspace/my-startup/report-a.md'] }]
+    view.rerender(<ChatTree />)
+    expect(screen.getByTestId('prompt-queue')).toBeInTheDocument()
+    expect(screen.getByText('1 attachment')).toBeInTheDocument()
+    expect(screen.getByTestId('prompt-queue-chip')).toBeInTheDocument()
+
+    // The run settles → the drain auto-sends the head WITH its attachments.
+    ctx.dequeuePrompt = vi.fn().mockReturnValueOnce({ id: 9, text: '', attachments: ['/Users/demo/workspace/my-startup/report-a.md'] })
+    ctx.isQuerying = false
+    view.rerender(<ChatTree />)
+    await waitFor(() =>
+      expect(ctx.sendMessage).toHaveBeenCalledWith('', ['/Users/demo/workspace/my-startup/report-a.md']),
+    )
   })
 })
