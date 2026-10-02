@@ -9,8 +9,13 @@
 # 消息的 turnIndex 时也判 rewindable（rewindInfoFor 的 `>=` 边界）——第二
 # 个测试特意编辑第 2 条用户消息（turnIndex 1，checkpoint 恰等），编辑按钮
 # 可用即边界语义的现状证据。
+#
+# wave-2 quickwin 扩展：第一条用户消息带 2 个附件（demo 工作目录内）。
+# A-26（所见即所发）与 A-25（纯附件编辑提交）各是新 test，但每个 test 都
+# 是全新 script 生命周期、单次 send 恒消费 turn 0——重发的回复气泡恒为
+# turn 0 的文本，两个新 test 只断言 banner 退出、气泡内容与 sends payload。
 name: edit-rewind
-description: 编辑重发 journey — 预置历史 + checkpoints → edit banner → commit（rewind_session + 新流）；cancel 保稿；A-14 边界证据
+description: 编辑重发 journey — 预置历史（首条消息带附件）+ checkpoints → edit banner → commit（rewind_session + 新流，附件所见即所发 + 纯附件编辑提交）；cancel 保稿；A-14 边界证据
 seed:
   config:
     hasKey: true
@@ -20,6 +25,9 @@ seed:
       messages:
         - role: user
           content: "第一轮：先介绍潮汐的成因"
+          attachments:
+            - /Users/demo/workspace/my-startup/tide-notes.md
+            - /Users/demo/workspace/my-startup/tide-chart.png
         - role: assistant
           content: 潮汐主要由月球和太阳的引力差驱动。
         - role: user
@@ -27,7 +35,7 @@ seed:
         - role: assistant
           content: 风暴潮是极端天气引起的海面异常升高现象。
 turns:
-  # 编辑提交后的重发消费这一轮。
+  # 编辑提交后的重发消费这一轮（每个 test 单次 send，恒为 turn 0）。
   - user: "第一轮（编辑后）：潮汐的成因和周期"
     script:
       - event: query:text

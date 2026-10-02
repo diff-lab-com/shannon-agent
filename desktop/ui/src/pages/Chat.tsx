@@ -201,8 +201,10 @@ export default function Chat() {
   // ── B1 §4-8: message edit (composer-based) ─────────────────────────────
   // One message editable at a time; the composer is prefilled and a banner
   // identifies the target. Sending rewinds to before that turn and resends
-  // the edited text with the ORIGINAL attachments (attachment editing is
-  // out of scope). Escape/cancel restores the pre-edit draft.
+  // the edited text with the composer's CURRENT attachments (A-26 WYSIWYG:
+  // the message's attachments load into the composer on entry, so chips the
+  // user sees — added or removed — are exactly what resends). Escape/cancel
+  // restores the pre-edit draft.
   const [editing, setEditing] = useState<EditingMessageState | null>(null)
 
   // Restore the incoming session's draft on switch (replacing whatever the
@@ -279,6 +281,11 @@ export default function Chat() {
       draft: { text: input, attachments: attachedFiles },
     })
     setInput(msg.content)
+    // A-26 WYSIWYG: the message's own attachments become the composer's
+    // chips (addable/removable). What the user sees during the edit is
+    // exactly the set that resends on commit; cancelEdit restores the
+    // pre-edit draft pair below.
+    setAttachedFiles((msg.file_attachments ?? []).map(a => a.path))
   }, [isQuerying, editing, messages, checkpoints, input, attachedFiles])
 
   const cancelEdit = useCallback(() => {
@@ -466,8 +473,10 @@ export default function Chat() {
   }, [navigate, currentSessionId, sessions, config?.working_dir, createSession, compactSession, t])
 
   // B1 §4-8: commit an edit — rewind to before the edited turn, then resend
-  // the edited text with the message's ORIGINAL attachment paths (editing
-  // attachments themselves is out of scope). A failed rewind keeps editing
+  // the edited text with the composer's CURRENT attachments (A-26 WYSIWYG:
+  // chips added/removed during the edit are honored; a set left untouched
+  // resends the message's original paths, and an attachment-less message
+  // still commits with zero attachments). A failed rewind keeps editing
   // mode alive so the user can retry or cancel.
   const commitEdit = useCallback(async (newText: string) => {
     if (!editing) return
@@ -478,20 +487,21 @@ export default function Chat() {
       return
     }
     setEditing(null)
-    const ok = await sendMessage(newText, editing.attachmentPaths.length > 0 ? editing.attachmentPaths : undefined)
+    const attachments = attachedFiles
+    const ok = await sendMessage(newText, attachments.length > 0 ? attachments : undefined)
     if (!ok) {
       // The backend rejected the send AFTER the rewind landed (budget
       // guard, concurrent-query guard, …) — the old turn is already gone,
-      // so keep the edited text (and its attachments) in the composer
-      // instead of discarding them; the debounced draft write persists it.
+      // so keep the edited text and the current chips in the composer
+      // instead of discarding them (they were never cleared on this path);
+      // the debounced draft write persists the recovery.
       setInput(newText)
-      setAttachedFiles(editing.attachmentPaths)
       return
     }
     setInput('')
     setAttachedFiles([])
     if (visibleSessionId) clearDraft(visibleSessionId)
-  }, [editing, rewindSession, sendMessage, visibleSessionId, t])
+  }, [editing, attachedFiles, rewindSession, sendMessage, visibleSessionId, t])
 
   const handleSend = () => {
     const trimmed = input.trim()
@@ -520,7 +530,12 @@ export default function Chat() {
     // B1 §4-8: an in-flight edit replaces the turn (rewind + resend) instead
     // of appending. Blocked while querying — rewinding mid-run is unsafe.
     if (editing) {
-      if (isQuerying || !trimmed) return
+      if (isQuerying) return
+      // A-25 fix: aligned with the main path's A-9 semantics — clearing the
+      // text while chips remain commits an attachments-only edit (empty text
+      // + the current composer attachments). Only a double-empty composer is
+      // a no-op; the old `!trimmed` arm swallowed that Enter silently.
+      if (!trimmed && !hasAttachments) return
       void commitEdit(trimmed)
       return
     }
@@ -653,8 +668,15 @@ export default function Chat() {
   // absolute paths (the backend reads bytes via std::fs and base64-encodes).
   // The browser <input type="file"> only exposes File objects with opaque
   // "fakepath" paths, which never resolve on disk — that was the dead-button bug.
-  const handleAttach = async (files: string[]) => {
-    if (files.length > 0) setAttachedFiles(prev => [...prev, ...files])
+  //
+  // The onAttach contract carries the FULL intended set, so this is a
+  // REPLACE, not an append: ChatInput's mergePaths dedupes
+  // `[current ∪ new]` before calling (dialog / drag-drop / paste), and a
+  // chip's ✕ hands back the remaining list as its removal (A-26 follow-up —
+  // the old `[...prev, ...files]` append duplicated every previously
+  // attached file on the second attach and resurrected a just-removed chip).
+  const handleAttach = (files: string[]) => {
+    setAttachedFiles(files)
   }
 
   const handleDetachAll = () => {

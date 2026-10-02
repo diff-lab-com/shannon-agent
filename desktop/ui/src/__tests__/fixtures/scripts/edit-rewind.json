@@ -1,6 +1,6 @@
 {
   "name": "edit-rewind",
-  "description": "编辑重发 journey — 预置历史 + checkpoints → edit banner → commit（rewind_session + 新流）；cancel 保稿；A-14 边界证据",
+  "description": "编辑重发 journey — 预置历史（首条消息带附件）+ checkpoints → edit banner → commit（rewind_session + 新流，附件所见即所发 + 纯附件编辑提交）；cancel 保稿；A-14 边界证据",
   "seed": {
     "config": {
       "hasKey": true
@@ -12,7 +12,11 @@
         "messages": [
           {
             "role": "user",
-            "content": "第一轮：先介绍潮汐的成因"
+            "content": "第一轮：先介绍潮汐的成因",
+            "attachments": [
+              "/Users/demo/workspace/my-startup/tide-notes.md",
+              "/Users/demo/workspace/my-startup/tide-chart.png"
+            ]
           },
           {
             "role": "assistant",
