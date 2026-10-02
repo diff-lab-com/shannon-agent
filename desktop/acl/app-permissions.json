@@ -596,6 +596,15 @@
       }
     },
     {
+      "identifier": "allow-get-active-session-id",
+      "description": "Enables the get_active_session_id command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_active_session_id"
+        ]
+      }
+    },
+    {
       "identifier": "allow-get-background-tasks",
       "description": "Enables the get_background_tasks command without any pre-configured scope.",
       "commands": {
@@ -2917,6 +2926,7 @@
         "allow-cancel-background-task",
         "allow-cancel-query",
         "allow-clear-session-model",
+        "allow-get-active-session-id",
         "allow-get-background-tasks",
         "allow-get-conversation",
         "allow-get-provider-allowlist",

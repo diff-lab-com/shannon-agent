@@ -191,7 +191,8 @@ export default function Chat() {
   // trigger never fired for it (clicking the same session is a no-op), and
   // the §4-11 restart anchor died. The effect's FIRST run therefore restores
   // the arrival session's draft too (mount = arriving in that session; the
-  // composer state is brand-new, so there is nothing to flush over it).
+  // composer state is brand-new, so there is nothing to flush over it) —
+  // unless a location.state prefill claimed the composer in the same pass.
   const prevDraftSessionRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
     const firstRun = prevDraftSessionRef.current === undefined
@@ -199,10 +200,16 @@ export default function Chat() {
     prevDraftSessionRef.current = visibleSessionId
     if (firstRun) {
       // Mount: restore whatever the arrival session kept (no-op when the
-      // boot is unbound — null has no draft).
-      const draft = visibleSessionId ? readDraft(visibleSessionId) : null
-      setInput(draft?.text ?? '')
-      setAttachedFiles(draft?.attachments ?? [])
+      // boot is unbound — null has no draft). Fix-round 1 (A-6 follow-up):
+      // a location.state prefill that applied in this SAME mount pass (the
+      // effect above runs first and flips its ref synchronously) owns the
+      // composer — the restore must not clobber it with a stale draft; the
+      // debounced write below then persists the prefill as the new draft.
+      if (!prefillApplied.current) {
+        const draft = visibleSessionId ? readDraft(visibleSessionId) : null
+        setInput(draft?.text ?? '')
+        setAttachedFiles(draft?.attachments ?? [])
+      }
       return
     }
     if (previousId === visibleSessionId) return
