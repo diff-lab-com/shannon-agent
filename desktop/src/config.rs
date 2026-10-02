@@ -834,15 +834,28 @@ pub fn load_mcp_servers_with_store(
 }
 
 /// Read one server's OAuth token block from the secret store, if present.
-/// A store miss/unavailability is indistinguishable from "not migrated yet" —
-/// the plaintext fallback applies (never an error).
+/// A store miss is indistinguishable from "not migrated yet" — the plaintext
+/// fallback applies. A store READ failure (locked keychain, …) is never
+/// silently treated as a miss: it warns loudly (with the server name) and
+/// then takes the same plaintext fallback, so a degraded read is at least
+/// diagnosable (A8: no silent degradation).
 fn oauth_from_secret_store(
     store: Option<&dyn crate::secret_store::SecretStore>,
     server: &str,
 ) -> Option<McpStoredOAuth> {
     let raw = match store?.get(&crate::secret_store::mcp_oauth_key(server)) {
         Ok(Some(raw)) => raw,
-        Ok(None) | Err(_) => return None,
+        Ok(None) => return None,
+        Err(e) => {
+            tracing::warn!(
+                domain = "mcp-oauth",
+                server,
+                error = %e,
+                "keyring read failed — treating the OAuth credential as absent \
+                 (plaintext fallback applies)"
+            );
+            return None;
+        }
     };
     match serde_json::from_str::<McpStoredOAuth>(&raw) {
         Ok(block) => Some(block),
@@ -1337,14 +1350,31 @@ pub fn migrate_legacy_mcp_servers_to(
 /// the OS keyring (R7-④ batch 2 / A8). Runs at startup (and after an OAuth
 /// install/re-authentication) before anything reads the store.
 ///
-/// Per entry, in order:
-/// 1. Keyring already has the block (`shannon/mcp-oauth/<name>`) → any
-///    leftover plaintext secret material is stripped (crash-recovery for a
-///    run interrupted between the keyring put and the file rewrite).
-/// 2. Otherwise, plaintext credentials present → write the token block to
-///    the keyring, then strip the plaintext and atomically rewrite the
-///    file. A **failed keyring write keeps the plaintext** (the file is
-///    already 0600) and warns — loading is never blocked.
+/// The keyring is the live credential once an entry is migrated — a token
+/// refresh rotates it **there** — so the file's plaintext copy never
+/// blindly overwrites it. Per entry, in order:
+///
+/// 1. Keyring **read** failure (locked keychain, …) → the entry is left
+///    as-is (plaintext kept, nothing overwritten) and the failure warns —
+///    retried on the next startup, never guessed over an entry we cannot
+///    see.
+/// 2. Keyring holds no block → first migration: put the plaintext payload,
+///    then strip it from the file (atomic 0600 rewrite).
+/// 3. Keyring block == plaintext block → in sync (a run interrupted
+///    between the put and the file rewrite) → strip the leftover only.
+/// 4. Keyring block differs → put only when the plaintext is demonstrably
+///    the newer one — its `expires_at` advanced past the stored block's,
+///    the fingerprint of a refresh whose keyring write failed last
+///    session. Otherwise the keyring wins and only the stale leftover is
+///    stripped (the crash-shaped case: an earlier migration's rewrite
+///    failed, then a refresh rotated the keyring — re-putting the old
+///    plaintext would roll back a possibly single-use refresh token).
+///    A mismatch with no `expires_at` on either side (static tokens) is
+///    indeterminate and likewise never rolls the keyring back —
+///    re-authentication recovers, a rolled-back rotation does not.
+///
+/// A **failed keyring write keeps the plaintext** (the file is already
+/// 0600) and warns — loading is never blocked.
 ///
 /// Migration scope (A8 ruling): the `shannonOAuth` token block, plus the
 /// W3-B legacy shape it derives from — a url-only entry's
@@ -1361,6 +1391,21 @@ pub fn migrate_mcp_oauth_secrets() -> usize {
         &user_settings_path(),
         crate::secret_store::global().as_deref(),
     )
+}
+
+/// True when the plaintext token block is demonstrably newer than the
+/// stored one: its `expires_at` advanced, which only a token refresh does.
+/// See [`migrate_mcp_oauth_secrets_to`] step 4 for why an indeterminate
+/// (static-token) mismatch resolves to `false` — never roll the keyring
+/// back on a guess.
+fn plaintext_block_newer(plain: &McpStoredOAuth, stored: &McpStoredOAuth) -> bool {
+    match (plain.expires_at, stored.expires_at) {
+        (Some(plain_exp), Some(stored_exp)) => plain_exp > stored_exp,
+        // Only the refreshed side carries an expiry: whoever has one was
+        // written by (or after) a refresh.
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
 }
 
 /// Store-injected core of [`migrate_mcp_oauth_secrets`] (tests pass a
@@ -1404,29 +1449,64 @@ pub fn migrate_mcp_oauth_secrets_to(
             };
         let had_plaintext =
             entry_obj.get("shannonOAuth").is_some() || entry_obj.get("headers").is_some();
-        let raw = match serde_json::to_string(&block) {
-            Ok(raw) => raw,
-            Err(e) => {
+
+        // Keyring first: read the stored block (if any) before touching
+        // anything — the file's copy is a leftover, not the source of truth.
+        let stored: Option<McpStoredOAuth> =
+            match store.get(&crate::secret_store::mcp_oauth_key(name)) {
+                Ok(Some(raw)) => serde_json::from_str(&raw).ok(),
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::warn!(
+                        domain = "mcp-oauth",
+                        server = name,
+                        error = %e,
+                        "keyring read failed during migration — entry left as-is \
+                         (plaintext kept, retried on next startup)"
+                    );
+                    continue;
+                }
+            };
+        let needs_put = match &stored {
+            // First migration, or a stored block we cannot parse (corrupt
+            // payload): the plaintext is the only sane source — put it.
+            None => true,
+            Some(stored_block) => {
+                if *stored_block == block {
+                    // In sync: the plaintext is the leftover of a run whose
+                    // file rewrite was interrupted. Strip only — re-putting
+                    // identical bytes is pointless churn.
+                    false
+                } else {
+                    plaintext_block_newer(&block, stored_block)
+                }
+            }
+        };
+        if needs_put {
+            let raw = match serde_json::to_string(&block) {
+                Ok(raw) => raw,
+                Err(e) => {
+                    tracing::warn!(
+                        domain = "mcp-oauth",
+                        server = name,
+                        error = %e,
+                        "OAuth token block serialization failed — entry left as-is"
+                    );
+                    continue;
+                }
+            };
+            if let Err(e) = store.put(&crate::secret_store::mcp_oauth_key(name), &raw) {
+                // Degraded write: keep the plaintext (0600 file) and warn —
+                // migration must never block loading or lose a credential.
                 tracing::warn!(
                     domain = "mcp-oauth",
                     server = name,
                     error = %e,
-                    "OAuth token block serialization failed — entry left as-is"
+                    "keyring write failed — OAuth token stays as plaintext in \
+                     settings.json (owner-only 0600)"
                 );
                 continue;
             }
-        };
-        if let Err(e) = store.put(&crate::secret_store::mcp_oauth_key(name), &raw) {
-            // Degraded write: keep the plaintext (0600 file) and warn —
-            // migration must never block loading or lose a credential.
-            tracing::warn!(
-                domain = "mcp-oauth",
-                server = name,
-                error = %e,
-                "keyring write failed — OAuth token stays as plaintext in \
-                 settings.json (owner-only 0600)"
-            );
-            continue;
         }
         if had_plaintext {
             entry_obj.remove("shannonOAuth");
@@ -2494,6 +2574,202 @@ mod tests {
         let original = std::fs::read_to_string(&path).unwrap();
         assert_eq!(migrate_mcp_oauth_secrets_to(&path, None), 0);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    /// Regression (review Important#1): the crash-shaped state "keyring
+    /// already holds the refreshed NEW token, settings.json still carries
+    /// the OLD plaintext (an earlier migration's rewrite failed, then a
+    /// refresh rotated the keyring)" must NEVER roll the keyring back —
+    /// re-putting the old block would resurrect a dead single-use refresh
+    /// token. The stale leftover is stripped; the keyring block survives.
+    #[test]
+    fn migration_never_rolls_a_newer_keyring_block_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"linear":{"type":"http","url":"https://mcp.linear.app/sse",
+                "shannonOAuth":{"client_id":"cid","token_url":"https://t/token",
+                                "refresh_token":"dead-refresh","access_token":"stale-token",
+                                "expires_at":1000}}}}"#,
+        )
+        .unwrap();
+
+        // Keyring holds the rotated (newer) pair from the refresh.
+        let store = MockSecretStore::new();
+        let newer = McpStoredOAuth {
+            client_id: "cid".into(),
+            token_url: "https://t/token".into(),
+            refresh_token: Some("rotated-refresh".into()),
+            access_token: Some("fresh-token".into()),
+            expires_at: Some(2000),
+        };
+        store
+            .put(
+                &crate::secret_store::mcp_oauth_key("linear"),
+                &serde_json::to_string(&newer).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(migrate_mcp_oauth_secrets_to(&path, Some(&store)), 1);
+
+        // The keyring still holds the NEW credential — not rolled back.
+        let kept: McpStoredOAuth = serde_json::from_str(
+            &store
+                .value(&crate::secret_store::mcp_oauth_key("linear"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            kept, newer,
+            "keyring block must win over the stale plaintext"
+        );
+
+        // The stale plaintext is still stripped (the file converges).
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(root["mcpServers"]["linear"].get("shannonOAuth").is_none());
+    }
+
+    /// The mirror case (review Important#1's other leg): the plaintext IS
+    /// the newer block — a refresh whose keyring write failed last session
+    /// left the rotated pair in the file — so the migration pushes it into
+    /// the keyring instead of stripping it into oblivion.
+    #[test]
+    fn migration_lets_a_demonstrably_newer_plaintext_block_win() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"linear":{"type":"http","url":"https://mcp.linear.app/sse",
+                "shannonOAuth":{"client_id":"cid","token_url":"https://t/token",
+                                "refresh_token":"rotated-refresh","access_token":"fresh-token",
+                                "expires_at":2000}}}}"#,
+        )
+        .unwrap();
+
+        // Keyring holds the pre-rotation (older) pair.
+        let store = MockSecretStore::new();
+        let older = McpStoredOAuth {
+            client_id: "cid".into(),
+            token_url: "https://t/token".into(),
+            refresh_token: Some("dead-refresh".into()),
+            access_token: Some("stale-token".into()),
+            expires_at: Some(1000),
+        };
+        store
+            .put(
+                &crate::secret_store::mcp_oauth_key("linear"),
+                &serde_json::to_string(&older).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(migrate_mcp_oauth_secrets_to(&path, Some(&store)), 1);
+
+        // The keyring now carries the newer (plaintext) credential.
+        let pushed: McpStoredOAuth = serde_json::from_str(
+            &store
+                .value(&crate::secret_store::mcp_oauth_key("linear"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(pushed.refresh_token.as_deref(), Some("rotated-refresh"));
+        assert_eq!(pushed.expires_at, Some(2000));
+
+        // And the file converges to keyring-only.
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(root["mcpServers"]["linear"].get("shannonOAuth").is_none());
+    }
+
+    /// An indeterminate mismatch (static tokens, no `expires_at` on either
+    /// side) never rolls the keyring back either — re-authentication
+    /// recovers, a rolled-back block may not.
+    #[test]
+    fn migration_with_static_token_mismatch_keeps_the_keyring() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"linear":{"type":"http","url":"https://mcp.linear.app/sse",
+                "shannonOAuth":{"client_id":"cid","token_url":"","access_token":"file-token"}}}}"#,
+        )
+        .unwrap();
+
+        let store = MockSecretStore::new();
+        store
+            .put(
+                &crate::secret_store::mcp_oauth_key("linear"),
+                r#"{"client_id":"cid","token_url":"","access_token":"keyring-token"}"#,
+            )
+            .unwrap();
+
+        assert_eq!(migrate_mcp_oauth_secrets_to(&path, Some(&store)), 1);
+        let kept: McpStoredOAuth = serde_json::from_str(
+            &store
+                .value(&crate::secret_store::mcp_oauth_key("linear"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(kept.access_token.as_deref(), Some("keyring-token"));
+    }
+
+    /// A keyring READ failure during migration leaves the entry untouched
+    /// (plaintext kept, nothing overwritten) and warns — never guessed over
+    /// an entry we cannot see.
+    #[test]
+    fn migration_with_unreadable_keyring_leaves_entries_and_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(&path, linear_entry_json()).unwrap();
+        let original = std::fs::read_to_string(&path).unwrap();
+
+        let store = MockSecretStore::failing_reads();
+        let (capture, migrated) = crate::secret_store::test_support::capture_warnings(|| {
+            migrate_mcp_oauth_secrets_to(&path, Some(&store))
+        });
+        assert_eq!(migrated, 0);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "an unreadable keyring must not be answered with a stripped file"
+        );
+        let warnings = capture.warnings();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("keyring read failed during migration")),
+            "read failure must be visible: {warnings:?}"
+        );
+    }
+
+    /// Regression (review Important#3): a keyring read failure on the load
+    /// path warns (with the server name) instead of silently rendering a
+    /// migrated server as unauthenticated; the returned semantics are
+    /// unchanged (plaintext fallback / credential-less row).
+    #[test]
+    fn load_with_unreadable_keyring_warns_and_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(&path, linear_entry_json()).unwrap();
+
+        let store = MockSecretStore::failing_reads();
+        let (capture, servers) = crate::secret_store::test_support::capture_warnings(|| {
+            load_mcp_servers_with_store(&path, Some(&store))
+        });
+        let servers = servers.unwrap();
+        let linear = servers.iter().find(|s| s.name == "linear").unwrap();
+        // Semantics unchanged: the plaintext copy still serves the row…
+        assert_eq!(
+            linear.oauth.as_ref().unwrap().access_token.as_deref(),
+            Some("old")
+        );
+        // …but the keyring failure is loud, not silent.
+        let warnings = capture.warnings();
+        assert!(
+            warnings.iter().any(|w| w.contains("keyring read failed")),
+            "a locked keychain must not silently look like 'not migrated': {warnings:?}"
+        );
     }
 
     /// Read-path precedence within the tolerance window: keyring wins over

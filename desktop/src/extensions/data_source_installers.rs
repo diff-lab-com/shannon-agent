@@ -495,15 +495,21 @@ fn read_data_source_kind_in(root: &Path, slug: &str) -> Result<String, InstallEr
 
 /// One-time, idempotent migration of data-source credential fields into the
 /// OS keyring (R7-④ batch 2 / A8). Runs at startup over every
-/// `data-sources/*.toml`:
+/// `data-sources/*.toml`, syncing the keyring against the plaintext:
 ///
-/// 1. Keyring already holds the payload → any leftover plaintext credential
-///    fields are stripped from the TOML (crash-recovery for a run
-///    interrupted between the keyring put and the file rewrite).
-/// 2. Otherwise, plaintext credential fields present → write the payload,
-///    then rewrite the TOML without them. A **failed keyring write keeps
-///    the plaintext** (owner-only 0600) and warns — loading is never
-///    blocked.
+/// 1. Keyring already holds an **equal** payload → the plaintext is just a
+///    leftover from a run interrupted between the keyring put and the file
+///    rewrite — strip it (crash-recovery).
+/// 2. Keyring holds a **different** payload (or none) → the TOML is what the
+///    user last successfully wrote, i.e. the newer state (a password change
+///    whose keyring put failed last session, or a first migration) — push
+///    the plaintext into the keyring, then strip it.
+/// 3. Keyring **read** failure (locked keychain, …) → the source is left
+///    as-is (plaintext kept, nothing overwritten) and the failure warns —
+///    retried on the next startup.
+///
+/// A **failed keyring write keeps the plaintext** (owner-only 0600) and
+/// warns — loading is never blocked.
 ///
 /// Only the catalog's `password`-kind fields migrate; host/port/user/enabled
 /// stay in the TOML verbatim (the file is re-rendered through the same
@@ -550,31 +556,49 @@ pub fn migrate_data_source_secrets_in(
             continue;
         }
         let key = crate::secret_store::datasource_key(&meta.slug);
-        // Crash-recovery: a keyring hit means the credential is already
-        // stored — just make sure the plaintext copy is gone.
-        let already_stored = matches!(store.get(&key), Ok(Some(_)));
-        if !already_stored {
-            let raw = match secrets_payload(&secrets) {
-                Ok(raw) => raw,
-                Err(e) => {
-                    tracing::warn!(
-                        domain = "datasource",
-                        slug = %meta.slug,
-                        error = %e,
-                        "data-source credential serialization failed — file left as-is"
-                    );
-                    continue;
-                }
-            };
-            if let Err(e) = store.put(&key, &raw) {
+        let raw = match secrets_payload(&secrets) {
+            Ok(raw) => raw,
+            Err(e) => {
                 tracing::warn!(
                     domain = "datasource",
                     slug = %meta.slug,
                     error = %e,
-                    "keyring write failed — data source credentials stay as \
-                     plaintext in the TOML (owner-only 0600)"
+                    "data-source credential serialization failed — file left as-is"
                 );
                 continue;
+            }
+        };
+        // Sync the keyring against the plaintext (the file is what the user
+        // last successfully wrote, so it is the newer state whenever the two
+        // disagree — e.g. a password change whose keyring put failed last
+        // session): no entry yet → first migration; differing entry → the
+        // plaintext overwrites it; equal → already in sync, strip only. A
+        // keyring READ failure never overwrites an entry we cannot see and
+        // never strips the plaintext behind it — the source is left as-is
+        // for the next startup, loudly.
+        match store.get(&key) {
+            Err(e) => {
+                tracing::warn!(
+                    domain = "datasource",
+                    slug = %meta.slug,
+                    error = %e,
+                    "keyring read failed during migration — data source left \
+                     as-is (plaintext kept, retried on next startup)"
+                );
+                continue;
+            }
+            Ok(Some(stored)) if stored == raw => {}
+            Ok(_) => {
+                if let Err(e) = store.put(&key, &raw) {
+                    tracing::warn!(
+                        domain = "datasource",
+                        slug = %meta.slug,
+                        error = %e,
+                        "keyring write failed — data source credentials stay as \
+                         plaintext in the TOML (owner-only 0600)"
+                    );
+                    continue;
+                }
             }
         }
         // Rewrite the TOML without the credential fields.
@@ -622,16 +646,27 @@ fn read_data_source_config_in_with_store(
         .map_err(|e| InstallError::Io(format!("read {}: {e}", file.display())))?;
     let mut config = parse_config_section(&body);
     if let Some(store) = store {
-        if let Some(secrets) = store
-            .get(&crate::secret_store::datasource_key(slug))
-            .ok()
-            .flatten()
-            .as_deref()
-            .and_then(parse_secrets_payload)
-        {
-            // Keyring values win; plaintext leftovers are the fallback.
-            for (key, value) in secrets {
-                config.insert(key, value);
+        // Keyring first, plaintext fallback. A keyring READ failure (locked
+        // keychain, …) must never masquerade as "no stored credential"
+        // silently — warn loudly, then let the plaintext fallback serve.
+        match store.get(&crate::secret_store::datasource_key(slug)) {
+            Ok(Some(raw)) => {
+                if let Some(secrets) = parse_secrets_payload(&raw) {
+                    // Keyring values win; plaintext leftovers are the fallback.
+                    for (key, value) in secrets {
+                        config.insert(key, value);
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    domain = "datasource",
+                    slug,
+                    error = %e,
+                    "keyring read failed — falling back to the plaintext copy \
+                     in the TOML (credentials may be stale)"
+                );
             }
         }
     }
@@ -884,7 +919,7 @@ kind = "should-not-win"
 
     // ── F5 (R7-④ batch 2 / A8): data-source credentials → OS keyring ──────
 
-    use crate::secret_store::MockSecretStore;
+    use crate::secret_store::{MockSecretStore, SecretStore};
 
     /// A "credential-less" secret set for the catalog's password-kind keys.
     fn secret_field_keys_now() -> std::collections::BTreeSet<String> {
@@ -1070,6 +1105,145 @@ kind = "should-not-win"
         assert_eq!(
             resolved.get("password").map(String::as_str),
             Some("hunter2")
+        );
+    }
+
+    /// Regression (review Important#2): the TOML carries NEWER user input —
+    /// a password change whose keyring put failed last session left the new
+    /// password in the file while the keyring still holds the old one — so
+    /// the migration must push the plaintext INTO the keyring, never strip
+    /// it into oblivion.
+    #[test]
+    fn migration_overwrites_a_stale_keyring_with_the_newer_plaintext() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("imap_host".into(), "imap.example.com".into());
+        config.insert("password".into(), "new-password".into());
+        // Seed the changed-password plaintext through the store-less installer.
+        install_data_source_in_with_store(root, "imap-home", "email_imap", "Home", &config, None)
+            .expect("seed plaintext install");
+
+        // The keyring still holds the OLD password from before the change.
+        let store = MockSecretStore::new();
+        let old_payload = serde_json::json!({ "password": "old-password" }).to_string();
+        store
+            .put(
+                &crate::secret_store::datasource_key("imap-home"),
+                &old_payload,
+            )
+            .unwrap();
+
+        assert_eq!(migrate_data_source_secrets_in(root, Some(&store)), 1);
+
+        // The newer user input won; the old credential is gone.
+        let raw = store
+            .value(&crate::secret_store::datasource_key("imap-home"))
+            .expect("entry present after migration");
+        let secrets: BTreeMap<String, String> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            secrets.get("password").map(String::as_str),
+            Some("new-password")
+        );
+        assert_ne!(raw, old_payload);
+
+        // And the file converges to keyring-only.
+        let body = std::fs::read_to_string(root.join("imap-home.toml")).unwrap();
+        assert!(!body.contains("new-password"), "{body}");
+    }
+
+    /// The in-sync leg of review Important#2: an equal keyring payload is
+    /// only stripped from the TOML (the interrupted-migration leftover) —
+    /// no redundant churn, value untouched.
+    #[test]
+    fn migration_with_equal_keyring_payload_strips_without_rewriting_the_entry() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("password".into(), "hunter2".into());
+        install_data_source_in_with_store(root, "imap-home", "email_imap", "Home", &config, None)
+            .expect("seed plaintext install");
+
+        let store = MockSecretStore::new();
+        let payload = serde_json::json!({ "password": "hunter2" }).to_string();
+        store
+            .put(&crate::secret_store::datasource_key("imap-home"), &payload)
+            .unwrap();
+
+        assert_eq!(migrate_data_source_secrets_in(root, Some(&store)), 1);
+        assert_eq!(
+            store
+                .value(&crate::secret_store::datasource_key("imap-home"))
+                .as_deref(),
+            Some(payload.as_str()),
+            "in-sync payload must not be rewritten"
+        );
+        let body = std::fs::read_to_string(root.join("imap-home.toml")).unwrap();
+        assert!(!body.contains("hunter2"), "{body}");
+    }
+
+    /// A keyring READ failure during migration leaves the source untouched
+    /// (plaintext kept, nothing overwritten, nothing stripped) and warns.
+    #[test]
+    fn migration_with_unreadable_keyring_leaves_sources_and_warns() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("password".into(), "hunter2".into());
+        install_data_source_in_with_store(root, "imap-home", "email_imap", "Home", &config, None)
+            .expect("seed plaintext install");
+        let before = std::fs::read_to_string(root.join("imap-home.toml")).unwrap();
+
+        let store = MockSecretStore::failing_reads();
+        let (capture, migrated) = crate::secret_store::test_support::capture_warnings(|| {
+            migrate_data_source_secrets_in(root, Some(&store))
+        });
+        assert_eq!(migrated, 0);
+        assert_eq!(
+            std::fs::read_to_string(root.join("imap-home.toml")).unwrap(),
+            before,
+            "an unreadable keyring must not be answered with a stripped TOML"
+        );
+        assert!(
+            capture
+                .warnings()
+                .iter()
+                .any(|w| w.contains("keyring read failed during migration")),
+            "read failure must be visible: {:?}",
+            capture.warnings()
+        );
+    }
+
+    /// Regression (review Important#3): a keyring read failure on the
+    /// resolve path warns instead of silently answering "no credential";
+    /// the plaintext fallback semantics are unchanged.
+    #[test]
+    fn read_with_unreadable_keyring_warns_and_falls_back_to_toml() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("imap_host".into(), "imap.example.com".into());
+        config.insert("password".into(), "hunter2".into());
+        // Plaintext TOML shape (degraded install).
+        install_data_source_in_with_store(root, "imap-home", "email_imap", "Home", &config, None)
+            .expect("seed plaintext install");
+
+        let store = MockSecretStore::failing_reads();
+        let (capture, resolved) = crate::secret_store::test_support::capture_warnings(|| {
+            read_data_source_config_in_with_store(root, "imap-home", Some(&store))
+        });
+        let resolved = resolved.expect("read must not fail on a degraded keyring");
+        assert_eq!(
+            resolved.get("password").map(String::as_str),
+            Some("hunter2")
+        );
+        assert!(
+            capture
+                .warnings()
+                .iter()
+                .any(|w| w.contains("keyring read failed")),
+            "a locked keychain must not silently look like 'no stored credential': {:?}",
+            capture.warnings()
         );
     }
 

@@ -51,11 +51,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// against the gateway connections' keys.
 pub const SERVICE: &str = "shannon";
 
-/// Probe entry, written/read/deleted once at startup to decide the storage
-/// backend. A dedicated `probe` domain so a leftover probe entry can never be
-/// mistaken for a migrated credential.
-const PROBE_KEY: &str = "shannon/probe/desktop-startup";
-
 /// Storage seam for one secret value. Keys are fully qualified
 /// `shannon/<domain>/<name>` strings — implementations decide the physical
 /// mapping (the production impl: OS keyring `(service, account)`).
@@ -131,12 +126,16 @@ fn err(e: keyring::Error) -> String {
 /// In-memory [`SecretStore`] for tests — the ONLY store implementation tests
 /// may exercise (CI has no Secret Service). `fail_writes` simulates an
 /// unavailable/refusing backend so the "keyring write failed → keep
-/// plaintext + warn" path is testable without any OS integration.
+/// plaintext + warn" path is testable without any OS integration;
+/// `fail_reads` simulates an unreadable backend (locked keychain) for the
+/// "keyring read failed → warn + plaintext fallback" paths.
 #[derive(Default)]
 pub struct MockSecretStore {
     entries: Mutex<BTreeMap<String, String>>,
     /// When true, every `put` fails (get/delete keep working).
     pub fail_writes: bool,
+    /// When true, every `get` fails (put/delete keep working).
+    pub fail_reads: bool,
 }
 
 impl MockSecretStore {
@@ -149,6 +148,16 @@ impl MockSecretStore {
         Self {
             entries: Mutex::new(BTreeMap::new()),
             fail_writes: true,
+            fail_reads: false,
+        }
+    }
+
+    /// Every `get` fails — the unreadable-backend double (locked keychain).
+    pub fn failing_reads() -> Self {
+        Self {
+            entries: Mutex::new(BTreeMap::new()),
+            fail_writes: false,
+            fail_reads: true,
         }
     }
 
@@ -172,6 +181,9 @@ impl MockSecretStore {
 
 impl SecretStore for MockSecretStore {
     fn get(&self, key: &str) -> Result<Option<String>, String> {
+        if self.fail_reads {
+            return Err("mock keyring read failure (locked keychain)".into());
+        }
         Ok(self
             .entries
             .lock()
@@ -200,16 +212,27 @@ impl SecretStore for MockSecretStore {
 /// Probe the real OS keyring: write → read → delete one probe entry. Any
 /// failure means the backend is unusable (no Secret Service on the Linux
 /// session, locked keychain, …) and the caller must fall back to plaintext.
+///
+/// The probe key carries the pid so two concurrent app instances can never
+/// interleave their probe cycles (A's delete landing between B's put and
+/// get would falsely degrade B's whole session — the probe is per-process
+/// state, not shared state).
 fn probe_keyring() -> Result<KeyringStore, String> {
     let store = KeyringStore;
     const PROBE_VALUE: &str = "shannon-keyring-probe";
-    store.put(PROBE_KEY, PROBE_VALUE)?;
-    let read_back = store.get(PROBE_KEY)?;
+    let probe_key = probe_key();
+    store.put(&probe_key, PROBE_VALUE)?;
+    let read_back = store.get(&probe_key)?;
     if read_back.as_deref() != Some(PROBE_VALUE) {
         return Err(format!("keyring probe read-back mismatch: {read_back:?}"));
     }
-    store.delete(PROBE_KEY)?;
+    store.delete(&probe_key)?;
     Ok(store)
+}
+
+/// The per-process probe entry key: `shannon/probe/desktop-startup-<pid>`.
+fn probe_key() -> String {
+    format!("shannon/probe/desktop-startup-{}", std::process::id())
 }
 
 /// The resolved credential backend for this process.
@@ -480,6 +503,30 @@ mod tests {
     fn mock_store_failing_writes_simulates_unavailable_backend() {
         let store = MockSecretStore::failing_writes();
         assert!(store.put("shannon/x/y", "v").is_err());
+    }
+
+    /// The unreadable-backend double: every get fails (locked keychain),
+    /// driving the "read failed → warn + plaintext fallback" paths.
+    #[test]
+    fn mock_store_failing_reads_simulates_locked_keychain() {
+        let store = MockSecretStore::failing_reads();
+        assert!(store.get("shannon/x/y").is_err());
+        // Writes still work — the failure is read-specific.
+        store.put("shannon/x/y", "v").unwrap();
+        assert!(store.contains("shannon/x/y"));
+    }
+
+    /// The probe key is pid-scoped: two concurrent app instances can never
+    /// interleave each other's probe cycles (A's delete landing between B's
+    /// put and get would falsely degrade B's whole session).
+    #[test]
+    fn probe_key_is_pid_scoped() {
+        let key = probe_key();
+        let pid = std::process::id();
+        assert_eq!(key, format!("shannon/probe/desktop-startup-{pid}"));
+        assert!(key.starts_with("shannon/probe/desktop-startup-"));
+        // Still within the `shannon` service namespace after the split.
+        assert_eq!(split_key(&key).0, SERVICE);
     }
 
     // ── degradation visibility (A8) ───────────────────────────────────────
