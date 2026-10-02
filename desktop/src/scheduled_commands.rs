@@ -703,7 +703,9 @@ pub async fn update_scheduled_task(
         };
     }
     if let Some(enabled) = payload.enabled {
-        routine.enabled = enabled;
+        // R7-②: stamp `enabled_at` on a disabled→enabled update, same as a
+        // toggle.
+        routine.set_enabled(enabled);
     }
     if let Some(ts) = payload.expires_at {
         routine.expires_at = Some(ts_to_dt(ts));
@@ -788,7 +790,9 @@ pub async fn toggle_scheduled_task(
         .load(&id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("task not found: {id}"))?;
-    routine.enabled = enabled.unwrap_or(!routine.enabled);
+    // R7-②: the disabled→enabled transition stamps `enabled_at`, the zero
+    // point of the auto-pause failure streak — re-enabling clears it.
+    routine.set_enabled(enabled.unwrap_or(!routine.enabled));
     let enabled = routine.enabled;
     store.save(&routine).map_err(|e| e.to_string())?;
     Ok(enabled)

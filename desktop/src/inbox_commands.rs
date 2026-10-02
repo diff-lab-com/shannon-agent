@@ -1812,13 +1812,22 @@ fn finalize_run<R: tauri::Runtime>(
 /// already recorded for `task_id` (newest first), stopping at the first
 /// success (any success clears the streak).
 ///
-/// The trigger tag decides what counts (R7-①): only runs tagged
-/// [`RunTrigger::Scheduled`] advance the streak — `run_now` and `rerun`
-/// are user-initiated. Rows recorded before the tag existed read back
-/// `None` and count as scheduled: the conservative R7-① fallback, so
-/// pre-tagging history still pauses until a success (or the pause itself)
-/// clears it. Non-terminal rows (`running`, `queued`/`cancelled`
-/// tombstones) are invisible to it.
+/// Two filters decide what counts:
+///
+/// - **trigger tag** (R7-①): only runs tagged [`RunTrigger::Scheduled`]
+///   advance the streak — `run_now` and `rerun` are user-initiated. Rows
+///   recorded before the tag existed read back `None` and count as
+///   scheduled: the conservative R7-① fallback, so pre-tagging history
+///   still pauses until a success (or the pause itself) clears it.
+/// - **`enabled_at`** (R7-②): only runs that finished *after* the routine's
+///   last disabled→enabled transition count, so re-enabling a paused
+///   routine restarts the streak from zero. Runs finished before the
+///   cutoff — successes included — are invisible. A routine without
+///   `enabled_at` (pre-field record, or an unreadable task store) counts
+///   the whole history: pre-field behavior, unchanged.
+///
+/// Non-terminal rows (`running`, `queued`/`cancelled` tombstones) are
+/// invisible to it.
 ///
 /// Stateless on purpose: the streak is re-derived from the authoritative
 /// SQLite `routine_runs` on every finalize instead of being accumulated in
@@ -1831,8 +1840,24 @@ fn scheduled_failure_streak(deps: &RoutineRunDeps, task_id: &str, threshold: u32
     let Ok(runs) = deps.inbox.list_runs_by_task(task_id, AUTO_PAUSE_RUN_SCAN) else {
         return 0;
     };
+    let enabled_at_ms = deps
+        .scheduled_tasks
+        .load(task_id)
+        .ok()
+        .flatten()
+        .and_then(|r| r.enabled_at)
+        .map(|t| t.timestamp_millis());
     let mut streak = 0u32;
     for run in runs {
+        // R7-②: everything finished at/before the last enable instant
+        // predates the current enabled period — skipped, successes
+        // included (an old success must not vouch for post-enable runs).
+        if let Some(cutoff) = enabled_at_ms {
+            match run.finished_at_ms {
+                Some(finished) if finished > cutoff => {}
+                _ => continue,
+            }
+        }
         match run.status.as_str() {
             "succeeded" => return 0,
             "failed" => {}
@@ -4073,6 +4098,12 @@ mod tests {
         stored_routine(&deps);
         let app_handle = app.handle().clone();
 
+        // Isolate the trigger filter: the routine predates `enabled_at` too,
+        // so the cutoff filter stays out of the way (covered separately).
+        let mut routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
+        routine.enabled_at = None;
+        deps.scheduled_tasks.save(&routine).unwrap();
+
         // Legacy history: failed rows with no trigger column value (imported
         // whole — no `running` placeholder, they were born terminal).
         for n in 1..=2 {
@@ -4121,6 +4152,84 @@ mod tests {
         finalize_scheduled_failure(&deps, &app_handle, 5, true);
         let routine = deps.scheduled_tasks.load("task-1").unwrap();
         assert!(routine.is_some_and(|r| !r.enabled));
+    }
+
+    /// R7-②: re-enabling an auto-paused routine restarts the streak from
+    /// zero — the first post-enable failure must NOT immediately re-pause
+    /// (the A2 contradiction), and the threshold counts post-enable
+    /// failures only.
+    #[test]
+    fn re_enabling_restarts_the_failure_streak_from_zero() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, _inbox) = webhook_deps(
+            tmp.path(),
+            std::sync::Arc::new(RecordingWebhookPort::default()),
+        );
+        stored_routine(&deps);
+        let app_handle = app.handle().clone();
+
+        // Three failures → auto-paused (W3-A behavior).
+        for n in 1..=3 {
+            finalize_scheduled_failure(&deps, &app_handle, n, true);
+        }
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(routine.is_some_and(|r| !r.enabled), "setup: paused");
+
+        // The user fixes the cause and re-enables (toggle-to-enabled).
+        let mut routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
+        routine.set_enabled(true);
+        assert!(
+            routine.enabled_at.is_some(),
+            "the toggle stamped enabled_at"
+        );
+        deps.scheduled_tasks.save(&routine).unwrap();
+
+        // The FIRST failure after re-enabling must not re-pause.
+        finalize_scheduled_failure(&deps, &app_handle, 4, true);
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(
+            routine.is_some_and(|r| r.enabled),
+            "1 failure after re-enable must not re-pause (A2)"
+        );
+
+        // Post-enable failures count from zero: the 3rd post-enable one pauses.
+        finalize_scheduled_failure(&deps, &app_handle, 5, true);
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(routine.is_some_and(|r| r.enabled));
+        finalize_scheduled_failure(&deps, &app_handle, 6, true);
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(
+            routine.is_some_and(|r| !r.enabled),
+            "3rd post-enable failure pauses"
+        );
+    }
+
+    /// R7-② fallback: a routine whose record predates `enabled_at` keeps
+    /// the pre-field behavior — the whole failure history counts.
+    #[test]
+    fn routine_without_enabled_at_keeps_counting_all_history() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, _inbox) = webhook_deps(
+            tmp.path(),
+            std::sync::Arc::new(RecordingWebhookPort::default()),
+        );
+        let mut routine = ScheduledRoutine::new("Task One".into(), "p".into(), 3600);
+        routine.id = "task-1".into();
+        routine.enabled = true;
+        routine.enabled_at = None; // pre-field record
+        deps.scheduled_tasks.save(&routine).unwrap();
+        let app_handle = app.handle().clone();
+
+        for n in 1..=3 {
+            finalize_scheduled_failure(&deps, &app_handle, n, true);
+        }
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(
+            routine.is_some_and(|r| !r.enabled),
+            "no enabled_at → all history counts (unchanged behavior)"
+        );
     }
 
     #[test]

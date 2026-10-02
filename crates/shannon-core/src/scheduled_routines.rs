@@ -345,6 +345,14 @@ pub struct ScheduledRoutine {
     // ── Lifecycle ──────────────────────────────────────────────────────
     /// When the routine was created.
     pub created_at: DateTime<Utc>,
+    /// When the routine last became enabled — written at create and on
+    /// every disabled→enabled toggle. It is the zero point of the
+    /// consecutive-failure auto-pause streak (R7-②: re-enabling a paused
+    /// routine restarts the streak from zero). `None` on records written
+    /// before the field existed; the streak derivation reads that as
+    /// "count from epoch" — pre-field behavior, unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_at: Option<DateTime<Utc>>,
     /// When the routine last fired.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_fired: Option<DateTime<Utc>>,
@@ -442,6 +450,7 @@ impl ScheduledRoutine {
             prompt,
             interval_secs,
             created_at: Utc::now(),
+            enabled_at: Some(Utc::now()),
             last_fired: None,
             enabled: true,
             fire_count: 0,
@@ -478,6 +487,7 @@ impl ScheduledRoutine {
             prompt,
             interval_secs: 0,
             created_at: Utc::now(),
+            enabled_at: Some(Utc::now()),
             last_fired: None,
             enabled: true,
             fire_count: 0,
@@ -499,6 +509,19 @@ impl ScheduledRoutine {
     /// Whether this routine uses cron mode.
     pub fn is_cron(&self) -> bool {
         self.trigger_type == TriggerType::Cron
+    }
+
+    /// Flip `enabled`, stamping [`Self::enabled_at`] on the disabled→enabled
+    /// transition (R7-②). Re-enabling restarts the consecutive-failure
+    /// streak from zero; a redundant `true` on an already-enabled routine
+    /// does NOT re-stamp (a no-op toggle must not reset the streak), and
+    /// disabling leaves the stamp untouched (it records the *enabled* zero
+    /// point, not the pause).
+    pub fn set_enabled(&mut self, enabled: bool) {
+        if enabled && !self.enabled {
+            self.enabled_at = Some(Utc::now());
+        }
+        self.enabled = enabled;
     }
 
     /// Check if the routine should fire now.
@@ -690,7 +713,8 @@ impl RoutineManager {
     pub fn toggle(&mut self, id_or_name: &str) -> Option<bool> {
         // Try exact ID
         if let Some(r) = self.routines.get_mut(id_or_name) {
-            r.enabled = !r.enabled;
+            let next = !r.enabled;
+            r.set_enabled(next);
             return Some(r.enabled);
         }
         // Try prefix
@@ -700,7 +724,8 @@ impl RoutineManager {
             .find(|k| k.starts_with(id_or_name))
             .cloned()?;
         let r = self.routines.get_mut(&key)?;
-        r.enabled = !r.enabled;
+        let next = !r.enabled;
+        r.set_enabled(next);
         Some(r.enabled)
     }
 
@@ -936,6 +961,75 @@ mod tests {
         let json = serde_json::to_string(&mgr).unwrap();
         let back: RoutineManager = serde_json::from_str(&json).unwrap();
         assert_eq!(back.routines.len(), 1);
+    }
+
+    // ── enabled_at (R7-② re-enable clears the failure streak) ───────────
+
+    #[test]
+    fn constructors_stamp_enabled_at_at_create() {
+        assert!(
+            ScheduledRoutine::new("t".into(), "p".into(), 60)
+                .enabled_at
+                .is_some()
+        );
+        assert!(
+            ScheduledRoutine::new_cron("t".into(), "p".into(), "0 12 * * *".into())
+                .unwrap()
+                .enabled_at
+                .is_some()
+        );
+    }
+
+    /// A pre-`enabled_at` task.json (no field) keeps loading — serde default
+    /// `None` — and the next toggle-to-enabled stamps it (migration
+    /// read/write path of the R7-② ruling).
+    #[test]
+    fn old_record_without_enabled_at_loads_and_re_enable_stamps() {
+        // The exact shape an older build persisted (field absent).
+        let legacy = r#"{
+            "id": "abc12345",
+            "name": "Legacy",
+            "prompt": "p",
+            "interval_secs": 60,
+            "trigger_type": "interval",
+            "created_at": "2026-01-01T00:00:00Z",
+            "last_fired": null,
+            "enabled": true,
+            "fire_count": 0
+        }"#;
+        let mut routine: ScheduledRoutine = serde_json::from_str(legacy).unwrap();
+        assert_eq!(routine.enabled_at, None, "pre-field record loads as None");
+
+        // Disabling never stamps; only the disabled→enabled transition does.
+        routine.set_enabled(false);
+        assert_eq!(routine.enabled_at, None);
+        routine.set_enabled(true);
+        assert!(routine.enabled_at.is_some(), "re-enable stamps enabled_at");
+
+        // A redundant true (already enabled) must not move the stamp.
+        let stamped = routine.enabled_at;
+        routine.set_enabled(true);
+        assert_eq!(routine.enabled_at, stamped);
+
+        // The stamped record serializes the field so it survives the save.
+        let json = serde_json::to_string(&routine).unwrap();
+        assert!(json.contains("enabled_at"), "{json}");
+        let back: ScheduledRoutine = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.enabled_at, stamped);
+    }
+
+    #[test]
+    fn routine_manager_toggle_stamps_enabled_at_on_re_enable() {
+        let mut mgr = RoutineManager::new();
+        let id = mgr.add(ScheduledRoutine::new("test".into(), "hello".into(), 60));
+        assert!(mgr.toggle(&id) == Some(false));
+        let before = mgr.get(&id).unwrap().enabled_at;
+        assert!(mgr.toggle(&id) == Some(true));
+        let after = mgr.get(&id).unwrap().enabled_at;
+        assert!(after.is_some());
+        if let (Some(before), Some(after)) = (before, after) {
+            assert!(after >= before, "re-enable refreshes the stamp");
+        }
     }
 
     #[test]
