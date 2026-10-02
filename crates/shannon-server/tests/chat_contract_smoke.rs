@@ -9,11 +9,12 @@
 //!
 //! What is asserted: the SSE frame sequence on the wire — every `event:` name
 //! ∈ the `SseEventName` contract, payloads are externally-tagged `QueryEvent`
-//! JSON (field-level assertions, not byte equality), text chunks arrive in
-//! script order, a tool turn round-trips `tool_use_request` →
-//! `tool_use_result`, a provider error terminates with `failed`, and a second
-//! message on the same session carries the first turn's history back to the
-//! LLM (the ConversationUpdate restore contract).
+//! JSON (field-level assertions, not byte equality), `started` opens every
+//! stream as the first frame (P0-A3: the engine emits it at query acceptance),
+//! text chunks arrive in script order, a tool turn round-trips
+//! `tool_use_request` → `tool_use_result`, a provider error terminates with
+//! `failed`, and a second message on the same session carries the first turn's
+//! history back to the LLM (the ConversationUpdate restore contract).
 //!
 //! Fully offline: no API key, no non-loopback traffic, no tauri-driver (D2).
 //! Approval (`POST /api/approval/respond`) has no route on this server — the
@@ -285,6 +286,22 @@ fn index_of(frames: &[(String, String)], event: &str) -> usize {
         .unwrap_or_else(|| panic!("no '{event}' frame in {frames:?}"))
 }
 
+/// P0-A3 wire contract: `started` opens EVERY accepted query's stream — the
+/// first frame, carrying `{"Started":{"query_id":…}}`.
+fn assert_started_is_first_frame(frames: &[(String, String)]) {
+    let (first_event, first_data) = frames.first().expect("a stream under test is never empty");
+    assert_eq!(
+        first_event, "started",
+        "the first SSE frame must be the query-acknowledgment 'started' frame"
+    );
+    let started: serde_json::Value = serde_json::from_str(first_data)
+        .unwrap_or_else(|e| panic!("started frame payload is JSON: {e}"));
+    assert!(
+        started["Started"]["query_id"].is_string(),
+        "Started carries the query_id: {started}"
+    );
+}
+
 /// True when any request the fake saw is a JSON body whose serialized form
 /// contains `needle`. Coarse by design — the structured assertions live in
 /// the tests; this one pins "the server sent the history back".
@@ -318,6 +335,7 @@ async fn text_turn_streams_scripted_chunks_and_second_message_sees_history() {
     // ── Turn 1 ──
     let frames = stack.post_message(&session, "hi there").await;
     assert_frames_are_contractual(&frames);
+    assert_started_is_first_frame(&frames);
     assert_eq!(
         joined_text(&frames),
         "Hello from the fake",
@@ -334,10 +352,16 @@ async fn text_turn_streams_scripted_chunks_and_second_message_sees_history() {
         completed["Completed"]["query_id"].is_string(),
         "Completed carries the query_id: {completed}"
     );
+    assert_eq!(
+        completed["Completed"]["query_id"],
+        serde_json::from_str::<serde_json::Value>(&frames[0].1).unwrap()["Started"]["query_id"],
+        "Started and Completed carry the SAME query_id"
+    );
 
     // ── Turn 2, same session ──
     let frames2 = stack.post_message(&session, "and again?").await;
     assert_frames_are_contractual(&frames2);
+    assert_started_is_first_frame(&frames2);
     assert_eq!(joined_text(&frames2), "Second answer");
     assert_eq!(frames2.last().expect("frames").0, "completed");
 
@@ -375,6 +399,7 @@ async fn tool_turn_round_trips_request_and_result_frames() {
 
     let frames = stack.post_message(&session, "list the files").await;
     assert_frames_are_contractual(&frames);
+    assert_started_is_first_frame(&frames);
 
     // The request frame carries the scripted tool call verbatim.
     let (request_idx, request_data) = frames
@@ -450,6 +475,9 @@ async fn provider_error_terminates_stream_with_failed_frame() {
 
     let frames = stack.post_message(&session, "trigger the error").await;
     assert_frames_are_contractual(&frames);
+    // Even a query doomed by the provider is acknowledged first: started
+    // opens the stream, failed closes it.
+    assert_started_is_first_frame(&frames);
 
     let (last_event, last_data) = frames.last().expect("frames non-empty").clone();
     assert_eq!(last_event, "failed", "terminal frame is failed: {frames:?}");
