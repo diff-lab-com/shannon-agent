@@ -49,6 +49,24 @@ export interface PlayerRuntime {
   schedule(delayMs: number, fn: () => void): () => void
 }
 
+/** The `send_message` invoke args the app actually sends (tauri-api.ts). */
+export interface SendArgs {
+  message?: string
+  filePaths?: string[] | null
+  budgetBypass?: boolean | null
+  sessionId?: string | null
+}
+
+/** One scripted send's observed args (snapshot `sends` log entry). */
+export interface SendRecord {
+  /** Which script turn consumed this send (-1 when the script is exhausted). */
+  turnIndex: number
+  message: string | null
+  attachments: string[] | null
+  budgetBypass: boolean
+  sessionId: string | null
+}
+
 export const DEFAULT_CHUNK_DELAY_MS = 30
 
 /** Neutral `budget:*` defaults — ≥80% warning AND ≥100% exceeded plausible. */
@@ -82,6 +100,8 @@ export class ScriptPlayer {
   private speedValue = 1
   /** Every `respond_permission` observed while scripted (assertion log). */
   private permissionLog: Array<Record<string, unknown>> = []
+  /** Every scripted send's observed args (R3 assertion log). */
+  private sends: SendRecord[] = []
 
   constructor(runtime?: Partial<PlayerRuntime>) {
     this.runtime = {
@@ -104,6 +124,7 @@ export class ScriptPlayer {
     this.turn = null
     this.pendingSends = []
     this.permissionLog = []
+    this.sends = []
     this.pauseAtStep = null
     this.parkKind = null
     this.phase = 'armed'
@@ -119,6 +140,7 @@ export class ScriptPlayer {
     this.turn = null
     this.pendingSends = []
     this.permissionLog = []
+    this.sends = []
     this.pauseAtStep = null
     this.parkKind = null
     this.speedValue = 1
@@ -139,20 +161,41 @@ export class ScriptPlayer {
    * `send_message` interception. Returns the scripted response while turns
    * remain, or null to fall through to the default handler (pre-script
    * behavior — no events, immediate query id).
+   *
+   * R3: the turn's `rejectedAttachments` ride along on the response (the
+   * backend's P0-3 partial-success shape) and every scripted send's args
+   * land on the snapshot's `sends` log — the assertion surface the
+   * budget-bypass / attachment-preservation anchors read.
    */
-  handleSendMessage(args: { sessionId?: string | null } | undefined): { query_id: string } | null {
+  handleSendMessage(args: SendArgs | undefined): { query_id: string; rejected_attachments?: unknown[] } | null {
     if (!this.script || this.phase === 'idle' || this.phase === 'done') return null
     if (this.phase !== 'armed') {
       // A send while a turn is still open cannot be scripted (the real
       // backend rejects concurrent queries); fall through to the default.
       return null
     }
+    const message = typeof args?.message === 'string' ? args.message : null
+    const attachments = Array.isArray(args?.filePaths) ? (args!.filePaths as unknown[]).filter(f => typeof f === 'string') : null
+    const turnIndex = this.turnCounter
+    this.sends.push({
+      turnIndex,
+      message,
+      attachments,
+      budgetBypass: args?.budgetBypass === true,
+      sessionId: (args?.sessionId ?? null) as string | null,
+    })
     const sessionId = (args?.sessionId ?? null) as string | null
     // startTurn returns the id up front — a turn whose steps settle
     // synchronously (e.g. a lone query:completed) is already finished by the
     // time startTurn returns, so this.turn is no longer readable.
     const queryId = this.startTurn(sessionId)
-    return { query_id: queryId }
+    const rejected = this.script.turns[turnIndex]?.rejectedAttachments
+    return rejected && rejected.length > 0
+      ? {
+          query_id: queryId,
+          rejected_attachments: rejected.map(r => ({ path: r.path, reason: r.reason })),
+        }
+      : { query_id: queryId }
   }
 
   /**
@@ -232,6 +275,8 @@ export class ScriptPlayer {
     /** send_message count consumed by the script since load (R2). */
     sentTurns: number
     permissionLog: Array<Record<string, unknown>>
+    /** Observed args of every scripted send since load (R3). */
+    sends: SendRecord[]
     speed: number
   } {
     return {
@@ -240,6 +285,7 @@ export class ScriptPlayer {
       stepIndex: this.turn?.stepIndex ?? null,
       sentTurns: this.turnCounter,
       permissionLog: [...this.permissionLog],
+      sends: this.sends.map(s => ({ ...s, attachments: s.attachments ? [...s.attachments] : null })),
       speed: this.speedValue,
     }
   }
@@ -276,7 +322,11 @@ export class ScriptPlayer {
     const seed = this.script?.seed?.config
     const base: Record<string, unknown> = {
       sessionId: this.turn?.sessionId ?? null,
-      spentUsd: seed?.budgetUsd != null ? seed.budgetUsd * 0.84 : DEFAULT_BUDGET_SPENT,
+      // R3: an explicitly seeded spend wins (the over-budget journey's
+      // events must agree with what get_session_usage reports); otherwise
+      // the 84%-of-cap warning default, then the neutral pair.
+      spentUsd: seed?.spentUsd
+        ?? (seed?.budgetUsd != null ? seed.budgetUsd * 0.84 : DEFAULT_BUDGET_SPENT),
       budgetUsd: seed?.budgetUsd ?? DEFAULT_BUDGET_CAP,
     }
     return extra ? { ...base, ...extra } : base

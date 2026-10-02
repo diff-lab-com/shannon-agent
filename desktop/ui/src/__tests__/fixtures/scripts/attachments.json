@@ -1,0 +1,40 @@
+{
+  "name": "attachments",
+  "description": "附件 journey — 草稿 chips → 发送 → rejected toast（P0 回归锚点）→ 乐观期无附件预览（A-4 锚点）",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-attach",
+        "title": "Attachments",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "总结这个文件",
+      "rejectedAttachments": [
+        {
+          "path": "/Users/demo/Downloads/outside-notes.md",
+          "reason": "out_of_working_dir"
+        }
+      ],
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "收到——不过附件被拒收了：",
+            "它在允许的工作目录之外。"
+          ],
+          "chunkDelayMs": 250
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

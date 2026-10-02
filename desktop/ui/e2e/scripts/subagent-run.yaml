@@ -1,0 +1,53 @@
+# ChatScript: subagent-run — journey #12（矩阵#12）。
+#
+# agent_spawn 工具 → SubagentBlock（data-testid=subagent-block）以运行形态
+# 出现；subagent:start（agent-teams 注册桥）→ 卡上出现 "registry <id>" 活
+# 徽章；waitFor 停点让中间态可观察 → tool-result + subagent:stop → 卡收敛
+# （completed 形态、活徽章消失）→ completed 随 run 退场（P2-4）。
+#
+# subagent:* 事件是会话无关的全局事件（SubAgentLive），播放器照常盖
+# auto payload，多出的 query_id/session_id 字段消费方不读（见 schema 注释）。
+name: subagent-run
+description: 子代理 journey — agent_spawn 工具卡 + subagent:start/stop 注册桥 → SubagentBlock 出现/收敛
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-subagent
+      title: Subagent run
+      messages: []
+turns:
+  - user: 派一个子代理调研潮汐能
+    script:
+      - event: query:text
+        chunks:
+          - "好的，我先派一个研究子代理。"
+      - event: query:tool-start
+        payload:
+          tool_use_id: tool-spawn-1
+          tool_name: agent_spawn
+          tool_input:
+            name: researcher
+            model: glm-4
+            team: alpha
+            max_turns: 8
+            system_prompt: "You research tidal energy and summarize findings."
+      - event: subagent:start
+        payload:
+          agentId: sa-research-1
+          agentName: researcher
+          team: alpha
+      # Park so the live block + registry badge are observable in the spec.
+      - waitFor: ui
+      - event: query:tool-result
+        payload:
+          tool_use_id: tool-spawn-1
+          result: "researcher finished: 6 key findings"
+          is_error: false
+      - event: subagent:stop
+        payload:
+          agentId: sa-research-1
+      # Park once more so the completed block form is observable (the card
+      # leaves with the run — P2-4 — so this is the last window).
+      - waitFor: ui
+      - event: query:completed

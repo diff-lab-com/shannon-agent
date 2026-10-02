@@ -28,6 +28,12 @@ export const SCRIPT_EVENT_NAMES = [
   'permission-request',
   'budget:warning',
   'budget:exceeded',
+  // R3 (journey #12): the agent-teams observer bridge. Session-less global
+  // events — the player still stamps its auto payload, whose extra
+  // query_id/session_id fields the consumers (SubagentBlock via
+  // subagentLive) simply never read.
+  'subagent:start',
+  'subagent:stop',
 ] as const
 
 export type ScriptEventName = (typeof SCRIPT_EVENT_NAMES)[number]
@@ -66,6 +72,23 @@ export interface ScriptSeedMessage {
   role: 'user' | 'assistant'
   content: string
   attachments?: string[]
+  /**
+   * R3 (journey #3 carry-over / #10 / #13): tool calls replayed from the
+   * persisted history. camelCase here; `seededMessages` maps them onto the
+   * wire's snake_case `tool_calls` so preloaded assistant messages render
+   * ToolCallDisplay / FileChangesCard / SubagentBlock / FileCard exactly
+   * like a real session reload does (R2 report §5.6 flagged the gap).
+   */
+  toolCalls?: ScriptSeedToolCall[]
+}
+
+export interface ScriptSeedToolCall {
+  toolUseId: string
+  toolName: string
+  toolInput: unknown
+  result?: string
+  isError?: boolean
+  meta?: unknown
 }
 
 export interface ScriptSeedSession {
@@ -79,6 +102,14 @@ export interface ScriptSeed {
     provider?: string
     hasKey?: boolean
     budgetUsd?: number | null
+    /**
+     * R3 (journey #7): the session's cumulative spend. `get_session_usage`
+     * reports it as `cost_usd`, so the budget banners' mount/switch
+     * re-derivation (useBudgetGuard B4 P2-8) sees spent ≥ cap (exceeded)
+     * or ≥ 80% (warning) WITHOUT waiting for a budget:* event — the
+     * "return to an over-budget session" shape.
+     */
+    spentUsd?: number
   }
   sessions?: ScriptSeedSession[]
 }
@@ -86,6 +117,13 @@ export interface ScriptSeed {
 /** What `cancel_query` does mid-turn. Default: emit `query:cancelled` now. */
 export interface ScriptOnCancel {
   emit: ScriptStep[]
+}
+
+/** P0-3 wire shape: one attachment the backend refused to send. */
+export interface ScriptRejectedAttachment {
+  path: string
+  /** Mirrors the Rust `RejectedAttachmentReason` snake_case tags. */
+  reason: 'out_of_working_dir' | 'unresolvable' | 'too_large' | 'no_working_dir' | 'unsupported_type'
 }
 
 export interface ChatScript {
@@ -96,6 +134,15 @@ export interface ChatScript {
     user: string
     attachments?: string[]
     script: ScriptStep[]
+    /**
+     * R3 (journey #8): attachment-refusal receipts returned with THIS
+     * turn's `send_message` response (`rejected_attachments`) — the
+     * partial-success P0-3 shape. The player merges them into its return
+     * value; AppContext toasts one "«file» was not sent: «reason»" per
+     * entry (finding anchor: out-of-working-dir refusals must surface,
+     * never silently drop).
+     */
+    rejectedAttachments?: ScriptRejectedAttachment[]
   }>
   onCancel?: ScriptOnCancel
 }
@@ -119,6 +166,7 @@ export const chatScriptSchema = {
             provider: { type: 'string' },
             hasKey: { type: 'boolean' },
             budgetUsd: { type: ['number', 'null'] },
+            spentUsd: { type: 'number', minimum: 0 },
           },
         },
         sessions: {
@@ -140,6 +188,22 @@ export const chatScriptSchema = {
                     role: { enum: ['user', 'assistant'] },
                     content: { type: 'string' },
                     attachments: { type: 'array', items: { type: 'string' } },
+                    toolCalls: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        required: ['toolUseId', 'toolName', 'toolInput'],
+                        additionalProperties: false,
+                        properties: {
+                          toolUseId: { type: 'string', minLength: 1 },
+                          toolName: { type: 'string', minLength: 1 },
+                          toolInput: {},
+                          result: { type: 'string' },
+                          isError: { type: 'boolean' },
+                          meta: {},
+                        },
+                      },
+                    },
                   },
                 },
               },
@@ -158,6 +222,20 @@ export const chatScriptSchema = {
         properties: {
           user: { type: 'string' },
           attachments: { type: 'array', items: { type: 'string' } },
+          rejectedAttachments: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['path', 'reason'],
+              additionalProperties: false,
+              properties: {
+                path: { type: 'string', minLength: 1 },
+                reason: {
+                  enum: ['out_of_working_dir', 'unresolvable', 'too_large', 'no_working_dir', 'unsupported_type'],
+                },
+              },
+            },
+          },
           script: {
             type: 'array',
             items: {

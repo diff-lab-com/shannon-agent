@@ -2,9 +2,20 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
+  // Warm the vite dev server (lazy /chat chunk compiled) before the first
+  // worker's first spec — see e2e/global-setup.ts for the CI incidents
+  // this closes.
+  globalSetup: './e2e/global-setup.ts',
   timeout: 30000,
   // Absorb one transient hydration/hit-target flake on slow CI runners.
   retries: process.env.CI ? 2 : 0,
+  // CI runs on 2-core runners where 2 chromium workers + the vite dev
+  // server fight for CPU — the structural cause behind every CI-only
+  // flake in this suite (four incidents, all confined to the
+  // alphabetically-first specs that started against the cold server).
+  // Serialize the suite in CI; locally keep Playwright's default
+  // (half the cores) so the inner loop stays fast.
+  workers: process.env.CI ? 1 : undefined,
   use: {
     baseURL: 'http://localhost:1420',
     // Pin the app language: locators anchor on en-locale aria-labels

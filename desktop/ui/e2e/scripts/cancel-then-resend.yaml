@@ -1,0 +1,41 @@
+# ChatScript: cancel-then-resend — cancel-matrix 场景 3（stop 后立刻重发，A-17 核心回归）。
+#
+# 真实竞态（A-17）：stop 立即放开 querying 闩（commands_chat.rs:229-234），
+# 但旧查询循环要等下一个引擎事件才退出——间隙内新 send_message 启动，
+# 同会话双查询并存；前端全程不按 query_id 过滤（AppContext 无 query_id），
+# 旧查询迟到的 text/query:cancelled 落进新 turn 的窗口。
+#
+# 播放器的 turn 机制无法表达「旧 turn 的取消事件迟到到新 turn 之后」
+# （onCancel 播放期间 phase=playing，新 send 会落到默认 handler），所以
+# 迟到事件由 spec 用 control.emitNow 注入（q-0 的 query_id + 同 session_id，
+# 与真实后端的迟到投递形状一致）——这正是 emitNow「bypass 播放器状态」
+# 的设计用途。序列（spec 注释同步）：
+#   turn 0 流中 → stop（cancelled 同步收敛）→ 立刻重发（turn 1 流中）
+#   → 注入迟到 q-0 text + 迟到 q-0 cancelled → 断言现状污染（A-17）。
+name: cancel-then-resend
+description: cancel-matrix #3 — stop 后立刻重发；迟到旧事件注入（A-17 现状确认）
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-resend
+      title: Cancel then resend
+      messages: []
+turns:
+  - user: 第一条（将被取消）
+    script:
+      - event: query:text
+        chunks:
+          - "旧流一，"
+          - "旧流二。"
+        chunkDelayMs: 400
+  - user: 第二条（stop 后立刻重发）
+    script:
+      - event: query:text
+        chunks:
+          - "新流甲，"
+          - "新流乙，"
+          - "新流丙，"
+          - "新流丁。"
+        chunkDelayMs: 600
+      - event: query:completed

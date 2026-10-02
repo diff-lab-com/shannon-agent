@@ -1,0 +1,55 @@
+{
+  "name": "cross-page",
+  "description": "跨页旅程 — write_file 工具历史 → FileCard → /files 可见该文件 → /timeline/<id> 深链",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-cross",
+        "title": "Cross page",
+        "messages": [
+          {
+            "role": "user",
+            "content": "帮我建一个待办清单文件"
+          },
+          {
+            "role": "assistant",
+            "content": "已创建 todo.md，共 3 条待办。",
+            "toolCalls": [
+              {
+                "toolUseId": "tool-write-todo",
+                "toolName": "write_file",
+                "toolInput": {
+                  "file_path": "/Users/demo/workspace/shannon-demo/todo.md",
+                  "content": "buy milk\nwrite tests\nship it"
+                },
+                "result": "wrote 3 lines",
+                "isError": false
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "再检查一下这个文件",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "文件内容确认无误：",
+            "3 条待办都在。"
+          ],
+          "chunkDelayMs": 250
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "name": "cancel-background",
+  "description": "cancel-matrix",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-bg-a",
+        "title": "Background A",
+        "messages": []
+      },
+      {
+        "id": "script-sess-bg-b",
+        "title": "Foreground B",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "A 的长任务",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "后台一，",
+            "后台二，",
+            "后台三，",
+            "后台四。"
+          ],
+          "chunkDelayMs": 700
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

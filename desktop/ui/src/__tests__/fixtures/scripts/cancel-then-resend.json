@@ -1,0 +1,49 @@
+{
+  "name": "cancel-then-resend",
+  "description": "cancel-matrix",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-resend",
+        "title": "Cancel then resend",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "第一条（将被取消）",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "旧流一，",
+            "旧流二。"
+          ],
+          "chunkDelayMs": 400
+        }
+      ]
+    },
+    {
+      "user": "第二条（stop 后立刻重发）",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "新流甲，",
+            "新流乙，",
+            "新流丙，",
+            "新流丁。"
+          ],
+          "chunkDelayMs": 600
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

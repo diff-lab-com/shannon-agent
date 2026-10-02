@@ -1,0 +1,58 @@
+{
+  "name": "session-switch-race",
+  "description": "会话切换竞态 journey — A 流中切 B 不串流 → 切回恢复 → 错误横幅跨会话残留（A-5 锚点）→ draft 隔离",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-race-a",
+        "title": "Race A",
+        "messages": []
+      },
+      {
+        "id": "script-sess-race-b",
+        "title": "Race B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "B 的历史问题"
+          },
+          {
+            "role": "assistant",
+            "content": "B 的历史回答。"
+          }
+        ]
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "A 的长问题",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "甲",
+            "乙",
+            "丙",
+            "丁",
+            "戊",
+            "己",
+            "庚",
+            "辛"
+          ],
+          "chunkDelayMs": 700
+        },
+        {
+          "event": "query:failed",
+          "payload": {
+            "error": "upstream exploded after the switch",
+            "error_kind": "other"
+          }
+        }
+      ]
+    }
+  ]
+}
