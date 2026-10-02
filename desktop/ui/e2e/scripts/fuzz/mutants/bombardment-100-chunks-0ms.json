@@ -1,0 +1,177 @@
+{
+  "name": "fuzz-bombardment-100-chunks-0ms",
+  "description": "fuzz 轰炸：100 chunks @ 0ms",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "fuzz-sess-a",
+        "title": "Fuzz A",
+        "messages": []
+      },
+      {
+        "id": "fuzz-sess-b",
+        "title": "Fuzz B",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "跑一个 fuzz 基线回合",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "流-0",
+            "test-1",
+            "test-2",
+            "写-3",
+            "🎉-4",
+            "🌊-5",
+            "test-6",
+            "🎉-7",
+            "🌊-8",
+            "render-9",
+            "📦-10",
+            "📦-11",
+            "写-12",
+            "chunk-13",
+            "检查-14",
+            "目录-15",
+            "写-16",
+            "chunk-17",
+            "⚙️-18",
+            "stream-19",
+            "检查-20",
+            "🌊-21",
+            "目录-22",
+            "render-23",
+            "buffer-24",
+            "📦-25",
+            "fix-26",
+            "流-27",
+            "render-28",
+            "目录-29",
+            "🎉-30",
+            "🌊-31",
+            "test-32",
+            "buffer-33",
+            "stream-34",
+            "写-35",
+            "🎉-36",
+            "📦-37",
+            "test-38",
+            "写-39",
+            "🌊-40",
+            "chunk-41",
+            "node-42",
+            "⚙️-43",
+            "stream-44",
+            "render-45",
+            "node-46",
+            "render-47",
+            "fix-48",
+            "检查-49",
+            "test-50",
+            "chunk-51",
+            "node-52",
+            "buffer-53",
+            "chunk-54",
+            "🌊-55",
+            "stream-56",
+            "检查-57",
+            "buffer-58",
+            "⚙️-59",
+            "render-60",
+            "流-61",
+            "node-62",
+            "buffer-63",
+            "render-64",
+            "test-65",
+            "目录-66",
+            "stream-67",
+            "目录-68",
+            "chunk-69",
+            "流-70",
+            "test-71",
+            "fix-72",
+            "目录-73",
+            "🌊-74",
+            "🌊-75",
+            "🎉-76",
+            "流-77",
+            "stream-78",
+            "目录-79",
+            "流-80",
+            "render-81",
+            "检查-82",
+            "buffer-83",
+            "node-84",
+            "node-85",
+            "流-86",
+            "目录-87",
+            "buffer-88",
+            "buffer-89",
+            "🌊-90",
+            "📦-91",
+            "🌊-92",
+            "流-93",
+            "流-94",
+            "node-95",
+            "检查-96",
+            "检查-97",
+            "node-98",
+            "检查-99"
+          ],
+          "chunkDelayMs": 0
+        },
+        {
+          "event": "query:thinking",
+          "payload": {
+            "content": "先查看目录，再决定下一步。"
+          }
+        },
+        {
+          "event": "query:tool-start",
+          "payload": {
+            "tool_use_id": "fuzz-tool-1",
+            "tool_name": "Bash",
+            "tool_input": {
+              "command": "ls"
+            }
+          }
+        },
+        {
+          "event": "query:tool-progress",
+          "payload": {
+            "tool_use_id": "fuzz-tool-1",
+            "progress": 0.5,
+            "message": "halfway"
+          }
+        },
+        {
+          "event": "query:tool-result",
+          "payload": {
+            "tool_use_id": "fuzz-tool-1",
+            "result": "total 0",
+            "is_error": false
+          }
+        },
+        {
+          "event": "query:usage",
+          "payload": {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

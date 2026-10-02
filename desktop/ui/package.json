@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:e2e": "playwright test",
+    "fuzz:gen": "node scripts/fuzz-mutate.mjs",
     "gallery:shoot": "node scripts/shoot-theme-gallery.mjs",
     "test:coverage": "vitest --coverage",
     "test:ci": "vitest run",
