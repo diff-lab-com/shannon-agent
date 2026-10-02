@@ -8,8 +8,12 @@
 // session's buffer.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderHook, act, waitFor } from '@testing-library/react'
+import { renderHook, render, screen, act, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { AppProvider, useApp } from '@/context/AppContext'
+import { useSessions } from '@/context/SessionContext'
+import { SessionsSection } from '@/components/SidebarSessions'
+import { I18nProvider } from '@/i18n'
 import { EVENT_NAMES } from '@/types'
 import * as api from '@/lib/tauri-api'
 
@@ -432,5 +436,153 @@ describe('AppContext — P2-19 tool progress lifecycle', () => {
       expect(result.current.error).toBeNull()
       expect(result.current.errorKind).toBeNull()
     })
+  })
+})
+
+// A-7 — the backend can re-emit a tool-start for a card the session already
+// tracks (resume/replay paths). The old unconditional append produced a
+// duplicate card per re-send; a known tool_use_id must keep the existing
+// card (first start wins — the result event resolves the shared id either
+// way), while a genuinely new id still gets its own card.
+describe('AppContext — A-7 tool-start dedup by tool_use_id', () => {
+  it('a re-sent tool-start for a known card does not duplicate it', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('Hello') })
+
+    const start = { tool_use_id: 'tc-dup', tool_name: 'bash', tool_input: { cmd: 1 }, session_id: SESSION_A }
+    act(() => { flush(EVENT_NAMES.QUERY_TOOL_START, start) })
+    expect(result.current.activeToolCalls).toHaveLength(1)
+
+    // Re-emissions of the same id — even with drifted payloads — must not
+    // append a second card nor rewrite the one already running.
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_START, { ...start, tool_input: { cmd: 2 } })
+      flush(EVENT_NAMES.QUERY_TOOL_START, { ...start, tool_name: 'edit_file' })
+    })
+
+    expect(result.current.activeToolCalls).toHaveLength(1)
+    expect(result.current.activeToolCalls[0]).toMatchObject({
+      tool_use_id: 'tc-dup',
+      tool_name: 'bash',
+      tool_input: { cmd: 1 },
+      status: 'running',
+    })
+  })
+
+  it('a genuinely new tool id still appends its own card', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('Hello') })
+
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_START, { tool_use_id: 'tc-a', tool_name: 'bash', tool_input: {}, session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_TOOL_START, { tool_use_id: 'tc-b', tool_name: 'read_file', tool_input: {}, session_id: SESSION_A })
+    })
+
+    expect(result.current.activeToolCalls.map(tc => tc.tool_use_id)).toEqual(['tc-a', 'tc-b'])
+  })
+})
+
+// S-2 — a pure-text run's ONLY events are `event` ticks (text/thinking/
+// usage), which used to touch just the ref: the published sessionActivity
+// never gained the session, so the rail showed no Running dot for the whole
+// run. The state channel must publish the visible flip (first observation,
+// settle transitions) while mid-run ticks keep ref-only updates.
+describe('AppContext — S-2 pure-text stream drives the sidebar running state', () => {
+  it('publishes running:true on the first text event without re-publishing per chunk', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+    await act(async () => { await result.current.createSession() })
+    expect(result.current.sessionActivity[SESSION_A]).toBeUndefined()
+
+    act(() => { flush(EVENT_NAMES.QUERY_TEXT, { content: 'a', session_id: SESSION_A }) })
+    const afterFirst = result.current.sessionActivity[SESSION_A]
+    expect(afterFirst?.running).toBe(true)
+    expect(afterFirst?.startedAt).not.toBeNull()
+
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TEXT, { content: 'b', session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_THINKING, { content: 'c', session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_USAGE, { session_id: SESSION_A })
+    })
+    // Throttle direction: mid-run ticks touch the ref only — the published
+    // record keeps its identity, so streaming never re-renders the rail.
+    expect(result.current.sessionActivity[SESSION_A]).toBe(afterFirst)
+
+    // Settle direction: completion flips the published state back.
+    await act(async () => { flush(EVENT_NAMES.QUERY_COMPLETED, { session_id: SESSION_A }) })
+    expect(result.current.sessionActivity[SESSION_A].running).toBe(false)
+  })
+
+  it('restarts the elapsed clock when a settled session starts running again', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+    await act(async () => { await result.current.createSession() })
+
+    const t0 = 1_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0)
+    try {
+      act(() => { flush(EVENT_NAMES.QUERY_TEXT, { content: 'first run', session_id: SESSION_A }) })
+      expect(result.current.sessionActivity[SESSION_A]).toMatchObject({ running: true, startedAt: t0 })
+
+      act(() => { flush(EVENT_NAMES.QUERY_COMPLETED, { session_id: SESSION_A }) })
+      expect(result.current.sessionActivity[SESSION_A].running).toBe(false)
+
+      nowSpy.mockReturnValue(t0 + 5_000)
+      act(() => { flush(EVENT_NAMES.QUERY_TEXT, { content: 'second run', session_id: SESSION_A }) })
+      // The re-run must not inherit the previous run's startedAt — the rail
+      // derives the elapsed badge from it.
+      expect(result.current.sessionActivity[SESSION_A]).toMatchObject({ running: true, startedAt: t0 + 5_000 })
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  // Component direction: with the state channel live, the rail row shows
+  // its Running marker during a pure-text stream and drops it on settle.
+  it('the session rail shows the Running marker for a text-only stream', async () => {
+    vi.mocked(api.listSessions).mockResolvedValue([
+      { id: SESSION_A, title: 'Text only', created_at: Date.now() - 60_000, message_count: 0 },
+    ])
+    function RailBridge() {
+      const { sessions, sessionActivity, currentSessionId } = useSessions()
+      return (
+        <SessionsSection
+          sessions={sessions}
+          sessionActivity={sessionActivity}
+          goalRunsBySession={{}}
+          currentSessionId={currentSessionId}
+          switchSession={async () => {}}
+          renameSession={async () => {}}
+          deleteSession={async () => {}}
+        />
+      )
+    }
+    render(
+      <I18nProvider>
+        <AppProvider>
+          <MemoryRouter>
+            <RailBridge />
+          </MemoryRouter>
+        </AppProvider>
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(screen.getByTestId(`desktop-session-row-${SESSION_A}`)).toBeInTheDocument())
+    // No run yet — no Running marker on the row.
+    expect(screen.queryByRole('img', { name: 'Running' })).not.toBeInTheDocument()
+
+    await flushUntilRegistered()
+    act(() => { flush(EVENT_NAMES.QUERY_TEXT, { content: 'streaming…', session_id: SESSION_A }) })
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Running' })).toBeInTheDocument())
+
+    act(() => { flush(EVENT_NAMES.QUERY_COMPLETED, { session_id: SESSION_A }) })
+    await waitFor(() => expect(screen.queryByRole('img', { name: 'Running' })).not.toBeInTheDocument())
   })
 })
