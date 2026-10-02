@@ -1,8 +1,23 @@
 // U1 — the app sidebar's session rail is the app's single session list
 // (the Chat-page session rail was removed). Runs against the mock build
 // (`pnpm demo` webServer, 8 seeded sessions from MOCK_SESSIONS).
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
+
+/** Click → postcondition as ONE atomic, retried unit: the rail re-renders
+ *  in batches under load, so a click can be swallowed or displaced onto a
+ *  neighbouring row/group menu mid-dispatch (nightly R3/G5/G6 flake). Same
+ *  shape as R3's openRaceSession (chat-script.session-switch.spec.ts). */
+async function clickToPostcondition(
+  page: Page,
+  click: () => Promise<void>,
+  postcondition: () => Promise<void>,
+): Promise<void> {
+  await expect(async () => {
+    await click()
+    await postcondition()
+  }).toPass({ timeout: 30_000 })
+}
 
 test.describe('Sidebar sessions rail (U1)', () => {
   test('has exactly one New Chat button', async ({ page }) => {
@@ -43,11 +58,19 @@ test.describe('Sidebar sessions rail (U1)', () => {
     // "Actions for …" ⋯ button.
     const row = page.getByTestId('desktop-session-row-sess-001')
     await expect(row).toBeVisible()
-    await row.click()
-    await expect(page).toHaveURL(/\/chat/)
-    await expect(
-      page.getByTestId('desktop-session-row-sess-001')
-    ).toHaveAttribute('aria-current', 'page')
+    // A click swallowed by a mid-dispatch re-render leaves the row
+    // unmarked — retry click→mark as one atomic unit (postconditions
+    // unchanged).
+    await clickToPostcondition(
+      page,
+      () => row.click(),
+      async () => {
+        await expect(page).toHaveURL(/\/chat/)
+        await expect(
+          page.getByTestId('desktop-session-row-sess-001')
+        ).toHaveAttribute('aria-current', 'page')
+      },
+    )
   })
 
   test('filters the rail by search', async ({ page }) => {
@@ -85,10 +108,20 @@ test.describe('Sidebar sessions rail (U1)', () => {
       page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     // The ⋯ button is hover-only (opacity-0); force-click past the hover gate.
-    await page
-      .getByRole('button', { name: 'Actions for Investor update draft' })
-      .click({ force: true })
-    await page.getByRole('menuitem', { name: 'Delete' }).click()
+    // A displaced click can land on a project group's menu button (or be
+    // swallowed) — scope the postcondition to THIS row's menu: the
+    // DropdownMenu carries the same "Actions for <title>" aria-label as its
+    // ⋯ button, which project group menus ("Project actions: …") do not.
+    const actionsButton = page.getByRole('button', { name: 'Actions for Investor update draft' })
+    const deleteItem = page
+      .getByRole('menu', { name: 'Actions for Investor update draft' })
+      .getByRole('menuitem', { name: 'Delete' })
+    await clickToPostcondition(
+      page,
+      () => actionsButton.click({ force: true }),
+      () => expect(deleteItem).toBeVisible({ timeout: 5_000 }),
+    )
+    await deleteItem.click()
 
     const dialog = page.getByRole('alertdialog')
     await expect(dialog).toBeVisible()
