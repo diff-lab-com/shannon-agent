@@ -587,8 +587,10 @@ fn save_webhook_config_to_disk(dto: &WebhookConfigDto) -> Result<(), String> {
     notif_table.insert("webhook".into(), toml::Value::Table(wh));
 
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
-    std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
-    crate::file_permissions::restrict_to_owner(&path);
+    // The `[notifications.webhook]` table carries the plaintext `secret` —
+    // owner-only atomic write (R6).
+    crate::secret_files::write_atomic_owner_only(&path, serialized.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(path = %path.display(), "webhook config saved");
     Ok(())
 }
@@ -611,8 +613,11 @@ fn clear_webhook_config_on_disk() -> Result<(), String> {
         }
     }
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
-    std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
-    crate::file_permissions::restrict_to_owner(&path);
+    // Same file can still hold a webhook `secret` in sibling tables (and the
+    // path may be the project-local `.shannon.toml`) — keep the owner-only
+    // atomic write (R6).
+    crate::secret_files::write_atomic_owner_only(&path, serialized.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(path = %path.display(), "webhook config cleared");
     Ok(())
 }

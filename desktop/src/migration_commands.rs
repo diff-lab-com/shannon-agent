@@ -1467,12 +1467,11 @@ fn load_mcp_store(roots: &Roots) -> Vec<McpServerConfig> {
 
 fn save_mcp_store(roots: &Roots, servers: &[McpServerConfig]) -> Result<bool, String> {
     let path = mcp_store_path(roots);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    }
     let text = serde_json::to_string_pretty(servers).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
-    crate::file_permissions::restrict_to_owner(&path);
+    // Imported `mcpServers[].env` entries can carry plaintext tokens —
+    // owner-only atomic write (R6).
+    crate::secret_files::write_atomic_owner_only(&path, text.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(true)
 }
 

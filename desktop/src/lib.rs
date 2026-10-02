@@ -17,6 +17,8 @@ pub mod file_permissions;
 pub mod mcp;
 pub mod provider_read_snapshot;
 pub mod routine_templates;
+/// Unified 0600 atomic writer for plaintext-secret-bearing files (R6).
+pub mod secret_files;
 /// G1 P0-2.1 — skill → chat-tool bridge (installed skills become
 /// model-callable `skill_<id>` tools).
 pub mod skill_tools;

@@ -748,13 +748,11 @@ pub fn load_config() -> DesktopConfig {
 /// Save desktop config to disk.
 pub fn save_config(config: &DesktopConfig) -> Result<(), String> {
     let path = config_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    std::fs::write(&path, content).map_err(|e| e.to_string())?;
-    crate::file_permissions::restrict_to_owner(&path);
-    Ok(())
+    // Carries secrets (`stt.api_key`, stdio `mcp_servers[].env`) — owner-only
+    // atomic write (R6).
+    crate::secret_files::write_atomic_owner_only(&path, content.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 /// Load MCP server configs from the unified store
@@ -937,31 +935,17 @@ fn mcp_server_config_to_json(config: &McpServerConfig) -> serde_json::Value {
     })
 }
 
-/// Atomically replace `path` with the pretty-printed JSON `root`:
-/// write a temp file in the same directory, then rename over the target.
-/// A crash mid-write can never leave a truncated/corrupt settings.json.
+/// Atomically replace `path` with the pretty-printed JSON `root`, with the
+/// temp file created owner-only (`0600`) so the OAuth blob in `mcpServers`
+/// is never on disk world-readable, even briefly. A crash mid-write can
+/// never leave a truncated/corrupt settings.json.
 fn write_settings_json_atomic(
     path: &std::path::Path,
     root: &serde_json::Value,
 ) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     let content = serde_json::to_string_pretty(root).map_err(|e| e.to_string())?;
-    let file_name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "settings.json".to_string());
-    let tmp = path.with_file_name(format!(".{file_name}.tmp"));
-    std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
-    // Best-effort restrictive perms before the rename becomes visible.
-    crate::file_permissions::restrict_to_owner(&tmp);
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        e.to_string()
-    })?;
-    crate::file_permissions::restrict_to_owner(path);
-    Ok(())
+    crate::secret_files::write_atomic_owner_only(path, content.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 /// Read and parse the settings.json root. A missing file starts empty
@@ -1216,6 +1200,29 @@ mod tests {
         assert!(config.working_dir.is_none());
         assert!(config.theme.is_none());
         assert_eq!(config.approval_mode, Some("confirm".into()));
+    }
+
+    /// R6: settings.json carries the `mcpServers` OAuth blob — it must land
+    /// owner-only (0600), including when a rewrite replaces a pre-existing
+    /// world-readable file.
+    #[cfg(unix)]
+    #[test]
+    fn settings_json_atomic_write_lands_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+
+        write_settings_json_atomic(&path, &serde_json::json!({"mcpServers": {}})).unwrap();
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&path), 0o600, "fresh settings.json must be 0600");
+
+        // Pre-existing 0644 file (older build) is fixed by the next write —
+        // the rename swaps in the temp file's inode, no batch chmod needed.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(mode(&path), 0o644);
+        write_settings_json_atomic(&path, &serde_json::json!({"mcpServers": {}})).unwrap();
+        assert_eq!(mode(&path), 0o600, "rewritten settings.json must be 0600");
     }
 
     #[test]
