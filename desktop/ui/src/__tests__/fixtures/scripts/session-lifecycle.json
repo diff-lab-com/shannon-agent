@@ -1,0 +1,339 @@
+{
+  "name": "session-lifecycle",
+  "description": "会话生命周期 — 重命名/pin/分组持久化/归档恢复/删除（含拒绝与永久变体）/搜索防抖/50 条 cap",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-cap-00",
+        "title": "Cap session 00",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-01",
+        "title": "Cap session 01",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-02",
+        "title": "Cap session 02",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-03",
+        "title": "Cap session 03",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-04",
+        "title": "Cap session 04",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-05",
+        "title": "Cap session 05",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-06",
+        "title": "Cap session 06",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-07",
+        "title": "Cap session 07",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-08",
+        "title": "Cap session 08",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-09",
+        "title": "Cap session 09",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-10",
+        "title": "Cap session 10",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-11",
+        "title": "Cap session 11",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-12",
+        "title": "Cap session 12",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-13",
+        "title": "Cap session 13",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-14",
+        "title": "Cap session 14",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-15",
+        "title": "Cap session 15",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-16",
+        "title": "Cap session 16",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-17",
+        "title": "Cap session 17",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-18",
+        "title": "Cap session 18",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-19",
+        "title": "Cap session 19",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-20",
+        "title": "Cap session 20",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-21",
+        "title": "Cap session 21",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-22",
+        "title": "Cap session 22",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-23",
+        "title": "Cap session 23",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-24",
+        "title": "Cap session 24",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-25",
+        "title": "Cap session 25",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-26",
+        "title": "Cap session 26",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-27",
+        "title": "Cap session 27",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-28",
+        "title": "Cap session 28",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-29",
+        "title": "Cap session 29",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-30",
+        "title": "Cap session 30",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-31",
+        "title": "Cap session 31",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-32",
+        "title": "Cap session 32",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-33",
+        "title": "Cap session 33",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-34",
+        "title": "Cap session 34",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-35",
+        "title": "Cap session 35",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-36",
+        "title": "Cap session 36",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-37",
+        "title": "Cap session 37",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-38",
+        "title": "Cap session 38",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-39",
+        "title": "Cap session 39",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-40",
+        "title": "Cap session 40",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-41",
+        "title": "Cap session 41",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-42",
+        "title": "Cap session 42",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-43",
+        "title": "Cap session 43",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-44",
+        "title": "Cap session 44",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-45",
+        "title": "Cap session 45",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-46",
+        "title": "Cap session 46",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-47",
+        "title": "Cap session 47",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-48",
+        "title": "Cap session 48",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-49",
+        "title": "Cap session 49",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-50",
+        "title": "Cap session 50",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-51",
+        "title": "Cap session 51",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-52",
+        "title": "Cap session 52",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-53",
+        "title": "Cap session 53",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cap-54",
+        "title": "Cap session 54",
+        "messages": []
+      },
+      {
+        "id": "script-sess-life-needle",
+        "title": "needle-xyzzy-unique",
+        "messages": []
+      },
+      {
+        "id": "script-sess-life-cursed",
+        "title": "Cursed delete",
+        "messages": [],
+        "deleteFails": true
+      },
+      {
+        "id": "script-sess-life-delete",
+        "title": "Delete me",
+        "messages": []
+      },
+      {
+        "id": "script-sess-life-archive",
+        "title": "Archive me",
+        "messages": []
+      },
+      {
+        "id": "script-sess-life-pin",
+        "title": "Pin me",
+        "messages": []
+      },
+      {
+        "id": "script-sess-life-rename",
+        "title": "Rename me",
+        "messages": []
+      },
+      {
+        "id": "script-sess-life-main",
+        "title": "Lifecycle main",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "生命周期旅程：确认当前会话可用",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "会话可用，生命周期操作不影响在轨状态。"
+          ],
+          "chunkDelayMs": 200
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

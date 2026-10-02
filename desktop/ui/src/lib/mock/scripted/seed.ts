@@ -83,10 +83,14 @@ export function recordSeedSessionRenamed(sessionId: string, title: string): void
   seedSessionRuntime().renamed.set(sessionId, title)
 }
 
-/** Record a seeded session's delete (delete_session while armed). */
+/** Record a seeded session's delete (delete_session while armed). A delete
+ *  also leaves the archive registry — the archived lens' 永久删除 removes
+ *  the whole session, exactly like the backend's L0 directory wipe. */
 export function recordSeedSessionDeleted(sessionId: string): void {
   if (!findSeedSession(sessionId)) return
-  seedSessionRuntime().deleted.add(sessionId)
+  const rt = seedSessionRuntime()
+  rt.deleted.add(sessionId)
+  rt.archived.delete(sessionId)
 }
 
 /** Record a seeded session's archive / restore (archive/unarchive_session
