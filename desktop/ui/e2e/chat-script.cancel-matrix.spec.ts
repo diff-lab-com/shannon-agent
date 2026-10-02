@@ -9,6 +9,10 @@
 // query:cancelled 会清空新流并误停 isQuerying。复现序列（同报告 §A-17）：
 //   send(q-0 流中) → stop → cancelled 收敛 → 立刻 send(q-1 流中)
 //   → 注入 q-0 迟到 text + q-0 迟到 cancelled → 新流被清空、composer 误复位。
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { expect, test } from '@playwright/test'
 
 import { ChatPage } from './helpers/ChatPage'
@@ -17,6 +21,18 @@ import { expectNoConsoleErrors } from './helpers/watchdog'
 import { annotateKnownIssues, mockSnapshot } from './helpers/knownIssues'
 
 type Page = import('@playwright/test').Page
+
+// Exceeded-only body suffix (everything after the {budget} placeholder in
+// en.json's budget.exceeded.body) — the same dynamic variant anchor the
+// budget journey spec uses; a copy drift fails by name here too.
+const EXCEEDED_BODY_SUFFIX = (
+  JSON.parse(
+    readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'i18n', 'locales', 'en.json'),
+      'utf8',
+    ),
+  ) as Record<string, string>
+)['budget.exceeded.body'].split('{budget}')[1]!.trim()
 
 /** Emit a raw event through the bridge, bypassing the player state. */
 function emitNow(page: Page, event: string, payload: Record<string, unknown>): void {
@@ -261,8 +277,9 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
 
     // The banner is already up (seed re-derivation) when the run starts.
     // Exceeded-only body suffix — variant anchor (see chat-script.budget
-    // spec: the $-body prefix is shared with the warning variant).
-    const banner = page.getByRole('alert').filter({ hasText: 'Choose how to proceed' })
+    // spec: the $-body prefix is shared with the warning variant; the
+    // suffix is derived from en.json by key).
+    const banner = page.getByRole('alert').filter({ hasText: EXCEEDED_BODY_SUFFIX })
     await expect(banner).toBeVisible({ timeout: 10_000 })
     await chat.send('再补充一下数据来源部分')
     await chat.expectStreamingCursor()

@@ -1,11 +1,20 @@
 // R3 journey #7（矩阵#7）— budget-exceeded: the seeded over-budget session
 // (spentUsd 6.4 ≥ budgetUsd 5) shows the red exceeded banner via the
 // mount/switch re-derivation (B4 P2-8), the budget-cap auto-cancel settles
-// the run, and "Continue (ignore once)" resends with the budget-bypass flag.
+// the run, and "Continue — resend the last message (ignore once)" resends
+// with the budget-bypass flag.
 //
-// Finding anchors: A-2 (the bypass resend drops the original attachments —
-// asserted below via the player's sends log) and the R2 walkthrough's
-// budget-continuation finding.
+// R2 W2-4 contract (rebase 适配 2026-10-02): the banner's Continue is
+// labeled by what it delivers (Chat.tsx continueTarget derivation:
+// blockedPayload ? 'blocked' : any recorded user turn ? 'last-message' :
+// null → the button hides). This seed derives 'last-message' — the session
+// history carries a recorded user turn and the scripted cap trips MID-TURN
+// (budget:exceeded event), never as a pre-turn refusal, so blockedPayload
+// stays null and the fallback ("resend the LAST recorded user turn") is
+// the delivery path. Every copy assertion references en.json by key.
+//
+// Finding anchors: A-2 (RESOLVED on dev — see the annotation below) and the
+// R2 walkthrough's budget-continuation finding.
 //
 // ─── Ledger issue CHAT-TEST-1 (裁定修复波) ─────────────────────────────────
 // Five consecutive CI rounds on GitHub 2-core runners (incl. jobs
@@ -25,6 +34,10 @@
 // → console.info + reasoned test.skip (never a silent skip, never a red).
 // The button rendering itself is pinned unconditionally at the jsdom layer
 // by src/__tests__/BudgetBanner.test.tsx, so the skip costs no coverage.
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { expect, test } from '@playwright/test'
 
 import { ChatPage } from './helpers/ChatPage'
@@ -35,18 +48,37 @@ import type { ChatScript } from '../src/lib/mock/scripted/schema'
 
 const script = readChatScript('budget-exceeded') as ChatScript
 
-// The frozen exceeded trio — the exact en.json copy (pinned key-by-key in
-// src/__tests__/BudgetBanner.test.tsx).
-const ACTIONS = ['Continue (ignore once)', 'Raise budget…', 'Stop'] as const
+// en.json read from disk (same pattern as scriptLoader — import-safe outside
+// Vite). Flat dotted keys: the assertion IS the key→copy mapping, so a copy
+// drift fails by name instead of silently passing on a stale literal.
+const HELPERS_DIR = dirname(fileURLToPath(import.meta.url))
+const en = JSON.parse(
+  readFileSync(join(HELPERS_DIR, '..', 'src', 'i18n', 'locales', 'en.json'), 'utf8'),
+) as Record<string, string>
+
+// The exceeded bar's frozen actions as THIS scenario derives them —
+// continueTarget = 'last-message' (see the header), so the Continue label
+// is the resend-last copy, never the blocked one.
+const ACTIONS = [
+  en['budget.exceeded.continueLast'],
+  en['budget.exceeded.raise'],
+  en['budget.exceeded.stop'],
+] as const
+
+// Exceeded-only body suffix — variant anchor: budget.warning.body and
+// budget.exceeded.body share the "{spent} of {budget} used" prefix, so the
+// anchor is the text AFTER the {budget} placeholder.
+const EXCEEDED_BODY_SUFFIX = en['budget.exceeded.body'].split('{budget}')[1]!.trim()
 
 test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
   test('exceeded banner three actions, auto-cancel at the cap, Continue once rides budgetBypass', async ({ page }) => {
     test.setTimeout(60_000)
     annotateKnownIssues(test.info(), {
-      'A-2': 'The budget "Continue once" resend drops the last user message\'s attachments '
-        + '(Chat.tsx continuePastBudget resends content only). Current behavior is asserted below '
-        + '(sends[1].attachments === null); flip to "attachments preserved" when R4 lands — the '
-        + 'seeded user message carries /Users/demo/Downloads/report-draft.md.',
+      'A-2': 'RESOLVED upstream (dev d3d40452): Chat.tsx continuePastBudget\'s mid-turn fallback '
+        + 'now forwards the last RECORDED user turn\'s file_attachments with the bypass resend. '
+        + 'This scenario\'s final recorded turn is the just-cancelled attachment-less send, so '
+        + 'the wire assertion below stays attachments === null (nothing to forward — not a '
+        + 'drop), and sends[1].message pins the resend-the-LAST-recorded-turn semantics.',
     })
     const chat = new ChatPage(page)
     await loadChatScript(page, 'budget-exceeded', test.info())
@@ -66,16 +98,17 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     // {budget} used" prefix (en.json), so a banner mid-flip between the
     // re-derive (useBudgetGuard.ts:52-76) and a budget:* event could satisfy
     // the old hasText pair while the buttons (exceeded-only,
-    // BudgetBanner.tsx:56-88) were not yet up. 'Choose how to proceed.' is
-    // exceeded-only; each presence assert carries its own 15s window so a
-    // slow CI runner rides out the variant settle instead of inheriting a 5s
-    // default mid-flip. Finding anchor (provider review §3-A1): the
-    // ApiKeyBanner now shows ONLY on a genuine missing-key/missing-provider
-    // snapshot — the armed seed's hasKey:true keeps it absent here (the
-    // filtered alert query below would catch an extra alert); the
-    // four-quadrant gating itself is pinned by
+    // BudgetBanner.tsx exceeded branch) were not yet up. The exceeded-only
+    // suffix (everything after the {budget} placeholder — currently
+    // "used. Choose how to proceed.") is the anchor; each presence assert
+    // carries its own 15s window so a slow CI runner rides out the variant
+    // settle instead of inheriting a 5s default mid-flip. Finding anchor
+    // (provider review §3-A1): the ApiKeyBanner now shows ONLY on a genuine
+    // missing-key/missing-provider snapshot — the armed seed's hasKey:true
+    // keeps it absent here (the filtered alert query below would catch an
+    // extra alert); the four-quadrant gating itself is pinned by
     // src/__tests__/ApiKeyBanner.test.tsx (R2).
-    const banner = page.getByRole('alert').filter({ hasText: 'Choose how to proceed' })
+    const banner = page.getByRole('alert').filter({ hasText: EXCEEDED_BODY_SUFFIX })
     await expect(banner).toBeVisible({ timeout: 15_000 })
     await expect(banner.getByText(/\$6\.40 of \$5\.00 used/)).toBeVisible({ timeout: 15_000 })
 
@@ -129,8 +162,9 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     }
 
     // ── Anomaly gate (CHAT-TEST-1): the deterministic drive of the flow. ──
-    // 30s to see the three buttons in the banner DOM (they render
-    // unconditionally — BudgetBanner.tsx exceeded branch, jsdom-pinned).
+    // 30s to see the three derived buttons in the banner DOM (the exceeded
+    // branch renders them whenever the page passes a non-null continueTarget
+    // — jsdom-pinned three-state in src/__tests__/BudgetBanner.test.tsx).
     // Buttons appear → the full click-flow runs exactly as before. Still
     // absent → this is the runner anomaly (never seen outside GitHub 2-core
     // runners): log the marker line, push the annotation, dump the final
@@ -179,19 +213,24 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     }
 
     // "Raise budget…" opens the budget dialog (the second action is alive).
-    await actionButtons.filter({ hasText: 'Raise budget…' }).click()
-    await expect(page.getByRole('dialog').getByText('Set session budget')).toBeVisible()
-    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
+    await actionButtons.filter({ hasText: en['budget.exceeded.raise'] }).click()
+    await expect(page.getByRole('dialog').getByText(en['budget.dialog.title'])).toBeVisible()
+    await page.getByRole('dialog').getByRole('button', { name: en['budget.dialog.cancel'] }).click()
 
-    // Continue once: clearExceeded + resend with the bypass flag — snapshot
-    // proves the wire arg, and A-2's dropped attachment.
-    await actionButtons.filter({ hasText: 'Continue (ignore once)' }).click()
+    // Continue once (the 'last-message' label — see the header): the bar
+    // clears, the fallback resends the LAST RECORDED user turn with the
+    // bypass flag — the snapshot proves the wire args, the resend target,
+    // and the (vacuously empty) attachment shape.
+    await actionButtons.filter({ hasText: en['budget.exceeded.continueLast'] }).click()
     await expect(banner).toHaveCount(0)
     const snapshot = await mockSnapshot(page)
     expect(snapshot.sends[1]).toMatchObject({
       turnIndex: 1,
+      // The LAST recorded user turn (the just-cancelled send) — the R2 W2-4
+      // contract's "never replay an earlier turn" pin.
+      message: script.turns[0]!.user,
       budgetBypass: true,
-      attachments: null, // A-2 current behavior — flip with the fix
+      attachments: null, // nothing to forward — A-2 resolved upstream, see the annotation
       sessionId: 'script-sess-budget',
     })
     // The bypass turn streams to completion.

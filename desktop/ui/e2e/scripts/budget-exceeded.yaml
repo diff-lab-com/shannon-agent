@@ -1,16 +1,19 @@
 # ChatScript: budget-exceeded — journey #7（矩阵#7）。
 #
 # 超支 seed（spentUsd 6.4 ≥ budgetUsd 5）→ 切入会话即由 useBudgetGuard 的
-# 挂载/切换重推导（B4 P2-8）看到 exceeded 红横幅三动作；新 turn 流中
-# budget:exceeded 事件 + 预算触顶自动取消（真实后端复用同一 cancel token，
-# commands.rs:2199）→ Continue once 以 budgetBypass:true 重发（snapshot
-# sends 断言）。Continue 后附件按 knownIssue: "A-2" 锚现状——重发
-# lastUser.content 时丢弃附件，断言写在 spec（sends.attachments === null），
-# R4 修复后翻转为「附件保留」。
+# 挂载/切换重推导（B4 P2-8）看到 exceeded 红横幅。R2 W2-4 契约：Continue
+# 按投递目标标注（continueTarget）——本场景含已记录的用户 turn 且触顶是
+# 流中事件（非 pre-turn 拒绝），推导为 'last-message' →「Continue — resend
+# the last message (ignore once)」。新 turn 流中 budget:exceeded 事件 +
+# 预算触顶自动取消（真实后端复用同一 cancel token，commands.rs:2199）→
+# Continue once 以 budgetBypass:true 重发最后一条已记录用户 turn（snapshot
+# sends 断言）。knownIssue A-2 已在 dev 上游修复（d3d40452 起 fallback 顺
+# 带 lastUser.file_attachments）——本场景最后一条 turn 无附件，断言保持
+# sends.attachments === null（无附件可带，非丢弃）。
 #
-# 回归锚点：A-2（Chat.tsx continuePastBudget 丢附件）· findings「预算续发」。
+# 回归锚点：A-2（已解决，见上）· findings「预算续发」。
 name: budget-exceeded
-description: 预算超支 journey — 超支 seed 红横幅三动作 → 自动取消 → Continue once 带 budgetBypass（A-2 锚点）
+description: 预算超支 journey — 超支 seed 红横幅（continueTarget=last-message）→ 自动取消 → Continue once 带 budgetBypass
 seed:
   config:
     hasKey: true

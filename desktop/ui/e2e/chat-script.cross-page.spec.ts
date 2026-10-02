@@ -39,10 +39,17 @@ test.describe('scripted chat backend — journey-cross-page (#13)', () => {
       )
       .toBe(true, { timeout: 15_000 })
 
-    // The sidebar Files page lists it.
+    // The sidebar Files page lists it. Anchor = the row's title attribute
+    // (the full path): the row BODY renders basename + meta only, so a text
+    // query for the path never matches /files itself — the pre-rebase
+    // passing runs were silently matching the OUTGOING chat DOM (the
+    // FileChangesCard's font-mono path span) during the lazy route
+    // transition, a false positive the rebase's faster warm-server chunk
+    // load removed the window for. Asserting the row directly is the
+    // journey's actual claim (the artifact is listed), now transition-proof.
     await page.getByRole('link', { name: 'Files' }).click()
     await expect(page).toHaveURL(/\/files$/)
-    await expect(page.getByText(FILE_PATH)).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator(`[data-testid="files-row"][title="${FILE_PATH}"]`)).toBeVisible({ timeout: 10_000 })
 
     // Timeline deep link (the demo trace_timeline projection answers for
     // any session id).
