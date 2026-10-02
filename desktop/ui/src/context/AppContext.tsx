@@ -15,6 +15,7 @@ import { describeBackendError } from '@/lib/backendError'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
+import { basenameOf } from '@/lib/fileRefs'
 import {
   beginRun as runBegin,
   endRun as runEnd,
@@ -522,7 +523,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // B1 P1-5: the run is tracked on ITS session — other sessions keep a
     // usable composer while this one streams.
     setSessionQuerying(targetSessionId, true)
-    setMessages(prev => [...prev, { role: 'user', content: message, timestamp: Date.now() }])
+    // A-4 fix: the optimistic user message carries its attachments in the
+    // backend ChatMessage's wire shape (commands.rs: file_attachments of
+    // {name, path, size}) so the just-sent bubble shows its attachment
+    // previews immediately instead of only after the next reload. The size
+    // is unknowable client-side pre-send — 0 renders as a placeholder until
+    // a reload brings the recorded message (with real metadata) back.
+    setMessages(prev => [...prev, {
+      role: 'user',
+      content: message,
+      timestamp: Date.now(),
+      file_attachments: filePaths?.map(p => ({ name: basenameOf(p), path: p, size: 0 })),
+    }])
     try {
       // P1-1 fix: explicit session routing — the window targets its own
       // session, the main window its current one; the backend never routes

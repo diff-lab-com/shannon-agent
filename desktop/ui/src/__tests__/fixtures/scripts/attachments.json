@@ -1,6 +1,6 @@
 {
   "name": "attachments",
-  "description": "附件 journey — 草稿 chips → 发送 → rejected toast（P0 回归锚点）→ 乐观期无附件预览（A-4 锚点）",
+  "description": "附件 journey — 草稿 chips → 发送 → rejected toast（P0 回归锚点）→ 乐观气泡带附件预览（A-4 已修复）",
   "seed": {
     "config": {
       "hasKey": true

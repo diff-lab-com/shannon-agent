@@ -7,16 +7,22 @@
 //
 //   mid-stream: 2 chunks then error_kind:'other' → plain banner + retry, no
 //   ghost bubble; clicking Retry re-sends (sentTurns 1 → 2) and the session
-//   continues. The retried turn is anchored to known bug A-3 (retry drops
-//   the original attachments) — flip notes inline.
+//   continues. A-3 fixed (R4 group 1): the retry resend carries the last
+//   user message's attachment paths — the retried bubble shows the
+//   attachment chip and the wire log proves the preserved path.
 import { expect, test } from '@playwright/test'
 
 import { ChatPage } from './helpers/ChatPage'
-import { loadChatScript } from './helpers/scriptLoader'
+import { loadChatScript, readChatScript } from './helpers/scriptLoader'
 import { expectNoConsoleErrors } from './helpers/watchdog'
-import { annotateKnownIssues, mockSnapshot } from './helpers/knownIssues'
+import { mockSnapshot } from './helpers/knownIssues'
+import type { ChatScript } from '../src/lib/mock/scripted/schema'
 
-const STORY = '给我讲一个关于海的故事'
+const script = readChatScript('mid-stream-fail') as ChatScript
+const STORY = script.turns[0]!.user
+const NOTES_PATH = script.turns[0]!.attachments![0]
+const NOTES_NAME = NOTES_PATH.split('/').pop()!
+const DRAFT_KEY = 'shannon.draft.script-sess-fail'
 
 test.describe('scripted chat backend — failure journeys (#5)', () => {
   test('auth failure routes to the dedicated API-key banner, not the plain one', async ({ page }) => {
@@ -42,15 +48,25 @@ test.describe('scripted chat backend — failure journeys (#5)', () => {
     await expectNoConsoleErrors(page)
   })
 
-  test('mid-stream failure keeps the transcript clean; retry re-sends (A-3 anchored)', async ({ page }) => {
+  test('mid-stream failure keeps the transcript clean; retry re-sends with its attachments (A-3 fixed)', async ({ page }) => {
     test.setTimeout(60_000)
-    annotateKnownIssues(test.info(), {
-      'A-3': 'Retry drops the original attachments (ComposerRetryButton resends text only). '
-        + 'Current behavior is asserted below; flip to "attachments preserved" when R4 lands '
-        + 'and remove the knownIssue marker on the retry turn in e2e/scripts/mid-stream-fail.yaml.',
-    })
     const chat = new ChatPage(page)
+    // Pre-seed the session draft with the attachment (plus the turn text):
+    // opening the session restores the chip, so the failing turn goes out
+    // WITH the attachment — exactly what the Retry resend must preserve.
+    await page.addInitScript(([key, path, text]) => {
+      localStorage.setItem(key, JSON.stringify({ text, attachments: [path], updatedAt: Date.now() }))
+    }, [DRAFT_KEY, NOTES_PATH, STORY] as const)
     await loadChatScript(page, 'mid-stream-fail', test.info())
+
+    // Same mount guard as the attachments journey: the draft-restore effect
+    // keys on the visible-session CHANGE, so the Chat page must be up
+    // before the row click.
+    await expect(chat.composer()).toBeVisible({ timeout: 10_000 })
+    await page.getByTestId('desktop-session-row-script-sess-fail').click()
+    await expect(page.getByRole('heading', { name: 'Mid-stream failure' })).toBeVisible({ timeout: 10_000 })
+    // The draft-restore put the attachment chip back into the composer.
+    await expect(page.getByRole('button', { name: `Remove ${NOTES_NAME}` })).toBeVisible({ timeout: 10_000 })
 
     await chat.send(STORY)
     await chat.expectStreamingCursor()
@@ -62,11 +78,13 @@ test.describe('scripted chat backend — failure journeys (#5)', () => {
     // No ghost bubble: the partial stream is dropped, nothing committed.
     await expect(chat.streamingCursor()).toHaveCount(0)
     await expect(chat.bubbles()).toHaveCount(1)
-    expect((await mockSnapshot(page)).sentTurns).toBe(1)
+    const preRetry = await mockSnapshot(page)
+    expect(preRetry.sentTurns).toBe(1)
+    // The failing turn went out WITH the draft-restored attachment.
+    expect(preRetry.sends[0]).toMatchObject({ turnIndex: 0, attachments: [NOTES_PATH] })
 
     // Retry: the last user message is re-sent — the script's second turn is
-    // consumed (its knownIssue'd chunk step is skipped, so the turn settles
-    // immediately) and the banner clears.
+    // consumed (its chunk step plays again) and the banner clears.
     await page.getByRole('button', { name: 'Retry' }).click()
     await expect.poll(async () => (await mockSnapshot(page)).sentTurns, { timeout: 5_000 }).toBe(2)
     await expect(page.getByText('upstream connection reset while streaming')).toHaveCount(0)
@@ -74,13 +92,22 @@ test.describe('scripted chat backend — failure journeys (#5)', () => {
 
     // The re-sent turn appended a second user bubble with the same text
     // (user bubbles carry chrome, not a .prose body — substring assert).
-    await expect(chat.bubbles()).toHaveCount(2)
+    // Its scripted reply replays and commits fast (a single chunk step), so
+    // assert the settled transcript directly: user + reply = 3 bubbles.
+    await expect(chat.bubbles()).toHaveCount(3, { timeout: 15_000 })
     await expect(chat.bubbleAt(1)).toContainText(STORY)
 
-    // A-3 current behavior: the retried bubble carries no attachment chips —
-    // the original attachment (story-notes.md) was dropped on the resend.
-    // Flip this to toBeVisible()-style presence assertions when R4 fixes it.
-    await expect(chat.bubbleAt(1).getByText('story-notes.md')).toHaveCount(0)
+    // A-3 fixed: the retry resend kept the last user message's attachments —
+    // the wire log carries the original path…
+    const snapshot = await mockSnapshot(page)
+    expect(snapshot.sends[1]).toMatchObject({
+      turnIndex: 1,
+      attachments: [NOTES_PATH],
+    })
+    // …and the retried bubble renders the attachment card. The reply bubble
+    // (already settled above) carries the replayed scripted text.
+    await expect(chat.bubbleAt(1).getByText('story-notes.md')).toBeVisible()
+    await expect(chat.bubbleAt(2)).toContainText('重试后的流式回复')
     await expectNoConsoleErrors(page)
   })
 })

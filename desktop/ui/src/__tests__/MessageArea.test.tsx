@@ -168,9 +168,10 @@ describe('MessageArea — error banner routing (auth vs other)', () => {
 
     expect(screen.queryByTestId('auth-error-banner')).toBeNull()
     expect(screen.getByText('upstream connection reset while streaming')).toBeInTheDocument()
-    // Retry resends the LAST USER MESSAGE (B0 P1-3)…
+    // Retry resends the LAST USER MESSAGE (B0 P1-3); A-3 fix: the second
+    // arg carries its attachment paths — `undefined` when it has none.
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-    expect(ctx.sendMessage).toHaveBeenCalledWith('tell me a story')
+    expect(ctx.sendMessage).toHaveBeenCalledWith('tell me a story', undefined)
   })
 
   it('hides Retry entirely when there is no user message to resend', () => {

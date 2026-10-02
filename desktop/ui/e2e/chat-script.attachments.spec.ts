@@ -1,13 +1,13 @@
 // R3 journey #8（矩阵#8）— attachments: the draft-restored attachment chips,
 // the P0-3 rejection receipt on send (one "«file» was not sent: «reason»"
 // toast per refused path — the R2 walkthrough's out-of-working-dir P0
-// finding anchor), and the optimistic bubble's bare shape (A-4).
+// finding anchor), and the optimistic bubble's attachment preview (A-4
+// fixed in R4 group 1).
 import { expect, test } from '@playwright/test'
 
 import { ChatPage } from './helpers/ChatPage'
 import { loadChatScript, readChatScript } from './helpers/scriptLoader'
 import { expectNoConsoleErrors } from './helpers/watchdog'
-import { annotateKnownIssues } from './helpers/knownIssues'
 import type { ChatScript } from '../src/lib/mock/scripted/schema'
 
 const script = readChatScript('attachments') as ChatScript
@@ -16,13 +16,8 @@ const OUTSIDE_NAME = OUTSIDE_PATH.split('/').pop()!
 const DRAFT_KEY = 'shannon.draft.script-sess-attach'
 
 test.describe('scripted chat backend — attachments (journey #8)', () => {
-  test('draft chips render, the send returns a rejection receipt toast, the optimistic bubble stays bare (A-4 anchored)', async ({ page }) => {
+  test('draft chips render, the send returns a rejection receipt toast, the optimistic bubble carries the attachment (A-4 fixed)', async ({ page }) => {
     test.setTimeout(60_000)
-    annotateKnownIssues(test.info(), {
-      'A-4': 'The optimistic user message carries no file_attachments (AppContext sendMessage), '
-        + 'so the just-sent message briefly looks like plain text until the next reload. Current '
-        + 'behavior asserted below (user bubble without the attachment preview).',
-    })
     const chat = new ChatPage(page)
     // The draft (text + out-of-working-dir attachment) rides localStorage
     // before the app boots — the same key Chat.tsx's per-session drafts use.
@@ -61,10 +56,11 @@ test.describe('scripted chat backend — attachments (journey #8)', () => {
     await expect(toast).toContainText('was not sent')
     await expect(toast).toContainText('outside the working directory')
 
-    // A-4 current behavior: the optimistic user bubble has NO attachment
-    // preview (the filename appears nowhere in the message log).
+    // A-4 fixed: the optimistic user bubble carries its attachment in the
+    // backend ChatMessage's wire shape — the FileCard renders the filename
+    // immediately, no reload needed.
     await expect(chat.bubbleAt(0)).toBeVisible()
-    await expect(chat.bubbleAt(0)).not.toContainText(OUTSIDE_NAME)
+    await expect(chat.bubbleAt(0)).toContainText(OUTSIDE_NAME)
     // Accepted sends clear the draft + chips.
     await expect(chat.composer()).toHaveValue('')
     await expect(chipRemove).toHaveCount(0)

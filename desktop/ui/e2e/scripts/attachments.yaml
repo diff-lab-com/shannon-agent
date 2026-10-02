@@ -5,11 +5,11 @@
 # "«file» was not sent: «reason»" toast。回归锚点：R2 走查 P0「附件黑洞」
 # 修复——工作目录外的附件必须明示拒收，绝不允许静默丢弃。
 #
-# A-4 锚点（knownIssue 注释，断言在 spec）：乐观 append 的 user 消息不带
-# file_attachments（AppContext sendMessage）——发送后用户气泡短暂没有附件
-# 预览。现状断言「无预览」，R4 修复后翻转为「乐观气泡带附件预览」。
+# A-4 已修复（R4 组1）：乐观 append 的 user 消息携带 file_attachments
+# （AppContext sendMessage，对齐后端 ChatMessage wire 形状）——发送后用户
+# 气泡立即渲染附件预览，无需等重载。spec 断言已翻转。
 name: attachments
-description: 附件 journey — 草稿 chips → 发送 → rejected toast（P0 回归锚点）→ 乐观期无附件预览（A-4 锚点）
+description: 附件 journey — 草稿 chips → 发送 → rejected toast（P0 回归锚点）→ 乐观气泡带附件预览（A-4 已修复）
 seed:
   config:
     hasKey: true
