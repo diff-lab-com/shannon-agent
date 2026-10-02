@@ -75,4 +75,90 @@ test.describe('scripted chat backend — multi-turn-stream (journey #2)', () => 
     await expect(chat.runStatusLine()).toHaveCount(0)
     await expectNoConsoleErrors(page)
   })
+
+  // G11 (wave-2): Ctrl+F in-conversation search — the NON-virtualized path
+  // (short history). The jump is a scrollIntoView landing on the match and
+  // the counter pins 1/1; Esc closes and hands focus back to the composer.
+  test('Ctrl+F over a short conversation: single-match landing, wrap, focus return', async ({ page }) => {
+    test.setTimeout(90_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'multi-turn-stream', test.info())
+
+    await chat.send(turn(0).user)
+    await expect(chat.sendButton()).toBeVisible({ timeout: 20_000 })
+    await expect(chat.bubbles()).toHaveCount(2)
+
+    await page.keyboard.press('Control+f')
+    const bar = page.getByTestId('chat-search-bar')
+    await expect(bar).toBeVisible({ timeout: 5_000 })
+
+    await bar.getByRole('textbox').fill('潮水退去')
+    const count = bar.getByTestId('chat-search-count')
+    await expect(count).toHaveText('1/1')
+    // The match flashes its ring on landing; the bubble is in view.
+    await expect(chat.bubbleAt(1)).toBeVisible()
+
+    // Enter / Shift+Enter wrap a single match without leaving it.
+    await bar.getByRole('textbox').press('Enter')
+    await expect(count).toHaveText('1/1')
+    await bar.getByRole('textbox').press('Shift+Enter')
+    await expect(count).toHaveText('1/1')
+
+    // A miss renders the error-colored zero state and disables navigation.
+    await bar.getByRole('textbox').fill('zzz-no-such-token')
+    await expect(count).toHaveText('0')
+    await expect(bar.getByRole('button', { name: 'Next match (Enter)' })).toBeDisabled()
+    await expect(bar.getByRole('button', { name: 'Previous match (Shift+Enter)' })).toBeDisabled()
+
+    // Esc closes the bar and returns focus to the composer.
+    await bar.getByRole('textbox').press('Escape')
+    await expect(bar).toHaveCount(0)
+    await expect(chat.composer()).toBeFocused()
+    await expectNoConsoleErrors(page)
+  })
+
+  // G11 (wave-2): the virtualized path — 32 seeded messages exceed
+  // VIRTUALIZE_THRESHOLD(30), so only a window of bubbles exists in the DOM
+  // and the jump MUST go through virtualizer.scrollToIndex (a plain
+  // scrollIntoView could never reach an unmounted row).
+  test('Ctrl+F over a virtualized long history: scrollToIndex jump, wrap across matches, empty state', async ({ page }) => {
+    test.setTimeout(90_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'search-virtualized', test.info())
+    await expect(chat.composer()).toBeVisible({ timeout: 10_000 })
+    // Virtualized: 32 seeded messages, but the DOM only holds a window.
+    const rendered = await chat.bubbles().count()
+    expect(rendered).toBeGreaterThan(0)
+    expect(rendered).toBeLessThan(32)
+
+    await page.keyboard.press('Control+f')
+    const bar = page.getByTestId('chat-search-bar')
+    await expect(bar).toBeVisible({ timeout: 5_000 })
+
+    // needle-42 lives at index 5 (assistant) and index 28 (user) — far
+    // outside the initially rendered window. The first jump lands on it via
+    // scrollToIndex: the row MOUNTS into the DOM.
+    await bar.getByRole('textbox').fill('needle-42')
+    const count = bar.getByTestId('chat-search-count')
+    await expect(count).toHaveText('1/2')
+    await expect(chat.bubbleAt(5)).toBeVisible({ timeout: 5_000 })
+
+    // Enter wraps forward to the second match; Shift+Enter wraps back.
+    await bar.getByRole('textbox').press('Enter')
+    await expect(count).toHaveText('2/2')
+    await expect(chat.bubbleAt(28)).toBeVisible({ timeout: 5_000 })
+    await bar.getByRole('textbox').press('Shift+Enter')
+    await expect(count).toHaveText('1/2')
+    await expect(chat.bubbleAt(5)).toBeVisible()
+
+    // Zero results: the error-toned counter, navigation disabled.
+    await bar.getByRole('textbox').fill('zzz-no-such-token')
+    await expect(count).toHaveText('0')
+    await expect(bar.getByRole('button', { name: 'Next match (Enter)' })).toBeDisabled()
+
+    await bar.getByRole('textbox').press('Escape')
+    await expect(bar).toHaveCount(0)
+    await expect(chat.composer()).toBeFocused()
+    await expectNoConsoleErrors(page)
+  })
 })
