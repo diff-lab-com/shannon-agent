@@ -614,24 +614,6 @@
       }
     },
     {
-      "identifier": "allow-get-billing-history",
-      "description": "Enables the get_billing_history command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "get_billing_history"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-get-billing-plan",
-      "description": "Enables the get_billing_plan command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "get_billing_plan"
-        ]
-      }
-    },
-    {
       "identifier": "allow-get-cli-install-status",
       "description": "Enables the get_cli_install_status command without any pre-configured scope.",
       "commands": {
@@ -655,15 +637,6 @@
       "commands": {
         "allow": [
           "get_conversation"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-get-cost-history",
-      "description": "Enables the get_cost_history command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "get_cost_history"
         ]
       }
     },
@@ -3231,12 +3204,9 @@
     },
     {
       "identifier": "app-usage",
-      "description": "Usage statistics, session budgets/cost breakdown and billing commands.",
+      "description": "Usage statistics, session budgets and cost breakdown commands.",
       "permissions": [
         "allow-estimate-task-cost",
-        "allow-get-billing-history",
-        "allow-get-billing-plan",
-        "allow-get-cost-history",
         "allow-get-session-budget",
         "allow-get-session-context-breakdown",
         "allow-get-session-usage",

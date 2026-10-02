@@ -9,7 +9,6 @@ fn main() {
     use shannon_desktop::commands;
     use shannon_desktop::commands_agents;
     use shannon_desktop::commands_artifact;
-    use shannon_desktop::commands_billing;
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
     use shannon_desktop::commands_connections;
@@ -502,10 +501,6 @@ fn main() {
             commands_notifications::clear_webhook_config,
             // P1-7 — one-shot test payload to the configured webhook
             commands_notifications::test_webhook,
-            // P0-c — billing demo data (UI shows "Demo mode" banner)
-            commands_billing::get_billing_plan,
-            commands_billing::get_cost_history,
-            commands_billing::get_billing_history,
             // Usage statistics — local usage ledger aggregation
             commands_usage::get_usage_stats,
             // P2-1/P2-6 — usage governance (monthly budget % + 80/100%
