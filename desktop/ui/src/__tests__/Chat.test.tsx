@@ -201,6 +201,51 @@ describe('Chat page', () => {
     expect(input).toHaveValue('')
   })
 
+  // A-9 — the queue (and steer) buttons render for attachments-only input
+  // while streaming (hasSteerableContent counts attachments), the queue
+  // chips carry an attachmentsOnly label, and the idle path has treated
+  // attachments-only as a real send since B0 P0-1 — but the queue branch's
+  // `if (!trimmed) return` silently swallowed exactly that input. Enter with
+  // files and no text must join the queue like any other send.
+  it('queues attachments-only input while querying instead of silently no-oping (A-9)', async () => {
+    resetCtx()
+    ctx.isQuerying = true
+    ctx.currentSessionId = 'sess-1'
+    ctx.sessions = [{ id: 'sess-1', title: 'S' }]
+    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
+    renderChat()
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    await screen.findByText('report.pdf')
+
+    const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(ctx.sendMessage).not.toHaveBeenCalled()
+    expect(ctx.enqueuePrompt).toHaveBeenCalledWith('', ['/home/alice/Downloads/report.pdf'])
+    // an accepted enqueue still clears the composer
+    expect(input).toHaveValue('')
+  })
+
+  it('keeps attachments-only input when the queue is full while querying (A-9)', async () => {
+    resetCtx()
+    ctx.isQuerying = true
+    ctx.currentSessionId = 'sess-1'
+    ctx.sessions = [{ id: 'sess-1', title: 'S' }]
+    ctx.enqueuePrompt = vi.fn().mockReturnValue(false)
+    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
+    renderChat()
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    await screen.findByText('report.pdf')
+
+    const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(ctx.enqueuePrompt).toHaveBeenCalledWith('', ['/home/alice/Downloads/report.pdf'])
+    // A rejected enqueue keeps the draft — the chip stays, nothing is
+    // silently swallowed (mirror of the text case above).
+    expect(screen.getByText('report.pdf')).toBeInTheDocument()
+  })
+
   it('keeps the draft when the queue is full (enqueue rejected)', () => {
     resetCtx()
     ctx.isQuerying = true
