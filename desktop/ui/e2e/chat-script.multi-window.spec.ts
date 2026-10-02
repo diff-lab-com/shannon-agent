@@ -29,6 +29,13 @@ const S1_ID = '11111111-1111-4111-8111-111111111111'
 const S2_ID = '22222222-2222-4222-8222-222222222222'
 const SESSION_WINDOW_URL = `/chat?windowSession=${S2_ID}`
 
+// Playwright only applies the config's `use` contextOptions to the CONTEXTS
+// IT CREATES — a bare `browser.newContext()` boots with the BROWSER's own
+// locale, so on a non-English dev machine the aria-label-anchored locators
+// ("Message" / "Session window" / …) would break the nightly's local run.
+// Pin the same contextOptions the global config declares (locale + viewport).
+const PINNED_CONTEXT = { locale: 'en-US', viewport: { width: 1440, height: 900 } }
+
 const script = readChatScript('multi-window') as ChatScript
 
 /**
@@ -109,7 +116,7 @@ test.describe('scripted chat backend — multi-window (journey #21, nightly-only
 
   test('session window filters foreign-session events and renders its own (reveal chrome pinned)', async ({ browser }) => {
     test.setTimeout(60_000)
-    const context = await browser.newContext()
+    const context = await browser.newContext(PINNED_CONTEXT)
     const pageA = await context.newPage()
     const pageB = await context.newPage()
     const chatA = new ChatPage(pageA)
@@ -166,7 +173,7 @@ test.describe('scripted chat backend — multi-window (journey #21, nightly-only
 
   test('permission alertdialog follows the window filter (main window pops for any session — pinned as-is)', async ({ browser }) => {
     test.setTimeout(60_000)
-    const context = await browser.newContext()
+    const context = await browser.newContext(PINNED_CONTEXT)
     const pageA = await context.newPage()
     const pageB = await context.newPage()
 
