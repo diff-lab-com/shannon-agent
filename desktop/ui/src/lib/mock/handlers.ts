@@ -22,9 +22,11 @@ import {
 // setScriptSeed) these accessors answer with the script's seed data instead
 // of the global demo singletons; unarmed they all return null/undefined and
 // every handler below behaves exactly as before.
-import { clearRecordedSends, getScriptSeed, recordSeedUserSend, seededBudget, seededCheckpoints, seededConfigPatch,
-  seededMessagesWithRecorded, seededProviderStatusPatch,
-  seededRewoundMessages, seededSessions, seededUsage } from './scripted/seed'
+import { clearRecordedSends, clearSeedSessionModel, recordSavedTextFile, recordSeedSessionArchived, recordSeedSessionDeleted,
+  recordSeedSessionRenamed, recordSeedSessionUnarchived, recordSeedUserSend, savedPlanForWorkingDir,
+  seedSaveTextFileShouldFail, seededArchivedSessions, seededBudget, seededCheckpoints, seededConfigPatch,
+  seededMessagesWithRecorded, seededProviderStatusPatch, seededRewoundMessages, seededSearchSessions,
+  seededSessionModel, seededSessions, seededUsage, seedSessionDeleteFails, setSeedSessionModel } from './scripted/seed'
 // wave-2 J15: canned /diff payloads behind the scripted seed gate (data/slash.ts).
 import { scriptedGitDiffFixture } from './data/slash'
 
@@ -34,6 +36,8 @@ const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random
 // Demo-build session mutations (see list_sessions above).
 const deletedSessions = new Set<string>()
 const renamedSessions = new Map<string, SessionInfo>()
+// W2 journey #19: demo twin of the backend's archived-session registry.
+const archivedSessions = new Set<string>()
 
 // P1-3: mutable desktop config so execution-mode / sandbox switches in the
 // demo feel live (get_config hands out a fresh clone of this).
@@ -409,6 +413,27 @@ export const handlers: Record<string, MockHandler> = {
     await delay(60)
     return null
   },
+  // W2 journey #20: the demo twin of the disk write (previously unmocked —
+  // save-as/export in demo mode could only fail). Records into the mock
+  // store so get_session_plan serves a PlanPanel write-back; with the seed's
+  // `config.saveTextFileFails` armed the write REJECTS (the PlanPanel
+  // rollback-to-engine-truth fixture — scripted-only, never the demo path).
+  async save_text_file(args: { path?: string; content?: string }) {
+    await delay(40)
+    if (!args?.path || seedSaveTextFileShouldFail()) {
+      throw new Error(`save_text_file failed${args?.path ? ` for ${args.path}` : ''}`)
+    }
+    recordSavedTextFile(args.path, args.content ?? '')
+    return true
+  },
+  // W2 journey #19: the plugin-dialog save() twin — demo has no native
+  // dialog, so the mock reports the user-cancel resolution (null), which is
+  // the exact shape FileCard's save-as "cancel backs out silently" branch
+  // handles.
+  async 'plugin:dialog|save'() {
+    await delay(40)
+    return null
+  },
   // --- Office Wave 3 C3: companion Quick Capture window ---
   // Demo mode has no real webview to spawn — the mock just reports the
   // fixed label the Rust command would return.
@@ -458,11 +483,14 @@ export const handlers: Record<string, MockHandler> = {
     await delay()
     const config = clone(demoConfig)
     // R1 scripted-backend: seed.config can retarget the provider and strip
-    // the API key (hasKey:false → the "no key" shape).
+    // the API key (hasKey:false → the "no key" shape). W2 journey #17: it
+    // also arms the boot `approval_mode` (any engine value — the composer
+    // pill echoes values outside the quick-switch table verbatim).
     const patch = seededConfigPatch()
     if (patch) {
       if (patch.provider != null) config.provider = patch.provider
       if (patch.api_key === null) config.api_key = undefined
+      if (patch.approval_mode != null) config.approval_mode = patch.approval_mode
     }
     return config
   },
@@ -743,18 +771,29 @@ export const handlers: Record<string, MockHandler> = {
   // R2-1: session-scoped model override (composer chip). Writes/reads the
   // per-session demo map; null sessionId → the active-session bucket, like
   // the backend's `resolve_explicit_or_active(None)` fallback.
+  // W2 journey #17: while a script is armed the SEED's registry answers —
+  // `session.modelOverride` pre-arms the override the chip renders with the
+  // "· session" suffix, and chip switches update the same registry so the
+  // player's next send observes the switch. Unarmed → demo map, unchanged.
   async set_session_model(args: { sessionId?: string | null; provider: string; model: string }) {
     await delay(60)
+    setSeedSessionModel(args.sessionId, { provider: args.provider, model: args.model })
     demoSessionModels.set(demoSessionKey(args.sessionId), { provider: args.provider, model: args.model })
   },
   async clear_session_model(args: { sessionId?: string | null }) {
     await delay(30)
+    clearSeedSessionModel(args.sessionId)
     demoSessionModels.delete(demoSessionKey(args.sessionId))
   },
   async get_session_model(args: { sessionId?: string | null }) {
     await delay()
-    // R1 scripted-backend: seeded sessions intentionally resolve to null
-    // (a fresh scripted session has no model override) — the existing
+    // W2 journey #17: a seeded session's override answers first (the R2-1
+    // comment below describes the unarmed shape, which is unchanged — the
+    // demoSessionModels Map-miss → null).
+    const seeded = seededSessionModel(args.sessionId)
+    if (seeded) return { ...seeded }
+    // R1 scripted-backend: unarmed scripted sessions intentionally resolve
+    // to null (a fresh scripted session has no model override) — the
     // demoSessionModels Map-miss already produces exactly that shape.
     return demoSessionModels.get(demoSessionKey(args.sessionId)) ?? null
   },
@@ -799,7 +838,17 @@ export const handlers: Record<string, MockHandler> = {
   // without a handler demo mode console.error'd 5× on /chat (the coverage
   // tripwire allowlisted it as "never reached", which the /chat boot proves
   // false). Demo keeps no archived sessions.
-  async list_archived_sessions() { await delay(30); return [] },
+  async list_archived_sessions() {
+    await delay(30)
+    // W2 journey #19: the seeded archive registry answers while armed;
+    // unarmed → the demo registry (rows archived via the new
+    // archive_session handler).
+    const seeded = seededArchivedSessions()
+    if (seeded) return clone(seeded)
+    return clone(MOCK_SESSIONS)
+      .filter(s => archivedSessions.has(s.id))
+      .map(s => ({ id: s.id, title: s.title, updated_at: s.updated_at }))
+  },
   async list_sessions() {
     await delay()
     // R1 scripted-backend: a loaded script's seeded sessions replace the
@@ -807,11 +856,16 @@ export const handlers: Record<string, MockHandler> = {
     const seeded = seededSessions()
     if (seeded) return clone(seeded)
     return clone(MOCK_SESSIONS)
-      .filter(s => !deletedSessions.has(s.id))
+      .filter(s => !deletedSessions.has(s.id) && !archivedSessions.has(s.id))
       .map(s => renamedSessions.get(s.id) ?? s)
   },
   async search_sessions(args: { query: string }) {
     await delay()
+    // W2 journey #19: while a seed is armed the search answers from the
+    // seeded roster (title-first, the backend's contract) — previously a
+    // scripted rail's search leaked the demo roster into the filtered list.
+    const seeded = seededSearchSessions(args.query ?? '')
+    if (seeded) return clone(seeded)
     const q = (args.query ?? '').toLowerCase()
     return clone(MOCK_SESSIONS)
       .filter(s => !deletedSessions.has(s.id))
@@ -822,6 +876,12 @@ export const handlers: Record<string, MockHandler> = {
   async get_session_plan(args: { workingDir?: string }) {
     await delay()
     if (!args?.workingDir) return null
+    // W2 journey #20: a plan file written back through save_text_file (the
+    // PlanPanel checkbox tick) IS the plan — serve the written content so
+    // the tick survives its own refresh, like the real backend reading the
+    // file back from disk.
+    const written = savedPlanForWorkingDir(args.workingDir)
+    if (written) return written
     return {
       id: 'demo-plan',
       title: 'Q3 roadmap execution plan',
@@ -860,11 +920,42 @@ export const handlers: Record<string, MockHandler> = {
     if (seeded) return clone(seeded)
     return clone(MOCK_MESSAGES)
   },
-  async delete_session(args: { id: string }) { await delay(60); deletedSessions.add(args.id); return true },
+  async delete_session(args: { id: string }) {
+    await delay(60)
+    // W2 journey #19: the deleteFails fixture — a seeded session marked
+    // `deleteFails` refuses the delete (the deterministic stand-in for the
+    // real backend's refused delete; the dialog stays open, the shared
+    // banner carries the error).
+    if (seedSessionDeleteFails(args.id)) throw new Error('session is busy; delete refused')
+    recordSeedSessionDeleted(args.id)
+    deletedSessions.add(args.id)
+    return true
+  },
   async rename_session(args: { id: string; title: string }) {
     await delay(60)
+    // W2 journey #19: a rename of a SEEDED session must survive the armed
+    // list_sessions read (which answers from the seed, not this map).
+    recordSeedSessionRenamed(args.id, args.title)
     const base = renamedSessions.get(args.id) ?? MOCK_SESSIONS.find(s => s.id === args.id)
     if (base) renamedSessions.set(args.id, { ...base, title: args.title })
+    return true
+  },
+  // W2 journey #19: archive/restore used to be unmocked (UNMOCKED_ALLOWLIST
+  // "session mutation on a live engine session") — the sidebar's Archive
+  // action could only ever toast failure in demo mode. The demo twin keeps
+  // an in-memory archived set alongside deletedSessions; scripted sessions
+  // record into the seed registry so the armed list_sessions /
+  // list_archived_sessions reads project them.
+  async archive_session(args: { id: string }) {
+    await delay(60)
+    recordSeedSessionArchived(args.id)
+    archivedSessions.add(args.id)
+    return true
+  },
+  async unarchive_session(args: { id: string }) {
+    await delay(60)
+    recordSeedSessionUnarchived(args.id)
+    archivedSessions.delete(args.id)
     return true
   },
   async duplicate_session(args: { id: string }) {
@@ -1676,10 +1767,6 @@ export const handlers: Record<string, MockHandler> = {
     await delay(30)
     const suggested = args?.options?.defaultPath ?? ''
     return suggested.startsWith('ExportSuccess') ? '/Users/demo/Downloads/ExportSuccess.md' : null
-  },
-  async save_text_file() {
-    await delay(30)
-    return null
   },
 
   // --- Memory ---

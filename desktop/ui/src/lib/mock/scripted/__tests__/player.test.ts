@@ -397,8 +397,8 @@ describe('fallback and multi-turn sequencing', () => {
     player.handleSendMessage({ message: 'first', filePaths: ['/a.md'], budgetBypass: true, sessionId: 'sess-a' })
     player.handleSendMessage({ message: 'second' })
     expect(player.snapshot().sends).toEqual([
-      { turnIndex: 0, message: 'first', attachments: ['/a.md'], budgetBypass: true, sessionId: 'sess-a' },
-      { turnIndex: 1, message: 'second', attachments: null, budgetBypass: false, sessionId: null },
+      { turnIndex: 0, message: 'first', attachments: ['/a.md'], budgetBypass: true, sessionId: 'sess-a', model: null },
+      { turnIndex: 1, message: 'second', attachments: null, budgetBypass: false, sessionId: null, model: null },
     ])
     // Post-exhaustion sends fall through — never logged.
     player.handleSendMessage({ message: 'ghost' })
@@ -466,7 +466,7 @@ describe('sendRejects turns (A-1 anchor)', () => {
     // no query id was ever allocated.
     expect(player.snapshot().sentTurns).toBe(1)
     expect(player.snapshot().sends).toEqual([
-      { turnIndex: 0, message: 'nope', attachments: null, budgetBypass: false, sessionId: 'sess-a' },
+      { turnIndex: 0, message: 'nope', attachments: null, budgetBypass: false, sessionId: 'sess-a', model: null },
     ])
     expect(names()).toEqual([])
     expect(player.snapshot().phase).toBe('armed')

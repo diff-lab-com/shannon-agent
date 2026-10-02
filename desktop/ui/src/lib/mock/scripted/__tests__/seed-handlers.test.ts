@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { handlers } from '@/lib/mock/handlers'
 import { MOCK_SESSIONS } from '@/lib/mock/data/core'
+import { MOCK_CONFIG } from '@/lib/mock/data/config'
 import { recordSeedUserSend, resetRecordedSends, setScriptSeed } from '../seed'
 import type { ScriptSeed } from '../schema'
 
@@ -256,5 +257,165 @@ describe('armed handlers answer from the script seed', () => {
     recordSeedUserSend('script-sess-2', '将被回滚的尾巴')
     await handlers.rewind_session({ sessionId: 'script-sess-2', turnIndex: 0 })
     expect(await handlers.switch_session({ id: 'script-sess-2' })).toEqual([])
+  })
+
+  // ── W2 (journeys #17/#19/#20): session model override, approvalMode, ─────
+  //    session-lifecycle mutations, seeded search, save_text_file store.
+
+  it('seeded modelOverride answers get_session_model and the player stamps it on sends', async () => {
+    setScriptSeed({
+      config: { hasKey: true },
+      sessions: [
+        { id: 'script-sess-model', title: 'Model', messages: [], modelOverride: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' } },
+        { id: 'script-sess-plain-model', title: 'Plain', messages: [] },
+      ],
+    })
+    expect(await handlers.get_session_model({ sessionId: 'script-sess-model' }))
+      .toEqual({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001' })
+    // A seeded session without an override keeps the null shape.
+    expect(await handlers.get_session_model({ sessionId: 'script-sess-plain-model' })).toBeNull()
+    // null sessionId resolves to the FIRST seeded session (the scripted
+    // "current conversation" rule).
+    expect(await handlers.get_session_model({})).toEqual({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001' })
+
+    // A chip switch updates the registry; a reset drops it (the
+    // "back to inheriting" shape the journey asserts through sends).
+    await handlers.set_session_model({ sessionId: 'script-sess-plain-model', provider: 'openai', model: 'gpt-5' })
+    expect(await handlers.get_session_model({ sessionId: 'script-sess-plain-model' }))
+      .toEqual({ provider: 'openai', model: 'gpt-5' })
+    await handlers.clear_session_model({ sessionId: 'script-sess-plain-model' })
+    expect(await handlers.get_session_model({ sessionId: 'script-sess-plain-model' })).toBeNull()
+
+    // Re-arming the SAME seed restores the seeded override (fresh lifecycle).
+    setScriptSeed({
+      config: { hasKey: true },
+      sessions: [
+        { id: 'script-sess-model', title: 'Model', messages: [], modelOverride: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' } },
+      ],
+    })
+    expect(await handlers.get_session_model({ sessionId: 'script-sess-model' }))
+      .toEqual({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001' })
+  })
+
+  it('unarmed session-model handlers keep the demo behavior (byte-identical)', async () => {
+    // Unarmed: set/get/clear on the demo map, seed registry untouched.
+    await handlers.set_session_model({ sessionId: 'demo-x', provider: 'openai', model: 'gpt-5' })
+    expect(await handlers.get_session_model({ sessionId: 'demo-x' })).toEqual({ provider: 'openai', model: 'gpt-5' })
+    await handlers.clear_session_model({ sessionId: 'demo-x' })
+    expect(await handlers.get_session_model({ sessionId: 'demo-x' })).toBeNull()
+  })
+
+  it('seeded config.approvalMode lands on get_config.approval_mode (any engine value)', async () => {
+    setScriptSeed({ config: { hasKey: true, approvalMode: 'bypass_permissions' }, sessions: [{ id: 's', title: 'S', messages: [] }] })
+    expect(await handlers.get_config({})).toMatchObject({ approval_mode: 'bypass_permissions' })
+    setScriptSeed(null)
+    // Unarmed: the demo default is untouched by the armed branch.
+    expect((await handlers.get_config({})).approval_mode).toBe(MOCK_CONFIG.approval_mode)
+  })
+
+  it('seeded session lifecycle: rename/delete/archive/restore project into the roster reads', async () => {
+    const lifecycleSeed: ScriptSeed = {
+      config: { hasKey: true },
+      sessions: [
+        { id: 'script-sess-life', title: 'Lifecycle', messages: [] },
+        { id: 'script-sess-life-2', title: 'Second', messages: [] },
+      ],
+    }
+    setScriptSeed(lifecycleSeed)
+
+    // Rename: the armed list_sessions / search read the new title.
+    await handlers.rename_session({ id: 'script-sess-life', title: 'Renamed!' })
+    let rows = await handlers.list_sessions({})
+    expect(rows.find((r: { id: string }) => r.id === 'script-sess-life')).toMatchObject({ title: 'Renamed!' })
+    const hits = await handlers.search_sessions({ query: 'renam' })
+    expect(hits.map((h: { id: string }) => h.id)).toEqual(['script-sess-life'])
+
+    // Archive: the row leaves the rail and surfaces in the archived list.
+    await handlers.archive_session({ id: 'script-sess-life' })
+    rows = await handlers.list_sessions({})
+    expect(rows.map((r: { id: string }) => r.id)).toEqual(['script-sess-life-2'])
+    expect(await handlers.list_archived_sessions({}))
+      .toEqual([expect.objectContaining({ id: 'script-sess-life', title: 'Renamed!' })])
+
+    // Restore: back on the rail, archived list empty again.
+    await handlers.unarchive_session({ id: 'script-sess-life' })
+    rows = await handlers.list_sessions({})
+    expect(rows).toHaveLength(2)
+    expect(await handlers.list_archived_sessions({})).toEqual([])
+
+    // Delete: the row leaves for good.
+    await handlers.delete_session({ id: 'script-sess-life-2' })
+    rows = await handlers.list_sessions({})
+    expect(rows.map((r: { id: string }) => r.id)).toEqual(['script-sess-life'])
+
+    // A cleared seed restores every default read.
+    setScriptSeed(null)
+    expect(await handlers.list_archived_sessions({})).toEqual([])
+  })
+
+  it('deleteFails fixture refuses the delete for exactly the marked session', async () => {
+    setScriptSeed({
+      config: { hasKey: true },
+      sessions: [
+        { id: 'script-sess-cursed', title: 'Cursed', messages: [], deleteFails: true },
+        { id: 'script-sess-fine', title: 'Fine', messages: [] },
+      ],
+    })
+    await expect(handlers.delete_session({ id: 'script-sess-cursed' })).rejects.toThrow(/refused/)
+    // The marked row survives; the unmarked one deletes.
+    let rows = await handlers.list_sessions({})
+    expect(rows.map((r: { id: string }) => r.id)).toEqual(['script-sess-cursed', 'script-sess-fine'])
+    await handlers.delete_session({ id: 'script-sess-fine' })
+    rows = await handlers.list_sessions({})
+    expect(rows.map((r: { id: string }) => r.id)).toEqual(['script-sess-cursed'])
+  })
+
+  it('seeded workingDir rides list_sessions.working_dir (the plan-panel journey surface)', async () => {
+    setScriptSeed({
+      config: { hasKey: true },
+      sessions: [{ id: 'script-sess-plan', title: 'Planned', messages: [], workingDir: '/Users/demo/workspace/shannon-demo' }],
+    })
+    const rows = await handlers.list_sessions({})
+    expect(rows[0]).toMatchObject({ working_dir: '/Users/demo/workspace/shannon-demo' })
+  })
+
+  it('save_text_file records writes the plan read serves back; the failure fixture rejects', async () => {
+    setScriptSeed({
+      config: { hasKey: true },
+      sessions: [{ id: 'script-sess-plan', title: 'Planned', messages: [], workingDir: '/w/demo' }],
+    })
+    const planPath = '/w/demo/.shannon/plans/demo-plan.md'
+    await handlers.save_text_file({ path: planPath, content: '# Plan: T\nCreated: c\nStatus: pending\n\n- [x] ticked\n' })
+    // The written header parses back into the SessionPlan shape.
+    expect(await handlers.get_session_plan({ workingDir: '/w/demo' })).toEqual({
+      id: 'demo-plan',
+      title: 'T',
+      status: 'pending',
+      created_at: 'c',
+      content: '- [x] ticked\n',
+    })
+    // A different working dir keeps the demo plan.
+    expect(await handlers.get_session_plan({ workingDir: '/w/other' })).toMatchObject({ id: 'demo-plan', title: 'Q3 roadmap execution plan' })
+
+    // The failure fixture: the write rejects and NOTHING is recorded.
+    // Re-arming the seed is a fresh lifecycle — the earlier write's store is
+    // cleared with it, so the DEMO plan (engine truth) answers again.
+    setScriptSeed({
+      config: { hasKey: true, saveTextFileFails: true },
+      sessions: [{ id: 'script-sess-plan', title: 'Planned', messages: [], workingDir: '/w/demo' }],
+    })
+    await expect(handlers.save_text_file({ path: '/w/demo/.shannon/plans/other.md', content: 'x' })).rejects.toThrow(/failed/)
+    expect(await handlers.get_session_plan({ workingDir: '/w/demo' })).toMatchObject({ title: 'Q3 roadmap execution plan' })
+
+    // Unarmed: the demo twin records into the store (demo plan writes now
+    // succeed instead of throwing "not available in demo mode").
+    setScriptSeed(null)
+    await expect(handlers.save_text_file({ path: '/tmp/notes.md', content: 'hello' })).resolves.toBe(true)
+  })
+
+  it('an unarmed save keeps get_session_plan on the demo plan', async () => {
+    expect(await handlers.get_session_plan({ workingDir: '/w/demo' }))
+      .toMatchObject({ id: 'demo-plan', title: 'Q3 roadmap execution plan', status: 'approved' })
+    expect(await handlers.get_session_plan({})).toBeNull()
   })
 })
