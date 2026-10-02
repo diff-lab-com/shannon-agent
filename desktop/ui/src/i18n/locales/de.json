@@ -540,6 +540,7 @@
   "tasks.scheduleForm.worktreePath": "Worktree-Pfad (optional)",
   "tasks.scheduleForm.worktreePlaceholder": "/path/to/worktree",
   "tasks.scheduleForm.notifyOnFailure": "Bei Fehlslag benachrichtigen",
+  "tasks.scheduleForm.notifyOnFailureHint": "Benachrichtigungen bei Fehlschlägen folgen diesem Schalter — wird eine Routine automatisch pausiert, kommt immer genau eine Benachrichtigung.",
   "tasks.scheduleForm.autoArchive": "Auto-Archivieren, wenn der Worktree leer ist",
   "tasks.scheduleForm.offpeak.toggle": "Nebenzeiten-Ausführung",
   "tasks.scheduleForm.offpeak.toggleAria": "Nebenzeiten-Fenster umschalten",

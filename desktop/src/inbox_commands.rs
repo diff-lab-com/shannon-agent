@@ -1018,10 +1018,11 @@ pub(crate) struct RunFinishContext {
     /// path routes a status notification through [`RoutineWebhookPort`].
     pub(crate) notify_webhook: bool,
     /// The routine's `policy.notify_on_failure` flag (W3-2). When true a
-    /// failed run sends the failure notification (and the auto-pause alert,
-    /// dual-channel); when false the failure stays silent — run record +
-    /// triage card only. A routine without a stored policy defaults to
-    /// true, matching the create-form default.
+    /// failed run sends the failure notification; when false the failure
+    /// stays silent — run record + triage card only. The auto-pause alert
+    /// is NOT governed by this flag (R7-③: a routine the system just
+    /// switched off is always announced once). A routine without a stored
+    /// policy defaults to true, matching the create-form default.
     pub(crate) notify_on_failure: bool,
     /// How this run was started (R7-①). Only [`RunTrigger::Scheduled`]
     /// fires can complete the consecutive-failure auto pause; `run_now`
@@ -1789,9 +1790,10 @@ fn finalize_run<R: tauri::Runtime>(
     // 5. W3-2 failure aftermath: flip enabled at the threshold (the bool
     // reports the actual transition — notifications fire once), then the
     // failure notification, then the auto-pause alert (the shared Notifier
-    // fans it out to desktop + webhook). All of it is gated by the routine's
-    // `policy.notify_on_failure`; false keeps the failure silent (run record
-    // + triage card only).
+    // fans it out to desktop + webhook). The failure alert is gated by the
+    // routine's `policy.notify_on_failure`; the auto-pause alert is
+    // deliberately NOT (R7-③): a routine the system just switched off must
+    // be announced even to opt-out users — exactly once per transition.
     let paused_now = if auto_pause {
         pause_routine_after_consecutive_failures(deps, &task_id)
     } else {
@@ -1799,9 +1801,9 @@ fn finalize_run<R: tauri::Runtime>(
     };
     if notify_on_failure && outcome.failed {
         notify_run_failed(deps.notify.as_ref(), &task_name, run_error.as_deref());
-        if paused_now {
-            notify_auto_paused(deps.notify.as_ref(), &task_name);
-        }
+    }
+    if paused_now {
+        notify_auto_paused(deps.notify.as_ref(), &task_name);
     }
 
     // 6. Refresh signal.
@@ -4245,11 +4247,27 @@ mod tests {
             finalize_scheduled_failure(&deps, &app_handle, n, false);
         }
 
-        // Paused + annotated, but completely silent.
+        // Paused + annotated. Failure alerts stay silent (the flag's job)…
         let routine = deps.scheduled_tasks.load("task-1").unwrap();
         assert!(!routine.unwrap().enabled);
-        assert_eq!(notify.dispatches().len(), 0, "no desktop alerts");
-        assert_eq!(webhook.deliveries().len(), 0, "no webhook alerts");
+        let dispatched = notify.dispatches();
+        assert_eq!(
+            dispatched
+                .iter()
+                .filter(|n| n.source.as_deref() == Some("routine_run_failed"))
+                .count(),
+            0,
+            "failure alerts follow notify_on_failure (still silent)"
+        );
+        // …but the auto-pause alert is deliberately un-gated (R7-③): a
+        // routine the system just switched off is announced exactly once.
+        assert_eq!(
+            dispatched.len(),
+            1,
+            "exactly one pause alert despite notify_on_failure=false"
+        );
+        assert_eq!(dispatched[0].source.as_deref(), Some("routine_auto_pause"));
+        assert_eq!(webhook.deliveries().len(), 0, "no direct webhook delivery");
         let runs = deps.inbox.list_runs_by_task("task-1", 10).unwrap();
         assert!(
             runs[0]

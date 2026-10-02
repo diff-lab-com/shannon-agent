@@ -540,6 +540,7 @@
   "tasks.scheduleForm.worktreePath": "Worktree path (optional)",
   "tasks.scheduleForm.worktreePlaceholder": "/path/to/worktree",
   "tasks.scheduleForm.notifyOnFailure": "Notify on failure",
+  "tasks.scheduleForm.notifyOnFailureHint": "실패 알림은 이 스위치를 따릅니다. 루틴이 자동으로 일시 중지되면 항상 한 번 알림을 받습니다.",
   "tasks.scheduleForm.autoArchive": "Auto-archive when worktree is empty",
   "tasks.scheduleForm.offpeak.toggle": "Off-peak execution",
   "tasks.scheduleForm.offpeak.toggleAria": "Toggle off-peak execution window",

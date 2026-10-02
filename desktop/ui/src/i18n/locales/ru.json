@@ -540,6 +540,7 @@
   "tasks.scheduleForm.worktreePath": "Worktree path (optional)",
   "tasks.scheduleForm.worktreePlaceholder": "/path/to/worktree",
   "tasks.scheduleForm.notifyOnFailure": "Notify on failure",
+  "tasks.scheduleForm.notifyOnFailureHint": "Оповещения о сбоях подчиняются этому переключателю; при автоматической паузе рутины всегда приходит одно оповещение.",
   "tasks.scheduleForm.autoArchive": "Auto-archive when worktree is empty",
   "tasks.scheduleForm.offpeak.toggle": "Off-peak execution",
   "tasks.scheduleForm.offpeak.toggleAria": "Toggle off-peak execution window",
