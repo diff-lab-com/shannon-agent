@@ -480,6 +480,51 @@ describe('Chat page', () => {
     expect(input).toHaveValue('kept draft')
   })
 
+  // Fix-round 1 (A-6 follow-up regression): the boot-bound session's mount
+  // draft restore must not clobber a location.state prefill applied in the
+  // same mount pass (Sidebar/Editor "Ask AI about this diagnostic" → /chat;
+  // A-6 made "already bound to a session at /chat mount" the common path).
+  it('location.state prefill wins over the boot session\u2019s persisted draft', () => {
+    resetCtx()
+    ctx.currentSessionId = 'sess-prefill-boot'
+    localStorage.setItem(
+      'shannon.draft.sess-prefill-boot',
+      JSON.stringify({ text: '重启前的旧草稿', attachments: [], updatedAt: Date.now() }),
+    )
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={[{ pathname: '/chat', state: { prefill: '帮我看看这个诊断' } }]}>
+          <ArtifactProvider>
+            <Chat />
+          </ArtifactProvider>
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    // The prefill owns the composer — the persisted draft does not win.
+    expect(screen.getByPlaceholderText(/Try: "Explain this repo"/)).toHaveValue('帮我看看这个诊断')
+  })
+
+  // The guard is one-sided: without a prefill, the mount restore still puts
+  // the boot session's draft back (the §4-11 restart anchor A-6 depends on).
+  it('restores the boot session\u2019s persisted draft on mount when no prefill is present', () => {
+    resetCtx()
+    ctx.currentSessionId = 'sess-prefill-boot'
+    localStorage.setItem(
+      'shannon.draft.sess-prefill-boot',
+      JSON.stringify({ text: '重启前的旧草稿', attachments: [], updatedAt: Date.now() }),
+    )
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <ArtifactProvider>
+            <Chat />
+          </ArtifactProvider>
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    expect(screen.getByPlaceholderText(/Try: "Explain this repo"/)).toHaveValue('重启前的旧草稿')
+  })
+
   // Header working-directory chip was removed when ChatInput took ownership
   // of WD selection. Per-input chip behavior is covered in ChatInput.test.tsx.
   // U1 additionally removed the per-row WD hint + export/print hover buttons

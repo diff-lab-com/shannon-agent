@@ -138,6 +138,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::send_message,
             commands_chat::get_conversation,
+            commands_chat::get_active_session_id,
             commands_chat::list_models,
             commands_chat::get_provider_allowlist,
             commands_chat::get_status,

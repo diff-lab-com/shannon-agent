@@ -22,7 +22,8 @@ import {
 // setScriptSeed) these accessors answer with the script's seed data instead
 // of the global demo singletons; unarmed they all return null/undefined and
 // every handler below behaves exactly as before.
-import { seededBudget, seededCheckpoints, seededConfigPatch, seededMessages, seededProviderStatusPatch,
+import { clearRecordedSends, recordSeedUserSend, seededBudget, seededCheckpoints, seededConfigPatch,
+  seededMessagesWithRecorded, seededProviderStatusPatch,
   seededRewoundMessages, seededSessions, seededUsage } from './scripted/seed'
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
@@ -420,17 +421,33 @@ export const handlers: Record<string, MockHandler> = {
   // --- Chat ---
   // (send_message interception when a script is armed happens in coreMock —
   // the scripted player owns the command and replays the turn's events.)
-  async send_message() {
+  async send_message(args: { message?: string; sessionId?: string | null }) {
     await delay(120)
+    // S-4 fix: fall-through sends (script exhausted/absent) are durable too —
+    // record into the seeded session's tail. Scripted sends were already
+    // recorded by the player before this handler is reached; unarmed (demo)
+    // seeds make recordSeedUserSend a no-op.
+    recordSeedUserSend(args?.sessionId ?? null, args?.message ?? null)
     return { query_id: `q-${Date.now()}` }
   },
   async get_conversation() {
     await delay()
     // R1 scripted-backend: a loaded script's first seeded session answers
     // (the scripted "current conversation"); unarmed → demo default.
-    const seeded = seededMessages()
+    // S-4 fix: the read includes the session's recorded send tail — the
+    // scripted counterpart of the L0 log projection.
+    const seeded = seededMessagesWithRecorded()
     if (seeded) return clone(seeded)
     return clone(MOCK_MESSAGES)
+  },
+  // A-6 fix (R4 group 3): the scripted active session is the FIRST seeded
+  // session — the one get_conversation answers for (seed.ts's "current
+  // conversation"). Demo mode has no session identity behind its canned
+  // conversation → null, byte-identical to the pre-A-6 boot (unbound).
+  async get_active_session_id() {
+    await delay()
+    const seeded = seededSessions()
+    return seeded?.[0]?.id ?? null
   },
   async cancel_query() { await delay(30) },
 
@@ -826,15 +843,18 @@ export const handlers: Record<string, MockHandler> = {
   // these returned the demo conversation unconditionally, so switching to a
   // scripted session replaced it with demo data). Unarmed → demo default,
   // byte-identical to before.
+  // S-4 fix: seeded reads project seed + the session's recorded send tail —
+  // a just-sent (possibly still unsettled) bubble survives the round trip,
+  // like the real backend's log-backed reload.
   async load_session(args: { id?: string | null }) {
     await delay()
-    const seeded = seededMessages(args?.id ?? null)
+    const seeded = seededMessagesWithRecorded(args?.id ?? null)
     if (seeded) return clone(seeded)
     return clone(MOCK_MESSAGES)
   },
   async switch_session(args: { id?: string | null }) {
     await delay()
-    const seeded = seededMessages(args?.id ?? null)
+    const seeded = seededMessagesWithRecorded(args?.id ?? null)
     if (seeded) return clone(seeded)
     return clone(MOCK_MESSAGES)
   },
@@ -934,6 +954,9 @@ export const handlers: Record<string, MockHandler> = {
   async list_feedback_sessions() { await delay(30); return [] },
   async rewind_session(args: { sessionId?: string | null; turnIndex?: number }) {
     await delay(80)
+    // S-4 fix consistency: a rewind truncates the session's history — its
+    // recorded send tail dies with the truncated turns.
+    clearRecordedSends(args?.sessionId ?? null)
     const seeded = seededRewoundMessages(args?.sessionId ?? null, args?.turnIndex ?? 0)
     if (seeded) return clone(seeded)
     return clone(MOCK_MESSAGES)

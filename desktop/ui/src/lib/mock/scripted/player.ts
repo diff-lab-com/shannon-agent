@@ -30,7 +30,7 @@
 
 import type { ChatScript, ScriptSeed, ScriptStep } from './schema'
 import { TERMINAL_EVENTS, validateScript } from './schema'
-import { setScriptSeed } from './seed'
+import { recordSeedUserSend, resetRecordedSends, setScriptSeed } from './seed'
 
 export type PlayerPhase =
   | 'idle'             // no script loaded
@@ -128,6 +128,8 @@ export class ScriptPlayer {
     this.pauseAtStep = null
     this.parkKind = null
     this.phase = 'armed'
+    // S-4 fix: a fresh script lifecycle starts with no recorded sends.
+    resetRecordedSends()
     this.runtime.onSeed(script.seed ?? null)
     return { ok: true, errors: [] }
   }
@@ -145,6 +147,8 @@ export class ScriptPlayer {
     this.parkKind = null
     this.speedValue = 1
     this.phase = 'idle'
+    // S-4 fix: back to the pre-script world — no recorded sends either.
+    resetRecordedSends()
     this.runtime.onSeed(null)
   }
 
@@ -196,6 +200,12 @@ export class ScriptPlayer {
       if (this.turnCounter >= this.script.turns.length) this.phase = 'done'
       throw new Error(`send rejected by scripted backend guard (turn ${turnIndex})`)
     }
+    // S-4 fix: an ACCEPTED send is durable — record the user message into
+    // its session's tail (seed.ts overlay), mirroring the real backend's
+    // L0 tee (agent_loop records the user message before the model sees
+    // anything). A sendRejects turn never reaches this line, matching the
+    // backend's pre-turn guards.
+    recordSeedUserSend(sessionId, message)
     // startTurn returns the id up front — a turn whose steps settle
     // synchronously (e.g. a lone query:completed) is already finished by the
     // time startTurn returns, so this.turn is no longer readable.

@@ -158,6 +158,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // response can land after a newer one and clobber
   // `currentSessionId`/`messages` with the session the user LEFT.
   const switchTokenRef = useRef(0)
+  // Which session's history `messages` currently holds. A switch whose
+  // target is ALREADY the visible, loaded session must not re-fetch and
+  // re-replace: the awaited IPC would land on top of optimistic sends made
+  // in the meantime and wipe their bubbles (observed as the A-4 attachment
+  // card vanishing between the send and its own echo). Boot binding (A-6)
+  // makes this the common path — the first rail click after a cold start
+  // targets the session the boot already loaded.
+  const loadedSessionRef = useRef<string | null>(null)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   // P0 sidebar telemetry: live per-session activity (running / elapsed /
   // active tool) for the session rail. Derived from the same query:* events
@@ -618,6 +626,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const id = await api.newSession()
       setCurrentSessionId(id)
       setMessages([])
+      loadedSessionRef.current = id
       setStreamingText('')
       setThinkingText('')
       setStreamNotices([])
@@ -638,6 +647,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const msgs = await api.switchSession(id)
       setCurrentSessionId(id)
       setMessages(msgs)
+      loadedSessionRef.current = id
       setStreamingText('')
       setThinkingText('')
       setStreamNotices([])
@@ -654,6 +664,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // was never bound to a worktree.
         setCurrentSessionId(null)
         setMessages([])
+        loadedSessionRef.current = null
       }
     }
   }, [refreshSessions, setChatError])
@@ -669,12 +680,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const switchToSession = useCallback(async (id: string) => {
     const token = ++switchTokenRef.current
     const isSwitch = id !== visibleSessionIdRef.current
-    if (isSwitch) setSwitchingSession(true)
+    if (isSwitch) {
+      setSwitchingSession(true)
+      // A-5 fix: the error banner is a visible-session readout (QUERY_FAILED
+      // only sets it for the session on screen), but nothing cleared it when
+      // the user moved to another session — the previous session's failure
+      // banner (auth included) followed them there. Clear it when a switch
+      // STARTS, so the old banner never flashes over the new session; a
+      // failing switch re-fills it in the catch below, and a superseded
+      // switch can't (its token check drops the stale error). Same-session
+      // reloads keep the banner — it belongs to the session still on screen.
+      setChatError(null)
+    }
     try {
+      // Already on the loaded session: nothing to fetch. A re-replace here
+      // could only destroy newer local state (the optimistic bubbles above).
+      if (!isSwitch && loadedSessionRef.current === id) return
       const msgs = await api.switchSession(id)
       if (token !== switchTokenRef.current) return
       setCurrentSessionId(id)
       setMessages(msgs)
+      loadedSessionRef.current = id
       // §P2-18: project the switched-to session's own stream buckets — a
       // background run keeps streaming into them while another session is
       // on screen, so a single shared buffer would show foreign tokens.
@@ -718,6 +744,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setMessages([])
         setStreamNotices([])
         setCurrentSessionId(null)
+        loadedSessionRef.current = null
       }
       await refreshSessions()
     } catch (e) { setChatError(String(e)) }
@@ -1190,9 +1217,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
       record('refreshBackgroundTasks', refreshBackgroundTasks()),
       // P1-1 window mode: auto-switch to the window's own session (instead
       // of the backend's global active session) and load its messages.
+      //
+      // A-6 fix: the main window's cold start filled `messages` from
+      // get_conversation but left `currentSessionId` null — RunStatusLine
+      // had no session to time against and every currentSessionId-gated
+      // action (checkpoints, feedback, explicit send routing, composer
+      // guards) stayed half-bound until the first manual switch. The
+      // conversation comes from the backend's ACTIVE session
+      // (get_or_create_active materializes it), so bind that id — read
+      // AFTER the conversation lands (get_active_session_id is a read-only
+      // peek at the same pointer, not a re-materialization).
       record('getConversation', windowSessionId != null
         ? switchToSession(windowSessionId)
-        : api.getConversation().then(setMessages)),
+        : api.getConversation()
+          .then(messages => {
+            setMessages(messages)
+            return api.getActiveSessionId()
+          })
+          .then(id => {
+            if (id) {
+              setCurrentSessionId(id)
+              loadedSessionRef.current = id
+            }
+          })),
       record('goalOwnedSessions', api.listGoalRuns().then(runs => applyGoalRuns(runs))),
     ])
     if (failures.length > 0) setInitError(failures[0])

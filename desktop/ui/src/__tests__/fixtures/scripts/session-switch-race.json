@@ -1,6 +1,6 @@
 {
   "name": "session-switch-race",
-  "description": "会话切换竞态 journey — A 流中切 B 不串流 → 切回恢复 → 错误横幅跨会话残留（A-5 锚点）→ draft 隔离",
+  "description": "会话切换竞态 journey — A 流中切 B 不串流 → 切回恢复 → 错误横幅留在 A（A-5 已修复）→ draft 隔离",
   "seed": {
     "config": {
       "hasKey": true

@@ -1,13 +1,14 @@
 // R3 journey #11★（矩阵#11）— session-switch-race: A streams while the user
 // reads B (no cross-session bleed, B stays idle), returning to A resumes the
-// projection; the failed turn's banner follows the user onto B (known bug
-// A-5, current behavior asserted); drafts stay per-session.
+// projection; the failed turn's banner stays with A (A-5 fixed in R4 group
+// 3 — cleared when the switch to B starts); the cold start binds the
+// scripted "current conversation" (A-6 fixed — the Header carries the first
+// seeded session's title before any click); drafts stay per-session.
 import { expect, test } from '@playwright/test'
 
 import { ChatPage } from './helpers/ChatPage'
 import { loadChatScript, readChatScript } from './helpers/scriptLoader'
 import { expectNoConsoleErrors } from './helpers/watchdog'
-import { annotateKnownIssues } from './helpers/knownIssues'
 import type { ChatScript } from '../src/lib/mock/scripted/schema'
 
 const script = readChatScript('session-switch-race') as ChatScript
@@ -22,16 +23,15 @@ async function openRaceSession(page: import('@playwright/test').Page, row: strin
 }
 
 test.describe('scripted chat backend — session-switch-race (journey #11)', () => {
-  test('mid-stream switch isolates buckets, the projection resumes, the error banner persists across sessions (A-5 anchored)', async ({ page }) => {
+  test('cold start binds the active session (A-6), mid-stream switch isolates buckets, the projection resumes, the error banner stays with A (A-5 fixed)', async ({ page }) => {
     test.setTimeout(60_000)
-    annotateKnownIssues(test.info(), {
-      'A-5': 'switchToSession does not clear error/errorKind (AppContext.tsx), so the previous '
-        + 'session\'s failure banner (auth included) follows the user onto the next session. '
-        + 'Current behavior asserted below (banner visible on B); flip to "no banner on B" '
-        + 'when R4 lands.',
-    })
     const chat = new ChatPage(page)
     await loadChatScript(page, 'session-switch-race', test.info())
+
+    // A-6 fixed (R4 group 3): the main window binds the scripted active
+    // session (the FIRST seeded session — get_conversation's answer) at
+    // cold start, so the Header carries its title before any click.
+    await expect(page.getByRole('banner').locator('h2')).toHaveText('Race A', { timeout: 10_000 })
 
     // A streams (8 chunks × 500ms — a wide switch window).
     await openRaceSession(page, 'desktop-session-row-script-sess-race-a', 'Race A')
@@ -50,8 +50,11 @@ test.describe('scripted chat backend — session-switch-race (journey #11)', () 
     await expect(chat.stopButton()).toHaveCount(0)
     await expect(chat.composer()).toHaveValue('')
 
-    // Back to A: the projection resumes mid-stream.
+    // Back to A: the projection resumes mid-stream. S-4 fixed: the just-sent
+    // bubble survives the round trip (the scripted backend records accepted
+    // sends at turn start, like the real backend's L0 tee).
     await openRaceSession(page, 'desktop-session-row-script-sess-race-a', 'Race A')
+    await expect(chat.bubbleAt(0)).toContainText('A 的长问题')
     await chat.expectStreamingCursor()
     // Draft assertion part 1: A's draft is typed while the run streams.
     await chat.composer().fill('A 的草稿')
@@ -59,9 +62,9 @@ test.describe('scripted chat backend — session-switch-race (journey #11)', () 
     // The run fails while A is visible: the classified banner appears.
     await expect(page.getByRole('alert').filter({ hasText: 'upstream exploded after the switch' })).toBeVisible({ timeout: 15_000 })
 
-    // A-5 current behavior: the banner follows the user onto B.
+    // A-5 fixed (R4 group 3): the banner stays with A — B opens clean.
     await openRaceSession(page, 'desktop-session-row-script-sess-race-b', 'Race B')
-    await expect(page.getByRole('alert').filter({ hasText: 'upstream exploded after the switch' })).toBeVisible()
+    await expect(page.getByRole('alert').filter({ hasText: 'upstream exploded after the switch' })).toHaveCount(0)
     // Draft isolation: B's composer never shows A's draft.
     await expect(chat.composer()).toHaveValue('')
 
