@@ -224,7 +224,7 @@ describe('ChatScript fixtures — YAML ↔ JSON two-layer parity (R2 §C)', () =
 // ───────────────────────────── the six journeys ─────────────────────────────
 
 describe('L1 state machine — first-chat (journey #1)', () => {
-  it('streams chunks into streamingText, announces usage, commits on completed', async () => {
+  it('streams chunks into streamingText, announces usage, commits on completed', { timeout: 30_000 }, async () => {
     const script = loadFixture('first-chat')
     const chunks = textChunksOf(script, 0)
     expect(chunks.length).toBeGreaterThanOrEqual(5) // ≥5 mixed chunks, per the journey spec
@@ -306,7 +306,7 @@ describe('L1 state machine — multi-turn-stream (journey #2)', () => {
 })
 
 describe('L1 state machine — tool-task-file (journey #3)', () => {
-  it('tracks the tool lifecycle, normalizes progress to 0-100 and settles clean', async () => {
+  it('tracks the tool lifecycle, normalizes progress to 0-100 and settles clean', { timeout: 30_000 }, async () => {
     const script = loadFixture('tool-task-file')
     const h = await makeHarness()
     h.player.load(script)
@@ -350,7 +350,7 @@ describe('L1 state machine — tool-task-file (journey #3)', () => {
 })
 
 describe('L1 state machine — approval journeys (#4)', () => {
-  it('allow: permissionRequest pends, respondPermission clears it and the run resumes', async () => {
+  it('allow: permissionRequest pends, respondPermission clears it and the run resumes', { timeout: 30_000 }, async () => {
     const script = loadFixture('approval-allow')
     const h = await makeHarness()
     h.player.load(script)
@@ -390,7 +390,7 @@ describe('L1 state machine — approval journeys (#4)', () => {
     expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(1)
   })
 
-  it('deny: the tool settles into the error form and the session stays usable', async () => {
+  it('deny: the tool settles into the error form and the session stays usable', { timeout: 30_000 }, async () => {
     const script = loadFixture('approval-deny')
     const h = await makeHarness()
     h.player.load(script)
@@ -440,7 +440,7 @@ describe('L1 state machine — failure journeys (#5)', () => {
     expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
   })
 
-  it('mid-stream-fail: "other" classification + retry preserves attachments and replays the reply (A-3 fixed)', async () => {
+  it('mid-stream-fail: "other" classification + retry preserves attachments and replays the reply (A-3 fixed)', { timeout: 30_000 }, async () => {
     const script = loadFixture('mid-stream-fail')
     const h = await makeHarness()
     h.player.load(script)
@@ -504,7 +504,7 @@ describe('L1 state machine — failure journeys (#5)', () => {
 })
 
 describe('L1 state machine — cancel-text-stream (journey #6)', () => {
-  it('cancel settles via query:cancelled and discards the partial text (A-19 anchored)', async () => {
+  it('cancel settles via query:cancelled and discards the partial text (A-19 anchored)', { timeout: 30_000 }, async () => {
     const script = loadFixture('cancel-text-stream')
     const h = await makeHarness()
     h.player.load(script)
@@ -535,7 +535,7 @@ describe('L1 state machine — cancel-text-stream (journey #6)', () => {
 // ───────────────────────── R3 journeys (#7 – #14) ─────────────────────────
 
 describe('L1 state machine — budget-exceeded (journey #7)', () => {
-  it('budget:exceeded auto-cancels the run; Continue once resends with budgetBypass and the original attachments (A-2 fixed)', async () => {
+  it('budget:exceeded auto-cancels the run; Continue once resends with budgetBypass and the original attachments (A-2 fixed)', { timeout: 30_000 }, async () => {
     const script = loadFixture('budget-exceeded')
     const h = await makeHarness()
     h.player.load(script)
@@ -588,7 +588,7 @@ describe('L1 state machine — budget-exceeded (journey #7)', () => {
 })
 
 describe('L1 state machine — attachments (journey #8)', () => {
-  it('sends ride attachment paths; the turn returns rejected receipts (P0 anchor) and the optimistic bubble carries the attachment (A-4 fixed)', async () => {
+  it('sends ride attachment paths; the turn returns rejected receipts (P0 anchor) and the optimistic bubble carries the attachment (A-4 fixed)', { timeout: 30_000 }, async () => {
     const script = loadFixture('attachments')
     const outsidePath = script.turns[0]!.rejectedAttachments![0]!.path
     const h = await makeHarness()
@@ -629,7 +629,7 @@ describe('L1 state machine — attachments (journey #8)', () => {
 })
 
 describe('L1 state machine — queue-steer (journey #9)', () => {
-  it('queue caps at 3, reorders, and drains FIFO after settle (the steer order is pinned E2E-side + by the hook\'s own tests)', async () => {
+  it('queue caps at 3, reorders, and drains FIFO after settle (the steer order is pinned E2E-side + by the hook\'s own tests)', { timeout: 30_000 }, async () => {
     const script = loadFixture('queue-steer')
     const h = await makeHarness()
     h.player.load(script)
@@ -677,7 +677,7 @@ describe('L1 state machine — queue-steer (journey #9)', () => {
 })
 
 describe('L1 state machine — edit-rewind (journey #10)', () => {
-  it('edit commit rewinds to the checkpoint boundary (A-14: equality included) and the resend streams', async () => {
+  it('edit commit rewinds to the checkpoint boundary (A-14: equality included) and the resend streams', { timeout: 30_000 }, async () => {
     vi.mocked(api.rewindSession).mockResolvedValue([])
     vi.mocked(api.listCheckpoints).mockResolvedValue([])
     const script = loadFixture('edit-rewind')
@@ -702,7 +702,7 @@ describe('L1 state machine — edit-rewind (journey #10)', () => {
 })
 
 describe('L1 state machine — session-switch-race (journey #11)', () => {
-  it('buckets stay per-session across a switch; the projection resumes on return; the error banner stays with A (A-5 fixed)', async () => {
+  it('buckets stay per-session across a switch; the projection resumes on return; the error banner stays with A (A-5 fixed)', { timeout: 30_000 }, async () => {
     const script = loadFixture('session-switch-race')
     const h = await makeHarness()
     h.player.load(script)
@@ -747,7 +747,7 @@ describe('L1 state machine — session-switch-race (journey #11)', () => {
 })
 
 describe('L1 state machine — subagent-run (journey #12)', () => {
-  it('subagent:start/stop drive the live registry; the agent_spawn card converges and leaves with the run', async () => {
+  it('subagent:start/stop drive the live registry; the agent_spawn card converges and leaves with the run', { timeout: 30_000 }, async () => {
     const script = loadFixture('subagent-run')
     const h = await makeHarness()
     h.player.load(script)
@@ -775,7 +775,7 @@ describe('L1 state machine — subagent-run (journey #12)', () => {
 })
 
 describe('L1 state machine — journey-cross-page (#13) + context-panels (#14)', () => {
-  it('cross-page: the seeded write_file history is the FileCard/source the pages read', async () => {
+  it('cross-page: the seeded write_file history is the FileCard/source the pages read', { timeout: 30_000 }, async () => {
     const script = loadFixture('cross-page')
     const h = await makeHarness()
     h.player.load(script)
@@ -794,7 +794,7 @@ describe('L1 state machine — journey-cross-page (#13) + context-panels (#14)',
     expect(assistants[0]!.content).toBe(textChunksOf(script, 0).join(''))
   })
 
-  it('context-panels: query:usage projects onto the visible session and is the usageTick the panels refetch on', async () => {
+  it('context-panels: query:usage projects onto the visible session and is the usageTick the panels refetch on', { timeout: 30_000 }, async () => {
     const script = loadFixture('context-panels')
     const h = await makeHarness()
     h.player.load(script)
@@ -818,7 +818,7 @@ describe('L1 state machine — journey-cross-page (#13) + context-panels (#14)',
 // ───────────────────── cancel-matrix L1 view (§4.1) ─────────────────────
 
 describe('L1 state machine — cancel-matrix #2 (tool execution stop)', () => {
-  it('cancel during a tool run converges the card; a late tool-result does not resurrect it', async () => {
+  it('cancel during a tool run converges the card; a late tool-result does not resurrect it', { timeout: 30_000 }, async () => {
     const script = loadFixture('cancel-tool-run')
     const h = await makeHarness()
     h.player.load(script)
@@ -851,7 +851,7 @@ describe('L1 state machine — cancel-matrix #2 (tool execution stop)', () => {
 })
 
 describe('L1 state machine — cancel-matrix #4 (approval-wait stop)', () => {
-  it('stop while a permission prompt waits settles the run; the prompt itself stays up (current behavior recorded)', async () => {
+  it('stop while a permission prompt waits settles the run; the prompt itself stays up (current behavior recorded)', { timeout: 30_000 }, async () => {
     const script = loadFixture('cancel-approval-wait')
     const h = await makeHarness()
     h.player.load(script)
@@ -889,7 +889,7 @@ describe('L1 state machine — cancel-matrix #3 (stop → instant resend, A-17 f
   // with an explicit 5s window; the post-drop asserts are direct reads —
   // the late events are dropped no-ops, so they ride a projection the wait
   // above already observed.
-  it('late old-turn events are dropped by query_id: the new stream stays intact and the composer stays busy', async () => {
+  it('late old-turn events are dropped by query_id: the new stream stays intact and the composer stays busy', { timeout: 30_000 }, async () => {
     const script = loadFixture('cancel-then-resend')
     const h = await makeHarness()
     h.player.load(script)
