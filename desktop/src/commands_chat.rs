@@ -230,14 +230,12 @@ pub async fn cancel_query(
 /// without a Wry app handle.
 ///
 /// A-17 fix (R4 group 6): cancel takes + fires the token but deliberately
-/// does NOT reset `session.querying` here. The streaming loop only observes
-/// the cancellation at its NEXT engine event, so between the cancel and that
-/// observation the old query is still live — reopening the latch here let a
-/// fresh `send_message` start a second concurrent query on the session, and
-/// the old loop's late events then polluted the new turn (wiped stream
-/// bucket, mis-idled composer). The latch is reset exclusively by the query
-/// loop's exit path (`send_message`'s spawned task — it runs on EVERY exit:
-/// ok, engine error, cancel, and the caught panic), so a resend in the
+/// does NOT reset `session.querying` here. The streaming loop observes the
+/// cancellation immediately (A-18 fix, R4 group 7: the token races the
+/// stream via `tokio::select!` in commands.rs), so the loop now unwinds
+/// promptly — but the latch is still reset exclusively by the query loop's
+/// exit path (`send_message`'s spawned task — it runs on EVERY exit: ok,
+/// engine error, cancel, and the caught panic), so a resend in the
 /// window is rejected with "A query is already in progress" until the old
 /// loop has actually unwound.
 async fn cancel_session_query(state: &AppState, session_id: Option<&str>) -> Result<(), String> {
