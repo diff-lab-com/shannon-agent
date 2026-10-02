@@ -258,6 +258,77 @@ describe('Chat page', () => {
     expect(input).toHaveValue('never queued')
   })
 
+  // A-22 — accepted sends feed the global composer input history
+  // (shannon.inputHistory) for terminal-style ArrowUp recall.
+  it('records an accepted send into the input history (A-22)', async () => {
+    resetCtx()
+    renderChat()
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    fireEvent.change(input, { target: { value: 'Hello agent' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(input).toHaveValue(''))
+    expect(JSON.parse(localStorage.getItem('shannon.inputHistory') ?? '[]')).toEqual(['Hello agent'])
+  })
+
+  it('does not record a rejected send (A-22)', async () => {
+    resetCtx()
+    ctx.sendMessage = vi.fn().mockResolvedValue(false)
+    renderChat()
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    fireEvent.change(input, { target: { value: 'refused payload' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    // The draft comes back to the composer; history never learns about it.
+    await waitFor(() => expect(input).toHaveValue('refused payload'))
+    expect(localStorage.getItem('shannon.inputHistory')).toBeNull()
+  })
+
+  it('records an accepted queue join into the input history (A-22)', () => {
+    resetCtx()
+    ctx.isQuerying = true
+    renderChat()
+    const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
+    fireEvent.change(input, { target: { value: 'queued hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(ctx.enqueuePrompt).toHaveBeenCalledWith('queued hello', [])
+    expect(JSON.parse(localStorage.getItem('shannon.inputHistory') ?? '[]')).toEqual(['queued hello'])
+  })
+
+  it('does not record when the queue rejects the join (A-22)', () => {
+    resetCtx()
+    ctx.isQuerying = true
+    ctx.enqueuePrompt = vi.fn().mockReturnValue(false)
+    renderChat()
+    const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
+    fireEvent.change(input, { target: { value: 'never queued' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(input).toHaveValue('never queued')
+    expect(localStorage.getItem('shannon.inputHistory')).toBeNull()
+  })
+
+  it('an attachments-only send records no empty history entry (A-22)', async () => {
+    resetCtx()
+    ctx.currentSessionId = 'sess-1'
+    ctx.sessions = [{ id: 'sess-1', title: 'S' }]
+    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
+    renderChat()
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    await screen.findByText('report.pdf')
+    fireEvent.keyDown(screen.getByPlaceholderText(/Try: "Explain this repo"/), { key: 'Enter' })
+    await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledWith('', ['/home/alice/Downloads/report.pdf']))
+    expect(localStorage.getItem('shannon.inputHistory')).toBeNull()
+  })
+
+  it('a slash command send records no history entry (runs locally, A-22)', async () => {
+    resetCtx()
+    renderChat()
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    fireEvent.change(input, { target: { value: '/cost' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(ctx.sendMessage).not.toHaveBeenCalled()
+    expect(localStorage.getItem('shannon.inputHistory')).toBeNull()
+  })
+
   it('calls cancelQuery on Escape when querying', () => {
     resetCtx()
     ctx.isQuerying = true

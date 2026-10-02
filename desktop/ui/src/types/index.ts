@@ -117,6 +117,12 @@ export interface ChatMessage {
    *  (citation chips with a source jump). Live-turn only: the session log
    *  does not persist the list, so reloaded history carries no chips. */
   injected_memories?: InjectedMemory[]
+  /** D6 (keep the partial output) — true on an assistant message that is a
+   *  CANCELLED run's partial answer; the bubble renders a "stopped" marker.
+   *  Committed live by the QUERY_CANCELLED handler and carried by reloaded
+   *  history (the L0 log finalizes interrupted turns with the same flag), so
+   *  the marker survives session switches and restarts. Absent otherwise. */
+  interrupted?: boolean
 }
 
 export interface ToolCall {

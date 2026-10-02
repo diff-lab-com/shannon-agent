@@ -299,6 +299,12 @@ pub struct StoredSession {
     pub metadata: StoredSessionMeta,
     /// Rebuilt conversation history (see [`projections::project_conversation`]).
     pub messages: Vec<shannon_engine::api::Message>,
+    /// D6: per-message interrupted flags (parallel to `messages`) — an
+    /// assistant step the log finalized with
+    /// `assistant/message.interrupted: true` (a cancelled run's partial
+    /// answer). Hosts surface this on the wire as the message's "stopped"
+    /// marker; absent entries mean `false`.
+    pub message_interrupted: Vec<bool>,
 }
 
 /// Listing summary ([`SessionStore::list`]).
@@ -458,6 +464,7 @@ impl SessionStore {
                 project_path,
             },
             messages: proj.messages,
+            message_interrupted: proj.message_interrupted,
         }
     }
 
@@ -1293,6 +1300,93 @@ mod tests {
         assert_eq!(ser["content"][1]["type"], "tool_use");
         let res = serde_json::to_value(&loaded.messages[2]).unwrap();
         assert_eq!(res["content"][0]["type"], "tool_result");
+    }
+
+    /// D6 (keep the partial output) — the reload contract behind the
+    /// desktop's `load_session`/`switch_session`: a turn cancelled mid-stream
+    /// (production shape: the tee sees user message → turn start → chunks,
+    /// then the producer abort drops it) reloads with the partial assistant
+    /// text AND its `interrupted` flag, while the surrounding completed turns
+    /// stay unflagged.
+    #[test]
+    fn cancelled_turn_reloads_with_partial_text_and_interrupted_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+
+        // Turn 1 completes normally (driven through the production tee API).
+        {
+            let tee = crate::session_log::TeeHandle::open_in_dir(
+                tmp.path(),
+                &id.to_string(),
+                "test-model",
+                None,
+            );
+            tee.record_turn_start(Some("q-done".into()));
+            tee.record_user_message("first question");
+            for input in crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Text {
+                query_id: uuid::Uuid::new_v4(),
+                content: "full answer".into(),
+            }) {
+                tee.record_bus_input(&input);
+            }
+            for input in
+                crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Completed {
+                    query_id: uuid::Uuid::new_v4(),
+                    outcome: Default::default(),
+                })
+            {
+                tee.record_bus_input(&input);
+            }
+            tee.close();
+        }
+        // Turn 2 is cancelled mid-stream: user message → chunks → drop.
+        {
+            let tee = crate::session_log::TeeHandle::open_in_dir(
+                tmp.path(),
+                &id.to_string(),
+                "test-model",
+                None,
+            );
+            tee.record_turn_start(Some("q-cancelled".into()));
+            tee.record_user_message("second question");
+            for chunk in ["海浪拍岸，", "月光洒落，"] {
+                for input in
+                    crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Text {
+                        query_id: uuid::Uuid::new_v4(),
+                        content: chunk.into(),
+                    })
+                {
+                    tee.record_bus_input(&input);
+                }
+            }
+            // Producer abort → last handle drops → interrupted close.
+            drop(tee);
+        }
+
+        let loaded = store.load(&id).unwrap().expect("session exists");
+        assert_eq!(loaded.messages.len(), 4); // user, assistant, user, partial assistant
+        assert_eq!(loaded.message_interrupted.len(), 4);
+        let rendered: Vec<serde_json::Value> = loaded
+            .messages
+            .iter()
+            .map(|m| serde_json::to_value(m).unwrap())
+            .collect();
+        assert_eq!(rendered[1]["role"], "assistant");
+        assert_eq!(rendered[1]["content"][0]["text"], "full answer");
+        assert!(
+            !loaded.message_interrupted[1],
+            "a completed turn is not marked"
+        );
+        assert_eq!(rendered[3]["role"], "assistant");
+        assert_eq!(
+            rendered[3]["content"][0]["text"], "海浪拍岸，月光洒落，",
+            "the reload projection carries the cancelled turn's partial text"
+        );
+        assert!(
+            loaded.message_interrupted[3],
+            "the partial assistant message keeps its interrupted (stopped) flag"
+        );
     }
 
     /// Seed a 3-turn session through the real writer (one writer handle so

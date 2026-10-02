@@ -138,14 +138,16 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
 
     // ── CI-must-pass part 2: the budget-cap auto-cancel flow. ──
     // The turn: budget:exceeded mid-stream → the cap auto-cancels (same
-    // token as Stop) — cancelled settles, no assistant bubble, no error.
-    // Wide mid-run window (3 × 800ms chunks) — the full suite runs workers
-    // in parallel and the first ticks after a send can be slow.
+    // token as Stop) — cancelled settles, no error. D6: the three chunks
+    // streamed before the cap fired commit as a stopped-marked partial
+    // bubble. Wide mid-run window (3 × 800ms chunks) — the full suite runs
+    // workers in parallel and the first ticks after a send can be slow.
     await chat.send(script.turns[0]!.user)
     await expect(page.locator('.streaming-cursor')).toBeVisible({ timeout: 15_000 })
     await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
-    // Seeded history (2) + the new user bubble; cancelled commits no reply.
-    await expect(chat.bubbles()).toHaveCount(3)
+    // Seeded history (2) + the new user bubble + the stopped partial.
+    await expect(chat.bubbles()).toHaveCount(4)
+    await expect(chat.bubbleAt(3).getByTestId('message-stopped-marker')).toBeVisible()
     await expect(page.getByRole('img', { name: 'Last run failed' })).toHaveCount(0)
     // Wire proof: the blocked turn went out WITH the draft-restored chip.
     expect((await mockSnapshot(page)).sends[0]).toMatchObject({
@@ -267,9 +269,10 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
       attachments: [REPORT_PATH],
       sessionId: 'script-sess-budget',
     })
-    // The bypass turn streams to completion.
-    await expect(chat.bubbles()).toHaveCount(5, { timeout: 15_000 })
-    await expect(chat.bubbleAt(4)).toContainText('数据来源已补充')
+    // The bypass turn streams to completion (bubbles: seeded 2 + user +
+    // the stopped partial + the full bypass reply).
+    await expect(chat.bubbles()).toHaveCount(6, { timeout: 15_000 })
+    await expect(chat.bubbleAt(5)).toContainText('数据来源已补充')
     await expectNoConsoleErrors(page)
   })
 })

@@ -1331,19 +1331,48 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (isStaleQueryEvent(key, p.query_id)) return
           retireQueryEvent(key, p.query_id)
           noteSessionActivity(key === claimedKey ? sid : key, 'end')
-          // B0 P1-2: same ghost-bubble cleanup as QUERY_FAILED — the
-          // cancelled session's buckets and, when visible, the projections.
+          // D6 (keep the partial output): a cancelled run's streamed text is
+          // COMMITTED as the assistant bubble — flagged `interrupted` so the
+          // bubble renders the "stopped" marker — instead of being wiped with
+          // the run (B0 P1-2's discard semantics). The backend mirrors this
+          // durably (the engine tee finalizes the interrupted turn in the L0
+          // log; the desktop buffer gets the same partial), so reloads and
+          // session switches bring the identical marked bubble back. An empty
+          // bucket (stop before the first token) keeps the no-bubble shape.
+          // §P2-18 scoping like QUERY_COMPLETED: the run's own session
+          // commits ITS OWN bucket; a background session's partial lands on
+          // its reload projection, not another session's screen. `key` is the
+          // SENDING session (F-1 owner routing) — a mismatched event sid can
+          // never route the commit (or the unlock) onto another chat.
           setSessionQuerying(key, false)
           cancelStreamFlush()
+          const finalText = streamingBucketsRef.current.get(key) ?? ''
           streamingBucketsRef.current.set(key, '')
           thinkingBucketsRef.current.set(key, '')
-          // W3-4: a cancelled run commits no bubble — same snapshot drop.
+          // W3-4: the run is over — pop its citation snapshot. A committed
+          // partial keeps its own chips (the memories DID inform it, same
+          // rule as the completed commit); an empty commit drops them so
+          // they can never leak onto a later turn's bubble.
+          const citations = pendingInjectedMemoriesRef.current.get(key)
           pendingInjectedMemoriesRef.current.delete(key)
           if (key === visibleKey) {
+            setSubagentLive(null)
+            if (finalText) {
+              setMessages(msgs => [...msgs, {
+                role: 'assistant',
+                content: finalText,
+                timestamp: Date.now(),
+                interrupted: true,
+                // W3-4: citation chips ride only a non-empty snapshot.
+                ...(citations && citations.length > 0 ? { injected_memories: citations } : {}),
+              }])
+            }
             setStreamingText('')
             setThinkingText('')
+            // Review P2-4: completed tool cards must not linger under the
+            // committed partial reply until the next send/switch.
             setActiveToolCalls([])
-            // P2-19: run cancelled — clear the progress pill with the cards.
+            // P2-19: no progress chip may outlive the run.
             setToolProgress(null)
             // GB P2-3: settle the run tab (not a failure — the user stopped it).
             setRunProcess(prev => runEnd(prev, Date.now(), false))

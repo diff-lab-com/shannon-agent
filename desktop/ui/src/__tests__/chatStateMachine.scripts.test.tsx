@@ -215,9 +215,17 @@ describe('ChatScript fixtures — YAML ↔ JSON two-layer parity (R2 §C)', () =
     })
   }
 
-  it('knownIssue markers survive the YAML→JSON round-trip (A-19 anchor; A-3 marker removed by the R4 attachment fix)', () => {
-    const cancel = loadFixture('cancel-text-stream')
-    expect(cancel.onCancel?.emit[0]!.knownIssue).toBe('A-19')
+  it('D6 landed: the A-19 knownIssue marker is gone from cancel-text-stream (both layers) and the script still validates', () => {
+    // A-19 (cancel discards the partial text) was resolved by D6 — the
+    // marker was removed from the YAML when the behavior flipped. The
+    // fixture must mirror that exactly (the deep-equality parity test above
+    // enforces the byte-level match) and the schema must still validate.
+    const yaml = loadYaml('cancel-text-stream')
+    const json = loadFixture('cancel-text-stream')
+    expect(yaml.onCancel?.emit[0]!.knownIssue).toBeUndefined()
+    expect(json.onCancel?.emit[0]!.knownIssue).toBeUndefined()
+    expect(validateScript(yaml).ok).toBe(true)
+    expect(validateScript(json).ok).toBe(true)
   })
 })
 
@@ -504,7 +512,7 @@ describe('L1 state machine — failure journeys (#5)', () => {
 })
 
 describe('L1 state machine — cancel-text-stream (journey #6)', () => {
-  it('cancel settles via query:cancelled and discards the partial text (A-19 anchored)', { timeout: 30_000 }, async () => {
+  it('cancel settles via query:cancelled and commits the partial text as a stopped-marked assistant bubble (D6)', { timeout: 30_000 }, async () => {
     const script = loadFixture('cancel-text-stream')
     const h = await makeHarness()
     h.player.load(script)
@@ -516,17 +524,21 @@ describe('L1 state machine — cancel-text-stream (journey #6)', () => {
     await waitFor(() => expect(h.result.current.streamingText).toBe(textChunksOf(script, 0).join('')))
     expect(h.player.snapshot().phase).toBe('waitingUi')
 
-    // Stop — the player's onCancel path (its only step is knownIssue'd and
-    // skipped, so the settle fallback emits the identical query:cancelled).
+    // Stop — the player's onCancel path settles the run.
     await act(async () => { await h.result.current.cancelQuery() })
     await act(async () => { expect(h.player.handleCancelQuery()).toBe(true) })
 
     await awaitSettled(h)
-    // A-19 current behavior: the half-streamed text is DISCARDED (B0 P1-2
-    // ghost-bubble cleanup). Flip to "partial text commits as the assistant
-    // bubble" when R4 lands and remove the knownIssue marker in the YAML.
+    // D6 (flipped from the A-19 discard anchor): the half-streamed text
+    // COMMITS as the assistant bubble, flagged `interrupted` — the field
+    // MessageBubble renders the "stopped" marker from. No error state; the
+    // streamed text equals the full emitted chunks (the park point is after
+    // the chunk step, so nothing was in flight to lose).
     expect(h.result.current.streamingText).toBe('')
-    expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
+    const partials = h.result.current.messages.filter(m => m.role === 'assistant')
+    expect(partials).toHaveLength(1)
+    expect(partials[0]!.content).toBe(textChunksOf(script, 0).join(''))
+    expect(partials[0]!.interrupted).toBe(true)
     expect(h.result.current.error).toBeNull()
     expect(h.player.snapshot().phase).toBe('done')
   })
@@ -549,10 +561,15 @@ describe('L1 state machine — budget-exceeded (journey #7)', () => {
       expect(budgetEvent?.payload).toEqual({ sessionId: SESSION_A, spentUsd: 6.4, budgetUsd: 5 })
     })
     // Budget-cap auto-cancel (same cancel token as Stop, commands.rs:2199):
-    // the run settles via query:cancelled — no ghost bubble, no error state.
+    // the run settles via query:cancelled — no error state. D6: the three
+    // chunks streamed before the cap fired commit as a stopped-marked
+    // partial bubble (the real backend mirrors this in the L0 finalize).
     await awaitSettled(h)
     expect(h.result.current.streamingText).toBe('')
-    expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
+    const budgetPartials = h.result.current.messages.filter(m => m.role === 'assistant')
+    expect(budgetPartials).toHaveLength(1)
+    expect(budgetPartials[0]!.content).toBe(textChunksOf(script, 0).join(''))
+    expect(budgetPartials[0]!.interrupted).toBe(true)
     expect(h.result.current.error).toBeNull()
     expect(h.player.snapshot().sentTurns).toBe(1)
 
@@ -583,7 +600,13 @@ describe('L1 state machine — budget-exceeded (journey #7)', () => {
     // A-2 fixed: the budget-bypass resend preserves the original message's
     // attachments.
     expect(sends[1]!.attachments).toEqual(['/Users/demo/Downloads/report-draft.md'])
-    expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(1)
+    // Two assistant messages now: the D6 partial (stopped-marked) from the
+    // auto-cancelled run + the bypass resend's full reply.
+    const afterBypass = h.result.current.messages.filter(m => m.role === 'assistant')
+    expect(afterBypass).toHaveLength(2)
+    expect(afterBypass[0]!.interrupted).toBe(true)
+    expect(afterBypass[1]!.interrupted).toBeUndefined()
+    expect(afterBypass[1]!.content).toBe(textChunksOf(script, 1).join(''))
   })
 })
 

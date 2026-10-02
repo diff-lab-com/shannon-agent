@@ -132,18 +132,25 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await loadChatScript(page, 'cancel-then-resend', test.info())
     await openSession(page, 'desktop-session-row-script-sess-resend', 'Cancel then resend')
 
-    // q-0 streams → stop → cancelled settles.
+    // q-0 streams → stop → cancelled settles. D6: the streamed partial
+    // commits as a stopped-marked assistant bubble. The first chunk is out
+    // before the stop; how many of the 400ms-gap chunks landed by then is
+    // timing-dependent, so the text is asserted by containment (the count
+    // and the marker are the deterministic part).
     await chat.send('第一条（将被取消）')
     await chat.expectStreamingCursor()
     await expect(chat.bubbleAt(0)).toContainText('将被取消')
     await chat.stop()
     await expect(chat.sendButton()).toBeVisible({ timeout: 5_000 })
-    await expect(chat.bubbles()).toHaveCount(1)
+    await expect(chat.bubbles()).toHaveCount(2)
+    await expect(chat.bubbleAt(1)).toContainText('旧流一，')
+    await expect(chat.bubbleAt(1).getByTestId('message-stopped-marker')).toBeVisible()
 
-    // 立刻重发 — the new turn (q-1) streams.
+    // 立刻重发 — the new turn (q-1) streams. Bubble order: user0, the
+    // partial (stopped) reply for q-0, then the q-1 user bubble.
     await chat.send('第二条（stop 后立刻重发）')
     await chat.expectStreamingCursor()
-    await expect(chat.bubbleAt(1)).toContainText('stop 后立刻重发')
+    await expect(chat.bubbleAt(2)).toContainText('stop 后立刻重发')
 
     // The old query's boundary events land INSIDE the new turn's window.
     emitNow(page, 'query:text', {
@@ -153,15 +160,18 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
 
     // A-17 FIXED (AppContext query_id filter): the late q-0 events (≠ the
     // session's current q-1) are dropped — the composer stays BUSY while
-    // q-1 keeps streaming, and the committed reply is the FULL new-turn
-    // text with no injected late chunk. (Was: the late cancelled wiped the
-    // bucket, mis-idled the composer, and truncated the reply to the
-    // post-pollution chunks.)
+    // q-1 keeps streaming, the committed q-0 partial stays untouched (its
+    // stopped-marked bubble keeps exactly the pre-stop text), and the final
+    // reply is the FULL new-turn text with no injected late chunk. (Was:
+    // the late cancelled wiped the bucket, mis-idled the composer, and
+    // truncated the reply to the post-pollution chunks.)
     await expect(chat.stopButton()).toBeVisible({ timeout: 5_000 })
     await expect(chat.streamingCursor()).toBeVisible()
     await expect(page.getByText('[旧流迟到]')).toHaveCount(0)
-    await expect(chat.bubbles()).toHaveCount(3, { timeout: 20_000 })
-    await chat.expectBubbleText(2, '新流甲，新流乙，新流丙，新流丁。')
+    await expect(chat.bubbles()).toHaveCount(4, { timeout: 20_000 })
+    await expect(chat.bubbleAt(1)).toContainText('旧流一，')
+    await expect(chat.bubbleAt(1).getByTestId('message-stopped-marker')).toBeVisible()
+    await chat.expectBubbleText(3, '新流甲，新流乙，新流丙，新流丁。')
     await expectNoConsoleErrors(page)
   })
 
@@ -299,10 +309,13 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await chat.expectStreamingCursor()
 
     // The cap cancels the turn (not a failure): convergence with no failed
-    // residue, banner actions only usable after the settle.
+    // residue, banner actions only usable after the settle. D6: the three
+    // chunks streamed before the cap fired commit as a stopped-marked
+    // partial bubble.
     await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
     await expect(chat.streamingCursor()).toHaveCount(0)
-    await expect(chat.bubbles()).toHaveCount(3) // seeded history + the user bubble
+    await expect(chat.bubbles()).toHaveCount(4) // seeded history + user bubble + the stopped partial
+    await expect(chat.bubbleAt(3).getByTestId('message-stopped-marker')).toBeVisible()
     await expect(page.getByRole('img', { name: 'Last run failed' })).toHaveCount(0)
     await expect(banner).toBeVisible()
     await expectNoConsoleErrors(page)
@@ -328,9 +341,13 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expect(chat.sendButton()).toBeVisible({ timeout: 5_000 })
     await expect(chat.streamingCursor()).toHaveCount(0)
     await expect(chat.runStatusLine()).toHaveCount(0)
-    // No error toast, exactly one settle, no flapping.
+    // No error toast, exactly one settle, no flapping. D6: the partial
+    // commits with its stopped marker (its length rides the 5s chunk gaps —
+    // at least the first chunk is out).
     await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
-    await expect(chat.bubbles()).toHaveCount(1)
+    await expect(chat.bubbles()).toHaveCount(2)
+    await expect(chat.bubbleAt(1)).toContainText('海浪拍岸')
+    await expect(chat.bubbleAt(1).getByTestId('message-stopped-marker')).toBeVisible()
     await expectNoConsoleErrors(page)
   })
 
@@ -361,11 +378,17 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     // survives the round trip — the scripted backend now records accepted
     // sends at turn start (seed.ts overlay), matching the real backend's L0
     // tee (agent_loop records the user message before the model sees
-    // anything, so a log-backed reload always includes it). The cancelled
-    // run left no residue beyond that — no cursor, no assistant bubble.
+    // anything, so a log-backed reload always includes it). D6: the
+    // cancelled run's streamed partial ALSO survives the round trip — the
+    // cancel recorded it into the tail (interrupted: true, the scripted
+    // counterpart of the L0 interrupted-turn finalize) — so the reload
+    // shows the user bubble plus the stopped-marked partial carrying at
+    // least the first chunk.
     await openSession(page, 'desktop-session-row-script-sess-bg-a', 'Background A')
-    await expect(chat.bubbles()).toHaveCount(1)
+    await expect(chat.bubbles()).toHaveCount(2)
     await expect(chat.bubbleAt(0)).toContainText('A 的长任务')
+    await expect(chat.bubbleAt(1)).toContainText('后台一，')
+    await expect(chat.bubbleAt(1).getByTestId('message-stopped-marker')).toBeVisible()
     await expect(chat.streamingCursor()).toHaveCount(0)
     await expect(page.locator('[data-tool-name]')).toHaveCount(0)
     await expectNoConsoleErrors(page)

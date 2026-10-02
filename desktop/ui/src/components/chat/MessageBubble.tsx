@@ -528,6 +528,18 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
             </div>
           )}
         </div>
+        {/* D6 (keep the partial output): a cancelled run's committed partial
+            answer is visibly marked — the reply stays, but it is not a
+            complete one. Chip style mirrors the sandbox-denied pill. */}
+        {!isTool && message.interrupted === true && (
+          <div
+            className="flex items-center gap-xs self-start px-xs py-[1px] rounded-sm bg-surface-container-high text-on-surface-variant font-label-xs w-fit"
+            data-testid="message-stopped-marker"
+          >
+            <span className="material-symbols-outlined icon-xs" aria-hidden="true">stop_circle</span>
+            {t('chat.message.stopped')}
+          </div>
+        )}
         <ActionToolbar className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
           <Button aria-label={t('chat.message.copy.aria')} onClick={handleCopy} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
             <span className="material-symbols-outlined icon-md" aria-hidden="true">content_copy</span>

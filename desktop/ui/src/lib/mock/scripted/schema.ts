@@ -60,10 +60,13 @@ export interface ScriptStep {
    * Known-bug anchor (R2 chat-testing plan §A). A step carrying this marker
    * is SKIPPED by the player (no event emitted) and annotated via
    * console.info — it pins where the journey is shaped by a tracked bug
-   * (e.g. A-3 retry drops attachments, A-19 cancel discards partial text).
-   * The YAML comment at the step documents the flip condition; when the fix
-   * lands (R4), remove the marker — the step resumes executing and the
-   * spec/L1 assertions next to it flip to the fixed behavior.
+   * (e.g. A-3 retry dropped attachments — resolved upstream). The YAML
+   * comment at the step documents the flip condition; when the fix lands,
+   * remove the marker — the step resumes executing and the spec/L1
+   * assertions next to it flip to the fixed behavior. (A-19, the cancel
+   * discards-partial anchor, was flipped by D6: the marker is gone from
+   * cancel-text-stream and the partial text now persists with a stopped
+   * marker.)
    */
   knownIssue?: string
 }

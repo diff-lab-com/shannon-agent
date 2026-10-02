@@ -866,11 +866,15 @@ pub async fn load_session(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Session not found: {id}"))?;
 
-    // Convert shannon_core Messages to ChatMessages
+    // Convert shannon_core Messages to ChatMessages. D6: the projection's
+    // per-message interrupted flags ride along, so a cancelled run's partial
+    // assistant message keeps its "stopped" marker across reloads.
+    let interrupted_flags = session_data.message_interrupted.clone();
     let messages: Vec<ChatMessage> = session_data
         .messages
         .into_iter()
-        .map(|msg| ChatMessage {
+        .enumerate()
+        .map(|(i, msg)| ChatMessage {
             role: msg.role,
             content: match msg.content {
                 shannon_engine::api::MessageContent::Text(t) => t,
@@ -888,6 +892,11 @@ pub async fn load_session(
             },
             timestamp: chrono_timestamp(),
             file_attachments: None,
+            interrupted: interrupted_flags
+                .get(i)
+                .copied()
+                .unwrap_or(false)
+                .then_some(true),
         })
         .collect();
 
@@ -1027,32 +1036,44 @@ pub async fn switch_session(
     // (§4.6) No explicit save needed before switching: every turn is already
     // durable in events.jsonl via the engine tee.
 
-    // Load new session by projecting its L0 log.
+    // Load new session by projecting its L0 log. D6: interrupted flags ride
+    // along (same contract as load_session) so a cancelled run's partial
+    // assistant message keeps its "stopped" marker across switches.
     let messages = match state
         .l0_store()
         .load(&session_uuid)
         .map_err(|e| e.to_string())?
     {
-        Some(data) => data
-            .messages
-            .into_iter()
-            .map(|msg| ChatMessage {
-                role: msg.role,
-                content: match msg.content {
-                    shannon_engine::api::MessageContent::Text(t) => t,
-                    shannon_engine::api::MessageContent::Blocks(blocks) => blocks
-                        .iter()
-                        .filter_map(|b| match b {
-                            shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                },
-                timestamp: chrono_timestamp(),
-                file_attachments: None,
-            })
-            .collect(),
+        Some(data) => {
+            let interrupted_flags = data.message_interrupted.clone();
+            data.messages
+                .into_iter()
+                .enumerate()
+                .map(|(i, msg)| ChatMessage {
+                    role: msg.role,
+                    content: match msg.content {
+                        shannon_engine::api::MessageContent::Text(t) => t,
+                        shannon_engine::api::MessageContent::Blocks(blocks) => blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                shannon_engine::api::ContentBlock::Text { text } => {
+                                    Some(text.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    },
+                    timestamp: chrono_timestamp(),
+                    file_attachments: None,
+                    interrupted: interrupted_flags
+                        .get(i)
+                        .copied()
+                        .unwrap_or(false)
+                        .then_some(true),
+                })
+                .collect()
+        }
         None => Vec::new(),
     };
 

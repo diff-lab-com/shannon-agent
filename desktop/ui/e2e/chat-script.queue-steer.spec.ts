@@ -110,8 +110,13 @@ test.describe('scripted chat backend — queue-steer (journey #9)', () => {
 
     // The steer cancels turn 0, waits for its settle, then delivers — the
     // queued chip stays parked while the steer's turn streams, and the
-    // steer's user bubble appears BEFORE the queued item's.
-    await expect(chat.bubbleAt(1)).toContainText('加急：先回答这个', { timeout: 15_000 })
+    // steer's user bubble appears BEFORE the queued item's. D6: the
+    // cancelled turn 0's streamed partial (at least the first 600ms-gap
+    // chunk) commits as a stopped-marked bubble at index 1, so the steer's
+    // user bubble lands at index 2.
+    await expect(chat.bubbleAt(1)).toContainText('潮汐之一')
+    await expect(chat.bubbleAt(1).getByTestId('message-stopped-marker')).toBeVisible()
+    await expect(chat.bubbleAt(2)).toContainText('加急：先回答这个', { timeout: 15_000 })
     await expect(page.getByTestId('prompt-queue-chip').filter({ hasText: '队列第一条' })).toBeVisible()
     // The steer's reply commits (player turn 1). FINDING S-1 (recorded in
     // the report, not fixed): the delivered turn settles within the same
@@ -121,7 +126,8 @@ test.describe('scripted chat backend — queue-steer (journey #9)', () => {
     // changes again. The parked item stays parked past this run until some
     // other real settle/switch re-runs the drain effect. Current behavior
     // asserted below; the R4-shaped fix is a state-based pendingSteer.
-    await expect(chat.bubbles()).toHaveCount(3, { timeout: 15_000 })
+    // Bubbles: user0 + the stopped partial + the steer user + its reply.
+    await expect(chat.bubbles()).toHaveCount(4, { timeout: 15_000 })
     await expect(page.getByTestId('prompt-queue-chip').filter({ hasText: '队列第一条' })).toBeVisible()
     expect((await mockSnapshot(page)).sentTurns).toBe(2)
     await expectNoConsoleErrors(page)

@@ -1873,6 +1873,7 @@
   "chat.message.regenerate.aria": "回答を再生成",
   "chat.message.regenerate.started": "巻き戻しました — 前の返信を再生成中…",
   "chat.message.regenerate.failed": "返信を再生成できませんでした",
+  "chat.message.stopped": "停止しました",
   "chat.message.edit.aria": "メッセージを編集",
   "chat.message.edit.button": "編集",
   "chat.edit.banner": "{time} のメッセージを編集中 — 送信すると会話がその直前まで巻き戻ります",

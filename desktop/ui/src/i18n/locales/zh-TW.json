@@ -1873,6 +1873,7 @@
   "chat.message.regenerate.aria": "重新產生回覆",
   "chat.message.regenerate.started": "已回捲——正在重新產生上一則回覆…",
   "chat.message.regenerate.failed": "無法重新產生回覆",
+  "chat.message.stopped": "已停止",
   "chat.message.edit.aria": "編輯訊息",
   "chat.message.edit.button": "編輯",
   "chat.edit.banner": "正在編輯 {time} 的訊息 — 送出後會話將回溯到該訊息之前",

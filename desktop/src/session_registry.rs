@@ -883,6 +883,7 @@ mod tests {
             content: "for A only".into(),
             timestamp: 0,
             file_attachments: None,
+            interrupted: None,
         };
         a.messages.try_lock().expect("a lock").push(msg);
         assert!(

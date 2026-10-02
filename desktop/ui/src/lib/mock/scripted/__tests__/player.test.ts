@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_CHUNK_DELAY_MS, ScriptPlayer } from '../player'
 import type { ScriptSeed } from '../schema'
 import { validateScript } from '../schema'
+import { seededCheckpoints, seededMessagesWithRecorded, setScriptSeed } from '../seed'
 
 interface CapturedEvent {
   event: string
@@ -623,7 +624,7 @@ describe('knownIssue markers (R2 §A)', () => {
     expect(validateScript({
       name: 'marked',
       turns: [{ user: 'u', script: [{ event: 'query:completed', knownIssue: 'A-1' }] }],
-      onCancel: { emit: [{ event: 'query:cancelled', knownIssue: 'A-19' }] },
+      onCancel: { emit: [{ event: 'query:cancelled', knownIssue: 'A-XX' }] },
     }).ok).toBe(true)
     expect(validateScript({
       name: 'bad-marker',
@@ -662,7 +663,7 @@ describe('knownIssue markers (R2 §A)', () => {
       player.load({
         name: 'cancel-marked',
         turns: [{ user: 'u', script: [{ event: 'query:text', chunks: ['half', 'more'], chunkDelayMs: 10_000 }] }],
-        onCancel: { emit: [{ event: 'query:cancelled', knownIssue: 'A-19' }] },
+        onCancel: { emit: [{ event: 'query:cancelled', knownIssue: 'A-XX' }] },
       })
       player.handleSendMessage({})
       expect(player.handleCancelQuery()).toBe(true)
@@ -670,7 +671,7 @@ describe('knownIssue markers (R2 §A)', () => {
       // produces an identical terminal so the journey behavior is unchanged.
       expect(names()).toEqual(['query:text', 'query:cancelled'])
       expect(player.snapshot().phase).toBe('done')
-      expect(info).toHaveBeenCalledWith(expect.stringContaining('knownIssue A-19'))
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('knownIssue A-XX'))
     } finally {
       info.mockRestore()
     }
@@ -695,5 +696,117 @@ describe('knownIssue markers (R2 §A)', () => {
     expect(player.snapshot().sentTurns).toBe(2)
     player.reset()
     expect(player.snapshot().sentTurns).toBe(0)
+  })
+})
+
+// D6 (keep the partial output): a cancelled settle records the turn's
+// streamed partial into the session tail, flagged `interrupted` — the
+// scripted counterpart of the real backend's interrupted-turn finalize in
+// the L0 log, so the reload readers (seededMessagesWithRecorded) serve the
+// identical marked partial.
+describe('D6 cancelled-turn partial persistence', () => {
+  const d6Seed = {
+    config: { hasKey: true },
+    sessions: [{ id: 'sess-d6', title: 'D6', messages: [] }],
+  }
+
+  beforeEach(() => {
+    setScriptSeed(d6Seed)
+  })
+
+  afterEach(() => {
+    setScriptSeed(null)
+  })
+
+  it('a cancelled turn records its streamed partial with interrupted: true', () => {
+    const { player } = makeHarness()
+    player.load({
+      name: 'd6-partial',
+      turns: [{
+        user: '写一首诗',
+        script: [{ event: 'query:text', chunks: ['海浪拍岸，', '月光洒落，', '风起云涌，'], chunkDelayMs: 10_000 }],
+      }],
+    })
+    player.handleSendMessage({ sessionId: 'sess-d6', message: '写一首诗' })
+    // First chunk is out; the rest are still pending when the stop lands.
+    player.handleCancelQuery()
+    expect(player.snapshot().phase).toBe('done')
+
+    const reloaded = seededMessagesWithRecorded('sess-d6')!
+    expect(reloaded).toHaveLength(2)
+    expect(reloaded[0]).toMatchObject({ role: 'user', content: '写一首诗' })
+    expect(reloaded[1]).toEqual({
+      role: 'assistant',
+      content: '海浪拍岸，',
+      timestamp: expect.any(Number),
+      interrupted: true,
+    })
+    // The turn checkpoint exists too (the desktop cancel path records it),
+    // so the partial bubble keeps its rewind/regenerate affordances.
+    const checkpoints = seededCheckpoints('sess-d6')!
+    expect(checkpoints).toHaveLength(1)
+    expect(checkpoints[0]).toMatchObject({ turn_index: 0, prompt_preview: '写一首诗' })
+  })
+
+  it('a scripted query:cancelled terminal (auto-cancel shape) records the partial too', async () => {
+    const { player } = makeHarness()
+    player.load({
+      name: 'd6-auto-cancel',
+      turns: [{
+        user: '问一句',
+        script: [
+          { event: 'query:text', chunks: ['先看一下', '花销'], chunkDelayMs: 10 },
+          { event: 'query:cancelled' },
+        ],
+      }],
+    })
+    player.handleSendMessage({ sessionId: 'sess-d6', message: '问一句' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(player.snapshot().phase).toBe('done')
+    const reloaded = seededMessagesWithRecorded('sess-d6')!
+    expect(reloaded[1]).toMatchObject({ role: 'assistant', content: '先看一下花销', interrupted: true })
+  })
+
+  it('a completed turn records no assistant row (unchanged S-4 tail shape)', () => {
+    const { player } = makeHarness()
+    player.load({
+      name: 'd6-complete',
+      turns: [{
+        user: '问一句',
+        script: [{ event: 'query:text', chunks: ['完整'] }, { event: 'query:completed' }],
+      }],
+    })
+    player.handleSendMessage({ sessionId: 'sess-d6', message: '问一句' })
+    expect(player.snapshot().phase).toBe('done')
+    expect(seededMessagesWithRecorded('sess-d6')).toHaveLength(1) // user only
+  })
+
+  it('an empty partial (stop before the first token) records nothing', () => {
+    const { player } = makeHarness()
+    player.load({
+      name: 'd6-empty',
+      turns: [{
+        user: '问一句',
+        script: [{ event: 'query:text', chunks: ['late'], chunkDelayMs: 10_000 }],
+      }],
+    })
+    player.handleSendMessage({ sessionId: 'sess-d6', message: '问一句' })
+    // The first chunk rides the timer — nothing streamed yet.
+    player.handleCancelQuery()
+    expect(seededMessagesWithRecorded('sess-d6')).toHaveLength(1) // user only
+  })
+
+  it('load() clears the recorded tails (fresh script lifecycle)', () => {
+    const { player } = makeHarness()
+    player.load({
+      name: 'd6-clear',
+      turns: [{ user: 'u', script: [{ event: 'query:text', chunks: ['a', 'b'], chunkDelayMs: 10_000 }] }],
+    })
+    player.handleSendMessage({ sessionId: 'sess-d6', message: 'u' })
+    // The first chunk is out (synchronous), the second rides the timer.
+    player.handleCancelQuery()
+    expect(seededMessagesWithRecorded('sess-d6')).toHaveLength(2)
+    player.load({ name: 'd6-fresh', turns: baseScript.turns })
+    expect(seededMessagesWithRecorded('sess-d6')).toHaveLength(0)
   })
 })
