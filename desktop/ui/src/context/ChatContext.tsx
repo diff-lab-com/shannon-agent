@@ -92,6 +92,13 @@ export interface ChatContextValue {
     options?: { budgetBypass?: boolean },
   ) => Promise<boolean>
   cancelQuery: () => Promise<void>
+  /**
+   * S-3/A-18 companion (R4 group 7): a cancel command is in flight for the
+   * VISIBLE session (stop pressed, run not settled yet). The composer's
+   * stop button renders a disabled "cancelling" state — a second press
+   * during teardown is a backend no-op and must not look like one.
+   */
+  isCancelInFlight: boolean
   /** B1 §4-9: this session's FIFO of prompts queued while streaming. */
   promptQueue: PromptQueueItem[]
   /** Append to the visible session's queue. False when the queue is full

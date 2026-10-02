@@ -90,7 +90,7 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expectNoConsoleErrors(page)
   })
 
-  // ── 2. 工具执行中 stop（无 progress 事件 = A-18 取消盲区形态）─────────
+  // ── 2. 工具执行中 stop（原 A-18 取消盲区形态，后端已修）───────────────
   test('2. stop during a tool run: the card converges and a late tool-result does not resurrect it', async ({ page }) => {
     test.setTimeout(60_000)
     const chat = new ChatPage(page)
@@ -102,6 +102,12 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expect(chat.runStatusLine()).toBeVisible()
 
     await chat.stop()
+    // A-18 FIXED backend-side (R4 group 7): the real backend races the
+    // cancel token against the stream via tokio::select! (commands.rs
+    // stream_step), so a stop lands immediately even while a silent tool
+    // runs — it no longer waits for the tool's next event boundary. (The
+    // scripted mock always converged on cancel, so the UI assertions are
+    // unchanged; the window stays CI-slack, not a semantic bound.)
     // The run's UI converges away: card, pill, cursor.
     await expect(chat.sendButton()).toBeVisible({ timeout: 5_000 })
     await expect(page.locator('[data-tool-name="Bash"]')).toHaveCount(0)
@@ -159,8 +165,8 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expectNoConsoleErrors(page)
   })
 
-  // ── 4. 审批等待中 stop ────────────────────────────────────────────────
-  test('4. stop while the approval dialog waits: the run settles, the dialog lingers (current), a late respond still works', async ({ page }) => {
+  // ── 4. 审批等待中 stop（S-3 已修复：scrim 上方挂出可达的 stop）────────
+  test('4. stop while the approval dialog waits: the portal stop settles the run, the dialog lingers, a late respond still works', async ({ page }) => {
     test.setTimeout(60_000)
     const chat = new ChatPage(page)
     await loadChatScript(page, 'cancel-approval-wait', test.info())
@@ -171,17 +177,25 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expect(dialog).toBeVisible({ timeout: 10_000 })
     await expectMockPhase(page, 'waitingPermission')
 
-    // CURRENT BEHAVIOR (recorded for the report): while the approval dialog
-    // waits, the composer's stop button is UNREACHABLE — the modal scrim
-    // intercepts pointer events (the click below would never land), and
-    // Escape on the dialog maps to Modal's deny-on-close, not a cancel.
-    // The engine still waits on respond_permission, so the reachable cancel
-    // path is the explicit session route (what a second window's stop does).
-    await invokeMock(page, 'cancel_query', { sessionId: 'script-sess-cancel-approval' })
+    // S-3 FIXED (R4 group 7): the composer's stop is UNREACHABLE while the
+    // dialog is up — the modal scrim covers it and the composer's glass
+    // surface is a `contain: paint` stacking context, so it can never win
+    // the z race (this click used to time out; recorded in task-3 §1.C).
+    // The fix mounts a portal stop control ABOVE the scrim for exactly this
+    // window. Clicking it goes through the same cancel_query IPC — and is
+    // NOT a Deny: the dialog only closes on a press targeting its own
+    // backdrop element (Escape=Deny semantics untouched, decision D6).
+    const portalStop = page.getByTestId('header-stop-while-waiting')
+    await expect(portalStop).toBeVisible()
+    await portalStop.click()
+
+    // The run settles: composer swaps back, cursor gone, the portal control
+    // disappears with the settled run.
     // The dialog's aria-modal masking keeps role queries blind to the
     // composer (R2 §5.5) — anchor the swap-back via the attribute locator.
     await expect(page.locator('button[aria-label="Send message"]')).toBeVisible({ timeout: 5_000 })
     await expect(page.locator('.streaming-cursor')).toHaveCount(0)
+    await expect(portalStop).toHaveCount(0)
 
     // CURRENT BEHAVIOR (recorded): QUERY_CANCELLED does not clear the
     // permissionRequest — the dialog stays open over a settled run.
@@ -305,8 +319,10 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
 
     await chat.send('写一首关于海的长诗，慢慢写')
     await chat.expectStreamingCursor()
-    // Double-stop: the second cancel is a backend no-op (token taken) — or
-    // the button has already swapped back to send; both are the calm paths.
+    // Double-stop: the second press either lands on the disabled
+    // "cancelling" state (S-3/A-18 companion feedback — in-flight marker
+    // until the settle) or the button has already swapped back to send;
+    // both are the calm paths, no error toast either way.
     await chat.stop()
     await chat.stopButton().click({ timeout: 2_000 }).catch(() => { /* already swapped */ })
     await expect(chat.sendButton()).toBeVisible({ timeout: 5_000 })

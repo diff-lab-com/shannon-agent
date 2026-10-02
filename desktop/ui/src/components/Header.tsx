@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useIntl, type PrimitiveType } from 'react-intl';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -46,7 +47,7 @@ export function Header() {
   const navigate = useNavigate();
   const { status, models, permissionRequest, respondPermission, refreshConfig, refreshStatus } = useCatalog();
   const { sessions, currentSessionId, windowSessionId } = useSessions();
-  const { contextPanelOpen, toggleContextPanel } = useChat();
+  const { contextPanelOpen, toggleContextPanel, isQuerying, isCancelInFlight, cancelQuery } = useChat();
   const { toggle: toggleSidebar } = useSidebar();
   // P1-1 window mode: this window is a dedicated session window (slim
   // chrome; header carries「在主窗口打开」+「关闭窗口」).
@@ -449,6 +450,41 @@ export function Header() {
             </div>
           </div>
       </Modal>
+      )}
+      {/* S-3 fix (R4 group 7): while the approval dialog waits, the modal
+          scrim sits above the composer and the composer's glass surface is a
+          `contain: paint` stacking context — its stop button can never rise
+          above the scrim, so a user who wants to abandon the whole query
+          (not just deny this one prompt) had no reachable stop. Mount a stop
+          control ABOVE the scrim for exactly that window (dialog open + the
+          visible session still running). Safe against accidental Deny: the
+          dialog only closes on a press whose target IS the dialog's own
+          backdrop element (Base UI useDialogRoot outsidePress), which this
+          button never is; Escape still maps to Deny (decision D6, unchanged).
+          The control vanishes once the run settles; keyboard users keep the
+          Escape path (pointer reachability is the fix, not the a11y tree). */}
+      {permissionRequest && isQuerying && createPortal(
+        // z-flash-above, not z-flash: the dialog's portal reaches the body
+        // after this one (layout-effect created), so an equal z would let
+        // the scrim paint on top and swallow the click again.
+        <div className="fixed inset-x-0 bottom-6 z-flash-above flex justify-center pointer-events-none">
+          <Button
+            aria-label={t('header.stopWhileWaiting.aria')}
+            title={t('header.stopWhileWaiting.aria')}
+            // Test seam: the dialog's aria-modal masking blinds role queries
+            // to everything outside the popup, so e2e anchors via testid.
+            data-testid="header-stop-while-waiting"
+            className="pointer-events-auto bg-error/80 text-on-error px-md py-sm rounded-xl active:scale-95 hover:bg-error transition-all font-label-md flex items-center gap-xs disabled:opacity-60 disabled:cursor-wait"
+            onClick={() => void cancelQuery()}
+            disabled={isCancelInFlight}
+          >
+            <span className={cn('material-symbols-outlined icon-md', isCancelInFlight && 'animate-spin')}>
+              {isCancelInFlight ? 'progress_activity' : 'stop'}
+            </span>
+            {t('header.stopWhileWaiting.label')}
+          </Button>
+        </div>,
+        document.body,
       )}
     </>
   );

@@ -25,7 +25,7 @@ interface ComposerPanelProps {
 // picker button).
 export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: ComposerPanelProps) {
   const { input, setInput, handleSend, handleSteer, attachedFiles, handleAttach, handleDetachAll, executeSlash, slashResult, dismissSlashResult, editing, cancelEdit } = useComposer()
-  const { isQuerying, cancelQuery, usage } = useChat()
+  const { isQuerying, isCancelInFlight, cancelQuery, usage } = useChat()
   const { sessions, currentSessionId } = useSessions()
   const { config } = useCatalog()
   const t = useT()
@@ -65,6 +65,8 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
             onAttach={handleAttach}
             onDetachAll={handleDetachAll}
             isQuerying={isQuerying}
+            // S-3/A-18 companion: stop already in flight → disabled spinner.
+            cancelInFlight={isCancelInFlight}
             onCancelQuery={cancelQuery}
             // Present only while an edit is in flight — Escape inside the
             // textarea then exits edit mode (restoring the pre-edit draft).

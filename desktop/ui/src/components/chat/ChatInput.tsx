@@ -93,6 +93,10 @@ interface ChatInputProps {
    *  stop/send swap and the Escape-cancels-run affordance. */
   isQuerying: boolean
   onCancelQuery: () => void
+  /** S-3/A-18 companion (R4 group 7): a stop is already tearing the run
+   *  down — the stop button renders a disabled "cancelling" state so a
+   *  second press gets feedback instead of a silent backend no-op. */
+  cancelInFlight?: boolean
   /** GB P2-10a: the interrupt-now send (bolt button / Ctrl+Enter while
    *  streaming). Enter keeps queueing; absent → Enter/Ctrl+Enter both send. */
   onSteer?: () => void
@@ -130,6 +134,7 @@ export default function ChatInput({
   onDetachAll,
   isQuerying,
   onCancelQuery,
+  cancelInFlight,
   onCancelEdit,
   onOpenQuickFix,
   onOpenEditor,
@@ -1452,12 +1457,20 @@ export default function ChatInput({
                     <span className="material-symbols-outlined icon-md">bolt</span>
                   </Button>
                 )}
+                {/* S-3/A-18 companion (R4 group 7): while the cancel IPC is
+                    tearing the run down, the second stop is a backend no-op
+                    (the token was already taken) — render a disabled
+                    spinner state so the press visibly registered. */}
                 <Button
-                  aria-label={t('chat.input.stop.aria')}
-                  className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all"
+                  aria-label={t(cancelInFlight ? 'chat.input.stop.cancelling.aria' : 'chat.input.stop.aria')}
+                  title={t(cancelInFlight ? 'chat.input.stop.cancelling.title' : 'chat.input.stop.aria')}
+                  className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all disabled:opacity-60 disabled:cursor-wait"
                   onClick={onCancelQuery}
+                  disabled={cancelInFlight}
                 >
-                  <span className="material-symbols-outlined icon-md">stop</span>
+                  <span className={cn('material-symbols-outlined icon-md', cancelInFlight && 'animate-spin')}>
+                    {cancelInFlight ? 'progress_activity' : 'stop'}
+                  </span>
                 </Button>
               </>
             ) : (

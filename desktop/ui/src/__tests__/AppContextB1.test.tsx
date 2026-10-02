@@ -138,6 +138,80 @@ describe('B1 P1-5 — isQuerying is per session', () => {
   })
 })
 
+describe('S-3/A-18 companion (R4 group 7) — cancel-in-flight feedback state', () => {
+  it('marks the session while the cancel tears the run down and clears on the settle', async () => {
+    // Deferred IPC: the marker must be observable while cancelQuery is in
+    // flight (the real backend's cancel returns before the loop unwinds).
+    let resolveCancel: () => void = () => {}
+    const cancelSpy = vi.spyOn(api, 'cancelQuery').mockImplementation(
+      () => new Promise<void>((resolve) => { resolveCancel = resolve }),
+    )
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('run in A') })
+    expect(result.current.isQuerying).toBe(true)
+    expect(result.current.isCancelInFlight).toBe(false)
+
+    // Hold the IPC open and let cancelQuery run to its await inside act —
+    // the marker is a plain state flip visible the moment act flushes.
+    let cancelPromise: Promise<void> = Promise.resolve()
+    await act(async () => { cancelPromise = result.current.cancelQuery() })
+    expect(result.current.isCancelInFlight).toBe(true)
+
+    // The run settles (query:cancelled) — the marker clears with the latch
+    // even though the deferred IPC promise is still pending. The stop
+    // button flips back to enabled/hidden state here, not at IPC-return.
+    act(() => { flush(EVENT_NAMES.QUERY_CANCELLED, { query_id: 'q1', session_id: SESSION_A }) })
+    expect(result.current.isCancelInFlight).toBe(false)
+    expect(result.current.isQuerying).toBe(false)
+
+    resolveCancel()
+    await act(async () => { await cancelPromise })
+    cancelSpy.mockRestore()
+  })
+
+  it('a failed cancel IPC clears the marker so the stop button does not wedge', async () => {
+    const cancelSpy = vi.spyOn(api, 'cancelQuery').mockRejectedValue(new Error('ipc down'))
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('run in A') })
+
+    await act(async () => { await result.current.cancelQuery() })
+    expect(result.current.isCancelInFlight).toBe(false)
+    expect(result.current.isQuerying).toBe(true) // the run is still live
+    cancelSpy.mockRestore()
+  })
+
+  it('a fresh send clears a marker left behind before the run started (no wedge on the next stop)', async () => {
+    // Pathological sequence: the marker got set while the session was NOT
+    // querying (the only setter is cancelQuery, UI-guarded, but the latch
+    // edge must self-heal regardless) — starting a run clears it.
+    const cancelSpy = vi.spyOn(api, 'cancelQuery').mockImplementation(
+      () => new Promise<void>(() => { /* never settles */ }),
+    )
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { void result.current.cancelQuery() })
+    expect(result.current.isCancelInFlight).toBe(true)
+
+    // A new run turns the latch ON — the stale marker must not survive it
+    // (it would render the next stop button permanently disabled).
+    await act(async () => { await result.current.sendMessage('next run') })
+    expect(result.current.isCancelInFlight).toBe(false)
+    expect(result.current.isQuerying).toBe(true)
+    cancelSpy.mockRestore()
+  })
+})
+
 describe('B1 P2-13 — throttled streaming projection', () => {
   it('coalesces rapid tokens into one flush and never loses the tail', async () => {
     vi.useFakeTimers()

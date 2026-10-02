@@ -92,6 +92,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // currently running; `isQuerying` (below) projects the VISIBLE session's
   // entry, so gating/stop/error UI all key off the session on screen.
   const [queryingSessions, setQueryingSessions] = useState<Record<string, true>>({})
+  // S-3/A-18 companion (R4 group 7): a cancel command is in flight for these
+  // sessions — set by `cancelQuery` before the IPC, cleared when the run
+  // settles (the same choke point that clears `queryingSessions`) or when
+  // the cancel IPC itself fails. The composer's stop button projects this
+  // (visible session) into a disabled "cancelling" state so a second press
+  // during the backend's teardown gives feedback instead of a silent no-op.
+  const [cancelInFlightSessions, setCancelInFlightSessions] = useState<Record<string, true>>({})
   const [activeToolCalls, setActiveToolCalls] = useState<ToolCall[]>([])
   // GB P2-3: 「过程四要素」 aggregation for the VISIBLE session's run —
   // fed by the same query events that fill activeToolCalls, reduced by
@@ -310,7 +317,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   // B1 P1-5: flip one session's query entry. No-op writes keep object
-  // identity stable so memoized context values don't churn.
+  // identity stable so memoized context values don't churn. This is also the
+  // single choke point where a run's lifecycle turns (completed/failed/
+  // cancelled all funnel through `setSessionQuerying(key, false)`; a fresh
+  // send turns it on) — the cancel-in-flight marker clears on BOTH edges, so
+  // it can only ever live while a run is up AND a stop was pressed, and a
+  // marker left by a superseded/aborted cancel never leaks onto a new run.
   const setSessionQuerying = useCallback((sessionId: string | null | undefined, on: boolean) => {
     const key = sessionId ?? ''
     setQueryingSessions(prev => {
@@ -320,7 +332,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       else delete next[key]
       return next
     })
+    setCancelInFlightSessions(prev => {
+      if (!prev[key]) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
   }, [])
+
+  // S-3/A-18 companion: the cancel-in-flight projection for the VISIBLE
+  // session — what the stop button renders from.
+  const isCancelInFlight = !!cancelInFlightSessions[visibleSessionIdRef.current ?? '']
 
   // A-17 fix: true when `queryId` names a dead or superseded query of the
   // session at `sessionKey` — such an event is a late delivery of a
@@ -702,11 +724,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // P1-1 fix: cancelQuery's targetSessionId mirrors sendMessage's — both
   // route explicitly instead of re-pointing the shared pointer.
+  //
+  // S-3/A-18 companion (R4 group 7): while the backend tears the run down,
+  // the target session is marked cancel-in-flight — the composer's stop
+  // button renders a disabled "cancelling" state instead of letting a
+  // second press vanish silently (the repeat cancel is a backend no-op: the
+  // token was already taken). The marker clears via setSessionQuerying when
+  // the run settles, or here if the cancel IPC itself failed.
   const cancelQuery = useCallback(async () => {
     const targetSessionId = windowSessionId ?? currentSessionId
+    const key = targetSessionId ?? ''
+    setCancelInFlightSessions(prev => (prev[key] ? prev : { ...prev, [key]: true }))
     try {
       await api.cancelQuery(targetSessionId ?? undefined)
     } catch (e) {
+      setCancelInFlightSessions(prev => {
+        if (!prev[key]) return prev
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
       // B0 P2-11: messageFor works outside IntlProvider (the provider may
       // not wrap this context's call sites) — same helper SESSION_AUTO_
       // UNARCHIVED uses.
@@ -1382,14 +1419,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const visibleKey = windowSessionId ?? currentSessionId ?? ''
   const chatValue = useMemo<ChatContextValue>(() => ({
-    messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, streamNotices, usage, runProcess,
+    messages, streamingText, thinkingText, isQuerying, isCancelInFlight, activeToolCalls, toolProgress, streamNotices, usage, runProcess,
     sendMessage, cancelQuery,
     promptQueue: promptQueues[visibleKey] ?? [],
     enqueuePrompt, dequeuePrompt, removeQueuedPrompt, moveQueuedPrompt,
     contextPanelOpen, toggleContextPanel, setContextPanelOpen: updateContextPanelOpen,
     checkpoints, rewindSession: rewindSessionAction, compactSession: compactSessionAction,
     feedback, recordFeedback: recordFeedbackAction,
-  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, streamNotices, usage, runProcess, sendMessage, cancelQuery,
+  }), [messages, streamingText, thinkingText, isQuerying, isCancelInFlight, activeToolCalls, toolProgress, streamNotices, usage, runProcess, sendMessage, cancelQuery,
     promptQueues, visibleKey, enqueuePrompt, dequeuePrompt, removeQueuedPrompt, moveQueuedPrompt,
     contextPanelOpen, toggleContextPanel, updateContextPanelOpen, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 
