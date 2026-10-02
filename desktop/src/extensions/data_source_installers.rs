@@ -78,7 +78,10 @@ fn install_data_source_in(
 
     let file_path = root.join(format!("{slug}.toml"));
     let body = render_toml(slug, kind, name, config);
-    std::fs::write(&file_path, body)?;
+    // The TOML carries plaintext credentials (IMAP password, Notion
+    // integration token) — owner-only atomic write (R6): the file is 0600
+    // from the instant it exists.
+    crate::secret_files::write_atomic_owner_only(&file_path, body.as_bytes())?;
 
     let installed_at = file_metadata_rfc3339(&file_path);
     Ok(InstalledDataSource {
@@ -412,6 +415,39 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmp");
         let result = install_data_source_in(tmp.path(), "", "obsidian", "x", &BTreeMap::new());
         assert!(result.is_err());
+    }
+
+    /// R6: the TOML carries plaintext credentials (IMAP password, Notion
+    /// integration token) — the installed file must be owner-only (0600),
+    /// including when it replaces a pre-existing world-readable file.
+    #[cfg(unix)]
+    #[test]
+    fn install_data_source_writes_toml_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path();
+        let mut config = BTreeMap::new();
+        config.insert("password".into(), "hunter2".into());
+
+        let first = install_data_source_in(root, "imap-home", "email_imap", "Home", &config)
+            .expect("install");
+        let mode = |p: &str| std::fs::metadata(p).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode(&first.path), 0o600, "fresh install must be 0600");
+
+        // A pre-existing 0644 file (e.g. from an older build) is replaced by
+        // the rename and comes back 0600 — no batch migration needed.
+        std::fs::set_permissions(
+            std::path::Path::new(&first.path),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .expect("set 0644");
+        assert_eq!(mode(&first.path), 0o644);
+
+        let second = install_data_source_in(root, "imap-home", "email_imap", "Home", &config)
+            .expect("reinstall");
+        assert_eq!(second.path, first.path);
+        assert_eq!(mode(&second.path), 0o600, "rewrite must land 0600");
     }
 
     #[test]
