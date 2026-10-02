@@ -358,3 +358,34 @@ MVP = P0+P1+P2 ≈ **1.5 周**；全量 ≈ **3 周**。每 Phase 独立成 PR�
 2. 新增 `query:*` / `permission-*` / `budget:*` 事件字段时，同步更新 DSL schema 与至少 1 个剧本；
 3. nightly fuzz 发现的崩溃 → 48h 内固化为固定剧本；
 4. `UNMOCKED_ALLOWLIST` 新增条目需注明原因（现有 tripwire 机制沿用）。
+
+---
+
+## 执行结果 (2026-10-02，全部轮次完成)
+
+方案经用户批准（D1-D7 全按推荐执行）后由 agent 团队分 6 轮实施，12 个 PR 全部合并 dev：
+
+| 轮次 | PR | 内容 |
+|---|---|---|
+| R1 基建 | #209 | Tauri v2 事件桥（实测发现 demo 模式 listen 全失败并修复）+ ChatScript 播放器 + seed 注入 + `window.__shannonMock` + Playwright 三件套 |
+| R2 核心剧本 | #210 | ★6 journeys 双层（L2 E2E + L1 状态机真驱动 AppProvider）+ knownIssue 锚定机制 + 零覆盖组件 41 测 |
+| R3 全量 journeys | #214 | 其余 8 journeys + cancel-matrix 9 场景 + 输入缓存锚点 + seed schema 扩展（toolCalls/spentUsd/checkpoint/send 日志） |
+| R4-G1..G7 | #219-#224, #228 | 7 组证实修复：附件保留（A-2 上游已修转正向钉/A-3/A-4）、发送完整性（A-1/A-11 引用回滚）、会话绑定（A-5/A-6 新增 Rust `get_active_session_id`+ACL/S-4 mock 保真度）、工具卡（A-7 首start胜出/A-8/S-2）、composer 五连（A-9/A-12/A-13/A-16/A-21）、A-17 竞态双层修复（TS query_id 过滤 + Rust 闩时序）、取消即时化（select! + 二连 stop 反馈 + S-3 portal stop） |
+| R5 横切强化 | #229 | 事件 fuzz（13 变异/五类）+ 视觉状态矩阵 12 基线 + 动态 a11y 扫（债务 rule+target 双键台账）+ 长会话 perf 守卫 + nightly workflow |
+| R6 契约冒烟 | #227 | fake SSE LLM + 真实 shannon-server 的 wire 契约 7 条（全离线）+ `just test-contract` |
+
+### 本轮测试体系的真实战果
+1. **F-1（fuzz 抓获，疑似产品 bug）**：`query:completed` 盖错 session_id → 发送会话 composer 锁永不释放；已冻结剧本 + KNOWN_FUZZ_WEDGES 立案
+2. **A-17 竞态（cancel-matrix 证实）**：stop 后立刻重发，迟到事件清空新流/误停——已双层修复并翻转锚点
+3. **动态 a11y 扫 4 条 serious**：权限弹窗无可访问名、运行中时长徽标对比度（静态 walkthrough 扫不到）、G7 stop pill 对比度 4.41:1（匹配器收紧后现形）、第二弹窗节点——均入 KNOWN_A11Y_DEBT 台账
+4. **wire 契约缺口（R6）**：`started` 帧在真实链路无生产者；server 路径无审批通道（权限以 is_error 拒绝）——契约文档待裁定
+5. 16 条源码走查可疑点全部处置：证实修复 12、证伪钉语义 2（A-14 checkpoint 边界、A-16 原疑点）、上游已修 2（A-2/A-9）、park 1（A-10 需结构性改动）、产品 gap 记录 1（A-22）
+
+### 维护规则
+见 CONTRIBUTING.md「Chat page (desktop/ui) — ChatScript test discipline」；运行细节台账 `.superpowers/sdd/2026-10-02-chat-testing-plan/`（工作区，未入库）与各轮报告 task-N-report.md。
+
+### 教训（已入规程）
+- 基线漂移侦测是 CI 排查第一步：5 轮"CI 独有失败"实为并行会话改预算横幅契约（#211-213）+ CI merge checkout 含新 dev；long-lived 分支需高频 rebase
+- resume 代理前必须核对 worktree 所在分支（两次提交落错分支）
+- Rust 组验收三件套 = cargo check + nextest + fmt --check（fmt 违规与 ACL 缺失都从缺口漏过）
+- rebase 后必须 git log 确认预期提交在分支上（测试绿可能是旧断言）
