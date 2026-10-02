@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useNavigate } from 'react-router-dom'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { I18nProvider } from '@/i18n'
 import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
@@ -199,6 +199,51 @@ describe('Chat page', () => {
     expect(ctx.enqueuePrompt).toHaveBeenCalledWith('queued hello', [])
     // an accepted enqueue clears the draft
     expect(input).toHaveValue('')
+  })
+
+  // A-9 — the queue (and steer) buttons render for attachments-only input
+  // while streaming (hasSteerableContent counts attachments), the queue
+  // chips carry an attachmentsOnly label, and the idle path has treated
+  // attachments-only as a real send since B0 P0-1 — but the queue branch's
+  // `if (!trimmed) return` silently swallowed exactly that input. Enter with
+  // files and no text must join the queue like any other send.
+  it('queues attachments-only input while querying instead of silently no-oping (A-9)', async () => {
+    resetCtx()
+    ctx.isQuerying = true
+    ctx.currentSessionId = 'sess-1'
+    ctx.sessions = [{ id: 'sess-1', title: 'S' }]
+    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
+    renderChat()
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    await screen.findByText('report.pdf')
+
+    const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(ctx.sendMessage).not.toHaveBeenCalled()
+    expect(ctx.enqueuePrompt).toHaveBeenCalledWith('', ['/home/alice/Downloads/report.pdf'])
+    // an accepted enqueue still clears the composer
+    expect(input).toHaveValue('')
+  })
+
+  it('keeps attachments-only input when the queue is full while querying (A-9)', async () => {
+    resetCtx()
+    ctx.isQuerying = true
+    ctx.currentSessionId = 'sess-1'
+    ctx.sessions = [{ id: 'sess-1', title: 'S' }]
+    ctx.enqueuePrompt = vi.fn().mockReturnValue(false)
+    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
+    renderChat()
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    await screen.findByText('report.pdf')
+
+    const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(ctx.enqueuePrompt).toHaveBeenCalledWith('', ['/home/alice/Downloads/report.pdf'])
+    // A rejected enqueue keeps the draft — the chip stays, nothing is
+    // silently swallowed (mirror of the text case above).
+    expect(screen.getByText('report.pdf')).toBeInTheDocument()
   })
 
   it('keeps the draft when the queue is full (enqueue rejected)', () => {
@@ -523,6 +568,37 @@ describe('Chat page', () => {
       </I18nProvider>,
     )
     expect(screen.getByPlaceholderText(/Try: "Explain this repo"/)).toHaveValue('重启前的旧草稿')
+  })
+
+  // A-13 — the prefill guard used to be a once-per-mount boolean: the first
+  // location.state prefill flipped it forever, so a SECOND prefill
+  // navigation while Chat stayed mounted (Sidebar/Editor navigate to /chat;
+  // already being on /chat keeps the page mounted, only the location
+  // changes) was silently ignored.
+  it('applies a second location.state prefill without a remount (A-13)', () => {
+    resetCtx()
+    function PrefillNavProbe() {
+      const navigate = useNavigate()
+      return (
+        <button type="button" onClick={() => navigate('/chat', { state: { prefill: '第二次 prefill' } })}>
+          nav-second-prefill
+        </button>
+      )
+    }
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={[{ pathname: '/chat', state: { prefill: '第一次 prefill' } }]}>
+          <ArtifactProvider>
+            <PrefillNavProbe />
+            <Chat />
+          </ArtifactProvider>
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    expect(input).toHaveValue('第一次 prefill')
+    fireEvent.click(screen.getByRole('button', { name: 'nav-second-prefill' }))
+    expect(input).toHaveValue('第二次 prefill')
   })
 
   // Header working-directory chip was removed when ChatInput took ownership

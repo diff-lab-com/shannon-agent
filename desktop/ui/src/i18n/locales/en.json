@@ -1820,6 +1820,7 @@
   "chat.input.queue.title": "Queue — will send after the current turn ends",
   "chat.input.steer.aria": "Send now (interrupt the current turn)",
   "chat.input.steer.title": "Send now — interrupts the current turn and sends immediately (Ctrl+Enter)",
+  "chat.draft.oversize": "Draft exceeds the 64KB persistence cap — kept in this window only; a reload will lose it",
   "chat.steer.timeout": "Steered message could not be delivered — restored to the composer",
   "chat.input.placeholder": "Ask Shannon anything...",
   "chat.input.stop.aria": "Stop generation",

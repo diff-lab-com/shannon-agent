@@ -1770,6 +1770,7 @@
   "chat.input.queue.title": "대기열 — 현재 턴이 끝난 후 전송됩니다",
   "chat.input.steer.aria": "지금 보내기(현재 턴 중단)",
   "chat.input.steer.title": "지금 보내기 — 현재 턴을 중단하고 즉시 전송합니다(Ctrl+Enter)",
+  "chat.draft.oversize": "초안이 64KB 저장 한도를 초과했습니다 — 이 창에만 유지되며 새로고침하면 사라집니다",
   "chat.steer.timeout": "끼어들기 메시지를 전송하지 못했습니다 — 입력창으로 복원했습니다",
   "chat.input.placeholder": "Shannon에게 무엇이든 물어보세요...",
   "chat.input.stop.aria": "생성 중지",

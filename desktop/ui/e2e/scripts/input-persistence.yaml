@@ -2,14 +2,15 @@
 #
 # 两个 seed 会话，专供草稿/队列的跨会话与重启断言：
 #   - 草稿：跨会话隔离（A 草稿不出现在 B）、300ms 防抖窗口内切换同步
-#     flush、发送清空、重启（reload）恢复、>64KB 仅内存（knownIssue A-21）。
+#     flush、发送清空、重启（reload）恢复、>64KB 仅内存（A-21 已修复：
+#     仍不落盘，但 warn + 一次性 toast 提示——spec 断言已翻转）。
 #   - 队列：跨会话 parked 返回续发（chips 属于所属会话）、重启丢失
 #     （knownIssue A-20 —— 队列纯内存，AppContext.tsx PROMPT_QUEUE_*）。
 #
 # A-22（输入历史回溯不存在）：产品 gap 记录，不建测试——ArrowUp 仅用于
 # mention/slash 菜单导航（ChatInput.tsx），除非产品立项否则无断言。
 name: input-persistence
-description: 输入缓存锚点 — 双会话草稿隔离/flush/清空/重启恢复 + 队列 parked/重启丢失（A-20/A-21 锚点）
+description: 输入缓存锚点 — 双会话草稿隔离/flush/清空/重启恢复 + >64KB warn+toast（A-21 已修复） + 队列 parked/重启丢失（A-20 锚点）
 seed:
   config:
     hasKey: true

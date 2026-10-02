@@ -65,14 +65,17 @@ function readDraft(sessionId: string): { text: string; attachments: string[] } |
   } catch { return null }
 }
 
-function writeDraft(sessionId: string, text: string, attachments: string[]): void {
+function writeDraft(sessionId: string, text: string, attachments: string[]): 'saved' | 'oversize' | 'failed' {
   try {
     const payload = JSON.stringify({ text, attachments, updatedAt: Date.now() })
     // Size cap: a runaway draft must not crowd the quota for the dock's
-    // persisted keys. Oversized drafts simply stay in-memory.
-    if (payload.length > DRAFT_MAX_BYTES) return
+    // persisted keys. Oversized drafts simply stay in-memory — A-21 fix:
+    // the skip used to be silent; the caller now warns (console + a
+    // one-shot toast) instead of letting a reload eat the text unnoticed.
+    if (payload.length > DRAFT_MAX_BYTES) return 'oversize'
     localStorage.setItem(draftKey(sessionId), payload)
-  } catch { /* quota / private mode — drafts are best-effort */ }
+    return 'saved'
+  } catch { return 'failed' /* quota / private mode — drafts are best-effort */ }
 }
 
 function clearDraft(sessionId: string): void {
@@ -145,18 +148,25 @@ export default function Chat() {
 
   // Pre-fill the composer when navigated from elsewhere (e.g. Editor's
   // "Ask AI about this diagnostic" button passes { prefill } in location.state).
-  // Guard with a ref so the effect doesn't re-fire on every keystroke that
-  // updates `input` — only react to the navigation event itself.
-  const prefillApplied = useRef(false)
+  // A-13 fix: the guard used to be a once-per-mount boolean, so a SECOND
+  // prefill navigation while Chat stayed mounted (Sidebar/Editor → /chat is
+  // a same-route navigation when the user is already on /chat) was silently
+  // ignored. Each navigation carries a unique location.key — a prefill now
+  // applies once per NAVIGATION, and the replace below clears the state so
+  // the same prefill can never re-apply on re-render.
+  const lastPrefillKeyRef = useRef<string | null>(null)
+  // Set whenever a prefill claims the composer; the mount-time draft restore
+  // below must not clobber a prefill applied in the same mount pass (the
+  // A-6 follow-up ordering: prefill wins over the boot draft restore).
+  const prefillClaimedRef = useRef(false)
   useEffect(() => {
-    if (prefillApplied.current) return
     const prefill = (location.state as { prefill?: string } | null)?.prefill
-    if (prefill) {
-      setInput(prefill)
-      prefillApplied.current = true
-      navigate(location.pathname, { replace: true, state: null })
-    }
-  }, [location.state, location.pathname, navigate])
+    if (!prefill || lastPrefillKeyRef.current === location.key) return
+    lastPrefillKeyRef.current = location.key
+    prefillClaimedRef.current = true
+    setInput(prefill)
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location.state, location.key, location.pathname, navigate])
 
   // ── B1 §4-11 / P2-1: per-session drafts ────────────────────────────────
   // The draft (text + attachments) used to be one page-level pair of states
@@ -164,14 +174,28 @@ export default function Chat() {
   // persists per session under `shannon.draft.<id>`: debounced write while
   // typing, synchronous flush on switch, cleared when emptied (send).
   const visibleSessionId = windowSessionId ?? currentSessionId
+  // A-21 fix: an oversized draft silently never reached localStorage — the
+  // user found out only when a reload ate the text. Every skipped write now
+  // console.warns and a one-shot toast (once per mount — the debounced
+  // writer would otherwise nag on every keystroke past the cap) tells the
+  // user the draft is window-bound. The input itself is never blocked: the
+  // draft keeps living in the composer state.
+  const oversizeDraftToastedRef = useRef(false)
+  const persistDraft = useCallback((sessionId: string, text: string, attachments: string[]) => {
+    if (writeDraft(sessionId, text, attachments) !== 'oversize') return
+    console.warn(`[Chat] draft for session ${sessionId} exceeds the ${Math.round(DRAFT_MAX_BYTES / 1024)}KB persistence cap — kept in memory only, lost on reload`)
+    if (oversizeDraftToastedRef.current) return
+    oversizeDraftToastedRef.current = true
+    toast.warning(t('chat.draft.oversize'))
+  }, [t])
   useEffect(() => {
     if (!visibleSessionId) return
     const id = window.setTimeout(() => {
       if (!input.trim() && attachedFiles.length === 0) clearDraft(visibleSessionId)
-      else writeDraft(visibleSessionId, input, attachedFiles)
+      else persistDraft(visibleSessionId, input, attachedFiles)
     }, DRAFT_DEBOUNCE_MS)
     return () => window.clearTimeout(id)
-  }, [input, attachedFiles, visibleSessionId])
+  }, [input, attachedFiles, visibleSessionId, persistDraft])
 
   // ── B1 §4-8: message edit (composer-based) ─────────────────────────────
   // One message editable at a time; the composer is prefilled and a banner
@@ -205,7 +229,7 @@ export default function Chat() {
       // effect above runs first and flips its ref synchronously) owns the
       // composer — the restore must not clobber it with a stale draft; the
       // debounced write below then persists the prefill as the new draft.
-      if (!prefillApplied.current) {
+      if (!prefillClaimedRef.current) {
         const draft = visibleSessionId ? readDraft(visibleSessionId) : null
         setInput(draft?.text ?? '')
         setAttachedFiles(draft?.attachments ?? [])
@@ -219,7 +243,7 @@ export default function Chat() {
     // would permanently overwrite the draft with the edit prefill.
     if (previousId) {
       const prev = editing ? editing.draft : { text: input, attachments: attachedFiles }
-      writeDraft(previousId, prev.text, prev.attachments)
+      persistDraft(previousId, prev.text, prev.attachments)
     }
     const draft = visibleSessionId ? readDraft(visibleSessionId) : null
     setInput(draft?.text ?? '')

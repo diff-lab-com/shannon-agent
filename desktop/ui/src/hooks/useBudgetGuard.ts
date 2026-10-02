@@ -14,7 +14,7 @@
 // from that cheap read — matching the backend's own thresholds in
 // `cost_commands.rs` (warning at >= 80% of the cap, exceeded at >= cap).
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import * as api from '@/lib/tauri-api'
 import { EVENT_NAMES, type BudgetStatusPayload } from '@/types'
@@ -33,17 +33,29 @@ export function useBudgetGuard(currentSessionId: string | null): BudgetGuardStat
   const [warning, setWarning] = useState<BudgetStatusPayload | null>(null)
   const [exceeded, setExceeded] = useState<BudgetStatusPayload | null>(null)
 
+  // A-12 fix: the session filter used to close over `currentSessionId`
+  // inside the subscribe effect, so every switch tore down and re-registered
+  // both listeners through the ASYNC listen()/unlisten round-trip. In that
+  // window the old registration was still live while its handler still
+  // compared against the PREVIOUS session id — a late event for the old
+  // session passed the stale filter and painted its banner onto the session
+  // now on screen. The handlers read the CURRENT session through a ref
+  // instead: one registration for the hook's lifetime (no re-subscribe
+  // window at all) and ownership checked at delivery time.
+  const sessionRef = useRef(currentSessionId)
+  useEffect(() => { sessionRef.current = currentSessionId }, [currentSessionId])
+
   useEffect(() => {
     const unlisteners: Promise<() => void>[] = [
       listen<BudgetStatusPayload>(EVENT_NAMES.BUDGET_WARNING, e => {
-        if (e.payload.sessionId === currentSessionId) setWarning(e.payload)
+        if (e.payload.sessionId === sessionRef.current) setWarning(e.payload)
       }),
       listen<BudgetStatusPayload>(EVENT_NAMES.BUDGET_EXCEEDED, e => {
-        if (e.payload.sessionId === currentSessionId) setExceeded(e.payload)
+        if (e.payload.sessionId === sessionRef.current) setExceeded(e.payload)
       }),
     ]
     return () => { unlisteners.forEach(p => void p.then(fn => fn())) }
-  }, [currentSessionId])
+  }, [])
 
   // On switch (and on mount), re-derive the banners from the persisted
   // budget state instead of dropping them. A session still past its cap
