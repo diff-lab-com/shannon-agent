@@ -15,10 +15,8 @@ import type { EngineEvent } from "../../engine/runtime.js";
 import type { EngineWsClient } from "../../engine/wsClient.js";
 import { bootstrap } from "../../bootstrap.js";
 import { createConsoleLogger } from "../../logger.js";
-import { formatTaskCompleted, formatTaskStarted } from "../../router/lifecycle.js";
-import { createApprovalTurnHandler } from "../../router/approvalTurnHandler.js";
 import { SessionRouter } from "../../router/router.js";
-import { withTaskLifecycle } from "../../router/lifecycle.js";
+import { type TurnHandler } from "../../router/types.js";
 import { createMobileChannelAdapter } from "../channel.js";
 import {
   deviceIdFromPublicKey,
@@ -29,12 +27,15 @@ import {
 import { MobileDispatchHub } from "../hub.js";
 import { ApprovalRegistry } from "../approvalRegistry.js";
 import { createTaskHandlers } from "../taskHandlers.js";
+import { createMobileTaskTurnHandler } from "../taskTurnHandler.js";
 import { MobileServer, type MethodContext } from "../server.js";
 
 /**
- * P2-1 acceptance: the four mobile dispatch actions over the T9 pipeline —
- * 派发 (text → task), 看任务 (task.list), 审批 (Y/N → engine decision),
- * 进度推送 (started/completed/failed stamps to the phone channel) — plus the
+ * §K acceptance: the mobile task face over the T9 pipeline —
+ * dispatch (`{prompt}` → §K task object), list (§K2 projection), the §K3
+ * structured task stream (query.started / task.progress / task.message /
+ * query.failed, session_id = task id, initiating device only), approvals via
+ * the signed decide path (the Y/N text dialect left the RPC face), plus the
  * security gate (unpaired devices are rejected) and the PWA page serving.
  */
 
@@ -84,7 +85,7 @@ function textEvent(content: string): EngineEvent {
 // ── unit: choice parsing + hub behaviors ─────────────────────────────────────
 
 describe("mobile dispatch — hub & handlers", () => {
-  it("parseApprovalChoice shares the DingTalk Y/N dialect", () => {
+  it("parseApprovalChoice shares the DingTalk Y/N dialect (IM adapters)", () => {
     expect(parseApprovalChoice("y")).toBe("allow");
     expect(parseApprovalChoice("允许")).toBe("allow");
     expect(parseApprovalChoice(" 拒绝 ")).toBe("deny");
@@ -97,22 +98,63 @@ describe("mobile dispatch — hub & handlers", () => {
     const handlers = createTaskHandlers({ hub });
     const ctx = fakeCtx(null); // no shannon/pair yet
 
-    const dispatch = await handlers["shannon/task.dispatch"]!({ text: "hi" }, ctx);
+    const dispatch = await handlers["shannon/task.dispatch"]!({ prompt: "hi" }, ctx);
     expect(dispatch).toMatchObject({ kind: "error", code: -32000 });
 
     const list = await handlers["shannon/task.list"]!({}, ctx);
     expect(list).toMatchObject({ kind: "error", code: -32000 });
   });
 
-  it("rejects empty dispatch text with BAD_PARAMS", async () => {
+  it("rejects dispatch from a paired-but-revoked device (§P1-13)", async () => {
+    const hub = new MobileDispatchHub({ logger });
+    const handlers = createTaskHandlers({ hub, isDeviceTrusted: () => false });
+    const ctx = fakeCtx("dev-1");
+    const res = await handlers["shannon/task.dispatch"]!({ prompt: "hi" }, ctx);
+    expect(res).toMatchObject({ kind: "error", code: -32000 });
+  });
+
+  it("rejects an empty prompt with INVALID_PARAMS (§K1)", async () => {
     const hub = new MobileDispatchHub({ logger });
     const handlers = createTaskHandlers({ hub });
     const ctx = fakeCtx("dev-1");
-    const res = await handlers["shannon/task.dispatch"]!({ text: "   " }, ctx);
-    expect(res).toMatchObject({ kind: "error", code: -32001 });
+    for (const bad of [{}, { prompt: "" }, { prompt: "   " }, { prompt: 7 }]) {
+      const res = await handlers["shannon/task.dispatch"]!(bad, ctx);
+      expect(res).toMatchObject({
+        kind: "error",
+        code: -32001,
+        message: "params.prompt (non-empty string) is required",
+      });
+    }
   });
 
-  it("dispatch creates a task, fabricates a direct inbound, and journals it", async () => {
+  it("rejects any non-empty agent_id with INVALID_PARAMS — no roster, no silent re-route (§K1)", async () => {
+    const hub = new MobileDispatchHub({ logger });
+    const seen: NormalizedInbound[] = [];
+    hub.setSubmit(async (inbound) => {
+      seen.push(inbound);
+    });
+    const handlers = createTaskHandlers({ hub });
+    const ctx = fakeCtx("dev-1");
+
+    for (const agentId of ["agent-0001", "me"]) {
+      const res = await handlers["shannon/task.dispatch"]!(
+        { prompt: "hi", agent_id: agentId },
+        ctx,
+      );
+      expect(res).toMatchObject({ kind: "error", code: -32001 });
+      expect((res as any).message).toContain("agent_id");
+    }
+    expect(seen).toHaveLength(0); // nothing was dispatched
+
+    // Absent / null / blank agent_id ≈ absent: the host dispatches itself.
+    const ok = await handlers["shannon/task.dispatch"]!({ prompt: "hi", agent_id: null }, ctx);
+    expect(ok).toMatchObject({ kind: "result" });
+    const blank = await handlers["shannon/task.dispatch"]!({ prompt: "hi", agent_id: "  " }, ctx);
+    expect(blank).toMatchObject({ kind: "result" });
+    await vi.waitFor(() => expect(seen).toHaveLength(2)); // deferred submission
+  });
+
+  it("dispatch answers the §K task object synchronously and journals the task", async () => {
     const hub = new MobileDispatchHub({ logger });
     const seen: NormalizedInbound[] = [];
     hub.setSubmit(async (inbound) => {
@@ -122,12 +164,21 @@ describe("mobile dispatch — hub & handlers", () => {
     const ctx = fakeCtx("dev-1");
     hub.registerConnection(ctx);
 
-    const res = await handlers["shannon/task.dispatch"]!({ text: "部署 staging 环境" }, ctx);
-    expect(res).toMatchObject({ kind: "result", result: { ok: true, kind: "task" } });
-    const taskId = (res as any).result.task_id as string;
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "部署 staging 环境" }, ctx);
+    expect(res.kind).toBe("result");
+    const task = res.result.task;
+    expect(task).toMatchObject({
+      prompt: "部署 staging 环境",
+      status: "running",
+      agent_id: null,
+    });
+    const taskId = task.id as string;
     expect(taskId).toBeTruthy();
+    // created_at is ISO-8601 UTC.
+    expect(new Date(task.created_at).toISOString()).toBe(task.created_at);
 
-    expect(seen).toHaveLength(1);
+    // The turn submission is deferred (§K1: response first), so wait for it.
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
     expect(seen[0]).toMatchObject({
       platform: "mobile",
       chatId: "dev-1",
@@ -135,7 +186,6 @@ describe("mobile dispatch — hub & handlers", () => {
       text: "部署 staging 环境",
       isDirect: true,
     });
-
     await vi.waitFor(() =>
       expect(hub.listTasks("dev-1")[0]).toMatchObject({
         task_id: taskId,
@@ -145,7 +195,31 @@ describe("mobile dispatch — hub & handlers", () => {
     );
   });
 
-  it("task.list returns the device's own tasks only, newest first, capped", async () => {
+  it("§K ruling: dispatch NEVER settles a pending approval — 'y' just creates a task", async () => {
+    const hub = new MobileDispatchHub({ logger });
+    hub.setSubmit(async () => {});
+    void hub.requestApproval("dev-1", {
+      requestId: "req-y",
+      toolName: "Bash",
+      toolInput: {},
+      description: "运行命令",
+      isDestructive: false,
+      diffPreview: null,
+    });
+    const handlers = createTaskHandlers({ hub });
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "y" }, ctx);
+    expect(res.result.task).toBeTruthy(); // a task was created
+    expect(hub.hasPendingApproval("dev-1")).toBe(true); // the ask still parks
+
+    // …and the signed-decide settle keeps working afterwards.
+    expect(hub.settleApproval("req-y", "deny")).toBe(true);
+    expect(hub.hasPendingApproval("dev-1")).toBe(false);
+  });
+
+  it("task.list returns the §K2 projection: own tasks, newest first, no legacy keys", async () => {
     const hub = new MobileDispatchHub({ logger });
     hub.setSubmit(async () => {});
     const mine = fakeCtx("dev-1");
@@ -154,33 +228,48 @@ describe("mobile dispatch — hub & handlers", () => {
     hub.registerConnection(other);
     const handlers = createTaskHandlers({ hub });
 
-    await handlers["shannon/task.dispatch"]!({ text: "mine first" }, mine);
-    await handlers["shannon/task.dispatch"]!({ text: "mine second" }, mine);
-    await handlers["shannon/task.dispatch"]!({ text: "other device" }, other);
+    await handlers["shannon/task.dispatch"]!({ prompt: "mine first" }, mine);
+    await handlers["shannon/task.dispatch"]!({ prompt: "mine second" }, mine);
+    await handlers["shannon/task.dispatch"]!({ prompt: "other device" }, other);
 
     const res = (await handlers["shannon/task.list"]!({ limit: 10 }, mine)) as any;
-    expect(res.result.tasks.map((t: any) => t.text)).toEqual(["mine second", "mine first"]);
-    expect(res.result.tasks[0].device_id).toBe("dev-1");
-    // Wire shape is snake_case for the phone client.
-    expect(Object.keys(res.result.tasks[0])).toEqual(
-      expect.arrayContaining(["task_id", "device_id", "title", "text", "status", "started_at", "finished_at", "error"]),
+    expect(res.result.tasks.map((t: any) => t.prompt)).toEqual(["mine second", "mine first"]);
+    // §K2 wire shape is exactly these five keys — the P2-1 keys are gone.
+    expect(Object.keys(res.result.tasks[0])).toEqual([
+      "id",
+      "prompt",
+      "status",
+      "agent_id",
+      "created_at",
+    ]);
+    expect(res.result.tasks[0]!.agent_id).toBeNull();
+    expect(new Date(res.result.tasks[0]!.created_at).toISOString()).toBe(
+      res.result.tasks[0]!.created_at,
     );
+    // limit semantics preserved (default 20, cap 100, floor 1).
+    expect(((await handlers["shannon/task.list"]!({ limit: 1 }, mine)) as any).result.tasks).toHaveLength(1);
   });
 
-  it("a failed turn lands in the journal as failed", async () => {
+  it("a failed submit lands in the journal as failed AND closes the phone's stream with query.failed", async () => {
     const hub = new MobileDispatchHub({ logger });
     hub.setSubmit(async () => {
       throw new Error("engine exploded");
     });
     const handlers = createTaskHandlers({ hub });
     const ctx = fakeCtx("dev-1");
-    await handlers["shannon/task.dispatch"]!({ text: "doomed task" }, ctx);
+    hub.registerConnection(ctx);
+    await handlers["shannon/task.dispatch"]!({ prompt: "doomed task" }, ctx);
     await vi.waitFor(() =>
       expect(hub.listTasks("dev-1")[0]).toMatchObject({ status: "failed", error: "engine exploded" }),
     );
+    await vi.waitFor(() => {
+      const failed = eventsOf(ctx).find((e) => e.type === "query.failed");
+      expect(failed).toMatchObject({ error: "engine exploded" });
+      expect(failed.session_id).toBe(hub.listTasks("dev-1")[0]!.task_id);
+    });
   });
 
-  it("adapter.send throws when the device has no open connection", async () => {
+  it("adapter.send throws when the device has no open connection (legacy bubble path)", async () => {
     const hub = new MobileDispatchHub({ logger });
     const adapter = createMobileChannelAdapter({ hub });
     await expect(adapter.send({ platform: "mobile", chatId: "ghost" }, "hello")).rejects.toThrow(
@@ -220,7 +309,7 @@ describe("mobile dispatch — approval registry integration", () => {
     diffPreview: null,
   };
 
-  it("requestApproval records the ask; the Y/N text answer resolves it", async () => {
+  it("requestApproval records the ask; the §K settleApproval (decide wiring) resolves it", async () => {
     const approvals = new ApprovalRegistry();
     const hub = new MobileDispatchHub({ logger, approvals });
     const ctx = fakeCtx("dev-1");
@@ -234,9 +323,14 @@ describe("mobile dispatch — approval registry integration", () => {
       isDestructive: false,
     });
 
-    hub.dispatch("dev-1", "y");
+    expect(hub.settleApproval("req-reg-1", "allow")).toBe(true);
     await expect(pending).resolves.toBe("allow");
     expect(approvals.listPending()).toEqual([]);
+  });
+
+  it("settleApproval is a no-op for unknown/already-settled requests", () => {
+    const hub = new MobileDispatchHub({ logger });
+    expect(hub.settleApproval("nope", "allow")).toBe(false);
   });
 
   it("the timeout settle (deny) also resolves the registry entry", async () => {
@@ -250,9 +344,9 @@ describe("mobile dispatch — approval registry integration", () => {
   });
 });
 
-// ── pipeline: dispatch → lane → approval/lifecycle → phone pushes ────────────
+// ── pipeline: dispatch → lane → §K3 task stream → phone pushes ────────────────
 
-describe("mobile dispatch — pipeline with lifecycle + approval", () => {
+describe("mobile dispatch — §K3 structured task stream", () => {
   function buildPipeline(opts: {
     client: EngineWsClient;
     fetchImpl?: typeof fetch;
@@ -263,9 +357,13 @@ describe("mobile dispatch — pipeline with lifecycle + approval", () => {
     const registry = {
       get: (platform: string) => (platform === "mobile" ? adapter : undefined),
     } as any;
-    const turnHandler = withTaskLifecycle(
-      createApprovalTurnHandler({ engineBaseUrl: "http://engine", fetchImpl: opts.fetchImpl }),
-    );
+    // Same composition the live bootstrap uses: platform "mobile" turns run
+    // the §K3 task handler (IM platforms would get the lifecycle-wrapped one).
+    const turnHandler: TurnHandler = createMobileTaskTurnHandler({
+      hub,
+      engineBaseUrl: "http://engine",
+      fetchImpl: opts.fetchImpl,
+    });
     const router = new SessionRouter({
       registry,
       clientFactory: () => opts.client,
@@ -276,27 +374,87 @@ describe("mobile dispatch — pipeline with lifecycle + approval", () => {
     return { hub, adapter, router };
   }
 
-  it("progress push: started / answer / completed reach the phone", async () => {
-    const client = mockEngineClient([textEvent("hello world"), { type: "completed", model: "m" } as EngineEvent]);
+  it("§K1 ordering: the dispatch response lands on the wire BEFORE the event stream", async () => {
+    const client = mockEngineClient([textEvent("x"), { type: "completed", model: "m" } as EngineEvent]);
     const { hub } = buildPipeline({ client });
     const ctx = fakeCtx("dev-1");
     hub.registerConnection(ctx);
     const handlers = createTaskHandlers({ hub });
 
-    await handlers["shannon/task.dispatch"]!({ text: "hi" }, ctx);
-    await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]?.status).toBe("completed"));
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "hi" }, ctx);
+    const taskId = res.result.task.id as string;
+    // Still inside the dispatch handler's microtask chain — the acceptance
+    // push is deferred to setImmediate precisely so the response (which the
+    // phone keys its thread by) is written first.
+    expect(eventsOf(ctx)).toEqual([]);
 
-    const texts = eventsOf(ctx)
-      .filter((e) => e.type === "task.message")
-      .map((e) => e.text);
-    expect(texts).toEqual([
-      formatTaskStarted("hi"),
-      "hello world",
-      formatTaskCompleted("hi"),
-    ]);
+    await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]?.status).toBe("completed"));
+    const events = eventsOf(ctx);
+    expect(events[0]).toMatchObject({ type: "query.started", session_id: taskId });
+    expect(events[events.length - 1]).toMatchObject({ type: "task.message", session_id: taskId });
   });
 
-  it("approval: request pushed to phone, text Y resolves, decision forwarded to engine", async () => {
+  it("streams query.started → task.progress → task.message(session_id=task id) to the initiating device ONLY", async () => {
+    const client = mockEngineClient([
+      textEvent("hello "),
+      textEvent("world"),
+      { type: "completed", model: "m" } as EngineEvent,
+    ]);
+    const { hub } = buildPipeline({ client });
+    const initiator = fakeCtx("dev-1");
+    const bystander = fakeCtx("dev-2");
+    hub.registerConnection(initiator);
+    hub.registerConnection(bystander);
+    const handlers = createTaskHandlers({ hub });
+
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "hi" }, initiator);
+    const taskId = res.result.task.id as string;
+    await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]?.status).toBe("completed"));
+
+    const events = eventsOf(initiator);
+    expect(events.map((e) => e.type)).toEqual([
+      "query.started",
+      "task.progress",
+      "task.progress",
+      "task.message",
+    ]);
+    expect(events[0]).toMatchObject({ turn_id: expect.any(String), session_id: taskId });
+    expect(events[1]).toMatchObject({ session_id: taskId, content: "hello " });
+    expect(events[2]).toMatchObject({ session_id: taskId, content: "world" });
+    // The terminal carries the FINAL COMPLETE reply and closes the stream.
+    expect(events[3]).toMatchObject({ session_id: taskId, text: "hello world" });
+    // §K3: no IM lifecycle stamps, no query.completed on a task stream.
+    expect(events.some((e) => e.type === "query.completed")).toBe(false);
+    expect(
+      events.some((e) => e.type === "task.message" && /^[🚀✅❌]/.test(e.text || "")),
+    ).toBe(false);
+    // 仅推给发起设备 — the bystander's socket heard nothing.
+    expect(eventsOf(bystander)).toEqual([]);
+  });
+
+  it("usage frames ride task.progress with the task's session_id (spend keyed by task thread)", async () => {
+    const client = mockEngineClient([
+      textEvent("result"),
+      { type: "usage", input_tokens: 10, output_tokens: 5, cost_usd: 0.01 } as EngineEvent,
+      { type: "completed", model: "m" } as EngineEvent,
+    ]);
+    const { hub } = buildPipeline({ client });
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+    const handlers = createTaskHandlers({ hub });
+
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "hi" }, ctx);
+    const taskId = res.result.task.id as string;
+    await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]?.status).toBe("completed"));
+
+    const usage = eventsOf(ctx).find((e) => e.type === "task.progress" && e.usage);
+    expect(usage).toMatchObject({
+      session_id: taskId,
+      usage: { input_tokens: 10, output_tokens: 5, cost_usd: 0.01 },
+    });
+  });
+
+  it("approval: request reaches the phone; the decide settle unblocks the lane and forwards the choice", async () => {
     const client = mockEngineClient([
       {
         type: "approval_request",
@@ -321,8 +479,8 @@ describe("mobile dispatch — pipeline with lifecycle + approval", () => {
     hub.registerConnection(ctx);
     const handlers = createTaskHandlers({ hub });
 
-    const dispatchRes: any = await handlers["shannon/task.dispatch"]!({ text: "清理临时目录" }, ctx);
-    expect(dispatchRes.result.kind).toBe("task");
+    const dispatchRes: any = await handlers["shannon/task.dispatch"]!({ prompt: "清理临时目录" }, ctx);
+    expect(dispatchRes.result.task.status).toBe("running");
 
     // The approval request reaches the phone as a structured event.
     await vi.waitFor(() => {
@@ -337,9 +495,9 @@ describe("mobile dispatch — pipeline with lifecycle + approval", () => {
     });
     expect(hub.hasPendingApproval("dev-1")).toBe(true);
 
-    // The phone answers with a Y text through the same dispatch method.
-    const answerRes: any = await handlers["shannon/task.dispatch"]!({ text: "y" }, ctx);
-    expect(answerRes.result).toMatchObject({ ok: true, kind: "approval", choice: "allow", task_id: null });
+    // The phone answers via signed shannon/approval/decide; the bootstrap
+    // wires that decision into hub.settleApproval — replay it here.
+    expect(hub.settleApproval("req-1", "allow")).toBe(true);
 
     // The turn handler forwards the decision to the engine HTTP API.
     await vi.waitFor(() => expect(posts).toHaveLength(1));
@@ -347,12 +505,16 @@ describe("mobile dispatch — pipeline with lifecycle + approval", () => {
     // Gateway choice "allow" maps to the engine wire enum "allow_once" (one-shot).
     expect(posts[0]!.body).toEqual({ request_id: "req-1", choice: "allow_once" });
 
-    // The turn then completes and the failure-free journal + stamps line up.
+    // The turn then completes: journal + §K3 terminal line up.
     await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]?.status).toBe("completed"));
     expect(hub.hasPendingApproval("dev-1")).toBe(false);
+    const events = eventsOf(ctx).map((e) => e.type);
+    expect(events).toEqual(["query.started", "approval.request", "task.progress", "task.message"]);
+    const terminal = eventsOf(ctx).find((e) => e.type === "task.message")!;
+    expect(terminal).toMatchObject({ text: "done", session_id: hub.listTasks("dev-1")[0]!.task_id });
   });
 
-  it("approval: 拒绝 (deny) text forwards deny to the engine", async () => {
+  it("approval: the decide settle with deny forwards deny to the engine", async () => {
     const client = mockEngineClient([
       {
         type: "approval_request",
@@ -377,11 +539,10 @@ describe("mobile dispatch — pipeline with lifecycle + approval", () => {
     hub.registerConnection(ctx);
     const handlers = createTaskHandlers({ hub });
 
-    void (await handlers["shannon/task.dispatch"]!({ text: "改系统文件" }, ctx));
+    void (await handlers["shannon/task.dispatch"]!({ prompt: "改系统文件" }, ctx));
     await vi.waitFor(() => expect(hub.hasPendingApproval("dev-1")).toBe(true));
 
-    const answerRes: any = await handlers["shannon/task.dispatch"]!({ text: "拒绝" }, ctx);
-    expect(answerRes.result.choice).toBe("deny");
+    expect(hub.settleApproval("req-2", "deny")).toBe(true);
     await vi.waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]!.body).toEqual({ request_id: "req-2", choice: "deny" });
   });
@@ -410,13 +571,13 @@ describe("mobile dispatch — pipeline with lifecycle + approval", () => {
     hub.registerConnection(ctx);
     const handlers = createTaskHandlers({ hub });
 
-    void (await handlers["shannon/task.dispatch"]!({ text: "needs approval" }, ctx));
+    void (await handlers["shannon/task.dispatch"]!({ prompt: "needs approval" }, ctx));
     await vi.waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]!.body).toEqual({ request_id: "req-3", choice: "deny" });
     expect(hub.hasPendingApproval("dev-1")).toBe(false);
   });
 
-  it("an engine failure turns the journal entry failed via the ❌ lifecycle stamp", async () => {
+  it("an engine failure closes the stream with query.failed(session_id) and flips the journal — no ❌ bubble", async () => {
     const client = mockEngineClient([
       textEvent("partial"),
       { type: "failed", error: "模型超时" } as EngineEvent,
@@ -426,16 +587,19 @@ describe("mobile dispatch — pipeline with lifecycle + approval", () => {
     hub.registerConnection(ctx);
     const handlers = createTaskHandlers({ hub });
 
-    await handlers["shannon/task.dispatch"]!({ text: "会失败的任务" }, ctx);
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "会失败的任务" }, ctx);
+    const taskId = res.result.task.id as string;
     await vi.waitFor(() =>
       expect(hub.listTasks("dev-1")[0]).toMatchObject({
         status: "failed",
         error: "模型超时",
       }),
     );
-    // The phone saw the failure stamp too.
-    const texts = eventsOf(ctx).filter((e) => e.type === "task.message").map((e) => e.text);
-    expect(texts.some((t) => t.includes("❌ 任务失败") && t.includes("模型超时"))).toBe(true);
+    const events = eventsOf(ctx);
+    expect(events.map((e) => e.type)).toEqual(["query.started", "task.progress", "query.failed"]);
+    expect(events[2]).toMatchObject({ session_id: taskId, error: "模型超时" });
+    // §K3: no lifecycle stamp and no reply bubble on the task stream.
+    expect(events.some((e) => e.type === "task.message")).toBe(false);
   });
 });
 
@@ -456,6 +620,7 @@ describe("mobile dispatch — server page + bootstrap end-to-end", () => {
       const html = await res.text();
       expect(html).toContain("shannon/task.dispatch");
       expect(html).toContain("shannon/pair");
+      expect(html).toContain("shannon/approval/decide");
       expect(html).toContain("移动派发");
       // The vendored signer ships inside the page.
       expect(html).toContain("nacl.sign");
@@ -467,11 +632,12 @@ describe("mobile dispatch — server page + bootstrap end-to-end", () => {
     }
   });
 
-  it("end-to-end over a real socket: pair → dispatch → approval y → engine", async () => {
+  it("end-to-end over a real socket: pair → dispatch {prompt} → §K3 stream → signed decide → §K terminal", async () => {
+    const posts: Array<{ body: any }> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_url: any, init?: any) => {
-        expect(JSON.parse(init?.body ?? "{}")).toEqual({ request_id: "req-e2e", choice: "allow_once" });
+        posts.push({ body: JSON.parse(init?.body ?? "{}") });
         return { ok: true, status: 200 } as unknown as Response;
       }),
     );
@@ -485,7 +651,7 @@ describe("mobile dispatch — server page + bootstrap end-to-end", () => {
     const record = { token, issuedAt: Date.now(), expiresAt: Date.now() + 75_000 };
     writeFileSync(tokensFile, JSON.stringify(record) + "\n", "utf8");
 
-    // The engine parks on the approval until the phone answers.
+    // The engine parks on the approval until the decision lands.
     const client = mockEngineClient([
       {
         type: "approval_request",
@@ -553,35 +719,59 @@ describe("mobile dispatch — server page + bootstrap end-to-end", () => {
       });
       expect(pairRes.device_id).toBe(deviceId);
 
-      // 派发：text → task through the IM pipeline.
-      const dispatchRes = await rpc("shannon/task.dispatch", { text: "deploy the staging env" });
-      expect(dispatchRes).toMatchObject({ ok: true, kind: "task" });
-      const taskId = dispatchRes.task_id as string;
+      // 派发：{prompt} → the §K task object, synchronously.
+      const dispatchRes = await rpc("shannon/task.dispatch", { prompt: "deploy the staging env" });
+      expect(dispatchRes.task).toMatchObject({
+        prompt: "deploy the staging env",
+        status: "running",
+        agent_id: null,
+      });
+      const taskId = dispatchRes.task.id as string;
+      expect(taskId.length).toBeGreaterThan(0);
+      expect(new Date(dispatchRes.task.created_at).toISOString()).toBe(dispatchRes.task.created_at);
 
-      // 进度推送：started stamp arrives on the phone channel.
+      // §K3 #1: query.started announcing the task's own session key.
       await vi.waitFor(() =>
-        expect(notifications.some((n) => n.type === "task.message" && n.text.startsWith("🚀"))).toBe(true),
+        expect(notifications.some((n) => n.type === "query.started" && n.session_id === taskId)).toBe(true),
       );
 
-      // 审批：request pushed; answer y; decision forwarded (fetch stub asserts).
+      // 审批：request pushed; the phone decides via the SIGNED decide RPC.
       await vi.waitFor(() =>
         expect(notifications.some((n) => n.type === "approval.request" && n.request_id === "req-e2e")).toBe(true),
       );
-      const answer = await rpc("shannon/task.dispatch", { text: "y" });
-      expect(answer).toMatchObject({ ok: true, kind: "approval", choice: "allow" });
+      const ts = Date.now();
+      const decideSig = signMessage(kp.privateKey, `req-e2e:allow:${ts}`);
+      const answer = await rpc("shannon/approval/decide", {
+        request_id: "req-e2e",
+        choice: "allow",
+        signature: decideSig,
+        timestamp: ts,
+      });
+      expect(answer).toEqual({ ok: true });
 
+      // The decision reaches the engine (decide's own POST + the unblocked
+      // turn handler's POST — both carry the same allow_once choice).
+      await vi.waitFor(() => expect(posts.length).toBeGreaterThanOrEqual(1));
+      for (const p of posts) {
+        expect(p.body).toEqual({ request_id: "req-e2e", choice: "allow_once" });
+      }
+
+      // §K3 terminal: task.message(session_id = task id) with the full reply.
       await vi.waitFor(() =>
-        expect(notifications.some((n) => n.type === "task.message" && n.text.startsWith("✅"))).toBe(true),
+        expect(
+          notifications.some((n) => n.type === "task.message" && n.session_id === taskId && n.text === "all done"),
+        ).toBe(true),
       );
 
-      // 看任务：journal shows the completed task.
+      // 看任务：journal shows the completed task in the §K2 shape.
       const list = await rpc("shannon/task.list", { limit: 10 });
       expect(list.tasks).toHaveLength(1);
-      expect(list.tasks[0]).toMatchObject({
-        task_id: taskId,
-        device_id: deviceId,
+      expect(list.tasks[0]).toEqual({
+        id: taskId,
+        prompt: "deploy the staging env",
         status: "completed",
-        title: "deploy the staging env",
+        agent_id: null,
+        created_at: expect.any(String),
       });
 
       // 未配对设备拒绝：a second, unpaired connection can't dispatch or list.
@@ -600,7 +790,7 @@ describe("mobile dispatch — server page + bootstrap end-to-end", () => {
           stranger.on("message", onMsg);
           stranger.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
         });
-      const denied = await strangerRpc("shannon/task.dispatch", { text: "sneak in" });
+      const denied = await strangerRpc("shannon/task.dispatch", { prompt: "sneak in" });
       expect(denied.error?.code).toBe(-32000);
       const deniedList = await strangerRpc("shannon/task.list", {});
       expect(deniedList.error?.code).toBe(-32000);

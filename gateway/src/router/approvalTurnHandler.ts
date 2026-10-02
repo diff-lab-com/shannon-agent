@@ -4,6 +4,11 @@ import { newAccumulator, sendReply } from "./reply.js";
 import { canStream, StreamingReply } from "./streaming.js";
 import { toEngineAttachments } from "./media.js";
 import { type TurnContext, type TurnHandler } from "./types.js";
+import {
+  type ChannelAdapter,
+  type Logger,
+  type ReplyTarget,
+} from "../adapters/types.js";
 
 /**
  * Approval-aware turn handler.
@@ -32,6 +37,69 @@ export interface ApprovalTurnHandlerOptions {
    *  non-loopback bind. Without this, every "allow" click from a chat
    *  adapter would 401 and the engine would deny the tool at 300s. */
   authToken?: string | null;
+}
+
+/** The engine's `approval_request` event shape this handler consumes. */
+export type EngineApprovalRequestEvent = Extract<EngineEvent, { type: "approval_request" }>;
+
+/** How long a pushed approval waits for a decision before auto-denying. */
+export const APPROVAL_TIMEOUT_MS = 300_000;
+
+/**
+ * The in-channel approval round-trip, shared by the IM turn handler below and
+ * the §K mobile task turn handler (gateway/src/mobile/taskTurnHandler.ts):
+ * race the adapter's requestApproval against a hard timeout that mirrors the
+ * engine's 300s approval window, then POST the decision so the engine resumes
+ * the tool call. Without the timeout the lane would block forever if the user
+ * never answers — the engine would have already denied the tool at 300s, but
+ * the lane would still wait, permanently starving the session (review §P1-13).
+ * A failed POST is logged, never thrown: the engine surfaces the outcome in
+ * the rest of the stream.
+ */
+export async function resolveApprovalInChannel(
+  opts: Pick<ApprovalTurnHandlerOptions, "engineBaseUrl" | "authToken" | "fetchImpl">,
+  adapter: ChannelAdapter,
+  replyTarget: ReplyTarget,
+  logger: Logger,
+  ev: EngineApprovalRequestEvent,
+): Promise<void> {
+  // Engine event fields are snake_case (wire); map to the gateway's camelCase
+  // ApprovalReq that the adapter understands.
+  const decision = await Promise.race([
+    adapter.requestApproval(replyTarget, {
+      requestId: ev.request_id,
+      toolName: ev.tool_name,
+      toolInput: ev.tool_input,
+      description: ev.description,
+      isDestructive: ev.is_destructive,
+      diffPreview: ev.diff_preview ?? null,
+    }),
+    new Promise<{ requestId: string; choice: "deny"; timedOut: true }>((resolve) => {
+      setTimeout(() => {
+        logger.warn(
+          `approval timed out after ${APPROVAL_TIMEOUT_MS}ms (review §P1-13); auto-denying ${ev.request_id}`,
+        );
+        resolve({
+          requestId: ev.request_id,
+          choice: "deny",
+          timedOut: true,
+        });
+      }, APPROVAL_TIMEOUT_MS).unref?.();
+    }),
+  ]);
+  try {
+    await respondToApproval({
+      engineBaseUrl: opts.engineBaseUrl,
+      requestId: decision.requestId,
+      choice: decision.choice,
+      authToken: opts.authToken,
+      fetchImpl: opts.fetchImpl,
+    });
+  } catch (err) {
+    logger.warn(
+      `approval respond failed for ${decision.requestId}: ${(err as Error).message}`,
+    );
+  }
 }
 
 export function createApprovalTurnHandler(
@@ -63,57 +131,9 @@ export function createApprovalTurnHandler(
             if (stream) await stream.ingestText(ev.content);
             else acc.chunks.push(ev.content);
             break;
-          case "approval_request": {
-            // Engine event fields are snake_case (wire); map to the gateway's
-            // camelCase ApprovalReq that the adapter understands.
-            //
-            // review §P1-13: race the adapter's requestApproval against a
-            // hard timeout that mirrors the engine's 300s approval window.
-            // Without the timeout the lane would block forever if the user
-            // never clicked — the engine would have already given up and
-            // denied the tool at 300s, but the lane would still wait for a
-            // button click, leaving the session permanently queued and
-            // starving every subsequent message on the same lane.
-            const APPROVAL_TIMEOUT_MS = 300_000;
-            const decision = await Promise.race([
-              adapter.requestApproval(replyTarget, {
-                requestId: ev.request_id,
-                toolName: ev.tool_name,
-                toolInput: ev.tool_input,
-                description: ev.description,
-                isDestructive: ev.is_destructive,
-                diffPreview: ev.diff_preview ?? null,
-              }),
-              new Promise<{ requestId: string; choice: "deny"; timedOut: true }>(
-                (resolve) => {
-                  setTimeout(() => {
-                    logger.warn(
-                      `approval timed out after ${APPROVAL_TIMEOUT_MS}ms (review §P1-13); auto-denying ${ev.request_id}`,
-                    );
-                    resolve({
-                      requestId: ev.request_id,
-                      choice: "deny",
-                      timedOut: true,
-                    });
-                  }, APPROVAL_TIMEOUT_MS).unref?.();
-                },
-              ),
-            ]);
-            try {
-              await respondToApproval({
-                engineBaseUrl: opts.engineBaseUrl,
-                requestId: decision.requestId,
-                choice: decision.choice,
-                authToken: opts.authToken,
-                fetchImpl: opts.fetchImpl,
-              });
-            } catch (err) {
-              logger.warn(
-                `approval respond failed for ${decision.requestId}: ${(err as Error).message}`,
-              );
-            }
+          case "approval_request":
+            await resolveApprovalInChannel(opts, adapter, replyTarget, logger, ev);
             break;
-          }
           case "completed":
             break;
           case "failed":

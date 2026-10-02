@@ -30,6 +30,7 @@ import { ApprovalRegistry } from "./mobile/approvalRegistry.js";
 import { MobileDispatchHub } from "./mobile/hub.js";
 import { createMobileChannelAdapter } from "./mobile/channel.js";
 import { createTaskHandlers } from "./mobile/taskHandlers.js";
+import { createMobileTaskTurnHandler } from "./mobile/taskTurnHandler.js";
 import {
   deriveRelayAuthTag,
   deriveSessionKey,
@@ -184,8 +185,14 @@ export async function bootstrap(
     opts.engineClientFactory ?? ((sessionKey: string) => createEngineClient(config, sessionKey, engineAuthToken));
 
   // P1-4: report 任务开始/完成/失败 back to the IM channel around every
-  // adapter-routed turn (opt-out via config.im.taskLifecycle = false). The
-  // mobile shannon/* path keeps its own engine bridge and is unaffected.
+  // adapter-routed turn (opt-out via config.im.taskLifecycle = false).
+  //
+  // §K3: dispatched mobile tasks do NOT ride the IM text pipeline — their
+  // engine events stream back to the initiating phone as structured
+  // `shannon/event`s keyed by the task id (query.started / task.progress /
+  // task.message / query.failed), so platform "mobile" turns get the
+  // mobile-specific handler and every IM platform keeps the lifecycle-wrapped
+  // approval-aware one.
   const baseTurnHandler: TurnHandler =
     opts.turnHandler ??
     createApprovalTurnHandler({
@@ -194,8 +201,23 @@ export async function bootstrap(
       // approvals reach a non-loopback-bound engine without 401ing.
       authToken: engineAuthToken,
     });
-  const turnHandler: TurnHandler =
+  const imTurnHandler: TurnHandler =
     config.im?.taskLifecycle === false ? baseTurnHandler : withTaskLifecycle(baseTurnHandler);
+  const mobileTaskTurnHandler = dispatchHub
+    ? createMobileTaskTurnHandler({
+        hub: dispatchHub,
+        engineBaseUrl: config.engine.httpBaseUrl,
+        authToken: engineAuthToken,
+      })
+    : null;
+  const turnHandler: TurnHandler = {
+    handle(ctx) {
+      if (ctx.inbound.platform === "mobile" && mobileTaskTurnHandler) {
+        return mobileTaskTurnHandler.handle(ctx);
+      }
+      return imTurnHandler.handle(ctx);
+    },
+  };
 
   const router = new SessionRouter({ registry, clientFactory, turnHandler, logger });
 
@@ -416,6 +438,9 @@ async function startMobileServer(
       fetchImpl: opts.mobileFetchImpl,
       engineAuthToken,
       approvalRegistry: approvals,
+      // §K: a signed shannon/approval/decide unblocks the dispatched task's
+      // parked approval lane (the Y/N-text settle left the RPC face).
+      approvalDecisionSink: (requestId, choice) => dispatchHub.settleApproval(requestId, choice),
     },
     tokens,
     registry,

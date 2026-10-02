@@ -203,6 +203,83 @@ describe("mapEngineEvent", () => {
     expect(mapEngineEvent(ev)).toEqual({ ...ev, type: "approval.request" });
   });
 
+  it("§L1: passes the engine's rich ts/agent/risk through the approval.request mapping", () => {
+    const ev = {
+      type: "approval_request" as const,
+      request_id: "r2",
+      tool_name: "Edit",
+      tool_input: { path: "/x" },
+      description: "edit /x",
+      is_destructive: false,
+      diff_preview: null,
+      ts: 1759500000000,
+      agent: { id: "agent-0001", name: "Planner" },
+      risk: { destructive: false, scope: "repo" as const, reversible: true },
+    };
+    expect(mapEngineEvent(ev)).toEqual({
+      type: "approval.request",
+      request_id: "r2",
+      tool_name: "Edit",
+      tool_input: { path: "/x" },
+      description: "edit /x",
+      is_destructive: false,
+      diff_preview: null,
+      ts: 1759500000000,
+      agent: { id: "agent-0001", name: "Planner" },
+      risk: { destructive: false, scope: "repo", reversible: true },
+    });
+  });
+
+  it("§L1: omits rich keys when the engine doesn't supply usable values (legacy engines)", () => {
+    // Absent fields → keys absent (the legacy six-key shape, byte-identical).
+    const bare = mapEngineEvent({
+      type: "approval_request",
+      request_id: "r3",
+      tool_name: "Bash",
+      tool_input: {},
+      description: "run",
+      is_destructive: false,
+      diff_preview: null,
+    });
+    expect(bare).toEqual({
+      type: "approval.request",
+      request_id: "r3",
+      tool_name: "Bash",
+      tool_input: {},
+      description: "run",
+      is_destructive: false,
+      diff_preview: null,
+    });
+    // Null ts / null agent (serde #[serde(default)]) / malformed risk → omitted.
+    const nulled = mapEngineEvent({
+      type: "approval_request",
+      request_id: "r4",
+      tool_name: "Bash",
+      tool_input: {},
+      description: "run",
+      is_destructive: false,
+      diff_preview: null,
+      ts: null,
+      agent: null,
+      risk: null,
+    } as never);
+    expect(nulled).not.toHaveProperty("ts");
+    expect(nulled).not.toHaveProperty("agent");
+    expect(nulled).not.toHaveProperty("risk");
+    // A risk that misses the required scope/reversible pair is not invented.
+    const badRisk = mapEngineEvent({
+      type: "approval_request",
+      request_id: "r5",
+      tool_name: "Bash",
+      tool_input: {},
+      description: "run",
+      is_destructive: false,
+      diff_preview: null,
+      risk: { scope: "galaxy" },
+    } as never);
+    expect(badRisk).not.toHaveProperty("risk");
+  });
+
   it("drops session_info (metadata-only) → null", () => {
     expect(mapEngineEvent({ type: "session_info", message_count: 3, model: "gpt-x" })).toBeNull();
   });

@@ -1,20 +1,24 @@
 /**
  * P2-1 "mobile" platform adapter — the paired-phone channel expressed as a
- * `ChannelAdapter` so dispatched tasks ride the exact IM pipeline (T9):
+ * `ChannelAdapter` so dispatched tasks ride the exact IM routing pipeline (T9):
  *
  *   task.dispatch → SessionRouter lane (serial per device, stable session_id)
- *                   → approval-aware turn handler → engine
- *                   → replies + 任务开始/完成/失败 lifecycle stamps pushed
- *                     back to the phone through this adapter.
+ *                   → §K3 mobile task turn handler → engine
+ *                   → structured task stream (query.started / task.progress /
+ *                     task.message / query.failed, session_id = task id)
+ *                     pushed back to the initiating phone through the hub.
  *
  * It has no platform transport of its own — `MobileServer` / the relay host
  * own the sockets; this adapter delegates delivery to the `MobileDispatchHub`
- * and surfaces the DingTalk-style Y/N approval loop via `requestApproval`
- * (v1 is text Y/N / two buttons that send the same text, per the brief).
+ * and surfaces the approval loop via `requestApproval` (the phone answers
+ * through the signed `shannon/approval/decide`, which the bootstrap wires back
+ * to the hub's parked lane).
  *
  * Capabilities: threading false (one lane per device), streaming "none" (the
- * phone gets the final reply + lifecycle stamps as `task.message` events; the
- * live engine stream remains available on the direct `shannon/query` path).
+ * §K3 task stream is NOT send/edits — the turn handler pushes structured
+ * events straight through the hub; `send` keeps IM-bubble semantics only for
+ * out-of-band pushes, and the live engine stream remains available on the
+ * direct `shannon/query` path).
  */
 
 import {
@@ -42,7 +46,9 @@ export function createMobileChannelAdapter(
   const capabilities: AdapterCapabilities = {
     threading: false,
     pairing: true,
-    approvalButtons: false, // v1: text Y/N (the PWA page's buttons send the same text)
+    // The phone decides approvals via the signed shannon/approval/decide RPC,
+    // not in-channel buttons — the adapter only parks the lane.
+    approvalButtons: false,
     streaming: "none",
   };
 

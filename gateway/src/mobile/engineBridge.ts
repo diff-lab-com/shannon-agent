@@ -135,6 +135,14 @@ export interface EngineBridgeOptions {
    * (`shannon/approval.list` / snapshot `pendingApprovals`) stays truthful.
    */
   approvalRegistry?: ApprovalRegistry;
+  /**
+   * §K: notified after a signed `shannon/approval/decide` landed at the
+   * engine. The bootstrap wires this to `MobileDispatchHub.settleApproval` so
+   * a dispatched task's parked approval lane unblocks on the phone's decision
+   * (the Y/N-text settle left the RPC face with §K — this is the only path
+   * besides the 300s timeout).
+   */
+  approvalDecisionSink?: (requestId: string, choice: GatewayApprovalChoice) => void;
 }
 
 /** Sentinel key for queries without a session_id (P1.2 replaces it with a device id). */
@@ -440,8 +448,10 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       }
       // §L2: the decision landed at the engine — the ask leaves the restore
       // face (resolve BEFORE the ok so an aborted response still can't leave
-      // a decided approval listed as pending).
+      // a decided approval listed as pending). §K: the same signal also
+      // unblocks a dispatched task's parked approval lane.
       opts.approvalRegistry?.resolve(params.request_id);
+      opts.approvalDecisionSink?.(params.request_id, params.choice);
       return { kind: "result", result: { ok: true } satisfies OkResult };
     },
 
@@ -640,7 +650,13 @@ export function mapEngineEvent(ev: EngineEvent): ShannonEvent | null {
       return { type: "query.failed", error: ev.error };
     case "cancelled":
       return { type: "query.cancelled" };
-    case "approval_request":
+    case "approval_request": {
+      // §L1: the engine's rich fields (ts / agent / risk) ride the generated
+      // types — pass them through verbatim, omitting the key when the engine
+      // doesn't supply a usable value (the phone degrades honestly; the
+      // legacy six-key shape stays byte-identical for old engines).
+      const agent = engineAgent(ev.agent);
+      const risk = engineRisk(ev.risk);
       return {
         type: "approval.request",
         request_id: ev.request_id,
@@ -649,7 +665,11 @@ export function mapEngineEvent(ev: EngineEvent): ShannonEvent | null {
         description: ev.description,
         is_destructive: ev.is_destructive,
         diff_preview: ev.diff_preview ?? null,
+        ...(typeof ev.ts === "number" && ev.ts !== null ? { ts: ev.ts } : {}),
+        ...(agent ? { agent } : {}),
+        ...(risk ? { risk } : {}),
       };
+    }
     case "session_info":
       // Metadata-only; no mobile-facing event. (Usage/cost for the turn already
       // arrives via the `usage` event, so nothing is lost.)

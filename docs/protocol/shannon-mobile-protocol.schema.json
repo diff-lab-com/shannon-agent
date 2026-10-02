@@ -123,6 +123,7 @@
           ]
         },
         "turn_id": { "type": "string" },
+        "session_id": { "type": "string", "description": "§K3 routing key: on a dispatched task's stream (query.started / task.progress / task.message / query.failed) this IS the task's own id — the phone keys its local thread by it and routes by the session-key chain. Absent on plain query turns." },
         "content": { "type": "string" },
         "tool": { "type": "object" },
         "usage": { "type": "object" },
@@ -135,7 +136,26 @@
         "description": { "type": "string" },
         "is_destructive": { "type": "boolean" },
         "diff_preview": { "type": ["string", "null"] },
-        "text": { "type": "string" }
+        "text": { "type": "string" },
+        "ts": { "type": "number", "description": "§L1 (additive, approval.request): engine-side epoch-ms timestamp; absent on engines that don't supply it (phone falls back to arrival time)" },
+        "agent": {
+          "type": "object",
+          "description": "§L1 (additive, approval.request): the requesting agent, when the engine supplies it",
+          "properties": {
+            "id": { "type": ["string", "null"] },
+            "name": { "type": ["string", "null"] }
+          }
+        },
+        "risk": {
+          "type": "object",
+          "description": "§L1 (additive, approval.request): the engine's three-dimensional risk, when present",
+          "properties": {
+            "destructive": { "type": "boolean" },
+            "scope": { "enum": ["local", "repo", "system"] },
+            "reversible": { "type": "boolean" }
+          },
+          "required": ["scope", "reversible"]
+        }
       }
     },
     "qrV2Payload": {
