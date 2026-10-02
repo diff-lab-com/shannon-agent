@@ -67,10 +67,14 @@ describe('AppContext — R5-2 stream notices', () => {
     expect(result.current.currentSessionId).toBe(SESSION_A)
     await act(async () => { await result.current.sendMessage('Hello') })
 
-    // A (visible) fails over; B (background) rotates its key.
+    // A (visible) fails over; B (background) rotates its key. A's notice
+    // carries the id the A-send response returned (A-17: events with a
+    // DIFFERENT query id than the session's current one are dropped as late
+    // deliveries); B was never sent to from this window, so its events have
+    // no recorded id to mismatch — they pass the filter untouched.
     act(() => {
       flush(EVENT_NAMES.QUERY_NOTICE, {
-        query_id: 'q-a', kind: 'failover',
+        query_id: 'q1', kind: 'failover',
         message: 'falling back to glm-5.3-flash@zhipu (rate limited)', session_id: SESSION_A,
       })
       flush(EVENT_NAMES.QUERY_NOTICE, {
@@ -103,7 +107,7 @@ describe('AppContext — R5-2 stream notices', () => {
     await act(async () => { await result.current.sendMessage('Hello') })
     act(() => {
       flush(EVENT_NAMES.QUERY_NOTICE, {
-        query_id: 'q-a', kind: 'failover',
+        query_id: 'q1', kind: 'failover',
         message: 'falling back to gpt-5-mini@openai (5xx)', session_id: SESSION_A,
       })
     })
@@ -118,10 +122,12 @@ describe('AppContext — R5-2 stream notices', () => {
     await act(async () => { await result.current.sendMessage('Again') })
     expect(result.current.streamNotices).toEqual([])
 
-    // And a notice arriving after the clear is for the new turn only.
+    // And a notice arriving after the clear is for the new turn only (the
+    // api mock answers every send with q1, so the new turn's notice carries
+    // the same current id and passes the A-17 filter).
     act(() => {
       flush(EVENT_NAMES.QUERY_NOTICE, {
-        query_id: 'q-a2', kind: 'key_rotation',
+        query_id: 'q1', kind: 'key_rotation',
         message: 'rotating API key (2/3) for anthropic (401)', session_id: SESSION_A,
       })
     })
@@ -139,7 +145,7 @@ describe('AppContext — R5-2 stream notices', () => {
     await act(async () => { await result.current.sendMessage('Hello') })
     act(() => {
       flush(EVENT_NAMES.QUERY_NOTICE, {
-        query_id: 'q-a', kind: 'retry',
+        query_id: 'q1', kind: 'retry',
         message: 'API retry 1/5 (next try in 2s)', session_id: SESSION_A,
       })
     })

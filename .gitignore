@@ -191,3 +191,4 @@ gateway/package-lock.json
 
 # Stray artifacts from unexpanded "~" paths (historical bug, keep out of git)
 /~
+.pnpm-store/

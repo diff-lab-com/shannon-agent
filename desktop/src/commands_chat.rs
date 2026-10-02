@@ -228,10 +228,23 @@ pub async fn cancel_query(
 
 /// Body of [`cancel_query`], split out so the routing behavior is testable
 /// without a Wry app handle.
+///
+/// A-17 fix (R4 group 6): cancel takes + fires the token but deliberately
+/// does NOT reset `session.querying` here. The streaming loop only observes
+/// the cancellation at its NEXT engine event, so between the cancel and that
+/// observation the old query is still live — reopening the latch here let a
+/// fresh `send_message` start a second concurrent query on the session, and
+/// the old loop's late events then polluted the new turn (wiped stream
+/// bucket, mis-idled composer). The latch is reset exclusively by the query
+/// loop's exit path (`send_message`'s spawned task — it runs on EVERY exit:
+/// ok, engine error, cancel, and the caught panic), so a resend in the
+/// window is rejected with "A query is already in progress" until the old
+/// loop has actually unwound.
 async fn cancel_session_query(state: &AppState, session_id: Option<&str>) -> Result<(), String> {
     let (_, session) = state.registry.resolve_explicit_or_active(session_id)?;
 
-    // Take the cancellation token and cancel it
+    // Take the cancellation token and cancel it. The querying latch stays
+    // held (see the A-17 note above) — the loop exit resets it.
     let token_opt = {
         let mut token_guard = session.cancellation_token.lock().await;
         token_guard.take()
@@ -239,12 +252,6 @@ async fn cancel_session_query(state: &AppState, session_id: Option<&str>) -> Res
 
     if let Some(token) = token_opt {
         token.cancel();
-    }
-
-    // Clear querying flag
-    {
-        let mut querying = session.querying.lock().await;
-        *querying = false;
     }
 
     Ok(())
@@ -1358,6 +1365,11 @@ mod tests {
         let state = AppState::new();
         let active = state.registry.get_or_create_active();
         let token = seed_token(&state, SessionKey(active.session_id)).await;
+        // A send is in flight (send_message's guard+set latched the session).
+        {
+            let mut q = active.querying.lock().await;
+            *q = true;
+        }
 
         super::cancel_session_query(&state, None)
             .await
@@ -1365,14 +1377,102 @@ mod tests {
 
         assert!(token.is_cancelled(), "active session's query is cancelled");
         assert!(
-            !*state
+            *state
                 .registry
                 .get(SessionKey(active.session_id))
                 .unwrap()
                 .querying
                 .try_lock()
                 .unwrap(),
-            "querying flag is cleared"
+            "querying flag stays held — only the loop exit resets it (A-17)"
         );
+    }
+
+    // === A-17 fix (R4 group 6): the latch survives cancel until the loop exit ===
+    //
+    // The old code cleared `session.querying` inside the cancel command, so a
+    // send issued immediately after Stop passed the concurrent-query guard
+    // while the old loop was still draining toward its next engine event —
+    // two live queries on one session, and the old loop's late events
+    // polluted the new turn. These tests replay that sequence at the same
+    // level the command bodies run (plain AppState, no Wry handle).
+
+    /// cancel must keep the latch latched: token fired, querying still true.
+    /// (Reverts to a failure if the early clear ever comes back.)
+    #[tokio::test]
+    async fn cancel_keeps_the_querying_latch_latched() {
+        let state = AppState::new();
+        let key = state.registry.create();
+        let token = seed_token(&state, key).await;
+        let session = state.registry.get(key).expect("seeded session");
+        // send_message's guard+set (commands.rs check-and-set) is what put
+        // the latch up before the user pressed Stop.
+        {
+            let mut q = session.querying.lock().await;
+            *q = true;
+        }
+
+        super::cancel_session_query(&state, Some(&key.0.to_string()))
+            .await
+            .expect("cancel succeeds");
+
+        assert!(token.is_cancelled(), "the token must still fire");
+        assert!(
+            *state
+                .registry
+                .get(key)
+                .unwrap()
+                .querying
+                .try_lock()
+                .unwrap(),
+            "the querying latch must STAY HELD across cancel — the old loop is \
+             still draining; resetting here reopens the A-17 pollution window"
+        );
+    }
+
+    /// The full A-17 sequence: send latched → cancel (resend rejected) →
+    /// the query loop's exit-path reset (the same two statements as
+    /// commands.rs, run on every exit incl. caught panic) → resend accepted.
+    #[tokio::test]
+    async fn resend_is_rejected_until_the_loop_exit_resets_the_latch() {
+        let state = AppState::new();
+        let key = state.registry.create();
+        let session = state.registry.get(key).unwrap();
+        let token = seed_token(&state, key).await;
+        {
+            let mut q = session.querying.lock().await;
+            *q = true;
+        }
+
+        super::cancel_session_query(&state, Some(&key.0.to_string()))
+            .await
+            .expect("cancel succeeds");
+
+        // A resend in the cancel→loop-exit window hits the guard and is
+        // rejected (the check half of send_message's check-and-set).
+        {
+            let q = session.querying.lock().await;
+            assert!(token.is_cancelled(), "the cancel still fired the token");
+            assert!(*q, "the concurrent-query guard must reject the resend");
+        }
+
+        // The loop exit path (commands.rs bottom — ok / error / cancel /
+        // panic all funnel here) resets latch + token.
+        {
+            let mut q = session.querying.lock().await;
+            *q = false;
+        }
+        {
+            let mut t = session.cancellation_token.lock().await;
+            *t = None;
+        }
+
+        // Now the resend's check-and-set succeeds — the session is usable
+        // again exactly when the old loop is gone.
+        {
+            let mut q = session.querying.lock().await;
+            assert!(!*q, "the loop exit reopened the latch");
+            *q = true;
+        }
     }
 }
