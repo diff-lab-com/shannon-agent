@@ -11,10 +11,12 @@
 //
 // Gate = the walkthrough threshold: zero critical/serious violations. The
 // brief's acceptance adds: CURRENT failures are recorded as known debt
-// (below), not a blocker for this round — so the gate is enforced against
-// KNOWN_A11Y_DEBT: anything already catalogued (state + rule id) is
-// reported and attached, anything NEW fails. Entries carry the reason and
-// are removed when the underlying fix lands.
+// (e2e/helpers/a11yDebt.ts), not a blocker for this round — so the gate is
+// enforced against KNOWN_A11Y_DEBT via matchA11yDebt, which keys every entry
+// to rule + axe node target with a hard count ceiling (fix round 1/5, review
+// Important 1): a new element, an extra node, or a drifted target fails even
+// under an already-catalogued rule. Entries carry the reason and are removed
+// when the underlying fix lands.
 //
 // NIGHTLY-ONLY: excluded from the PR gate by playwright.config.ts
 // testIgnore; run via playwright.chat-nightly.config.ts.
@@ -22,33 +24,15 @@ import { expect, test } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
 import { ChatPage } from './helpers/ChatPage'
+import { KNOWN_A11Y_DEBT, matchA11yDebt } from './helpers/a11yDebt'
 import { expectMockPhase, loadChatScript } from './helpers/scriptLoader'
 
 type ScanState = 'approval-dialog' | 'streaming' | 'error-banner'
 
-/**
- * Known a11y debt (report task-5, §a11y): critical/serious violations
- * present at scan time, keyed by state + rule. NOT a silent allowlist —
- * every scan re-attaches the full violation report and the R5 report
- * enumerates them. A NEW rule (or a new state hitting an old rule) fails.
- */
-const KNOWN_A11Y_DEBT: Array<{ state: ScanState, rule: string, reason: string }> = [
-  {
-    state: 'approval-dialog',
-    rule: 'aria-dialog-name',
-    reason: 'Header.tsx permission Modal (role="alertdialog") carries no accessible name — the visible h3 title is not wired via aria-labelledby / aria-label. serious; fix = label the dialog (business component, out of R5 scope).',
-  },
-  {
-    state: 'approval-dialog',
-    rule: 'color-contrast',
-    reason: 'SidebarSessions.tsx live-elapsed badge (font-mono text-label-2xs text-secondary) fails 4.5:1 on the rail surface while the run is live. serious; only rendered mid-run — the static walkthrough never sees it.',
-  },
-  {
-    state: 'streaming',
-    rule: 'color-contrast',
-    reason: 'Same SidebarSessions live-elapsed badge as approval-dialog (the row runs live during the parked stream). serious.',
-  },
-]
+// Review Minor 2 probe: stale-debt (fix landed → entry must be struck) is
+// warn-only by default; setting A11Y_FAIL_ON_STALE_DEBT=1 on a nightly run
+// turns the strike into a hard gate without touching this file.
+const FAIL_ON_STALE_DEBT = process.env.A11Y_FAIL_ON_STALE_DEBT === '1'
 
 test.describe('chat a11y — dynamic states (full axe rule set)', () => {
   /**
@@ -101,34 +85,50 @@ test.describe('chat a11y — dynamic states (full axe rule set)', () => {
       const bad = results.violations.filter(v => v.impact === 'critical' || v.impact === 'serious')
 
       // Full transparency either way: attach every violation (all impacts)
-      // and log the critical/serious rows so the nightly log is greppable.
+      // plus the debt verdict so the nightly log/report is greppable, and
+      // log the critical/serious rows.
+      const verdict = matchA11yDebt(KNOWN_A11Y_DEBT, state, bad)
       await test.info().attach(`axe-${state}.json`, {
-        body: JSON.stringify({ inapplicable: results.inapplicable?.length, passes: results.passes?.length, violations: results.violations }, null, 2),
+        body: JSON.stringify({
+          inapplicable: results.inapplicable?.length,
+          passes: results.passes?.length,
+          violations: results.violations,
+          debtVerdict: {
+            known: verdict.known.map(k => ({ rule: k.rule, target: k.target })),
+            novel: verdict.novel,
+            stale: verdict.stale.map(s => ({ state: s.state, rule: s.rule })),
+          },
+        }, null, 2),
         contentType: 'application/json',
       })
       // eslint-disable-next-line no-console
-      console.log(`[a11y] ${state}: ${results.violations.length} violation(s) total, ${bad.length} critical/serious`)
+      console.log(`[a11y] ${state}: ${results.violations.length} violation(s) total, ${bad.length} critical/serious, ${verdict.known.length} known-debt node(s), ${verdict.novel.length} novel`)
 
-      const debtFor = (rule: string) => KNOWN_A11Y_DEBT.find(d => d.state === state && d.rule === rule)
-      const known = bad.filter(v => debtFor(v.id) != null)
-      const novel = bad.filter(v => debtFor(v.id) == null)
-      for (const v of known) {
+      for (const k of verdict.known) {
         // eslint-disable-next-line no-console
-        console.warn(`[a11y][known-debt] ${state} / ${v.id} (${v.impact}, ${v.nodes.length} nodes): ${debtFor(v.id)?.reason}`)
+        console.warn(`[a11y][known-debt] ${state} / ${k.rule} @ ${JSON.stringify(k.target)} (${k.impact}): ${k.entry.reason}`)
       }
       // Stale-debt reminder: a catalogued rule that no longer violates means
-      // the fix landed — strike the entry (and the report row).
-      const badIds = new Set(bad.map(v => v.id))
-      for (const entry of KNOWN_A11Y_DEBT.filter(d => d.state === state)) {
-        if (!badIds.has(entry.rule)) {
-          // eslint-disable-next-line no-console
-          console.warn(`[a11y][stale-debt] ${state} / ${entry.rule} no longer violates — remove the KNOWN_A11Y_DEBT entry: ${entry.reason}`)
-        }
+      // the fix landed — strike the entry (and the report row). Warn-only by
+      // default; A11Y_FAIL_ON_STALE_DEBT=1 enforces (see FAIL_ON_STALE_DEBT).
+      for (const s of verdict.stale) {
+        // eslint-disable-next-line no-console
+        console.warn(`[a11y][stale-debt] ${state} / ${s.rule} no longer violates — remove the KNOWN_A11Y_DEBT entry: ${s.reason}`)
       }
+
+      // The gate: any node the ledger does not explicitly absorb — a new
+      // rule, a new target on an old rule, or a count above the catalogued
+      // slots — fails. The message prints copy-pasteable axe targets.
       expect(
-        novel.map(v => ({ id: v.id, impact: v.impact, nodes: v.nodes.slice(0, 3).map(n => n.target) })),
-        `${state}: NEW critical/serious violations (not in KNOWN_A11Y_DEBT)\n`
-          + known.map(v => `  [known-debt] ${v.id}: ${debtFor(v.id)?.reason}`).join('\n'),
+        [
+          ...verdict.novel.map(v => ({ novel: v.rule, impact: v.impact, target: v.target })),
+          ...(FAIL_ON_STALE_DEBT
+            ? verdict.stale.map(s => ({ staleDebt: s.rule, reason: s.reason }))
+            : []),
+        ],
+        `${state}: a11y debt gate fired\n`
+          + verdict.known.map(k => `  [known-debt] ${k.rule} @ ${JSON.stringify(k.target)}: ${k.entry.reason}`).join('\n')
+          + `\nRe-catalog only after human review — see e2e/helpers/a11yDebt.ts.`,
       ).toEqual([])
     })
   }
