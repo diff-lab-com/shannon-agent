@@ -64,9 +64,9 @@ pub use config::{
 };
 pub use process_pool::{
     ChunkResult, McpProcessPool, PooledDiscoveryResult, PooledMcpToolAdapter, RemoteFailureKind,
-    ServerState, ServerStatus, StoredOAuthCredentials, UserPromptCallback, classify_remote_failure,
-    discover_pooled_remote_tools, discover_pooled_tools, make_elicitation_provider,
-    make_sampling_provider,
+    ServerState, ServerStatus, StoredOAuthCredentials, TokenUpdateCallback, UserPromptCallback,
+    classify_remote_failure, discover_pooled_remote_tools, discover_pooled_tools,
+    make_elicitation_provider, make_sampling_provider,
 };
 pub use protocol::{
     ClientCapabilities, ClientInfo, Completion, CompletionRef, CompletionRequest, CompletionResult,

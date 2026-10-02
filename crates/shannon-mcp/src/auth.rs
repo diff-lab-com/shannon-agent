@@ -865,8 +865,70 @@ pub async fn auto_register_oauth(
     Ok(provider)
 }
 
+/// Test-only infrastructure shared across the crate's test modules (the
+/// process-pool tests reuse the token endpoint; the mock never leaves
+/// `cfg(test)` builds).
+#[cfg(test)]
+pub(crate) mod test_support {
+    /// Minimal OAuth token endpoint speaking just enough HTTP to answer a
+    /// refresh POST with a fixed JSON token payload. A deliberately
+    /// unparseable payload drives the refresh-failure paths.
+    pub(crate) async fn spawn_mock_token_endpoint(payload: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = Vec::with_capacity(1024);
+                let mut chunk = [0u8; 512];
+                let header_end = loop {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break None,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break Some(pos);
+                            }
+                        }
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let head = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
+                let content_length = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let mut body = buf[header_end + 4..].to_vec();
+                while body.len() < content_length {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => body.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    payload.len(),
+                    payload
+                );
+                let _ = socket.write_all(http.as_bytes()).await;
+                let _ = socket.flush().await;
+            }
+        });
+        format!("http://{addr}/token")
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_support::spawn_mock_token_endpoint;
     use super::*;
 
     #[tokio::test]
@@ -1050,60 +1112,6 @@ mod tests {
     }
 
     // ── Stored-token providers (desktop A2 reconnect path) ─────────────
-
-    /// Minimal OAuth token endpoint speaking just enough HTTP to answer a
-    /// refresh POST with a fixed JSON token payload.
-    async fn spawn_mock_token_endpoint(payload: &'static str) -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            loop {
-                let Ok((mut socket, _)) = listener.accept().await else {
-                    break;
-                };
-                let mut buf = Vec::with_capacity(1024);
-                let mut chunk = [0u8; 512];
-                let header_end = loop {
-                    match socket.read(&mut chunk).await {
-                        Ok(0) | Err(_) => break None,
-                        Ok(n) => {
-                            buf.extend_from_slice(&chunk[..n]);
-                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                                break Some(pos);
-                            }
-                        }
-                    }
-                };
-                let Some(header_end) = header_end else {
-                    continue;
-                };
-                let head = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
-                let content_length = head
-                    .lines()
-                    .find_map(|l| l.strip_prefix("content-length:"))
-                    .and_then(|v| v.trim().parse::<usize>().ok())
-                    .unwrap_or(0);
-                let mut body = buf[header_end + 4..].to_vec();
-                while body.len() < content_length {
-                    match socket.read(&mut chunk).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => body.extend_from_slice(&chunk[..n]),
-                    }
-                }
-                let http = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    payload.len(),
-                    payload
-                );
-                let _ = socket.write_all(http.as_bytes()).await;
-                let _ = socket.flush().await;
-            }
-        });
-        format!("http://{addr}/token")
-    }
 
     #[tokio::test]
     async fn stored_provider_holds_seeded_tokens() {

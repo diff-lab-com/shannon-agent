@@ -130,6 +130,11 @@ pub(crate) struct RemoteMcpServerHandle {
     pub(crate) sampling_provider: Arc<Mutex<Option<SamplingProvider>>>,
     /// Channel for forwarding server notifications to the pool's notification handler.
     pub(crate) notification_tx: tokio::sync::mpsc::Sender<(String, Value)>,
+    /// Token-rotation callback shared with the pool (F6): fired after a
+    /// 401-triggered refresh replaced the in-memory credential, so the
+    /// embedding application can persist the new snapshot. `None` (no
+    /// subscriber) keeps rotation memory-only.
+    pub(crate) on_token_refresh: Arc<Mutex<Option<super::TokenUpdateCallback>>>,
 }
 
 impl RemoteMcpServerHandle {
@@ -238,6 +243,12 @@ impl RemoteMcpServerHandle {
             if let Some(provider) = &self.auth_provider {
                 info!(server = %self.name, "Got 401, attempting OAuth token refresh");
                 if provider.refresh_token().await.is_ok() {
+                    // F6: the refresh rotated the credential — hand the new
+                    // snapshot to the caller-side persistence seam before the
+                    // retry so a rotating refresh token survives restart even
+                    // when the retry itself fails.
+                    let snapshot = provider.token_snapshot().await;
+                    self.notify_token_refresh(&snapshot).await;
                     // Retry with refreshed token.
                     let retry = self.send_http_request(&request, timeout).await?;
                     if !retry.status().is_success() {
@@ -321,6 +332,18 @@ impl RemoteMcpServerHandle {
             self.parse_sse_response(response).await
         } else {
             self.parse_jsonrpc_response(response).await
+        }
+    }
+
+    /// Fire the pool's token-rotation callback (F6) with the post-refresh
+    /// snapshot. Fire-and-forget for the handle: persistence decisions
+    /// (dedup, locking, keyring vs plaintext) live entirely caller-side —
+    /// this crate never touches settings files or keyrings. No subscriber
+    /// is a no-op.
+    async fn notify_token_refresh(&self, snapshot: &crate::auth::OAuthTokenSnapshot) {
+        let callback = self.on_token_refresh.lock().await.clone();
+        if let Some(callback) = callback {
+            callback(&self.name, snapshot);
         }
     }
 
@@ -743,6 +766,11 @@ impl RemoteMcpServerHandle {
         if response.status().as_u16() == 401 {
             if let Some(provider) = &self.auth_provider {
                 if provider.refresh_token().await.is_ok() {
+                    // F6: same rotation notification as the single-request
+                    // path — the batch retry must not be the only record of
+                    // the new credential.
+                    let snapshot = provider.token_snapshot().await;
+                    self.notify_token_refresh(&snapshot).await;
                     let retry = self
                         .send_http_request(&serde_json::json!(batch), timeout)
                         .await?;
@@ -996,6 +1024,7 @@ mod tests {
             ws_transport: None,
             sampling_provider: Arc::new(Mutex::new(None)),
             notification_tx: ntx,
+            on_token_refresh: Arc::new(Mutex::new(None)),
         }
     }
 
