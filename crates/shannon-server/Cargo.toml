@@ -32,3 +32,8 @@ swagger-ui = ["dep:utoipa-swagger-ui"]
 [dev-dependencies]
 shannon-api-protocol = { path = "../shannon-api-protocol" }
 tower = { version = "0.5", features = ["util"] }
+# Chat wire-contract smoke (tests/chat_contract_smoke.rs): drives the real
+# server over loopback TCP. Both crates are already in the workspace lockfile
+# via production deps elsewhere — no new dependency graph edges.
+reqwest = { workspace = true }
+tempfile = "3"
