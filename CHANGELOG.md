@@ -4,6 +4,43 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Desktop — MCP OAuth tokens and data-source credentials move into the OS keyring (2026-10-02)
+
+R7-④ batch 2 (adversarial-review A8): the three plaintext credential
+surfaces shrink to one OS-controlled store. **Breaking / migration
+notes — read before upgrading:**
+
+- **What moved**: MCP OAuth token blocks (`settings.json#mcpServers`
+  `shannonOAuth` blocks and the `Authorization: Bearer` headers derived
+  from them) and data-source credential fields (IMAP password, Notion
+  integration token, GitHub/Slack/Telegram tokens, Jira API tokens — the
+  catalog's password-kind fields) now live in the **OS keyring**, keyed
+  `shannon/mcp-oauth/<server>` and `shannon/datasource/<slug>`. On the
+  first launch after upgrading, an idempotent migration moves existing
+  credentials into the keyring and deletes the plaintext copies from the
+  files. User-configured non-OAuth custom headers and stdio `env` blocks
+  are deliberately **not** migrated and stay in `settings.json` /
+  `data-sources/*.toml` (owner-only 0600) with their fail-safe semantics
+  unchanged.
+- **Keyring machine binding**: OS-keychain entries are bound to the
+  user/machine that created them. **Backups do not carry your
+  credentials, and moving to a new machine (or restoring `settings.json`
+  / `data-sources/*.toml` from a backup) requires re-authenticating** the
+  affected MCP servers (Extensions → MCP Servers → Re-authenticate) and
+  re-entering the affected data-source credentials.
+- **Downgrade**: an older app version reading post-migration data shows
+  the MCP server as unauthenticated (the honest state — re-authenticate
+  from the newer app) and data sources report authentication failure.
+  There is no dual-write: the plaintext copy is deleted on a successful
+  migration.
+- **Fallback, never silent**: when no OS keyring is available (e.g. a
+  Linux session without a Secret Service), credentials stay in the local
+  files at owner-only `0600` — the process logs one warning per affected
+  domain at startup, and the MCP Servers and Data Sources settings pages
+  show a "credential storage" line stating whether credentials live in
+  the OS keychain or a restricted local file. Deleting an MCP server or
+  data source also deletes its keyring entry (no orphans).
+
 ### macOS real-machine verification batch (2026-09-30)
 
 Full-workspace verification on macOS 15.5 arm64 (CI only runs `cargo check`

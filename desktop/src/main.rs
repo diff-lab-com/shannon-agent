@@ -638,6 +638,14 @@ fn main() {
             let app_handle_for_block = app_handle.clone();
             let app_handle_for_seed = app_handle.clone();
             tauri::async_runtime::block_on(async move {
+                // F5 (R7-④ batch 2) — probe the OS keyring once and install
+                // the process-global secret store. This must precede every
+                // store read/migration: on probe failure the process degrades
+                // to the F3 0600 plaintext files, loudly (one warn per
+                // affected domain inside init_global) and visibly (the
+                // settings pages' credential-storage line).
+                let storage = shannon_desktop::secret_store::init_global();
+
                 // G1 P0-1.1 / P1-9 — one-time, idempotent migrations before
                 // anything reads the stores: legacy
                 // `~/.shannon/desktop/mcp-servers.json` → unified
@@ -646,6 +654,21 @@ fn main() {
                 // `<plugin>.toml` definitions. Both never fatal.
                 shannon_desktop::config::migrate_legacy_mcp_servers();
                 shannon_desktop::extensions::migrate_legacy_agent_dirs();
+
+                // F5 — idempotent credential migrations into the keyring
+                // (MCP OAuth token blocks + data-source password/token
+                // fields). Keyring write failures keep the 0600 plaintext
+                // and warn; loading is never blocked.
+                let mcp_migrated = shannon_desktop::config::migrate_mcp_oauth_secrets();
+                let ds_migrated = shannon_desktop::extensions::migrate_data_source_secrets();
+                if mcp_migrated > 0 || ds_migrated > 0 {
+                    tracing::info!(
+                        backend = ?storage,
+                        mcp_oauth = mcp_migrated,
+                        data_sources = ds_migrated,
+                        "credential keyring migration pass complete"
+                    );
+                }
 
                 // G1 P0-1.2 — seed the MCP process pool in the BACKGROUND.
                 // Startup must not block on server handshakes: a single
