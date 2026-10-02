@@ -529,7 +529,12 @@ export default function Chat() {
     // B1 §4-8: an in-flight edit replaces the turn (rewind + resend) instead
     // of appending. Blocked while querying — rewinding mid-run is unsafe.
     if (editing) {
-      if (isQuerying || !trimmed) return
+      if (isQuerying) return
+      // A-25 fix: aligned with the main path's A-9 semantics — clearing the
+      // text while chips remain commits an attachments-only edit (empty text
+      // + the current composer attachments). Only a double-empty composer is
+      // a no-op; the old `!trimmed` arm swallowed that Enter silently.
+      if (!trimmed && !hasAttachments) return
       void commitEdit(trimmed)
       return
     }

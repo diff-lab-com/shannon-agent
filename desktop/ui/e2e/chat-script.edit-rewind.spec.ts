@@ -20,7 +20,10 @@ import type { ChatScript } from '../src/lib/mock/scripted/schema'
 
 const script = readChatScript('edit-rewind') as ChatScript
 const EDITED = script.turns[0]!.user
-const EDITED_2 = script.turns[1]!.user
+// The A-26 commit's edited text: each quickwin test is a FRESH script
+// lifecycle whose single send always consumes turn 0, so the turn list
+// stays at one entry and this test-local text never maps to a yaml turn.
+const EDITED_2 = '第一轮（编辑后，附件已调整）：潮汐的成因和周期'
 
 const NOTES_PATH = script.seed!.sessions![0]!.messages[0]!.attachments![0]!
 const CHART_PATH = script.seed!.sessions![0]!.messages[0]!.attachments![1]!
@@ -129,7 +132,8 @@ test.describe('scripted chat backend — edit-rewind (journey #10)', () => {
     await expect(page.getByRole('button', { name: `Remove ${ADDED_NAME}` })).toBeVisible()
     await expect(page.getByRole('button', { name: `Remove ${CHART_NAME}` })).toBeVisible()
 
-    // Commit: the resend streams turn 1 with the EDITED attachment set.
+    // Commit: the resend streams with the EDITED attachment set (the reply
+    // bubble is turn 0's scripted text — each test owns a fresh lifecycle).
     await chat.composer().fill(EDITED_2)
     await chat.composer().press('Enter')
     await expect(page.getByTestId('edit-banner')).toHaveCount(0)
@@ -142,6 +146,35 @@ test.describe('scripted chat backend — edit-rewind (journey #10)', () => {
     const sends = (await mockSnapshot(page)).sends
     expect(sends).toHaveLength(1)
     expect(sends[0]).toMatchObject({ message: EDITED_2, attachments: [CHART_PATH, ADDED_PATH] })
+    await expectNoConsoleErrors(page)
+  })
+
+  test('A-25: clearing the text during an edit and pressing Enter resends attachments-only (no silent return)', async ({ page }) => {
+    test.setTimeout(60_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'edit-rewind', test.info())
+    await openSeededSession(page)
+
+    await startEdit(page, 0)
+    // WYSIWYG chips are loaded (A-26); emptying the text leaves an
+    // attachments-only composer — the A-25 gate must treat Enter as a
+    // commit, not a silent return.
+    await expect(page.getByRole('button', { name: `Remove ${NOTES_NAME}` })).toBeVisible()
+    await chat.composer().fill('')
+    await chat.composer().press('Enter')
+
+    // NOT silent: the edit exits and the attachments-only resend streams.
+    await expect(page.getByTestId('edit-banner')).toHaveCount(0)
+    await expect(chat.bubbles()).toHaveCount(2, { timeout: 20_000 })
+    // The optimistic user bubble carries the attachment previews (A-4).
+    await expect(chat.bubbleAt(0)).toContainText(NOTES_NAME)
+    await expect(chat.bubbleAt(0)).toContainText(CHART_NAME)
+
+    // Payload truth: empty text + the loaded chip set (untouched → the
+    // message's original pair).
+    const sends = (await mockSnapshot(page)).sends
+    expect(sends).toHaveLength(1)
+    expect(sends[0]).toMatchObject({ message: '', attachments: [NOTES_PATH, CHART_PATH] })
     await expectNoConsoleErrors(page)
   })
 })

@@ -11,10 +11,11 @@
 # 可用即边界语义的现状证据。
 #
 # wave-2 quickwin 扩展：第一条用户消息带 2 个附件（demo 工作目录内）。
-#   turn 1 — A-26 所见即所发：startEdit 载入原附件为 chips → 删一个、
-#   （drag-drop 桥）加一个 → commit → 重发 payload 附件 = 编辑后集合。
+# A-26（所见即所发）与 A-25（纯附件编辑提交）各是新 test，但每个 test 都
+# 是全新 script 生命周期、单次 send 恒消费 turn 0——重发的回复气泡恒为
+# turn 0 的文本，两个新 test 只断言 banner 退出、气泡内容与 sends payload。
 name: edit-rewind
-description: 编辑重发 journey — 预置历史 + checkpoints → edit banner → commit（rewind_session + 新流，附件所见即所发）；cancel 保稿；A-14 边界证据
+description: 编辑重发 journey — 预置历史（首条消息带附件）+ checkpoints → edit banner → commit（rewind_session + 新流，附件所见即所发 + 纯附件编辑提交）；cancel 保稿；A-14 边界证据
 seed:
   config:
     hasKey: true
@@ -34,7 +35,7 @@ seed:
         - role: assistant
           content: 风暴潮是极端天气引起的海面异常升高现象。
 turns:
-  # 编辑提交后的重发消费这一轮（test 1：改文提交）。
+  # 编辑提交后的重发消费这一轮（每个 test 单次 send，恒为 turn 0）。
   - user: "第一轮（编辑后）：潮汐的成因和周期"
     script:
       - event: query:text
@@ -42,11 +43,4 @@ turns:
           - "编辑后的回答："
           - "潮汐按周期可分为半日潮、全日潮和混合潮。"
         chunkDelayMs: 250
-      - event: query:completed
-  # A-26 所见即所发 turn（test 3：删一个加一个后提交）。
-  - user: "第一轮（编辑后，附件已调整）：潮汐的成因和周期"
-    script:
-      - event: query:text
-        chunks:
-          - "编辑后（附件已调整）的回答：潮汐按周期可分为半日潮、全日潮和混合潮。"
       - event: query:completed

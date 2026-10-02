@@ -1,6 +1,6 @@
 {
   "name": "edit-rewind",
-  "description": "编辑重发 journey — 预置历史 + checkpoints → edit banner → commit（rewind_session + 新流，附件所见即所发）；cancel 保稿；A-14 边界证据",
+  "description": "编辑重发 journey — 预置历史（首条消息带附件）+ checkpoints → edit banner → commit（rewind_session + 新流，附件所见即所发 + 纯附件编辑提交）；cancel 保稿；A-14 边界证据",
   "seed": {
     "config": {
       "hasKey": true
@@ -45,20 +45,6 @@
             "潮汐按周期可分为半日潮、全日潮和混合潮。"
           ],
           "chunkDelayMs": 250
-        },
-        {
-          "event": "query:completed"
-        }
-      ]
-    },
-    {
-      "user": "第一轮（编辑后，附件已调整）：潮汐的成因和周期",
-      "script": [
-        {
-          "event": "query:text",
-          "chunks": [
-            "编辑后（附件已调整）的回答：潮汐按周期可分为半日潮、全日潮和混合潮。"
-          ]
         },
         {
           "event": "query:completed"

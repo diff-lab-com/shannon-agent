@@ -275,3 +275,37 @@ describe('A-26: edit-mode attachments are what-you-see-is-what-you-send', () => 
     expectNoChip('report-a.md')
   })
 })
+
+// ───────────────── A-25 — attachments-only edit commit ─────────────────
+
+describe('A-25: clearing the text during an edit and pressing Enter commits attachments-only', () => {
+  it('resends with the current chips and exits the edit — never a silent return', async () => {
+    seedTurn({ attachments: ['/Users/demo/workspace/my-startup/report-a.md'] })
+    renderChat()
+    await startEdit()
+    expectChip('report-a.md')
+
+    // Empty the text; the chip keeps the composer submittable — the old
+    // `if (isQuerying || !trimmed) return` silently swallowed this Enter.
+    fireEvent.change(composerInput(), { target: { value: '' } })
+    fireEvent.keyDown(composerInput(), { key: 'Enter' })
+    await waitFor(() => expect(ctx.rewindSession).toHaveBeenCalledWith(0))
+    await waitFor(() =>
+      expect(ctx.sendMessage).toHaveBeenCalledWith('', ['/Users/demo/workspace/my-startup/report-a.md']),
+    )
+    expect(screen.queryByTestId('edit-banner')).not.toBeInTheDocument()
+  })
+
+  it('a double-empty composer stays blocked: no rewind, no send, still editing', async () => {
+    seedTurn({})
+    renderChat()
+    await startEdit()
+    fireEvent.change(composerInput(), { target: { value: '' } })
+    fireEvent.keyDown(composerInput(), { key: 'Enter' })
+    // Flush the microtask chain a stray async commit would ride, then pin
+    // the no-op: 仅双空才拦截.
+    await waitFor(() => expect(screen.getByTestId('edit-banner')).toBeInTheDocument())
+    expect(ctx.rewindSession).not.toHaveBeenCalled()
+    expect(ctx.sendMessage).not.toHaveBeenCalled()
+  })
+})
