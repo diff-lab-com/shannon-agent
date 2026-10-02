@@ -151,11 +151,16 @@ async function drainWaits(player: ScriptPlayer): Promise<void> {
  * Send one scripted turn: optimistic UI, then the player replays the turn's
  * events over macrotasks. Returns while the turn is still playing — the test
  * drives the waits (and parks) so mid-run projections can be asserted.
+ *
+ * A-17: the context records the query id from the sendMessage RESPONSE and
+ * drops query:* events whose query_id differs — the api mock must resolve
+ * with the SAME id the player's turn emits (`q-<turn>`).
  */
 async function sendAndPlay(
   h: Harness,
   opts: { text: string; attachments?: string[]; expectedQueryId: string },
 ): Promise<void> {
+  vi.mocked(api.sendMessage).mockResolvedValue({ query_id: opts.expectedQueryId })
   await act(async () => {
     await h.result.current.sendMessage(opts.text, opts.attachments)
   })
@@ -219,7 +224,7 @@ describe('ChatScript fixtures — YAML ↔ JSON two-layer parity (R2 §C)', () =
 // ───────────────────────────── the six journeys ─────────────────────────────
 
 describe('L1 state machine — first-chat (journey #1)', () => {
-  it('streams chunks into streamingText, announces usage, commits on completed', async () => {
+  it('streams chunks into streamingText, announces usage, commits on completed', { timeout: 30_000 }, async () => {
     const script = loadFixture('first-chat')
     const chunks = textChunksOf(script, 0)
     expect(chunks.length).toBeGreaterThanOrEqual(5) // ≥5 mixed chunks, per the journey spec
@@ -301,7 +306,7 @@ describe('L1 state machine — multi-turn-stream (journey #2)', () => {
 })
 
 describe('L1 state machine — tool-task-file (journey #3)', () => {
-  it('tracks the tool lifecycle, normalizes progress to 0-100 and settles clean', async () => {
+  it('tracks the tool lifecycle, normalizes progress to 0-100 and settles clean', { timeout: 30_000 }, async () => {
     const script = loadFixture('tool-task-file')
     const h = await makeHarness()
     h.player.load(script)
@@ -345,7 +350,7 @@ describe('L1 state machine — tool-task-file (journey #3)', () => {
 })
 
 describe('L1 state machine — approval journeys (#4)', () => {
-  it('allow: permissionRequest pends, respondPermission clears it and the run resumes', async () => {
+  it('allow: permissionRequest pends, respondPermission clears it and the run resumes', { timeout: 30_000 }, async () => {
     const script = loadFixture('approval-allow')
     const h = await makeHarness()
     h.player.load(script)
@@ -385,7 +390,7 @@ describe('L1 state machine — approval journeys (#4)', () => {
     expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(1)
   })
 
-  it('deny: the tool settles into the error form and the session stays usable', async () => {
+  it('deny: the tool settles into the error form and the session stays usable', { timeout: 30_000 }, async () => {
     const script = loadFixture('approval-deny')
     const h = await makeHarness()
     h.player.load(script)
@@ -435,7 +440,7 @@ describe('L1 state machine — failure journeys (#5)', () => {
     expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
   })
 
-  it('mid-stream-fail: "other" classification + retry preserves attachments and replays the reply (A-3 fixed)', async () => {
+  it('mid-stream-fail: "other" classification + retry preserves attachments and replays the reply (A-3 fixed)', { timeout: 30_000 }, async () => {
     const script = loadFixture('mid-stream-fail')
     const h = await makeHarness()
     h.player.load(script)
@@ -461,6 +466,8 @@ describe('L1 state machine — failure journeys (#5)', () => {
 
     // Retry — exactly what ComposerRetryButton does: resend the last user
     // message WITH its attachment paths. A-3 fixed: the attachment survives.
+    // (A-17: the retry's response id must be the turn id the player emits.)
+    vi.mocked(api.sendMessage).mockResolvedValue({ query_id: 'q-1' })
     await act(async () => {
       await h.result.current.sendMessage(script.turns[0]!.user, script.turns[0]!.attachments)
     })
@@ -497,7 +504,7 @@ describe('L1 state machine — failure journeys (#5)', () => {
 })
 
 describe('L1 state machine — cancel-text-stream (journey #6)', () => {
-  it('cancel settles via query:cancelled and discards the partial text (A-19 anchored)', async () => {
+  it('cancel settles via query:cancelled and discards the partial text (A-19 anchored)', { timeout: 30_000 }, async () => {
     const script = loadFixture('cancel-text-stream')
     const h = await makeHarness()
     h.player.load(script)
@@ -528,7 +535,7 @@ describe('L1 state machine — cancel-text-stream (journey #6)', () => {
 // ───────────────────────── R3 journeys (#7 – #14) ─────────────────────────
 
 describe('L1 state machine — budget-exceeded (journey #7)', () => {
-  it('budget:exceeded auto-cancels the run; Continue once resends with budgetBypass and the original attachments (A-2 fixed)', async () => {
+  it('budget:exceeded auto-cancels the run; Continue once resends with budgetBypass and the original attachments (A-2 fixed)', { timeout: 30_000 }, async () => {
     const script = loadFixture('budget-exceeded')
     const h = await makeHarness()
     h.player.load(script)
@@ -552,7 +559,9 @@ describe('L1 state machine — budget-exceeded (journey #7)', () => {
     // "Continue once" — exactly what Chat.tsx's continuePastBudget does:
     // resend the last user message with the bypass flag AND its attachment
     // paths (the seeded user turn carries report-draft.md). The harness
-    // passes the same invoke args the real send_message carries.
+    // passes the same invoke args the real send_message carries. (A-17: the
+    // response id must match the q-1 turn the player emits.)
+    vi.mocked(api.sendMessage).mockResolvedValue({ query_id: 'q-1' })
     await act(async () => {
       await h.result.current.sendMessage(
         script.turns[0]!.user,
@@ -579,12 +588,14 @@ describe('L1 state machine — budget-exceeded (journey #7)', () => {
 })
 
 describe('L1 state machine — attachments (journey #8)', () => {
-  it('sends ride attachment paths; the turn returns rejected receipts (P0 anchor) and the optimistic bubble carries the attachment (A-4 fixed)', async () => {
+  it('sends ride attachment paths; the turn returns rejected receipts (P0 anchor) and the optimistic bubble carries the attachment (A-4 fixed)', { timeout: 30_000 }, async () => {
     const script = loadFixture('attachments')
     const outsidePath = script.turns[0]!.rejectedAttachments![0]!.path
     const h = await makeHarness()
     h.player.load(script)
 
+    // A-17: the send's response id must match the q-0 turn the player emits.
+    vi.mocked(api.sendMessage).mockResolvedValue({ query_id: 'q-0' })
     await act(async () => {
       await h.result.current.sendMessage(script.turns[0]!.user, [outsidePath])
     })
@@ -618,7 +629,7 @@ describe('L1 state machine — attachments (journey #8)', () => {
 })
 
 describe('L1 state machine — queue-steer (journey #9)', () => {
-  it('queue caps at 3, reorders, and drains FIFO after settle (the steer order is pinned E2E-side + by the hook\'s own tests)', async () => {
+  it('queue caps at 3, reorders, and drains FIFO after settle (the steer order is pinned E2E-side + by the hook\'s own tests)', { timeout: 30_000 }, async () => {
     const script = loadFixture('queue-steer')
     const h = await makeHarness()
     h.player.load(script)
@@ -666,7 +677,7 @@ describe('L1 state machine — queue-steer (journey #9)', () => {
 })
 
 describe('L1 state machine — edit-rewind (journey #10)', () => {
-  it('edit commit rewinds to the checkpoint boundary (A-14: equality included) and the resend streams', async () => {
+  it('edit commit rewinds to the checkpoint boundary (A-14: equality included) and the resend streams', { timeout: 30_000 }, async () => {
     vi.mocked(api.rewindSession).mockResolvedValue([])
     vi.mocked(api.listCheckpoints).mockResolvedValue([])
     const script = loadFixture('edit-rewind')
@@ -691,7 +702,7 @@ describe('L1 state machine — edit-rewind (journey #10)', () => {
 })
 
 describe('L1 state machine — session-switch-race (journey #11)', () => {
-  it('buckets stay per-session across a switch; the projection resumes on return; the error banner stays with A (A-5 fixed)', async () => {
+  it('buckets stay per-session across a switch; the projection resumes on return; the error banner stays with A (A-5 fixed)', { timeout: 30_000 }, async () => {
     const script = loadFixture('session-switch-race')
     const h = await makeHarness()
     h.player.load(script)
@@ -736,7 +747,7 @@ describe('L1 state machine — session-switch-race (journey #11)', () => {
 })
 
 describe('L1 state machine — subagent-run (journey #12)', () => {
-  it('subagent:start/stop drive the live registry; the agent_spawn card converges and leaves with the run', async () => {
+  it('subagent:start/stop drive the live registry; the agent_spawn card converges and leaves with the run', { timeout: 30_000 }, async () => {
     const script = loadFixture('subagent-run')
     const h = await makeHarness()
     h.player.load(script)
@@ -764,7 +775,7 @@ describe('L1 state machine — subagent-run (journey #12)', () => {
 })
 
 describe('L1 state machine — journey-cross-page (#13) + context-panels (#14)', () => {
-  it('cross-page: the seeded write_file history is the FileCard/source the pages read', async () => {
+  it('cross-page: the seeded write_file history is the FileCard/source the pages read', { timeout: 30_000 }, async () => {
     const script = loadFixture('cross-page')
     const h = await makeHarness()
     h.player.load(script)
@@ -783,7 +794,7 @@ describe('L1 state machine — journey-cross-page (#13) + context-panels (#14)',
     expect(assistants[0]!.content).toBe(textChunksOf(script, 0).join(''))
   })
 
-  it('context-panels: query:usage projects onto the visible session and is the usageTick the panels refetch on', async () => {
+  it('context-panels: query:usage projects onto the visible session and is the usageTick the panels refetch on', { timeout: 30_000 }, async () => {
     const script = loadFixture('context-panels')
     const h = await makeHarness()
     h.player.load(script)
@@ -807,7 +818,7 @@ describe('L1 state machine — journey-cross-page (#13) + context-panels (#14)',
 // ───────────────────── cancel-matrix L1 view (§4.1) ─────────────────────
 
 describe('L1 state machine — cancel-matrix #2 (tool execution stop)', () => {
-  it('cancel during a tool run converges the card; a late tool-result does not resurrect it', async () => {
+  it('cancel during a tool run converges the card; a late tool-result does not resurrect it', { timeout: 30_000 }, async () => {
     const script = loadFixture('cancel-tool-run')
     const h = await makeHarness()
     h.player.load(script)
@@ -840,7 +851,7 @@ describe('L1 state machine — cancel-matrix #2 (tool execution stop)', () => {
 })
 
 describe('L1 state machine — cancel-matrix #4 (approval-wait stop)', () => {
-  it('stop while a permission prompt waits settles the run; the prompt itself stays up (current behavior recorded)', async () => {
+  it('stop while a permission prompt waits settles the run; the prompt itself stays up (current behavior recorded)', { timeout: 30_000 }, async () => {
     const script = loadFixture('cancel-approval-wait')
     const h = await makeHarness()
     h.player.load(script)
@@ -867,16 +878,18 @@ describe('L1 state machine — cancel-matrix #4 (approval-wait stop)', () => {
   })
 })
 
-describe('L1 state machine — cancel-matrix #3 (stop → instant resend, A-17)', () => {
-  // De-race note (裁定修复波): CI shard2 failed this test with
-  // `expected '' to contain '新流丁'` — the chunk flush orchestration (real
-  // setTimeout macrotasks, capped at 60ms each) is itself asynchronous and,
-  // under 2-core CI CPU contention, slower than a direct assertion. Every
-  // streamingText / committed-reply point below is therefore a WAITING
-  // assertion (this file's established RTL waitFor — act-integrated, same
-  // semantics as vi.waitFor/expect.poll) with an explicit 5s window; the
-  // assertion objects and semantics are unchanged.
-  it('a late old-turn cancelled WIPES the new turn\'s stream and idles the composer (A-17 pollution, recorded)', async () => {
+describe('L1 state machine — cancel-matrix #3 (stop → instant resend, A-17 fixed)', () => {
+  // De-race note (裁定修复波, carried through the A-17 flip): CI shard2
+  // failed this test with `expected '' to contain '新流丁'` — the chunk
+  // flush orchestration (real setTimeout macrotasks, capped at 60ms each)
+  // is itself asynchronous and, under 2-core CI CPU contention, slower than
+  // a direct assertion. Every point that waits for a state CHANGE (stream
+  // start, run settle) stays a WAITING assertion (this file's established
+  // RTL waitFor — act-integrated, same semantics as vi.waitFor/expect.poll)
+  // with an explicit 5s window; the post-drop asserts are direct reads —
+  // the late events are dropped no-ops, so they ride a projection the wait
+  // above already observed.
+  it('late old-turn events are dropped by query_id: the new stream stays intact and the composer stays busy', { timeout: 30_000 }, async () => {
     const script = loadFixture('cancel-then-resend')
     const h = await makeHarness()
     h.player.load(script)
@@ -891,43 +904,35 @@ describe('L1 state machine — cancel-matrix #3 (stop → instant resend, A-17)'
     await act(async () => { expect(h.player.handleCancelQuery()).toBe(true) })
     await awaitSettled(h)
 
-    // Instant resend — the new turn streams (its own query id).
+    // Instant resend — the new turn streams (its own query id, recorded as
+    // the session's current one from the q-1 send response — the A-17 fix).
     await sendAndPlay(h, { text: script.turns[1]!.user, expectedQueryId: 'q-1' })
     await waitFor(() => expect(h.result.current.streamingText).toContain('新流甲'), { timeout: 5_000 })
     expect(h.result.current.isQuerying).toBe(true)
 
     // The old query's boundary events land INSIDE the new turn's window:
     // a late text chunk (q-0) + the late query:cancelled (q-0), same
-    // session — indistinguishable from the new turn's events without
-    // query_id filtering (the A-17 gap).
+    // session. A-17 fixed: both carry the OLD query id ≠ the session's
+    // current (q-1) → the handlers drop them untouched (windowSession
+    // routing and query-id staleness are two independent filters; the
+    // q-1 turn's own events pass).
     act(() => { flush(EVENT_NAMES.QUERY_TEXT, { content: '[旧流迟到]', query_id: 'q-0', session_id: SESSION_A }) })
     act(() => { flush(EVENT_NAMES.QUERY_CANCELLED, { query_id: 'q-0', session_id: SESSION_A }) })
 
-    // A-17 CURRENT BEHAVIOR — pollution. The late cancelled clears the
-    // SESSION bucket (new stream's text gone), flips isQuerying false while
-    // q-1 is still streaming, and the committed reply loses every chunk
-    // emitted before the pollution point (and the injected late chunk —
-    // both were in the wiped bucket). Flip these to the no-pollution
-    // asserts (stream intact, isQuerying stays true, full reply) when R4
-    // lands. The flush handlers run synchronously, but the projection
-    // wait below rides out any throttled state propagation on a starved CI
-    // core instead of asserting against a mid-flight frame.
-    await waitFor(() => {
-      expect(h.result.current.streamingText).not.toContain('新流甲')
-      expect(h.result.current.isQuerying).toBe(false)
-    }, { timeout: 5_000 })
-    // q-1 keeps streaming into the wiped bucket — it commits WITHOUT the
-    // pre-pollution chunks. Waiting (5s) rather than direct: the commit is
-    // the tail of the chunk macrotask chain, the exact thing CI contention
-    // stretches past a direct read.
-    await waitFor(() => {
-      const reply = h.result.current.messages.filter(m => m.role === 'assistant').at(-1)
-      expect(reply?.content ?? '').toContain('新流丁')
-    }, { timeout: 5_000 })
-    await waitFor(() => {
-      const reply = h.result.current.messages.filter(m => m.role === 'assistant').at(-1)
-      expect(reply!.content).not.toContain('新流甲')
-      expect(reply!.content).not.toContain('旧流迟到')
-    }, { timeout: 5_000 })
+    // The late cancelled no longer wipes the new stream (was: bucket
+    // cleared, isQuerying mis-flipped) — the pre-injection text survives
+    // and the composer stays busy while q-1 is still streaming. Direct
+    // reads: the dropped events mutate nothing, so this rides the same
+    // projection the stream-start wait above already observed.
+    expect(h.result.current.isQuerying).toBe(true)
+    expect(h.result.current.streamingText).toContain('新流甲')
+    // q-1 streams to its own completion and commits the FULL reply — no
+    // pre-pollution loss, and the injected late chunk never mixed in.
+    // Waiting: the commit is the tail of the chunk macrotask chain, the
+    // exact thing CI contention stretches past a direct read.
+    await awaitSettled(h)
+    const reply = h.result.current.messages.filter(m => m.role === 'assistant').at(-1)
+    expect(reply!.content).toBe(textChunksOf(script, 1).join(''))
+    expect(reply!.content).not.toContain('旧流迟到')
   })
 })

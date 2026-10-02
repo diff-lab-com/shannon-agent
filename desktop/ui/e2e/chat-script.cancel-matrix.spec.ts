@@ -5,10 +5,15 @@
 // 用 control.emitNow 注入——播放器的 turn 机制表达不了「旧 turn 的终态
 // 晚于新 turn」的交错，这正是 emitNow 的设计用途（bypass 播放器状态）。
 //
-// A-17（场景 3）是本轮最高价值产出：确认「stop 后立刻重发」时迟到的
-// query:cancelled 会清空新流并误停 isQuerying。复现序列（同报告 §A-17）：
+// 场景 3 是 A-17 的回归锚（R4 组6 已修复）：「stop 后立刻重发」时旧查询
+// 的迟到事件曾清空新流并误停 isQuerying。修复 = 双管齐下——后端 cancel
+// 不再提前放开 querying 闩（commands_chat.rs，闩复位统一在查询循环退出），
+// 前端按 query_id 过滤（AppContext 记录每次 send 响应的 query_id，携带
+// 不同 id 的 query:*/terminal 事件按旧查询迟到投递丢弃，缺 id 的旧形状
+// 放行）。复现序列（同报告 §A-17，注入形状不变）：
 //   send(q-0 流中) → stop → cancelled 收敛 → 立刻 send(q-1 流中)
-//   → 注入 q-0 迟到 text + q-0 迟到 cancelled → 新流被清空、composer 误复位。
+//   → 注入 q-0 迟到 text + q-0 迟到 cancelled → 新流完好、isQuerying 保持、
+//   完整回复提交（本 spec 断言新契约）。
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,7 +23,7 @@ import { expect, test } from '@playwright/test'
 import { ChatPage } from './helpers/ChatPage'
 import { expectMockPhase, loadChatScript } from './helpers/scriptLoader'
 import { expectNoConsoleErrors } from './helpers/watchdog'
-import { annotateKnownIssues, mockSnapshot } from './helpers/knownIssues'
+import { mockSnapshot } from './helpers/knownIssues'
 
 type Page = import('@playwright/test').Page
 
@@ -114,17 +119,9 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expectNoConsoleErrors(page)
   })
 
-  // ── 3. stop 后立刻重发（A-17 核心）────────────────────────────────────
-  test('3. instant resend after stop: the late old-turn cancelled WIPES the new stream (A-17 pollution, recorded)', async ({ page }) => {
+  // ── 3. stop 后立刻重发（A-17 已修复，回归锚）─────────────────────────
+  test('3. instant resend after stop: late old-turn events are dropped by query_id, the new stream stays intact (A-17 fixed)', async ({ page }) => {
     test.setTimeout(60_000)
-    annotateKnownIssues(test.info(), {
-      'A-17': 'stop releases the querying latch immediately (commands_chat.rs) but the old loop '
-        + 'only exits at its next engine event, and AppContext never filters by query_id — the '
-        + 'late query:cancelled clears the session bucket and idles the composer while the NEW '
-        + 'turn is still streaming. Repro: send q-0 → stop → cancelled settles → instantly send '
-        + 'q-1 → inject late q-0 text + q-0 cancelled (emitNow). Current pollution asserted '
-        + 'below; flip to "new stream intact, isQuerying stays true, full reply" when R4 lands.',
-    })
     const chat = new ChatPage(page)
     await loadChatScript(page, 'cancel-then-resend', test.info())
     await openSession(page, 'desktop-session-row-script-sess-resend', 'Cancel then resend')
@@ -148,14 +145,17 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     })
     emitNow(page, 'query:cancelled', { query_id: 'q-0', session_id: 'script-sess-resend' })
 
-    // A-17 CURRENT BEHAVIOR: the late cancelled clears the new stream and
-    // mis-idles the composer while q-1 is still playing.
-    await expect(chat.sendButton()).toBeVisible({ timeout: 5_000 })
-    // q-1 keeps streaming into the wiped bucket — its committed reply loses
-    // everything emitted before the pollution point (and the injected late
-    // chunk never shows).
+    // A-17 FIXED (AppContext query_id filter): the late q-0 events (≠ the
+    // session's current q-1) are dropped — the composer stays BUSY while
+    // q-1 keeps streaming, and the committed reply is the FULL new-turn
+    // text with no injected late chunk. (Was: the late cancelled wiped the
+    // bucket, mis-idled the composer, and truncated the reply to the
+    // post-pollution chunks.)
+    await expect(chat.stopButton()).toBeVisible({ timeout: 5_000 })
+    await expect(chat.streamingCursor()).toBeVisible()
+    await expect(page.getByText('[旧流迟到]')).toHaveCount(0)
     await expect(chat.bubbles()).toHaveCount(3, { timeout: 20_000 })
-    await chat.expectBubbleText(2, '新流乙，新流丙，新流丁。')
+    await chat.expectBubbleText(2, '新流甲，新流乙，新流丙，新流丁。')
     await expectNoConsoleErrors(page)
   })
 

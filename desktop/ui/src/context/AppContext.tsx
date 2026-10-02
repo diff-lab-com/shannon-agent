@@ -253,6 +253,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // it onto the committed assistant message (citation chips). Live-turn
   // only: cleared on fail/cancel/new send, never persisted.
   const pendingInjectedMemoriesRef = useRef<Map<string, api.InjectedMemory[]>>(new Map())
+  // A-17 fix (R4 group 6): per-session id of the query THIS window last
+  // started (the `query_id` of a successful sendMessage response), plus the
+  // set of ids that are known-dead (terminal event seen, or superseded by a
+  // newer send). Stop does not retire a query synchronously — the Rust
+  // cancel command fires the token and the old loop exits at its next
+  // engine event — so an immediate re-send races the old loop's teardown,
+  // and its late `query:*`/terminal events used to land inside the NEW
+  // turn's window (wiped stream bucket, mis-idled composer, truncated
+  // reply). Events whose query_id is retired or simply differs from the
+  // session's current one are exactly those late deliveries and are dropped
+  // by the handlers below (isStaleQueryEvent).
+  //
+  // The current id deliberately survives the run's settle — the late events
+  // arrive after the terminal one, and clearing on settle would reopen the
+  // window until the next send; it is replaced by the next send and dies
+  // with the session. The retired set exists because a new turn's OWN id is
+  // only known from its response, and the backend may emit the first events
+  // BEFORE that response lands — during that gap the old id must judge
+  // nothing (it moved to retired; unknown ids pass).
+  const currentQueryIdsRef = useRef<Map<string, string>>(new Map())
+  const retiredQueryIdsRef = useRef<Map<string, Set<string>>>(new Map())
+
   const visibleSessionIdRef = useRef<string | null>(windowSessionId)
   visibleSessionIdRef.current = windowSessionId ?? currentSessionId
   // B1 P1-5: the visible session's own run gates this session's composer,
@@ -298,6 +320,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
       else delete next[key]
       return next
     })
+  }, [])
+
+  // A-17 fix: true when `queryId` names a dead or superseded query of the
+  // session at `sessionKey` — such an event is a late delivery of a
+  // cancelled/completed/ replaced run and must not touch the current turn's
+  // state. Backwards compatible by construction: payloads without a
+  // query_id (old backend shapes) and sessions without any recorded id
+  // (runs this window never sent — goal runs, another window's sends)
+  // always pass through; the filter only fires on a real match against a
+  // known-dead id or a mismatch against the recorded current one.
+  const isStaleQueryEvent = useCallback((sessionKey: string, queryId: unknown): boolean => {
+    if (typeof queryId !== 'string' || queryId === '') return false
+    if (retiredQueryIdsRef.current.get(sessionKey)?.has(queryId)) return true
+    const current = currentQueryIdsRef.current.get(sessionKey)
+    return current !== undefined && current !== queryId
+  }, [])
+
+  // A-17 fix: a TERMINAL event (completed/failed/cancelled) proves its
+  // query is dead — later events under the same id are late deliveries.
+  // Runs BEFORE the stale check in the terminal handlers (a stale terminal
+  // event is itself proof, and re-retiring is a set no-op).
+  const retireQueryEvent = useCallback((sessionKey: string, queryId: unknown): void => {
+    if (typeof queryId !== 'string' || queryId === '') return
+    const set = retiredQueryIdsRef.current.get(sessionKey)
+    if (set) set.add(queryId)
+    else retiredQueryIdsRef.current.set(sessionKey, new Set([queryId]))
   }, [])
 
   // P0 sidebar telemetry: record one query-stream observation for a session.
@@ -526,6 +574,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // visible projection (a previous turn may have failed mid-stream).
     const targetSessionId = windowSessionId ?? currentSessionId
     const targetKey = targetSessionId ?? ''
+    // A-17 fix: this send supersedes the session's previous query id. The
+    // new turn's own id is only known from the response (and the backend
+    // may emit its first events BEFORE that response lands), so from here
+    // until the response the stale filter must judge against the retired
+    // set only — the old id moves there, unknown ids pass. On rejection
+    // (pre-turn guard — no run started) the previous records are restored.
+    const prevQueryId = currentQueryIdsRef.current.get(targetKey)
+    const prevRetired = retiredQueryIdsRef.current.get(targetKey) ?? new Set<string>()
+    currentQueryIdsRef.current.delete(targetKey)
+    retiredQueryIdsRef.current.set(targetKey, new Set(prevQueryId ? [prevQueryId] : []))
     streamingBucketsRef.current.set(targetKey, '')
     thinkingBucketsRef.current.set(targetKey, '')
     // R5-2: a new turn starts with a clean notice slate (the previous
@@ -599,6 +657,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
         targetKey,
         Array.isArray(resp.injected_memories) ? resp.injected_memories : [],
       )
+      // A-17 fix: from here until the next send, this session's query:*
+      // events must carry THIS query id — the handlers drop any event whose
+      // query_id is retired or otherwise mismatched (the stop→instant-
+      // resend race's late deliveries). The id is also UN-retired: the send
+      // (re)owns it (a backend that reuses ids would otherwise have its new
+      // run dropped by its own previous turn's retirement). Missing id (old
+      // backend shape) leaves the current-vs-mismatch arm off; the retired
+      // set still catches ids that already terminated.
+      if (resp.query_id) {
+        currentQueryIdsRef.current.set(targetKey, resp.query_id)
+        retiredQueryIdsRef.current.get(targetKey)?.delete(resp.query_id)
+      }
+
       return true
     } catch (e) {
       // P0-4 fix: the backend rejected the send BEFORE recording the user
@@ -617,6 +688,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       setChatError(describeBackendError(String(e), messageFor))
       setSessionQuerying(targetSessionId, false)
+      // A-17 fix: the send was rejected before starting any run — restore
+      // the superseded query records (the previous query may still be live).
+      if (prevQueryId !== undefined) currentQueryIdsRef.current.set(targetKey, prevQueryId)
+      retiredQueryIdsRef.current.set(targetKey, prevRetired)
       // Round-1 review (Minor-4): the send was rejected BEFORE recording the
       // user message — no run ever started, so the pre-send snapshot (with
       // its sources/outputs) comes back instead of a phantom "Running".
@@ -754,6 +829,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // §P2-18: drop the deleted session's stream buckets.
       streamingBucketsRef.current.delete(id)
       thinkingBucketsRef.current.delete(id)
+      // A-17 fix: its current-query record dies with the session too.
+      currentQueryIdsRef.current.delete(id)
+      retiredQueryIdsRef.current.delete(id)
       // R5-2: its retry notices die with it too.
       streamNoticesBucketsRef.current.delete(id)
       // B1 §4-9: its queued prompts die with the session too.
@@ -905,29 +983,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async function register() {
       const handlers = [
         listen(EVENT_NAMES.QUERY_TEXT, (e) => {
-          const p = e.payload as { content: string; session_id?: string }
+          const p = e.payload as { query_id?: string; content: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          // A-17 fix: windowSession routing (above) and query-id staleness
+          // (here) are two independent filters — both must pass.
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = p.session_id ?? visibleKey
+          if (isStaleQueryEvent(key, p.query_id)) return
           noteSessionActivity(p.session_id, 'event')
           // §P2-18: append to this session's own bucket; only the visible
           // session's bucket is projected into state, so tokens from a
           // background session never land in the on-screen stream.
           // B1 P2-13: the projection itself is throttled — tokens coalesce
           // in the bucket and the flush re-reads it at most every 50ms.
-          const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = p.session_id ?? visibleKey
           const next = (streamingBucketsRef.current.get(key) ?? '') + p.content
           streamingBucketsRef.current.set(key, next)
           if (key === visibleKey) scheduleStreamFlush()
         }),
         listen(EVENT_NAMES.QUERY_TOOL_START, (e) => {
-          const p = e.payload as { tool_use_id: string; tool_name: string; tool_input: unknown; session_id?: string }
+          const p = e.payload as { query_id?: string; tool_use_id: string; tool_name: string; tool_input: unknown; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = p.session_id ?? visibleKey
+          if (isStaleQueryEvent(key, p.query_id)) return
           noteSessionActivity(p.session_id, 'tool-start', p.tool_name)
           // B1 P1-5: tool cards belong to the session that runs them — a
           // background session's tools never bleed into the visible list
           // (same visibility rule as the text/thinking buckets).
-          const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = p.session_id ?? visibleKey
           if (key !== visibleKey) return
           // P2-19: a new tool starts from a clean slate — the previous
           // tool's last percentage/message must not label this one until it
@@ -951,11 +1033,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           })
         }),
         listen(EVENT_NAMES.QUERY_TOOL_RESULT, (e) => {
-          const p = e.payload as { tool_use_id: string; result: string; is_error: boolean; meta?: unknown; tokens_used?: number; session_id?: string }
+          const p = e.payload as { query_id?: string; tool_use_id: string; result: string; is_error: boolean; meta?: unknown; tokens_used?: number; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
-          noteSessionActivity(p.session_id, 'tool-end')
           const visibleKey = visibleSessionIdRef.current ?? ''
           const key = p.session_id ?? visibleKey
+          if (isStaleQueryEvent(key, p.query_id)) return
+          noteSessionActivity(p.session_id, 'tool-end')
           if (key !== visibleKey) return
           setActiveToolCalls(prev => prev.map(tc => {
             if (tc.tool_use_id !== p.tool_use_id) return tc
@@ -965,11 +1048,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }))
         }),
         listen(EVENT_NAMES.QUERY_TOOL_PROGRESS, (e) => {
-          const p = e.payload as { tool_use_id: string; progress: number; message: string; session_id?: string }
+          const p = e.payload as { query_id?: string; tool_use_id: string; progress: number; message: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
-          noteSessionActivity(p.session_id, 'event')
           const visibleKey = visibleSessionIdRef.current ?? ''
           const key = p.session_id ?? visibleKey
+          if (isStaleQueryEvent(key, p.query_id)) return
+          noteSessionActivity(p.session_id, 'event')
           if (key !== visibleKey) return
           setActiveToolCalls(prev => prev.map(tc =>
             tc.tool_use_id === p.tool_use_id
@@ -999,6 +1083,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           const visibleKey = visibleSessionIdRef.current ?? ''
           const key = p.session_id ?? visibleKey
+          if (isStaleQueryEvent(key, p.query_id)) return
           const notice: StreamNotice = {
             id: ++streamNoticeIdRef.current,
             kind: p.kind === 'key_rotation' ? 'key_rotation' : 'failover',
@@ -1018,13 +1103,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setSubagentLive(prev => (prev && prev.agentId === p.agentId ? null : prev))
         }),
         listen(EVENT_NAMES.QUERY_THINKING, (e) => {
-          const p = e.payload as { content: string; session_id?: string }
+          const p = e.payload as { query_id?: string; content: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
-          noteSessionActivity(p.session_id, 'event')
           // §P2-18: same per-session bucketing as QUERY_TEXT (B1 P2-13: and
           // the same throttled projection).
           const visibleKey = visibleSessionIdRef.current ?? ''
           const key = p.session_id ?? visibleKey
+          if (isStaleQueryEvent(key, p.query_id)) return
+          noteSessionActivity(p.session_id, 'event')
           const next = (thinkingBucketsRef.current.get(key) ?? '') + p.content
           thinkingBucketsRef.current.set(key, next)
           if (key === visibleKey) scheduleStreamFlush()
@@ -1032,18 +1118,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
         listen(EVENT_NAMES.QUERY_USAGE, (e) => {
           const p = e.payload as UsagePayload
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
-          noteSessionActivity(p.session_id, 'event')
           // B1-16 (review §5 骨架): the footer's token/cost line is a
           // visible-session readout — a background session's usage must not
           // overwrite it (same visibleKey projection as QUERY_TEXT).
           const visibleKey = visibleSessionIdRef.current ?? ''
           const key = p.session_id ?? visibleKey
+          if (isStaleQueryEvent(key, p.query_id)) return
+          noteSessionActivity(p.session_id, 'event')
           if (key !== visibleKey) return
           setUsage(p)
         }),
         listen(EVENT_NAMES.QUERY_COMPLETED, (e) => {
-          const sid = (e.payload as { session_id?: string }).session_id
+          const p = e.payload as { query_id?: string; session_id?: string }
+          const sid = p.session_id
           if (!isEventForCurrentWindow(sid, windowSessionId)) return
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = sid ?? visibleKey
+          // A-17 fix: check staleness FIRST (this terminal event itself is
+          // legitimate for its own query), then retire the id — any LATER
+          // event under it is a late delivery.
+          if (isStaleQueryEvent(key, p.query_id)) return
+          retireQueryEvent(key, p.query_id)
           noteSessionActivity(sid, 'end')
           // §P2-18: the completed session commits ITS OWN bucket, and UI
           // mutations only fire when it is the one on screen — a background
@@ -1051,8 +1146,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // session's visible stream. The committed text is read from the
           // bucket (not a streamingText mirror), so StrictMode can't
           // double-append and concurrent sessions can't cross-commit.
-          const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = sid ?? visibleKey
           // B1 P1-5/P2-13: the run's own session settles regardless of
           // visibility; a pending throttled flush must die BEFORE the
           // buckets are cleared so it can't resurrect stale text.
@@ -1094,8 +1187,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // classified Rust-side from the engine's AuthenticationFailed
           // text (events::classify_query_error_kind), so the JS side never
           // string-matches provider errors.
-          const p = e.payload as { error: string; error_kind?: string; session_id?: string }
+          const p = e.payload as { query_id?: string; error: string; error_kind?: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = p.session_id ?? visibleKey
+          // A-17 fix: staleness first, then retire (mirrors QUERY_COMPLETED).
+          if (isStaleQueryEvent(key, p.query_id)) return
+          retireQueryEvent(key, p.query_id)
           noteSessionActivity(p.session_id, 'fail')
           // §P2-18: like QUERY_COMPLETED, failure state is scoped to the
           // session that owns the run — a background run failing must not
@@ -1105,8 +1203,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // bubble — drop the run's buckets AND the visible projections.
           // Persisting the partial text needs a backend commit path (none
           // exists yet), so clearing is the approved behavior.
-          const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = p.session_id ?? visibleKey
           setSessionQuerying(key, false)
           cancelStreamFlush()
           streamingBucketsRef.current.set(key, '')
@@ -1126,13 +1222,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }),
         listen(EVENT_NAMES.QUERY_CANCELLED, (e) => {
-          const sid = (e.payload as { session_id?: string }).session_id
+          const p = e.payload as { query_id?: string; session_id?: string }
+          const sid = p.session_id
           if (!isEventForCurrentWindow(sid, windowSessionId)) return
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = sid ?? visibleKey
+          // A-17 fix: a cancelled event for an OLD query id (stop→instant
+          // resend race) must not settle the NEW turn — the new query's own
+          // terminal event is the only thing that may end it. Staleness
+          // first (this event is legitimate for its own query), then retire.
+          if (isStaleQueryEvent(key, p.query_id)) return
+          retireQueryEvent(key, p.query_id)
           noteSessionActivity(sid, 'end')
           // B0 P1-2: same ghost-bubble cleanup as QUERY_FAILED — the
           // cancelled session's buckets and, when visible, the projections.
-          const visibleKey = visibleSessionIdRef.current ?? ''
-          const key = sid ?? visibleKey
           setSessionQuerying(key, false)
           cancelStreamFlush()
           streamingBucketsRef.current.set(key, '')

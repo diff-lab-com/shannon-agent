@@ -1,9 +1,14 @@
-# ChatScript: cancel-then-resend — cancel-matrix 场景 3（stop 后立刻重发，A-17 核心回归）。
+# ChatScript: cancel-then-resend — cancel-matrix 场景 3（stop 后立刻重发，
+# A-17 回归锚；R4 组6 已修复）。
 #
-# 真实竞态（A-17）：stop 立即放开 querying 闩（commands_chat.rs:229-234），
-# 但旧查询循环要等下一个引擎事件才退出——间隙内新 send_message 启动，
-# 同会话双查询并存；前端全程不按 query_id 过滤（AppContext 无 query_id），
+# 真实竞态（A-17，已修复）：stop 曾立即放开 querying 闩（commands_chat.rs
+# 的 cancel 命令），而旧查询循环要等下一个引擎事件才退出——间隙内新
+# send_message 启动，同会话双查询并存；前端曾全程不按 query_id 过滤，
 # 旧查询迟到的 text/query:cancelled 落进新 turn 的窗口。
+# 修复 = 双管齐下：①后端 cancel 不再提前清闩（保留 take+cancel token，
+# 复位统一在查询循环退出路径）；②前端 AppContext 记录每次 send 响应的
+# query_id，携带不同 id 的 query:*/terminal 事件按旧查询迟到投递丢弃
+# （缺 id 的旧形状放行）。
 #
 # 播放器的 turn 机制无法表达「旧 turn 的取消事件迟到到新 turn 之后」
 # （onCancel 播放期间 phase=playing，新 send 会落到默认 handler），所以
@@ -11,9 +16,10 @@
 # 与真实后端的迟到投递形状一致）——这正是 emitNow「bypass 播放器状态」
 # 的设计用途。序列（spec 注释同步）：
 #   turn 0 流中 → stop（cancelled 同步收敛）→ 立刻重发（turn 1 流中）
-#   → 注入迟到 q-0 text + 迟到 q-0 cancelled → 断言现状污染（A-17）。
+#   → 注入迟到 q-0 text + 迟到 q-0 cancelled → 断言新流完好、isQuerying
+#   保持、完整回复（已修复 #R4 组6；原先断言污染现状）。
 name: cancel-then-resend
-description: cancel-matrix #3 — stop 后立刻重发；迟到旧事件注入（A-17 现状确认）
+description: cancel-matrix #3 — stop 后立刻重发；迟到旧事件注入（A-17 已修复，query_id 过滤 + 闩时序）
 seed:
   config:
     hasKey: true
