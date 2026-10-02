@@ -5,15 +5,30 @@
 // cancelling the edit restores the pre-edit draft. The second test doubles
 // as the A-14 boundary-evidence run (checkpoint turn_index == the edited
 // message's turn is still rewindable).
+//
+// wave-2 quickwin: the first seeded user message carries two attachments —
+// the A-26 test pins WYSIWYG editing (chips load from the message on
+// startEdit; remove/add during the edit is exactly what the resend carries,
+// asserted through the player's sends log).
 import { expect, test } from '@playwright/test'
 
 import { ChatPage } from './helpers/ChatPage'
 import { loadChatScript, readChatScript } from './helpers/scriptLoader'
 import { expectNoConsoleErrors } from './helpers/watchdog'
+import { mockSnapshot } from './helpers/knownIssues'
 import type { ChatScript } from '../src/lib/mock/scripted/schema'
 
 const script = readChatScript('edit-rewind') as ChatScript
 const EDITED = script.turns[0]!.user
+const EDITED_2 = script.turns[1]!.user
+
+const NOTES_PATH = script.seed!.sessions![0]!.messages[0]!.attachments![0]!
+const CHART_PATH = script.seed!.sessions![0]!.messages[0]!.attachments![1]!
+const NOTES_NAME = NOTES_PATH.split('/').pop()!
+const CHART_NAME = CHART_PATH.split('/').pop()!
+// The added-during-edit file (inside the demo working dir → no refusal badge).
+const ADDED_PATH = '/Users/demo/workspace/my-startup/storm-surge.md'
+const ADDED_NAME = ADDED_PATH.split('/').pop()!
 
 async function openSeededSession(page: import('@playwright/test').Page): Promise<ChatPage> {
   const chat = new ChatPage(page)
@@ -30,6 +45,21 @@ async function startEdit(page: import('@playwright/test').Page, index: number): 
   // Scope to the bubble — every user message carries an Edit button.
   await bubble.getByRole('button', { name: 'Edit message' }).click()
   await expect(page.getByTestId('edit-banner')).toBeVisible()
+}
+
+/**
+ * Deliver a Tauri v2 webview drag-drop through the mock event bridge — the
+ * demo-mode path into the composer's mergePaths (the native attach dialog is
+ * not drivable in the harness). The real @tauri-apps/api webview listener
+ * registers `tauri://drag-drop` through plugin:event|listen, which the mock
+ * bridge fans out to.
+ */
+async function emitWebviewDrop(page: import('@playwright/test').Page, paths: string[]): Promise<void> {
+  await page.evaluate((dropped) => {
+    ;(window as unknown as {
+      __shannonMock: { emit(name: string, payload: unknown): void }
+    }).__shannonMock.emit('tauri://drag-drop', { paths: dropped, position: { x: 0, y: 0 } })
+  }, paths)
 }
 
 test.describe('scripted chat backend — edit-rewind (journey #10)', () => {
@@ -76,6 +106,42 @@ test.describe('scripted chat backend — edit-rewind (journey #10)', () => {
     await expect(page.getByTestId('edit-banner')).toHaveCount(0)
     await expect(chat.composer()).toHaveValue('')
     await expect(chat.bubbles()).toHaveCount(4)
+    await expectNoConsoleErrors(page)
+  })
+
+  test('A-26 WYSIWYG: edit chips load from the message; remove/add during the edit is what the resend carries', async ({ page }) => {
+    test.setTimeout(60_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'edit-rewind', test.info())
+    await openSeededSession(page)
+
+    await startEdit(page, 0)
+    // WYSIWYG load: the seeded message's own attachments appear as composer
+    // chips (anchored on their remove buttons — the bubbles' FileCards show
+    // the same names, so the buttons are the unambiguous chip anchor).
+    await expect(page.getByRole('button', { name: `Remove ${NOTES_NAME}` })).toBeVisible()
+    await expect(page.getByRole('button', { name: `Remove ${CHART_NAME}` })).toBeVisible()
+
+    // Edit the set: drop tide-notes.md, add storm-surge.md.
+    await page.getByRole('button', { name: `Remove ${NOTES_NAME}` }).click()
+    await expect(page.getByRole('button', { name: `Remove ${NOTES_NAME}` })).toHaveCount(0)
+    await emitWebviewDrop(page, [ADDED_PATH])
+    await expect(page.getByRole('button', { name: `Remove ${ADDED_NAME}` })).toBeVisible()
+    await expect(page.getByRole('button', { name: `Remove ${CHART_NAME}` })).toBeVisible()
+
+    // Commit: the resend streams turn 1 with the EDITED attachment set.
+    await chat.composer().fill(EDITED_2)
+    await chat.composer().press('Enter')
+    await expect(page.getByTestId('edit-banner')).toHaveCount(0)
+    await expect(chat.bubbles()).toHaveCount(2, { timeout: 20_000 })
+    await expect(chat.bubbleAt(0)).toContainText(EDITED_2)
+
+    // Payload truth (player sends log): the composer's current set travels —
+    // NOT the message's original pair the old editing.attachmentPaths commit
+    // silently resurrected.
+    const sends = (await mockSnapshot(page)).sends
+    expect(sends).toHaveLength(1)
+    expect(sends[0]).toMatchObject({ message: EDITED_2, attachments: [CHART_PATH, ADDED_PATH] })
     await expectNoConsoleErrors(page)
   })
 })
