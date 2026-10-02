@@ -681,6 +681,12 @@ fn main() {
                 // next turn after the pool is up registers them.
                 let pool = state_ref.mcp_pool();
                 tauri::async_runtime::spawn(async move {
+                    // F6 (R7-④ batch 2) — persist every OAuth token rotation
+                    // (401-triggered refresh, tool calls included) into the
+                    // keyring immediately, not just at connect time. Must be
+                    // installed before seeding so handshake-time rotations go
+                    // through the same serialized, debounced writer.
+                    shannon_desktop::mcp::install_token_rotation_hook(&pool).await;
                     // W2-A: a corrupt settings.json is an error, never a
                     // silent empty list — log loudly (the MCP settings page
                     // surfaces the same error in its UI state).
