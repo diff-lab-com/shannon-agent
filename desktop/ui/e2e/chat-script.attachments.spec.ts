@@ -70,4 +70,38 @@ test.describe('scripted chat backend — attachments (journey #8)', () => {
     await expect(chat.bubbleAt(1)).toContainText('工作目录之外')
     await expectNoConsoleErrors(page)
   })
+
+  // G18 (wave-2): the send registers the attachment into the session file
+  // index — the optimistic bubble's FileCard upserts on mount, and the
+  // /files page lists the reference. Client-side nav only: a reload would
+  // reset the demo index (module state) by design.
+  test('the sent file is registered into the file index and listed on /files (G18)', async ({ page }) => {
+    test.setTimeout(90_000)
+    const chat = new ChatPage(page)
+    await page.addInitScript(([key, path]) => {
+      localStorage.setItem(key, JSON.stringify({ text: '总结这个文件', attachments: [path], updatedAt: Date.now() }))
+    }, [DRAFT_KEY, OUTSIDE_PATH] as const)
+    await loadChatScript(page, 'attachments', test.info())
+    await expect(chat.composer()).toBeVisible({ timeout: 10_000 })
+
+    await page.getByTestId('desktop-session-row-script-sess-attach').click()
+    const chipRemove = page.getByRole('button', { name: `Remove ${OUTSIDE_NAME}` })
+    await expect(chipRemove).toBeVisible({ timeout: 5_000 })
+
+    await chat.send('总结这个文件')
+    // The optimistic bubble mounts its FileCard — that mount is the index
+    // upsert (register_file_index_entry, fire-and-forget).
+    await expect(chat.bubbleAt(0)).toContainText(OUTSIDE_NAME, { timeout: 10_000 })
+
+    await page.getByRole('link', { name: 'Files' }).click()
+    const list = page.getByTestId('files-list')
+    await expect(list).toBeVisible({ timeout: 10_000 })
+    const row = page.getByTestId('files-row').filter({ hasText: OUTSIDE_NAME })
+    await expect(row).toHaveCount(1, { timeout: 10_000 })
+    // The row's full path rides the title attribute; the text shows name +
+    // size + registered-at.
+    await expect(row).toHaveAttribute('title', OUTSIDE_PATH)
+    await expect(row).toContainText(OUTSIDE_NAME)
+    await expectNoConsoleErrors(page)
+  })
 })
