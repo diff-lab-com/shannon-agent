@@ -19,6 +19,8 @@
 
 > **10-02 增补**：应用户要求补做两个专项调研并合并入本方案——**取消（§4.1）**与**输入缓存（§4.2）**。结论：取消"支持但有洞"（引擎不感知 token、事件边界才生效、前端不按 query_id 过滤 → stop 后立刻重发有状态污染竞态）；输入缓存"草稿/队列/外部桥齐备但策略不一致"（队列不持久化、无历史回溯）。可疑点扩至 **22 条**（A-17…A-22），拍板项扩至 7 个（新增 D6/D7）。
 
+> **10-03 v2 深度复核与增补拍板（独立会话）**：对 §1–§8 做独立复核（3×Explore+主会话实证，同基线 828c4adb）——架构前提全部成立；修正 A-16 反证/A-14 改判/A-10 后半降级；新发现 A-23…A-26 四条（复核时 A-23/A-24 尚未修，后经主路径 R 系列修复覆盖，见 §9.3 与执行结果）；盲区扫描 G1–G22 → 剧本矩阵 14→22；新增拍板 D8/D9。v2 增量实施=本 wave（R7），范围见 §9.6。
+
 **工作量**：MVP（基建 + 核心 6 剧本 + L1 状态机）≈ 1 周；全量（14 journeys + fuzz + 视觉 + 回归锚点）≈ 2–3 周。待拍板项 5 个（§8）。
 
 ---
@@ -298,7 +300,7 @@ L2 fixture 在每个剧本步骤后自动巡检一组跨场景不变量（不逐
 
 | Phase | 内容 | 产出 | 估时 |
 |---|---|---|---|
-| P0 spike | 实证 `plugin:event|listen` 桥方案；定 DSL 细节（YAML+类型化 loader）；用 1 个手工剧本在 demo 模式跑通"流式+工具卡" | 可行性结论 + Demo 视频/截图 | 0.5–1d |
+| P0 spike | 实证 `plugin:event\|listen` 桥方案；定 DSL 细节（YAML+类型化 loader）；用 1 个手工剧本在 demo 模式跑通"流式+工具卡" | 可行性结论 + Demo 视频/截图 | 0.5–1d |
 | P1 基建 | ScriptedBackend 四件套（事件桥/播放器/seed 注入/watchdog）+ Playwright fixture + page objects + DSL loader/校验 | `e2e/helpers/` + `lib/mock/scripted/` | 3–4d |
 | P2 剧本库 + L1 | ★核心 6 剧本双层跑 + 零覆盖组件补测 + 纯函数边界 | 6 journeys 全绿 + 组件测试 | 4–5d |
 | P3 全量 journeys + 回归锚点 | 其余 8 剧本 + 竞态剧本组 + findings 回归断言入剧本 | 14 journeys + 锚点清单核销 | 3–4d |
@@ -320,6 +322,8 @@ MVP = P0+P1+P2 ≈ **1.5 周**；全量 ≈ **3 周**。每 Phase 独立成 PR�
 | D5 | Vitest 串行（maxThreads=1）+ 626 行全局 setup 的脆弱性 | 本期不治理，只记录；剧本测试尽量进 Playwright 层以绕开该瓶颈 |
 | D6 | 取消/失败后**半截输出丢弃**（现状）vs 保留"已生成部分"（Claude/ChatGPT 均保留，见走查 WC1） | 无论取舍，先把现状钉成回归锚点；是否改为保留走产品决策（涉及 session log 落定格式） |
 | D7 | 流式中排队队列**不持久化**（重启丢失）vs 草稿已持久化——策略不一致 | 先钉住现状为回归锚点；持久化与否与 D6 一起排 backlog |
+| D8 | `voice-input`（剧本 22）CI 策略 | **nightly 可选、默认 skip**（10-03 拍板） |
+| D9 | G17 死键与不可达分支 | **删不补**；但 D9-b 复核翻转：QueueChips attachmentsOnly 占位在 A-9 修复后已成可达且被依赖的正面分支，改为"钉测试不删"（10-03 拍板修订） |
 
 ---
 
@@ -397,3 +401,117 @@ MVP = P0+P1+P2 ≈ **1.5 周**；全量 ≈ **3 周**。每 Phase 独立成 PR�
 - **文档化（P2/P3）**：D7 队列不持久化为有意设计（AppContext PROMPT_QUEUE_CAP 注释，含"勿无产品裁定修复"警示）；A-10 后台完成态瞬态不可见、tauri-driver 真壳测试延后、QUERY_FAILED 半截不一致（D6 邻接项）均记录为接受现状
 - **流程**：CONTRIBUTING 新增长生命分支每日 rebase 规则；Rust 验收升级为四件套（+clippy）
 - **仍开放的观察项**：QUERY_FAILED 半截重载无标记不一致（D6 邻接，tee 侧扩 reason 即可统一）；`continueTarget` undefined 锐边（组件测试已钉）；3 个非矩阵主题的 on-error 对比度（contrast-audit PAIRS 外，建议另立项）
+---
+
+## 9. v2 深度复核增补（2026-10-03）
+
+> 本章为对 §1–§8 的独立复核结果与盲区补强。基线同 HEAD 828c4adb（复核时点，先于上文执行结果 R1–R6 合并）。复核方式：3 个 Explore 代理分别核实 22 条可疑点、盘点 /chat 全功能面找 journey 盲区、核实测试基建资产表；主会话另行实证 tauriBridge demo 路径。本章所引数字为复核时点现状；R 系列落地后已变化处见条目内括注。
+
+### 9.1 架构前提复核结论：全部成立
+
+| 前提 | 复核证据 |
+|---|---|
+| demo 模式零对话能力 | 主会话实证 `src/lib/runtime/tauriBridge.ts:139-150`：mock 分支 `queueMicrotask` 秒回 `{kind:'completed'}`，零 `query:*` 事件；`installListeners` 的 9 路 `listen()` 在 mock 下注册即失败（coreMock 无 `plugin:event\|listen` handler）——ScriptedBackend 必要性与 §2.2 事件桥方案成立 |
+| L1 主控缝可复用 | `AppContextStreaming.test.tsx` 的 `vi.hoisted` captured + `flush()` 范式确认存在（L21-40），`vi.mock('@tauri-apps/api/event')` 可直接承接剧本事件流 |
+| e2e 唯一 mock 通道 = 构建期别名 | 18 个 spec 全部依赖 `vite.config.ts` 将 `@tauri-apps/api/core` 别名到 `coreMock.ts`，**零 `page.route` 网络拦截先例**——§2.2 选 mock 层扩展（而非 route 拦截）是唯一顺路，备选否定理由加一 |
+| L3 契约入口存在 | `POST /v1/sessions/:id/messages` SSE 路由确认（`crates/shannon-server/src/routes/mod.rs:147`）；注意 shannon-server 是 **lib-only**（二进制入口经 `shannon-cli` main.rs:3571），L3 驱动方式按 §8 D2 微调 |
+| Rust 侧场景/回放基建 | `tests/scenarios/` 20 个 yaml + Rust loader（`shannon-core/src/testing/{scenario,test_env,eval_runner,mock_dsl}.rs`）；`SHANNON_RECORD_DIR/REPLAY_DIR` 行号精确吻合（client.rs:453-461）；`representative_events()` 16 个事件样例（sse.rs:89）——剧本事件样例来源成立 |
+
+### 9.2 原文修正（以当前代码为准，原文相应条目以本节为准）
+
+| # | 原文 | 修正 |
+|---|---|---|
+| C1 | 附录 A-16（composerBridge 同 tick 顺序未定义） | **反证**：未订阅时逐次 `pendingDrafts.push`（调用序=数组序），订阅时 `splice(0)` 严格 FIFO 派发，同 tick 内订阅态无 await 边界不可能翻转——顺序确定。从捕虫清单移出，改为"顺序契约证伪测试"目标（钉死 FIFO 语义） |
+| C2 | 附录 A-10 后半（缺 session_id 事件 commit 错会话） | **降级 latent**：后端恒发 `session_id: Some`（commands.rs:1887-1890），当前不可达，属防御性分支。fuzz 变体保留（防后端回归），不作为预期 bug |
+| C3 | 附录 A-14（checkpoint 等于当前 turn 也判 rewindable） | **非缺陷**：rewind 语义=「删除该回合及其后所有回合」（commands_rewind.rs:10-12），等号恰是撤销第 N 回合的必要条件（改 `>` 则第 0 回合永不可 rewind）。改记为"边界语义回归锚点" |
+| C4 | §1.1 "tauri-api.ts ~280 命令" | 实测 **301 个唯一命令**（tripwire 测试注释里的 280 已过时）；handlers.ts 2096 行 / 218 个 handler / UNMOCKED_ALLOWLIST **97 条**（注：R 系列落地后事件桥/播放器等新 handler 已并入，此为复核时点数字，以 tripwire 测试实时为准） |
+| C5 | §1.1 前后端事件名常量表 | 两表**非镜像**：前端 EVENT_NAMES 29 键、后端 event_names 33 const，互有缺失（前端独有 QUERY_NOTICE/SUBAGENT_*/SESSION_AUTO_UNARCHIVED；后端独有 TASK_STEP/UPDATE_*/VOICE_* 等）。DSL schema 校验按「**前端子集 + 例外清单**」实现，不能假设 1:1 |
+| C6 | §3 横切 "视觉基线仅 3 页 × light × 空闲态" | 实际 `visual-baseline.spec.ts` 仅 27 行：3 页 × **默认单主题**（maxDiffPixelRatio 0.05）；主题矩阵在 themes.spec / theme-gallery.spec / walkthrough（14 路由 × 2 主题，axe 全规则）。D4 的"现状"据此修正，目标不变（注：R5 视觉状态矩阵 12 基线落地后，本条"现状"已失效，见执行结果） |
+| C7 | §1.1 "lines 83%" | vitest thresholds 红线是 **lines 80**（functions 60/branches 75/statements 80）；现存 `coverage/` 产物为陈旧空数据（lcov LH:0），83% 不可证实。表述改为"红线 80，实测待重跑"（注：R 系列新增剧本层与组件测试后覆盖数字已再变化，红线 80 不变） |
+| C8 | §2.1 蓝本说明 | `tests/scenarios` 的 loader/runner 是 **Rust 侧**（shannon-core/src/testing/）；TS 侧 ChatScript loader 从零建（三段式蓝本关系不变） |
+| C9 | §3 L3 工具链 | Rust 侧无 wiremock，惯例是 **mockito 1.6 + `mock_dsl.rs`**（可渲染 Anthropic/OpenAI/Ollama 三格式 SSE）。fake SSE provider 优先复用 mock_dsl 起本地 mockito server 作为 `openai-compatible` 的 base_url，而非新写 axum 服务 |
+| C10 | §2.2 事件桥实现注意 | `plugin:event\|listen`/`plugin:event\|unlisten` 作为新"命令"进入 mock 层后，**必须同步登记 tripwire**（`mock-handlers-coverage.test.ts` 双向检查：新命令无 handler 失败、handler 被删也失败），或显式加入 allowlist 并注明原因（§附录 B-4） |
+| C11 | §1.1 组件零覆盖清单（精确化） | **零测试引用**：AttachmentChip、SlashResultCard、QueueChips、DeleteSessionModal、InlinePanelModal、ComposerContext；**仅间接覆盖**（无专属测试）：BudgetBanner、BudgetDialog、ContextBreakdownCard、GoalStartForm、diffStats、sessionModelPromotion、MessageArea、ComposerPanel、ContextPanel、PlanPanel、ApiKeyBanner。§3 L1 补测范围据此扩展 |
+
+### 9.3 捕虫清单扩充（A-23…A-26，复核新发现）
+
+| # | 位置 | 疑点 |
+|---|---|---|
+| A-23 | `Chat.tsx:292` × `AppContext.tsx:537-549` | **P1，用户可直接感知**：budget 预检拒绝会回滚乐观 append（"rejected BEFORE recording"），此后 `continuePastBudget` 取到的 `lastUser` 是上一（**已回答过的**）回合——"Continue once" 重发的是旧消息，被拒的那条输入彻底丢失 |
+| A-24 | `useBudgetGuard.ts:38-45` | 切换会话后、旧监听器异步 unlisten 完成前，旧闭包收到旧会话 budget 事件会 `setWarning/setExceeded`，把旧会话横幅污染到当前界面；与 L52 重 derive 是 promise 竞速，胜负不确定 |
+| A-25 | `Chat.tsx:431-434` | editing 状态下附件-only 发送（`!trimmed`）被静默 return——与 A-9 同类问题但位于独立路径（idle+editing） |
+| A-26 | `Chat.tsx:229` × `Chat.tsx:390` | `startEdit` 只 `setInput(msg.content)` 不清空当前 `attachedFiles`：编辑期间 composer 显示与目标消息无关的附件 chips，且 commitEdit 用原消息附件整体替换——用户编辑期间新加的附件被静默丢弃 |
+
+> 待证实清单口径更新：A-16 反证移出、A-14 改判语义锚点、A-10 后半降级 latent，净变化后 **24 条待证实**（A-1…A-13、A-15、A-17…A-26）。§5.4 的"第一轮验收"以此为准。
+>
+> 状态更新（v1 R 系列合并后）：**A-23/A-24 上游 R 系列已修**（Chat.tsx 预检 blockedPayload / useBudgetGuard ref 过滤），移出待证实清单；**A-25/A-26 与 D9 由 R7 quick-win 处理**（见 §9.6）。
+
+### 9.4 剧本矩阵 v2：14 → 22（盲区扫描 G1–G22）
+
+> 实施标注：新增剧本 15–22 与既有剧本扩展由 **本 wave R7 实施**（journeys-composer / journeys-chrome / journeys-env 三个 PR，见 §9.6）；本节为复核时点的设计定稿。
+
+对 /chat 全功能面（Chat.tsx 705 行、ChatInput.tsx 1457 行、RightDock.tsx 849 行、SidebarSessions.tsx 1819 行、AppContext.tsx 1189 行、slash 15 命令、10 locale、全局快捷键全集）逐区盘点，得 22 个 gap（G1–G22），归并为 8 条新增剧本 + 8 条既有剧本扩展：
+
+**新增剧本（编号续 §4）**：
+
+| # | 剧本 | 覆盖 gap | 优先级 | 关键断言（摘要） |
+|---|---|---|---|---|
+| 15 | `slash-commands` | G1 | 高 | /goal 表单必填校验与内联报错、`goal-start-success`；/diff 四态（notRepo/noChanges/truncated/patch 展开）；/export 保存对话框取消/失败；/new 建会话；/dream skipped toast 矩阵；**parse 规则**：`/name args`、未知 token 作纯文本、别名（parse 先做 L1 纯函数表驱动） |
+| 16 | `file-mention` | G2 | 高 | @ 菜单开合、fuzzy 排序、键盘导航、插入相对路径 + caret 复位、mid-text mention、email 不触发、Escape 重 arm、无 working dir 降级横幅（与 J8 附件是不同管线：纯文本无预检） |
+| 17 | `model-mode-switch` | G3+G4 | 高（前置 testid） | 模型 chip 会话 override（"· session"后缀/Set as default 晋级/Reset 回继承）、effort 四档 label、ExecutionModeSwitcher 四档写 approval_mode + 未知值 rawLabel 回显、PhaseTierSwitcher、**切换后下一 turn 才生效**语义、approval 模式对审批弹窗出现与否的影响 |
+| 18 | `composer-draft-bridge` | G6+G20 | 高（R2 修复回归高危区） | 五个草稿入口（companion 窗口/终端 fenced prefill/PPT 大纲/csv Batch run/Session sources cite）契约：**永不自动发送、追加不覆盖、未挂载暂存 mount 后 flush**；InlinePanelModal 脏确认三路关闭 |
+| 19 | `session-lifecycle` | G7 | 中 | 内联重命名、pin + 拖拽排序持久化、三分组切换持久化、归档→重开 unarchive toast、DeleteSessionModal（pending/失败保持打开/permanent 变体）、导出 md、后端全文搜索防抖、50 条 cap |
+| 20 | `dock-interactions` | G8+G9 | 中 | 拖宽/键盘调宽 clamp（280-720 + 60% 视口）、全屏进出、`shannon.dock.*` 持久化恢复、Ctrl+\ 一次性 hint、自动停靠四源（artifact/plan/diff/run）、**PlanPanel 人工勾选写回 save_text_file 失败回滚**、html 交互注册失败降级静态 hint |
+| 21 | `multi-window` | G5 | 中 | windowSession 事件过滤（只收本会话）、审批弹窗只弹本窗、双页实例并发流式/取消互不串扰、reveal→主窗切会话导航、关窗收敛（L2 用 `/?windowSession=` 起两 page；真壳归 L3） |
+| 22 | `voice-input` | G12 | 低（nightly 可选） | voice.supported 门禁、VoiceOrb 录音态、转写合并进草稿、流式中禁用、local/cloud provider 切换（mock provider；→ D8 拍板 CI 策略） |
+
+**既有剧本扩展**：
+
+| 剧本 | 扩展（gap） | 新增断言 |
+|---|---|---|
+| J2 multi-turn-stream | G11+G15 | Ctrl+F 计数 0 态/Enter 环游/虚拟化（>30 条）两跳转路径/flash ring/Esc 归还焦点；流式中切语言不丢流 |
+| J3 tool-task-file | G19 | FileCard 全动作面：PDF 预览懒加载失败态、csv Batch run、save-as 取消静默、reveal/open 失败 toast、抽取明细 |
+| J4 approval-* | G4+G22 | risk 四级配色与 aria、reason 三源（rule 名/llm 置信度/default）、**背板关闭=Deny**、legacy 无 reason 兼容 |
+| J5 auth-error | G13 | 错误分类全集（仅 auth/other 两类）、Retry 无历史消息时按钮消失、StreamNoticeLine（failover/key_rotation）存活到下次发送、goal-owned 发送阻断、initError banner |
+| J8 attachments | G18 | issue/extraction 徽章随 chips 剪枝时序、detach-all、no-working-dir 横幅出现/消失、`registerFileIndexEntry`→Files 页联动 |
+| J10 edit-rewind | G10 | branch（fork 确认→**切换 currentSessionId**，与 J11 竞态面交叉）、regenerate（仅最后一条 assistant + idle 门禁）、👍/👎 持久化往返 |
+| J13 journey-cross-page | G21 | 扩为四角旅程 chat↔files↔timeline↔**terminal**（Ctrl+` 切换、代码块 run-in-terminal、选中发送 prefill、drawer 关闭态事件三连） |
+| P4 横切 | G14+G15+G16 | 视觉矩阵加入空态/骨架（WelcomeState、sidebar skeleton、切换遮罩、dock/plan 空态）；主题/语言即时反映（data-theme、`<html lang>`、Toaster 跟随）；shortcuts↔help 面板一致性断言（L1 可先行） |
+
+**转 finding 不建剧本（G17）**：① WelcomeState 广告 "Alt+Up history" 快捷键全仓无 handler（与 A-22 同根）；② QueueChips 的 attachmentsOnly 占位在现 UI 不可达（流式中纯附件 no-op）——转产品/修复清单，→ D9（D9-b 修订：②经 A-9 修复后已成可达且被依赖的正面分支，改判"钉测试不删"，见 §8 D9）。
+
+### 9.5 前置工作 P1.5：testid 补齐
+
+盲区扫描确认 **testid 无集中注册表**（全部组件内联），且以下高频交互面**完全没有 testid**（只有 aria-label/class），剧本 17 与 J4/J11 扩展锚定前需先补：
+
+- Header：预算徽章、**审批弹窗（permission dialog）**、ExecutionModeSwitcher、PhaseTierSwitcher
+- ChatInput：模型 chip 按钮、plan 模式横幅、审批模式 pill、"+" 菜单
+- ApiKeyBanner：现为 class（`shannon-apikey-banner`）非 testid
+
+建议顺带建立 `e2e/helpers/testids.ts` 常量表（新增锚点登记，避免字符串漂移），工作量并入 P1。
+
+> 状态更新（2026-10-03）：P1.5 由本 wave R7 的 testids PR 实施（集中注册表 `e2e/helpers/testids.ts` + 补齐缺失 testid），见 §9.6。
+
+### 9.6 v2 增量剩余范围与实施（R7, 2026-10-03）
+
+v1 执行结果（R1–R6）已覆盖基建与 §9.2 修正面；v2 增量剩余范围（§9.3 收尾 + §9.4 矩阵 + §9.5 前置）拆为 6 个 PR，自 dev@7e5203a90 切出，分 worktree 并行实施、串行合并：
+
+| # | PR | 内容 | 文件域（互斥） |
+|---|---|---|---|
+| 1 | `fix/chat-quickwin-v2` | §9.3 收尾：A-25（编辑态附件-only 提交，语义对齐 A-9 修复后主路径）、A-26（编辑期间附件丢弃，语义="所见即所发"）、D9-a（删 WelcomeState Alt+Up 广告）；D9-b 翻转后为 QueueChips attachmentsOnly 分支钉测试（不删）。每项附 failing-then-passing 锚点 | `pages/Chat.tsx`、`WelcomeState.tsx` + 十语 i18n、edit-rewind/queue-steer/first-chat 剧本、新 L1 文件 |
+| 2 | `feat/chat-testids-registry` | §9.5 P1.5：集中 testid 注册表 `e2e/helpers/testids.ts` + 补齐 7 处缺失 testid + 权限弹窗可访问名（KNOWN_A11Y_DEBT ①同步清台账） | `Header.tsx`、`ExecutionModeSwitcher.tsx`、`ChatInput.tsx`（仅 testid 行）、`ApiKeyBanner.tsx`、`a11yDebt.ts`、`helpers/testids.ts`（新） |
+| 3 | `feat/chat-journeys-composer` | §9.4 剧本 15/16/18（slash-commands / file-mention / composer-draft-bridge）+ J2/J5/J8 扩展 | 新 spec+yaml（composer 域）、`lib/slash` L1 新文件、errors/multi-turn-stream/attachments 扩展 |
+| 4 | `feat/chat-journeys-chrome` | §9.4 剧本 17/19/20（model-mode-switch / session-lifecycle / dock-interactions）+ J3/J4/J13 扩展 + seed schema 扩展（铁律 2 三件套） | `mock/scripted/schema.ts`+`seed.ts`、新 spec+yaml（chrome 域）、approval/tool-task-file/cross-page 扩展 |
+| 5 | `feat/chat-journeys-env` | §9.4 剧本 21/22（multi-window / voice-input）+ i18n-theme 横切，全部 nightly-only 家族（D8：voice-input 默认 skip） | 新 nightly spec+yaml（env 域）；不碰 `schema.ts` |
+| 6 | `docs/chat-test-plan-v2` | 本 PR：v2 复核与 D8/D9 拍板入档（§8 增行 + 本章）+ CONTRIBUTING KNOWN_FUZZ_WEDGES 引用漂移修正 | 本文档、`CONTRIBUTING.md` |
+
+实施约束：
+
+- **文件域互斥**：六个 PR 文件域两两不相交（上表第 4 列）；在飞禁区（budget/cancel-matrix 两 spec、AppContext 事件路由、fuzz-found、`mock/scripted/player.ts`）本 wave 全员不碰。
+- **合并顺序**：`testids` 先于 `journeys-chrome`（chrome 域 spec 的 permission-dialog/budget-badge 等锚点依赖注册表；注册表合并前 chrome spec 以集中常量占位并注释来源）；quickwin 与两条 journeys 线可并行；`docs`（本 PR）最后合并，合并前补写 §10。
+
+---
+
+## 10. R7 执行结果（待本 wave 合并前补写）
+
+> 占位：wave-2 六 PR（§9.6）合并前由 controller 汇总补写执行结果。
