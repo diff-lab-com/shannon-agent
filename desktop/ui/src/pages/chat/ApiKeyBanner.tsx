@@ -36,6 +36,7 @@ export default function ApiKeyBanner({
     <Banner
       tone="info"
       className="shannon-apikey-banner"
+      data-testid="apikey-banner"
       onDismiss={onDismiss}
       dismissLabel={t('chat.banner.apiKeyMissing.dismiss')}
     >

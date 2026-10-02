@@ -1090,6 +1090,7 @@ export default function ChatInput({
       {planModeActive && (
         <div
           role="status"
+          data-testid="plan-mode-banner"
           className="flex items-center gap-xs px-md py-xs bg-tertiary-container/60 border-b border-tertiary/30 rounded-t-2xl text-on-tertiary-container"
         >
           <span className="material-symbols-outlined icon-sm shrink-0">route</span>
@@ -1261,6 +1262,7 @@ export default function ChatInput({
                 variant="ghost"
                 aria-haspopup="menu"
                 aria-expanded={plusOpen}
+                data-testid="composer-plus-menu"
                 aria-label={t('chat.input.plus.aria')}
                 title={t('chat.input.plus.aria')}
                 className="p-md text-on-surface-variant hover:text-primary"
@@ -1283,6 +1285,7 @@ export default function ChatInput({
             <Select value={selectedMode.value} onValueChange={handleModeChange}>
               <SelectTrigger
                 size="sm"
+                data-testid="approval-mode-pill"
                 aria-label={t('chat.input.mode.label')}
                 title={`${selectedMode.rawLabel ? selectedMode.rawLabel : t(selectedMode.descriptionKey)} · ${t('chat.input.mode.highRiskNote')}`}
                 className={cn('rounded-full border', selectedMode.tone, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
@@ -1381,6 +1384,7 @@ export default function ChatInput({
             >
               <SelectTrigger
                 size="sm"
+                data-testid="model-chip-trigger"
                 aria-label={t('chat.input.model.label')}
                 title={sessionOverride
                   ? intl.formatMessage(
