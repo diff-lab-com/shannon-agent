@@ -29,7 +29,7 @@
 //! the pool's token-rotation callback ([`install_token_rotation_hook`])
 //! persists every 401-triggered refresh (tool calls included) into the
 //! keyring via the F5 keyring-first write path. Both writers (connect-time
-//! diff, rotation callback) share one [`OAuthTokenPersister`]: same-value
+//! diff, rotation callback) share one the private `OAuthTokenPersister`: same-value
 //! snapshots dedup to a single write, and the shared lock serializes them so
 //! a stale value can never overwrite a fresh rotation.
 
@@ -412,7 +412,7 @@ pub async fn install_token_rotation_hook(pool: &McpProcessPool) {
 /// `install_token_rotation_hook` against an explicit `settings.json` path and
 /// an injected secret store (tests pass a
 /// [`MockSecretStore`](crate::secret_store::MockSecretStore) — never the real
-/// keyring). The shared [`OAuthTokenPersister`] is reachable through
+/// keyring). The shared the private `OAuthTokenPersister` is reachable through
 /// [`oauth_token_persister`].
 ///
 /// The callback resolves the credential **origin** (client id, token
