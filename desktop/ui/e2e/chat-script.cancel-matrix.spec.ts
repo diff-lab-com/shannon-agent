@@ -218,9 +218,17 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await chat.composer().fill('加急（超时还稿）')
     await chat.composer().press('Control+Enter')
     await expect(chat.composer()).toHaveValue('')
+    // CI fix (job 110627367229): the persistent OUTCOME is asserted first —
+    // onSendRejected restores the draft, and the composer value survives —
+    // with a window that tolerates a late fire on a loaded runner. The
+    // notice toast rides the SAME callback (it mounts in that commit), so
+    // by the time the composer assert passes the toast is at age ~0 and a
+    // fresh window cannot miss it; its sonner lifetime is ~4s, so the
+    // old order (polling for the toast from t+0 with 20s) raced a slow
+    // runner instead.
+    await expect(chat.composer()).toHaveValue('加急（超时还稿）', { timeout: 35_000 })
     const toast = page.locator('[data-sonner-toast]').filter({ hasText: 'Steered message could not be delivered' })
     await expect(toast).toBeVisible({ timeout: 20_000 })
-    await expect(chat.composer()).toHaveValue('加急（超时还稿）')
     await expectNoConsoleErrors(page)
   })
 

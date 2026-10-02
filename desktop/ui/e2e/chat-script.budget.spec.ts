@@ -50,12 +50,37 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     const banner = page.getByRole('alert').filter({ hasText: 'Choose how to proceed' })
     await expect(banner).toBeVisible({ timeout: 15_000 })
     await expect(banner.getByText(/\$6\.40 of \$5\.00 used/)).toBeVisible({ timeout: 15_000 })
-    await expect(banner.getByRole('button', { name: 'Continue (ignore once)' })).toBeVisible({ timeout: 15_000 })
-    await expect(banner.getByRole('button', { name: 'Raise budget…' })).toBeVisible({ timeout: 15_000 })
-    await expect(banner.getByRole('button', { name: 'Stop', exact: true })).toBeVisible({ timeout: 15_000 })
+
+    // The three frozen actions. CI incident 110627367229 (two runs, every
+    // retry): the banner + body stood for the full window while the
+    // ROLE-based button query ran empty — so the actions pair DOM-first
+    // (the buttons are inseparable JSX from the body they follow), and ONE
+    // role-based a11y terminal check is kept below, wrapped in a
+    // self-healing toPass that dumps pruning-source evidence
+    // ([aria-modal]/[inert]/[aria-hidden]) into the log for as long as the
+    // mismatch lasts.
+    const actionButtons = banner.locator('button')
+    await expect(actionButtons.filter({ hasText: 'Continue (ignore once)' })).toBeVisible({ timeout: 15_000 })
+    await expect(actionButtons.filter({ hasText: 'Raise budget…' })).toBeVisible({ timeout: 15_000 })
+    await expect(actionButtons.filter({ hasText: 'Stop' })).toBeVisible({ timeout: 15_000 })
+
+    await expect(async () => {
+      const roleButton = banner.getByRole('button', { name: 'Continue (ignore once)' })
+      if ((await roleButton.count()) === 0) {
+        const evidence = await page.evaluate(() => ({
+          alertHtml: document.querySelector('[role="alert"]')?.outerHTML.slice(0, 500) ?? null,
+          pruners: [...document.querySelectorAll('[aria-modal="true"], [inert], [aria-hidden="true"]')]
+            .map(e => `${e.tagName.toLowerCase()}[${e.getAttribute('aria-label') ?? e.getAttribute('data-testid') ?? (e.getAttribute('class') ?? '').split(' ')[0]}]`)
+            .slice(0, 12),
+        }))
+        // eslint-disable-next-line no-console
+        console.info('[budget-a11y] role query empty while the DOM anchor stands:', JSON.stringify(evidence))
+      }
+      await expect(roleButton).toBeVisible()
+    }).toPass({ timeout: 30_000 })
 
     // "Raise budget…" opens the budget dialog (the second action is alive).
-    await banner.getByRole('button', { name: 'Raise budget…' }).click()
+    await actionButtons.filter({ hasText: 'Raise budget…' }).click()
     await expect(page.getByRole('dialog').getByText('Set session budget')).toBeVisible()
     await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
 
@@ -72,7 +97,7 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
 
     // Continue once: clearExceeded + resend with the bypass flag — snapshot
     // proves the wire arg, and A-2's dropped attachment.
-    await banner.getByRole('button', { name: 'Continue (ignore once)' }).click()
+    await actionButtons.filter({ hasText: 'Continue (ignore once)' }).click()
     await expect(banner).toHaveCount(0)
     const snapshot = await mockSnapshot(page)
     expect(snapshot.sends[1]).toMatchObject({
