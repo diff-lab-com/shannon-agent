@@ -47,6 +47,30 @@ just ci
 - Add `#[serial]` to any new Rust test that mutates shared state (env vars, ~/.shannon, /tmp).
 - For TS, tests live next to source as `*.test.ts`. Use `pnpm test` per package.
 
+### Chat page (desktop/ui) — ChatScript test discipline
+
+The `/chat` page is covered by the scripted E2E layer (`docs/plans/2026-10-02-chat-testing-plan.md`):
+ChatScripts (YAML) replay deterministic AI event streams through the demo-mode
+ScriptedBackend, consumed by both Playwright (L2) and the Vitest state-machine
+suite (L1). Rules:
+
+- **Every chat-domain fix PR ships or updates a script.** A bug fix without a
+  failing-then-passing script anchor is not done (R2-lesson: per-step checks
+  missed what journeys catch).
+- **New `query:*` / `permission-*` / `budget:*` event fields** must update the
+  ChatScript schema (`src/lib/mock/scripted/schema.ts` + ajv) and at least one
+  script; the YAML/JSON parity test must stay green.
+- **Nightly fuzz findings** (`.github/workflows/chat-nightly.yml`) become fixed
+  scripts within 48h — see `KNOWN_FUZZ_WEDGES` in
+  `e2e/scripts/fuzz-found-cross-session.yaml` for the pattern (freeze the wedge,
+  write the flip condition, file the issue).
+- **`UNMOCKED_ALLOWLIST` / armed-vs-unarmed**: any new mock handler must keep
+  the un-scripted demo path byte-identical (covered by
+  `mock-handlers-coverage.test.ts` and the seed-handlers comparison tests).
+- **Rust touching desktop commands**: acceptance = `cargo check` + relevant
+  `cargo nextest` + `cargo fmt --check`. A fmt slip or a missing ACL entry in
+  `desktop/acl/app-permissions.json` has both landed via this gap before.
+
 ## Releases
 
 - Maintainer-driven only. Pushing a `vX.Y.Z` tag triggers the single `.github/workflows/release.yml` orchestrator, which produces exactly one GitHub Release containing all three products: the `shannon` CLI (per-target `cargo build` archives + sha256), the desktop app (Tauri, via tauri-action), and `shannon-gateway` (Bun compile). A version-guard job fails fast if the tag doesn't match the manifests' versions.
