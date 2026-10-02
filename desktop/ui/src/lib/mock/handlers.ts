@@ -22,9 +22,11 @@ import {
 // setScriptSeed) these accessors answer with the script's seed data instead
 // of the global demo singletons; unarmed they all return null/undefined and
 // every handler below behaves exactly as before.
-import { clearRecordedSends, recordSeedUserSend, seededBudget, seededCheckpoints, seededConfigPatch,
+import { clearRecordedSends, getScriptSeed, recordSeedUserSend, seededBudget, seededCheckpoints, seededConfigPatch,
   seededMessagesWithRecorded, seededProviderStatusPatch,
   seededRewoundMessages, seededSessions, seededUsage } from './scripted/seed'
+// wave-2 J15: canned /diff payloads behind the scripted seed gate (data/slash.ts).
+import { scriptedGitDiffFixture } from './data/slash'
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
 const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random() * 40))
@@ -1017,6 +1019,15 @@ export const handlers: Record<string, MockHandler> = {
   },
   async get_session_git_diff() {
     await delay(30)
+    // wave-2 J15 (slash-commands journey): while a ChatScript is armed, a
+    // FIRST seeded session whose id carries the `diff:<case>` sentinel swaps
+    // in a canned GitDiffSummary (data/slash.ts) so the SlashResultCard's
+    // four shapes are drivable — the script schema has no diff field, so the
+    // seam lives in the mock layer. Un-armed (demo) seeds never match the
+    // sentinel and keep the historical not-repo default below verbatim
+    // (CONTRIBUTING iron rule 4).
+    const fixture = scriptedGitDiffFixture(getScriptSeed())
+    if (fixture) return fixture
     return { is_repo: false, files: [], patch: '', truncated: false }
   },
   async compact_session() {
@@ -1644,6 +1655,31 @@ export const handlers: Record<string, MockHandler> = {
       content: `// Source for ${args.path}\n\nfn main() {\n    println!("hello");\n}\n`,
       language_id: 'rust',
     }
+  },
+  // wave-2 J18: the chat-inline editor runs diagnostics on every file load —
+  // without a handler the demo console.error'd on each open (the watchdog
+  // would flag every editor journey). A quiet empty verdict: the demo has no
+  // LSP server to talk to, and "no diagnostics" is the honest shape.
+  async run_file_diagnostics() {
+    await delay(60)
+    return { diagnostics: [], timed_out: false }
+  },
+  // wave-2 J15: /export's save-dialog pair. plugin-dialog talks through the
+  // same invoke alias, so without these handlers the demo console.error'd
+  // "unhandled plugin:dialog|save" on every export. The dialog resolves null
+  // (the user-cancel semantics the app already treats as a calm no-op)
+  // EXCEPT for the journey sentinel: a suggested filename prefixed
+  // `ExportSuccess` "saves" to the demo Downloads path, so the slash
+  // journey can drive BOTH halves of the success/cancel pair. The write
+  // itself is a demo no-op (no fs behind the mock).
+  async 'plugin:dialog|save'(args: { options?: { defaultPath?: string } }) {
+    await delay(30)
+    const suggested = args?.options?.defaultPath ?? ''
+    return suggested.startsWith('ExportSuccess') ? '/Users/demo/Downloads/ExportSuccess.md' : null
+  },
+  async save_text_file() {
+    await delay(30)
+    return null
   },
 
   // --- Memory ---

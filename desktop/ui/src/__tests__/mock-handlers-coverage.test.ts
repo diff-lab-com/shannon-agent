@@ -153,10 +153,14 @@ const UNMOCKED_ALLOWLIST: Record<string, string> = {
   open_artifact_externally: 'OS/updater/file surface — browser cannot perform it',
   path_exists: 'OS/updater/file surface — browser cannot perform it',
   read_text_file: 'OS/updater/file surface — browser cannot perform it',
-  save_text_file: 'OS/updater/file surface — browser cannot perform it',
+  // (save_text_file left the list: wave-2 J15 gave it a real no-op handler —
+  // the /export journey drives the save-dialog success half end to end. The
+  // demo write is intentionally a no-op: no fs behind the mock.)
   save_text_file_via_dialog: 'OS/native save dialog + fs write — browser cannot perform it',
   reveal_in_folder: 'OS/updater/file surface — browser cannot perform it',
-  run_file_diagnostics: 'OS/updater/file surface — browser cannot perform it',
+  // (run_file_diagnostics left the list: wave-2 J18 gave it a real handler —
+  // the chat-inline editor fires it on every file load, and the demo
+  // console.error'd on each open. It answers a quiet empty verdict.)
   send_notification: 'OS/updater/file surface — browser cannot perform it',
   read_attachment: 'OS/updater/file surface — browser cannot perform it',
   read_attachments: 'OS/updater/file surface — browser cannot perform it',
