@@ -1,0 +1,76 @@
+{
+  "name": "dock-interactions",
+  "description": "Dock 旅程 — 键盘调宽/全屏/持久化/hint；计划模式与 Diff 自动停靠；PlanPanel 勾选写回与失败回滚；html 产物静态降级",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-dock",
+        "title": "Dock journey",
+        "workingDir": "/Users/demo/workspace/shannon-demo",
+        "messages": [
+          {
+            "role": "user",
+            "content": "给我写一个 todo 清单和演示页面"
+          },
+          {
+            "role": "assistant",
+            "content": "已创建 todo.md 和一个演示页面。\n\n```html\n<!doctype html>\n<html>\n  <body>\n    <h1>Shannon demo</h1>\n    <button id=\"go\">click</button>\n  </body>\n</html>\n```",
+            "toolCalls": [
+              {
+                "toolUseId": "tool-dock-write-1",
+                "toolName": "write_file",
+                "toolInput": {
+                  "file_path": "/Users/demo/workspace/shannon-demo/todo.md",
+                  "content": "buy milk\nwrite tests\nship it"
+                },
+                "result": "wrote 3 lines",
+                "isError": false
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "核对计划清单（plan 工具回包应刷新计划面板）",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "计划本身没有变化，",
+            "这次只是确认。"
+          ],
+          "chunkDelayMs": 200
+        },
+        {
+          "event": "query:tool-start",
+          "payload": {
+            "tool_use_id": "tool-dock-plan-1",
+            "tool_name": "get_plan_status",
+            "tool_input": {}
+          }
+        },
+        {
+          "event": "query:tool-result",
+          "payload": {
+            "tool_use_id": "tool-dock-plan-1",
+            "tool_name": "get_plan_status",
+            "result": "plan pending, 1/3 steps done",
+            "is_error": false
+          }
+        },
+        {
+          "waitFor": "ui"
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

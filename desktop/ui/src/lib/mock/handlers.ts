@@ -29,6 +29,16 @@ import { clearRecordedSends, clearSeedSessionModel, recordSavedTextFile, recordS
   seededSessionModel, seededSessions, seededUsage, seedSessionDeleteFails, setSeedSessionModel } from './scripted/seed'
 // wave-2 J15: canned /diff payloads behind the scripted seed gate (data/slash.ts).
 import { scriptedGitDiffFixture } from './data/slash'
+import { dispatchEvent } from './eventBridge'
+
+/**
+ * W2 journey #19: the scripted session mutations notify the rail exactly
+ * like the real backend (sessions-updated → refreshSessions). ARMED ONLY —
+ * the demo path keeps its current no-event behavior byte-identically.
+ */
+function notifySeededSessionsUpdated(): void {
+  if (seededSessions()) dispatchEvent('sessions-updated', {})
+}
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
 const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random() * 40))
@@ -432,6 +442,19 @@ export const handlers: Record<string, MockHandler> = {
   // handles.
   async 'plugin:dialog|save'() {
     await delay(40)
+    return null
+  },
+  // W2 journey #20: the chat-fence HTML artifact's interactive registration
+  // — demo mode has no artifact scripting host, so the registration ALWAYS
+  // fails and HtmlRenderer falls back to the static preview (the honest
+  // "could not run interactively" hint). Throwing (not absent) keeps the
+  // failure off coreMock's console.error path, so the watchdog stays clean.
+  async register_interactive_artifact() {
+    await delay(30)
+    throw new Error('artifact scripting host unavailable in demo mode')
+  },
+  async unregister_interactive_artifact() {
+    await delay(20)
     return null
   },
   // --- Office Wave 3 C3: companion Quick Capture window ---
@@ -928,6 +951,7 @@ export const handlers: Record<string, MockHandler> = {
     // banner carries the error).
     if (seedSessionDeleteFails(args.id)) throw new Error('session is busy; delete refused')
     recordSeedSessionDeleted(args.id)
+    notifySeededSessionsUpdated()
     deletedSessions.add(args.id)
     return true
   },
@@ -936,6 +960,7 @@ export const handlers: Record<string, MockHandler> = {
     // W2 journey #19: a rename of a SEEDED session must survive the armed
     // list_sessions read (which answers from the seed, not this map).
     recordSeedSessionRenamed(args.id, args.title)
+    notifySeededSessionsUpdated()
     const base = renamedSessions.get(args.id) ?? MOCK_SESSIONS.find(s => s.id === args.id)
     if (base) renamedSessions.set(args.id, { ...base, title: args.title })
     return true
@@ -949,12 +974,14 @@ export const handlers: Record<string, MockHandler> = {
   async archive_session(args: { id: string }) {
     await delay(60)
     recordSeedSessionArchived(args.id)
+    notifySeededSessionsUpdated()
     archivedSessions.add(args.id)
     return true
   },
   async unarchive_session(args: { id: string }) {
     await delay(60)
     recordSeedSessionUnarchived(args.id)
+    notifySeededSessionsUpdated()
     archivedSessions.delete(args.id)
     return true
   },

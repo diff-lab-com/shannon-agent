@@ -170,13 +170,15 @@ const UNMOCKED_ALLOWLIST: Record<string, string> = {
   detect_slash: 'only fires on live engine turns',
 
   // Misc one-off engine/gateway probes that demo pages never reach.
+  // (register/unregister_interactive_artifact left this list in the W2
+  // chat-testing wave: the chat-fence HTML artifact path DOES reach them —
+  // the demo handler throws so HtmlRenderer's static-hint fallback is the
+  // demo truth, and the failure stays off coreMock's console.error path.)
   get_provider_allowlist: 'engine/gateway probe demo never reaches',
   featured_vendor_to_entry: 'engine/gateway probe demo never reaches',
   verify_signature: 'engine/gateway probe demo never reaches',
   probe_url_frameable: 'engine/gateway probe demo never reaches',
   seed_sample_data: 'engine/gateway probe demo never reaches',
-  register_interactive_artifact: 'engine/gateway probe demo never reaches',
-  unregister_interactive_artifact: 'engine/gateway probe demo never reaches',
   test_all_providers: 'engine/gateway probe demo never reaches',
   scan_prompt_injection: 'engine/gateway probe demo never reaches',
   scan_prompt_injection_with_readme: 'engine/gateway probe demo never reaches',
