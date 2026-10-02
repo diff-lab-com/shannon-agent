@@ -34,7 +34,10 @@
         "shannon/snapshot",
         "shannon/resume",
         "shannon/device.list",
-        "shannon/device.revoke"
+        "shannon/device.revoke",
+        "shannon/approval.list",
+        "shannon/session.list",
+        "shannon/session.history"
       ]
     },
     "errorCodes": {

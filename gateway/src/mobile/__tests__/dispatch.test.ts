@@ -27,6 +27,7 @@ import {
   signMessage,
 } from "../crypto.js";
 import { MobileDispatchHub } from "../hub.js";
+import { ApprovalRegistry } from "../approvalRegistry.js";
 import { createTaskHandlers } from "../taskHandlers.js";
 import { MobileServer, type MethodContext } from "../server.js";
 
@@ -185,6 +186,67 @@ describe("mobile dispatch — hub & handlers", () => {
     await expect(adapter.send({ platform: "mobile", chatId: "ghost" }, "hello")).rejects.toThrow(
       /no connected device/,
     );
+  });
+
+  it("§M2 broadcastEvent reaches every connected device except the excluded one", () => {
+    const hub = new MobileDispatchHub({ logger });
+    const a = fakeCtx("dev-a");
+    const b = fakeCtx("dev-b");
+    const c = fakeCtx("dev-c"); // registered but never bound
+    hub.registerConnection(a);
+    hub.registerConnection(b);
+    hub.registerConnection(c);
+    c.sessionId = null; // no session → never a push target
+
+    hub.broadcastEvent({ type: "device.revoked", device_id: "dev-b" }, "dev-b");
+    const aEvents = eventsOf(a).filter((e) => e.type === "device.revoked");
+    const bEvents = eventsOf(b).filter((e) => e.type === "device.revoked");
+    expect(aEvents).toHaveLength(1);
+    expect(aEvents[0]).toMatchObject({ type: "device.revoked", device_id: "dev-b" });
+    // The revoked device itself does not hear the broadcast.
+    expect(bEvents).toHaveLength(0);
+  });
+});
+
+// ── §L2: the hub feeds the pending-approval registry ─────────────────────────
+
+describe("mobile dispatch — approval registry integration", () => {
+  const req = {
+    requestId: "req-reg-1",
+    toolName: "Bash",
+    toolInput: { command: "echo hi" },
+    description: "运行命令",
+    isDestructive: false,
+    diffPreview: null,
+  };
+
+  it("requestApproval records the ask; the Y/N text answer resolves it", async () => {
+    const approvals = new ApprovalRegistry();
+    const hub = new MobileDispatchHub({ logger, approvals });
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+
+    const pending = hub.requestApproval("dev-1", req);
+    expect(approvals.listPending().map((r) => r.requestId)).toEqual(["req-reg-1"]);
+    expect(approvals.listPending()[0]).toMatchObject({
+      toolName: "Bash",
+      description: "运行命令",
+      isDestructive: false,
+    });
+
+    hub.dispatch("dev-1", "y");
+    await expect(pending).resolves.toBe("allow");
+    expect(approvals.listPending()).toEqual([]);
+  });
+
+  it("the timeout settle (deny) also resolves the registry entry", async () => {
+    const approvals = new ApprovalRegistry();
+    const hub = new MobileDispatchHub({ logger, approvals, approvalTimeoutMs: 25 });
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+
+    void hub.requestApproval("dev-1", req);
+    await vi.waitFor(() => expect(approvals.listPending()).toEqual([]));
   });
 });
 

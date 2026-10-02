@@ -394,3 +394,167 @@ describe("createEngineHandlers (P1.1b)", () => {
     socket.close();
   });
 });
+
+// ── §J session face (engine one-shot call seam) ──────────────────────────────
+
+/** A session-capable fake engine: answers `sessions.list` / `session.history` via `call`. */
+class SessionFakeEngine implements EngineClient {
+  sent: unknown[] = [];
+  constructor(
+    private readonly respond: (message: any) => unknown,
+    private readonly opts: { connectFails?: boolean } = {},
+  ) {}
+  async connect(): Promise<void> {
+    if (this.opts.connectFails) throw new Error("engine socket refused");
+  }
+  cancel(): void {}
+  async close(): Promise<void> {}
+  async *runQuery(): AsyncGenerator<EngineEvent> {}
+  async call<T>(
+    message: unknown,
+    match: (frame: unknown) => T | null,
+  ): Promise<T> {
+    this.sent.push(message);
+    const frame = this.respond(message);
+    const matched = match(frame);
+    if (matched === null) {
+      throw new Error(`fake engine produced an unmatched frame: ${JSON.stringify(frame)}`);
+    }
+    return matched;
+  }
+}
+
+function sessionHandlers(engine: EngineClient): MethodHandlers {
+  return createEngineHandlers({
+    engineWsUrl: "ws://127.0.0.1:9",
+    engineHttpBaseUrl: "http://engine:33420",
+    version: "test",
+    logger,
+    engineClientFactory: () => engine,
+  });
+}
+
+describe("shannon/session.list + session.history (§J)", () => {
+  it("maps the engine snapshot to the §J1 wire shape (id required; optional keys omitted)", async () => {
+    const engine = new SessionFakeEngine(() => ({
+      type: "sessions.snapshot",
+      sessions: [
+        {
+          session_id: "sess-1",
+          title: "Refactor transport client",
+          updated_at: "2026-06-28T14:21:00Z",
+          preview: "…",
+          turn_count: 4,
+        },
+        { session_id: "sess-2", title: null, updated_at: null },
+        { session_id: "", title: "unusable" }, // no id → dropped
+      ],
+    }));
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/session.list", {});
+    expect(res.result).toEqual({
+      sessions: [
+        { id: "sess-1", title: "Refactor transport client", updatedAt: "2026-06-28T14:21:00Z" },
+        { id: "sess-2" },
+      ],
+    });
+    // v1 request frame is the bare type tag (unknown params never forwarded).
+    expect(engine.sent).toEqual([{ type: "sessions.list" }]);
+    socket.close();
+  });
+
+  it("session.history happy path: §J2 wire shape, pagination passthrough, epoch ts normalized", async () => {
+    const engine = new SessionFakeEngine((message: any) => {
+      expect(message.type).toBe("session.history");
+      expect(message.session_id).toBe("sess-1");
+      expect(message.before).toBe("2026-06-28T14:20:00Z");
+      expect(message.limit).toBe(10);
+      return {
+        type: "session.transcript",
+        session_id: "sess-1",
+        has_more: true,
+        messages: [
+          { role: "user", content: "refactor the reconnect backoff", ts: 1_759_500_000_000 },
+          { role: "assistant", content: "on it", ts: "2026-06-28T14:20:05Z" },
+          { content: "no role but string content stays" },
+        ],
+      };
+    });
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/session.history", {
+      sessionId: "sess-1",
+      before: "2026-06-28T14:20:00Z",
+      limit: 10,
+    });
+    expect(res.result).toEqual({
+      sessionId: "sess-1",
+      hasMore: true,
+      messages: [
+        { role: "user", content: "refactor the reconnect backoff", ts: "2025-10-03T14:00:00.000Z" },
+        { role: "assistant", content: "on it", ts: "2026-06-28T14:20:05Z" },
+        { role: "assistant", content: "no role but string content stays" },
+      ],
+    });
+    socket.close();
+  });
+
+  it("session.history without pagination omits the optional engine params", async () => {
+    const engine = new SessionFakeEngine((message: any) => {
+      expect(message.before).toBeUndefined();
+      expect(message.limit).toBeUndefined();
+      return { type: "session.transcript", session_id: "sess-1", messages: [], has_more: false };
+    });
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/session.history", { sessionId: "sess-1" });
+    expect(res.result).toEqual({ sessionId: "sess-1", messages: [], hasMore: false });
+    socket.close();
+  });
+
+  it("session.history missing/blank sessionId → INVALID_PARAMS (no engine call)", async () => {
+    const engine = new SessionFakeEngine(() => {
+      throw new Error("engine must not be called");
+    });
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const missing = await rpc(socket, "shannon/session.history", {});
+    expect(missing.error?.code).toBe(ShannonError.BAD_PARAMS);
+    const blank = await rpc(socket, "shannon/session.history", { sessionId: "" });
+    expect(blank.error?.code).toBe(ShannonError.BAD_PARAMS);
+    socket.close();
+  });
+
+  it("an engine error frame on history degrades to the honest empty transcript (§J2)", async () => {
+    const engine = new SessionFakeEngine(() => ({ type: "error", message: "no such session" }));
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/session.history", { sessionId: "ghost" });
+    expect(res.error).toBeUndefined();
+    expect(res.result).toEqual({ sessionId: "ghost", messages: [], hasMore: false });
+    socket.close();
+  });
+
+  it("engine connect failure / call-less client → ENGINE_ERROR (distinguishable from empty)", async () => {
+    const down = new SessionFakeEngine(() => ({}), { connectFails: true });
+    const { port } = await start(sessionHandlers(down));
+    const socket = await connect(port);
+    const downList = await rpc(socket, "shannon/session.list", {});
+    expect(downList.error?.code).toBe(ShannonError.ENGINE_ERROR);
+    expect(downList.error?.message).toMatch(/engine session call failed/);
+    const downHistory = await rpc(socket, "shannon/session.history", { sessionId: "s" });
+    expect(downHistory.error?.code).toBe(ShannonError.ENGINE_ERROR);
+    socket.close();
+
+    // A legacy fake without `call` reports the surface as unavailable —
+    // still ENGINE_ERROR, never a silent empty list.
+    const legacy = new FakeEngine({ script: [] });
+    const { port: port2 } = await start(sessionHandlers(legacy));
+    const socket2 = await connect(port2);
+    const noCall = await rpc(socket2, "shannon/session.list", {});
+    expect(noCall.error?.code).toBe(ShannonError.ENGINE_ERROR);
+    expect(noCall.error?.message).toMatch(/one-shot calls/);
+    socket2.close();
+  });
+});

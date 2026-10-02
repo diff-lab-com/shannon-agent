@@ -46,6 +46,7 @@ import {
   type ShannonEvent,
 } from "./protocol.js";
 import type { MethodContext } from "./server.js";
+import type { ApprovalRegistry } from "./approvalRegistry.js";
 
 /** How long a pushed approval waits for the device's Y/N before denying. */
 const APPROVAL_TIMEOUT_MS = 300_000;
@@ -93,6 +94,12 @@ export interface MobileDispatchHubOptions {
    * `sharedPushSeq`; tests inject their own for isolation).
    */
   seqCounter?: SeqCounter;
+  /**
+   * §L2: pending-approval registry. When set, `requestApproval` records every
+   * pushed ask and every settle (timeout deny / Y/N text answer) resolves it —
+   * keeping `shannon/approval.list` + the snapshot `pendingApprovals` honest.
+   */
+  approvals?: ApprovalRegistry;
 }
 
 export class MobileDispatchHub {
@@ -101,6 +108,7 @@ export class MobileDispatchHub {
   private readonly now: () => number;
   private readonly newTaskId: () => string;
   private readonly seq: SeqCounter;
+  private readonly approvals: ApprovalRegistry | null;
 
   /** deviceId → open, session-bound contexts. */
   private readonly byDevice = new Map<string, Set<MethodContext>>();
@@ -117,6 +125,7 @@ export class MobileDispatchHub {
     this.now = opts.now ?? Date.now;
     this.newTaskId = opts.newTaskId ?? (() => crypto.randomUUID());
     this.seq = opts.seqCounter ?? sharedPushSeq;
+    this.approvals = opts.approvals ?? null;
   }
 
   /** Current push seq head — feeds `shannon/snapshot` / `shannon/resume`. */
@@ -219,6 +228,21 @@ export class MobileDispatchHub {
     }
     return this.pushEvent(deviceId, { type: "task.message", text });
   }
+
+  /**
+   * §M2: push one event to every connected device EXCEPT `exceptDeviceId` —
+   * the fan-out for the `device.revoked` broadcast (the revoked device itself
+   * must not hear it; it loses access at its next signed call anyway).
+   * Devices without an open socket simply miss it (the phone's next
+   * `device.list` converges the list — push is best-effort by design).
+   */
+  broadcastEvent(event: ShannonEvent, exceptDeviceId?: string): void {
+    for (const [deviceId, sockets] of this.byDevice) {
+      if (exceptDeviceId !== undefined && deviceId === exceptDeviceId) continue;
+      if (sockets.size === 0) continue;
+      this.pushEvent(deviceId, event);
+    }
+  }
   // ── approvals (phone decides via Y/N text) ─────────────────────────────────
 
   /**
@@ -237,6 +261,16 @@ export class MobileDispatchHub {
       is_destructive: req.isDestructive,
       diff_preview: req.diffPreview,
     });
+    // §L2: the ask is now visible to the restore face until a settle resolves it.
+    this.approvals?.record({
+      requestId: req.requestId,
+      toolName: req.toolName,
+      toolInput: req.toolInput,
+      description: req.description,
+      isDestructive: req.isDestructive,
+      diffPreview: req.diffPreview,
+      ts: this.now(),
+    });
     return new Promise<"allow" | "deny">((resolve) => {
       let timer: NodeJS.Timeout | undefined;
       const entry: PendingApproval = {
@@ -250,6 +284,7 @@ export class MobileDispatchHub {
         this.removePending(deviceId, entry);
         // The engine itself times the request out to deny at 300s; denying here
         // keeps the reply loop unblocked when the phone never answers.
+        this.approvals?.resolve(entry.requestId);
         entry.settle("deny");
       }, this.approvalTimeoutMs);
       this.pendingFor(deviceId).push(entry);
@@ -326,6 +361,8 @@ export class MobileDispatchHub {
     if (pendingQueue && pendingQueue.length > 0 && choice !== null) {
       const entry = pendingQueue.shift()!;
       if (pendingQueue.length === 0) this.pending.delete(deviceId);
+      // §L2: a text Y/N settles the ask — drop it from the restore face.
+      this.approvals?.resolve(entry.requestId);
       entry.settle(choice);
       this.logger.info(`mobile hub: approval ${entry.requestId} → ${choice} (device ${deviceId})`);
       return { kind: "approval", choice };

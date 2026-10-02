@@ -43,7 +43,10 @@ export type ShannonMethod =
   | "shannon/snapshot"
   | "shannon/resume"
   | "shannon/device.list"
-  | "shannon/device.revoke";
+  | "shannon/device.revoke"
+  | "shannon/approval.list"
+  | "shannon/session.list"
+  | "shannon/session.history";
 
 /**
  * Runtime mirror of [ShannonMethod] — the SINGLE SOURCE both the type above
@@ -69,6 +72,9 @@ export const SHANNON_METHODS = [
   "shannon/resume",
   "shannon/device.list",
   "shannon/device.revoke",
+  "shannon/approval.list",
+  "shannon/session.list",
+  "shannon/session.history",
 ] as const satisfies readonly ShannonMethod[];
 
 // Compile-time guard: every member of the union is present in the runtime
@@ -142,6 +148,19 @@ export interface TaskDispatchParams {
  * first.
  */
 export interface TaskListParams {
+  limit?: number;
+}
+
+/**
+ * `shannon/session.history` (cross-repo spec §J2) — fetch one session's
+ * transcript. `sessionId` is required (the gateway rejects absence with
+ * INVALID_PARAMS, unlike the mock's active-session fallback). Optional
+ * pagination: `before` is the ISO-8601 ts of the oldest message the client
+ * already holds, `limit` the page size (engine default 50).
+ */
+export interface SessionHistoryParams {
+  sessionId: string;
+  before?: string;
   limit?: number;
 }
 
@@ -255,6 +274,15 @@ export type ShannonEvent =
        */
       type: "task.message";
       text: string;
+    }
+  | {
+      /**
+       * §M2 (cross-repo spec): a paired device was revoked. Broadcast to every
+       * OTHER online device so their settings screens drop the row. The phone
+       * tolerates unknown event types, so older builds just ignore this.
+       */
+      type: "device.revoked";
+      device_id: string;
     };
 
 export interface ToolFrame {
@@ -333,6 +361,75 @@ export interface MobileTaskRecord {
 /** `shannon/task.list` success — newest first. */
 export interface TaskListResult {
   tasks: MobileTaskRecord[];
+}
+
+// ── §L2 approval-restore + §J session shapes (cross-repo spec) ─────────────
+
+/**
+ * One pending approval as served by `shannon/approval.list` and carried in the
+ * `shannon/snapshot` `pendingApprovals` array. Key names are camelCase and
+ * map 1:1 onto the phone's `approvalFromMap` (shannon-mobile
+ * `lib/src/live/protocol_mapper.dart`) — these keys ARE the contract.
+ */
+export interface MobileApprovalItem {
+  /** The engine's request id (`request_id` on `approval.request` events). */
+  approvalId: string;
+  /** The tool that wants to run (`tool_name`). */
+  kind: string;
+  /** Human headline (`description`). */
+  headline: string;
+  /** `'high' | 'medium' | 'low'` — synthesized per the §L2 mapping. */
+  risk: "high" | "medium" | "low";
+  /** ISO-8601 UTC instant the request was recorded. */
+  timestamp: string;
+  /** The raw tool input, verbatim — feeds the phone's operation mono block. */
+  toolInput: unknown;
+  /** Initiating agent, when the engine supplies it (absent otherwise). */
+  agentId?: string;
+  agentName?: string;
+  /** Risk scopes from the engine's three-dimensional risk, when present. */
+  scope?: string[];
+  /** `tool_input.path` when it is a string (diff header for the phone). */
+  diffTitle?: string;
+}
+
+/** `shannon/approval.list` success — verbatim envelope key per the contract. */
+export interface ApprovalListResult {
+  pendingApprovals: MobileApprovalItem[];
+}
+
+/** One session summary as served by `shannon/session.list` (spec §J1). */
+export interface MobileSessionSummary {
+  /** Global session primary key — required; entries without it are useless. */
+  id: string;
+  /** Owning agent id — required by the phone's parser; omitted until the
+   *  engine exposes it (the phone then honestly skips the entry). */
+  agentId?: string;
+  /** UTF-8 title; the phone falls back to the agent name when absent. */
+  title?: string;
+  /** ISO-8601 UTC last-activity instant (list ordering). */
+  updatedAt?: string;
+}
+
+/** `shannon/session.list` success. */
+export interface SessionListResult {
+  sessions: MobileSessionSummary[];
+}
+
+/** One transcript message as served by `shannon/session.history` (§J2). */
+export interface MobileSessionMessage {
+  role: string;
+  content: string;
+  /** ISO-8601 UTC; the phone stamps arrival time when absent. */
+  ts?: string;
+}
+
+/** `shannon/session.history` success. */
+export interface SessionHistoryResult {
+  sessionId: string;
+  messages: MobileSessionMessage[];
+  /** True when older messages exist beyond this page (spec §J2 pagination). */
+  hasMore: boolean;
 }
 
 // ── T9: desktop pairing-approval shapes ────────────────────────────────────

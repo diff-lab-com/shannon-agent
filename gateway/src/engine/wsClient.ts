@@ -49,6 +49,9 @@ export interface EngineWsClientOptions {
 /** Default WS handshake budget (review §P2-23). */
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 
+/** Default budget for a one-shot `call()` request/response round-trip. */
+const DEFAULT_CALL_TIMEOUT_MS = 10_000;
+
 const KNOWN_EVENT_TYPES: ReadonlySet<EngineEventType> = new Set([
   "text",
   "thinking",
@@ -62,6 +65,18 @@ const KNOWN_EVENT_TYPES: ReadonlySet<EngineEventType> = new Set([
   "session_info",
   "error",
 ]);
+
+/**
+ * One awaited request/response round-trip on the socket. The matcher decides
+ * which decoded frame is the response (the engine's request RPCs carry no
+ * correlation id, so matching is by frame shape — e.g. the `sessions.*`
+ * response types); non-matching frames fall through to normal event routing.
+ */
+interface PendingCall {
+  match: (frame: unknown) => unknown;
+  resolve: (value: unknown) => void;
+  reject: (err: Error) => void;
+}
 
 /**
  * Parse one wire frame. Returns `null` for anything that isn't a recognized
@@ -123,6 +138,14 @@ export class EngineWsClient {
   private versionObserved = false;
   // review F44: malformed-frame accounting for the rate-limited warn below.
   private malformedFrames = 0;
+  /** The in-flight one-shot `call()`, if any (single slot — the engine
+   *  answers request/response frames in order on this socket). */
+  private pendingCall: PendingCall | null = null;
+  /** Shared handshake promise so concurrent connect() callers (e.g. two
+   *  `call()`s racing on a cold client) share ONE socket instead of each
+   *  opening their own — `this.socket` is only assigned once the handshake
+   *  completes, so the null check alone cannot dedupe in-flight connects. */
+  private connecting: Promise<void> | null = null;
   private readonly url: string;
   private readonly defaultModel: string | null;
   private readonly defaultSessionId: string | null;
@@ -152,9 +175,20 @@ export class EngineWsClient {
     return this.engineProtocolVersion;
   }
 
-  /** Open the socket and wait for it to be ready. Idempotent. */
+  /** Open the socket and wait for it to be ready. Idempotent — including
+   *  across concurrent calls (a handshake in flight is shared, not duplicated). */
   async connect(): Promise<void> {
     if (this.socket) return;
+    if (this.connecting) return this.connecting;
+    this.connecting = this.doConnect();
+    try {
+      await this.connecting;
+    } finally {
+      this.connecting = null;
+    }
+  }
+
+  private async doConnect(): Promise<void> {
     const socket =
       Object.keys(this.headers).length > 0
         ? new WebSocket(this.url, { headers: this.headers })
@@ -236,6 +270,53 @@ export class EngineWsClient {
     socket.send(JSON.stringify({ type: "cancel" }));
   }
 
+  /**
+   * One-shot request/response: send one client message and wait for the first
+   * frame the `match` predicate accepts (the engine's RPC-style messages —
+   * e.g. the §J `sessions.list` / `session.history` pair — carry no correlation
+   * id, so the response is identified by shape). The greeting and any
+   * non-matching frames fall through to normal event routing.
+   *
+   * Connects first when the socket isn't open. One call at a time per client
+   * (the engine answers in order; callers wanting concurrency create a client
+   * each — the same convention as `runQuery`). Rejects on the ~10s timeout, a
+   * socket error, or a close before the response arrives.
+   */
+  async call<T>(
+    message: unknown,
+    match: (frame: unknown) => T | null,
+    opts: { timeoutMs?: number } = {},
+  ): Promise<T> {
+    if (!this.isConnected) await this.connect();
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      throw new Error("EngineWsClient not connected; call() could not open the socket");
+    }
+    if (this.pendingCall) {
+      throw new Error("another one-shot call is already in flight on this client");
+    }
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingCall = null;
+        reject(new Error(`engine call timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      timer.unref?.();
+      this.pendingCall = {
+        match: (frame) => match(frame),
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value as T);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      };
+      socket.send(JSON.stringify(message));
+    });
+  }
+
   /** Close the socket. Resolves once the underlying socket has closed. */
   async close(): Promise<void> {
     const socket = this.socket;
@@ -256,6 +337,24 @@ export class EngineWsClient {
       // pathological/binary frame can neither crash the process nor spam it.
       this.noteMalformedFrame();
       return;
+    }
+    // A pending one-shot call gets first crack at the frame — RPC responses
+    // are not engine events and would be dropped by the known-type filter
+    // below. A matcher that throws (or returns null/undefined) passes the
+    // frame through to normal routing.
+    const pending = this.pendingCall;
+    if (pending) {
+      let matched: unknown = null;
+      try {
+        matched = pending.match(decoded);
+      } catch {
+        matched = null;
+      }
+      if (matched !== null && matched !== undefined) {
+        this.pendingCall = null;
+        pending.resolve(matched);
+        return;
+      }
     }
     const parsed = parseEngineEvent(decoded);
     if (!parsed) return; // unknown / malformed — ignore for now
@@ -318,6 +417,7 @@ export class EngineWsClient {
   }
 
   private onSocketError(err: Error): void {
+    this.failPendingCall(new Error(`engine socket error: ${err.message}`));
     this.activeQueue?.close({
       kind: "error",
       error: new Error(`engine socket error: ${err.message}`),
@@ -328,11 +428,20 @@ export class EngineWsClient {
     // An unexpected close mid-stream surfaces as an error so a truncated turn
     // isn't silently swallowed. After a normal terminal frame the queue is
     // already cleared, so this is a no-op.
+    this.failPendingCall(new Error("engine socket closed before the call response arrived"));
     this.activeQueue?.close({
       kind: "error",
       error: new Error("engine socket closed before terminal event"),
     } satisfies CloseReason);
     this.socket = null;
+  }
+
+  /** Reject the in-flight one-shot call, if any (socket error / close). */
+  private failPendingCall(err: Error): void {
+    const pending = this.pendingCall;
+    if (!pending) return;
+    this.pendingCall = null;
+    pending.reject(err);
   }
 }
 

@@ -46,6 +46,10 @@ import {
 } from "./protocol.js";
 import type { MethodContext, MethodHandlers } from "./server.js";
 import {
+  approvalWireItem,
+  type ApprovalRegistry,
+} from "./approvalRegistry.js";
+import {
   createEngineHandlers,
   type DeviceSignatureVerifier,
   type EngineBridgeOptions,
@@ -479,6 +483,28 @@ export class DeviceRegistry {
 
 // ── pairing handlers ────────────────────────────────────────────────────────
 
+/**
+ * §M1 wire shape for one `shannon/device.list` entry: camelCase keys, epoch
+ * numbers as ISO-8601 UTC strings, no label key when unlabeled — and NEVER the
+ * `public_key` (the disk `DeviceEntry` is the desktop Rust mirror's format and
+ * stays snake_case; only this RPC response is reshaped). The phone skips
+ * entries without a usable `deviceId`, so that key is always emitted.
+ */
+function toWireDeviceEntry(e: DeviceEntry): {
+  deviceId: string;
+  label?: string;
+  pairedAt?: string;
+  lastSeenAt?: string;
+} {
+  const wire: { deviceId: string; label?: string; pairedAt?: string; lastSeenAt?: string } = {
+    deviceId: e.device_id,
+  };
+  if (e.label != null && e.label.length > 0) wire.label = e.label;
+  if (Number.isFinite(e.added_at)) wire.pairedAt = new Date(e.added_at).toISOString();
+  if (Number.isFinite(e.last_seen_at)) wire.lastSeenAt = new Date(e.last_seen_at).toISOString();
+  return wire;
+}
+
 export interface PairingHandlersOptions {
   tokens: PairTokenStore;
   registry: DeviceRegistry;
@@ -489,6 +515,19 @@ export interface PairingHandlersOptions {
   now?: () => number;
   /** WP-15 T4: push cursor (defaults to the process-wide counter). */
   seq?: SeqCounter;
+  /**
+   * §M2: called after a device was successfully revoked, so the bootstrap can
+   * broadcast `shannon/event {type:"device.revoked"}` to the OTHER online
+   * devices (their settings screens drop the row; the revoked device itself is
+   * excluded — it finds out via PAIRING_REQUIRED on its next call).
+   */
+  onDeviceRevoked?: (deviceId: string) => void;
+  /**
+   * §L2: the process-wide pending-approval registry. When set, `shannon/snapshot`
+   * serves the real pending queue (the phone's reconnect-recovery path) instead
+   * of an empty array.
+   */
+  approvals?: ApprovalRegistry;
 }
 
 /** Generic, non-revealing rejection so pair/resume can't act as an oracle. */
@@ -653,7 +692,9 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
         kind: "result",
         result: {
           agents: [],
-          pendingApprovals: [],
+          // §L2 reconnect recovery: the phone rebuilds its approval queue from
+          // this array (same item shape as `shannon/approval.list`).
+          pendingApprovals: (opts.approvals?.listPending() ?? []).map(approvalWireItem),
           activeSessions: [],
           lastSeq: seq.current(),
         },
@@ -687,45 +728,61 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
 
     // ── WP-15 T3: device management RPCs (the desktop revoke path also
     // rewrites the registry file out-of-band; `refreshIfChanged` picks that
-    // up on the next read). Revoke requires an already-paired session — a
-    // device may revoke itself (logout-everywhere) or any other device.
+    // up on the next read). Wire shapes are the §M contract (cross-repo spec):
+    // camelCase response keys + ISO-8601 timestamps; `device.revoke` takes
+    // `deviceId` and may revoke ANY registered device (2026-10-03 ruling —
+    // the double-confirm lives in the phone's UI, not in a gateway gate).
 
     "shannon/device.list": async (_raw, ctx) => {
       if (ctx.sessionId == null || !opts.registry.has(ctx.sessionId)) {
         return { kind: "error", code: ShannonError.PAIRING_REQUIRED, message: "pair a device first" };
       }
-      return { kind: "result", result: { devices: opts.registry.list() } };
+      return { kind: "result", result: { devices: opts.registry.list().map(toWireDeviceEntry) } };
     },
 
     "shannon/device.revoke": async (raw, ctx) => {
-      const params = (raw ?? {}) as { device_id?: unknown };
-      if (typeof params.device_id !== "string" || params.device_id.length === 0) {
+      // §M2 requests are camelCase (`deviceId`); the snake_case `device_id`
+      // fallback keeps the pre-§M phone builds working.
+      const params = (raw ?? {}) as { deviceId?: unknown; device_id?: unknown };
+      const target =
+        typeof params.deviceId === "string"
+          ? params.deviceId
+          : typeof params.device_id === "string"
+            ? params.device_id
+            : undefined;
+      if (typeof target !== "string" || target.length === 0) {
         return {
           kind: "error",
           code: ShannonError.BAD_PARAMS,
-          message: "device_id is required",
+          message: "deviceId is required",
         };
       }
+      // Trust gate: only an already-paired device may revoke at all. (The
+      // previous self-only restriction is gone by ruling — a paired session is
+      // the trust boundary, and revoking another device is the "lost phone"
+      // scenario the face exists for.)
       if (ctx.sessionId == null || !opts.registry.has(ctx.sessionId)) {
         return { kind: "error", code: ShannonError.PAIRING_REQUIRED, message: "pair a device first" };
       }
-      // Scope: an RPC holder may revoke ONLY itself (logout-everywhere).
-      // Revoking OTHER devices is an administrative action — the desktop UI
-      // owns it (it can require a human confirmation, which a stolen phone
-      // could never pass). Without this, any paired device (e.g. a stolen
-      // one) could eject every other device and take the gateway solo.
-      if (params.device_id !== ctx.sessionId) {
-        return {
-          kind: "error",
-          code: ShannonError.BAD_PARAMS,
-          message: "only your own device can be revoked here; revoke others from the desktop",
-        };
-      }
-      const removed = opts.registry.revoke(params.device_id);
+      const removed = opts.registry.revoke(target);
       if (removed) {
-        opts.logger.info(`device revoked via RPC: ${params.device_id} (self)`);
+        opts.logger.info(`device revoked via RPC: ${target} (by ${ctx.sessionId})`);
+        // Fan out to the surviving devices (the bootstrap wires this to the
+        // dispatch hub's broadcast; the revoked device is excluded there).
+        try {
+          opts.onDeviceRevoked?.(target);
+        } catch (err) {
+          // A broken broadcast must never fail an already-successful revoke.
+          opts.logger.warn(`device.revoked broadcast failed: ${(err as Error).message}`);
+        }
       }
-      return { kind: "result", result: { device_id: params.device_id, revoked: removed } };
+      return {
+        kind: "result",
+        // Honest no-ops stay successes with `revoked: false` (the phone keeps
+        // its list as-is on a miss rather than phantom-revoking); a hit echoes
+        // the revoked deviceId per the §M2 mock shape, plus the boolean.
+        result: { revoked: removed ? target : false, removed },
+      };
     },
   };
 }
@@ -770,6 +827,15 @@ export interface MobileHandlersOptions {
    * They self-gate on a trusted device session or a valid pair token.
    */
   access?: MethodHandlers;
+  /**
+   * §L2: the process-wide pending-approval registry. Wired into the engine
+   * bridge (record on `approval.request`, resolve after `approval/decide`),
+   * the task-dispatch hub (resolve on timeout/text answer), and the snapshot
+   * handler (pendingApprovals recovery array).
+   */
+  approvalRegistry?: ApprovalRegistry;
+  /** §M2: post-revoke broadcast hook (bootstrap → dispatch hub fan-out). */
+  onDeviceRevoked?: (deviceId: string) => void;
 }
 
 /**
@@ -786,6 +852,8 @@ export function createMobileHandlers(opts: MobileHandlersOptions): MethodHandler
     logger: opts.logger,
     resumeClockSkewMs: opts.resumeClockSkewMs,
     now: opts.now,
+    onDeviceRevoked: opts.onDeviceRevoked,
+    approvals: opts.approvalRegistry,
   });
   const engine = createEngineHandlers({
     ...opts.engine,
@@ -794,6 +862,7 @@ export function createMobileHandlers(opts: MobileHandlersOptions): MethodHandler
     // WP-15 T3: revocation must bite on live sessions — every gated RPC
     // re-checks the registry (which refreshes from disk on read).
     isDeviceTrusted: (deviceId) => opts.registry.has(deviceId),
+    approvalRegistry: opts.approvalRegistry,
   });
   return { ...engine, ...pairing, ...opts.tasks, ...opts.access };
 }
