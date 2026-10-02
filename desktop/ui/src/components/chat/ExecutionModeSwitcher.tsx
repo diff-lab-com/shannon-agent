@@ -140,6 +140,7 @@ export function ExecutionModeSwitcher() {
     <div className="relative" ref={ref}>
       <Button
         variant="ghost"
+        data-testid="execution-mode-switcher"
         aria-label={t('execMode.toggle.aria', { tier: currentLabel })}
         title={t('execMode.toggle.title')}
         aria-haspopup="listbox"

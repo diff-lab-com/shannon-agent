@@ -238,6 +238,7 @@ export function Header() {
           {isChat && sessionBudget != null && sessionBudget > 0 && (
             <span
               role="status"
+              data-testid="budget-badge"
               aria-label={t('budget.badge.aria', {
                 spent: `$${(sessionUsage?.cost_usd ?? 0).toFixed(2)}`,
                 budget: `$${sessionBudget.toFixed(2)}`,
@@ -373,7 +374,11 @@ export function Header() {
       {/* Permission Modal — alertdialog because it demands immediate attention.
           G1: no className override — the old bg-black/30+backdrop-blur-sm landed
           on the POPUP (not the backdrop) and double-scrimmed it; the Modal now
-          carries the unified glass-overlay panel + its own scrim backdrop. */}
+          carries the unified glass-overlay panel + its own scrim backdrop.
+          KNOWN_A11Y_DEBT ① (aria-dialog-name, fixed): the h3 title renders as
+          a Base UI Dialog.Title, so the Popup's aria-labelledby resolves to it
+          and the alertdialog carries an accessible name. `testId` anchors the
+          popup for e2e (e2e/helpers/testids.ts: permissionDialog). */}
       {permissionRequest && (
       <Modal
         open
@@ -385,6 +390,7 @@ export function Header() {
         // header, so name the dialog from the visible h3 (accname resolves
         // through aria-labelledby) instead of the built-in title block.
         ariaLabelledBy="header-perm-request-title"
+        testId="permission-dialog"
       >
         <div className="p-xl">
             <div className="flex items-center gap-md mb-lg">
