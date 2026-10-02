@@ -381,6 +381,10 @@ export function Header() {
         size="md"
         role="alertdialog"
         showCloseButton={false}
+        // P0-A2 (axe aria-dialog-name): the popup carries its own custom
+        // header, so name the dialog from the visible h3 (accname resolves
+        // through aria-labelledby) instead of the built-in title block.
+        ariaLabelledBy="header-perm-request-title"
       >
         <div className="p-xl">
             <div className="flex items-center gap-md mb-lg">
@@ -388,7 +392,7 @@ export function Header() {
                 <span className="material-symbols-outlined text-on-tertiary-container">shield</span>
               </div>
               <div className="flex-1">
-                <h3 className="font-headline-sm text-on-surface font-bold">{t('header.permRequest.title')}</h3>
+                <h3 id="header-perm-request-title" className="font-headline-sm text-on-surface font-bold">{t('header.permRequest.title')}</h3>
                 <p className="text-body-sm text-on-surface-variant">{t('header.permRequest.subtitle')}</p>
               </div>
               {/* U3: four distinguishable risk tiers — critical=error,
@@ -474,7 +478,11 @@ export function Header() {
             // Test seam: the dialog's aria-modal masking blinds role queries
             // to everything outside the popup, so e2e anchors via testid.
             data-testid="header-stop-while-waiting"
-            className="pointer-events-auto bg-error/80 text-on-error px-md py-sm rounded-xl active:scale-95 hover:bg-error transition-all font-label-md flex items-center gap-xs disabled:opacity-60 disabled:cursor-wait"
+            // P0-A2 (axe color-contrast 4.41:1): bg-error/80 alpha-composited
+            // over the scrim too dark for text-on-error in the default dark
+            // theme. Opaque bg-error passes AA in both matrix themes
+            // (6.46:1 light/dark) and is a strict improvement in every theme.
+            className="pointer-events-auto bg-error text-on-error px-md py-sm rounded-xl active:scale-95 transition-all font-label-md flex items-center gap-xs disabled:opacity-60 disabled:cursor-wait"
             onClick={() => void cancelQuery()}
             disabled={isCancelInFlight}
           >
