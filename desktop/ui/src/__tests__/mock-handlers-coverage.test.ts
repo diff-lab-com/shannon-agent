@@ -126,16 +126,14 @@ const UNMOCKED_ALLOWLIST: Record<string, string> = {
 
   // Voice / Whisper / STT — model downloads (GB-scale) and OS audio capture
   // have no browser equivalent; the UI degrades via error toasts.
+  // (transcribe_audio / transcribe_audio_local / transcribe_audio_local_base64
+  // / get_voice_local_config / save_voice_local_config / get_stt_config /
+  // list_whisper_models left this list in wave-2 task 6: the nightly
+  // voice-input journey drives the real UI path, so handlers.ts answers
+  // them deterministically now.)
   delete_whisper_model: 'Whisper models/OS audio — no browser equivalent',
   download_whisper_model: 'Whisper models/OS audio — no browser equivalent',
-  list_whisper_models: 'Whisper models/OS audio — no browser equivalent',
-  get_stt_config: 'Whisper models/OS audio — no browser equivalent',
   save_stt_config: 'Whisper models/OS audio — no browser equivalent',
-  get_voice_local_config: 'Whisper models/OS audio — no browser equivalent',
-  save_voice_local_config: 'Whisper models/OS audio — no browser equivalent',
-  transcribe_audio: 'Whisper models/OS audio — no browser equivalent',
-  transcribe_audio_local: 'Whisper models/OS audio — no browser equivalent',
-  transcribe_audio_local_base64: 'Whisper models/OS audio — no browser equivalent',
 
   // Desktop-shell / OS surfaces — updater, CLI installer, secrets, file
   // system, notifications. A browser demo cannot perform any of these and
