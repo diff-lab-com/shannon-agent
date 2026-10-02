@@ -705,6 +705,13 @@ export interface AttachmentPathCheck {
   reason?: RejectedAttachmentReason
   /** G3b P1-4 — extraction summary for parseable ok paths (best-effort). */
   extraction?: AttachmentExtractionReport
+  /**
+   * R7-③ threshold hybrid — a parseable, ok document over the large-file
+   * threshold: the preflight skipped the attach-time full parse, so the chip
+   * shows the honest "large file — parsed on send" placeholder and the real
+   * extraction badge lights from the send receipt instead.
+   */
+  deferred_parse?: boolean
 }
 
 export interface SendMessageResponse {

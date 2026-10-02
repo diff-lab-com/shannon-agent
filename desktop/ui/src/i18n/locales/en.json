@@ -1800,6 +1800,7 @@
   "chat.attach.reason.noWorkingDir": "no working directory is set — choose one in Settings first",
   "chat.attach.reason.unsupportedType": "Shannon cannot send this image format to the model (supported: PNG, JPG, GIF, WebP)",
   "chat.attach.issue.tooltip": "Will be refused on send: {reason}",
+  "chat.attach.deferredParse.tooltip": "Large file · will be parsed when sent",
   "chat.attach.extraction.office": "Extracted {total} sections, first {inlined} inlined",
   "chat.attach.extraction.pdfTruncated": "PDF inlines the first 50 KiB — the model can read the rest from the extracted cache",
   "chat.attach.extraction.pdfFull": "PDF text fully extracted and inlined",
