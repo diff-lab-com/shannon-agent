@@ -12,6 +12,10 @@
 // Included:
 //   e2e/chat-script.*.spec.ts          all scripted journeys (R1-R4) + the
 //                                      R5 fuzz / visual-matrix / a11y / perf
+//                                      + the wave-2 task-6 env/cross-cutting
+//                                      families multi-window / voice-input /
+//                                      i18n-theme (D8: nightly-only, never
+//                                      in the PR gate's testIgnore escape)
 //   e2e/chat-input-persistence.spec.ts scripted (R3) input-draft journeys
 //   e2e/sidebar-sessions.spec.ts       NOT scripted, but the R3/G6 load-flake
 //                                      family lives here (sidebar row batching)
