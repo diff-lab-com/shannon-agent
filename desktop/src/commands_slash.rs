@@ -366,6 +366,7 @@ pub async fn compact_session(
                         content: user.clone(),
                         timestamp: now,
                         file_attachments: None,
+                        interrupted: None,
                     });
                 }
                 if !assistant.is_empty() {
@@ -374,6 +375,7 @@ pub async fn compact_session(
                         content: assistant.clone(),
                         timestamp: now,
                         file_attachments: None,
+                        interrupted: None,
                     });
                 }
             }

@@ -37,8 +37,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use shannon_types::session_event::{
-    RequestHeaderPayload, SessionEventBody, SessionStartPayload, TokenUsage, ToolManifestEntry,
-    TurnEndPayload, TurnStartPayload, UserMessagePayload,
+    AssistantMessagePayload, RequestHeaderPayload, SessionEventBody, SessionStartPayload,
+    TokenUsage, ToolManifestEntry, TurnEndPayload, TurnStartPayload, UserMessagePayload,
 };
 use tracing::warn;
 
@@ -248,6 +248,12 @@ pub struct SessionTee {
     /// Whether this tee opened a fresh log (first header says "initial").
     fresh_log: bool,
     headers_written: u32,
+    /// D6: text accumulated for the OPEN assistant step (visible deltas only,
+    /// mirroring the projection's step fold). An interrupted close finalizes
+    /// it as one authoritative `assistant/message(interrupted: true)` row —
+    /// the partial marker the conversation reload reads — instead of leaving
+    /// the step's text implied by `assistant/chunk` rows alone.
+    step_text: String,
 }
 
 impl SessionTee {
@@ -377,6 +383,7 @@ impl SessionTee {
                     turn_steps: 0,
                     fresh_log: fresh,
                     headers_written: 0,
+                    step_text: String::new(),
                 }
             }
             // Lock conflict or I/O failure: degrade, never fail the session.
@@ -397,6 +404,7 @@ impl SessionTee {
             turn_steps: 0,
             fresh_log: false,
             headers_written: 0,
+            step_text: String::new(),
         }
     }
 
@@ -528,6 +536,7 @@ impl SessionTee {
     /// carrying the accumulated usage (or the bare-token fallback).
     fn close_turn(&mut self, reason: &str, error: Option<String>) {
         if !self.turn_open {
+            self.step_text.clear();
             return;
         }
         self.turn_open = false;
@@ -535,6 +544,29 @@ impl SessionTee {
         // interrupted/…) funnels through here, so this is the single
         // counting point for turn denominators and interruption numerators.
         crate::signals::observe_turn_end(reason);
+        // D6 (keep the partial output): an interrupted turn finalizes the
+        // open step's streamed text as one authoritative
+        // `assistant/message(interrupted: true)` row BEFORE the `turn/end`.
+        // This is the vocabulary's designed interrupt coalescing (the
+        // projection replaces the open step's chunk-derived text with this
+        // content and marks the message), so a reload carries the partial
+        // answer back WITH its stopped marker — no new record type. Completed
+        // and failed closes keep the chunk-row record unchanged.
+        let partial = if reason == TurnEndPayload::REASON_INTERRUPTED {
+            std::mem::take(&mut self.step_text)
+        } else {
+            self.step_text.clear();
+            String::new()
+        };
+        if !partial.is_empty() {
+            self.record_body(SessionEventBody::AssistantMessage(
+                AssistantMessagePayload {
+                    content: partial,
+                    usage: None,
+                    interrupted: true,
+                },
+            ));
+        }
         let usage = self.turn_usage.take().or_else(|| {
             self.bare_tokens.map(|tokens| TokenUsage {
                 input_tokens: 0,
@@ -585,6 +617,21 @@ impl SessionTee {
 
     /// Redact, enforce the size limit, and append. Infallible by design.
     fn record_body(&mut self, body: SessionEventBody) {
+        // D6: mirror the projection's step fold — accumulate visible deltas
+        // for the open step so an interrupted close can finalize them, and
+        // reset at the exact bodies that flush a step there (user message,
+        // tool result, turn boundary, an authoritative assistant/message).
+        // A tool/call belongs to the step it was issued in (no reset).
+        match &body {
+            SessionEventBody::AssistantChunk(p) if !p.thinking => {
+                self.step_text.push_str(&p.delta);
+            }
+            SessionEventBody::UserMessage(_)
+            | SessionEventBody::ToolResult(_)
+            | SessionEventBody::TurnStart(_)
+            | SessionEventBody::AssistantMessage(_) => self.step_text.clear(),
+            _ => {}
+        }
         // Redact first (immutable borrow), then hand off to the writer.
         let body = enforce_size_limit(self.redact_body(body));
         let Some(writer) = self.writer.as_mut() else {
@@ -1373,5 +1420,176 @@ mod tests {
         }
         assert_eq!(syncs, 1, "offloaded boundary sync must complete");
         handle.close();
+    }
+
+    // ── D6: an interrupted turn keeps its partial output ────────────────────
+    //
+    // The production cancel path is: the desktop drops the stream, the engine
+    // producer aborts, the tee's Drop closes the open turn as `interrupted`.
+    // The close must finalize the open step's streamed text as one
+    // `assistant/message(interrupted: true)` row — the marker the conversation
+    // reload reads — instead of leaving the partial text implied by chunk
+    // rows alone.
+
+    /// The full cancel shape (production bus path): user message → turn start
+    /// → streamed chunks → drop. The log must carry the partial text as an
+    /// authoritative interrupted assistant/message BEFORE the interrupted
+    /// turn/end, and the dropped in-flight chunks must not double-write.
+    #[test]
+    fn interrupted_close_finalizes_the_open_step_text() {
+        let dir = TempDir::new().expect("tempdir");
+        {
+            let tee = open_tee(&dir);
+            let handle = TeeHandle::new(tee);
+            handle.record_user_message("写一首诗");
+            handle.record_turn_start(Some("q-1".into()));
+            for input in crate::session_log::query_event_to_bus_inputs(&QueryEvent::Text {
+                query_id: query_id(),
+                content: "海浪拍岸，".into(),
+            }) {
+                handle.record_bus_input(&input);
+            }
+            for input in crate::session_log::query_event_to_bus_inputs(&QueryEvent::Text {
+                query_id: query_id(),
+                content: "月光洒落，".into(),
+            }) {
+                handle.record_bus_input(&input);
+            }
+            // Producer abort → last handle drops → close as interrupted.
+            drop(handle);
+        }
+        let bodies = read_bodies(&dir);
+        let kinds: Vec<SessionEventKind> = bodies.iter().map(|b| b.kind()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SessionEventKind::SessionStart,
+                SessionEventKind::UserMessage,
+                SessionEventKind::TurnStart,
+                SessionEventKind::AssistantChunk,
+                SessionEventKind::AssistantChunk,
+                // D6: the authoritative partial finalize lands before the
+                // turn boundary.
+                SessionEventKind::AssistantMessage,
+                SessionEventKind::TurnEnd,
+            ],
+            "interrupted close must finalize the partial text"
+        );
+        match &bodies[5] {
+            SessionEventBody::AssistantMessage(p) => {
+                assert_eq!(p.content, "海浪拍岸，月光洒落，");
+                assert!(p.interrupted, "the finalize carries the interrupted flag");
+            }
+            other => panic!("wrong body: {other:?}"),
+        }
+        match &bodies[6] {
+            SessionEventBody::TurnEnd(TurnEndPayload { reason, .. }) => {
+                assert_eq!(reason, TurnEndPayload::REASON_INTERRUPTED);
+            }
+            other => panic!("wrong body: {other:?}"),
+        }
+    }
+
+    /// Completed turns keep the chunk-row record exactly as before — NO
+    /// assistant/message finalize (the D6 marker is exclusive to interrupts).
+    #[test]
+    fn completed_close_writes_no_finalize_row() {
+        let dir = TempDir::new().expect("tempdir");
+        {
+            let mut tee = open_tee(&dir);
+            tee.record_turn_start(None);
+            tee.record_query_event(&QueryEvent::Text {
+                query_id: query_id(),
+                content: "完整回复".into(),
+            });
+            tee.record_query_event(&QueryEvent::Completed {
+                query_id: query_id(),
+                outcome: Default::default(),
+            });
+            tee.close();
+        }
+        let bodies = read_bodies(&dir);
+        assert!(
+            bodies
+                .iter()
+                .all(|b| b.kind() != SessionEventKind::AssistantMessage),
+            "a completed turn must not gain an interrupted finalize"
+        );
+    }
+
+    /// A mid-turn cancel between tool rounds finalizes only the OPEN step's
+    /// text — the earlier step's text is already durable in its own chunk
+    /// rows and must not be duplicated into the finalize.
+    #[test]
+    fn interrupted_finalize_carries_only_the_open_step() {
+        let dir = TempDir::new().expect("tempdir");
+        {
+            let mut tee = open_tee(&dir);
+            tee.record_turn_start(None);
+            for content in ["第一步回答。"] {
+                tee.record_query_event(&QueryEvent::Text {
+                    query_id: query_id(),
+                    content: content.into(),
+                });
+            }
+            let q = query_id();
+            tee.record_query_event(&QueryEvent::ToolUseRequest {
+                query_id: q,
+                tool_use_id: "toolu_1".into(),
+                tool_name: "Bash".into(),
+                tool_input: serde_json::json!({"command": "ls"}),
+            });
+            tee.record_query_event(&QueryEvent::ToolUseResult {
+                query_id: q,
+                tool_use_id: "toolu_1".into(),
+                tool_name: "Bash".into(),
+                result: "ok".into(),
+                is_error: false,
+                meta: Box::new(serde_json::Value::Null),
+            });
+            tee.record_query_event(&QueryEvent::Text {
+                query_id: q,
+                content: "第二步开始".into(),
+            });
+            // Cancel mid-second-step: drop without a terminal event.
+            drop(tee);
+        }
+        let bodies = read_bodies(&dir);
+        let finalize = bodies
+            .iter()
+            .filter_map(|b| match b {
+                SessionEventBody::AssistantMessage(p) => Some(p),
+                _ => None,
+            })
+            .next()
+            .expect("interrupted close finalizes the open step");
+        assert_eq!(
+            finalize.content, "第二步开始",
+            "only the open step's text is finalized — the first step stays in its own rows"
+        );
+        assert!(finalize.interrupted);
+    }
+
+    /// Thinking-only partials finalize nothing (the conversation keeps only
+    /// visible text — same rule the projection's chunk fold applies).
+    #[test]
+    fn thinking_only_interrupt_finalizes_nothing() {
+        let dir = TempDir::new().expect("tempdir");
+        {
+            let mut tee = open_tee(&dir);
+            tee.record_turn_start(None);
+            tee.record_query_event(&QueryEvent::Thinking {
+                query_id: query_id(),
+                content: "推理中……".into(),
+            });
+            drop(tee);
+        }
+        let bodies = read_bodies(&dir);
+        assert!(
+            bodies
+                .iter()
+                .all(|b| b.kind() != SessionEventKind::AssistantMessage),
+            "a thinking-only partial must not produce an assistant/message"
+        );
     }
 }

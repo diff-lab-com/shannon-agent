@@ -375,6 +375,12 @@ pub struct ChatMessage {
     pub timestamp: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_attachments: Option<Vec<FileAttachment>>,
+    /// D6 (keep the partial output): true on an assistant message that is a
+    /// CANCELLED run's partial answer — the "stopped" bubble marker. Absent
+    /// (`None`, serde-default for older clients / older logs) on every
+    /// completed message, so the wire shape is fully backward compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupted: Option<bool>,
 }
 
 /// File attachment for chat messages.
@@ -1479,6 +1485,7 @@ pub async fn send_message(
             content: message.clone(),
             timestamp: now,
             file_attachments: attachments,
+            interrupted: None,
         });
         first
     };
@@ -1801,6 +1808,44 @@ pub async fn send_message(
                 // arm first — the same check-first order the old loop-top
                 // guard had) and lands the moment the token fires.
                 crate::commands::StreamStep::Cancelled => {
+                    // D6 (keep the partial output): whatever the run already
+                    // streamed stays. Two durable traces, mirroring the
+                    // normal-completion bookkeeping:
+                    // ① the in-memory buffer gets the partial assistant
+                    //    message (flagged `interrupted`) so `get_conversation`
+                    //    and the visible session agree with the log;
+                    // ② the turn's /rewind checkpoint still records, so the
+                    //    partial bubble carries the rewind/regenerate
+                    //    affordances a completed turn would have.
+                    // The authoritative log trace itself is written by the
+                    // engine tee (an interrupted close finalizes the streamed
+                    // text as `assistant/message(interrupted: true)`), so a
+                    // reload projection brings the same partial back.
+                    if !final_content.is_empty() {
+                        let mut messages = session_for_task.messages.lock().await;
+                        messages.push(ChatMessage {
+                            role: "assistant".into(),
+                            content: final_content.clone(),
+                            timestamp: chrono_timestamp(),
+                            file_attachments: None,
+                            interrupted: Some(true),
+                        });
+                    }
+                    {
+                        let files: Vec<String> = turn_files.iter().cloned().collect();
+                        let prompt = message_for_skill_loop.clone();
+                        let working_dir = crate::commands_agents::resolve_working_dir(
+                            &app.state::<AppState>(),
+                        )
+                        .await;
+                        crate::commands_rewind::record_turn(
+                            &session_id.to_string(),
+                            rewind_turn_index,
+                            &files,
+                            &prompt,
+                            &working_dir,
+                        );
+                    }
                     let _ = app.emit(
                         event_names::QUERY_CANCELLED,
                         events::QueryCancelledPayload {
@@ -2013,6 +2058,7 @@ pub async fn send_message(
                                 },
                                 timestamp: chrono_timestamp(),
                                 file_attachments: None,
+                                interrupted: None,
                             });
                         }
 
@@ -2781,6 +2827,7 @@ mod tests {
             content: "hello world".to_string(),
             timestamp: 1700000000,
             file_attachments: None,
+            interrupted: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let deserialized: ChatMessage = serde_json::from_str(&json).unwrap();
@@ -2797,6 +2844,7 @@ mod tests {
                 content: "test".to_string(),
                 timestamp: 0,
                 file_attachments: None,
+                interrupted: None,
             };
             assert_eq!(msg.role, *role);
         }
@@ -3098,12 +3146,14 @@ mod tests {
                 content: "hello".to_string(),
                 timestamp: 100,
                 file_attachments: None,
+                interrupted: None,
             });
             msgs.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: "hi".to_string(),
                 timestamp: 101,
                 file_attachments: None,
+                interrupted: None,
             });
         }
         let msgs = session.messages.lock().await;
