@@ -1206,3 +1206,262 @@ async fn test_set_server_budget() {
     pool.track_result_bytes_for("cfg-srv", 200);
     assert!(pool.is_over_budget("cfg-srv").await);
 }
+
+// ── F6: token-rotation callback seam ───────────────────────────────────────
+
+use crate::auth::OAuthTokenSnapshot;
+
+/// Minimal Streamable-HTTP MCP mock with a **rotatable** bearer gate (F6):
+/// requests carrying exactly the current required bearer pass; anything
+/// else gets HTTP 401 — so flipping the gate between connect and
+/// `call_tool` forces the 401 → refresh → retry path the rotation callback
+/// is fired from.
+struct MockRotatingAuthMcp {
+    url: String,
+    required: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl MockRotatingAuthMcp {
+    async fn start(initial_bearer: Option<&str>) -> Self {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let required = Arc::new(std::sync::Mutex::new(initial_bearer.map(str::to_string)));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let gate = required.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = Vec::with_capacity(1024);
+                let mut chunk = [0u8; 1024];
+                let header_end = loop {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break None,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break Some(pos);
+                            }
+                        }
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let head = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
+                let content_length = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let mut body = buf[header_end + 4..].to_vec();
+                while body.len() < content_length {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => body.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let raw_head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                let bearer = raw_head.lines().find_map(|l| {
+                    let (name, value) = l.split_once(':')?;
+                    if !name.eq_ignore_ascii_case("authorization") {
+                        return None;
+                    }
+                    Some(value.trim().to_string())
+                });
+                // Auth gate: reject any credential other than the current
+                // required bearer (read per request so tests can rotate it).
+                let required_now = gate.lock().unwrap().clone();
+                if bearer != required_now {
+                    let payload = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"unauthorized\"}}";
+                    let http = format!(
+                        "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        payload.len(),
+                        payload
+                    );
+                    let _ = socket.write_all(http.as_bytes()).await;
+                    let _ = socket.flush().await;
+                    continue;
+                }
+                let request: serde_json::Value =
+                    serde_json::from_slice(&body).unwrap_or(serde_json::json!({}));
+                let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                let result = match method {
+                    "initialize" => serde_json::json!({
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {"tools": {"listChanged": false}},
+                        "serverInfo": {"name": "mock-rotating", "version": "0.0.1"}
+                    }),
+                    "tools/call" => serde_json::json!({
+                        "content": [{"type": "text", "text": "ok"}]
+                    }),
+                    _ => serde_json::json!({}),
+                };
+                let response = if request.get("id").is_some() {
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": request["id"].clone(),
+                        "result": result,
+                    })
+                } else {
+                    serde_json::json!({})
+                };
+                let payload = serde_json::to_string(&response).unwrap();
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    payload.len(),
+                    payload
+                );
+                let _ = socket.write_all(http.as_bytes()).await;
+                let _ = socket.flush().await;
+            }
+        });
+
+        Self {
+            url: format!("http://{addr}/mcp"),
+            required,
+        }
+    }
+
+    /// Rotate the bearer the mock accepts — requests with the old
+    /// credential now get 401.
+    fn set_required_bearer(&self, bearer: Option<&str>) {
+        *self.required.lock().unwrap() = bearer.map(str::to_string);
+    }
+}
+
+fn stored_creds(token_url: String, access: &str, refresh: &str) -> StoredOAuthCredentials {
+    StoredOAuthCredentials {
+        client_id: "shannon-desktop".to_string(),
+        client_secret: None,
+        token_url,
+        access_token: access.to_string(),
+        refresh_token: Some(refresh.to_string()),
+        expires_at: None,
+        scopes: Vec::new(),
+    }
+}
+
+type RotationEvents = Arc<std::sync::Mutex<Vec<(String, OAuthTokenSnapshot)>>>;
+
+/// A tool-call-time 401 rotates the token, and the pool's token-rotation
+/// callback fires exactly once with the new snapshot (F6 seam contract).
+#[tokio::test]
+async fn token_rotation_callback_fires_on_call_time_401_with_new_snapshot() {
+    let token_url = crate::auth::test_support::spawn_mock_token_endpoint(
+        r#"{"access_token":"fresh-token","refresh_token":"rotated-refresh","expires_in":3600,"token_type":"Bearer"}"#,
+    )
+    .await;
+    let mock = MockRotatingAuthMcp::start(Some("Bearer stored-token")).await;
+    let pool = Arc::new(McpProcessPool::new());
+    let events: RotationEvents = Arc::default();
+    let sink = events.clone();
+    pool.set_on_token_refresh(Arc::new(move |server, snap| {
+        sink.lock()
+            .unwrap()
+            .push((server.to_string(), snap.clone()));
+    }))
+    .await;
+
+    pool.start_remote_oauth_server(
+        "rotator",
+        &mock.url,
+        stored_creds(token_url, "stored-token", "stored-refresh"),
+    )
+    .await
+    .unwrap();
+
+    // Connect used the stored token — no rotation, no callback.
+    assert!(events.lock().unwrap().is_empty());
+
+    // The vendor invalidated the stored access token: the next tool call
+    // gets 401 → refresh → retry — the call-time rotation.
+    mock.set_required_bearer(Some("Bearer fresh-token"));
+    let out = pool
+        .call_tool("rotator", "echo", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(!out.is_error, "retry with the refreshed token must succeed");
+
+    let evts = events.lock().unwrap();
+    assert_eq!(evts.len(), 1, "exactly one rotation notification: {evts:?}");
+    assert_eq!(evts[0].0, "rotator");
+    assert_eq!(evts[0].1.access_token, "fresh-token");
+    assert_eq!(evts[0].1.refresh_token.as_deref(), Some("rotated-refresh"));
+    assert!(evts[0].1.expires_at.is_some());
+}
+
+/// A refresh that fails fires no callback — only a *successful* rotation
+/// is notified (the presentation stays the W3-B needs_auth classification).
+#[tokio::test]
+async fn token_rotation_callback_not_fired_when_refresh_fails() {
+    // Unparseable 200 body → the refresh grant fails.
+    let token_url = crate::auth::test_support::spawn_mock_token_endpoint("not-json").await;
+    let mock = MockRotatingAuthMcp::start(Some("Bearer stored-token")).await;
+    let pool = Arc::new(McpProcessPool::new());
+    let events: RotationEvents = Arc::default();
+    let sink = events.clone();
+    pool.set_on_token_refresh(Arc::new(move |server, snap| {
+        sink.lock()
+            .unwrap()
+            .push((server.to_string(), snap.clone()));
+    }))
+    .await;
+
+    pool.start_remote_oauth_server(
+        "rotator-fail",
+        &mock.url,
+        stored_creds(token_url, "stored-token", "stored-refresh"),
+    )
+    .await
+    .unwrap();
+
+    mock.set_required_bearer(Some("Bearer never-issued"));
+    let result = pool
+        .call_tool("rotator-fail", "echo", serde_json::json!({}))
+        .await;
+    assert!(
+        result.is_err(),
+        "401 + failed refresh must surface an error"
+    );
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "a failed refresh is not a rotation — no callback"
+    );
+}
+
+/// No subscriber: the same 401 → refresh → retry flow succeeds with the
+/// rotation staying memory-only — the seam is optional.
+#[tokio::test]
+async fn token_rotation_without_subscriber_is_memory_only() {
+    let token_url = crate::auth::test_support::spawn_mock_token_endpoint(
+        r#"{"access_token":"fresh-token","refresh_token":"rotated-refresh","expires_in":3600,"token_type":"Bearer"}"#,
+    )
+    .await;
+    let mock = MockRotatingAuthMcp::start(Some("Bearer stored-token")).await;
+    let pool = Arc::new(McpProcessPool::new());
+
+    pool.start_remote_oauth_server(
+        "rotator-solo",
+        &mock.url,
+        stored_creds(token_url, "stored-token", "stored-refresh"),
+    )
+    .await
+    .unwrap();
+
+    mock.set_required_bearer(Some("Bearer fresh-token"));
+    let out = pool
+        .call_tool("rotator-solo", "echo", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(!out.is_error);
+
+    // The provider holds the rotated token in memory.
+    let snap = pool.remote_oauth_tokens("rotator-solo").await.unwrap();
+    assert_eq!(snap.access_token, "fresh-token");
+    assert_eq!(snap.refresh_token.as_deref(), Some("rotated-refresh"));
+}

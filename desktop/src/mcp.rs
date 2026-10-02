@@ -24,6 +24,14 @@
 //! entry's `shannonOAuth` block (ruling R6: inside the existing settings
 //! blob, no keychain). A refresh that still fails lands the row in the
 //! "needs re-authentication" state (classified, never a generic Offline).
+//!
+//! F6 (R7-④ batch 2): rotations are no longer persisted only at connect —
+//! the pool's token-rotation callback ([`install_token_rotation_hook`])
+//! persists every 401-triggered refresh (tool calls included) into the
+//! keyring via the F5 keyring-first write path. Both writers (connect-time
+//! diff, rotation callback) share one the private `OAuthTokenPersister`: same-value
+//! snapshots dedup to a single write, and the shared lock serializes them so
+//! a stale value can never overwrite a fresh rotation.
 
 use shannon_core::tools::ToolRegistry;
 use shannon_mcp::McpProcessPool;
@@ -292,12 +300,11 @@ pub async fn start_oauth_remote_row_in(
             access_token: Some(snap.access_token.clone()),
             expires_at: snap.expires_at.map(|e| e.timestamp()),
         };
-        match crate::config::update_mcp_server_oauth_tokens_with_store(
-            settings_path,
-            &server.name,
-            &stored,
-            store,
-        ) {
+        // F6: through the shared persister — the rotation callback (tool-call
+        // path) may already have written exactly this snapshot while the
+        // handshake was in flight; the shared lock + same-value dedup turn
+        // the double write into one keyring/0600-file write.
+        match oauth_token_persister().persist(settings_path, &server.name, &stored, store) {
             Ok(true) => info!(server = %server.name, "Persisted refreshed OAuth tokens"),
             Ok(false) => {
                 warn!(server = %server.name, "Refreshed OAuth tokens not persisted: entry vanished")
@@ -314,6 +321,188 @@ pub async fn start_oauth_remote_row_in(
         connected: true,
         refreshed,
         error: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// F6 — tool-call-time token rotation persistence
+// ---------------------------------------------------------------------------
+
+/// Serializes and de-duplicates OAuth token-block persistence across the two
+/// writers that target the same keyring entry / `settings.json` row (F6):
+/// the connection-time diff write (W3-B, [`start_oauth_remote_row_in`]) and
+/// the tool-call-time rotation callback ([`install_token_rotation_hook`]).
+///
+/// One `Mutex` is held across the dedup check **and** the underlying
+/// [`crate::config::update_mcp_server_oauth_tokens_with_store`] write, so
+/// the writers can never interleave — and a late writer holding an older
+/// snapshot can never overwrite a freshly rotated one, because equal
+/// snapshots dedup to a no-op and a genuinely newer rotation always wins
+/// the lock order it observed.
+#[derive(Default)]
+pub(crate) struct OAuthTokenPersister {
+    /// Per-server token block last successfully persisted (dedup memory).
+    /// The mutex is held across the dedup check and the write itself.
+    last_written: std::sync::Mutex<HashMap<String, crate::config::McpStoredOAuth>>,
+}
+
+impl OAuthTokenPersister {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Persist `stored` unless it is byte-identical (struct equality) to what
+    /// this persister already wrote for `server` (F6 debounce: a rotation
+    /// observed twice — callback + connect-time diff — is one write).
+    ///
+    /// `Ok(false)` (entry vanished) and `Err` leave the dedup memory
+    /// untouched, so the next rotation (or retry) attempts the write again —
+    /// the in-memory provider handle keeps the new token either way.
+    pub(crate) fn persist(
+        &self,
+        settings_path: &Path,
+        server: &str,
+        stored: &crate::config::McpStoredOAuth,
+        store: Option<&dyn crate::secret_store::SecretStore>,
+    ) -> Result<bool, String> {
+        let mut last = self.last_written.lock().expect("oauth persister lock");
+        if last.get(server).is_some_and(|prev| prev == stored) {
+            debug!(server = %server, "OAuth tokens unchanged since last persist — skipping write");
+            return Ok(true);
+        }
+        let outcome = crate::config::update_mcp_server_oauth_tokens_with_store(
+            settings_path,
+            server,
+            stored,
+            store,
+        );
+        if matches!(&outcome, Ok(true)) {
+            last.insert(server.to_string(), stored.clone());
+        }
+        outcome
+    }
+}
+
+/// The process-wide persister both writers share. A `OnceLock` (not AppState
+/// state) because the rotation callback is installed on the pool whose
+/// handle outlives any single Tauri command scope — and because the
+/// connection-time writer must reach the *same* instance the hook captured.
+static OAUTH_TOKEN_PERSISTER: std::sync::OnceLock<std::sync::Arc<OAuthTokenPersister>> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn oauth_token_persister() -> std::sync::Arc<OAuthTokenPersister> {
+    OAUTH_TOKEN_PERSISTER
+        .get_or_init(|| std::sync::Arc::new(OAuthTokenPersister::new()))
+        .clone()
+}
+
+/// Subscribe the pool's token-rotation events (F6) against the real user
+/// `settings.json` and the process-global secret store. Installed once at
+/// startup, before the pool is seeded, so handshake-time rotations are
+/// persisted through the same path too.
+pub async fn install_token_rotation_hook(pool: &McpProcessPool) {
+    install_token_rotation_hook_in(
+        pool,
+        crate::config::user_settings_path(),
+        crate::secret_store::global(),
+    )
+    .await;
+}
+
+/// `install_token_rotation_hook` against an explicit `settings.json` path and
+/// an injected secret store (tests pass a
+/// [`MockSecretStore`](crate::secret_store::MockSecretStore) — never the real
+/// keyring). The shared the private `OAuthTokenPersister` is reachable through
+/// [`oauth_token_persister`].
+///
+/// The callback resolves the credential **origin** (client id, token
+/// endpoint) through the F5 keyring-first loader, overlays the rotated
+/// snapshot, and writes via the F5 keyring-first write path — keyring entry
+/// updated, plaintext stripped from the file; without a store the legacy
+/// 0600 in-file shape is written instead. There are no separate non-secret
+/// file fields to sync: `expires_at` lives inside the credential block, and
+/// no UI surface displays it.
+pub(crate) async fn install_token_rotation_hook_in(
+    pool: &McpProcessPool,
+    settings_path: std::path::PathBuf,
+    store: Option<std::sync::Arc<dyn crate::secret_store::SecretStore>>,
+) -> std::sync::Arc<OAuthTokenPersister> {
+    let persister = oauth_token_persister();
+    let hook: shannon_mcp::TokenUpdateCallback = {
+        let persister = persister.clone();
+        std::sync::Arc::new(
+            move |server: &str, snapshot: &shannon_mcp::OAuthTokenSnapshot| {
+                persist_rotated_snapshot(
+                    &persister,
+                    &settings_path,
+                    store.as_deref(),
+                    server,
+                    snapshot,
+                );
+            },
+        )
+    };
+    pool.set_on_token_refresh(hook).await;
+    info!("OAuth token-rotation persistence hook installed");
+    persister
+}
+
+/// The rotation-callback body: overlay `snapshot` onto the stored credential
+/// origin and persist. Every failure path only warns — the provider keeps
+/// the new token in memory, so the next rotation retries the write; nothing
+/// is lost by deferring.
+fn persist_rotated_snapshot(
+    persister: &OAuthTokenPersister,
+    settings_path: &Path,
+    store: Option<&dyn crate::secret_store::SecretStore>,
+    server: &str,
+    snapshot: &shannon_mcp::OAuthTokenSnapshot,
+) {
+    // The snapshot carries only the rotated secrets; the stable origin
+    // fields (client id, token endpoint) come from the F5 keyring-first
+    // loader — never guessed, never written as an empty-client block that
+    // could not refresh next session.
+    let rows = match crate::config::load_mcp_servers_with_store(settings_path, store) {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(
+                server = %server,
+                error = %e,
+                "OAuth token rotation not persisted: settings.json failed to load"
+            );
+            return;
+        }
+    };
+    let Some(origin) = rows
+        .into_iter()
+        .find(|r| r.name == server)
+        .and_then(|r| r.oauth)
+    else {
+        warn!(
+            server = %server,
+            "OAuth token rotation not persisted: no stored credential record for this server"
+        );
+        return;
+    };
+    let stored = crate::config::McpStoredOAuth {
+        client_id: origin.client_id,
+        token_url: origin.token_url,
+        refresh_token: snapshot.refresh_token.clone(),
+        access_token: Some(snapshot.access_token.clone()),
+        expires_at: snapshot.expires_at.map(|e| e.timestamp()),
+    };
+    match persister.persist(settings_path, server, &stored, store) {
+        Ok(true) => info!(server = %server, "Persisted rotated OAuth tokens (tool-call refresh)"),
+        Ok(false) => warn!(
+            server = %server,
+            "Rotated OAuth tokens not persisted: entry vanished"
+        ),
+        Err(e) => warn!(
+            server = %server,
+            error = %e,
+            "Persisting rotated OAuth tokens failed — the in-memory token stays new; \
+             the next rotation retries the write"
+        ),
     }
 }
 
@@ -385,6 +574,10 @@ mod tests {
         url: String,
         seen: Arc<std::sync::Mutex<Vec<String>>>,
         saw_auth_header: Arc<std::sync::Mutex<bool>>,
+        /// The bearer the mock currently accepts (F6: shared + mutable, so a
+        /// test can invalidate the stored credential between connect and a
+        /// tool call, forcing the 401 → refresh → retry rotation).
+        required: Arc<std::sync::Mutex<Option<String>>>,
     }
 
     impl MockRemoteMcp {
@@ -400,12 +593,13 @@ mod tests {
 
             let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
             let saw_auth_header = Arc::new(std::sync::Mutex::new(false));
+            let required = Arc::new(std::sync::Mutex::new(required_bearer.map(str::to_string)));
 
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr = listener.local_addr().unwrap();
             let seen_task = seen.clone();
             let auth_task = saw_auth_header.clone();
-            let required = required_bearer.map(str::to_string);
+            let gate = required.clone();
 
             tokio::spawn(async move {
                 loop {
@@ -456,8 +650,10 @@ mod tests {
                     if bearer.is_some() {
                         *auth_task.lock().unwrap() = true;
                     }
-                    // Auth gate: when required, reject any other credential.
-                    if let Some(required) = &required {
+                    // Auth gate: when required, reject any other credential
+                    // (read per request — tests rotate the bearer mid-run).
+                    let required_now = gate.lock().unwrap().clone();
+                    if let Some(required) = required_now {
                         if bearer.as_deref() != Some(required.as_str()) {
                             let payload = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"unauthorized\"}}";
                             let http = format!(
@@ -517,7 +713,14 @@ mod tests {
                 url: format!("http://{addr}/mcp"),
                 seen,
                 saw_auth_header,
+                required,
             }
+        }
+
+        /// Rotate the bearer the mock accepts — requests with the old
+        /// credential now get 401, forcing the client's refresh path.
+        fn set_required_bearer(&self, bearer: Option<&str>) {
+            *self.required.lock().unwrap() = bearer.map(str::to_string);
         }
     }
 
@@ -1210,5 +1413,526 @@ mod tests {
             }
             _ => panic!("expected Stdio variant"),
         }
+    }
+
+    // ── F6: tool-call-time token rotation persistence ─────────────────────
+
+    /// SecretStore double delegating to a [`MockSecretStore`](crate::secret_store::MockSecretStore)
+    /// while recording every `put` (value order + enter/exit instants) — the
+    /// F6 debounce and serialization assertions need evidence the plain mock
+    /// does not expose. Never touches the real keyring.
+    struct CountingStore {
+        inner: crate::secret_store::MockSecretStore,
+        puts: std::sync::atomic::AtomicUsize,
+        writes: std::sync::Mutex<Vec<(std::time::Instant, std::time::Instant, String)>>,
+    }
+
+    impl CountingStore {
+        fn new() -> Self {
+            Self {
+                inner: crate::secret_store::MockSecretStore::new(),
+                puts: std::sync::atomic::AtomicUsize::new(0),
+                writes: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn put_count(&self) -> usize {
+            self.puts.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn written_values(&self) -> Vec<String> {
+            self.writes
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(_, _, value)| value.clone())
+                .collect()
+        }
+
+        /// The stored value under `key` (test assertion helper).
+        fn value(&self, key: &str) -> Option<String> {
+            self.inner.value(key)
+        }
+
+        /// True when any two puts ran concurrently (their intervals overlap).
+        fn has_overlapping_puts(&self) -> bool {
+            let writes = self.writes.lock().unwrap();
+            for (i, (start_a, end_a, _)) in writes.iter().enumerate() {
+                for (start_b, end_b, _) in writes.iter().skip(i + 1) {
+                    if *start_a < *end_b && *start_b < *end_a {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+    }
+
+    impl crate::secret_store::SecretStore for CountingStore {
+        fn get(&self, key: &str) -> Result<Option<String>, String> {
+            self.inner.get(key)
+        }
+
+        fn put(&self, key: &str, value: &str) -> Result<(), String> {
+            let start = std::time::Instant::now();
+            // A small critical section so interleaved (unserialized) writers
+            // would actually overlap and the assertion would have teeth.
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let out = self.inner.put(key, value);
+            let end = std::time::Instant::now();
+            self.puts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.writes
+                .lock()
+                .unwrap()
+                .push((start, end, value.to_string()));
+            out
+        }
+
+        fn delete(&self, key: &str) -> Result<(), String> {
+            self.inner.delete(key)
+        }
+    }
+
+    /// Write a migrated-shape `settings.json` (no plaintext credential) for
+    /// one OAuth url-only row and seed the (mock) keyring with a stale
+    /// token block — the F6 test starting point.
+    fn migrated_shape_with_stale_keyring(
+        tmp: &tempfile::TempDir,
+        name: &str,
+        url: &str,
+        token_url: &str,
+    ) -> (std::path::PathBuf, Arc<CountingStore>) {
+        use crate::secret_store::{SecretStore, mcp_oauth_key};
+
+        let settings_path = tmp.path().join("settings.json");
+        std::fs::write(
+            &settings_path,
+            serde_json::json!({
+                "mcpServers": {
+                    name: {
+                        "type": "http",
+                        "url": url,
+                        "enabled": true,
+                        "shannon:transport": "oauth_remote",
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let store = Arc::new(CountingStore::new());
+        // Seed through the inner mock directly — the counter exists to
+        // observe F6 persistence writes, not the fixture setup.
+        store
+            .inner
+            .put(
+                &mcp_oauth_key(name),
+                &format!(
+                    r#"{{"client_id":"shannon-desktop","token_url":{token_url_json},"refresh_token":"stale-refresh","access_token":"stale-token"}}"#,
+                    token_url_json = serde_json::to_string(token_url).unwrap(),
+                ),
+            )
+            .unwrap();
+        (settings_path, store)
+    }
+
+    /// F6 core acceptance: a tool-call-time 401 rotates the credential, the
+    /// pool's rotation callback fires, and the rotated pair lands in the
+    /// (mock) keyring — origin fields (client id, token endpoint) preserved,
+    /// the file stays plaintext-free, and the connect wrote nothing at all.
+    #[tokio::test]
+    async fn tool_call_401_rotates_and_persists_to_keyring_via_callback() {
+        use crate::secret_store::mcp_oauth_key;
+
+        let tmp = tempfile::tempdir().unwrap();
+        // The mock accepts the stored (stale) credential, so the connect
+        // itself never rotates — the rotation is forced by the tool call.
+        let mock = MockRemoteMcp::start_with_auth(Some("Bearer stale-token")).await;
+        let token_url = spawn_token_endpoint(
+            r#"{"access_token":"call-token","refresh_token":"call-refresh","expires_in":3600,"token_type":"Bearer"}"#,
+            false,
+        )
+        .await;
+        let (settings_path, store) =
+            migrated_shape_with_stale_keyring(&tmp, "f6-rotator", &mock.url, &token_url);
+
+        let row = crate::config::load_mcp_servers_with_store(&settings_path, Some(&*store))
+            .unwrap()
+            .into_iter()
+            .find(|s| s.name == "f6-rotator")
+            .unwrap();
+        assert_eq!(
+            row.oauth.as_ref().unwrap().access_token.as_deref(),
+            Some("stale-token")
+        );
+
+        let pool = Arc::new(McpProcessPool::new());
+        install_token_rotation_hook_in(
+            &pool,
+            settings_path.clone(),
+            Some(store.clone() as Arc<dyn crate::secret_store::SecretStore>),
+        )
+        .await;
+        let result =
+            seed_pool_from_config_in(&pool, vec![row], &settings_path, Some(&*store)).await;
+        assert_eq!(result.servers_started, vec!["f6-rotator".to_string()]);
+        assert_eq!(
+            store.put_count(),
+            0,
+            "connect used the stored token — no rotation, no write"
+        );
+
+        // The vendor invalidated the stored token: the tool call gets 401 →
+        // refresh → retry, and the rotation must persist immediately.
+        mock.set_required_bearer(Some("Bearer call-token"));
+        let out = pool
+            .call_tool("f6-rotator", "echo", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(!out.is_error, "retry with the refreshed token must succeed");
+
+        let raw = store.value(&mcp_oauth_key("f6-rotator")).unwrap();
+        let rotated: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(rotated["access_token"], "call-token");
+        assert_eq!(rotated["refresh_token"], "call-refresh");
+        // Origin fields survive the overlay — the next session can refresh.
+        assert_eq!(rotated["client_id"], "shannon-desktop");
+        assert_eq!(rotated["token_url"], token_url);
+        assert!(rotated["expires_at"].as_i64().is_some());
+
+        // The file stays plaintext-free (keyring mode).
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let entry = &root["mcpServers"]["f6-rotator"];
+        assert!(entry.get("shannonOAuth").is_none(), "{entry}");
+        assert!(entry.get("headers").is_none(), "{entry}");
+
+        // Exactly one keyring write; the provider keeps the new token.
+        assert_eq!(store.put_count(), 1);
+        let snap = pool.remote_oauth_tokens("f6-rotator").await.unwrap();
+        assert_eq!(snap.access_token, "call-token");
+    }
+
+    /// F6 debounce across the two writers: a handshake-time rotation is
+    /// written exactly once — the rotation callback persists it during the
+    /// connect, and the W3-B connect-time diff observes the same snapshot
+    /// and dedups to a no-op.
+    #[tokio::test]
+    async fn handshake_rotation_is_persisted_once_with_hook_installed() {
+        use crate::secret_store::mcp_oauth_key;
+
+        let tmp = tempfile::tempdir().unwrap();
+        // The mock rejects the stale credential — the handshake itself 401s,
+        // refreshes and retries (the W3-B flow, now through F6).
+        let mock = MockRemoteMcp::start_with_auth(Some("Bearer fresh-token")).await;
+        let token_url = spawn_token_endpoint(
+            r#"{"access_token":"fresh-token","refresh_token":"rotated-refresh","expires_in":3600,"token_type":"Bearer"}"#,
+            false,
+        )
+        .await;
+        let (settings_path, store) =
+            migrated_shape_with_stale_keyring(&tmp, "f6-handshake", &mock.url, &token_url);
+
+        let row = crate::config::load_mcp_servers_with_store(&settings_path, Some(&*store))
+            .unwrap()
+            .into_iter()
+            .find(|s| s.name == "f6-handshake")
+            .unwrap();
+
+        let pool = Arc::new(McpProcessPool::new());
+        install_token_rotation_hook_in(
+            &pool,
+            settings_path.clone(),
+            Some(store.clone() as Arc<dyn crate::secret_store::SecretStore>),
+        )
+        .await;
+        let result =
+            seed_pool_from_config_in(&pool, vec![row], &settings_path, Some(&*store)).await;
+        assert_eq!(result.servers_started, vec!["f6-handshake".to_string()]);
+
+        assert_eq!(
+            store.put_count(),
+            1,
+            "callback + connect-time diff must collapse into one keyring write; got {:?}",
+            store.written_values()
+        );
+        let raw = store.value(&mcp_oauth_key("f6-handshake")).unwrap();
+        let rotated: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(rotated["access_token"], "fresh-token");
+        assert_eq!(rotated["refresh_token"], "rotated-refresh");
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let entry = &root["mcpServers"]["f6-handshake"];
+        assert!(entry.get("shannonOAuth").is_none(), "{entry}");
+        assert!(entry.get("headers").is_none(), "{entry}");
+    }
+
+    /// F6 persister contract: same-value snapshots dedup to one write, a new
+    /// value writes again, and a failed write leaves the dedup memory clean
+    /// so the next attempt really retries (no lost rotation).
+    #[test]
+    fn persister_debounces_same_value_and_retries_after_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let settings_path = tmp.path().join("settings.json");
+        std::fs::write(
+            &settings_path,
+            serde_json::json!({
+                "mcpServers": {"deb": {"type": "http", "url": "https://mcp.example/mcp"}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let store = CountingStore::new();
+        let persister = OAuthTokenPersister::new();
+        let block = crate::config::McpStoredOAuth {
+            client_id: "c".into(),
+            token_url: "https://token".into(),
+            refresh_token: Some("r1".into()),
+            access_token: Some("a1".into()),
+            expires_at: Some(1_000),
+        };
+
+        assert!(
+            persister
+                .persist(&settings_path, "deb", &block, Some(&store))
+                .unwrap()
+        );
+        assert!(
+            persister
+                .persist(&settings_path, "deb", &block, Some(&store))
+                .unwrap()
+        );
+        assert_eq!(store.put_count(), 1, "same-value snapshot must not rewrite");
+
+        let mut rotated = block.clone();
+        rotated.access_token = Some("a2".into());
+        assert!(
+            persister
+                .persist(&settings_path, "deb", &rotated, Some(&store))
+                .unwrap()
+        );
+        assert_eq!(store.put_count(), 2, "a new value writes again");
+
+        // A failing attempt (unreadable settings.json) must not enter the
+        // dedup memory — the retry through a good path really writes.
+        let bogus = tmp.path().join("not-a-settings-file");
+        std::fs::create_dir(&bogus).unwrap();
+        let mut rotated_again = rotated.clone();
+        rotated_again.access_token = Some("a3".into());
+        assert!(
+            persister
+                .persist(&bogus, "deb", &rotated_again, Some(&store))
+                .is_err()
+        );
+        assert!(
+            persister
+                .persist(&settings_path, "deb", &rotated_again, Some(&store))
+                .unwrap()
+        );
+        assert_eq!(
+            store.put_count(),
+            4,
+            "failed attempt recorded nothing — the retry wrote (keyring put on both attempts)"
+        );
+    }
+
+    /// F6 failure presentation: a rotation that cannot be persisted warns
+    /// (with the server context) and never crashes the tool-call path.
+    #[test]
+    fn rotated_snapshot_persist_failure_warns_with_server_context() {
+        use crate::secret_store::test_support::capture_warnings;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let bogus = tmp.path().join("unreadable"); // a directory: load fails
+        std::fs::create_dir(&bogus).unwrap();
+        let persister = OAuthTokenPersister::new();
+        let snapshot = shannon_mcp::OAuthTokenSnapshot {
+            access_token: "new-token".into(),
+            refresh_token: Some("new-refresh".into()),
+            expires_at: None,
+        };
+        let (capture, ()) = capture_warnings(|| {
+            persist_rotated_snapshot(&persister, &bogus, None, "f6-failing", &snapshot);
+        });
+        let warnings = capture.warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("not persisted"),
+            "warn must name the failure: {warnings:?}"
+        );
+    }
+
+    /// F6 failure shape end to end: the rotation callback cannot persist —
+    /// the tool call still succeeds and, critically, the provider keeps the
+    /// new token in memory (nothing is lost; the next rotation retries).
+    #[tokio::test]
+    async fn rotation_persist_failure_keeps_new_token_in_memory() {
+        use crate::secret_store::mcp_oauth_key;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = MockRemoteMcp::start_with_auth(Some("Bearer stored-token")).await;
+        let token_url = spawn_token_endpoint(
+            r#"{"access_token":"call-token","refresh_token":"call-refresh","expires_in":3600,"token_type":"Bearer"}"#,
+            false,
+        )
+        .await;
+        let store = Arc::new(crate::secret_store::MockSecretStore::new());
+
+        let pool = Arc::new(McpProcessPool::new());
+        // An unreadable settings path forces the callback's origin load to
+        // fail — the pure "persist impossible" shape.
+        let bogus = tmp.path().join("unreadable");
+        std::fs::create_dir(&bogus).unwrap();
+        install_token_rotation_hook_in(
+            &pool,
+            bogus.clone(),
+            Some(store.clone() as Arc<dyn crate::secret_store::SecretStore>),
+        )
+        .await;
+
+        // Row built in memory (the file is unreadable by design): valid
+        // stored token, no rotation at connect.
+        let row = crate::config::McpServerConfig {
+            name: "f6-lossy".into(),
+            command: "".into(),
+            args: vec![],
+            env: Default::default(),
+            enabled: true,
+            url: Some(mock.url.clone()),
+            has_auth_headers: true,
+            oauth: Some(crate::config::McpStoredOAuth {
+                client_id: "shannon-desktop".into(),
+                token_url,
+                refresh_token: Some("stale-refresh".into()),
+                access_token: Some("stored-token".into()),
+                expires_at: None,
+            }),
+        };
+        let result = seed_pool_from_config_in(&pool, vec![row], &bogus, Some(&*store)).await;
+        assert_eq!(result.servers_started, vec!["f6-lossy".to_string()]);
+
+        mock.set_required_bearer(Some("Bearer call-token"));
+        let out = pool
+            .call_tool("f6-lossy", "echo", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(!out.is_error, "the rotation itself still succeeds");
+
+        let snap = pool.remote_oauth_tokens("f6-lossy").await.unwrap();
+        assert_eq!(
+            snap.access_token, "call-token",
+            "memory keeps the new token despite the failed persist"
+        );
+        assert_eq!(snap.refresh_token.as_deref(), Some("call-refresh"));
+        assert!(
+            !store.contains(&mcp_oauth_key("f6-lossy")),
+            "nothing landed in the store — the write never happened"
+        );
+    }
+
+    /// F6 concurrency contract: the connect-time writer and the rotation
+    /// callback share one persister — concurrent persists of distinct
+    /// snapshots are serialized (no overlapping writes, final value = last
+    /// write: a stale value can never overwrite a fresh rotation).
+    #[test]
+    fn concurrent_persist_through_one_persister_never_overlaps() {
+        use crate::secret_store::mcp_oauth_key;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let settings_path = tmp.path().join("settings.json");
+        std::fs::write(
+            &settings_path,
+            serde_json::json!({
+                "mcpServers": {"f6-par": {"type": "http", "url": "https://mcp.example/mcp"}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let persister = Arc::new(OAuthTokenPersister::new());
+        let store = Arc::new(CountingStore::new());
+
+        std::thread::scope(|scope| {
+            for i in 0..8 {
+                let persister = persister.clone();
+                let store = store.clone();
+                let settings_path = settings_path.clone();
+                scope.spawn(move || {
+                    let stored = crate::config::McpStoredOAuth {
+                        client_id: "c".into(),
+                        token_url: "https://token".into(),
+                        refresh_token: Some(format!("r-{i}")),
+                        access_token: Some(format!("a-{i}")),
+                        expires_at: Some(i),
+                    };
+                    persister
+                        .persist(&settings_path, "f6-par", &stored, Some(&*store))
+                        .unwrap();
+                });
+            }
+        });
+
+        assert_eq!(
+            store.put_count(),
+            8,
+            "eight distinct snapshots → eight writes"
+        );
+        assert!(
+            !store.has_overlapping_puts(),
+            "writes through one persister must be serialized"
+        );
+        let values = store.written_values();
+        let last: serde_json::Value = serde_json::from_str(values.last().unwrap()).unwrap();
+        let final_block: serde_json::Value =
+            serde_json::from_str(&store.value(&mcp_oauth_key("f6-par")).unwrap()).unwrap();
+        assert_eq!(
+            final_block, last,
+            "the entry ends on the last write — no stale overwrite"
+        );
+    }
+
+    /// Same-value contention: eight writers persisting one identical
+    /// snapshot collapse into a single keyring write (debounce under races).
+    #[test]
+    fn same_value_concurrent_persist_writes_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let settings_path = tmp.path().join("settings.json");
+        std::fs::write(
+            &settings_path,
+            serde_json::json!({
+                "mcpServers": {"f6-same": {"type": "http", "url": "https://mcp.example/mcp"}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let persister = Arc::new(OAuthTokenPersister::new());
+        let store = Arc::new(CountingStore::new());
+        let block = crate::config::McpStoredOAuth {
+            client_id: "c".into(),
+            token_url: "https://token".into(),
+            refresh_token: Some("r".into()),
+            access_token: Some("a".into()),
+            expires_at: Some(42),
+        };
+
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let persister = persister.clone();
+                let store = store.clone();
+                let settings_path = settings_path.clone();
+                let block = block.clone();
+                scope.spawn(move || {
+                    persister
+                        .persist(&settings_path, "f6-same", &block, Some(&*store))
+                        .unwrap();
+                });
+            }
+        });
+
+        assert_eq!(
+            store.put_count(),
+            1,
+            "identical snapshots → exactly one write"
+        );
     }
 }

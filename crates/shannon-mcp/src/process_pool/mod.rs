@@ -80,6 +80,18 @@ pub struct StoredOAuthCredentials {
     pub scopes: Vec<String>,
 }
 
+/// Callback invoked when a remote OAuth server **rotated** its tokens (F6
+/// token-rotation persistence): a 401-triggered refresh inside the handle
+/// replaced the in-memory credential, and the new
+/// [`OAuthTokenSnapshot`](crate::auth::OAuthTokenSnapshot) should be
+/// persisted by the embedding application so the rotation survives restart.
+///
+/// Receives `(server_name, new_snapshot)`. The crate itself has no access
+/// to settings files or OS keyrings — persisting is entirely caller-side
+/// (the desktop installs a hook that writes the keyring). No subscriber
+/// means rotation stays memory-only, exactly the pre-F6 behavior.
+pub type TokenUpdateCallback = Arc<dyn Fn(&str, &crate::auth::OAuthTokenSnapshot) + Send + Sync>;
+
 /// Type alias for the async sampling callback.
 ///
 /// Takes a `CreateMessageRequest` and returns a `CreateMessageResult`.
@@ -155,6 +167,9 @@ pub struct McpProcessPool {
     /// Receives `(tool_name, progress, total)`.
     pub(crate) progress_callback:
         Arc<Mutex<Option<Arc<dyn Fn(&str, f64, Option<f64>) + Send + Sync>>>>,
+    /// Callback invoked when a remote OAuth server rotated its tokens (F6).
+    /// Shared `Arc` so the setter propagates to already-built handles.
+    pub(crate) on_token_refresh: Arc<Mutex<Option<TokenUpdateCallback>>>,
     /// Glob patterns for tool allowlisting (from `allowedTools` config).
     /// Empty = all tools allowed. `!` prefix = deny.
     allowed_patterns: Arc<RwLock<Vec<String>>>,
@@ -205,6 +220,7 @@ impl McpProcessPool {
             tool_cache: Arc::new(RwLock::new(HashMap::new())),
             cache_ttl: Duration::from_secs(60),
             progress_callback: Arc::new(Mutex::new(None)),
+            on_token_refresh: Arc::new(Mutex::new(None)),
             allowed_patterns: Arc::new(RwLock::new(Vec::new())),
             max_concurrent_per_server: 8,
             max_output_chars: 1_000_000,
@@ -626,6 +642,7 @@ impl McpProcessPool {
             ws_transport,
             sampling_provider: self.sampling_provider.clone(),
             notification_tx: self.notification_tx.clone(),
+            on_token_refresh: self.on_token_refresh.clone(),
         })
     }
 
@@ -1776,6 +1793,19 @@ impl McpProcessPool {
         callback: Arc<dyn Fn(&str, f64, Option<f64>) + Send + Sync>,
     ) {
         *self.progress_callback.lock().await = Some(callback);
+    }
+
+    /// Set a callback invoked when a remote OAuth server rotates its tokens
+    /// (F6 token-rotation persistence).
+    ///
+    /// The callback receives `(server_name, new_snapshot)` right after a
+    /// 401-triggered refresh succeeded inside the handle — during the
+    /// connect handshake and during tool calls alike. The embedding
+    /// application persists the snapshot (desktop: keyring via the F5
+    /// keyring-first write path) so a rotated refresh token survives
+    /// restart; without a callback, rotation stays memory-only.
+    pub async fn set_on_token_refresh(&self, callback: TokenUpdateCallback) {
+        *self.on_token_refresh.lock().await = Some(callback);
     }
 
     /// Request completions from a server that supports the completions capability.
