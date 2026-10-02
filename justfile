@@ -147,6 +147,11 @@ test-rust:
 test-ci:
     cargo nextest run --workspace --profile ci
 
+# 聊天 wire 级契约冒烟（R6）:fake SSE LLM + 真实 shannon-server（loopback TCP）,
+# 全离线秒级。防「装了→能用」最后一公里断裂——SSE 帧名/顺序/payload 即合同。
+test-contract:
+    @cargo nextest run -p shannon-server --test chat_contract_smoke
+
 test-ui:
     cd desktop/ui && pnpm test:ci
 
