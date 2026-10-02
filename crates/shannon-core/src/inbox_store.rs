@@ -172,6 +172,43 @@ pub struct InboxStats {
     pub today: u64,
 }
 
+/// How a run was started (R7-①). Persisted on the `routine_runs` row and
+/// mirrored into the legacy JSONL history so the consecutive-failure
+/// auto pause can tell scheduler fires from user-initiated ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunTrigger {
+    /// Fired by the scheduler — the only trigger that advances (or can
+    /// complete) the consecutive-failure streak.
+    Scheduled,
+    /// Fired on demand by the user (`trigger_task_now`, the loopback
+    /// trigger endpoint).
+    RunNow,
+    /// Re-execution of an existing run's triage card (`rerun_inbox_item`).
+    Rerun,
+}
+
+impl RunTrigger {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scheduled => "scheduled",
+            Self::RunNow => "run_now",
+            Self::Rerun => "rerun",
+        }
+    }
+
+    /// Parse a persisted column/JSON value. Unrecognized strings fall back
+    /// to [`RunTrigger::Scheduled`] — the same conservative counting rule a
+    /// missing (pre-tagging) value gets.
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "run_now" => Self::RunNow,
+            "rerun" => Self::Rerun,
+            _ => Self::Scheduled,
+        }
+    }
+}
+
 /// One automation run record (`routine_runs` table).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -195,6 +232,12 @@ pub struct RunRecord {
     /// the same rule as the cost field above.
     #[serde(default)]
     pub token_usage: Option<u64>,
+    /// R7-①: how the run was started. `None` on rows/lines written before
+    /// trigger tagging existed — consumers treat that as
+    /// [`RunTrigger::Scheduled`] (the conservative fallback: pre-tagging
+    /// history counts toward the streak until it clears naturally).
+    #[serde(default)]
+    pub trigger: Option<RunTrigger>,
 }
 
 /// Legacy `triage.jsonl` line shape (subset — unknown fields are ignored).
@@ -243,7 +286,8 @@ CREATE TABLE IF NOT EXISTS routine_runs (
     duration_ms INTEGER,
     inbox_item_id INTEGER,
     cost_usd REAL,
-    token_usage INTEGER
+    token_usage INTEGER,
+    "trigger" TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_routine_runs_started ON routine_runs (started_at_ms DESC);
 
@@ -303,7 +347,7 @@ impl InboxStore {
         // the pragma is a no-op.
         let _ = conn.pragma_update(None, "busy_timeout", "2000");
         conn.execute_batch(SCHEMA_SQL)?;
-        Self::migrate_routine_runs_cost_columns(&conn)?;
+        Self::migrate_routine_runs_columns(&conn)?;
         let store = Self {
             conn: Mutex::new(conn),
         };
@@ -315,13 +359,14 @@ impl InboxStore {
         self.conn.lock().map_err(|_| InboxStoreError::Poisoned)
     }
 
-    /// R2-W2-2 migration: add the run cost/token columns to a `routine_runs`
-    /// table created before cost tracking existed. `CREATE TABLE IF NOT
-    /// EXISTS` above is a no-op on such databases, so the columns are added
-    /// with `ALTER TABLE` when (and only when) `PRAGMA table_info` shows them
-    /// missing. Pre-existing rows read back `NULL` → `None` — the UI hides
-    /// the cost cell instead of inventing a number.
-    fn migrate_routine_runs_cost_columns(conn: &Connection) -> Result<(), InboxStoreError> {
+    /// R2-W2-2 / R7-① migration: add the run cost/token and trigger columns
+    /// to a `routine_runs` table created before they existed. `CREATE TABLE
+    /// IF NOT EXISTS` above is a no-op on such databases, so missing columns
+    /// are added with `ALTER TABLE` when (and only when) `PRAGMA table_info`
+    /// shows them absent. Pre-existing rows read back `NULL` → `None` — the
+    /// UI hides the cost cell instead of inventing a number, and the auto-
+    /// pause streak treats untagged runs as `scheduled` (R7-① fallback).
+    fn migrate_routine_runs_columns(conn: &Connection) -> Result<(), InboxStoreError> {
         let existing = {
             let mut stmt = conn.prepare("PRAGMA table_info(routine_runs)")?;
             let names = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -337,6 +382,9 @@ impl InboxStore {
                 "ALTER TABLE routine_runs ADD COLUMN token_usage INTEGER",
                 [],
             )?;
+        }
+        if !existing.contains("trigger") {
+            conn.execute("ALTER TABLE routine_runs ADD COLUMN \"trigger\" TEXT", [])?;
         }
         Ok(())
     }
@@ -611,18 +659,38 @@ impl InboxStore {
 
     /// Record a new `running` run. Returns its id (used as the run id by
     /// every store, including the legacy JSONL mirror).
+    ///
+    /// Untagged form: the row reads back `trigger = NULL`, which consumers
+    /// treat as [`RunTrigger::Scheduled`] (the R7-① conservative fallback —
+    /// untagged history counts toward the auto-pause streak). Every current
+    /// production spawn point tags its runs through
+    /// [`Self::record_run_start_with_trigger`] instead.
     pub fn record_run_start(
         &self,
         task_id: &str,
         task_name: &str,
     ) -> Result<String, InboxStoreError> {
+        self.record_run_start_with_trigger(task_id, task_name, None)
+    }
+
+    /// Tagged variant of [`Self::record_run_start`] (R7-①): every spawn
+    /// point declares how the run was started (`scheduled` / `run_now` /
+    /// `rerun`) so the consecutive-failure streak can count scheduler fires
+    /// only. `None` writes the NULL column — the pre-tagging shape readers
+    /// treat as scheduled (conservative fallback).
+    pub fn record_run_start_with_trigger(
+        &self,
+        task_id: &str,
+        task_name: &str,
+        trigger: Option<RunTrigger>,
+    ) -> Result<String, InboxStoreError> {
         let id = uuid::Uuid::new_v4().to_string();
         let conn = self.lock_conn()?;
         self.with_busy_retry(|| {
             conn.execute(
-                "INSERT INTO routine_runs (id, task_id, task_name, status, started_at_ms)
-                 VALUES (?1, ?2, ?3, 'running', ?4)",
-                params![&id, task_id, task_name, now_ms()],
+                "INSERT INTO routine_runs (id, task_id, task_name, status, started_at_ms, \"trigger\")
+                 VALUES (?1, ?2, ?3, 'running', ?4, ?5)",
+                params![&id, task_id, task_name, now_ms(), trigger.map(|t| t.as_str())],
             )?;
             Ok(())
         })?;
@@ -723,8 +791,8 @@ impl InboxStore {
         let inserted = self.with_busy_retry(|| {
             let changed = conn.execute(
                 "INSERT OR IGNORE INTO routine_runs
-                    (id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id, cost_usd, token_usage)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    (id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id, cost_usd, token_usage, \"trigger\")
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     run.id,
                     run.task_id,
@@ -737,6 +805,7 @@ impl InboxStore {
                     run.inbox_item_id,
                     run.cost_usd,
                     run.token_usage,
+                    run.trigger.as_ref().map(|t| t.as_str()),
                 ],
             )?;
             Ok(changed > 0)
@@ -849,7 +918,7 @@ impl std::fmt::Debug for InboxStore {
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 const ITEM_COLUMNS: &str = "id, source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms";
-const RUN_COLUMNS: &str = "id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id, cost_usd, token_usage";
+const RUN_COLUMNS: &str = "id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id, cost_usd, token_usage, \"trigger\"";
 
 /// Shared list tail for [`InboxStore::list`]: newest first (created_at DESC,
 /// id DESC as tiebreaker for same-millisecond inserts). `limit` is a trusted
@@ -889,6 +958,7 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxItem> {
 }
 
 fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
+    let trigger: Option<String> = row.get(11)?;
     Ok(RunRecord {
         id: row.get(0)?,
         task_id: row.get(1)?,
@@ -901,6 +971,7 @@ fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         inbox_item_id: row.get(8)?,
         cost_usd: row.get(9)?,
         token_usage: row.get(10)?,
+        trigger: trigger.as_deref().map(RunTrigger::parse),
     })
 }
 
@@ -1405,6 +1476,7 @@ mod tests {
             inbox_item_id: None,
             cost_usd: None,
             token_usage: None,
+            trigger: Some(RunTrigger::Scheduled),
         };
         assert!(store.import_run(&record).unwrap(), "first import inserts");
 
@@ -1428,6 +1500,7 @@ mod tests {
             inbox_item_id: None,
             cost_usd: Some(0.25),
             token_usage: Some(4_096),
+            trigger: Some(RunTrigger::RunNow),
         };
         assert!(store.import_run(&record).unwrap());
         // A second pass (e.g. the next startup's backfill) must neither
@@ -1516,6 +1589,106 @@ mod tests {
         let fresh = runs.iter().find(|r| r.id == run_id).unwrap();
         assert_eq!(fresh.cost_usd, Some(0.5));
         assert_eq!(fresh.token_usage, Some(1_000));
+    }
+
+    /// R7-① migration: a database written before trigger tagging existed
+    /// gains the `"trigger"` column on open — old rows survive and read back
+    /// `trigger = None` (consumers count them as scheduled), and tagged
+    /// starts are writable afterwards.
+    #[test]
+    fn migration_adds_trigger_column_to_a_pre_trigger_database() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("inbox.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE routine_runs (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    task_name TEXT,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    started_at_ms INTEGER,
+                    finished_at_ms INTEGER,
+                    duration_ms INTEGER,
+                    inbox_item_id INTEGER,
+                    cost_usd REAL,
+                    token_usage INTEGER
+                );
+                INSERT INTO routine_runs (id, task_id, task_name, status, started_at_ms)
+                VALUES ('old-1', 't', 'T', 'failed', 1_700_000_000_000);",
+            )
+            .unwrap();
+        }
+
+        let store = InboxStore::open_with_legacy(&db, None).unwrap();
+
+        // The pre-tagging row survived and reads back untagged…
+        let runs = store.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, "old-1");
+        assert_eq!(runs[0].trigger, None);
+
+        // …and the migrated table accepts tagged starts.
+        let run_id = store
+            .record_run_start_with_trigger("t", "T", Some(RunTrigger::Rerun))
+            .unwrap();
+        let runs = store.list_runs(10).unwrap();
+        let tagged = runs.iter().find(|r| r.id == run_id).unwrap();
+        assert_eq!(tagged.trigger, Some(RunTrigger::Rerun));
+    }
+
+    /// R7-①: the trigger tag round-trips through start → list, and the
+    /// untagged constructor stays the `NULL` (= scheduled-fallback) shape.
+    #[test]
+    fn run_trigger_tag_roundtrips_per_variant() {
+        let store = InboxStore::open_in_memory().unwrap();
+        for trigger in [RunTrigger::Scheduled, RunTrigger::RunNow, RunTrigger::Rerun] {
+            let id = store
+                .record_run_start_with_trigger("t", "T", Some(trigger))
+                .unwrap();
+            let row = store
+                .list_runs(10)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.id == id)
+                .unwrap();
+            assert_eq!(row.trigger, Some(trigger));
+        }
+
+        // Untagged start → NULL trigger (the pre-tagging / fallback shape).
+        let untagged = store.record_run_start("t", "T").unwrap();
+        let row = store
+            .list_runs(10)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == untagged)
+            .unwrap();
+        assert_eq!(row.trigger, None);
+
+        // A NULL column and an explicit "scheduled" are the same to readers.
+        let record = RunRecord {
+            id: "imported".into(),
+            task_id: "t".into(),
+            task_name: None,
+            status: "failed".into(),
+            error: None,
+            started_at_ms: Some(1),
+            finished_at_ms: Some(2),
+            duration_ms: Some(1),
+            inbox_item_id: None,
+            cost_usd: None,
+            token_usage: None,
+            trigger: None,
+        };
+        store.import_run(&record).unwrap();
+        let imported = store
+            .list_runs(10)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == "imported")
+            .unwrap();
+        assert_eq!(imported.trigger, None);
     }
 
     // ── legacy triage migration ─────────────────────────────────────────

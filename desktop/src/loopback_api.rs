@@ -224,13 +224,15 @@ pub(crate) async fn trigger_routine<R: tauri::Runtime>(
 
     // 5. Fire through the shared unattended execution path. The run record
     //    (`running`) is written synchronously; completion + the inbox item
-    //    (source=`trigger`) land asynchronously.
+    //    (source=`trigger`) land asynchronously. Tagged `run_now` (R7-①) —
+    //    a user-initiated trigger, never counted by the auto-pause streak.
     let run_id = crate::inbox_commands::spawn_routine_run(
         &ts.run_deps(),
         ts.app.clone(),
         routine,
         SOURCE_TRIGGER,
         payload.note,
+        crate::inbox_commands::RunTrigger::RunNow,
     )
     .await
     .map_err(|e| {

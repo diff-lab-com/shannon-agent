@@ -31,6 +31,9 @@ use chrono::{Datelike as _, TimeZone as _};
 use shannon_core::inbox_store::{
     InboxItem, InboxItemNew, InboxStats, InboxStatus, InboxStore, InboxStoreError, RunRecord,
 };
+// Re-exported for the sibling spawn points (`trigger_task_now`, the
+// scheduler tick, the loopback trigger endpoint) to tag their runs.
+pub(crate) use shannon_core::inbox_store::RunTrigger;
 use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
 use shannon_core::scheduled_retry::{RetryDecision, RetryPolicy};
 use shannon_core::scheduled_routines::ScheduledRoutine;
@@ -142,7 +145,18 @@ pub async fn rerun_inbox_item(
         .ok_or_else(|| format!("task not found: {task_id}"))?;
 
     let deps = RoutineRunDeps::from_state(&state);
-    spawn_routine_run(&deps, app_handle, routine, &item.source, None).await
+    // R7-①: a rerun reuses the original card's source (often `routine`), so
+    // the source alone cannot tell it from a scheduler fire — it is tagged
+    // `rerun` and never advances the auto-pause streak.
+    spawn_routine_run(
+        &deps,
+        app_handle,
+        routine,
+        &item.source,
+        None,
+        RunTrigger::Rerun,
+    )
+    .await
 }
 
 /// Return the session id linked to an inbox item so the frontend can resume
@@ -229,6 +243,9 @@ pub(crate) fn scheduled_run_to_record(run: &ScheduledRun) -> RunRecord {
         inbox_item_id: None,
         cost_usd: run.cost_usd,
         token_usage: run.token_usage,
+        // Pre-tagging JSONL lines (field absent) import untagged — the
+        // streak's conservative "count as scheduled" fallback (R7-①).
+        trigger: run.trigger,
     }
 }
 
@@ -1006,6 +1023,10 @@ pub(crate) struct RunFinishContext {
     /// triage card only. A routine without a stored policy defaults to
     /// true, matching the create-form default.
     pub(crate) notify_on_failure: bool,
+    /// How this run was started (R7-①). Only [`RunTrigger::Scheduled`]
+    /// fires can complete the consecutive-failure auto pause; `run_now`
+    /// and `rerun` runs are user-initiated and never advance the streak.
+    pub(crate) trigger: RunTrigger,
 }
 
 /// A run's observed spend, as persisted on the run records (SQLite
@@ -1133,16 +1154,23 @@ impl RunOutcome {
 ///   [`finalize_run`], which marks the run succeeded/failed — a panic,
 ///   timeout, or exhausted retry budget can never leave the SQLite row
 ///   stuck in `running`.
+///
+/// `trigger` (R7-①) tags how the run was started on both run stores — the
+/// scheduler tags [`RunTrigger::Scheduled`], `trigger_task_now` and the
+/// loopback endpoint tag [`RunTrigger::RunNow`], `rerun_inbox_item` tags
+/// [`RunTrigger::Rerun`] — so the auto-pause streak counts scheduler fires
+/// only.
 pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     deps: &RoutineRunDeps,
     app: tauri::AppHandle<R>,
     routine: ScheduledRoutine,
     inbox_source: &str,
     note: Option<String>,
+    trigger: RunTrigger,
 ) -> Result<String, String> {
     let run_id = deps
         .inbox
-        .record_run_start(&routine.id, &routine.name)
+        .record_run_start_with_trigger(&routine.id, &routine.name, Some(trigger))
         .map_err(|e| e.to_string())?;
 
     // Best-effort mirror of the run start into the legacy JSONL history
@@ -1151,6 +1179,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     // otherwise the SQLite row we just created would never get a finish.
     let mut jsonl_run = ScheduledRun::start(&routine.id, &routine.name);
     jsonl_run.run_id = run_id.clone();
+    jsonl_run.trigger = Some(trigger);
     if let Err(e) = deps.runs_store.record_start(&jsonl_run) {
         tracing::warn!(
             run_id = %run_id,
@@ -1187,6 +1216,8 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
             .as_ref()
             .map(|p| p.notify_on_failure)
             .unwrap_or(true),
+        // R7-①: carried into finalize so only scheduler fires can pause.
+        trigger,
     };
 
     // P1-2 budget gate: a routine past its configured monthly budget is
@@ -1646,12 +1677,13 @@ fn finalize_run<R: tauri::Runtime>(
 
     // W3-2: decide the auto pause BEFORE any record is written, so the
     // machine-readable pause reason can be folded into the persisted error.
-    // Only scheduler fires can complete the streak (manual triggers never
-    // pause a routine and never count toward it); the streak itself is
-    // re-derived from SQLite per finalize — stateless, so concurrent
-    // finalizes cannot double-count.
+    // Only scheduler fires can complete the streak (R7-①): the run's
+    // trigger tag decides, so manual fires AND trigger-card reruns (which
+    // reuse the routine's inbox source) never pause a routine. The streak
+    // itself is re-derived from SQLite per finalize — stateless, so
+    // concurrent finalizes cannot double-count.
     let auto_pause = outcome.failed
-        && ctx.source == shannon_core::inbox_store::SOURCE_ROUTINE
+        && ctx.trigger == RunTrigger::Scheduled
         && scheduled_failure_streak(deps, &ctx.task_id, AUTO_PAUSE_FAILURE_THRESHOLD - 1)
             == AUTO_PAUSE_FAILURE_THRESHOLD - 1;
 
@@ -1778,11 +1810,15 @@ fn finalize_run<R: tauri::Runtime>(
 
 /// Length of the scheduled-fire failure streak among the terminal runs
 /// already recorded for `task_id` (newest first), stopping at the first
-/// success (any success clears the streak). Only scheduler-originated runs
-/// count — a run's linked inbox item decides (`source == routine`), so
-/// manual triggers and trigger-item reruns never advance the streak.
-/// Non-terminal rows (`running`, `queued`/`cancelled` tombstones) are
-/// invisible to it.
+/// success (any success clears the streak).
+///
+/// The trigger tag decides what counts (R7-①): only runs tagged
+/// [`RunTrigger::Scheduled`] advance the streak — `run_now` and `rerun`
+/// are user-initiated. Rows recorded before the tag existed read back
+/// `None` and count as scheduled: the conservative R7-① fallback, so
+/// pre-tagging history still pauses until a success (or the pause itself)
+/// clears it. Non-terminal rows (`running`, `queued`/`cancelled`
+/// tombstones) are invisible to it.
 ///
 /// Stateless on purpose: the streak is re-derived from the authoritative
 /// SQLite `routine_runs` on every finalize instead of being accumulated in
@@ -1802,11 +1838,8 @@ fn scheduled_failure_streak(deps: &RoutineRunDeps, task_id: &str, threshold: u32
             "failed" => {}
             _ => continue,
         }
-        let scheduled = run
-            .inbox_item_id
-            .and_then(|id| deps.inbox.get_item(id).ok().flatten())
-            .is_some_and(|item| item.source == shannon_core::inbox_store::SOURCE_ROUTINE);
-        if !scheduled {
+        // R7-①: untagged (pre-tagging) rows count; run_now/rerun never do.
+        if !matches!(run.trigger, None | Some(RunTrigger::Scheduled)) {
             continue;
         }
         streak += 1;
@@ -2295,6 +2328,7 @@ mod tests {
             started_ms,
             notify_webhook: false,
             notify_on_failure: true,
+            trigger: RunTrigger::Scheduled,
         }
     }
 
@@ -3438,6 +3472,10 @@ mod tests {
         assert_eq!(record.inbox_item_id, None);
         assert_eq!(record.cost_usd, None, "legacy mirror had no spend");
         assert_eq!(record.token_usage, None);
+        assert_eq!(
+            record.trigger, None,
+            "pre-tagging JSONL lines stay untagged"
+        );
 
         // Tombstone statuses render exactly like the JSONL projection.
         let mut queued = ScheduledRun::start("t", "T");
@@ -3446,6 +3484,14 @@ mod tests {
         let mut cancelled = ScheduledRun::start("t", "T");
         cancelled.finish(RunStatus::Cancelled, None);
         assert_eq!(scheduled_run_to_record(&cancelled).status, "cancelled");
+
+        // A tagged JSONL line carries its trigger across the projection.
+        let mut tagged = ScheduledRun::start("t", "T");
+        tagged.trigger = Some(RunTrigger::RunNow);
+        assert_eq!(
+            scheduled_run_to_record(&tagged).trigger,
+            Some(RunTrigger::RunNow)
+        );
     }
 
     #[test]
@@ -3462,6 +3508,7 @@ mod tests {
             inbox_item_id: Some(7),
             cost_usd: None,
             token_usage: None,
+            trigger: Some(RunTrigger::Scheduled),
         };
         let exec = run_record_to_execution(&record);
         // The run id is the real SQLite/JSONL id — get_execution_detail
@@ -3771,16 +3818,22 @@ mod tests {
         deps.scheduled_tasks.save(&routine).unwrap();
     }
 
-    /// One failed scheduled fire through the real `finalize_run`.
-    fn finalize_scheduled_failure<R: tauri::Runtime>(
+    /// One failed run of the given trigger kind through the real
+    /// `finalize_run`, tagged on the run row AND in the finish context
+    /// (the two places R7-① reads the trigger from).
+    fn finalize_triggered_failure<R: tauri::Runtime>(
         deps: &RoutineRunDeps,
         app: &tauri::AppHandle<R>,
+        trigger: RunTrigger,
         n: usize,
         notify_on_failure: bool,
     ) {
-        let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
+        let run_id = deps
+            .inbox
+            .record_run_start_with_trigger("task-1", "Task One", Some(trigger))
+            .unwrap();
         let mut ctx = finish_ctx(&run_id, chrono::Utc::now().timestamp_millis() - 1_000);
-        ctx.source = shannon_core::inbox_store::SOURCE_ROUTINE.into();
+        ctx.trigger = trigger;
         ctx.notify_on_failure = notify_on_failure;
         finalize_run(
             deps,
@@ -3796,6 +3849,16 @@ mod tests {
             },
             RunSpend::default(),
         );
+    }
+
+    /// One failed **scheduled** fire through the real `finalize_run`.
+    fn finalize_scheduled_failure<R: tauri::Runtime>(
+        deps: &RoutineRunDeps,
+        app: &tauri::AppHandle<R>,
+        n: usize,
+        notify_on_failure: bool,
+    ) {
+        finalize_triggered_failure(deps, app, RunTrigger::Scheduled, n, notify_on_failure);
     }
 
     #[test]
@@ -3936,37 +3999,128 @@ mod tests {
         stored_routine(&deps);
         let app_handle = app.handle().clone();
 
-        // Two scheduled failures, then THREE manual-trigger failures — the
-        // manual ones must neither pause nor advance the streak.
+        // Two scheduled failures, then THREE run-now failures — the manual
+        // ones must neither pause nor advance the streak.
         for n in 1..=2 {
             finalize_scheduled_failure(&deps, &app_handle, n, true);
         }
         for n in 1..=3 {
-            let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
-            let mut ctx = finish_ctx(&run_id, chrono::Utc::now().timestamp_millis() - 1_000);
-            ctx.source = shannon_core::inbox_store::SOURCE_TRIGGER.into();
-            finalize_run(
-                &deps,
-                app.handle(),
-                ctx,
-                RunOutcome {
-                    failed: true,
-                    error: Some(format!("manual {n} blew up")),
-                    output: String::new(),
-                    session_id: None,
-                    cost_usd: None,
-                    token_usage: None,
-                },
-                RunSpend::default(),
-            );
+            finalize_triggered_failure(&deps, &app_handle, RunTrigger::RunNow, n, true);
         }
-        let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
-        assert!(routine.enabled, "manual failures must not pause");
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(
+            routine.is_some_and(|r| r.enabled),
+            "manual failures must not pause"
+        );
 
         // The next scheduled failure is the THIRD scheduled one → pause.
         finalize_scheduled_failure(&deps, &app_handle, 3, true);
-        let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
-        assert!(!routine.enabled);
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(routine.is_some_and(|r| !r.enabled));
+    }
+
+    /// R7-①: a rerun reuses the original card's `routine` inbox source, so
+    /// only the trigger tag keeps it out of the streak — N rerun failures
+    /// never pause, and the next scheduled fire still counts from zero.
+    #[test]
+    fn rerun_failures_never_pause_and_never_advance_the_streak() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, _inbox) = webhook_deps(
+            tmp.path(),
+            std::sync::Arc::new(RecordingWebhookPort::default()),
+        );
+        stored_routine(&deps);
+        let app_handle = app.handle().clone();
+
+        for n in 1..=3 {
+            finalize_triggered_failure(&deps, &app_handle, RunTrigger::Rerun, n, true);
+        }
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(
+            routine.is_some_and(|r| r.enabled),
+            "3 rerun failures must not pause (the W3-A source check alone would)"
+        );
+
+        // The streak starts fresh: exactly 3 SCHEDULED failures pause.
+        for n in 1..=2 {
+            finalize_scheduled_failure(&deps, &app_handle, n, true);
+        }
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(
+            routine.is_some_and(|r| r.enabled),
+            "2 scheduled failures stay under the threshold"
+        );
+        finalize_scheduled_failure(&deps, &app_handle, 3, true);
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(
+            routine.is_some_and(|r| !r.enabled),
+            "3rd scheduled failure pauses"
+        );
+    }
+
+    /// R7-① conservative fallback: runs recorded before the trigger tag
+    /// existed (trigger = NULL) keep counting toward the streak, so a
+    /// long-failing legacy routine still auto-pauses after the upgrade.
+    #[test]
+    fn untagged_pre_trigger_rows_still_count_toward_the_streak() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, _inbox) = webhook_deps(
+            tmp.path(),
+            std::sync::Arc::new(RecordingWebhookPort::default()),
+        );
+        stored_routine(&deps);
+        let app_handle = app.handle().clone();
+
+        // Legacy history: failed rows with no trigger column value (imported
+        // whole — no `running` placeholder, they were born terminal).
+        for n in 1..=2 {
+            let now = chrono::Utc::now().timestamp_millis();
+            let record = RunRecord {
+                id: format!("legacy-{n}"),
+                task_id: "task-1".into(),
+                task_name: Some("Task One".into()),
+                status: "failed".into(),
+                error: Some(format!("legacy {n}")),
+                started_at_ms: Some(now - 2_000),
+                finished_at_ms: Some(now - 1_000),
+                duration_ms: Some(1_000),
+                inbox_item_id: None,
+                cost_usd: None,
+                token_usage: None,
+                trigger: None,
+            };
+            deps.inbox.import_run(&record).unwrap();
+        }
+
+        // The FIRST new scheduled failure alone must not pause (streak 3 of
+        // the threshold means the two legacy rows DID count)…
+        finalize_scheduled_failure(&deps, &app_handle, 3, true);
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(
+            routine.is_some_and(|r| !r.enabled),
+            "legacy untagged failures count"
+        );
+
+        // …and a fresh routine (no enabled_at, so the cutoff filter stays
+        // out of the way) with the same legacy history does NOT pause on a
+        // rerun failure in between — reruns stay excluded from the streak.
+        let mut fresh = ScheduledRoutine::new("Task One".into(), "p".into(), 3600);
+        fresh.id = "task-1".into();
+        fresh.enabled = true;
+        fresh.enabled_at = None;
+        deps.scheduled_tasks.save(&fresh).unwrap();
+        finalize_triggered_failure(&deps, &app_handle, RunTrigger::Rerun, 4, true);
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(
+            routine.is_some_and(|r| r.enabled),
+            "a rerun failure must not complete the legacy streak"
+        );
+        // …but the next scheduled fire is the 3rd counted failure → pause.
+        finalize_scheduled_failure(&deps, &app_handle, 5, true);
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(routine.is_some_and(|r| !r.enabled));
     }
 
     #[test]
@@ -3983,8 +4137,8 @@ mod tests {
         }
 
         // Paused + annotated, but completely silent.
-        let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
-        assert!(!routine.enabled);
+        let routine = deps.scheduled_tasks.load("task-1").unwrap();
+        assert!(!routine.unwrap().enabled);
         assert_eq!(notify.dispatches().len(), 0, "no desktop alerts");
         assert_eq!(webhook.deliveries().len(), 0, "no webhook alerts");
         let runs = deps.inbox.list_runs_by_task("task-1", 10).unwrap();
