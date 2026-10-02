@@ -17,6 +17,7 @@ import {
   signMessage,
 } from "../crypto.js";
 import { ShannonError, type ShannonEvent } from "../protocol.js";
+import { ApprovalRegistry } from "../approvalRegistry.js";
 import { MobileServer, type MethodHandlers } from "../server.js";
 import {
   DeviceRegistry,
@@ -115,6 +116,8 @@ function handlers(opts: {
   registry: DeviceRegistry;
   fetchImpl?: typeof fetch;
   engineScript?: EngineEvent[];
+  onDeviceRevoked?: (deviceId: string) => void;
+  approvalRegistry?: ApprovalRegistry;
 }): MethodHandlers {
   return createMobileHandlers({
     engine: {
@@ -124,10 +127,13 @@ function handlers(opts: {
       logger,
       engineClientFactory: () => new FakeEngine(opts.engineScript ?? []),
       fetchImpl: opts.fetchImpl,
+      approvalRegistry: opts.approvalRegistry,
     },
     tokens: opts.tokens,
     registry: opts.registry,
     logger,
+    onDeviceRevoked: opts.onDeviceRevoked,
+    approvalRegistry: opts.approvalRegistry,
   });
 }
 
@@ -678,13 +684,69 @@ describe("createMobileHandlers (P1.2 pairing lifecycle)", () => {
   });
 });
 
-// ── scope: revoke is self-only; queries are owned by the caller ─────────────
+// ── scope: §M device management (camelCase wire, cross-device revoke) ───────
 
-describe("scope (v0.12 minimal set)", () => {
-  it("device.revoke rejects revoking OTHER devices (desktop-only action)", async () => {
+describe("device management (§M wire contract)", () => {
+  async function pairDevice(
+    socket: WebSocket,
+    tokens: PairTokenStore,
+    kp: ReturnType<typeof newPhone>,
+  ): Promise<string> {
+    const rec = tokens.issue();
+    await rpc(socket, "shannon/pair", {
+      pair_token: rec.token,
+      device_public_key: kp.publicKeyB64Url,
+      pop_signature: signMessage(kp.privateKey, pairPopMessage(rec.token, kp.publicKeyB64Url)),
+      device_label: undefined,
+    });
+    return deviceIdFromPublicKey(kp.publicKeyB64Url);
+  }
+
+  it("device.list serves the §M1 shape: camelCase keys, ISO stamps, no public_key, null label omitted", async () => {
     const tokens = new PairTokenStore();
     const registry = new DeviceRegistry();
     const { port } = await start(handlers({ tokens, registry }));
+    const socket = await connect(port);
+
+    // A labeled device (via pair) and an unlabeled one (seeded directly).
+    const phoneA = newPhone();
+    const rec = tokens.issue();
+    await rpc(socket, "shannon/pair", {
+      pair_token: rec.token,
+      device_public_key: phoneA.publicKeyB64Url,
+      pop_signature: signMessage(phoneA.privateKey, pairPopMessage(rec.token, phoneA.publicKeyB64Url)),
+      device_label: "Pixel 8",
+    });
+    const idA = deviceIdFromPublicKey(phoneA.publicKeyB64Url);
+    const idB = deviceIdFromPublicKey(newPhone().publicKeyB64Url);
+    registry.upsert(idB, "pk-b", null);
+
+    const res = await rpc(socket, "shannon/device.list");
+    const a = res.result.devices.find((d: any) => d.deviceId === idA);
+    const b = res.result.devices.find((d: any) => d.deviceId === idB);
+    expect(a).toEqual({
+      deviceId: idA,
+      label: "Pixel 8",
+      pairedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/),
+      lastSeenAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/),
+    });
+    // Unlabeled → the key is omitted (the phone renders a placeholder); the
+    // snake_case disk entry (public_key et al) never leaks onto the wire.
+    expect(b).toEqual({
+      deviceId: idB,
+      pairedAt: expect.any(String),
+      lastSeenAt: expect.any(String),
+    });
+    expect(JSON.stringify(res.result)).not.toContain("public_key");
+    expect(JSON.stringify(res.result)).not.toContain("added_at");
+    socket.close();
+  });
+
+  it("device.revoke accepts camelCase deviceId and may revoke ANY registered device (2026-10-03 ruling)", async () => {
+    const tokens = new PairTokenStore();
+    const registry = new DeviceRegistry();
+    const revoked: string[] = [];
+    const { port } = await start(handlers({ tokens, registry, onDeviceRevoked: (id) => revoked.push(id) }));
 
     const phoneA = newPhone();
     const phoneB = newPhone();
@@ -694,26 +756,248 @@ describe("scope (v0.12 minimal set)", () => {
     registry.upsert(idB, phoneB.publicKeyB64Url);
 
     const socket = await connect(port);
-    // Bind the socket to device A (pair consumes a token + PoP).
-    const rec = tokens.issue();
-    await rpc(socket, "shannon/pair", {
-      pair_token: rec.token,
-      device_public_key: phoneA.publicKeyB64Url,
-      pop_signature: signMessage(phoneA.privateKey, pairPopMessage(rec.token, phoneA.publicKeyB64Url)),
+    await pairDevice(socket, tokens, phoneA);
+
+    // THE lost-phone scenario: A (paired) revokes B (another device).
+    const res = await rpc(socket, "shannon/device.revoke", { deviceId: idB });
+    expect(res.result).toEqual({ revoked: idB, removed: true });
+    expect(registry.has(idB)).toBe(false);
+    // The §M2 broadcast hook fired for the revoked device.
+    expect(revoked).toEqual([idB]);
+
+    // B's signatures are dead from here on: resume answers PAIRING_REQUIRED.
+    const socketB = await connect(port);
+    const ts = Date.now();
+    const resumeB = await rpc(socketB, "shannon/device.resume", {
+      device_id: idB,
+      timestamp: ts,
+      signature: signMessage(phoneB.privateKey, resumeMessage(idB, ts)),
     });
+    expect(resumeB.error?.code).toBe(ShannonError.PAIRING_REQUIRED);
+    socketB.close();
 
-    const res = await rpc(socket, "shannon/device.revoke", { device_id: idB });
-    expect(res.error?.code).toBe(ShannonError.BAD_PARAMS);
-    // B is untouched.
-    expect(registry.has(idB)).toBe(true);
+    // A miss is an honest no-op success carrying the removed boolean — the
+    // phone keeps its list rather than phantom-revoking.
+    const ghost = newPhone();
+    const miss = await rpc(socket, "shannon/device.revoke", {
+      deviceId: deviceIdFromPublicKey(ghost.publicKeyB64Url),
+    });
+    expect(miss.result).toEqual({ revoked: false, removed: false });
+    expect(revoked).toEqual([idB]);
 
-    // Self-revoke still works (logout-everywhere).
+    // Self-revoke still works (logout-everywhere), snake_case param accepted.
     const self = await rpc(socket, "shannon/device.revoke", { device_id: idA });
-    expect(self.result).toEqual({ device_id: idA, revoked: true });
+    expect(self.result).toEqual({ revoked: idA, removed: true });
     expect(registry.has(idA)).toBe(false);
+    expect(revoked).toEqual([idB, idA]);
     socket.close();
   });
 
+  it("device.revoke gates: missing param → BAD_PARAMS; unpaired caller → PAIRING_REQUIRED", async () => {
+    const tokens = new PairTokenStore();
+    const registry = new DeviceRegistry();
+    const { port } = await start(handlers({ tokens, registry }));
+    const idB = deviceIdFromPublicKey(newPhone().publicKeyB64Url);
+    registry.upsert(idB, "pk-b");
+
+    // Unpaired socket: PAIRING_REQUIRED beats everything.
+    const stranger = await connect(port);
+    const unpaired = await rpc(stranger, "shannon/device.revoke", { deviceId: idB });
+    expect(unpaired.error?.code).toBe(ShannonError.PAIRING_REQUIRED);
+    stranger.close();
+
+    // Paired socket: a request without any id is a params error.
+    const socket = await connect(port);
+    const phoneA = newPhone();
+    await pairDevice(socket, tokens, phoneA);
+    const missing = await rpc(socket, "shannon/device.revoke", {});
+    expect(missing.error?.code).toBe(ShannonError.BAD_PARAMS);
+    expect(registry.has(idB)).toBe(true);
+    socket.close();
+  });
+});
+
+// ── scope: queries are owned by the caller ──────────────────────────────────
+
+describe("§L2 approval restore face", () => {
+  /** Seed a paired socket + one pending approval in the shared registry. */
+  async function setup(opts?: { engineScript?: EngineEvent[] }) {
+    const tokens = new PairTokenStore();
+    const registry = new DeviceRegistry();
+    const approvals = new ApprovalRegistry();
+    const { port } = await start(
+      handlers({
+        tokens,
+        registry,
+        approvalRegistry: approvals,
+        engineScript: opts?.engineScript,
+        fetchImpl: mockOk(),
+      }),
+    );
+    const socket = await connect(port);
+    const phone = newPhone();
+    const rec = tokens.issue();
+    await rpc(socket, "shannon/pair", {
+      pair_token: rec.token,
+      device_public_key: phone.publicKeyB64Url,
+      pop_signature: signMessage(phone.privateKey, pairPopMessage(rec.token, phone.publicKeyB64Url)),
+    });
+    return { tokens, registry, approvals, port, socket, phone };
+  }
+
+  const record = {
+    requestId: "req-l2",
+    toolName: "Write",
+    toolInput: { path: "/etc/hosts", content: "x" },
+    description: "写系统文件",
+    isDestructive: false,
+    diffPreview: null,
+    ts: Date.now(),
+  };
+
+  it("approval.list serves the verbatim {pendingApprovals:[...]} envelope with approvalFromMap keys", async () => {
+    const h = await setup();
+    h.approvals.record(record);
+    h.approvals.record({
+      ...record,
+      requestId: "req-l2-b",
+      toolInput: { command: "ls" },
+      isDestructive: true,
+    });
+
+    const res = await rpc(h.socket, "shannon/approval.list");
+    expect(Object.keys(res.result)).toEqual(["pendingApprovals"]);
+    const [first] = res.result.pendingApprovals;
+    // Required keys of the mobile contract (camelCase, ISO timestamp).
+    expect(first).toEqual({
+      approvalId: "req-l2",
+      kind: "Write",
+      headline: "写系统文件",
+      risk: "low",
+      timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/),
+      toolInput: { path: "/etc/hosts", content: "x" },
+      diffTitle: "/etc/hosts",
+    });
+    // Destructive → 'high'; a string-path-less input omits diffTitle.
+    const second = res.result.pendingApprovals[1];
+    expect(second).toEqual({
+      approvalId: "req-l2-b",
+      kind: "Write",
+      headline: "写系统文件",
+      risk: "high",
+      timestamp: expect.any(String),
+      toolInput: { command: "ls" },
+    });
+    h.socket.close();
+  });
+
+  it("approval.list degrades honestly: engine agent/risk present → keys land; absent → omitted", async () => {
+    const h = await setup();
+    h.approvals.record({
+      ...record,
+      requestId: "rich",
+      agent: { id: "agent-1", name: "Builder" },
+      risk: { scope: "system", reversible: true },
+    });
+    h.approvals.record({ ...record, requestId: "plain" });
+
+    const res = await rpc(h.socket, "shannon/approval.list");
+    const rich = res.result.pendingApprovals.find((a: any) => a.approvalId === "rich");
+    // scope:'system' → 'high' even though not destructive and reversible.
+    expect(rich).toEqual({
+      approvalId: "rich",
+      kind: "Write",
+      headline: "写系统文件",
+      risk: "high",
+      scope: ["system"],
+      agentId: "agent-1",
+      agentName: "Builder",
+      timestamp: expect.any(String),
+      toolInput: record.toolInput,
+      diffTitle: "/etc/hosts",
+    });
+    const plain = res.result.pendingApprovals.find((a: any) => a.approvalId === "plain");
+    expect(plain.agentId).toBeUndefined();
+    expect(plain.agentName).toBeUndefined();
+    expect(plain.scope).toBeUndefined();
+    h.socket.close();
+  });
+
+  it("a successful approval/decide removes the entry from the restore face", async () => {
+    const h = await setup();
+    h.approvals.record(record);
+
+    const ok = await rpc(h.socket, "shannon/approval/decide", {
+      request_id: "req-l2",
+      choice: "allow",
+      signature: signMessage(h.phone.privateKey, approvalMessage("req-l2", "allow")),
+    });
+    expect(ok.result).toEqual({ ok: true });
+    expect(h.approvals.resolve("req-l2")).toBe(false); // already gone
+
+    const res = await rpc(h.socket, "shannon/approval.list");
+    expect(res.result.pendingApprovals).toEqual([]);
+    h.socket.close();
+  });
+
+  it("snapshot carries the same pendingApprovals array (reconnect recovery)", async () => {
+    const h = await setup();
+    h.approvals.record(record);
+    const snap = await rpc(h.socket, "shannon/snapshot");
+    expect(snap.result.pendingApprovals).toEqual([
+      {
+        approvalId: "req-l2",
+        kind: "Write",
+        headline: "写系统文件",
+        risk: "low",
+        timestamp: expect.any(String),
+        toolInput: record.toolInput,
+        diffTitle: "/etc/hosts",
+      },
+    ]);
+    h.socket.close();
+  });
+
+  it("query-stream approval.request events record into the registry (with engine rich fields)", async () => {
+    const h = await setup({
+      engineScript: [
+        {
+          type: "approval_request",
+          request_id: "req-stream",
+          tool_name: "Bash",
+          tool_input: { command: "rm -rf /" },
+          description: "危险操作",
+          is_destructive: true,
+          diff_preview: null,
+          ts: Date.now() - 1_000, // fresh — a year-old ts would be TTL-swept
+          agent: { id: "agent-9", name: "Closer" },
+          risk: { scope: "repo", reversible: false },
+        } as unknown as EngineEvent,
+        { type: "completed", model: "m" } as EngineEvent,
+      ],
+    });
+    const { events } = rpcStream(h.socket, "shannon/query", { prompt: "go" });
+    await vi.waitFor(() => expect(h.approvals.size).toBe(1));
+    const pending = h.approvals.listPending()[0];
+    expect(pending).toMatchObject({
+      requestId: "req-stream",
+      toolName: "Bash",
+      description: "危险操作",
+      isDestructive: true,
+      agent: { id: "agent-9", name: "Closer" },
+      risk: { scope: "repo", reversible: false },
+    });
+    // And the wire mapping surfaces the engine risk band: irreversible → medium.
+    const res = await rpc(h.socket, "shannon/approval.list");
+    const item = res.result.pendingApprovals.find((a: any) => a.approvalId === "req-stream");
+    expect(item.risk).toBe("medium");
+    expect(item.scope).toEqual(["repo"]);
+    expect(events.length).toBeGreaterThanOrEqual(0);
+    h.socket.close();
+  });
+});
+
+describe("query ownership", () => {
   it("query ignores a foreign session_id and runs under the caller's device session", async () => {
     const tokens = new PairTokenStore();
     const registry = new DeviceRegistry();

@@ -26,9 +26,11 @@ import {
 } from "./mobile/pairing.js";
 import { createPairingAccess } from "./mobile/accessRpc.js";
 import type { EngineClientFactory as MobileEngineClientFactory } from "./mobile/engineBridge.js";
+import { ApprovalRegistry } from "./mobile/approvalRegistry.js";
 import { MobileDispatchHub } from "./mobile/hub.js";
 import { createMobileChannelAdapter } from "./mobile/channel.js";
 import { createTaskHandlers } from "./mobile/taskHandlers.js";
+import { createMobileTaskTurnHandler } from "./mobile/taskTurnHandler.js";
 import {
   deriveRelayAuthTag,
   deriveSessionKey,
@@ -166,8 +168,14 @@ export async function bootstrap(
   // P2-1 mobile dispatch: when the mobile channel is enabled, the paired-phone
   // channel becomes a first-class platform adapter ("mobile") so dispatched
   // tasks ride the same lane/approval/lifecycle pipeline as the IM adapters.
-  const dispatchHub = config.mobile?.enabled
-    ? new MobileDispatchHub({ logger })
+  // §L2: the pending-approval registry is created ONCE and shared by the hub
+  // (record on requestApproval, resolve on settle) and the shannon/* handlers
+  // (shannon/approval.list / snapshot pendingApprovals) so both faces see the
+  // same queue.
+  const mobileEnabled = config.mobile?.enabled === true;
+  const approvalRegistry = mobileEnabled ? new ApprovalRegistry() : null;
+  const dispatchHub = mobileEnabled
+    ? new MobileDispatchHub({ logger, approvals: approvalRegistry ?? undefined })
     : null;
   if (dispatchHub) {
     registry.register(createMobileChannelAdapter({ hub: dispatchHub }));
@@ -177,8 +185,14 @@ export async function bootstrap(
     opts.engineClientFactory ?? ((sessionKey: string) => createEngineClient(config, sessionKey, engineAuthToken));
 
   // P1-4: report 任务开始/完成/失败 back to the IM channel around every
-  // adapter-routed turn (opt-out via config.im.taskLifecycle = false). The
-  // mobile shannon/* path keeps its own engine bridge and is unaffected.
+  // adapter-routed turn (opt-out via config.im.taskLifecycle = false).
+  //
+  // §K3: dispatched mobile tasks do NOT ride the IM text pipeline — their
+  // engine events stream back to the initiating phone as structured
+  // `shannon/event`s keyed by the task id (query.started / task.progress /
+  // task.message / query.failed), so platform "mobile" turns get the
+  // mobile-specific handler and every IM platform keeps the lifecycle-wrapped
+  // approval-aware one.
   const baseTurnHandler: TurnHandler =
     opts.turnHandler ??
     createApprovalTurnHandler({
@@ -187,8 +201,23 @@ export async function bootstrap(
       // approvals reach a non-loopback-bound engine without 401ing.
       authToken: engineAuthToken,
     });
-  const turnHandler: TurnHandler =
+  const imTurnHandler: TurnHandler =
     config.im?.taskLifecycle === false ? baseTurnHandler : withTaskLifecycle(baseTurnHandler);
+  const mobileTaskTurnHandler = dispatchHub
+    ? createMobileTaskTurnHandler({
+        hub: dispatchHub,
+        engineBaseUrl: config.engine.httpBaseUrl,
+        authToken: engineAuthToken,
+      })
+    : null;
+  const turnHandler: TurnHandler = {
+    handle(ctx) {
+      if (ctx.inbound.platform === "mobile" && mobileTaskTurnHandler) {
+        return mobileTaskTurnHandler.handle(ctx);
+      }
+      return imTurnHandler.handle(ctx);
+    },
+  };
 
   const router = new SessionRouter({ registry, clientFactory, turnHandler, logger });
 
@@ -301,8 +330,8 @@ export async function bootstrap(
   await registry.startAll(ctx);
   logger.info(`shannon-gateway up: ${registry.size} adapter(s) started`);
 
-  const mobile = config.mobile?.enabled
-    ? await startMobileServer(config, logger, opts, dispatchHub!, engineAuthToken, {
+  const mobile = mobileEnabled
+    ? await startMobileServer(config, logger, opts, dispatchHub!, approvalRegistry!, engineAuthToken, {
         allowlist,
         pairing: accessPairing,
       })
@@ -352,6 +381,8 @@ async function startMobileServer(
   logger: Logger,
   opts: BootstrapOptions,
   dispatchHub: MobileDispatchHub,
+  /** §L2: shared pending-approval registry (also wired into the hub). */
+  approvals: ApprovalRegistry,
   engineAuthToken: string | null,
   /** T9: the IM access stores the desktop pairing-approval RPC serves. */
   access: { allowlist: Allowlist; pairing: PairingStore },
@@ -406,10 +437,21 @@ async function startMobileServer(
       engineClientFactory: opts.mobileEngineClientFactory,
       fetchImpl: opts.mobileFetchImpl,
       engineAuthToken,
+      approvalRegistry: approvals,
+      // §K: a signed shannon/approval/decide unblocks the dispatched task's
+      // parked approval lane (the Y/N-text settle left the RPC face).
+      approvalDecisionSink: (requestId, choice) => dispatchHub.settleApproval(requestId, choice),
     },
     tokens,
     registry,
     logger,
+    // §L2: the same registry the hub feeds — snapshot/approval.list read it.
+    approvalRegistry: approvals,
+    // §M2: a successful revoke fans a `device.revoked` event out to every
+    // OTHER online device (the revoked one is excluded — it learns from the
+    // PAIRING_REQUIRED on its next signed call).
+    onDeviceRevoked: (deviceId: string) =>
+      dispatchHub.broadcastEvent({ type: "device.revoked", device_id: deviceId }, deviceId),
     tasks: createTaskHandlers({
       hub: dispatchHub,
       // review §P1-13: revoked devices must not be able to dispatch tasks

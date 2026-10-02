@@ -62,10 +62,10 @@ relay 端到端加密通道的浏览器支持（§7），或使用原生客户�
 
 | 动作 | 页面操作 | 网关行为 |
 | --- | --- | --- |
-| **派发** | 输入框写一句话，点 **派发**（`shannon/task.dispatch`） | 走 IM 同款管线创建任务：按设备分会话串行执行，消息前 30 字作为任务标题 |
-| **看任务** | 右上角 **任务**（`shannon/task.list`） | 返回本设备最近任务及状态：运行中 / 已完成 / 失败（含原因），最多 20 条 |
-| **审批** | 引擎发出确认请求时页面弹出横幅，点 **✅ 批准 / ❌ 拒绝**（也可直接回复 y / n） | 与钉钉文本审批同一套识别（`parseChoice`：allow/yes/y/同意/允许/✅，deny/no/n/拒绝/否/❌）；300 秒无响应按拒绝处理 |
-| **进度推送** | 无需操作，自动收到 | `🚀 已开始任务：<标题>` / `✅ 任务完成：<标题>` / `❌ 任务失败：<标题>+原因`，以及引擎最终答复，全部以 `shannon/event` 实时推到手机 |
+| **派发** | 输入框写一句话，点 **派发**（`shannon/task.dispatch {prompt}`） | 创建任务并同步返回 §K 任务对象 `{task:{id,prompt,status,agent_id,created_at}}`（r2-w2 起 §K 形状，不再收 `{text}`/回 `{task_id}`）；按设备分会话串行执行，事件带 `session_id=task.id` 仅推发起设备 |
+| **看任务** | 右上角 **任务**（`shannon/task.list`） | 返回本设备最近任务 `{id,prompt,status,agent_id,created_at}`（§K2 投影），最多 20 条 |
+| **审批** | 引擎发出确认请求时页面弹出横幅，点 **✅ 批准 / ❌ 拒绝** | 走**签名** `shannon/approval/decide` v2（`request_id:choice:timestamp` Ed25519）——r2-w2 起 RPC 面不再支持文本 y/n 代答（该识别保留在钉钉等 IM 适配器内）；300 秒无响应按拒绝处理 |
+| **进度推送** | 无需操作，自动收到 | `query.started` → `task.progress`（增量文本/工具/usage）→ 终态 `task.message`（失败为 `query.failed`），全部 `shannon/event` 实时推到手机 |
 
 任务列表为网关内存日志（进程生命周期内），重启后清空——这是刻意的最小只读面。
 
@@ -89,8 +89,9 @@ relay 端到端加密通道的浏览器支持（§7），或使用原生客户�
   （X25519/E2E，本指南的浏览器页面 v1 只支持 LAN 直连，见 §7）。
 - **门禁**：`shannon/task.dispatch` / `shannon/task.list` / `shannon/query` / `shannon/cancel` /
   `shannon/approval/decide` 一律要求已配对会话（`PAIRING_REQUIRED`），未配对连接被直接拒绝。
-- **审批**：审批决定来自**已配对设备的已认证连接**（配对/重连均验签），文本 Y/N 与钉钉审批同级；
-  更严格的逐决策 Ed25519 签名仍保留在直连引擎的 `shannon/approval/decide` 路径上。
+- **审批**：审批决定来自**已配对设备的已认证连接**（配对/重连均验签）；浏览器页与原生手机的
+  审批决定均走逐决策 Ed25519 签名的 `shannon/approval/decide`（v2 防重放时间窗），
+  文本 Y/N 代答仅保留在钉钉等 IM 适配器管线内（r2-w2 起不再暴露在 RPC 面）。
 - **无新明文落盘点**：设备公钥存 `~/.shannon/mobile-devices.json`（公钥非机密，F14），
   私钥只在手机本机，配置文件不新增任何密钥字段。
 

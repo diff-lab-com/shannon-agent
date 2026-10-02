@@ -43,7 +43,10 @@ export type ShannonMethod =
   | "shannon/snapshot"
   | "shannon/resume"
   | "shannon/device.list"
-  | "shannon/device.revoke";
+  | "shannon/device.revoke"
+  | "shannon/approval.list"
+  | "shannon/session.list"
+  | "shannon/session.history";
 
 /**
  * Runtime mirror of [ShannonMethod] — the SINGLE SOURCE both the type above
@@ -69,6 +72,9 @@ export const SHANNON_METHODS = [
   "shannon/resume",
   "shannon/device.list",
   "shannon/device.revoke",
+  "shannon/approval.list",
+  "shannon/session.list",
+  "shannon/session.history",
 ] as const satisfies readonly ShannonMethod[];
 
 // Compile-time guard: every member of the union is present in the runtime
@@ -127,13 +133,15 @@ export interface AgentDetailParams {
 }
 
 /**
- * `shannon/task.dispatch` — send a text through the IM-style inbound pipeline
- * (per-device lane → lifecycle → approval loop). If the device has a pending
- * approval request, a Y/N text resolves it instead of creating a task (the
- * DingTalk `parseChoice` pattern, P2-1).
+ * `shannon/task.dispatch` (cross-repo spec §K1) — send a prompt through the
+ * IM-style inbound pipeline (per-device lane → approval loop → structured
+ * task stream). `agent_id` is accepted on the wire but this host has NO agent
+ * roster (`shannon/agent.list` is an empty stub), so ANY non-empty value is
+ * rejected with INVALID_PARAMS rather than silently routed elsewhere.
  */
 export interface TaskDispatchParams {
-  text: string;
+  prompt: string;
+  agent_id?: string | null;
 }
 
 /**
@@ -142,6 +150,19 @@ export interface TaskDispatchParams {
  * first.
  */
 export interface TaskListParams {
+  limit?: number;
+}
+
+/**
+ * `shannon/session.history` (cross-repo spec §J2) — fetch one session's
+ * transcript. `sessionId` is required (the gateway rejects absence with
+ * INVALID_PARAMS, unlike the mock's active-session fallback). Optional
+ * pagination: `before` is the ISO-8601 ts of the oldest message the client
+ * already holds, `limit` the page size (engine default 50).
+ */
+export interface SessionHistoryParams {
+  sessionId: string;
+  before?: string;
   limit?: number;
 }
 
@@ -224,7 +245,16 @@ export interface ShannonEventNotification {
 }
 
 export type ShannonEvent =
-  | { type: "query.started"; turn_id: string }
+  | {
+      type: "query.started";
+      turn_id: string;
+      /**
+       * §K3: the routing key for a DISPATCHED task's stream — the task's own
+       * id (the phone keys its local thread by it). Absent on plain query
+       * turns (the direct `shannon/query` path), which route by turn_id.
+       */
+      session_id?: string;
+    }
   | {
       type: "task.progress";
       content?: string;
@@ -232,11 +262,21 @@ export type ShannonEvent =
       usage?: UsageFrame;
       /** Turn this progress belongs to (WP-15 P2-8). Absent on legacy gateways. */
       turn_id?: string;
+      /**
+       * §K3: the task thread key on a dispatched task's stream (= the task's
+       * own id). Absent on plain query turns.
+       */
+      session_id?: string;
       /** Push cursor (WP-15 T4). */
       seq?: number;
     }
   | { type: "query.completed"; model: string }
-  | { type: "query.failed"; error: string }
+  | {
+      type: "query.failed";
+      error: string;
+      /** §K3: a dispatched task's failure carries its thread key. */
+      session_id?: string;
+    }
   | { type: "query.cancelled" }
   | {
       type: "approval.request";
@@ -246,15 +286,40 @@ export type ShannonEvent =
       description: string;
       is_destructive: boolean;
       diff_preview: string | null;
+      /**
+       * §L1 (additive): engine-side epoch-ms timestamp. Absent/omitted on
+       * engines that don't supply it (the phone falls back to arrival time).
+       */
+      ts?: number;
+      /** §L1 (additive): the requesting agent, when the engine supplies it. */
+      agent?: { id: string | null; name: string | null };
+      /** §L1 (additive): the engine's three-dimensional risk, when present. */
+      risk?: {
+        destructive?: boolean;
+        scope: "local" | "repo" | "system";
+        reversible: boolean;
+      };
     }
   | {
       /**
-       * P2-1: a plain text message pushed to a dispatched task's device — the
-       * engine's final reply and the 任务开始/完成/失败 lifecycle stamps (the
-       * same strings the IM channels receive from `router/lifecycle.ts`).
+       * §K3: a dispatched task's terminal reply — the final complete text. The
+       * `session_id` IS the task's own id (the phone's thread key), and its
+       * presence makes this the task stream's closing event (the P2-1 IM
+       * bubble/lifecycle-stamp semantics only apply when `session_id` is
+       * absent — the pre-§K fallback for plain chat channels).
        */
       type: "task.message";
       text: string;
+      session_id?: string;
+    }
+  | {
+      /**
+       * §M2 (cross-repo spec): a paired device was revoked. Broadcast to every
+       * OTHER online device so their settings screens drop the row. The phone
+       * tolerates unknown event types, so older builds just ignore this.
+       */
+      type: "device.revoked";
+      device_id: string;
     };
 
 export interface ToolFrame {
@@ -303,36 +368,99 @@ export interface OkResult {
   ok: true;
 }
 
-// ── P2-1 task dispatch shapes ───────────────────────────────────────────────
+// ── §K task dispatch shapes (cross-repo spec, mock-server aligned) ──────────
 
-/** `shannon/task.dispatch` success. */
-export interface TaskDispatchResult {
-  ok: true;
-  /** `"approval"` — the text resolved a pending approval; `"task"` — a task was created. */
-  kind: "approval" | "task";
-  /** The dispatched task's id (null when the text resolved an approval instead). */
-  task_id: string | null;
-  /** Present when kind === "approval": the choice the device's text resolved. */
-  choice?: "allow" | "deny";
+/**
+ * One dispatched task on the wire (spec §K1/K2). `id` is the primary key AND
+ * the task thread's conversation key (§K3: the `session_id` the task's
+ * `task.progress` / `task.message` events carry). `agent_id` is always null
+ * on this host (no agent roster); `created_at` is ISO-8601 UTC.
+ */
+export interface MobileTaskRecord {
+  id: string;
+  prompt: string;
+  status: "running" | "completed" | "failed";
+  agent_id: string | null;
+  created_at: string;
 }
 
-/** One journaled dispatched task (gateway-side, in-memory, this process). */
-export interface MobileTaskRecord {
-  task_id: string;
-  device_id: string;
-  /** Short title (first 30 chars of the text, same rule as the IM lifecycle). */
-  title: string;
-  /** The full dispatched text. */
-  text: string;
-  status: "running" | "completed" | "failed";
-  started_at: number;
-  finished_at: number | null;
-  error: string | null;
+/** `shannon/task.dispatch` success — the task object, synchronously, before any event. */
+export interface TaskDispatchResult {
+  task: MobileTaskRecord;
 }
 
 /** `shannon/task.list` success — newest first. */
 export interface TaskListResult {
   tasks: MobileTaskRecord[];
+}
+
+// ── §L2 approval-restore + §J session shapes (cross-repo spec) ─────────────
+
+/**
+ * One pending approval as served by `shannon/approval.list` and carried in the
+ * `shannon/snapshot` `pendingApprovals` array. Key names are camelCase and
+ * map 1:1 onto the phone's `approvalFromMap` (shannon-mobile
+ * `lib/src/live/protocol_mapper.dart`) — these keys ARE the contract.
+ */
+export interface MobileApprovalItem {
+  /** The engine's request id (`request_id` on `approval.request` events). */
+  approvalId: string;
+  /** The tool that wants to run (`tool_name`). */
+  kind: string;
+  /** Human headline (`description`). */
+  headline: string;
+  /** `'high' | 'medium' | 'low'` — synthesized per the §L2 mapping. */
+  risk: "high" | "medium" | "low";
+  /** ISO-8601 UTC instant the request was recorded. */
+  timestamp: string;
+  /** The raw tool input, verbatim — feeds the phone's operation mono block. */
+  toolInput: unknown;
+  /** Initiating agent, when the engine supplies it (absent otherwise). */
+  agentId?: string;
+  agentName?: string;
+  /** Risk scopes from the engine's three-dimensional risk, when present. */
+  scope?: string[];
+  /** `tool_input.path` when it is a string (diff header for the phone). */
+  diffTitle?: string;
+}
+
+/** `shannon/approval.list` success — verbatim envelope key per the contract. */
+export interface ApprovalListResult {
+  pendingApprovals: MobileApprovalItem[];
+}
+
+/** One session summary as served by `shannon/session.list` (spec §J1). */
+export interface MobileSessionSummary {
+  /** Global session primary key — required; entries without it are useless. */
+  id: string;
+  /** Owning agent id — required by the phone's parser; omitted until the
+   *  engine exposes it (the phone then honestly skips the entry). */
+  agentId?: string;
+  /** UTF-8 title; the phone falls back to the agent name when absent. */
+  title?: string;
+  /** ISO-8601 UTC last-activity instant (list ordering). */
+  updatedAt?: string;
+}
+
+/** `shannon/session.list` success. */
+export interface SessionListResult {
+  sessions: MobileSessionSummary[];
+}
+
+/** One transcript message as served by `shannon/session.history` (§J2). */
+export interface MobileSessionMessage {
+  role: string;
+  content: string;
+  /** ISO-8601 UTC; the phone stamps arrival time when absent. */
+  ts?: string;
+}
+
+/** `shannon/session.history` success. */
+export interface SessionHistoryResult {
+  sessionId: string;
+  messages: MobileSessionMessage[];
+  /** True when older messages exist beyond this page (spec §J2 pagination). */
+  hasMore: boolean;
 }
 
 // ── T9: desktop pairing-approval shapes ────────────────────────────────────

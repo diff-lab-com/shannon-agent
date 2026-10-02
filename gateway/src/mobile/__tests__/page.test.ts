@@ -98,7 +98,25 @@ describe("PWA page", () => {
     expect(MOBILE_PAGE_HTML).toContain("shannon/device.resume");
     expect(MOBILE_PAGE_HTML).toContain("shannon/task.dispatch");
     expect(MOBILE_PAGE_HTML).toContain("shannon/task.list");
+    expect(MOBILE_PAGE_HTML).toContain("shannon/approval/decide");
     expect(MOBILE_PAGE_HTML).toContain("nacl.sign.keyPair.fromSeed");
+  });
+
+  it("speaks the §K task face: {prompt} dispatch, {task:…} result, §K2 list keys", () => {
+    // Dispatch sends {prompt} (no legacy {text}) and reads r.task.id.
+    expect(MOBILE_PAGE_HTML).toContain("rpc('shannon/task.dispatch', { prompt: text })");
+    expect(MOBILE_PAGE_HTML).toContain("var task = r && r.task;");
+    expect(MOBILE_PAGE_HTML).toContain("t.prompt || t.id");
+    expect(MOBILE_PAGE_HTML).toContain("t.created_at");
+    // The P2-1 Y/N-text approval dialect left the RPC face (§K ruling).
+    expect(MOBILE_PAGE_HTML).not.toContain("dispatchText('y')");
+    expect(MOBILE_PAGE_HTML).not.toContain("r.kind === 'approval'");
+    expect(MOBILE_PAGE_HTML).not.toContain("t.error");
+    // Approvals are signed decide v2 calls (request_id:choice:timestamp).
+    expect(MOBILE_PAGE_HTML).toContain(
+      "nacl.sign.detached(utf8(requestId + ':' + choice + ':' + ts), kp.secretKey)",
+    );
+    expect(MOBILE_PAGE_HTML).toContain("timestamp: ts");
   });
 
   it("does not rely on SubtleCrypto (works on plain-http LAN pages)", () => {

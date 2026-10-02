@@ -367,4 +367,70 @@ describe("EngineWsClient greeting consumption (§P2-24)", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     await client.close();
   });
+  // ── one-shot call() (§J session RPCs) ────────────────────────────────────
+
+  it("call() auto-connects, skips the greeting, and resolves the matched frame", async () => {
+    const received: any[] = [];
+    const server = await startMockServer((ws) => {
+      // The engine greets on connect — a call must not mistake it for the
+      // response.
+      send(ws, { type: "session_info", message_count: 0, protocol_version: "0.8.0" });
+      ws.on("message", (data) => {
+        const msg = JSON.parse(data.toString("utf8"));
+        received.push(msg);
+        if (msg?.type === "sessions.list") {
+          send(ws, {
+            type: "sessions.snapshot",
+            sessions: [{ session_id: "s1", title: "t", updated_at: "2026-06-28T14:21:00Z" }],
+          });
+        }
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    const snapshot = await client.call(
+      { type: "sessions.list" },
+      (frame) =>
+        frame && typeof frame === "object" && (frame as any).type === "sessions.snapshot"
+          ? (frame as any)
+          : null,
+    );
+    expect(snapshot.sessions).toHaveLength(1);
+    expect(received).toEqual([{ type: "sessions.list" }]);
+    await client.close();
+  });
+
+  it("call() rejects on timeout when the response never arrives", async () => {
+    const server = await startMockServer(() => {});
+    const client = new EngineWsClient({ url: server.url });
+    await expect(
+      client.call({ type: "sessions.list" }, () => null, { timeoutMs: 50 }),
+    ).rejects.toThrow(/timed out after 50ms/);
+    await client.close();
+  });
+
+  it("call() rejects when the socket closes before the response", async () => {
+    const server = await startMockServer((ws) => {
+      ws.on("message", () => {
+        // Reply to the handshake then slam the door mid-call.
+        setTimeout(() => ws.close(), 10);
+      });
+    });
+    const client = new EngineWsClient({ url: server.url });
+    await expect(
+      client.call({ type: "sessions.list" }, () => null, { timeoutMs: 2_000 }),
+    ).rejects.toThrow(/closed before the call response/);
+    await client.close();
+  });
+
+  it("a second call while one is in flight is refused (single slot)", async () => {
+    const server = await startMockServer(() => {});
+    const client = new EngineWsClient({ url: server.url });
+    const first = client.call({ type: "sessions.list" }, () => null, { timeoutMs: 500 });
+    await expect(client.call({ type: "sessions.list" }, () => null, { timeoutMs: 50 })).rejects.toThrow(
+      /already in flight/,
+    );
+    await expect(first).rejects.toThrow(/timed out/);
+    await client.close();
+  });
 });

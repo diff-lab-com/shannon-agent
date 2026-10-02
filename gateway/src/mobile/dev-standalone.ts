@@ -20,11 +20,18 @@
  *
  * The fake engine speaks the `shannon-api-protocol` WS surface (session_info
  * handshake, text/tool/usage events, approval_request → HTTP
- * /api/approval/respond → continue → completed, cancel → cancelled) with a
- * deterministic script: every turn streams two text deltas, then requests an
- * Edit approval, then (allow) applies the patch narratively or (deny) stands
- * down, and completes. It exists ONLY for joint debugging — production never
- * imports this module.
+ * /api/approval/respond → continue → completed, cancel → cancelled, and the
+ * §J `sessions.list` / `session.history` one-shots backed by two static fake
+ * sessions) with a deterministic script: every turn streams two text deltas,
+ * then requests an Edit approval (with §L1 ts/agent/risk rich fields), then
+ * (allow) applies the patch narratively or (deny) stands down, and completes.
+ * It exists ONLY for joint debugging — production never imports this module.
+ *
+ * Scope note: the standalone host wires the engine-bridge + pairing handlers
+ * only (createMobileHandlers without `tasks`), so `shannon/task.dispatch` /
+ * `shannon/task.list` answer METHOD_NOT_FOUND here — the §K task face needs
+ * the full desktop bootstrap (router + hub). Exercise it against the real
+ * gateway; the fake engine's value is the direct `shannon/query` stream.
  *
  * Exits on stdin EOF or SIGINT.
  */
@@ -59,6 +66,40 @@ class FakeEngine {
   private readonly pending = new Map<string, PendingApproval>();
   private turnSeq = 0;
   readonly port = 0;
+
+  // §J dev data: two fake sessions with transcripts so the phone's Chat list
+  // seeding (sessions.list) and thread fills (session.history) have something
+  // honest to render during joint debugging. Static — the fake engine's turns
+  // don't write back into them (it exists only to exercise the wire).
+  private readonly sessions = [
+    {
+      session_id: "sess-dev-0001",
+      agent_id: null,
+      title: "Fix flaky login tests",
+      updated_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+      transcript: [
+        { role: "user", content: "The login tests fail about one in five runs — investigate." },
+        {
+          role: "assistant",
+          content:
+            "Found it: the token refresh test asserts on wall-clock time. I made the clock injectable and pinned it — suite is green across 50 runs.",
+        },
+      ],
+    },
+    {
+      session_id: "sess-dev-0002",
+      agent_id: null,
+      title: "Draft release notes",
+      updated_at: new Date(Date.now() - 45 * 60_000).toISOString(),
+      transcript: [
+        { role: "user", content: "Draft the v0.13 release notes from the merged PRs." },
+        {
+          role: "assistant",
+          content: "Draft ready: highlights on direct-link E2E, mobile TLS pinning, and the relay auto-reconnect.",
+        },
+      ],
+    },
+  ] as const;
 
   async start(): Promise<number> {
     const timers = new Set<NodeJS.Timeout>();
@@ -121,7 +162,7 @@ class FakeEngine {
       });
 
       socket.on("message", (data) => {
-        let frame: { type?: string; prompt?: string };
+        let frame: { type?: string; prompt?: string; session_id?: string; before?: string; limit?: number };
         try {
           frame = JSON.parse(String(data));
         } catch {
@@ -130,6 +171,30 @@ class FakeEngine {
         if (frame.type === "cancel") {
           cancelled = true;
           send({ type: "cancelled" });
+          return;
+        }
+        // §J: the one-shot session-data RPCs the gateway's shannon/session.*
+        // surface proxies (see engineSessions.ts for the frame matchers).
+        if (frame.type === "sessions.list") {
+          send({
+            type: "sessions.snapshot",
+            sessions: this.sessions.map(({ transcript: _t, ...s }) => s),
+          });
+          return;
+        }
+        if (frame.type === "session.history") {
+          const session = this.sessions.find((s) => s.session_id === frame.session_id);
+          const messages = session ? [...session.transcript] : [];
+          const limit =
+            typeof frame.limit === "number" && Number.isFinite(frame.limit) && frame.limit >= 1
+              ? Math.floor(frame.limit)
+              : 50;
+          send({
+            type: "session.transcript",
+            session_id: frame.session_id ?? "",
+            messages: messages.slice(0, limit),
+            has_more: messages.length > limit,
+          });
           return;
         }
         if (frame.type !== "query") return;
@@ -158,6 +223,10 @@ class FakeEngine {
             description: `Apply a patch to src/main.rs (${prompt})`,
             is_destructive: false,
             diff_preview: "- let x = 1;\n+ let x = 2;",
+            // §L1 rich fields — exercise the phone's agent/ts/risk rendering.
+            ts: Date.now(),
+            agent: { id: "agent-dev-1", name: "Dev Agent" },
+            risk: { destructive: false, scope: "repo", reversible: true },
           });
           this.pending.set(requestId, {
             resolve: (choice) => {

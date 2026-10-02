@@ -7,9 +7,10 @@
 
 use serde_json::json;
 use shannon_api_protocol::{
-    ApprovalDecision, ApprovalRespondRequest, HealthResponse, ModelInfo, ModelsResponse,
-    PROTOCOL_VERSION, QueryRequest, QueryResponse, SseEventName, ToolEntry, ToolsListResponse,
-    UsageInfo, WsClientMessage, WsServerMessage,
+    AgentRef, ApprovalDecision, ApprovalRespondRequest, HealthResponse, ModelInfo, ModelsResponse,
+    PROTOCOL_VERSION, QueryRequest, QueryResponse, RiskInfo, RiskScope, SessionSummary,
+    SseEventName, ToolEntry, ToolsListResponse, TranscriptMessage, UsageInfo, WsClientMessage,
+    WsServerMessage,
 };
 use uuid::Uuid;
 
@@ -221,6 +222,22 @@ fn approval_respond_request_serialization() {
     assert_eq!(parsed["choice"], "allow_once");
 }
 
+// ── RiskScope (R2-W2) ───────────────────────────────────────────────────
+
+#[test]
+fn risk_scope_serializes_lowercase() {
+    for (scope, wire) in [
+        (RiskScope::Local, "local"),
+        (RiskScope::Repo, "repo"),
+        (RiskScope::System, "system"),
+    ] {
+        let json = serde_json::to_string(&scope).unwrap();
+        assert_eq!(json, format!("\"{wire}\""));
+        let back: RiskScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, scope);
+    }
+}
+
 // ── WsClientMessage ─────────────────────────────────────────────────────
 
 #[test]
@@ -279,6 +296,54 @@ fn ws_client_message_clear_info_cancel() {
     );
 }
 
+// ── R2-W2: sessions.list / session.history client frames ────────────────
+
+#[test]
+fn ws_client_message_sessions_list_wire_shape() {
+    let parsed: serde_json::Value = serde_json::to_value(&WsClientMessage::SessionsList).unwrap();
+    assert_eq!(parsed["type"], "sessions.list");
+    // Unit variant: the tag is the whole frame.
+    let roundtrip: WsClientMessage = serde_json::from_str(r#"{"type":"sessions.list"}"#).unwrap();
+    assert_eq!(roundtrip, WsClientMessage::SessionsList);
+}
+
+#[test]
+fn ws_client_message_session_history_round_trips() {
+    let msg = WsClientMessage::SessionHistory {
+        session_id: "0f0e0d0c-0b0a-4938-8276-654321fedcba".to_string(),
+        before: Some("2026-06-01T10:00:00.000Z".to_string()),
+        limit: Some(10),
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
+    assert_eq!(parsed["type"], "session.history");
+    assert_eq!(parsed["session_id"], "0f0e0d0c-0b0a-4938-8276-654321fedcba");
+    assert_eq!(parsed["before"], "2026-06-01T10:00:00.000Z");
+    assert_eq!(parsed["limit"], 10);
+
+    let roundtrip: WsClientMessage =
+        serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+    assert_eq!(roundtrip, msg);
+}
+
+#[test]
+fn ws_client_message_session_history_defaults() {
+    // Absent `before`/`limit` must parse (the latest-page request shape).
+    let msg: WsClientMessage =
+        serde_json::from_str(r#"{"type":"session.history","session_id":"abc"}"#).unwrap();
+    match msg {
+        WsClientMessage::SessionHistory {
+            session_id,
+            before,
+            limit,
+        } => {
+            assert_eq!(session_id, "abc");
+            assert_eq!(before, None);
+            assert_eq!(limit, None);
+        }
+        other => panic!("expected SessionHistory, got {other:?}"),
+    }
+}
+
 #[test]
 fn ws_client_message_roundtrip_all_variants() {
     let messages = vec![
@@ -291,6 +356,12 @@ fn ws_client_message_roundtrip_all_variants() {
         WsClientMessage::Clear,
         WsClientMessage::Info,
         WsClientMessage::Cancel,
+        WsClientMessage::SessionsList,
+        WsClientMessage::SessionHistory {
+            session_id: Uuid::new_v4().to_string(),
+            before: None,
+            limit: None,
+        },
     ];
     for msg in messages {
         let json = serde_json::to_string(&msg).unwrap();
@@ -397,6 +468,9 @@ fn ws_server_message_approval_request() {
         description: "Run a shell command".to_string(),
         is_destructive: true,
         diff_preview: Some("--- old\n+++ new".to_string()),
+        ts: None,
+        agent: None,
+        risk: None,
     };
     let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
     assert_eq!(parsed["type"], "approval_request");
@@ -404,6 +478,150 @@ fn ws_server_message_approval_request() {
     assert_eq!(parsed["tool_name"], "bash");
     assert_eq!(parsed["is_destructive"], true);
     assert_eq!(parsed["diff_preview"], "--- old\n+++ new");
+}
+
+#[test]
+fn ws_server_message_approval_request_rich_fields_wire_shape() {
+    // R2-W2: the enrichment fields are additive. When populated they ride
+    // under their exact snake_case names, and the risk scope serializes
+    // lowercase.
+    let msg = WsServerMessage::ApprovalRequest {
+        request_id: "r2".to_string(),
+        tool_name: "bash".to_string(),
+        tool_input: json!({"command": "rm -rf build"}),
+        description: "Delete build".to_string(),
+        is_destructive: true,
+        diff_preview: None,
+        ts: Some(1_760_000_000_000),
+        agent: Some(AgentRef {
+            id: None,
+            name: Some("refactor-agent".to_string()),
+        }),
+        risk: Some(RiskInfo {
+            scope: RiskScope::Repo,
+            reversible: false,
+        }),
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
+    assert_eq!(parsed["ts"], 1_760_000_000_000u64);
+    assert_eq!(parsed["agent"]["name"], "refactor-agent");
+    assert!(parsed["agent"]["id"].is_null());
+    assert_eq!(parsed["risk"]["scope"], "repo");
+    assert_eq!(parsed["risk"]["reversible"], false);
+
+    let roundtrip: WsServerMessage =
+        serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+    assert_eq!(roundtrip, msg);
+}
+
+#[test]
+fn ws_server_message_approval_request_legacy_payload_still_parses() {
+    // Pre-R2-W2 server payload (no ts/agent/risk) must keep parsing — the
+    // additive contract old clients rely on.
+    let legacy = r#"{
+        "type": "approval_request",
+        "request_id": "old",
+        "tool_name": "bash",
+        "tool_input": {"command": "ls"},
+        "description": "List files",
+        "is_destructive": false,
+        "diff_preview": null
+    }"#;
+    let msg: WsServerMessage = serde_json::from_str(legacy).unwrap();
+    match msg {
+        WsServerMessage::ApprovalRequest {
+            request_id,
+            ts,
+            agent,
+            risk,
+            ..
+        } => {
+            assert_eq!(request_id, "old");
+            assert_eq!(ts, None);
+            assert_eq!(agent, None);
+            assert_eq!(risk, None);
+        }
+        other => panic!("expected ApprovalRequest, got {other:?}"),
+    }
+}
+
+#[test]
+fn ws_server_message_sessions_snapshot_round_trips() {
+    let msg = WsServerMessage::SessionsSnapshot {
+        sessions: vec![SessionSummary {
+            session_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c8".to_string(),
+            title: Some("Fix the login flow".to_string()),
+            preview: Some("the login button is misaligned".to_string()),
+            created_at: "2026-06-01T10:00:00+00:00".to_string(),
+            updated_at: "2026-06-01T10:05:00+00:00".to_string(),
+            turn_count: 3,
+            total_input_tokens: 1200,
+            total_output_tokens: 450,
+        }],
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
+    assert_eq!(parsed["type"], "sessions.snapshot");
+    assert_eq!(
+        parsed["sessions"][0]["session_id"],
+        "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+    );
+    assert_eq!(parsed["sessions"][0]["turn_count"], 3);
+    assert_eq!(parsed["sessions"][0]["total_input_tokens"], 1200);
+    assert_eq!(parsed["sessions"][0]["total_output_tokens"], 450);
+    assert_eq!(
+        parsed["sessions"][0]["created_at"],
+        "2026-06-01T10:00:00+00:00"
+    );
+
+    let roundtrip: WsServerMessage =
+        serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+    assert_eq!(roundtrip, msg);
+}
+
+#[test]
+fn ws_server_message_session_transcript_round_trips() {
+    let msg = WsServerMessage::SessionTranscript {
+        session_id: "sess-1".to_string(),
+        messages: vec![
+            TranscriptMessage {
+                role: "user".to_string(),
+                content: "open example.com".to_string(),
+                ts: "2026-06-01T10:00:00+00:00".to_string(),
+            },
+            TranscriptMessage {
+                role: "assistant".to_string(),
+                content: "Done — the page is loaded.".to_string(),
+                ts: "2026-06-01T10:00:05+00:00".to_string(),
+            },
+        ],
+        has_more: true,
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
+    assert_eq!(parsed["type"], "session.transcript");
+    assert_eq!(parsed["session_id"], "sess-1");
+    assert_eq!(parsed["messages"][0]["role"], "user");
+    assert_eq!(parsed["messages"][0]["content"], "open example.com");
+    assert_eq!(parsed["messages"][1]["role"], "assistant");
+    assert_eq!(parsed["has_more"], true);
+
+    let roundtrip: WsServerMessage =
+        serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+    assert_eq!(roundtrip, msg);
+}
+
+#[test]
+fn ws_server_message_session_transcript_unknown_session_shape() {
+    // The unknown-id answer is an empty transcript, not an error — pin the
+    // exact shape the phone treats as "no server-side content yet".
+    let parsed: serde_json::Value = serde_json::to_value(&WsServerMessage::SessionTranscript {
+        session_id: "no-such-session".to_string(),
+        messages: Vec::new(),
+        has_more: false,
+    })
+    .unwrap();
+    assert_eq!(parsed["type"], "session.transcript");
+    assert_eq!(parsed["messages"].as_array().unwrap().len(), 0);
+    assert_eq!(parsed["has_more"], false);
 }
 
 #[test]
@@ -492,6 +710,17 @@ fn ws_server_message_roundtrip_all_variants() {
             description: "d".to_string(),
             is_destructive: false,
             diff_preview: None,
+            ts: None,
+            agent: None,
+            risk: None,
+        },
+        WsServerMessage::SessionsSnapshot {
+            sessions: Vec::new(),
+        },
+        WsServerMessage::SessionTranscript {
+            session_id: "s".to_string(),
+            messages: Vec::new(),
+            has_more: false,
         },
     ];
     for msg in messages {

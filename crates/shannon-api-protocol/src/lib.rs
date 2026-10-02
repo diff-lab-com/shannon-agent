@@ -46,6 +46,13 @@ use uuid::Uuid;
 /// non-backward-compatible way. Read it from
 /// `WsServerMessage::SessionInfo::protocol_version`.
 pub const PROTOCOL_VERSION: &str = "0.8.0";
+// R2-W2 additive batch (session enumeration for the phone's session surface +
+// rich approval payloads): `sessions.list` / `session.history` client frames,
+// their `sessions.snapshot` / `session.transcript` responses, and the optional
+// `ts` / `agent` / `risk` fields on `ApprovalRequest`. Every addition is a new
+// variant (old servers never emit it) or an `Option` with `#[serde(default)]`
+// (old payloads keep parsing) — backward compatible per the policy above, so
+// the version deliberately stays at 0.8.0.
 
 // ── HTTP request / response types ───────────────────────────────────────
 
@@ -286,6 +293,31 @@ pub enum WsClientMessage {
     /// Cancel the current in-progress query.
     #[serde(rename = "cancel")]
     Cancel,
+    /// Enumerate the persisted sessions the engine can serve (R2-W2: the
+    /// phone's session picker). Answered with
+    /// [`WsServerMessage::SessionsSnapshot`].
+    #[serde(rename = "sessions.list")]
+    SessionsList,
+    /// Request one page of a session's stored transcript (R2-W2: the phone's
+    /// history backfill). Answered with
+    /// [`WsServerMessage::SessionTranscript`]; a session the engine has no
+    /// log for answers an EMPTY transcript rather than an error — callers
+    /// treat that as "the server has no content for this session yet".
+    #[serde(rename = "session.history")]
+    SessionHistory {
+        /// The session to read. An id the engine has no log for yields an
+        /// empty transcript (no error), so a malformed or foreign id is
+        /// handled with the same quiet path.
+        session_id: String,
+        /// ISO-8601 UTC cursor: the page carries the messages strictly OLDER
+        /// than this timestamp. Absent = the latest page.
+        #[serde(default)]
+        before: Option<String>,
+        /// Page size. Absent = 50; values below 1 clamp to 1; values above
+        /// 500 clamp to 500.
+        #[serde(default)]
+        limit: Option<u32>,
+    },
 }
 
 /// Outgoing message sent to a WebSocket client.
@@ -337,7 +369,10 @@ pub enum WsServerMessage {
     #[serde(rename = "cancelled")]
     Cancelled,
     /// Engine requests human approval for a tool call. The client responds via
-    /// `POST /api/approval/respond` with the matching `request_id`.
+    /// `POST /api/approval/respond` with the matching `request_id`. The R2-W2
+    /// enrichment fields (`ts`, `agent`, `risk`) are all optional with
+    /// `#[serde(default)]`: clients built against the pre-0.8 shape ignore
+    /// them, and an engine that cannot honestly populate one leaves it `None`.
     #[serde(rename = "approval_request")]
     ApprovalRequest {
         request_id: String,
@@ -346,6 +381,20 @@ pub enum WsServerMessage {
         description: String,
         is_destructive: bool,
         diff_preview: Option<String>,
+        /// When the request was raised, epoch milliseconds (R2-W2: the phone
+        /// renders approval age). `None` from engines that don't stamp it.
+        #[serde(default)]
+        ts: Option<u64>,
+        /// The agent/profile context the request was issued under, when the
+        /// engine tracks one (R2-W2). `None` when no active-agent context
+        /// exists — callers must not guess.
+        #[serde(default)]
+        agent: Option<AgentRef>,
+        /// Scope/reversibility classification of the operation (R2-W2).
+        /// `None` until the engine carries a real scope/reversible verdict —
+        /// never synthesized from `is_destructive` or risk levels.
+        #[serde(default)]
+        risk: Option<RiskInfo>,
     },
     /// Session info response. The greeting emitted on connection carries the
     /// server's [`PROTOCOL_VERSION`] in `protocol_version` so clients can
@@ -364,6 +413,99 @@ pub enum WsServerMessage {
     /// Error in protocol.
     #[serde(rename = "error")]
     Error { message: String },
+    /// Answer to `WsClientMessage::SessionsList` (R2-W2): the persisted
+    /// sessions, most recently active first.
+    #[serde(rename = "sessions.snapshot")]
+    SessionsSnapshot {
+        /// One summary per persisted session. Empty when the engine has no
+        /// sessions yet — an empty snapshot is an answer, not an error.
+        sessions: Vec<SessionSummary>,
+    },
+    /// Answer to `WsClientMessage::SessionHistory` (R2-W2): one page of the
+    /// session's stored transcript, in chronological (ascending `ts`) order.
+    #[serde(rename = "session.transcript")]
+    SessionTranscript {
+        /// Echoes the requested `session_id` — including the unknown-id case,
+        /// which answers an empty transcript instead of an error.
+        session_id: String,
+        /// The page's messages, ascending by `ts`.
+        messages: Vec<TranscriptMessage>,
+        /// True when still-older messages exist beyond this page (paging
+        /// continues by re-requesting with `before` = this page's first `ts`).
+        has_more: bool,
+    },
+}
+
+/// One persisted session in a [`WsServerMessage::SessionsSnapshot`] (R2-W2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct SessionSummary {
+    /// Session id (a UUID string).
+    pub session_id: String,
+    /// Curated title, when the session carries one.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// First user-message preview.
+    #[serde(default)]
+    pub preview: Option<String>,
+    /// Session start, RFC3339 UTC.
+    pub created_at: String,
+    /// Last activity, RFC3339 UTC.
+    pub updated_at: String,
+    /// Started turns.
+    pub turn_count: u64,
+    /// Cumulative input tokens.
+    pub total_input_tokens: u64,
+    /// Cumulative output tokens.
+    pub total_output_tokens: u64,
+}
+
+/// One chat-visible message in a [`WsServerMessage::SessionTranscript`] (R2-W2).
+///
+/// Only messages with real text content are projected — tool-call bookkeeping
+/// (tool_use-only assistant steps, tool_result user messages) stays out, so
+/// `role` is exactly `"user"` (a prompt) or `"assistant"` (a reply).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct TranscriptMessage {
+    /// `"user"` or `"assistant"`.
+    pub role: String,
+    /// The message's text content.
+    pub content: String,
+    /// Message timestamp, RFC3339 UTC — also the pagination cursor (clients
+    /// echo the page's first `ts` back as `before`).
+    pub ts: String,
+}
+
+/// The agent/profile context an approval request was issued under (R2-W2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct AgentRef {
+    /// Stable agent id, when the engine tracks one.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Human-readable agent/profile name, when known.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Scope/reversibility classification of an approved operation (R2-W2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct RiskInfo {
+    /// How far the operation reaches.
+    pub scope: RiskScope,
+    /// Whether the effect can be undone.
+    pub reversible: bool,
+}
+
+/// How far an operation reaches (`RiskInfo::scope`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[schemars(rename_all = "lowercase")]
+pub enum RiskScope {
+    /// Confined to files/state inside the session's sandbox.
+    Local,
+    /// Reaches the working repository (checkout, branch, git state).
+    Repo,
+    /// Reaches beyond the repo — machine or network-wide effect.
+    System,
 }
 
 impl WsServerMessage {

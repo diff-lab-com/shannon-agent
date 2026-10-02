@@ -166,14 +166,22 @@ describe("WP-15 T4 — live-sync snapshot / resume / seq", () => {
 });
 
 describe("WP-15 T3 — device revocation bites on live sessions", () => {
-  it("device.list shows the paired device; revoke then yields PAIRING_REQUIRED on every RPC", async () => {
+  it("device.list shows the paired device (§M camelCase shape); revoke then yields PAIRING_REQUIRED on every RPC", async () => {
     const h = await harness();
     try {
       const list = await h.rpc("shannon/device.list");
-      expect(list.devices.map((d: any) => d.device_id)).toContain(h.deviceId);
+      const mine = list.devices.find((d: any) => d.deviceId === h.deviceId);
+      expect(mine).toBeDefined();
+      // §M1 wire contract: camelCase keys, ISO-8601 UTC stamps, and never the
+      // public key (the snake_case shape stays disk-only).
+      expect(mine.label).toBe("livesync test");
+      expect(mine.pairedAt).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
+      expect(mine.lastSeenAt).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
+      expect(Object.keys(mine)).not.toContain("public_key");
 
-      const rev = await h.rpc("shannon/device.revoke", { device_id: h.deviceId });
-      expect(rev.revoked).toBe(true);
+      const rev = await h.rpc("shannon/device.revoke", { deviceId: h.deviceId });
+      expect(rev.revoked).toBe(h.deviceId);
+      expect(rev.removed).toBe(true);
 
       // Acceptance: ANY subsequent RPC on the revoked session answers
       // PAIRING_REQUIRED (-32000).

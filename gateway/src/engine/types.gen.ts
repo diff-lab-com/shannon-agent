@@ -91,6 +91,38 @@ export type SseEventName =
   | "usage"
   | "warning";
 
+export interface SessionSummary {
+  created_at: string;
+  preview: string | null;
+  session_id: string;
+  title: string | null;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  turn_count: number;
+  updated_at: string;
+}
+
+export interface TranscriptMessage {
+  content: string;
+  role: string;
+  ts: string;
+}
+
+export interface AgentRef {
+  id: string | null;
+  name: string | null;
+}
+
+export interface RiskInfo {
+  reversible: boolean;
+  scope: RiskScope;
+}
+
+export type RiskScope =
+  | "local"
+  | "repo"
+  | "system";
+
 export interface WsClientMessageQuery {
   type: "query";
   attachments?: MessageAttachment[] | null;
@@ -107,12 +139,23 @@ export interface WsClientMessageInfo {
 export interface WsClientMessageCancel {
   type: "cancel";
 }
+export interface WsClientMessageSessionsList {
+  type: "sessions.list";
+}
+export interface WsClientMessageSessionHistory {
+  type: "session.history";
+  before?: string | null;
+  limit?: number | null;
+  session_id: string;
+}
 
 export type WsClientMessage =
   | WsClientMessageQuery
   | WsClientMessageClear
   | WsClientMessageInfo
-  | WsClientMessageCancel;
+  | WsClientMessageCancel
+  | WsClientMessageSessionsList
+  | WsClientMessageSessionHistory;
 
 export interface WsServerMessageText {
   type: "text";
@@ -151,12 +194,15 @@ export interface WsServerMessageCancelled {
 }
 export interface WsServerMessageApprovalRequest {
   type: "approval_request";
+  agent?: AgentRef | null;
   description: string;
   diff_preview?: string | null;
   is_destructive: boolean;
   request_id: string;
+  risk?: RiskInfo | null;
   tool_input: unknown;
   tool_name: string;
+  ts?: number | null;
 }
 export interface WsServerMessageSessionInfo {
   type: "session_info";
@@ -167,6 +213,16 @@ export interface WsServerMessageSessionInfo {
 export interface WsServerMessageError {
   type: "error";
   message: string;
+}
+export interface WsServerMessageSessionsSnapshot {
+  type: "sessions.snapshot";
+  sessions: SessionSummary[];
+}
+export interface WsServerMessageSessionTranscript {
+  type: "session.transcript";
+  has_more: boolean;
+  messages: TranscriptMessage[];
+  session_id: string;
 }
 
 export type WsServerMessage =
@@ -180,6 +236,8 @@ export type WsServerMessage =
   | WsServerMessageCancelled
   | WsServerMessageApprovalRequest
   | WsServerMessageSessionInfo
-  | WsServerMessageError;
+  | WsServerMessageError
+  | WsServerMessageSessionsSnapshot
+  | WsServerMessageSessionTranscript;
 
 export const PROTOCOL_VERSION = "0.8.0" as const;

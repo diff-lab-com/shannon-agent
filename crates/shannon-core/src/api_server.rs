@@ -25,6 +25,11 @@ use crate::query_engine::{
     PERMISSION_REQUEST_CHANNEL_CAPACITY, PermissionRequest, QueryContext, QueryEngine, QueryEvent,
     QueryMetadata,
 };
+// R2-W2 WS session-enumeration surface: the L0 store + conversation
+// projection answer `sessions.list` / `session.history` (see the
+// "WS session-enumeration surface" section next to the WS handler).
+use crate::session_log::session_store::ns_to_datetime;
+use crate::session_log::{SessionStore, project_conversation};
 use crate::tools::ToolRegistry;
 use axum::Json;
 use axum::extract::State;
@@ -34,13 +39,15 @@ use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use futures::{SinkExt, StreamExt};
-use shannon_engine::api::{LlmClient, LlmClientConfig, Message};
+use shannon_api_protocol::{SessionSummary, TranscriptMessage};
+use shannon_engine::api::{ContentBlock, LlmClient, LlmClientConfig, Message, MessageContent};
 use shannon_engine::permissions::{PermissionChoice, PermissionManager};
 use shannon_engine::state::StateManager;
+use shannon_types::session_event::SessionEvent;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
@@ -1071,6 +1078,212 @@ fn ws_origin_allowed(origin: Option<&str>) -> bool {
     )
 }
 
+// ── WS session-enumeration surface (R2-W2) ──────────────────────────────
+//
+// `sessions.list` / `session.history` read the engine's own L0 session
+// container so a phone (or any WS client) can enumerate sessions and
+// backfill transcripts. Paging semantics deliberately mirror the mobile
+// spec §J2 reference (`shannon-mobile/tool/mock_server.dart`): `before`
+// anchors at the FIRST transcript entry bearing that ts (same-ts neighbors
+// stay on one side of the boundary), the window is the last `limit`
+// messages strictly before the anchor, and `has_more` says whether
+// still-older messages remain.
+
+/// Default `session.history` page size (§J2: absent `limit` answers 50).
+const HISTORY_PAGE_DEFAULT: u32 = 50;
+/// Hard cap on one `session.history` page.
+const HISTORY_PAGE_MAX: u32 = 500;
+
+/// The engine process's own sessions container. The WS handler builds its
+/// per-query engines over a fresh default `StateManager` (see the Query
+/// arm), so the enumeration surface reads that same default directory —
+/// no separate sessions-dir configuration is introduced.
+fn engine_session_store() -> SessionStore {
+    SessionStore::new(StateManager::new().sessions_dir().to_path_buf())
+}
+
+/// Answer a `sessions.list` frame: the persisted sessions as
+/// [`SessionSummary`] rows, most recently active first (the store's order).
+fn sessions_snapshot(store: &SessionStore) -> WsServerMessage {
+    match store.list() {
+        Ok(infos) => WsServerMessage::SessionsSnapshot {
+            sessions: infos
+                .into_iter()
+                .map(|info| SessionSummary {
+                    session_id: info.session_id.to_string(),
+                    title: info.title,
+                    preview: info.preview,
+                    created_at: info.created_at.to_rfc3339(),
+                    updated_at: info.updated_at.to_rfc3339(),
+                    turn_count: info.turn_count as u64,
+                    total_input_tokens: info.total_input_tokens,
+                    total_output_tokens: info.total_output_tokens,
+                })
+                .collect(),
+        },
+        // A store that cannot be read is a real failure the caller should
+        // see — one Error frame, socket stays up (the attachment-validation
+        // pattern). An EMPTY store, by contrast, is a plain empty snapshot.
+        Err(e) => WsServerMessage::Error {
+            message: format!("sessions.list failed: {e}"),
+        },
+    }
+}
+
+/// Answer a `session.history` frame.
+///
+/// An id the engine has no log for — unknown UUID, or not a UUID at all —
+/// answers an EMPTY transcript, not an error: the phone reads empty
+/// history as "the server has no content for this session yet" (§J2). A
+/// log that exists but fails to READ is a real failure and answers an
+/// Error frame.
+fn session_history_response(
+    store: &SessionStore,
+    session_id: &str,
+    before: Option<&str>,
+    limit: Option<u32>,
+) -> WsServerMessage {
+    let empty = || WsServerMessage::SessionTranscript {
+        session_id: session_id.to_string(),
+        messages: Vec::new(),
+        has_more: false,
+    };
+    let Ok(id) = Uuid::parse_str(session_id) else {
+        return empty();
+    };
+    match store.read_events(&id) {
+        Ok(Some(events)) => transcript_page(session_id, &events, before, limit),
+        Ok(None) => empty(),
+        Err(e) => WsServerMessage::Error {
+            message: format!("session.history: cannot read log for {session_id}: {e}"),
+        },
+    }
+}
+
+/// Compute one transcript page over an event slice (the pure, unit-tested
+/// core of [`session_history_response`]).
+fn transcript_page(
+    session_id: &str,
+    events: &[SessionEvent],
+    before: Option<&str>,
+    limit: Option<u32>,
+) -> WsServerMessage {
+    let transcript = transcript_messages(events);
+    let anchor = history_anchor(&transcript, before);
+    let limit = history_page_limit(limit);
+    let start = anchor.saturating_sub(limit as usize);
+    WsServerMessage::SessionTranscript {
+        session_id: session_id.to_string(),
+        messages: transcript[start..anchor].to_vec(),
+        has_more: anchor > limit as usize,
+    }
+}
+
+/// Clamp the wire `limit` to the page contract (§J2 + review I2): absent =
+/// 50, below 1 clamps to 1 — never the default — and the page is capped at
+/// [`HISTORY_PAGE_MAX`].
+fn history_page_limit(limit: Option<u32>) -> u32 {
+    match limit {
+        None => HISTORY_PAGE_DEFAULT,
+        Some(l) => l.clamp(1, HISTORY_PAGE_MAX),
+    }
+}
+
+/// The exclusive END of the history page window for the `before` cursor:
+/// the index of the FIRST transcript entry whose ts is not older than the
+/// cursor (RFC3339; an unparseable cursor selects the whole transcript, and
+/// an entry with an unparseable ts stays on the older side — both mirror
+/// the §J2 reference). Slicing `[max(0, anchor - limit), anchor)` then
+/// yields the `limit` entries immediately before the cursor in
+/// chronological order, and `has_more = anchor > limit`. Because the anchor
+/// is the FIRST entry bearing the cursor ts, same-ts neighbors can never be
+/// split across a page boundary.
+fn history_anchor(transcript: &[TranscriptMessage], before: Option<&str>) -> usize {
+    let Some(before_iso) = before else {
+        return transcript.len();
+    };
+    let Ok(cursor) = chrono::DateTime::parse_from_rfc3339(before_iso) else {
+        return transcript.len();
+    };
+    for (i, message) in transcript.iter().enumerate() {
+        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&message.ts)
+            && ts >= cursor
+        {
+            return i;
+        }
+    }
+    transcript.len()
+}
+
+/// Project an event slice into the chat-visible transcript.
+///
+/// `project_conversation` folds the log into engine messages; each becomes
+/// at most one [`TranscriptMessage`] whose ts is the envelope ts of the
+/// event that STARTED the message. Messages without text content (tool-call
+/// bookkeeping: tool_use-only assistant steps, tool_result user messages)
+/// are left out — a transcript entry is chat text, and `role` stays exactly
+/// "user" (a prompt) or "assistant" (a reply).
+fn transcript_messages(events: &[SessionEvent]) -> Vec<TranscriptMessage> {
+    let proj = project_conversation(events);
+    // Dense seq → ts table: every projected message cites the inclusive
+    // event range it was folded from; its ts is the FIRST event's.
+    let seq_ts: HashMap<u64, u64> = events
+        .iter()
+        .map(|event| (event.seq, event.ts_ns))
+        .collect();
+    let mut out = Vec::with_capacity(proj.messages.len());
+    for (message, (first_seq, _)) in proj.messages.iter().zip(&proj.message_origin_seqs) {
+        let content = message_text(&message.content);
+        if content.is_empty() {
+            continue;
+        }
+        let ts_ns = seq_ts.get(first_seq).copied().unwrap_or(0);
+        out.push(TranscriptMessage {
+            role: message.role.clone(),
+            content,
+            ts: rfc3339_from_ns(ts_ns),
+        });
+    }
+    out
+}
+
+/// Render one projected message's content to chat text: the plain text, or
+/// the joined text blocks (tool_use / tool_result / thinking / image blocks
+/// contribute nothing — they are protocol traffic, not chat text).
+fn message_text(content: &MessageContent) -> String {
+    match content {
+        MessageContent::Text(text) => text.clone(),
+        MessageContent::Blocks(blocks) => {
+            let mut text = String::new();
+            for block in blocks {
+                if let ContentBlock::Text { text: part } = block {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str(part);
+                }
+            }
+            text
+        }
+    }
+}
+
+/// Nanoseconds since the epoch → RFC3339 UTC string (the wire timestamp
+/// format for `SessionSummary` / `TranscriptMessage`).
+fn rfc3339_from_ns(ns: u64) -> String {
+    ns_to_datetime(ns).to_rfc3339()
+}
+
+/// Wall-clock stamp for the approval frames, epoch milliseconds. `None`
+/// only when the clock is before the epoch (never in practice) — the
+/// protocol keeps `ts` optional so the frame shape is unchanged.
+fn epoch_millis_now() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as u64)
+}
+
 async fn handle_ws_socket(socket: WebSocket, state: AppState) {
     let session_id = uuid::Uuid::new_v4().to_string();
     let session = Arc::new(Mutex::new(WsSession {
@@ -1326,6 +1539,20 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                                 description: prompt.description.clone(),
                                 is_destructive: prompt.is_destructive,
                                 diff_preview: prompt.diff_preview.clone(),
+                                // R2-W2 approval enrichment. `ts` is stamped
+                                // from the wall clock. `agent` stays None:
+                                // this path builds a fresh default-profile
+                                // engine per query and tracks no active
+                                // agent/profile name. `risk` stays None:
+                                // neither `permission_classifier` nor the
+                                // tool metadata carries a scope/reversible
+                                // dimension (only `is_destructive`, which is
+                                // forwarded untouched above) — the protocol
+                                // treats both fields as honestly-absent
+                                // rather than synthesized.
+                                ts: epoch_millis_now(),
+                                agent: None,
+                                risk: None,
                             };
                             if !send_msg(&mut sender, areq).await {
                                 break 'outer;
@@ -1409,6 +1636,24 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                     WsServerMessage::Error {
                         message: "no active query to cancel".to_string(),
                     },
+                )
+                .await;
+            }
+            WsClientMessage::SessionsList => {
+                // R2-W2: the engine's own L0 container, read on demand —
+                // sessions are being written underneath us, so no caching.
+                let store = engine_session_store();
+                let _ = send_msg(&mut sender, sessions_snapshot(&store)).await;
+            }
+            WsClientMessage::SessionHistory {
+                session_id,
+                before,
+                limit,
+            } => {
+                let store = engine_session_store();
+                let _ = send_msg(
+                    &mut sender,
+                    session_history_response(&store, &session_id, before.as_deref(), limit),
                 )
                 .await;
             }
@@ -3558,6 +3803,9 @@ mod tests {
             description: "Run a shell command".to_string(),
             is_destructive: true,
             diff_preview: Some("--- old\n+++ new".to_string()),
+            ts: None,
+            agent: None,
+            risk: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -3785,5 +4033,439 @@ mod tests {
         let server = ShannonApiServer::new(config);
         // Ensure build_router is deterministic and doesn't panic
         let _router = server.build_router();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // WS session-enumeration surface (R2-W2): sessions.list / session.history
+    // ══════════════════════════════════════════════════════════════════════
+
+    use shannon_types::session_event::{
+        AssistantChunkPayload, SessionEventBody, SessionStartPayload, TokenUsage, TurnEndPayload,
+        TurnStartPayload, UserMessagePayload,
+    };
+    use std::path::PathBuf;
+
+    /// Append one event as a JSONL row with an explicit seq/ts — the fixture
+    /// path (the live writer stamps its own wall-clock ts, which the paging
+    /// tests need to control).
+    fn write_event(file: &mut std::fs::File, event: &SessionEvent) {
+        use std::io::Write;
+        writeln!(file, "{}", serde_json::to_string(event).unwrap()).unwrap();
+    }
+
+    fn event(session: &str, seq: u64, ts_ns: u64, body: SessionEventBody) -> SessionEvent {
+        SessionEvent::new(seq, ts_ns, session, 1, body)
+    }
+
+    fn user_msg(session: &str, seq: u64, ts_ns: u64, content: &str) -> SessionEvent {
+        event(
+            session,
+            seq,
+            ts_ns,
+            SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: content.into(),
+                attachment_count: 0,
+            }),
+        )
+    }
+
+    fn assistant_chunk(session: &str, seq: u64, ts_ns: u64, delta: &str) -> SessionEvent {
+        event(
+            session,
+            seq,
+            ts_ns,
+            SessionEventBody::AssistantChunk(AssistantChunkPayload {
+                delta: delta.into(),
+                thinking: false,
+            }),
+        )
+    }
+
+    /// One `user prompt → assistant reply` turn at a controlled ts. The pair
+    /// shares ONE ts, mirroring the §J2 same-ts-group contract.
+    fn turn(session: &str, seq: u64, ts_ns: u64, prompt: &str, reply: &str) -> Vec<SessionEvent> {
+        vec![
+            user_msg(session, seq, ts_ns, prompt),
+            assistant_chunk(session, seq + 1, ts_ns, reply),
+        ]
+    }
+
+    /// Fixture container with one session whose transcript is the given
+    /// turns; returns (container, session id string).
+    fn fixture_session(dir: &std::path::Path, turns: &[(u64, &str, &str)]) -> (PathBuf, String) {
+        let sid = Uuid::new_v4().to_string();
+        let session_dir = dir.join(&sid);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let path = session_dir.join("events.jsonl");
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let start_ns = 1_760_000_000_000_000_000; // 2025-10-09T05:06:40Z
+        write_event(
+            &mut file,
+            &event(
+                &sid,
+                0,
+                start_ns,
+                SessionEventBody::SessionStart(SessionStartPayload {
+                    model: "test-model".into(),
+                    provider: None,
+                    cwd: None,
+                    app_version: None,
+                    os: None,
+                    arch: None,
+                    browser_cdp: None,
+                }),
+            ),
+        );
+        for (i, (turn_no, prompt, reply)) in turns.iter().enumerate() {
+            let seq = 1 + (i as u64) * 4;
+            let ts_ns = start_ns + turn_no * 1_000_000_000;
+            write_event(
+                &mut file,
+                &event(
+                    &sid,
+                    seq,
+                    ts_ns,
+                    SessionEventBody::TurnStart(TurnStartPayload { query_id: None }),
+                ),
+            );
+            for e in turn(&sid, seq + 1, ts_ns + 1_000_000_000, prompt, reply) {
+                write_event(&mut file, &e);
+            }
+            write_event(
+                &mut file,
+                &event(
+                    &sid,
+                    seq + 3,
+                    ts_ns + 2_000_000_000,
+                    SessionEventBody::TurnEnd(TurnEndPayload {
+                        llm_steps: None,
+                        reason: TurnEndPayload::REASON_COMPLETED.into(),
+                        usage: Some(TokenUsage {
+                            input_tokens: 10,
+                            output_tokens: 5,
+                            cache_creation_tokens: 0,
+                            cache_read_tokens: 0,
+                            cost_usd: None,
+                        }),
+                        error: None,
+                    }),
+                ),
+            );
+        }
+        (dir.to_path_buf(), sid)
+    }
+
+    fn temp_container(tag: &str) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join(tag);
+        std::fs::create_dir_all(&container).unwrap();
+        (tmp, container)
+    }
+
+    fn assert_transcript(msg: WsServerMessage) -> (String, Vec<TranscriptMessage>, bool) {
+        match msg {
+            WsServerMessage::SessionTranscript {
+                session_id,
+                messages,
+                has_more,
+            } => (session_id, messages, has_more),
+            other => panic!("expected SessionTranscript, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sessions_list_maps_store_rows_to_summaries() {
+        let (_tmp, container) = temp_container("list");
+        let (_container2, sid) =
+            fixture_session(&container, &[(1, "fix the login", "done, tests pass")]);
+        let store = SessionStore::new(&container);
+
+        let msg = sessions_snapshot(&store);
+        let sessions = match msg {
+            WsServerMessage::SessionsSnapshot { sessions } => sessions,
+            other => panic!("expected SessionsSnapshot, got {other:?}"),
+        };
+        assert_eq!(sessions.len(), 1);
+        let s = &sessions[0];
+        assert_eq!(s.session_id, sid);
+        assert_eq!(s.turn_count, 1);
+        assert_eq!(s.total_input_tokens, 10);
+        assert_eq!(s.total_output_tokens, 5);
+        // RFC3339 UTC stamps parse back.
+        chrono::DateTime::parse_from_rfc3339(&s.created_at).unwrap();
+        chrono::DateTime::parse_from_rfc3339(&s.updated_at).unwrap();
+        assert_eq!(s.preview.as_deref(), Some("fix the login"));
+    }
+
+    #[test]
+    fn sessions_list_empty_container_answers_empty_snapshot() {
+        let (_tmp, container) = temp_container("empty");
+        let store = SessionStore::new(&container);
+        match sessions_snapshot(&store) {
+            WsServerMessage::SessionsSnapshot { sessions } => assert!(sessions.is_empty()),
+            other => panic!("expected SessionsSnapshot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_history_full_transcript_roles_and_ts() {
+        let (_tmp, container) = temp_container("full");
+        let (_dir, sid) = fixture_session(
+            &container,
+            &[
+                (1, "turn one ask", "turn one answer"),
+                (2, "turn two ask", "turn two answer"),
+            ],
+        );
+        let store = SessionStore::new(&container);
+
+        let (echoed, messages, has_more) =
+            assert_transcript(session_history_response(&store, &sid, None, None));
+        assert_eq!(echoed, sid);
+        assert!(!has_more, "everything fits on the latest page");
+        assert_eq!(messages.len(), 4, "user+assistant per turn");
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].content, "turn one ask");
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].content, "turn one answer");
+        assert_eq!(messages[3].content, "turn two answer");
+        // Ascending ts, RFC3339.
+        assert!(messages[0].ts <= messages[1].ts && messages[1].ts <= messages[2].ts);
+        for m in messages {
+            chrono::DateTime::parse_from_rfc3339(&m.ts).unwrap();
+        }
+    }
+
+    #[test]
+    fn session_history_latest_page_is_tail_with_has_more() {
+        let (_tmp, container) = temp_container("tail");
+        let turns: Vec<(u64, &str, &str)> = (0..60)
+            .map(|i| {
+                (
+                    i + 1,
+                    Box::leak(format!("p{i}").into_boxed_str()) as &str,
+                    "r",
+                )
+            })
+            .collect();
+        let (_dir, sid) = fixture_session(&container, &turns);
+        let store = SessionStore::new(&container);
+
+        let (_, messages, has_more) =
+            assert_transcript(session_history_response(&store, &sid, None, None));
+        assert!(has_more, "70 older messages remain");
+        assert_eq!(messages.len(), 50, "the §J2 default page size");
+        assert_eq!(messages[0].content, "p35");
+        assert_eq!(messages[49].content, "r");
+    }
+
+    #[test]
+    fn session_history_before_slices_strictly_before_cursor() {
+        let (_tmp, container) = temp_container("before");
+        let turns: Vec<(u64, &str, &str)> = (0..60)
+            .map(|i| {
+                (
+                    i + 1,
+                    Box::leak(format!("p{i}").into_boxed_str()) as &str,
+                    "r",
+                )
+            })
+            .collect();
+        let (_dir, sid) = fixture_session(&container, &turns);
+        let store = SessionStore::new(&container);
+
+        // Deterministic fixture arithmetic: transcript entry 70 is turn 35's
+        // user message, stamped at start + 37s (§J2: the cursor is a message
+        // ts — the client echoes one back from a previous page).
+        let start_ns = 1_760_000_000_000_000_000u64;
+        let cursor = rfc3339_from_ns(start_ns + 37_000_000_000);
+
+        let (_, messages, has_more) = assert_transcript(session_history_response(
+            &store,
+            &sid,
+            Some(&cursor),
+            Some(10),
+        ));
+        assert!(has_more);
+        assert_eq!(messages.len(), 10);
+        assert_eq!(messages[0].content, "p30");
+        assert_eq!(messages[9].content, "r");
+    }
+
+    #[test]
+    fn session_history_same_ts_group_never_splits() {
+        let (_tmp, container) = temp_container("group");
+        let (_dir, sid) = fixture_session(
+            &container,
+            &[(1, "a1", "b1"), (2, "a2", "b2"), (3, "a3", "b3")],
+        );
+        let store = SessionStore::new(&container);
+
+        // a2/b2 share one ts (the fixture stamps the pair together): a page
+        // ending at that ts boundary takes the pair as a unit.
+        let (_, all, _) = assert_transcript(session_history_response(&store, &sid, None, None));
+        assert_eq!(all[2].content, "a2");
+        assert_eq!(all[2].ts, all[3].ts, "fixture: the pair shares one ts");
+        let cursor = all[2].ts.clone();
+
+        // limit 1 → strictly before the cursor's group: exactly b1.
+        let (_, page, has_more) = assert_transcript(session_history_response(
+            &store,
+            &sid,
+            Some(&cursor),
+            Some(1),
+        ));
+        assert!(has_more, "a1/b1 remain");
+        assert_eq!(page.len(), 1);
+        assert_eq!(
+            page[0].content, "b1",
+            "the same-ts group stayed on the newer side"
+        );
+
+        // limit 2 → the whole a1/b1 group, and nothing older: has_more false.
+        let (_, page, has_more) = assert_transcript(session_history_response(
+            &store,
+            &sid,
+            Some(&cursor),
+            Some(2),
+        ));
+        assert!(!has_more);
+        assert_eq!(
+            page.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(),
+            vec!["a1", "b1"]
+        );
+
+        // Cursor at the head group: empty page, still no more.
+        let head = all[0].ts.clone();
+        let (_, page, has_more) =
+            assert_transcript(session_history_response(&store, &sid, Some(&head), Some(5)));
+        assert!(!has_more);
+        assert!(page.is_empty());
+    }
+
+    #[test]
+    fn session_history_unknown_and_foreign_ids_answer_empty_transcript() {
+        let (_tmp, container) = temp_container("unknown");
+        let store = SessionStore::new(&container);
+
+        // Not a UUID at all.
+        let (_, messages, has_more) = assert_transcript(session_history_response(
+            &store,
+            "no-such-session",
+            None,
+            None,
+        ));
+        assert!(messages.is_empty());
+        assert!(!has_more);
+        // A well-formed UUID with no log.
+        let (_, messages, has_more) = assert_transcript(session_history_response(
+            &store,
+            &Uuid::new_v4().to_string(),
+            None,
+            None,
+        ));
+        assert!(messages.is_empty());
+        assert!(!has_more);
+    }
+
+    #[test]
+    fn session_history_unreadable_log_answers_error_frame() {
+        let (_tmp, container) = temp_container("corrupt");
+        let sid = Uuid::new_v4();
+        let dir = container.join(sid.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("events.jsonl"), "{not json}\n").unwrap();
+        let store = SessionStore::new(&container);
+
+        match session_history_response(&store, &sid.to_string(), None, None) {
+            WsServerMessage::Error { message } => {
+                assert!(message.contains("cannot read log"), "got: {message}");
+            }
+            other => panic!("expected Error frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn history_page_limit_clamps() {
+        assert_eq!(history_page_limit(None), 50);
+        assert_eq!(history_page_limit(Some(1)), 1);
+        assert_eq!(history_page_limit(Some(499)), 499);
+        assert_eq!(history_page_limit(Some(500)), 500);
+        assert_eq!(history_page_limit(Some(100_000)), 500);
+        // Review I2: degenerate values clamp to 1, never the default.
+        assert_eq!(history_page_limit(Some(0)), 1);
+    }
+
+    #[test]
+    fn history_anchor_degenerate_cursors_select_whole_transcript() {
+        let transcript = vec![TranscriptMessage {
+            role: "user".into(),
+            content: "hi".into(),
+            ts: "2026-06-01T10:00:00+00:00".into(),
+        }];
+        assert_eq!(history_anchor(&transcript, None), 1);
+        // Unparseable cursor = latest page (§J2 reference behavior).
+        assert_eq!(history_anchor(&transcript, Some("not-a-date")), 1);
+        // A cursor older than everything still anchors at 0.
+        assert_eq!(
+            history_anchor(&transcript, Some("1999-01-01T00:00:00.000Z")),
+            0
+        );
+    }
+
+    #[test]
+    fn transcript_skips_tool_bookkeeping_messages() {
+        let sid = Uuid::new_v4().to_string();
+        let start_ns = 1_760_000_000_000_000_000u64;
+        let events = vec![
+            user_msg(&sid, 0, start_ns, "run the thing"),
+            assistant_chunk(&sid, 1, start_ns + 1, ""),
+            // A tool call + result project as (assistant tool_use step,
+            // user tool_result) — neither carries chat text.
+            event(
+                &sid,
+                2,
+                start_ns + 2,
+                SessionEventBody::ToolCall(shannon_types::session_event::ToolCallPayload {
+                    tool_use_id: "t1".into(),
+                    tool_name: "Bash".into(),
+                    arguments: "{}".into(),
+                }),
+            ),
+            event(
+                &sid,
+                3,
+                start_ns + 3,
+                SessionEventBody::ToolResult(shannon_types::session_event::ToolResultPayload {
+                    tool_use_id: "t1".into(),
+                    tool_name: "Bash".into(),
+                    output: "ok".into(),
+                    is_error: false,
+                    duration_ms: Some(1),
+                    meta: serde_json::Value::Null,
+                }),
+            ),
+            assistant_chunk(&sid, 4, start_ns + 4, "all done"),
+        ];
+        let transcript = transcript_messages(&events);
+        let contents: Vec<_> = transcript.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(contents, vec!["run the thing", "all done"]);
+        // Tool noise never becomes a transcript row.
+        assert!(
+            transcript
+                .iter()
+                .all(|m| matches!(m.role.as_str(), "user" | "assistant"))
+        );
+    }
+
+    #[test]
+    fn epoch_millis_stamp_is_sane() {
+        let ts = epoch_millis_now().expect("clock after epoch");
+        assert!(ts > 1_700_000_000_000, "plausible epoch ms: {ts}");
     }
 }

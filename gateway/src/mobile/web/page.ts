@@ -7,8 +7,9 @@
  *
  *   shannon/pair            (paste the one-time token from the desktop QR)
  *   shannon/device.resume   (auto on reconnect, Ed25519-signed)
- *   shannon/task.dispatch   (派发文本 → IM 同款管线；也用于回复审批 y/n)
- *   shannon/task.list       (最近任务 + 状态)
+ *   shannon/task.dispatch   (派发 prompt → §K 任务面;响应回 {task:{...}})
+ *   shannon/task.list       (最近任务 + 状态,§K 形状 {id,prompt,status,created_at})
+ *   shannon/approval/decide (审批:Ed25519 签名决策 — §K 后审批不再走 task.dispatch 文本代答)
  *   shannon/event           (approval.request / task.message / task.progress / …)
  *
  * Signing uses the vendored TweetNaCl (see naclSource.ts): SubtleCrypto is only
@@ -136,7 +137,7 @@ export const MOBILE_PAGE_HTML: string = `<!doctype html>
       <button id="apOk" class="ok">✅ 批准</button>
       <button id="apNo" class="no">❌ 拒绝</button>
     </div>
-    <p class="hint">也可以在输入框直接回复 y / n（同钉钉文本审批）。</p>
+    <p class="hint">决策以本机配对密钥签名（shannon/approval/decide）。</p>
   </section>
 
   <section>
@@ -314,16 +315,19 @@ function showPairIntro() {
 // ── dispatch / approval / list ─────────────────────────────────────────────
 var currentApproval = null;
 
+// §K1: {prompt} in, {task:{id,prompt,status,agent_id,created_at}} out. The
+// task's streamed content arrives as shannon/event frames whose session_id IS
+// task.id — the feed below shows them as they land.
 function dispatchText(text) {
   if (!text.trim()) return Promise.resolve();
-  return rpc('shannon/task.dispatch', { text: text }).then(function (r) {
-    if (r.kind === 'approval') {
-      pushFeed('statusline', '已' + (r.choice === 'allow' ? '批准' : '拒绝') + '审批请求');
-      hideApproval();
-    } else {
-      pushFeed('msg me', text);
-      $('taskMsg').textContent = '任务已创建：' + (r.task_id || '').slice(0, 8) + '…';
+  return rpc('shannon/task.dispatch', { prompt: text }).then(function (r) {
+    var task = r && r.task;
+    if (!task || !task.id) {
+      pushFeed('err-msg', '派发失败：网关未返回任务 id');
+      return;
     }
+    pushFeed('msg me', text);
+    $('taskMsg').textContent = '任务已创建：' + task.id.slice(0, 8) + '…';
   }).catch(function (err) {
     $('taskMsg').textContent = '派发失败：' + err.message;
     pushFeed('err-msg', '派发失败：' + err.message);
@@ -341,29 +345,52 @@ function hideApproval() {
   currentApproval = null;
   $('approval').style.display = 'none';
 }
+// §K: approvals are decided through the SIGNED shannon/approval/decide (v2
+// anti-replay: the epoch-ms timestamp is bound into the signed message), the
+// same method the native client uses — never a text reply.
+function decideApproval(choice) {
+  var requestId = currentApproval;
+  var d = loadDevice();
+  if (!requestId || !d || !d.deviceId) {
+    pushFeed('err-msg', '审批失败：设备未配对或请求已失效');
+    return;
+  }
+  var kp = deviceKeypair(d);
+  var ts = Date.now();
+  var sig = b64u(nacl.sign.detached(utf8(requestId + ':' + choice + ':' + ts), kp.secretKey));
+  rpc('shannon/approval/decide', { request_id: requestId, choice: choice, signature: sig, timestamp: ts })
+    .then(function () {
+      pushFeed('statusline', '已' + (choice === 'allow' ? '批准' : '拒绝') + '审批请求');
+      hideApproval();
+    })
+    .catch(function (err) {
+      pushFeed('err-msg', '审批失败：' + err.message);
+    });
+}
+// §K2: {tasks: [{id, prompt, status, agent_id, created_at}]}, newest first.
 function refreshTasks() {
   rpc('shannon/task.list', { limit: 20 }).then(function (r) {
     var ul = $('taskList');
     ul.innerHTML = '';
-    var tasks = r.tasks || [];
+    var tasks = (r && r.tasks) || [];
     $('taskListEmpty').style.display = tasks.length ? 'none' : 'block';
     var chipText = { running: '运行中', completed: '已完成', failed: '失败' };
     for (var i = 0; i < tasks.length; i++) {
       var t = tasks[i];
       var li = document.createElement('li');
       var chip = document.createElement('span');
-      chip.className = 'chip ' + t.status;
-      chip.textContent = chipText[t.status] || t.status;
+      chip.className = 'chip ' + (t.status || '');
+      chip.textContent = chipText[t.status] || t.status || '';
       var title = document.createElement('span');
       title.className = 'title';
-      title.textContent = t.title || t.text;
+      title.textContent = t.prompt || t.id || '';
       li.appendChild(chip);
       li.appendChild(title);
-      if (t.error) {
-        var er = document.createElement('span');
-        er.className = 'terr';
-        er.textContent = t.error;
-        li.appendChild(er);
+      if (t.created_at) {
+        var when = document.createElement('code');
+        when.className = 'small';
+        when.textContent = String(t.created_at).replace('T', ' ').slice(0, 19) + ' UTC';
+        li.appendChild(when);
       }
       ul.appendChild(li);
     }
@@ -419,8 +446,8 @@ $('btnDispatch').addEventListener('click', function () {
   $('taskText').value = '';
   dispatchText(t);
 });
-$('apOk').addEventListener('click', function () { dispatchText('y'); });
-$('apNo').addEventListener('click', function () { dispatchText('n'); });
+$('apOk').addEventListener('click', function () { decideApproval('allow'); });
+$('apNo').addEventListener('click', function () { decideApproval('deny'); });
 $('btnTasks').addEventListener('click', function () {
   var p = $('tasksPanel');
   var show = p.style.display === 'none';

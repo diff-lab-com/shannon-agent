@@ -28,23 +28,39 @@ import { EngineWsClient, type EngineWsClientOptions } from "../engine/wsClient.j
 import type { EngineEvent } from "../engine/runtime.js";
 import type { Logger } from "../adapters/types.js";
 import { approvalMessage, approvalMessageV2, approvalDecideTimestampWindowMs } from "./crypto.js";
+import { approvalWireItem, engineAgent, engineRisk, type ApprovalRegistry } from "./approvalRegistry.js";
+import {
+  fetchEngineSessionHistory,
+  fetchEngineSessions,
+  mapSessionSummary,
+  mapSessionTranscript,
+  type EngineSessionCaller,
+} from "./engineSessions.js";
 import {
   ShannonError,
   type AgentListResult,
   type ApprovalDecideParams,
+  type ApprovalListResult,
   type CancelParams,
   type HealthResult,
   type ModelListResult,
   type OkResult,
   type QueryParams,
+  type SessionHistoryParams,
+  type SessionListResult,
   type ShannonEvent,
 } from "./protocol.js";
-import type { MethodContext, MethodHandlers } from "./server.js";
+import type { HandlerOutcome, MethodContext, MethodHandlers } from "./server.js";
 
 /**
  * The engine-client surface this bridge consumes. `EngineWsClient` satisfies it;
  * tests pass a fake. Parameterized so the bridge never imports a concrete socket
  * implementation except as the default factory.
+ *
+ * `call` (optional so older test fakes stay valid) is the one-shot
+ * request/response surface the §J session RPCs use — `EngineWsClient` implements
+ * it; a fake that omits it simply makes the session handlers report the engine
+ * surface as unavailable.
  */
 export interface EngineClient {
   connect(): Promise<void>;
@@ -54,6 +70,11 @@ export interface EngineClient {
   ): AsyncIterable<EngineEvent>;
   cancel(): void;
   close(): Promise<void>;
+  call?<T>(
+    message: unknown,
+    match: (frame: unknown) => T | null,
+    opts?: { timeoutMs?: number },
+  ): Promise<T>;
 }
 
 export type EngineClientFactory = (opts: EngineWsClientOptions) => EngineClient;
@@ -107,6 +128,21 @@ export interface EngineBridgeOptions {
    * unauthenticated (loopback default).
    */
   engineAuthToken?: string | null;
+  /**
+   * §L2: the process-wide pending-approval registry. When set, every
+   * `approval.request` this bridge streams records into it and every
+   * successful `shannon/approval/decide` resolves the entry — the restore face
+   * (`shannon/approval.list` / snapshot `pendingApprovals`) stays truthful.
+   */
+  approvalRegistry?: ApprovalRegistry;
+  /**
+   * §K: notified after a signed `shannon/approval/decide` landed at the
+   * engine. The bootstrap wires this to `MobileDispatchHub.settleApproval` so
+   * a dispatched task's parked approval lane unblocks on the phone's decision
+   * (the Y/N-text settle left the RPC face with §K — this is the only path
+   * besides the 300s timeout).
+   */
+  approvalDecisionSink?: (requestId: string, choice: GatewayApprovalChoice) => void;
 }
 
 /** Sentinel key for queries without a session_id (P1.2 replaces it with a device id). */
@@ -153,6 +189,43 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       };
     }
     return null;
+  };
+
+  /**
+   * §J session RPCs run on a throwaway engine connection: connect → one-shot
+   * `call` → close. Transport failures (connect refused, timeout) surface as
+   * ENGINE_ERROR — distinguishable from an empty roster / unknown session,
+   * which are honest successes per the contract.
+   */
+  const withSessionClient = async (
+    run: (call: EngineSessionCaller["call"]) => Promise<HandlerOutcome>,
+  ): Promise<HandlerOutcome> => {
+    const client = factory({
+      url: opts.engineWsUrl,
+      model: null,
+      sessionId: null,
+      headers: engineAuthHeaders(),
+    });
+    try {
+      const call = (client as { call?: EngineSessionCaller["call"] }).call;
+      if (typeof call !== "function") {
+        return {
+          kind: "error",
+          code: ShannonError.ENGINE_ERROR,
+          message: "engine client does not support one-shot calls (session surface unavailable)",
+        };
+      }
+      await client.connect();
+      return await run(call.bind(client) as EngineSessionCaller["call"]);
+    } catch (err) {
+      return {
+        kind: "error",
+        code: ShannonError.ENGINE_ERROR,
+        message: `engine session call failed: ${(err as Error).message}`,
+      };
+    } finally {
+      await client.close().catch(() => {});
+    }
   };
 
   return {
@@ -222,6 +295,28 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
               // convention. Additive — clients that ignore `turn_id` are
               // unaffected.
               if (mapped.type === "task.progress") mapped.turn_id = turnId;
+              // §L2: this push is a record point — the ask joins the restore
+              // face until `shannon/approval/decide` resolves it. The engine's
+              // §L1 rich fields (ts/agent/risk) ride the raw event; read them
+              // defensively so a lagging generated-type regeneration can't
+              // break this bridge (absent fields → honest omission downstream).
+              if (mapped.type === "approval.request") {
+                const rich = ev as { ts?: unknown; agent?: unknown; risk?: unknown };
+                opts.approvalRegistry?.record({
+                  requestId: mapped.request_id,
+                  toolName: mapped.tool_name,
+                  toolInput: mapped.tool_input,
+                  description: mapped.description,
+                  isDestructive: mapped.is_destructive,
+                  diffPreview: mapped.diff_preview,
+                  ts:
+                    typeof rich.ts === "number" && Number.isFinite(rich.ts)
+                      ? rich.ts
+                      : Date.now(),
+                  agent: engineAgent(rich.agent),
+                  risk: engineRisk(rich.risk),
+                });
+              }
               yield mapped;
             }
           }
@@ -351,7 +446,24 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           message: (err as Error).message,
         };
       }
+      // §L2: the decision landed at the engine — the ask leaves the restore
+      // face (resolve BEFORE the ok so an aborted response still can't leave
+      // a decided approval listed as pending). §K: the same signal also
+      // unblocks a dispatched task's parked approval lane.
+      opts.approvalRegistry?.resolve(params.request_id);
+      opts.approvalDecisionSink?.(params.request_id, params.choice);
       return { kind: "result", result: { ok: true } satisfies OkResult };
+    },
+
+    // ── §L2 pending-approval restore face ──────────────────────────────────
+    // Verbatim envelope `{"pendingApprovals": [...]}` (the phone's
+    // `live_providers.dart` reads exactly that key); items are the
+    // `approvalFromMap` contract — see `approvalWireItem`.
+    "shannon/approval.list": async (_raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
+      const pendingApprovals = (opts.approvalRegistry?.listPending() ?? []).map(approvalWireItem);
+      return { kind: "result", result: { pendingApprovals } satisfies ApprovalListResult };
     },
 
     // ── health ────────────────────────────────────────────────────────────
@@ -433,6 +545,54 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       };
     },
 
+    // ── §J session face (cross-repo spec; engine RPC via one-shot call) ────
+    "shannon/session.list": async (_raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
+      return withSessionClient(async (call) => {
+        // §J1/§J4: v1 takes no params — unknown keys are ignored (the
+        // reserve-then-enable pattern; `cursor` lands later).
+        const snapshot = await fetchEngineSessions(call);
+        const sessions = snapshot.sessions
+          .map(mapSessionSummary)
+          .filter((s): s is NonNullable<ReturnType<typeof mapSessionSummary>> => s !== null);
+        return { kind: "result", result: { sessions } satisfies SessionListResult };
+      });
+    },
+
+    "shannon/session.history": async (raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
+      const params = (raw ?? {}) as Partial<SessionHistoryParams>;
+      if (typeof params.sessionId !== "string" || params.sessionId.length === 0) {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: "params.sessionId is required",
+        };
+      }
+      const before =
+        typeof params.before === "string" && params.before.length > 0 ? params.before : undefined;
+      const limit =
+        typeof params.limit === "number" && Number.isFinite(params.limit) && params.limit >= 1
+          ? Math.floor(params.limit)
+          : undefined;
+      return withSessionClient(async (call) => {
+        // §J2: an unknown sessionId must NOT error — the engine degrades it to
+        // an empty transcript (see `fetchEngineSessionHistory`), and the phone
+        // then keeps its local records instead of blanking the thread.
+        const transcript = await fetchEngineSessionHistory(
+          call,
+          params.sessionId as string,
+          { before, limit },
+        );
+        return {
+          kind: "result",
+          result: mapSessionTranscript(transcript, params.sessionId as string),
+        };
+      });
+    },
+
     // ── pairing (P1.2) ────────────────────────────────────────────────────
     "shannon/pair": async () => ({
       kind: "error",
@@ -490,7 +650,13 @@ export function mapEngineEvent(ev: EngineEvent): ShannonEvent | null {
       return { type: "query.failed", error: ev.error };
     case "cancelled":
       return { type: "query.cancelled" };
-    case "approval_request":
+    case "approval_request": {
+      // §L1: the engine's rich fields (ts / agent / risk) ride the generated
+      // types — pass them through verbatim, omitting the key when the engine
+      // doesn't supply a usable value (the phone degrades honestly; the
+      // legacy six-key shape stays byte-identical for old engines).
+      const agent = engineAgent(ev.agent);
+      const risk = engineRisk(ev.risk);
       return {
         type: "approval.request",
         request_id: ev.request_id,
@@ -499,10 +665,19 @@ export function mapEngineEvent(ev: EngineEvent): ShannonEvent | null {
         description: ev.description,
         is_destructive: ev.is_destructive,
         diff_preview: ev.diff_preview ?? null,
+        ...(typeof ev.ts === "number" && ev.ts !== null ? { ts: ev.ts } : {}),
+        ...(agent ? { agent } : {}),
+        ...(risk ? { risk } : {}),
       };
+    }
     case "session_info":
       // Metadata-only; no mobile-facing event. (Usage/cost for the turn already
       // arrives via the `usage` event, so nothing is lost.)
+      return null;
+    case "sessions.snapshot":
+    case "session.transcript":
+      // §J engine RPC responses — consumed by the one-shot `call()` path
+      // (shannon/session.list / .history), never pushed as phone events.
       return null;
     case "error":
       return { type: "query.failed", error: ev.message };
