@@ -344,6 +344,13 @@ jobs:
         # On failure the repro lines + output tail are re-emitted as
         # ::error:: annotations — the only failure detail readable through
         # the public API without an authenticated log download.
+        #
+        # R6 chat wire-contract smoke (crates/shannon-server/tests/
+        # chat_contract_smoke.rs — fake SSE LLM + the real server, offline,
+        # seconds) deliberately rides THIS workspace run instead of a
+        # dedicated step: no extra compile slot, no double run. GUARD: any
+        # future filter/exclude added to the nextest invocation below must
+        # keep that test target included (or re-home it explicitly).
         run: |
           set -o pipefail
           # Guard against stale cached binaries with unexpected feature sets.
