@@ -1,6 +1,6 @@
 {
   "name": "cancel-text-stream",
-  "description": "流中取消 — stop → query:cancelled 收敛 + 半截文本丢弃现状（A-19 锚点）",
+  "description": "流中取消 — stop → query:cancelled 收敛 + 半截文本保留（interrupted 标记，D6 已实施）",
   "seed": {
     "config": {
       "hasKey": true
@@ -9,6 +9,11 @@
       {
         "id": "script-sess-cancel",
         "title": "Cancel stream",
+        "messages": []
+      },
+      {
+        "id": "script-sess-cancel-spare",
+        "title": "Cancel spare",
         "messages": []
       }
     ]
@@ -32,8 +37,7 @@
   "onCancel": {
     "emit": [
       {
-        "event": "query:cancelled",
-        "knownIssue": "A-19"
+        "event": "query:cancelled"
       }
     ]
   }

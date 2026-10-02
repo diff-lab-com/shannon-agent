@@ -137,6 +137,26 @@ export function recordSeedUserSend(sessionId: string | null | undefined, message
   box.bySession.set(session.id, tail)
 }
 
+/**
+ * D6 (keep the partial output): record a CANCELLED turn's partial assistant
+ * text into its session's tail, flagged `interrupted` — the scripted
+ * counterpart of the real backend's interrupted-turn finalize (the engine
+ * tee writes `assistant/message(interrupted: true)` on the cancel path, so a
+ * log-backed reload brings the marked partial bubble back). An empty partial
+ * (stop before the first token) records nothing, matching the no-bubble
+ * commit. Completed replies stay unrecorded (the S-4 tail models accepted
+ * sends; assistant completion persistence remains the pre-existing gap).
+ */
+export function recordSeedPartialAssistant(sessionId: string | null | undefined, text: string | null): void {
+  if (text == null || text === '') return
+  const session = targetSession(sessionId)
+  if (!session) return
+  const box = recordedSends()
+  const tail = box.bySession.get(session.id) ?? []
+  tail.push({ role: 'assistant', content: text, timestamp: Date.now(), interrupted: true })
+  box.bySession.set(session.id, tail)
+}
+
 /** Clear the recorded tails (player load/reset — a fresh script lifecycle). */
 export function resetRecordedSends(): void {
   recordedSends().bySession.clear()
@@ -227,7 +247,13 @@ export function seededCheckpoints(sessionId?: string | null): Array<{
     ? seed.sessions[0]
     : seed.sessions.find(s => s.id === sessionId)
   if (!session) return null
-  const base = Date.now() - session.messages.length * 60_000
+  // D6: recorded tail user sends are turns too — each gets its checkpoint
+  // exactly like the desktop's record_turn (the cancel path records it as
+  // well), so a cancelled turn's partial bubble carries the same
+  // rewind/regenerate affordances a completed turn has.
+  const tail = recordedSends().bySession.get(session.id) ?? []
+  const tailUserSends = tail.filter(m => m.role === 'user')
+  const base = Date.now() - (session.messages.length + tailUserSends.length) * 60_000
   const checkpoints: Array<{
     turn_index: number
     timestamp: number
@@ -238,6 +264,16 @@ export function seededCheckpoints(sessionId?: string | null): Array<{
   let turnIndex = 0
   for (const m of session.messages) {
     if (m.role !== 'user') continue
+    checkpoints.push({
+      turn_index: turnIndex,
+      timestamp: base + turnIndex * 60_000,
+      description: `Turn ${turnIndex + 1}`,
+      files_changed: [],
+      prompt_preview: m.content,
+    })
+    turnIndex += 1
+  }
+  for (const m of tailUserSends) {
     checkpoints.push({
       turn_index: turnIndex,
       timestamp: base + turnIndex * 60_000,
@@ -263,15 +299,17 @@ export function seededRewoundMessages(sessionId: string | null | undefined, turn
     ? seed.sessions[0]
     : seed.sessions.find(s => s.id === sessionId)
   if (!session) return null
-  const all = seededMessages(sessionId) ?? []
+  // D6: the rewind boundary may name a RECORDED tail turn (a scripted turn
+  // after the seeded history), so the truncation walks seed + tail — the
+  // same conversation the reload readers project.
+  const all = seededMessagesWithRecorded(sessionId) ?? []
   const out: ChatMessage[] = []
   let turn = 0
-  for (let i = 0; i < session.messages.length; i++) {
-    const m = session.messages[i]!
+  for (let i = 0; i < all.length; i++) {
+    const m = all[i]!
     if (m.role === 'user' && turn >= turnIndex) break
     if (m.role === 'user') turn += 1
-    const wire = all[i]
-    if (wire) out.push(wire)
+    out.push(m)
   }
   return out
 }

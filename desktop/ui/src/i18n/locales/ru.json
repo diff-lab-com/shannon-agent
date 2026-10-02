@@ -1873,6 +1873,7 @@
   "chat.message.regenerate.aria": "Regenerate response",
   "chat.message.regenerate.started": "Rewound — regenerating the previous reply…",
   "chat.message.regenerate.failed": "Couldn't regenerate the reply",
+  "chat.message.stopped": "Остановлено",
   "chat.message.edit.aria": "Edit message",
   "chat.message.edit.button": "Изменить",
   "chat.edit.banner": "Вы редактируете сообщение от {time} — отправка отмотает разговор к моменту сразу перед ним",

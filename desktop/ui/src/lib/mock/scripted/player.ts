@@ -30,7 +30,7 @@
 
 import type { ChatScript, ScriptSeed, ScriptStep } from './schema'
 import { TERMINAL_EVENTS, validateScript } from './schema'
-import { recordSeedUserSend, resetRecordedSends, setScriptSeed } from './seed'
+import { recordSeedPartialAssistant, recordSeedUserSend, resetRecordedSends, setScriptSeed } from './seed'
 
 export type PlayerPhase =
   | 'idle'             // no script loaded
@@ -79,6 +79,11 @@ interface ActiveTurn {
   queryId: string
   sessionId: string | null
   cancelTimer: (() => void) | null
+  /** D6: visible text streamed for this turn so far (`query:text` contents).
+   *  A cancelled settle records it as the session tail's partial assistant
+   *  message — the scripted counterpart of the real backend's interrupted
+   *  turn finalize in the L0 log. */
+  streamedText: string
 }
 
 function defaultSchedule(delayMs: number, fn: () => void): () => void {
@@ -102,6 +107,9 @@ export class ScriptPlayer {
   private permissionLog: Array<Record<string, unknown>> = []
   /** Every scripted send's observed args (R3 assertion log). */
   private sends: SendRecord[] = []
+  /** D6: set when the open turn was cancelled — finishTurn then records the
+   *  turn's streamed text as the session tail's partial assistant message. */
+  private cancelSettled = false
 
   constructor(runtime?: Partial<PlayerRuntime>) {
     this.runtime = {
@@ -129,6 +137,7 @@ export class ScriptPlayer {
     this.parkKind = null
     this.phase = 'armed'
     // S-4 fix: a fresh script lifecycle starts with no recorded sends.
+    this.cancelSettled = false
     resetRecordedSends()
     this.runtime.onSeed(script.seed ?? null)
     return { ok: true, errors: [] }
@@ -148,6 +157,7 @@ export class ScriptPlayer {
     this.speedValue = 1
     this.phase = 'idle'
     // S-4 fix: back to the pre-script world — no recorded sends either.
+    this.cancelSettled = false
     resetRecordedSends()
     this.runtime.onSeed(null)
   }
@@ -322,6 +332,7 @@ export class ScriptPlayer {
       queryId: `q-${turnIndex}`,
       sessionId,
       cancelTimer: null,
+      streamedText: '',
     }
     this.turn = turn
     this.phase = 'playing'
@@ -357,6 +368,21 @@ export class ScriptPlayer {
     const payload = event === 'budget:warning' || event === 'budget:exceeded'
       ? this.budgetAutoPayload(extra)
       : this.autoPayload(extra)
+    // D6: track the turn's streamed visible text — a cancelled settle
+    // records exactly what was emitted (the AppContext commits the same
+    // bucket content), keeping the live partial and the reload tail
+    // byte-identical.
+    if (event === 'query:text' && this.turn && typeof payload.content === 'string') {
+      this.turn.streamedText += payload.content
+    }
+    // D6: a `query:cancelled` terminal (user stop, an onCancel script, or a
+    // scripted auto-cancel like the budget cap) settles the turn as
+    // interrupted — finishTurn then persists the streamed partial into the
+    // session tail. (emitNow injections bypass this on purpose: a stale
+    // old-turn cancelled must not record anything.)
+    if (event === 'query:cancelled' && this.turn) {
+      this.cancelSettled = true
+    }
     this.runtime.emit(event, payload)
   }
 
@@ -444,6 +470,14 @@ export class ScriptPlayer {
   private finishTurn(autoEvent?: string): void {
     this.haltTurn()
     if (autoEvent) this.emitEvent(autoEvent)
+    // D6: a cancelled settle persists the turn's streamed partial into the
+    // session tail (interrupted: true) — after the terminal event, so any
+    // text an onCancel script emitted is included and the recorded partial
+    // matches the bucket the AppContext committed.
+    if (this.cancelSettled) {
+      this.cancelSettled = false
+      recordSeedPartialAssistant(this.turn?.sessionId, this.turn?.streamedText ?? null)
+    }
     this.turn = null
     this.parkKind = null
     if (this.turnCounter >= (this.script?.turns.length ?? 0)) {

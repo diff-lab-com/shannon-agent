@@ -184,8 +184,10 @@ describe('AppContext — P0-3 rejected-attachment toasts', () => {
 // B0 P1-2 — a failed/cancelled run leaves no ghost streaming bubble: the
 // run's buckets are dropped and, for the visible session, the projections
 // (streamingText / thinkingText / activeToolCalls) reset along with
-// isQuerying. Persisting the partial text needs a backend commit path, so
-// clearing is the approved behavior.
+// isQuerying. D6 refined the CANCEL half: the dropped bucket is COMMITTED
+// as a stopped-marked assistant bubble (keep the partial output), so the
+// cancel test below pins the commit instead of the old full discard; the
+// FAILED path keeps the approved no-bubble cleanup.
 describe('AppContext — B0 P1-2 ghost-bubble cleanup on fail/cancel', () => {
   async function setupStreamingSession() {
     const { result } = renderHook(() => useApp(), { wrapper })
@@ -228,7 +230,7 @@ describe('AppContext — B0 P1-2 ghost-bubble cleanup on fail/cancel', () => {
     expect(result.current.thinkingText).toBe('')
   })
 
-  it('QUERY_CANCELLED drops the ghost bubble and its bucket too', async () => {
+  it('QUERY_CANCELLED commits the partial as a stopped-marked bubble and clears the projections (D6)', async () => {
     const result = await setupStreamingSession()
 
     act(() => { flush(EVENT_NAMES.QUERY_CANCELLED, { session_id: SESSION_A }) })
@@ -237,7 +239,15 @@ describe('AppContext — B0 P1-2 ghost-bubble cleanup on fail/cancel', () => {
     expect(result.current.streamingText).toBe('')
     expect(result.current.thinkingText).toBe('')
     expect(result.current.activeToolCalls).toHaveLength(0)
-    expect(result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
+    // D6 (flipped from the B0 P1-2 discard pin): the streamed partial
+    // commits as the assistant bubble, flagged `interrupted` — the field
+    // the "stopped" bubble marker renders from.
+    const partials = result.current.messages.filter(m => m.role === 'assistant')
+    expect(partials).toHaveLength(1)
+    expect(partials[0]!.content).toBe('partial answer')
+    expect(partials[0]!.interrupted).toBe(true)
+    // The commit consumed the bucket: switching away and back replays the
+    // committed bubble, not a resurrected stream.
     await act(async () => { await result.current.switchSession(SESSION_B) })
     await act(async () => { await result.current.switchSession(SESSION_A) })
     expect(result.current.streamingText).toBe('')
