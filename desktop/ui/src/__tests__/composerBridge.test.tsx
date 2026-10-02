@@ -125,4 +125,43 @@ describe('composerBridge pending queue (G5 P0-6)', () => {
       window.removeEventListener(COMPOSER_DRAFT_EVENT, handler)
     }
   })
+
+  // A-16 — the pending queue's order used to be defined only for the plain
+  // case (push, push, mount). A push arriving DURING the flush (a delivered
+  // draft synchronously pushing another — surface components re-push on
+  // navigation) used to jump the queue through the direct-dispatch path,
+  // landing BETWEEN parked drafts. FIFO means behind them.
+  it('keeps a push made during the flush behind the still-queued drafts (A-16 FIFO)', () => {
+    act(() => {
+      pushComposerDraft('queued-1')
+      pushComposerDraft('queued-2')
+    })
+
+    const seen: string[] = []
+    let reentrated = false
+    renderHook(() => useComposerDraftListener(text => {
+      seen.push(text)
+      if (!reentrated) {
+        reentrated = true
+        pushComposerDraft('reentrant')
+      }
+    }))
+
+    expect(seen).toEqual(['queued-1', 'queued-2', 'reentrant'])
+  })
+
+  it('delivers same-tick pushes made after the flush directly, in order (A-16)', () => {
+    act(() => pushComposerDraft('parked'))
+    const seen: string[] = []
+    renderHook(() => useComposerDraftListener(text => seen.push(text)))
+    expect(seen).toEqual(['parked'])
+
+    // Post-flush pushes take the direct path (queue stays empty), and a
+    // re-mount must not replay them.
+    act(() => {
+      pushComposerDraft('live-1')
+      pushComposerDraft('live-2')
+    })
+    expect(seen).toEqual(['parked', 'live-1', 'live-2'])
+  })
 })

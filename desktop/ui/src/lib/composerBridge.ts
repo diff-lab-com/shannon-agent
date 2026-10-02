@@ -27,6 +27,9 @@ const pendingDrafts: string[] = []
 /** Whether a `useComposerDraftListener` subscriber is currently mounted. */
 let composerSubscribed = false
 
+/** True while the mount flush is draining {@link pendingDrafts} (A-16). */
+let flushing = false
+
 function dispatchDraft(text: string): void {
   window.dispatchEvent(new CustomEvent(COMPOSER_DRAFT_EVENT, { detail: { text } }))
 }
@@ -34,15 +37,25 @@ function dispatchDraft(text: string): void {
 /**
  * Push `text` into the composer as a draft. Never sends.
  *
- * Delivery is one-shot: with the composer subscribed the event lands
- * directly; otherwise the text waits in the pending queue and is delivered
- * exactly once, when the composer next mounts. Callers that may run while
+ * Delivery is one-shot and FIFO: with the composer subscribed the event
+ * lands directly; otherwise the text waits in the pending queue and is
+ * delivered exactly once, in push order, when the composer next mounts.
+ * A push arriving WHILE the queue drains (a delivered draft synchronously
+ * pushing another) is parked behind the still-queued drafts instead of
+ * jumping them through the direct path (A-16). Callers that may run while
  * /chat is not mounted should navigate there after pushing (ChatInput
  * flushes the queue on subscribe).
  */
 export function pushComposerDraft(text: string): void {
-  dispatchDraft(text)
-  if (!composerSubscribed) pendingDrafts.push(text)
+  if (composerSubscribed && !flushing) {
+    dispatchDraft(text)
+    return
+  }
+  // Parked (or arriving mid-flush). The raw event still dispatches so
+  // non-hook observers keep seeing queued pushes — except mid-flush, where
+  // the observer IS the drainer and a re-dispatch would break the order.
+  if (!flushing) dispatchDraft(text)
+  pendingDrafts.push(text)
 }
 
 /**
@@ -69,9 +82,21 @@ export function useComposerDraftListener(onDraft: (text: string) => void): void 
       if (typeof text === 'string') onDraftRef.current(text)
     }
     window.addEventListener(COMPOSER_DRAFT_EVENT, handler)
+    // A-16: drain as a FIFO loop with the direct path suppressed for the
+    // duration — a draft delivered here may synchronously push another, and
+    // that push must queue up behind the remaining drafts, not cut ahead.
+    // `composerSubscribed` flips only after the drain, so the parked-push
+    // branch above catches everything arriving mid-drain.
+    flushing = true
+    try {
+      while (pendingDrafts.length > 0) {
+        const text = pendingDrafts.shift()
+        if (text !== undefined) dispatchDraft(text)
+      }
+    } finally {
+      flushing = false
+    }
     composerSubscribed = true
-    const queued = pendingDrafts.splice(0)
-    for (const text of queued) dispatchDraft(text)
     return () => {
       window.removeEventListener(COMPOSER_DRAFT_EVENT, handler)
       composerSubscribed = false
@@ -86,4 +111,5 @@ export function useComposerDraftListener(onDraft: (text: string) => void): void 
 export function resetPendingComposerDraftsForTests(): void {
   pendingDrafts.length = 0
   composerSubscribed = false
+  flushing = false
 }
