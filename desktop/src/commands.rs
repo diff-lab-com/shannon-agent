@@ -1141,6 +1141,41 @@ pub(crate) fn collect_attachments(
     (collected, rejected)
 }
 
+/// The next step of the desktop query stream: an engine event, the end of
+/// the stream, or a user cancellation that won the race (A-18).
+#[derive(Debug, PartialEq)]
+pub(crate) enum StreamStep<T> {
+    /// The engine produced its next event (or a stream-level error).
+    Event(T),
+    /// The stream ended normally (the loop's non-cancel exit).
+    Ended,
+    /// The cancellation token fired before the next event arrived.
+    Cancelled,
+}
+
+/// A-18 fix (R4 group 7): race the stream's next item against the
+/// cancellation token so a stop takes effect immediately — not at the next
+/// engine event boundary, which during a silent tool execution (no progress
+/// frames) could be tens of seconds away. `biased` + the cancel arm first
+/// keeps the old loop's check-before-dequeue order: a token that is already
+/// cancelled discards even a queued event. The engine side of the drop is
+/// audited for safety (see the loop comment in `send_message`'s task):
+/// `AbortOnDropStream` aborts the engine producer, and the Bash tool's
+/// spawn paths are `kill_on_drop(true)`.
+async fn stream_step<T>(
+    token: &CancellationToken,
+    next: impl std::future::Future<Output = Option<T>>,
+) -> StreamStep<T> {
+    tokio::select! {
+        biased;
+        _ = token.cancelled() => StreamStep::Cancelled,
+        event = next => match event {
+            Some(event) => StreamStep::Event(event),
+            None => StreamStep::Ended,
+        },
+    }
+}
+
 /// Send a user message and stream the AI response via Tauri events.
 ///
 /// P0-4 spike scope: `messages`, `querying`, `cancellation_token` and the
@@ -1745,21 +1780,42 @@ pub async fn send_message(
         use futures::StreamExt;
         let mut pin_stream = std::pin::pin!(stream);
 
-        while let Some(event_result) = pin_stream.next().await {
-            // Check for cancellation
-            if cancel_token_clone.is_cancelled() {
-                let _ = app.emit(
-                    event_names::QUERY_CANCELLED,
-                    events::QueryCancelledPayload {
-                        query_id: qid_str.clone(),
-                        session_id: Some(session_id_str.clone()),
-                    },
-                );
-                route_event(crate::session_registry::SessionEvent::Status(
-                    crate::session_registry::SessionEventStatus::Cancelled,
-                ));
-                break;
-            }
+        // A-18 fix (R4 group 7): the cancellation token now races the next
+        // engine event instead of being polled between events. The old
+        // `while let Some(ev) = next().await` + loop-top token check only
+        // observed a stop at the NEXT event boundary — during a silent tool
+        // execution or a long LLM stretch the stop appeared dead. Dropping
+        // the stream on cancel is safe: the engine wraps its producer in
+        // `AbortOnDropStream` (shannon-core `engine/events.rs`), so the drop
+        // aborts the producer task, and both Bash spawn paths run with
+        // `kill_on_drop(true)` (shannon-core `providers.rs`) — no orphaned
+        // child process.
+        loop {
+            let event_result = match crate::commands::stream_step(
+                &cancel_token_clone,
+                pin_stream.next(),
+            )
+            .await
+            {
+                // Cancellation wins over a pending event (`biased`, cancel
+                // arm first — the same check-first order the old loop-top
+                // guard had) and lands the moment the token fires.
+                crate::commands::StreamStep::Cancelled => {
+                    let _ = app.emit(
+                        event_names::QUERY_CANCELLED,
+                        events::QueryCancelledPayload {
+                            query_id: qid_str.clone(),
+                            session_id: Some(session_id_str.clone()),
+                        },
+                    );
+                    route_event(crate::session_registry::SessionEvent::Status(
+                        crate::session_registry::SessionEventStatus::Cancelled,
+                    ));
+                    break;
+                }
+                crate::commands::StreamStep::Ended => break,
+                crate::commands::StreamStep::Event(event_result) => event_result,
+            };
 
             match event_result {
                 Ok(event) => match event {
@@ -4615,5 +4671,125 @@ mod budget_enforcement_tests {
         assert!(is_terminal_task_status("completed"));
         assert!(is_terminal_task_status("failed"));
         assert!(is_terminal_task_status("cancelled"));
+    }
+}
+
+// ── A-18 (R4 group 7): `stream_step` — the cancel-vs-event race ────────
+//
+// The send_message consume loop used to poll the cancellation token only
+// between engine events, so a stop during a silent tool execution (no
+// progress frames) did nothing until the tool finished. `stream_step` races
+// the token against the next event; these tests pin the three outcomes at
+// the same seam the loop consumes.
+
+#[cfg(test)]
+mod cancel_race_tests {
+    use super::*;
+
+    use futures::stream::{self, StreamExt as _};
+
+    fn a_progress_event(msg: &str) -> Result<QueryEvent, String> {
+        Ok(QueryEvent::Progress {
+            query_id: uuid::Uuid::nil(),
+            message: msg.to_string(),
+        })
+    }
+
+    /// The A-18 core: a stop lands IMMEDIATELY while the stream is silent
+    /// (a tool running with no progress frames, an LLM stretch) — the old
+    /// event-boundary poll would hang here forever. Bounded with a timeout
+    /// so a regression back to event-boundary polling fails fast instead of
+    /// hanging the suite.
+    #[tokio::test]
+    async fn cancel_fires_while_the_stream_is_silent() {
+        let token = CancellationToken::new();
+        // Cancel from the side once the race has begun (and reached its
+        // silent await).
+        let canceller = tokio::spawn({
+            let token = token.clone();
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                token.cancel();
+            }
+        });
+        let mut never_stream = std::pin::pin!(stream::pending::<Result<QueryEvent, String>>());
+        let never = never_stream.next();
+
+        let step = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream_step(&token, never),
+        )
+        .await
+        .expect("cancel must win while the stream never yields");
+        canceller.await.expect("canceller task");
+
+        assert!(
+            matches!(step, StreamStep::Cancelled),
+            "a stop must land while the engine is silent, got {step:?}"
+        );
+    }
+
+    /// No cancel: events still flow one by one and the stream end becomes
+    /// `Ended` — the loop's non-cancel exit is unchanged.
+    #[tokio::test]
+    async fn events_flow_and_the_end_is_ended_without_cancel() {
+        let token = CancellationToken::new();
+        let events = stream::iter(vec![a_progress_event("a"), a_progress_event("b")]);
+        let mut events = std::pin::pin!(events);
+
+        let first = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream_step(&token, events.next()),
+        )
+        .await
+        .expect("first event arrives");
+        assert!(
+            matches!(&first, StreamStep::Event(Ok(QueryEvent::Progress { message, .. })) if message == "a"),
+            "the first engine event must pass through, got {first:?}"
+        );
+
+        let second = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream_step(&token, events.next()),
+        )
+        .await
+        .expect("second event arrives");
+        assert!(
+            matches!(&second, StreamStep::Event(Ok(QueryEvent::Progress { message, .. })) if message == "b"),
+            "the second engine event must pass through, got {second:?}"
+        );
+
+        let end = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream_step(&token, events.next()),
+        )
+        .await
+        .expect("stream end arrives");
+        assert!(
+            matches!(end, StreamStep::Ended),
+            "a drained stream must map to Ended, got {end:?}"
+        );
+    }
+
+    /// `biased` + cancel-first keeps the old loop-top order: an already
+    /// cancelled token discards even a QUEUED event (the old guard checked
+    /// the token before dequeuing).
+    #[tokio::test]
+    async fn an_already_cancelled_token_discards_a_queued_event() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut source = std::pin::pin!(stream::iter(vec![a_progress_event("never surfaced")]));
+        let queued = source.next();
+
+        let step = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream_step(&token, queued),
+        )
+        .await
+        .expect("the race resolves");
+        assert!(
+            matches!(step, StreamStep::Cancelled),
+            "a queued event must not preempt a fired token (old loop-top order), got {step:?}"
+        );
     }
 }

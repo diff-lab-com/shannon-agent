@@ -30,6 +30,31 @@ export function readChatScript(name: string): unknown {
 }
 
 /**
+ * Arm an IN-MEMORY script object and navigate to /chat — the object twin of
+ * `loadChatScript`. Used by the R5 fuzz spec (mutants are generated JSON,
+ * not YAML files) and the perf spec (the long-session seed is built in
+ * code). Validates with the SAME ajv schema and throws on a mutant that
+ * broke the schema, so "insane semantics" can never masquerade as
+ * "malformed document".
+ */
+export async function loadChatScriptObject(page: Page, script: unknown, testInfo?: TestInfo): Promise<ConsoleWatchdog> {
+  const result = validateScript(script)
+  if (!result.ok) {
+    throw new Error(`loadChatScriptObject: script failed validation:\n${result.errors.join('\n')}`)
+  }
+  await page.addInitScript((value) => {
+    (window as unknown as { __SHANNON_SCRIPT__?: unknown }).__SHANNON_SCRIPT__ = value
+  }, script)
+  const watchdog = attachConsoleWatchdog(page)
+  await watchdog.ready
+  await page.goto('/chat')
+  if (testInfo) {
+    await testInfo.attach('chat-script', { body: JSON.stringify(script, null, 2), contentType: 'application/json' })
+  }
+  return watchdog
+}
+
+/**
  * Arm a script for `page` and navigate to /chat.
  *
  * - `addInitScript` runs before ANY page script on every navigation, so the

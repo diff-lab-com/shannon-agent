@@ -208,7 +208,11 @@
      raised: in-component elevation (menus, chips) · sticky: spare ·
      subheader: sticky section headers · header: sticky app chrome ·
      modal: dialogs/side panels/popovers · scrim: modal backdrops ·
-     drawer: mobile sidebar · flash: topmost overlay (primary modal).
+     drawer: mobile sidebar · flash: topmost overlay (primary modal) ·
+     flash-above: the rare overlay that must ride ABOVE the primary modal
+     (S-3: the approval-wait stop control portal'ed over the modal scrim —
+     Base UI's dialog portal reaches the body after our portal, so equal
+     z would paint the scrim on top; the step must be strictly higher).
      Sonner toasts self-manage their z-index — not part of this scale. */
   --z-index-raised: 10;
   --z-index-sticky: 20;
@@ -218,6 +222,7 @@
   --z-index-scrim: 60;
   --z-index-drawer: 70;
   --z-index-flash: 100;
+  --z-index-flash-above: 110;
 
   /* Motion duration tokens — the ONLY duration definitions in the app
      (UI review 2026-09-29 T1: the old :root override in this file and the

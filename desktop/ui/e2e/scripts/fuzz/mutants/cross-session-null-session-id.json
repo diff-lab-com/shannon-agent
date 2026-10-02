@@ -1,0 +1,90 @@
+{
+  "name": "fuzz-cross-session-null-session-id",
+  "description": "fuzz 串扰：事件 session_id 全为 null（缺失）",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "fuzz-sess-a",
+        "title": "Fuzz A",
+        "messages": []
+      },
+      {
+        "id": "fuzz-sess-b",
+        "title": "Fuzz B",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "跑一个 fuzz 基线回合",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "基线开始。",
+            "工具调用即将执行。"
+          ],
+          "chunkDelayMs": 60,
+          "payload": {
+            "session_id": null
+          }
+        },
+        {
+          "event": "query:thinking",
+          "payload": {
+            "content": "先查看目录，再决定下一步。",
+            "session_id": null
+          }
+        },
+        {
+          "event": "query:tool-start",
+          "payload": {
+            "tool_use_id": "fuzz-tool-1",
+            "tool_name": "Bash",
+            "tool_input": {
+              "command": "ls"
+            },
+            "session_id": null
+          }
+        },
+        {
+          "event": "query:tool-progress",
+          "payload": {
+            "tool_use_id": "fuzz-tool-1",
+            "progress": 0.5,
+            "message": "halfway",
+            "session_id": null
+          }
+        },
+        {
+          "event": "query:tool-result",
+          "payload": {
+            "tool_use_id": "fuzz-tool-1",
+            "result": "total 0",
+            "is_error": false,
+            "session_id": null
+          }
+        },
+        {
+          "event": "query:usage",
+          "payload": {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cost_usd": 0.0001,
+            "session_id": null
+          }
+        },
+        {
+          "event": "query:completed",
+          "payload": {
+            "session_id": null
+          }
+        }
+      ]
+    }
+  ]
+}

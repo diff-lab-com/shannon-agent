@@ -1,0 +1,80 @@
+{
+  "generator": "scripts/fuzz-mutate.mjs",
+  "seed": 20261002,
+  "baseline": "e2e/scripts/fuzz/base.yaml",
+  "categories": {
+    "reorder": 2,
+    "duplicate": 2,
+    "cross-session": 2,
+    "boundary": 6,
+    "bombardment": 1
+  },
+  "total": 13,
+  "mutants": [
+    {
+      "file": "reorder-tool-result-before-start.json",
+      "category": "reorder",
+      "description": "tool-result 先于 tool-start（同一 tool_use_id）— 卡片必须在结果早到时不崩、终态收敛"
+    },
+    {
+      "file": "reorder-completed-before-text.json",
+      "category": "reorder",
+      "description": "completed 先于 text 分片 — 终态后的迟到分片必须被丢弃（player 终态语义）"
+    },
+    {
+      "file": "duplicate-tool-start-same-id.json",
+      "category": "duplicate",
+      "description": "双 tool-start 同一 tool_use_id — 卡片必须去重（A-7 语义）而非渲染两张"
+    },
+    {
+      "file": "duplicate-completed-in-turn.json",
+      "category": "duplicate",
+      "description": "同回合双 query:completed — player 终态屏蔽必须兜住（第二个被丢弃），UI 不重复提交"
+    },
+    {
+      "file": "cross-session-wrong-session-id.json",
+      "category": "cross-session",
+      "description": "所有事件 session_id 指向另一个真实种子会话（fuzz-sess-b）— 当前视图不得串台、不得崩"
+    },
+    {
+      "file": "cross-session-null-session-id.json",
+      "category": "cross-session",
+      "description": "所有事件 session_id 显式 null（缺失语义）— 必须 window 本地路由，不崩不复位失败"
+    },
+    {
+      "file": "boundary-empty-chunk.json",
+      "category": "boundary",
+      "description": "空字符串 chunk — streamingText 拼接与 Markdown 渲染必须容忍"
+    },
+    {
+      "file": "boundary-emoji-only.json",
+      "category": "boundary",
+      "description": "纯 emoji chunk（含 ZWJ 序列）— 计数/渲染不得误判"
+    },
+    {
+      "file": "boundary-superlong-line.json",
+      "category": "boundary",
+      "description": "单 chunk ~20000 字符超长行 — 长词断行/渲染不挂起"
+    },
+    {
+      "file": "boundary-progress-out-of-range.json",
+      "category": "boundary",
+      "description": "tool-progress progress=-1 与 1.5 — 进度 pill 的区间守卫必须兜住"
+    },
+    {
+      "file": "boundary-usage-missing-tokens.json",
+      "category": "boundary",
+      "description": "usage 只带 cost_usd（input/output tokens 缺失）— 用量展示必须容忍缺字段"
+    },
+    {
+      "file": "boundary-unknown-meta-classification.json",
+      "category": "boundary",
+      "description": "tool-result meta.classification 未知枚举 — meta 透传不得崩、不得渲染垃圾"
+    },
+    {
+      "file": "bombardment-100-chunks-0ms.json",
+      "category": "bombardment",
+      "description": "100 个 chunk、chunkDelayMs=0 轰炸 — 事件风暴下终态幂等、无崩溃"
+    }
+  ]
+}

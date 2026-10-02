@@ -1,0 +1,77 @@
+{
+  "name": "fuzz-boundary-usage-missing-tokens",
+  "description": "fuzz 边界：usage 缺 token 字段",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "fuzz-sess-a",
+        "title": "Fuzz A",
+        "messages": []
+      },
+      {
+        "id": "fuzz-sess-b",
+        "title": "Fuzz B",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "跑一个 fuzz 基线回合",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "基线开始。",
+            "工具调用即将执行。"
+          ],
+          "chunkDelayMs": 60
+        },
+        {
+          "event": "query:thinking",
+          "payload": {
+            "content": "先查看目录，再决定下一步。"
+          }
+        },
+        {
+          "event": "query:tool-start",
+          "payload": {
+            "tool_use_id": "fuzz-tool-1",
+            "tool_name": "Bash",
+            "tool_input": {
+              "command": "ls"
+            }
+          }
+        },
+        {
+          "event": "query:tool-progress",
+          "payload": {
+            "tool_use_id": "fuzz-tool-1",
+            "progress": 0.5,
+            "message": "halfway"
+          }
+        },
+        {
+          "event": "query:tool-result",
+          "payload": {
+            "tool_use_id": "fuzz-tool-1",
+            "result": "total 0",
+            "is_error": false
+          }
+        },
+        {
+          "event": "query:usage",
+          "payload": {
+            "cost_usd": 0.01
+          }
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

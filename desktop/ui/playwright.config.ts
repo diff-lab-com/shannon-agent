@@ -2,6 +2,11 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
+  // R5: the nightly-only chat families (event fuzz / fuzz harvest / visual
+  // state matrix / dynamic a11y / long-session perf) live beside the PR
+  // specs but run ONLY under playwright.chat-nightly.config.ts. The PR gate
+  // set is unchanged — these five files did not exist before this ignore.
+  testIgnore: /chat-script\.(fuzz|fuzz-found|visual-matrix|a11y|perf)\.spec\.ts/,
   // Warm the vite dev server (lazy /chat chunk compiled) before the first
   // worker's first spec — see e2e/global-setup.ts for the CI incidents
   // this closes.
