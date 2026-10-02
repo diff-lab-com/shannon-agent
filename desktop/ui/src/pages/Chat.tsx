@@ -145,18 +145,25 @@ export default function Chat() {
 
   // Pre-fill the composer when navigated from elsewhere (e.g. Editor's
   // "Ask AI about this diagnostic" button passes { prefill } in location.state).
-  // Guard with a ref so the effect doesn't re-fire on every keystroke that
-  // updates `input` — only react to the navigation event itself.
-  const prefillApplied = useRef(false)
+  // A-13 fix: the guard used to be a once-per-mount boolean, so a SECOND
+  // prefill navigation while Chat stayed mounted (Sidebar/Editor → /chat is
+  // a same-route navigation when the user is already on /chat) was silently
+  // ignored. Each navigation carries a unique location.key — a prefill now
+  // applies once per NAVIGATION, and the replace below clears the state so
+  // the same prefill can never re-apply on re-render.
+  const lastPrefillKeyRef = useRef<string | null>(null)
+  // Set whenever a prefill claims the composer; the mount-time draft restore
+  // below must not clobber a prefill applied in the same mount pass (the
+  // A-6 follow-up ordering: prefill wins over the boot draft restore).
+  const prefillClaimedRef = useRef(false)
   useEffect(() => {
-    if (prefillApplied.current) return
     const prefill = (location.state as { prefill?: string } | null)?.prefill
-    if (prefill) {
-      setInput(prefill)
-      prefillApplied.current = true
-      navigate(location.pathname, { replace: true, state: null })
-    }
-  }, [location.state, location.pathname, navigate])
+    if (!prefill || lastPrefillKeyRef.current === location.key) return
+    lastPrefillKeyRef.current = location.key
+    prefillClaimedRef.current = true
+    setInput(prefill)
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location.state, location.key, location.pathname, navigate])
 
   // ── B1 §4-11 / P2-1: per-session drafts ────────────────────────────────
   // The draft (text + attachments) used to be one page-level pair of states
@@ -205,7 +212,7 @@ export default function Chat() {
       // effect above runs first and flips its ref synchronously) owns the
       // composer — the restore must not clobber it with a stale draft; the
       // debounced write below then persists the prefill as the new draft.
-      if (!prefillApplied.current) {
+      if (!prefillClaimedRef.current) {
         const draft = visibleSessionId ? readDraft(visibleSessionId) : null
         setInput(draft?.text ?? '')
         setAttachedFiles(draft?.attachments ?? [])

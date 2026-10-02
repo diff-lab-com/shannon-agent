@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useNavigate } from 'react-router-dom'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { I18nProvider } from '@/i18n'
 import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
@@ -568,6 +568,37 @@ describe('Chat page', () => {
       </I18nProvider>,
     )
     expect(screen.getByPlaceholderText(/Try: "Explain this repo"/)).toHaveValue('重启前的旧草稿')
+  })
+
+  // A-13 — the prefill guard used to be a once-per-mount boolean: the first
+  // location.state prefill flipped it forever, so a SECOND prefill
+  // navigation while Chat stayed mounted (Sidebar/Editor navigate to /chat;
+  // already being on /chat keeps the page mounted, only the location
+  // changes) was silently ignored.
+  it('applies a second location.state prefill without a remount (A-13)', () => {
+    resetCtx()
+    function PrefillNavProbe() {
+      const navigate = useNavigate()
+      return (
+        <button type="button" onClick={() => navigate('/chat', { state: { prefill: '第二次 prefill' } })}>
+          nav-second-prefill
+        </button>
+      )
+    }
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={[{ pathname: '/chat', state: { prefill: '第一次 prefill' } }]}>
+          <ArtifactProvider>
+            <PrefillNavProbe />
+            <Chat />
+          </ArtifactProvider>
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    expect(input).toHaveValue('第一次 prefill')
+    fireEvent.click(screen.getByRole('button', { name: 'nav-second-prefill' }))
+    expect(input).toHaveValue('第二次 prefill')
   })
 
   // Header working-directory chip was removed when ChatInput took ownership
