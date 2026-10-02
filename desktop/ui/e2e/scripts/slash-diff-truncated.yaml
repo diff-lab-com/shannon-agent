@@ -1,0 +1,20 @@
+# ChatScript: slash-diff-truncated — wave-2 journey #15 的 /diff truncated 态。
+#
+# seed 哨兵 id = "diff:truncated" → get_session_git_diff 返回带
+# truncated: true 的 fixture → 卡片渲染 3 个文件行 + "patch truncated"
+# 标记 + Show patch 展开钮。断言在 spec（chat-script.slash.spec.ts）。
+name: slash-diff-truncated
+description: /diff truncated 态 — 截断标记 + 文件行
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: "diff:truncated"
+      title: Diff truncated fixture
+      messages: []
+turns:
+  - user: "/diff"
+    script:
+      - event: query:text
+        chunks:
+          - "(unused)"

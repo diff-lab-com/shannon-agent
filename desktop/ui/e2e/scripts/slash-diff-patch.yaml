@@ -1,0 +1,20 @@
+# ChatScript: slash-diff-patch — wave-2 journey #15 的 /diff patch 展开态。
+#
+# seed 哨兵 id = "diff:patch" → get_session_git_diff 返回带 patch 文本的
+# fixture → 卡片渲染 2 个文件行（+x −y）→ Show patch 展开 CodeBlock →
+# Hide patch 收起。断言在 spec（chat-script.slash.spec.ts）。
+name: slash-diff-patch
+description: /diff patch 态 — 文件行 + patch 展开/收起
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: "diff:patch"
+      title: Diff patch fixture
+      messages: []
+turns:
+  - user: "/diff"
+    script:
+      - event: query:text
+        chunks:
+          - "(unused)"
