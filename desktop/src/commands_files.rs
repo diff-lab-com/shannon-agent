@@ -31,7 +31,7 @@ const MAX_ATTACHMENT_COUNT: usize = 10;
 const LARGE_DOCUMENT_PARSE_THRESHOLD: u64 = 10 * 1024 * 1024;
 
 /// R7-③ predicate: `true` when `path` is a parseable document (PDF or office
-/// format) over [`LARGE_DOCUMENT_PARSE_THRESHOLD`] — the size class whose
+/// format) over the private `LARGE_DOCUMENT_PARSE_THRESHOLD` — the size class whose
 /// attach-time full parse is skipped in favor of the send-time parse. Pure
 /// over (extension, length) so the threshold boundary is unit-testable.
 fn defers_document_parse(path: &Path, len: u64) -> bool {
@@ -295,7 +295,7 @@ pub struct AttachmentPathCheck {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extraction: Option<crate::commands::AttachmentExtractionReport>,
     /// R7-③ threshold hybrid — a parseable, ok document over
-    /// [`LARGE_DOCUMENT_PARSE_THRESHOLD`]: the preflight skipped the
+    /// the private `LARGE_DOCUMENT_PARSE_THRESHOLD`: the preflight skipped the
     /// attach-time full parse, and the chip shows the honest "parsed on
     /// send" placeholder instead of an extraction badge. Absent/false for
     /// everything the preflight still parses at attach time.
@@ -316,7 +316,7 @@ pub struct AttachmentPathCheck {
 /// domain is UNDEFINED — every path reports `no_working_dir` so the UI can
 /// point at Settings instead of pretending the files will be read.
 ///
-/// R7-③ threshold hybrid (see [`LARGE_DOCUMENT_PARSE_THRESHOLD`]): the
+/// R7-③ threshold hybrid (see the private `LARGE_DOCUMENT_PARSE_THRESHOLD`): the
 /// attach-time full parse below this doc comment used to run for EVERY
 /// parseable document — a 100 MiB PDF fired the whole
 /// pdftotext/office pipeline fire-and-forget the moment it was attached,
