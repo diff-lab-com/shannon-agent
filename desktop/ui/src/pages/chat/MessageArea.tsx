@@ -115,9 +115,21 @@ export function StreamNoticeLine({ notice }: { notice: StreamNotice }) {
  * timeline — one IPC per session, giving every historical tool card its
  * authoritative duration (live cards measure client-side instead).
  * Best-effort: failures just leave the cards without a duration label.
+ * A-8 fix: the timeline is also re-read when the session's run SETTLES
+ * (isQuerying true→false) — the just-finished turn's authoritative durations
+ * only exist backend-side after settle, and the user can keep reading this
+ * session without ever switching away (the lookup used to refresh on session
+ * switches only). A run START bumps nothing: it adds no history to read.
  */
-function useToolDurationLookup(sessionId: string | null): Map<string, number> {
+function useToolDurationLookup(sessionId: string | null, isQuerying: boolean): Map<string, number> {
   const [lookup, setLookup] = useState<Map<string, number>>(() => new Map())
+  // One tick per settle transition (not per render) feeds the fetch effect.
+  const [settleTick, setSettleTick] = useState(0)
+  const wasQueryingRef = useRef(isQuerying)
+  useEffect(() => {
+    if (wasQueryingRef.current && !isQuerying) setSettleTick(t => t + 1)
+    wasQueryingRef.current = isQuerying
+  }, [isQuerying])
   useEffect(() => {
     if (!sessionId) {
       setLookup(new Map())
@@ -137,7 +149,7 @@ function useToolDurationLookup(sessionId: string | null): Map<string, number> {
       })
       .catch(() => { /* durations are opportunistic */ })
     return () => { cancelled = true }
-  }, [sessionId])
+  }, [sessionId, settleTick])
   return lookup
 }
 
@@ -211,7 +223,7 @@ export default function MessageArea({
 }: MessageAreaProps) {
   const { messages, streamingText, thinkingText, activeToolCalls, toolProgress, streamNotices, checkpoints, rewindSession, isQuerying } = useChat()
   const { currentSessionId, sessionActivity, switchingSession } = useSessions()
-  const durationLookup = useToolDurationLookup(currentSessionId)
+  const durationLookup = useToolDurationLookup(currentSessionId, isQuerying)
   const checkpointTurns = useMemo(() => checkpoints.map(c => c.turn_index), [checkpoints])
   const rewind = useMemo(() => {
     return (msgIndex: number) => {

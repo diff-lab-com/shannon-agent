@@ -301,9 +301,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   // P0 sidebar telemetry: record one query-stream observation for a session.
-  // `kind === 'event'` (text/thinking/usage) only refreshes the ref's
-  // lastActivity; every other kind publishes a state update so the sidebar
-  // sees running/tool transitions immediately.
+  // A state update publishes only when the sidebar-VISIBLE projection flips
+  // (membership / running / activeTool / failed / awaitingApproval) or the
+  // kind is state-bearing anyway — high-frequency `event` ticks (text/
+  // thinking/usage) still touch just the ref's lastActivity, so a streaming
+  // run re-renders the rail on transitions, never per chunk. S-2 fix: the
+  // FIRST observation of a run is such a flip even when it is an `event`
+  // (a pure-text run's only events are text/thinking/usage ticks — ref-only
+  // publication left the rail without its Running dot for the whole run).
   const noteSessionActivity = useCallback((
     sessionId: string | null | undefined,
     kind: 'event' | 'tool-start' | 'tool-end' | 'end' | 'fail',
@@ -336,8 +341,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
         next = { ...base, running: false, lastActivity: now, activeTool: null, failed: true }
         break
     }
+    // S-2 fix: when this observation (re)starts a run on an entry left
+    // behind by a settled run, restart the elapsed clock — `base` carried
+    // the PREVIOUS run's startedAt, which would render a huge stale elapsed.
+    if (next.running && prev && !prev.running) next = { ...next, startedAt: now }
     map.set(sessionId, next)
-    if (kind !== 'event') setSessionActivity(Object.fromEntries(map))
+    // S-2 fix: publish on a visible flip too — membership (first observation
+    // of a run) or any running/tool/failed/approval transition. Mid-run
+    // `event` ticks still refresh the ref only, so streaming never
+    // re-renders the sidebar per chunk.
+    const visibleFlip = !prev
+      || prev.running !== next.running
+      || prev.activeTool !== next.activeTool
+      || prev.failed !== next.failed
+      || prev.awaitingApproval !== next.awaitingApproval
+    if (kind !== 'event' || visibleFlip) setSessionActivity(Object.fromEntries(map))
   }, [])
 
   // Batch B2: permission prompts surface as an amber dot on the owning
@@ -916,13 +934,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // reports its own progress.
           setToolProgress(null)
           setRunProcess(prev => runToolStart(prev, p.tool_name, p.tool_input, Date.now()))
-          setActiveToolCalls(prev => [...prev, {
-            tool_use_id: p.tool_use_id,
-            tool_name: p.tool_name,
-            tool_input: p.tool_input,
-            status: 'running',
-            started_at: Date.now(),
-          }])
+          // A-7 fix: the backend can re-emit a tool-start for a card this
+          // session already tracks (resume/replay paths) — a second start
+          // for a known tool_use_id must keep the existing card instead of
+          // appending a duplicate (the first start wins; the result event
+          // resolves the shared id either way).
+          setActiveToolCalls(prev => {
+            if (prev.some(tc => tc.tool_use_id === p.tool_use_id)) return prev
+            return [...prev, {
+              tool_use_id: p.tool_use_id,
+              tool_name: p.tool_name,
+              tool_input: p.tool_input,
+              status: 'running',
+              started_at: Date.now(),
+            }]
+          })
         }),
         listen(EVENT_NAMES.QUERY_TOOL_RESULT, (e) => {
           const p = e.payload as { tool_use_id: string; result: string; is_error: boolean; meta?: unknown; tokens_used?: number; session_id?: string }

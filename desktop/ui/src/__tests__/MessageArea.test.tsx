@@ -6,12 +6,13 @@
 // chatRunStatus; this file pins what MessageArea itself decides.)
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import type { Virtualizer } from '@tanstack/react-virtual'
 
 import MessageArea, { VIRTUALIZE_THRESHOLD } from '@/pages/chat/MessageArea'
 import { ComposerContext } from '@/pages/chat/ComposerContext'
+import * as api from '@/lib/tauri-api'
 
 const ctx = vi.hoisted(() => ({
   messages: [] as any[],
@@ -230,5 +231,79 @@ describe('MessageArea — session-switch overlay', () => {
 describe('MessageArea — list virtualization decision', () => {
   it('virtualizes strictly above the shared threshold', () => {
     expect(VIRTUALIZE_THRESHOLD).toBe(30)
+  })
+})
+
+// A-8 — the duration lookup used to fetch the L0 trace timeline on session
+// switches only, so a turn that completed while the user stayed in the same
+// session never got its historical durations. The lookup must also refresh
+// when the run settles (isQuerying true→false); a run START reads no new
+// history and must not refetch.
+describe('MessageArea — tool duration lookup refresh on run settle (A-8)', () => {
+  const timeline = {
+    session_id: 'session-1',
+    started_ts_ns: 0,
+    ended_ts_ns: 2_000_000,
+    turns: [
+      {
+        turn: 1,
+        start_ts_ns: 0,
+        end_ts_ns: 1,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 0,
+        tools: [
+          { tool_use_id: 'tc-9', tool_name: 'bash', start_ts_ns: 0, end_ts_ns: 1_234_000, duration_ms: 1234, is_error: false },
+        ],
+      },
+    ],
+    cumulative: [],
+  }
+
+  function rerenderArea(view: ReturnType<typeof renderArea>) {
+    view.rerender(
+      <MemoryRouter>
+        <ComposerContext.Provider value={composerValue}>
+          <MessageArea
+            scrollParentRef={{ current: null }}
+            messagesEndRef={{ current: null }}
+            virtualizer={virtualizer}
+            setDiffPath={() => {}}
+            setDiffPaths={() => {}}
+          />
+        </ComposerContext.Provider>
+      </MemoryRouter>,
+    )
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.getTraceTimeline).mockReset()
+    vi.mocked(api.getTraceTimeline).mockResolvedValue(timeline)
+  })
+
+  it('refetches the trace timeline when the run settles in the same session', async () => {
+    ctx.isQuerying = true
+    const view = renderArea()
+    await waitFor(() => expect(api.getTraceTimeline).toHaveBeenCalledTimes(1))
+    expect(api.getTraceTimeline).toHaveBeenCalledWith('session-1')
+
+    // The run settles — the just-finished turn's durations are now in the
+    // backend timeline; the lookup must re-read it without a session switch.
+    ctx.isQuerying = false
+    rerenderArea(view)
+    await waitFor(() => expect(api.getTraceTimeline).toHaveBeenCalledTimes(2))
+    expect(api.getTraceTimeline).toHaveBeenLastCalledWith('session-1')
+  })
+
+  it('a run start does not refetch (no new history to read yet)', async () => {
+    ctx.isQuerying = false
+    const view = renderArea()
+    await waitFor(() => expect(api.getTraceTimeline).toHaveBeenCalledTimes(1))
+
+    ctx.isQuerying = true
+    rerenderArea(view)
+    await act(async () => {}) // drain microtasks — no fetch may follow
+    expect(api.getTraceTimeline).toHaveBeenCalledTimes(1)
   })
 })
