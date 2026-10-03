@@ -175,7 +175,16 @@ test.describe('scripted chat backend — slash-commands (journey #15)', () => {
     // ExportSuccess sentinel) — the app treats it as a calm user cancel:
     // no toast, nothing sent.
     await chat.send('/export')
-    await page.waitForTimeout(800)
+    // Bounded negative anchor (was a blind waitForTimeout): keep sampling
+    // the mock snapshot across a ~2s window — sends must stay empty on the
+    // LAST sample too. A sleep only proves "nothing yet"; sampling through
+    // the window proves the cancel is final within the horizon a misrouted
+    // save would need to land in.
+    const probeUntil = Date.now() + 2_000
+    while (Date.now() < probeUntil) {
+      expect((await mockSnapshot(page)).sends).toEqual([])
+      await page.waitForTimeout(250)
+    }
     await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
     expect((await mockSnapshot(page)).sentTurns).toBe(0)
 
