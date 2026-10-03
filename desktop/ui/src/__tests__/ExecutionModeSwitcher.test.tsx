@@ -109,3 +109,32 @@ describe('ExecutionModeSwitcher keyboard support', () => {
     expect(screen.queryByRole('listbox', { name: 'Execution mode options' })).toBeNull()
   })
 })
+
+// w3 fix/header-dropdown-hit-test: the menu used to render inline inside the
+// header, whose glass-surface `contain: paint` + z-header stacking context
+// trapped/clipped the z-modal dropdown — the message area won the pointer
+// hit-test and specs had to fake clicks. jsdom has no hit-test, so the fix
+// is pinned at the contract level: body-level portal mount + token class.
+describe('ExecutionModeSwitcher portal stacking contract', () => {
+  it('mounts the open menu as a body-level portal, outside the header-local wrapper', () => {
+    const { container } = renderSwitcher()
+    fireEvent.click(container.querySelector('button')!)
+    const listbox = screen.getByRole('listbox', { name: 'Execution mode options' })
+    expect(listbox.parentElement).toBe(document.body)
+    expect(container.contains(listbox)).toBe(false)
+  })
+
+  it('carries the z-modal token class (never an arbitrary z-index) and stays pointer-pickable', async () => {
+    const { container } = renderSwitcher()
+    fireEvent.click(container.querySelector('button')!)
+    const listbox = screen.getByRole('listbox', { name: 'Execution mode options' })
+    expect(listbox).toHaveClass('z-modal')
+    // The e2e anchor (chat-script.model-mode.spec.ts) drives the same path
+    // with a REAL Playwright click; here we pin that the option's onClick
+    // stays wired through the portal.
+    fireEvent.click(screen.getAllByRole('option')[1]!)
+    await waitFor(() => {
+      expect(api.activatePermissionProfile).toHaveBeenCalledWith('balanced')
+    })
+  })
+})
