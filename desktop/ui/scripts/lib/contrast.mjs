@@ -58,6 +58,35 @@ export const PAIRS = [
   // badges) was the one error template pair outside the gate — nord sat at
   // 3.05:1 on it. Same AA contract as the sibling status hues.
   ['color-on-error', 'color-error', 4.5, 'MD3 error label'],
+  // Destructive UI-state indicators (2026-10-03, destructive-alignment 裁定).
+  // `--destructive` never carries a text label on a solid fill — there is no
+  // on-destructive token, `--color-destructive-foreground` is a dead alias
+  // (defined in index.css, zero consumers), and the solid-danger flows
+  // (ConfirmDialog, DropdownMenu destructive items, the DataSources/Skills/
+  // Agents/OPCTask variant="destructive" call sites) all override to the
+  // gated error/on-error family above. What destructive really renders:
+  // the aria-invalid border/ring family (ui/button, input, select, switch,
+  // textarea, input-group, badge.prim) and the PlatformsCard status dot —
+  // WCAG 1.4.11 non-text state info, so 3:1 like the outline pair above,
+  // modeled against background (the outline precedent's border surface).
+  // Gate floor = nord at 3.05:1: #bf616a is deliberately KEPT over error's
+  // #b45761 because the darker alignment value scores 2.66:1 here — the
+  // error token is role-pinned dark (it carries white on-error text),
+  // destructive is role-pinned as an indicator on dark surfaces, and no
+  // single nord red serves both (obs-destructive report, 2026-10-03).
+  ['destructive', 'background', 3.0, 'destructive UI indicators vs background (non-text)'],
+  // NOT gated, documented: `text-destructive` on its own-hue tint — the
+  // ui/button + ui/badge.prim `destructive` variants (`bg-destructive/10
+  // text-destructive`, dark rest `bg-destructive/20`). Same-hue tint pulls
+  // the label's backdrop toward the label color, so the pair is structurally
+  // sub-4.5 for every midtone red (nord 3.15:1 at /10-over-lowest, slate
+  // 4.13, solarized 3.71, gruvbox 4.31 — only pastel dark-theme reds like
+  // tokyo-night's #f7768e clear it at 5.89). Gating it would force
+  // canonical-palette-breaking recolors across ~6 themes and is unsatisfiable
+  // for nord at any error-aligned value; full per-theme arithmetic lives in
+  // .superpowers/sdd/2026-10-02-chat-testing-plan/obs-destructive-report.md.
+  // Revisit as a dedicated design task (tint recipe or token split), not a
+  // one-line gate.
   // Status hues (success/warning/info) complete the error template — every
   // theme must pass the same four-role AA contract (2026-09 status-tokens PR).
   ['color-on-success', 'color-success', 4.5, 'MD3 success label'],
@@ -70,6 +99,15 @@ export const PAIRS = [
   ['color-link', 'color-surface-container-lowest', 4.5, 'link text on markdown surfaces'],
   ['outline', 'background', 3.0, 'borders / iconography vs background'],
 ]
+
+// Chart data colors (`--chart-series-*`) are deliberately OUTSIDE this
+// contract and must stay there (2026-10-03 destructive-alignment 裁定):
+// they are categorical data marks, not UI indicators — WCAG 1.4.1 (use of
+// color) / 3:1 non-text governs UI state, while chart marks follow
+// series-distinctness rules instead, and a data color intentionally
+// repeats a UI hue (nord keeps #bf616a as both --destructive and
+// --chart-series-4) without inheriting its gate. Never add chart tokens
+// to PAIRS or CHIP_COMPOSITES.
 
 // Accent-tinted chips (the `bg-primary/10` + `text-primary` family, G7
 // 2026-09-30): the rendered backdrop is the accent itself alpha-composited
