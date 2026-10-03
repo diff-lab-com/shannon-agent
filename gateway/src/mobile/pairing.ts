@@ -31,6 +31,7 @@ import { dirname } from "node:path";
 
 import type { Logger } from "../adapters/types.js";
 import { sharedPushSeq, GAP_WINDOW, type SeqCounter } from "./seq.js";
+import type { PushReplayBuffer } from "./pushReplay.js";
 import {
   deviceIdFromPublicKey,
   generatePairToken,
@@ -534,6 +535,13 @@ export interface PairingHandlersOptions {
    * of an empty array.
    */
   approvals?: ApprovalRegistry;
+  /**
+   * §O4: the process-wide replay ring (same instance the hub and the server
+   * hold). When set, `shannon/resume` answers `replayed` with the device's
+   * buffered events after `sinceSeq`; a hole in the buffered stream answers
+   * GAP_TOO_LARGE so the phone re-snapshots.
+   */
+  replayBuffer?: PushReplayBuffer;
 }
 
 /** Generic, non-revealing rejection so pair/resume can't act as an oracle. */
@@ -724,11 +732,26 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
           message: "gap exceeds retained window; use snapshot",
         };
       }
-      // The gateway does not retain a replay buffer yet — the phone treats an
-      // empty replay as "cursor at head" and converges via the live stream.
+      // §O4: replay the device's own buffered stream after the cursor. A hole
+      // (cursor predates the ring's oldest entry) is the same contract as the
+      // global window check — the phone re-snapshots. Without a buffer wired
+      // (or a device with no buffered pushes) `replayed: []` keeps the exact
+      // pre-buffer semantics: "cursor at head", converge via re-fetch.
+      const replay = opts.replayBuffer?.replay(ctx.sessionId, sinceSeq);
+      if (replay && !replay.complete) {
+        return {
+          kind: "error",
+          code: ShannonError.GAP_TOO_LARGE,
+          message: "gap exceeds retained window; use snapshot",
+        };
+      }
       return {
         kind: "result",
-        result: { sinceSeq, lastSeq, replayed: [] },
+        result: {
+          sinceSeq,
+          lastSeq,
+          replayed: (replay?.entries ?? []).map((e) => ({ seq: e.seq, ...e.event })),
+        },
       };
     },
 
@@ -773,6 +796,9 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
       const removed = opts.registry.revoke(target);
       if (removed) {
         opts.logger.info(`device revoked via RPC: ${target} (by ${ctx.sessionId})`);
+        // §O4 hygiene: a revoked device's buffered stream is dead weight —
+        // it can never resume to read it.
+        opts.replayBuffer?.forget(target);
         // Fan out to the surviving devices (the bootstrap wires this to the
         // dispatch hub's broadcast; the revoked device is excluded there).
         try {
@@ -842,6 +868,17 @@ export interface MobileHandlersOptions {
   approvalRegistry?: ApprovalRegistry;
   /** §M2: post-revoke broadcast hook (bootstrap → dispatch hub fan-out). */
   onDeviceRevoked?: (deviceId: string) => void;
+  /**
+   * Test seam: push cursor (defaults to the process-wide `sharedPushSeq`).
+   * Forwarded to the pairing handlers so resume's `lastSeq` agrees with a
+   * hub built on the same injected counter.
+   */
+  seq?: SeqCounter;
+  /**
+   * §O4: the process-wide replay ring (same instance the hub and the server
+   * hold). Forwarded to the pairing handlers — `shannon/resume` replays it.
+   */
+  replayBuffer?: PushReplayBuffer;
 }
 
 /**
@@ -860,6 +897,8 @@ export function createMobileHandlers(opts: MobileHandlersOptions): MethodHandler
     now: opts.now,
     onDeviceRevoked: opts.onDeviceRevoked,
     approvals: opts.approvalRegistry,
+    seq: opts.seq,
+    replayBuffer: opts.replayBuffer,
   });
   const engine = createEngineHandlers({
     ...opts.engine,

@@ -35,6 +35,7 @@
 
 import { WebSocket } from "ws";
 import { sharedPushSeq, type SeqCounter } from "./seq.js";
+import type { PushReplayBuffer } from "./pushReplay.js";
 
 import {
   type ApprovalReq,
@@ -127,6 +128,12 @@ export interface MobileDispatchHubOptions {
    * keeping `shannon/approval.list` + the snapshot `pendingApprovals` honest.
    */
   approvals?: ApprovalRegistry;
+  /**
+   * §O4: per-device replay ring. When set, every seq-stamped push records
+   * here (online or not) so `shannon/resume(sinceSeq)` can replay what the
+   * phone missed while offline. Same instance the pairing handlers read.
+   */
+  replay?: PushReplayBuffer;
 }
 
 export class MobileDispatchHub {
@@ -137,6 +144,7 @@ export class MobileDispatchHub {
   private readonly newTurnId: () => string;
   private readonly seq: SeqCounter;
   private readonly approvals: ApprovalRegistry | null;
+  private readonly replay: PushReplayBuffer | null;
 
   /** deviceId → open, session-bound contexts. */
   private readonly byDevice = new Map<string, Set<MethodContext>>();
@@ -161,6 +169,7 @@ export class MobileDispatchHub {
     this.newTurnId = opts.newTurnId ?? (() => crypto.randomUUID());
     this.seq = opts.seqCounter ?? sharedPushSeq;
     this.approvals = opts.approvals ?? null;
+    this.replay = opts.replay ?? null;
   }
 
   /** Current push seq head — feeds `shannon/snapshot` / `shannon/resume`. */
@@ -233,11 +242,15 @@ export class MobileDispatchHub {
    * Push one ShannonEvent notification to every open socket of the device.
    * WP-15 T4: every pushed notification carries a top-level `seq` (the
    * phone's live-sync cursor; a missing seq is invisible to it).
+   * §O4: the push is recorded into the replay ring at seq-stamp time —
+   * BEFORE the socket check, because an offline device's push is exactly
+   * what `shannon/resume` replays later.
    */
   pushEvent(deviceId: string, event: ShannonEvent): boolean {
+    const seq = this.seq.next();
+    this.replay?.record(deviceId, seq, event);
     const sockets = this.byDevice.get(deviceId);
     if (!sockets || sockets.size === 0) return false;
-    const seq = this.seq.next();
     const frame = JSON.stringify({
       jsonrpc: JSONRPC_VERSION,
       method: "shannon/event",

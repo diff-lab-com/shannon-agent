@@ -28,6 +28,7 @@ import {
 import { createPairingAccess } from "./mobile/accessRpc.js";
 import type { EngineClientFactory as MobileEngineClientFactory } from "./mobile/engineBridge.js";
 import { ApprovalRegistry } from "./mobile/approvalRegistry.js";
+import { PushReplayBuffer } from "./mobile/pushReplay.js";
 import { MobileDispatchHub } from "./mobile/hub.js";
 import { createMobileChannelAdapter } from "./mobile/channel.js";
 import { createTaskHandlers } from "./mobile/taskHandlers.js";
@@ -175,8 +176,13 @@ export async function bootstrap(
   // same queue.
   const mobileEnabled = config.mobile?.enabled === true;
   const approvalRegistry = mobileEnabled ? new ApprovalRegistry() : null;
+  // §O4: one replay ring shared three ways — the hub records its pushes into
+  // it, the server's MethodContext lets the direct-query stream record, and
+  // the pairing handlers replay it on `shannon/resume` (same
+  // instance-injection pattern as the approval registry above).
+  const pushReplay = mobileEnabled ? new PushReplayBuffer() : null;
   const dispatchHub = mobileEnabled
-    ? new MobileDispatchHub({ logger, approvals: approvalRegistry ?? undefined })
+    ? new MobileDispatchHub({ logger, approvals: approvalRegistry ?? undefined, replay: pushReplay ?? undefined })
     : null;
   // Shared in-flight query registry: the engine bridge (shannon/query +
   // shannon/cancel) and the router's per-lane clients register against ONE
@@ -349,6 +355,7 @@ export async function bootstrap(
           allowlist,
           pairing: accessPairing,
         },
+        pushReplay!,
       )
     : null;
   if (mobile) {
@@ -403,6 +410,8 @@ async function startMobileServer(
   engineAuthToken: string | null,
   /** T9: the IM access stores the desktop pairing-approval RPC serves. */
   access: { allowlist: Allowlist; pairing: PairingStore },
+  /** §O4: shared replay ring (also wired into the hub + server ctx). */
+  pushReplay: PushReplayBuffer,
 ): Promise<{ handle: { stop(): Promise<void> }; port: number }> {
   const mobileCfg = config.mobile!;
   const host = mobileCfg.host ?? "0.0.0.0";
@@ -473,6 +482,8 @@ async function startMobileServer(
     logger,
     // §L2: the same registry the hub feeds — snapshot/approval.list read it.
     approvalRegistry: approvals,
+    // §O4: the same ring the hub and the server feed — resume replays it.
+    replayBuffer: pushReplay ?? undefined,
     // §M2: a successful revoke fans a `device.revoked` event out to every
     // OTHER online device (the revoked one is excluded — it learns from the
     // PAIRING_REQUIRED on its next signed call).
@@ -496,6 +507,9 @@ async function startMobileServer(
     handlers,
     httpApi: pairingAccess.http,
     onContext: (ctx) => dispatchHub.registerConnection(ctx),
+    // §O4: the MethodContext carries the ring so the direct-query stream
+    // records its seq-stamped frames (same instance as hub/handlers).
+    replayBuffer: pushReplay ?? undefined,
     directE2E: {
       privateKey: directE2EKey.privateKey,
       // The pairing flavor mixes the token the phone scanned; it is consumed
