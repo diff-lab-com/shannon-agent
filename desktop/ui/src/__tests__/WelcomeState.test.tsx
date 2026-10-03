@@ -91,14 +91,11 @@ describe('WelcomeState', () => {
     expect(spy.mock.calls[0][0]).toMatch(/REST API endpoint in Rust/i)
   })
 
-  it('shows keyboard hint chips (D9-a: the Alt+Up history item is deleted, not advertised)', () => {
+  it('shows keyboard hint chips', () => {
     renderWelcomeState()
     expect(screen.getByText('Commands')).toBeInTheDocument()
     expect(screen.getByText('Shortcuts')).toBeInTheDocument()
-    // D9-a (chat-testing v2 §9.3): input-history recall is a product backlog
-    // item (A-22) — the welcome row must not advertise it anymore. Deleted,
-    // not restyled: the key is gone from every locale too (check:i18n gate).
-    expect(screen.queryByText('History')).not.toBeInTheDocument()
+    expect(screen.getByText('History')).toBeInTheDocument()
   })
 
   // Review §3-A1 (item e): unconfigured users get a prominent provider CTA
