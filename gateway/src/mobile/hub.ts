@@ -372,6 +372,30 @@ export class MobileDispatchHub {
     return false;
   }
 
+  /**
+   * r2-w2d: deny-settle EVERY approval the device still has parked here — the
+   * `shannon/cancel` entry point. A parked approval belongs to the cancelled
+   * task's own turn, so once the device says "cancel my task" the ask can no
+   * longer matter: leaving it parked would hold the lane inside the approval
+   * round-trip until the device answers or the 300s timeout, delaying the
+   * turn's `cancelled` terminal (§K3's `query.failed`) by up to 300s. Reuses
+   * `settleApproval` verbatim (queue removal + registry resolve + waiter
+   * release), so the race with the 300s timeout timer stays idempotent the
+   * same way — single-threaded settle, first setter wins, and the loser's
+   * `clearTimeout` / `Map.delete` / `resolve` are all no-ops. Approvals parked
+   * for other devices are never touched. Returns the number actually settled
+   * now (0 = nothing parked / already settled).
+   */
+  cancelPendingApprovals(deviceId: string): number {
+    const queue = this.pending.get(deviceId);
+    if (!queue || queue.length === 0) return 0;
+    let settled = 0;
+    for (const entry of [...queue]) {
+      if (this.settleApproval(entry.requestId, "deny")) settled++;
+    }
+    return settled;
+  }
+
   // ── task journal + §K3 task stream ─────────────────────────────────────────
 
   /** Recent tasks for one device, newest first. */

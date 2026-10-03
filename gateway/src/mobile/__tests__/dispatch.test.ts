@@ -342,6 +342,52 @@ describe("mobile dispatch — approval registry integration", () => {
     void hub.requestApproval("dev-1", req);
     await vi.waitFor(() => expect(approvals.listPending()).toEqual([]));
   });
+
+  it("cancelPendingApprovals deny-settles ALL of the device's parked asks — and only theirs", async () => {
+    const approvals = new ApprovalRegistry();
+    const hub = new MobileDispatchHub({ logger, approvals });
+    hub.registerConnection(fakeCtx("dev-1"));
+    hub.registerConnection(fakeCtx("dev-2"));
+
+    const p1 = hub.requestApproval("dev-1", { ...req, requestId: "req-cp-1" });
+    const p2 = hub.requestApproval("dev-1", { ...req, requestId: "req-cp-2" });
+    const otherDevice = hub.requestApproval("dev-2", { ...req, requestId: "req-cp-3" });
+
+    expect(hub.cancelPendingApprovals("dev-1")).toBe(2);
+    await expect(p1).resolves.toBe("deny");
+    await expect(p2).resolves.toBe("deny");
+    expect(approvals.listPending().map((r) => r.requestId)).toEqual(["req-cp-3"]);
+    expect(hub.hasPendingApproval("dev-1")).toBe(false);
+    // Another device's parked ask is untouched.
+    expect(hub.hasPendingApproval("dev-2")).toBe(true);
+    // Idempotent: the second pass finds nothing left.
+    expect(hub.cancelPendingApprovals("dev-1")).toBe(0);
+    // Another device's ask still settles normally through the decide path.
+    expect(hub.settleApproval("req-cp-3", "allow")).toBe(true);
+    await expect(otherDevice).resolves.toBe("allow");
+  });
+
+  it("cancelPendingApprovals vs the 300s timeout race: first settle wins, the loser is a no-op", async () => {
+    const approvals = new ApprovalRegistry();
+    const hub = new MobileDispatchHub({ logger, approvals, approvalTimeoutMs: 25 });
+    hub.registerConnection(fakeCtx("dev-1"));
+
+    // Cancel wins the race: the waiter resolves once with the cancel's deny,
+    // the timer's own deny is absorbed (Promise.resolve is idempotent), and
+    // the timeout pass finds the queue already empty.
+    const won = hub.requestApproval("dev-1", { ...req, requestId: "req-race-1" });
+    expect(hub.cancelPendingApprovals("dev-1")).toBe(1);
+    await expect(won).resolves.toBe("deny");
+    await new Promise((r) => setTimeout(r, 40)); // let the (cleared) timer fire
+    expect(hub.cancelPendingApprovals("dev-1")).toBe(0);
+    expect(approvals.size).toBe(0);
+
+    // Timeout wins the race: the entry is already gone, cancel settles 0.
+    void hub.requestApproval("dev-1", { ...req, requestId: "req-race-2" });
+    await vi.waitFor(() => expect(hub.hasPendingApproval("dev-1")).toBe(false));
+    expect(hub.cancelPendingApprovals("dev-1")).toBe(0);
+    expect(approvals.size).toBe(0);
+  });
 });
 
 // ── pipeline: dispatch → lane → §K3 task stream → phone pushes ────────────────
