@@ -19,7 +19,7 @@
 //      directions, the app-level Toaster follows the RESOLVED theme
 //      (App.tsx ThemedToaster → sonner's data-sonner-theme), and the
 //      parked stream survives the flips (流式中切主题不丢流).
-//   4. G14: the sidebar sessions skeleton in the boot's catalogLoading
+//   5. G14: the sidebar sessions skeleton in the boot's catalogLoading
 //      window (seeded empty roster), handing over to the empty-state card.
 // session-switch-overlay is NOT repeated here — chat-script.session-switch
 // already owns it (brief: 已有 spec 不重复).

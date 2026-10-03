@@ -252,12 +252,14 @@ describe('ThemeContext — live OS scheme switch in system mode (F-theme-system)
     document.documentElement.removeAttribute('data-theme-mode')
   })
 
-  let matchMediaSpy: ReturnType<typeof vi.spyOn>
+  let matchMediaSpy: ReturnType<typeof vi.spyOn> | undefined
 
   afterEach(() => {
     // Targeted restore — vi.restoreAllMocks() would also wipe the setup
     // file's global mocks (e.g. tauri-api configure → mockResolvedValue).
-    matchMediaSpy.mockRestore()
+    // Tests that never installed the spy must not crash the teardown.
+    matchMediaSpy?.mockRestore()
+    matchMediaSpy = undefined
   })
 
   // A controllable matchMedia: the provider registers its change listener on
