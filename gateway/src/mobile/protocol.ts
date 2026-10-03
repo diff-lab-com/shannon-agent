@@ -440,6 +440,10 @@ export interface MobileSessionSummary {
   title?: string;
   /** ISO-8601 UTC last-activity instant (list ordering). */
   updatedAt?: string;
+  /** Lifetime token totals (C8, additive): present only when the engine
+   *  supplied a usable number — the phone renders spend "有数据才渲染". */
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
 }
 
 /** `shannon/session.list` success. */

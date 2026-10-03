@@ -60,3 +60,13 @@ MB-3 文档回写 ──┘
 3. §K 事件仅推发起设备;`task.message` 为任务线程终态;失败终态用 `query.failed` + Fleet journal 迁移,不改 mock 既有 happy path。
 4. §J2 分页锚点取 ts 首现、同 ts 组边界不切分——mock(`tool/mock_server.dart`)已是参考实现,engine/gateway 两侧实现以 mobile `test/session_history_paging_test.dart` 语义为准。
 5. `approval.list`/snapshot 条目形状以 mobile `approvalFromMap`(`protocol_mapper.dart:84`)逐字为准:`{approvalId, kind, headline, risk:'high'|'medium'|'low', scope?:[], diffTitle?, timestamp, toolInput, agentId?, agentName?}`,响应包 `{"pendingApprovals":[...]}`。
+
+## 遗留跟进(2026-10-03,r2-w2b 批次登记)
+
+> 本批(r2-w2b)为 r2-w2 的遗留跟进:①dev-standalone 挂上 §K 任务面(补真 gateway 冒烟缺口);②session.list 透传 token 总量(C8 快速胜利)。以下三项为**排期外遗留**,共性是引擎/聚合侧前置缺失——mobile/gateway 两侧消费面均已就绪(r2-w2 §L1 落地),前置补上即自动点亮,无需反向改动(「宁缺勿造」降级口径不变)。登记格式沿用 `2026-10-02-r2-followup-plan.md` 的表列/验收要点风格。
+
+| # | 项 | 内容 | 前置/依赖 | 规模 | 验收要点 |
+|---|---|---|---|---|---|
+| FL-1 | **审批 risk 三维落地**(W3 候选) | scope/reversible 分类源放**工具元数据**:`shannon-tool-interface`/`shannon-tools` 每工具声明;bash 类 → `system + reversible:false`,文件编辑默认 `repo`;引擎审批发射点从元数据读取填 `risk{scope,reversible}`(`destructive` 已有) | 引擎侧 wire 字段 r2-w2 §L1 已落(`#[serde(default)]` additive),只缺分类源 | M | 审批事件携带真实三维 risk;gateway 透传与 mobile 渲染自动点亮、零反向改动;**拒绝**用 permission_classifier 的严重度冒充 scope(严重度≠作用域,语义不可混用) |
+| FL-2 | **agent 归因** | 引擎 WS 协议增 profile/agent 字段时,`ApprovalRequest.agent{id,name}` 同步接线发射,手机 Agent Context 卡显示真实发起 agent | 挂 **P1-4b**(WS 协议 profile 字段,见 `docs/integrations/mobile-dispatch.md` §4) | S(P1-4b 顺带) | 「审批事件可归因」列为 P1-4b 验收项;缺席时维持现降级(品牌字回退、id 空串)不回归 |
+| FL-3 | **C8 二期(跨会话/按日花费聚合)** | 跨会话/按日聚合依赖 mono usage ledger 聚合;落地时按 §J4 reserve-then-enable 模式先钉 `usage.summary` 类 wire 契约再实现 | 挂 **W2-2**(usage ledger 聚合,见 `2026-10-01-r2-improvement-schedule.md`) | M | 契约先钉后实现;会话级 token 总量已随本批 `session.list` 透传(`totalInputTokens`/`totalOutputTokens`,引擎有值才带)——快速胜利完成 |

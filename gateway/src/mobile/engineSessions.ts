@@ -14,7 +14,9 @@
  * convention) with a camelCase fallback.
  *
  * Semantics per spec §J:
- *  - `session.list` maps to `{sessions: [{id, agentId?, title?, updatedAt?}]}`.
+ *  - `session.list` maps to `{sessions: [{id, agentId?, title?, updatedAt?,
+ *    totalInputTokens?, totalOutputTokens?}]}` (token totals additive, C8:
+ *    present only when the engine supplies them).
  *  - `session.history` paginates with `before` (ISO-8601 anchor = the first
  *    occurrence of that ts; same-ts groups are not split) + `limit`, and
  *    answers `hasMore`. An unknown sessionId is NOT an error — the engine (or
@@ -30,6 +32,9 @@ export interface EngineSessionSummary {
   agent_id?: string | null;
   title?: string | null;
   updated_at?: string | number | null;
+  /** C8 r2-w2: lifetime token totals (engine protocol additive fields). */
+  total_input_tokens?: number | null;
+  total_output_tokens?: number | null;
 }
 
 /** Engine response to `sessions.list`. */
@@ -191,12 +196,16 @@ export interface MobileSessionSummaryWire {
   agentId?: string;
   title?: string;
   updatedAt?: string;
+  /** Lifetime token totals — present only when the engine supplied a number. */
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
 }
 
 /**
  * Map one engine summary to the §J1 wire entry. Entries without a usable id
  * are skipped (the phone would skip them anyway); `agentId`/`title`/
- * `updatedAt` are omitted when the engine omits them — never invented.
+ * `updatedAt`/token totals are omitted when the engine omits them — never
+ * invented (the phone renders the spend row only "有数据才渲染").
  */
 export function mapSessionSummary(summary: EngineSessionSummary): MobileSessionSummaryWire | null {
   const id = asString(summary.session_id ?? (summary as { id?: unknown }).id);
@@ -208,6 +217,14 @@ export function mapSessionSummary(summary: EngineSessionSummary): MobileSessionS
   if (title) wire.title = title;
   const updatedAt = toIsoTimestamp(summary.updated_at ?? (summary as { updatedAt?: unknown }).updatedAt);
   if (updatedAt) wire.updatedAt = updatedAt;
+  const totalInputTokens = asTokenCount(
+    summary.total_input_tokens ?? (summary as { totalInputTokens?: unknown }).totalInputTokens,
+  );
+  if (totalInputTokens !== null) wire.totalInputTokens = totalInputTokens;
+  const totalOutputTokens = asTokenCount(
+    summary.total_output_tokens ?? (summary as { totalOutputTokens?: unknown }).totalOutputTokens,
+  );
+  if (totalOutputTokens !== null) wire.totalOutputTokens = totalOutputTokens;
   return wire;
 }
 
@@ -251,4 +268,10 @@ function toIsoTimestamp(v: unknown): string | null {
   if (typeof v === "string" && v.length > 0) return v;
   if (typeof v === "number" && Number.isFinite(v)) return new Date(v).toISOString();
   return null;
+}
+
+/** A usable token count: a finite, non-negative number. Anything else → null. */
+function asTokenCount(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return null;
+  return v;
 }
