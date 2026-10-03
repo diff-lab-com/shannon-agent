@@ -83,6 +83,10 @@ vi.mock('@/lib/tauri-api', async () => {
     setSessionModel: vi.fn().mockResolvedValue(undefined),
     clearSessionModel: vi.fn().mockResolvedValue(undefined),
     getSessionModel: vi.fn().mockResolvedValue(null),
+    // F-voice-gate: with real capture seams installed (installVoiceCapture
+    // below) ChatInput exercises the REAL remote provider, whose flush calls
+    // transcribe_audio — an explicit mock keeps that off the Tauri bridge.
+    transcribeAudio: vi.fn().mockResolvedValue({ text: 'voice transcript' }),
     getSessionContextBreakdown: vi.fn().mockResolvedValue({
       totalTokens: 0, contextWindow: null,
       categories: [
@@ -114,6 +118,47 @@ function renderChatInput(props: Partial<React.ComponentProps<typeof ChatInput>> 
     onOpenEditor: vi.fn(),
   }
   return render(<ChatInput {...defaultProps} {...props} />, { wrapper: I18nProvider })
+}
+
+// F-voice-gate: the mic button only renders when the real capture seams
+// exist (MediaRecorder + navigator.mediaDevices.getUserMedia) — the stub
+// fallback no longer counts as support. These fakes let the mic-render and
+// recording-cycle tests drive the REAL remote provider path in jsdom.
+function installVoiceCapture() {
+  interface FakeRecorder {
+    ondataavailable: ((e: { data: Blob }) => void) | null
+    onstop: (() => void) | null
+    start(): void
+    stop(): void
+  }
+  const instances: FakeRecorder[] = []
+  class FakeMediaRecorder {
+    ondataavailable: ((e: { data: Blob }) => void) | null = null
+    onstop: (() => void) | null = null
+    constructor() {
+      instances.push(this as unknown as FakeRecorder)
+    }
+    static isTypeSupported() {
+      return true
+    }
+    start() {}
+    stop() {
+      this.onstop?.()
+    }
+  }
+  ;(globalThis as unknown as { MediaRecorder: typeof MediaRecorder }).MediaRecorder =
+    FakeMediaRecorder as unknown as typeof MediaRecorder
+  Object.defineProperty(navigator, 'mediaDevices', {
+    value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }) },
+    configurable: true,
+  })
+  return {
+    instances,
+    restore: () => {
+      delete (globalThis as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
+      delete (navigator as unknown as { mediaDevices?: unknown }).mediaDevices
+    },
+  }
 }
 
 describe('ChatInput', () => {
@@ -171,8 +216,13 @@ describe('ChatInput', () => {
   })
 
   it('renders the Voice mic button in idle state', () => {
-    renderChatInput()
-    expect(screen.getByLabelText('Start voice recording')).toBeInTheDocument()
+    const { restore } = installVoiceCapture()
+    try {
+      renderChatInput()
+      expect(screen.getByLabelText('Start voice recording')).toBeInTheDocument()
+    } finally {
+      restore()
+    }
   })
 
   it('does not render the Voice orb when idle', () => {
@@ -180,18 +230,28 @@ describe('ChatInput', () => {
     expect(container.querySelector('[role="presentation"]')).toBeNull()
   })
 
-  it('appends stub transcript to value after recording cycle', async () => {
-    const onChange = vi.fn()
-    renderChatInput({ value: '', onChange })
-    const mic = screen.getByLabelText('Start voice recording')
-    fireEvent.click(mic)
-    expect(screen.getByLabelText('Stop recording')).toBeInTheDocument()
-    fireEvent.click(screen.getByLabelText('Stop recording'))
-    await waitFor(() => {
-      expect(onChange).toHaveBeenCalled()
-    })
-    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1]
-    expect(lastCall[0]).toContain('stub transcript')
+  it('appends the transcript to value after a recording cycle', async () => {
+    const { instances, restore } = installVoiceCapture()
+    try {
+      const onChange = vi.fn()
+      renderChatInput({ value: '', onChange })
+      const mic = screen.getByLabelText('Start voice recording')
+      fireEvent.click(mic)
+      expect(screen.getByLabelText('Stop recording')).toBeInTheDocument()
+      // getUserMedia resolves asynchronously — a stop that lands before the
+      // recorder exists is a provider no-op, so wait for the real instance.
+      await waitFor(() => expect(instances.length).toBeGreaterThan(0))
+      fireEvent.click(screen.getByLabelText('Stop recording'))
+      await waitFor(() => {
+        expect(onChange).toHaveBeenCalled()
+      })
+      const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1]
+      // F-voice-gate: with the capture seams installed this cycle runs the
+      // REAL remote provider (transcribe_audio mock), not the stub.
+      expect(lastCall[0]).toContain('voice transcript')
+    } finally {
+      restore()
+    }
   })
 
   it('calls onCancelQuery when Stop button is clicked', () => {

@@ -62,7 +62,9 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   // `options.provider` (P2-5e). When the local provider is
   // selected and MediaRecorder is unavailable, the factory
   // falls back to the stub — same fallback semantics as the
-  // cloud provider.
+  // cloud provider. The stub reports `isSupported() === false`
+  // (F-voice-gate), so a fallback environment surfaces here as
+  // `supported: false` and the UI hides the mic.
   const providerRef = useRef<VoiceProvider | null>(null)
   if (!providerRef.current) {
     const config = provider === 'local'

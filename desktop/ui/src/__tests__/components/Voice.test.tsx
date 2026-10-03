@@ -60,7 +60,12 @@ function installMediaRecorder() {
   return { teardown, instances }
 }
 
-describe('useVoice hook (stub fallback without MediaRecorder)', () => {
+// F-voice-gate: without MediaRecorder the factory falls back to the stub
+// provider, which now (honestly) reports isSupported() === false — so the
+// hook's `supported` is false and ChatInput hides the mic. The stub's
+// start/stop remain drivable directly (jsdom tests), they just no longer
+// pretend to be a usable STT backend.
+describe('useVoice hook — stub fallback (unsupported environment)', () => {
   beforeEach(() => {
     // jsdom has no MediaRecorder by default → factory falls back to the stub.
     delete (globalThis as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
@@ -81,11 +86,11 @@ describe('useVoice hook (stub fallback without MediaRecorder)', () => {
     )
   }
 
-  it('starts idle with empty partial and reports supported (stub fallback)', () => {
+  it('starts idle with empty partial and reports unsupported (stub fallback)', () => {
     renderWithI18n(<VoiceProbe />)
     expect(screen.getByTestId('state')).toHaveTextContent('idle')
     expect(screen.getByTestId('partial')).toHaveTextContent('empty')
-    expect(screen.getByTestId('supported')).toHaveTextContent('yes')
+    expect(screen.getByTestId('supported')).toHaveTextContent('no')
   })
 
   it('startRecording transitions to recording state', async () => {
