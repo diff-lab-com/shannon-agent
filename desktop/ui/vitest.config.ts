@@ -1,8 +1,16 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import os from 'node:os'
 import path from 'path'
 import pkg from './package.json' with { type: 'json' }
+
+// Parallel workers = half the machine's CPUs (min 2). Half leaves headroom
+// for the editor/TS server on dev machines and for sibling CI jobs; the
+// floor keeps 4-vCPU CI runners at 2 workers. The default pool is `forks`
+// (vitest 2.x), so `maxForks` is the binding limit — `maxThreads` is kept
+// in sync for anyone switching pools.
+const workers = Math.max(2, Math.floor(os.availableParallelism() / 2))
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -19,11 +27,11 @@ export default defineConfig({
     setupFiles: ['./src/__tests__/setup.ts'],
     poolOptions: {
       threads: {
-        maxThreads: 1,
+        maxThreads: workers,
         minThreads: 1,
       },
       forks: {
-        maxForks: 1,
+        maxForks: workers,
         minForks: 1,
       },
     },
