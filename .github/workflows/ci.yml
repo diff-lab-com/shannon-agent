@@ -368,8 +368,13 @@ jobs:
         # keep that test target included (or re-home it explicitly).
         run: |
           set -o pipefail
-          # Guard against stale cached binaries with unexpected feature sets.
-          cargo clean -p shannon-tools
+          # (The old `cargo clean -p shannon-tools` stale-feature guard was
+          # removed 2026-10-03: it recompiled shannon-tools plus the four
+          # crates downstream of it — ~3 min per shard, on the merge
+          # critical path — and its motive is gone since test-features
+          # builds its feature shapes in the isolated target-feature dir
+          # (see that job). If a stale-binary mystery ever appears, suspect
+          # this removal first.)
           if cargo nextest run --workspace --config-file .config/nextest.toml --profile ci --partition hash:${{ matrix.shard }}/2 2>&1 | tee /tmp/nextest-test.log; then
             exit 0
           fi
