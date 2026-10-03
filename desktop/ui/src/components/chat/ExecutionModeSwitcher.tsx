@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useState } from 'react'
+import { Menu } from '@base-ui/react/menu'
 import { useIntl, type PrimitiveType } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -36,16 +36,25 @@ const TIER_LABEL_KEY: Record<string, string> = {
  * turn. The `custom` row is a navigation shortcut to the Profiles settings
  * page rather than an activation target.
  *
- * The menu is a **body-level portal** (w3 fix/header-dropdown-hit-test):
- * inline it used to live inside the header's `<header class="glass-surface
- * fixed z-header">`, whose `contain: paint` (plus backdrop-filter and the
- * z-header + fixed pair) forms a stacking context AND clips descendants to
- * the 64px bar — the dropdown's `z-modal` was trapped inside and its body
+ * The menu is a **Base UI Menu** (w4 refactor/header-menus-baseui): Base UI
+ * owns the body-level Portal, the trigger anchoring and the full keyboard
+ * contract (arrow/typeahead navigation, Escape, focus-out close, focus
+ * return to the trigger). That supersedes the w3 hand-rolled portal: the
+ * menu used to live inside the header's `glass-surface fixed z-header`
+ * element, whose `contain: paint` (plus backdrop-filter and the z-header +
+ * fixed pair) forms a stacking context AND clips descendants to the 64px
+ * bar — the dropdown's `z-modal` was trapped inside and its body
  * painted/hit-tested away under the chat message area, so real pointer
  * clicks never reached the options (specs had to fake clicks with
- * dispatchEvent). Portalled to body with the `z-modal` token class the
+ * dispatchEvent). Base UI's Portal + `z-modal` positioner token class the
  * menu paints above the chat main area (token scale: header 40 < modal 50)
- * without leaving the design-token system.
+ * and re-anchors automatically when the sidebar resizes.
+ *
+ * The `role="listbox"`/`option` presentation is deliberate (the pre-Base-UI
+ * contract this surface shipped with): `aria-haspopup="menu"`-style
+ * `menuitem` roles would read as a command menu, while these rows are a
+ * single-value selection — Base UI lets the ARIA roles be overridden per
+ * part without losing its roving-focus/typeahead machinery.
  */
 export function ExecutionModeSwitcher() {
   const intl = useIntl()
@@ -55,15 +64,6 @@ export function ExecutionModeSwitcher() {
   const { config, refreshConfig } = useCatalog()
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [focus, setFocus] = useState(-1)
-  const ref = useRef<HTMLDivElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
-  // Viewport-anchored position for the portalled menu, computed from the
-  // trigger box on open (and on window resize while open — the header is
-  // fixed, so page scroll never moves the anchor). jsdom reports zero rects
-  // and the menu still mounts; only pixel alignment depends on this.
-  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null)
 
   const state = deriveExecutionMode(config)
   const options: Array<{ key: string; tier: ExecutionMode; profile: string | null }> = [
@@ -71,59 +71,14 @@ export function ExecutionModeSwitcher() {
     { key: 'custom', tier: 'custom' as ExecutionMode, profile: state.mode === 'custom' ? state.profile : null },
   ]
 
-  useEffect(() => {
-    if (!open) return
-    // Portal means the menu is no longer inside `ref` — treat presses inside
-    // the menu itself as "inside" or every pick's mousedown would close the
-    // menu before the click lands.
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as Node
-      if (ref.current?.contains(target) || menuRef.current?.contains(target)) return
-      setOpen(false)
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [open])
-
-  // Keep the portalled menu anchored under the trigger across resizes.
-  // Layout effect: the menu's FIRST painted frame must already sit at the
-  // trigger — a passive effect would paint one frame at the viewport corner.
-  useLayoutEffect(() => {
-    if (!open) return
-    const updatePos = () => {
-      const rect = ref.current?.getBoundingClientRect()
-      if (rect) setMenuPos({ top: rect.bottom, right: window.innerWidth - rect.right })
-    }
-    updatePos()
-    window.addEventListener('resize', updatePos)
-    return () => window.removeEventListener('resize', updatePos)
-  }, [open])
-
-  // P2-10: opening the menu moves focus to the selected item (listbox
-  // roving-focus pattern) — previously focus stayed on the trigger, so the
-  // menu's key handling was unreachable dead code.
-  useEffect(() => {
-    if (!open) return
-    const selectedIdx = options.findIndex((o) => o.tier === state.mode)
-    const idx = selectedIdx >= 0 ? selectedIdx : 0
-    setFocus(idx)
-    optionRefs.current[idx]?.focus()
-    // options/state.mode are stable while the menu is open; re-running on
-    // every render would yank focus back after hover/arrow navigation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
-
-  /** Close and put focus back on the trigger (Escape / activation). */
-  const closeAndRestoreFocus = () => {
-    setOpen(false)
-    ref.current?.querySelector<HTMLButtonElement>(':scope > button')?.focus()
-  }
+  /** Close with Base UI's focus-return-to-trigger semantics. */
+  const close = () => setOpen(false)
 
   const handlePick = async (option: (typeof options)[number]) => {
     if (busy) return
     // 自定义 → the Profiles settings page (enable/edit lives there).
     if (option.tier === 'custom') {
-      closeAndRestoreFocus()
+      close()
       navigate('/settings/permissions')
       return
     }
@@ -131,36 +86,12 @@ export function ExecutionModeSwitcher() {
     try {
       await api.activatePermissionProfile(option.profile)
       await refreshConfig()
-      closeAndRestoreFocus()
+      close()
       toast.success(t('execMode.toast.switched', { tier: t(TIER_LABEL_KEY[option.tier]) }))
     } catch (e) {
       toastError(t('execMode.toast.failed'), e)
     } finally {
       setBusy(false)
-    }
-  }
-
-  const moveFocus = (delta: number) => {
-    const next = (focus + delta + options.length) % options.length
-    setFocus(next)
-    optionRefs.current[next]?.focus()
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      moveFocus(1)
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      moveFocus(-1)
-    } else if (e.key === 'Enter') {
-      // preventDefault also suppresses the focused option's native click,
-      // so Enter activates exactly once.
-      e.preventDefault()
-      if (focus >= 0) void handlePick(options[focus])
-    } else if (e.key === 'Escape') {
-      e.preventDefault()
-      closeAndRestoreFocus()
     }
   }
 
@@ -172,80 +103,91 @@ export function ExecutionModeSwitcher() {
       : t(TIER_LABEL_KEY[state.mode])
 
   return (
-    <div className="relative" ref={ref}>
-      <Button
-        variant="ghost"
-        data-testid="execution-mode-switcher"
-        aria-label={t('execMode.toggle.aria', { tier: currentLabel })}
-        title={t('execMode.toggle.title')}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className="flex items-center gap-xs px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
-        onClick={() => {
-          setOpen((o) => !o)
-          setFocus(-1)
-        }}
-      >
-        <span className="material-symbols-outlined icon-md" aria-hidden="true">
-          tune
-        </span>
-        <span className="font-label-sm text-label-sm whitespace-nowrap max-w-[110px] truncate">
-          {currentLabel}
-        </span>
-        <span className="material-symbols-outlined icon-sm" aria-hidden="true">
-          expand_more
-        </span>
-      </Button>
-      {open && createPortal(
-        <div
-          ref={menuRef}
-          className="glass-overlay animate-panel-in fixed mt-sm w-[240px] rounded-xl z-modal py-sm"
-          style={{ top: menuPos?.top ?? 0, right: menuPos?.right ?? 0 }}
-          role="listbox"
-          aria-label={t('execMode.menu.aria')}
-          onKeyDown={handleKeyDown}
-        >
-          {options.map((option, i) => {
-            const selected = state.mode === option.tier
-            const label =
-              option.tier === 'custom'
-                ? option.profile
-                  ? t('execMode.tier.customNamed', { name: option.profile })
-                  : t(TIER_LABEL_KEY.custom)
-                : t(TIER_LABEL_KEY[option.tier])
-            return (
-              <Button
-                key={option.key}
-                ref={(el) => { optionRefs.current[i] = el }}
-                variant="ghost"
-                role="option"
-                aria-selected={selected}
-                className={cn(
-                  'w-full justify-between px-md py-sm h-auto rounded-none',
-                  i === focus
-                    ? 'bg-primary-container text-on-primary-container'
-                    : selected
+    // highlightItemOnHover={false} keeps CSS :hover (bg-primary/5, the
+    // pre-Base-UI hover paint) separate from the keyboard's data-highlighted
+    // (primary-container) — zero visual drift, per fix round 1.
+    <Menu.Root open={open} onOpenChange={setOpen} modal={false} highlightItemOnHover={false}>
+      <Menu.Trigger
+        render={
+          <Button
+            variant="ghost"
+            data-testid="execution-mode-switcher"
+            aria-label={t('execMode.toggle.aria', { tier: currentLabel })}
+            title={t('execMode.toggle.title')}
+            className="flex items-center gap-xs px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
+          >
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">
+              tune
+            </span>
+            <span className="font-label-sm text-label-sm whitespace-nowrap max-w-[110px] truncate">
+              {currentLabel}
+            </span>
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+              expand_more
+            </span>
+          </Button>
+        }
+      />
+      <Menu.Portal>
+        {/* z-modal rides the POSITIONER (as ui/select.tsx): floating-ui's
+            transform makes the positioner the portal subtree's stacking
+            context, so a z-index on the popup inside it could never win
+            against the header (40) or the message area overlays. Token scale
+            keeps the menu below the permission scrim/dialog (z-flash). */}
+        <Menu.Positioner align="end" sideOffset={8} className="isolate z-modal">
+          {/* role="listbox" replaces Base UI's default "menu" (see component
+              doc); aria-labelledby is explicitly cleared because Base UI
+              labels the popup from the trigger — the e2e + AT contract is
+              the dedicated "Execution mode options" name. */}
+          <Menu.Popup
+            role="listbox"
+            aria-labelledby={undefined}
+            aria-label={t('execMode.menu.aria')}
+            aria-orientation="vertical"
+            className="glass-overlay animate-panel-in w-[240px] rounded-xl py-sm outline-none"
+          >
+            {options.map((option) => {
+              const selected = state.mode === option.tier
+              const label =
+                option.tier === 'custom'
+                  ? option.profile
+                    ? t('execMode.tier.customNamed', { name: option.profile })
+                    : t(TIER_LABEL_KEY.custom)
+                  : t(TIER_LABEL_KEY[option.tier])
+              return (
+                <Menu.Item
+                  key={option.key}
+                  role="option"
+                  aria-selected={selected}
+                  label={label}
+                  // Keep the pre-Base-UI error semantics: a failed
+                  // activation leaves the menu open for a retry, so items
+                  // opt out of the automatic close-on-press.
+                  closeOnClick={false}
+                  className={cn(
+                    'flex w-full cursor-pointer items-center justify-between gap-sm px-md py-sm text-left font-label-md outline-none transition-colors',
+                    selected
                       ? 'text-primary font-bold'
                       : 'text-on-surface hover:bg-primary/5',
-                )}
-                onClick={() => void handlePick(option)}
-                onMouseEnter={() => setFocus(i)}
-              >
-                <span className="font-label-md truncate">{label}</span>
-                {selected && (
-                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">
-                    check
-                  </span>
-                )}
-              </Button>
-            )
-          })}
-          <div className="px-md pt-xs pb-sm text-label-sm text-on-surface-variant" aria-hidden="true">
-            {t('execMode.menu.hint')}
-          </div>
-        </div>,
-        document.body,
-      )}
-    </div>
+                    'data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container',
+                  )}
+                  onClick={() => void handlePick(option)}
+                >
+                  <span className="truncate">{label}</span>
+                  {selected && (
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                      check
+                    </span>
+                  )}
+                </Menu.Item>
+              )
+            })}
+            <div className="px-md pt-xs pb-sm text-label-sm text-on-surface-variant" aria-hidden="true">
+              {t('execMode.menu.hint')}
+            </div>
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
   )
 }

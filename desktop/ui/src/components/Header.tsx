@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { Menu } from '@base-ui/react/menu';
 import { useIntl, type PrimitiveType } from 'react-intl';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -40,21 +41,103 @@ function getTitleKey(pathname: string): string {
   return 'header.title.chat'
 }
 
+/**
+ * The non-chat header model selector (w4 refactor/header-menus-baseui).
+ * Decision 1 (review P1-2 / B1-8): the config's `model` key stores the
+ * catalog ID — `provider_resolver` passes the stored string through as the
+ * API `model` parameter verbatim; legacy display_name values on disk are
+ * normalized back to the id inside `configure('model')`
+ * (commands_config.rs `normalize_model_id`). Header remains the only model
+ * switcher outside /chat; the composer chip owns /chat.
+ */
+function HeaderModelSelector() {
+  const intl = useIntl();
+  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values);
+  const { status, models, refreshConfig, refreshStatus } = useCatalog();
+  const [open, setOpen] = useState(false);
+
+  const handleModelSwitch = async (modelId: string) => {
+    const model = models.find(m => m.id === modelId)
+    if (!model) return
+    try {
+      await api.configure({ key: 'model', value: model.id })
+      await api.configure({ key: 'provider', value: model.provider })
+      await refreshConfig()
+      await refreshStatus()
+      setOpen(false)
+      toast.success(t('header.model.toast.switched', { model: model.name }))
+    } catch (e) { toastError(t('header.model.failed'), e) }
+  }
+
+  return (
+    // highlightItemOnHover={false} keeps CSS :hover (bg-primary/5, the
+    // pre-Base-UI hover paint) separate from the keyboard's data-highlighted
+    // (primary-container) — zero visual drift, per fix round 1.
+    <Menu.Root open={open} onOpenChange={setOpen} modal={false} highlightItemOnHover={false}>
+      <Menu.Trigger
+        render={
+          <Button
+            variant="ghost"
+            aria-label={t('header.model.select')}
+            className="flex items-center gap-sm px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
+          >
+            <span className={cn('w-2 h-2 rounded-full shrink-0', status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')}></span>
+            <span className="font-mono font-label-sm text-label-sm whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
+            <span className="material-symbols-outlined icon-sm">expand_more</span>
+          </Button>
+        }
+      />
+      {models.length > 0 && (
+        <Menu.Portal>
+          {/* z-modal rides the POSITIONER — same convention + token scale as
+              the two chat switchers (ui/select.tsx). */}
+          <Menu.Positioner align="end" sideOffset={8} className="isolate z-modal">
+            <Menu.Popup
+              role="listbox"
+              aria-labelledby={undefined}
+              aria-label={t('header.model.select')}
+              className="glass-overlay animate-panel-in w-[280px] rounded-xl py-sm outline-none"
+            >
+              {models.map(m => (
+                <Menu.Item
+                  key={m.id}
+                  role="option"
+                  aria-selected={m.id === status?.model}
+                  label={m.name}
+                  // A failed switch keeps the menu open for a retry — the
+                  // close happens in handleModelSwitch on success only.
+                  closeOnClick={false}
+                  className={cn(
+                    'flex w-full cursor-pointer items-center justify-between gap-sm px-md py-sm text-left outline-none transition-colors',
+                    m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5',
+                    'data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container',
+                  )}
+                  onClick={() => void handleModelSwitch(m.id)}
+                >
+                  <span className="font-mono font-label-md truncate">{m.name}</span>
+                  <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>
+                </Menu.Item>
+              ))}
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      )}
+    </Menu.Root>
+  );
+}
+
 export function Header() {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const location = useLocation();
   const navigate = useNavigate();
-  const { status, models, permissionRequest, respondPermission, refreshConfig, refreshStatus } = useCatalog();
+  const { permissionRequest, respondPermission } = useCatalog();
   const { sessions, currentSessionId, windowSessionId } = useSessions();
   const { contextPanelOpen, toggleContextPanel, isQuerying, isCancelInFlight, cancelQuery } = useChat();
   const { toggle: toggleSidebar } = useSidebar();
   // P1-1 window mode: this window is a dedicated session window (slim
   // chrome; header carries「在主窗口打开」+「关闭窗口」).
   const isWindowMode = windowSessionId != null;
-  const [modelOpen, setModelOpen] = useState(false);
-  const modelRef = useRef<HTMLDivElement>(null);
-  const [modelFocus, setModelFocus] = useState(-1);
   // B1-13 (review P1-8): after a route change, focus moves to the page
   // title (tabIndex=-1 below) and an aria-live region announces it, so
   // screen-reader users learn the page switched.
@@ -94,18 +177,6 @@ export function Header() {
   const { budget: sessionBudget, usage: sessionUsage } = useSessionBudget(chatSessionId);
   const isOpcTask = location.pathname.includes('/opc/task');
 
-  // Click outside to close model selector
-  useEffect(() => {
-    if (!modelOpen) return
-    const handleClick = (e: MouseEvent) => {
-      if (modelRef.current && !modelRef.current.contains(e.target as Node)) {
-        setModelOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [modelOpen])
-
   // Decision 1 (review P1-2 / B1-8): the config's `model` key stores the
   // catalog ID. The old "U2 config stores the name" convention is retired —
   // `provider_resolver` passes the stored string through as the API `model`
@@ -114,19 +185,7 @@ export function Header() {
   // values already on disk are normalized back to the id inside
   // `configure('model')` (commands_config.rs `normalize_model_id`).
   // Header remains the only model switcher outside /chat; the composer chip
-  // owns /chat.
-  const handleModelSwitch = async (modelId: string) => {
-    const model = models.find(m => m.id === modelId)
-    if (!model) return
-    try {
-      await api.configure({ key: 'model', value: model.id })
-      await api.configure({ key: 'provider', value: model.provider })
-      await refreshConfig()
-      await refreshStatus()
-      setModelOpen(false)
-      toast.success(t('header.model.toast.switched', { model: model.name }))
-    } catch (e) { toastError(t('header.model.failed'), e) }
-  }
+  // owns /chat. (The switch itself lives in HeaderModelSelector below.)
 
   // P1-1: focus the main window and have it switch to this window's
   // session (backend focuses `main` and emits `session-window:reveal`).
@@ -269,62 +328,17 @@ export function Header() {
           {isChat && <PhaseTierSwitcher />}
           {/* Model selector — non-chat pages only: on /chat the composer
               model chip is the single surface (issue: 三处模型名重复).
-              Both write the same config keys, so switching stays in sync. */}
-          {!isChat && (
-            <div className="relative" ref={modelRef}>
-              <Button
-                variant="ghost"
-                aria-label={t('header.model.select')}
-                className="flex items-center gap-sm px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
-                onClick={() => { setModelOpen(!modelOpen); setModelFocus(-1) }}
-              >
-                <span className={cn('w-2 h-2 rounded-full shrink-0', status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')}></span>
-                <span className="font-mono font-label-sm text-label-sm whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
-                <span className="material-symbols-outlined icon-sm">expand_more</span>
-              </Button>
-              {modelOpen && models.length > 0 && (
-                <div className="glass-overlay animate-panel-in absolute right-0 top-full mt-sm w-[280px] rounded-xl z-modal py-sm" role="listbox" onKeyDown={e => {
-                  if (e.key === 'ArrowDown') { e.preventDefault(); setModelFocus(f => Math.min(f + 1, models.length - 1)) }
-                  else if (e.key === 'ArrowUp') { e.preventDefault(); setModelFocus(f => Math.max(f - 1, 0)) }
-                  // B6-37: only handle Enter when the keydown originated on the
-                  // container itself. An option Button is natively focusable —
-                  // its own click handler fires on Enter, and the old
-                  // unguarded branch switched twice (and to a different model
-                  // whenever Tab focus and modelFocus had diverged).
-                  else if (e.key === 'Enter' && modelFocus >= 0 && e.target === e.currentTarget) { handleModelSwitch(models[modelFocus].id) }
-                  else if (e.key === 'Escape') {
-                    // T5 (review P1-6): this listbox owns Escape while open —
-                    // don't let the same keydown also hit the window-level
-                    // shortcuts (query cancel).
-                    e.preventDefault()
-                    e.stopPropagation()
-                    setModelOpen(false)
-                  }
-                }}>
-                  {models.map((m, i) => (
-                    <Button
-                      key={m.id}
-                      variant="ghost"
-                      role="option"
-                      aria-selected={m.id === status?.model}
-                      className={cn(
-                        'w-full justify-between px-md py-sm h-auto rounded-none',
-                        i === modelFocus ? 'bg-primary-container text-on-primary-container' : m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5'
-                      )}
-                      onClick={() => handleModelSwitch(m.id)}
-                      onMouseEnter={() => setModelFocus(i)}
-                      // B6-37: keep the highlight in sync with real focus, so
-                      // Tab-through and the arrow-key index can't disagree.
-                      onFocus={() => setModelFocus(i)}
-                    >
-                      <span className="font-mono font-label-md truncate">{m.name}</span>
-                      <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>
-                    </Button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+              Both write the same config keys, so switching stays in sync.
+              w4 refactor/header-menus-baseui: this used to be the family's
+              last INLINE menu — trapped inside the same glass header
+              stacking context the two chat switchers had to be portalled
+              out of (#250 only covered /chat, so on /settings the dropdown
+              was one resize away from clipping). It is a Base UI Menu now:
+              body-level portal + z-modal positioner, automatic re-anchor on
+              sidebar resize, and Base UI's full keyboard contract (typeahead
+              included) replacing the hand-rolled focus index. The
+              listbox/option roles carry over (single-value selection). */}
+          {!isChat && <HeaderModelSelector />}
 
           {/* U6/IA T3: the bell tooltip says where it leads — /triage, with
               the pending skill count when one exists. The click is never

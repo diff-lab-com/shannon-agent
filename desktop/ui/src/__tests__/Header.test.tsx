@@ -157,6 +157,40 @@ describe('Header component', () => {
     })
   })
 
+  // w4 refactor/header-menus-baseui — this menu used to be the family's last
+  // INLINE dropdown: it sat inside the glass header's contain:paint stacking
+  // context (#250 only portalled the two /chat switchers), so on /settings
+  // it was one sidebar-resize away from clipping. Same portal contract as
+  // the switchers now: body-level mount + z-modal token on the positioner.
+  it('opens the model menu as a body-level portal carrying the z-modal positioner token', async () => {
+    const { container } = render(wrap(<Header />, { route: '/tasks' }))
+    const trigger = screen.getByRole('button', { name: 'Select model' })
+    trigger.focus()
+    fireEvent.click(trigger)
+    const menu = await screen.findByRole('listbox', { name: 'Select model' })
+    let root: HTMLElement = menu
+    while (root.parentElement && root.parentElement !== document.body) {
+      root = root.parentElement
+    }
+    expect(root.parentElement).toBe(document.body)
+    expect(container.contains(menu)).toBe(false)
+    expect(menu.parentElement).toHaveClass('z-modal')
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('Escape closes the model menu and returns focus to the trigger', async () => {
+    render(wrap(<Header />, { route: '/tasks' }))
+    const trigger = screen.getByRole('button', { name: 'Select model' })
+    trigger.focus()
+    fireEvent.click(trigger)
+    await screen.findByRole('listbox', { name: 'Select model' })
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => {
+      expect(screen.queryByRole('listbox', { name: 'Select model' })).toBeNull()
+    }, { timeout: 5000 })
+    expect(document.activeElement).toBe(trigger)
+  })
+
   // 2026-09 dedup: on /chat the composer chip is the single model surface
   // (issue: 三处模型名重复). Header must hide its selector on that page
   // so there's exactly one entry point per view.
