@@ -175,7 +175,6 @@ jobs:
           # cache-agnostic. Shared workspace-compile cache (ci-v4, rotated
           # per run) — see the rationale on the Test job.
           shared-key: ci-v4
-          key: ${{ github.run_id }}
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Generated facade facts are fresh
@@ -309,20 +308,18 @@ jobs:
           # Bump to ci-v3 to invalidate every pre-split cache (ci-v2's
           # feature-isolation rationale, see git history).
           #
-          # 2026-10-03 (ci-v4 unfreeze): actions/cache SKIPS the post-save on
-          # an exact-key hit ("Cache up-to-date."), so under shared-key-only
-          # ci-v3 the whole family kept restoring one partial 2026-10-02
-          # snapshot forever — every job recompiled ~700 crates per run
-          # anyway. `key: github.run_id` makes the exact key unique per run:
-          # restore falls back to the newest ci-v4 entry via the shared-key
-          # prefix, and the post step always saves a fresh snapshot, so the
-          # cache tracks the code instead of freezing. The ci-v3 bump also
-          # orphans the frozen entries for LRU eviction. Watch "Cache Size"
-          # and the compile-step times for ~20 runs (per-run entries grow the
-          # cache population; see the review-workflow budget note in the
-          # 2026-10-02 CI analysis report).
+          # 2026-10-03 (ci-v4, REVISED after CI data): shared-key-only ci-v3
+          # froze on one partial 2026-10-02 snapshot (actions/cache skips the
+          # post-save on an exact-key hit), so every job recompiled ~700
+          # crates per run. A per-run `key: github.run_id` was tried first and
+          # MEASURED 4x SLOWER — restore never hits a unique-per-run key, so
+          # every run compiled from cold (Test shards 915-982s vs 231-235s
+          # with the partial hit). Final semantics: shared-key-only ci-v4,
+          # with the frozen partial entries purged once (2026-10-03) so the
+          # first run rebuilds and saves a COMPLETE snapshot that later runs
+          # hit exactly. If it ever goes partial again, purge the ci-v4
+          # entries the same way (actions/caches API, key prefix ci-v4).
           shared-key: ci-v4
-          key: ${{ github.run_id }}
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -447,7 +444,6 @@ jobs:
         with:
           # Same shared cache as the Test job (see the comment there).
           shared-key: ci-v4
-          key: ${{ github.run_id }}
       - name: Install Tauri system deps
         # The doctests below compile every workspace lib (shannon-desktop
         # needs the webkit/gtk headers); the feature legs need the xcap
@@ -696,7 +692,6 @@ jobs:
           # Shared workspace-compile cache (ci-v4, rotated per run) — see the
           # rationale on the Test job.
           shared-key: ci-v4
-          key: ${{ github.run_id }}
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -826,7 +821,6 @@ jobs:
           # matrix values to the key, so each OS leg keeps its own entry
           # (no cross-OS pollution).
           shared-key: ci-v4
-          key: ${{ github.run_id }}
       # shannon-desktop is excluded below, but shannon-mcp-saas still
       # pulls in `keyring` → `dbus-secret-service` → `dbus` →
       # `libdbus-sys`, whose build.rs runs `pkg-config --libs dbus-1`.
