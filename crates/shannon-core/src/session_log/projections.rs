@@ -44,6 +44,13 @@ pub struct ConversationProjection {
     /// messages and unmarked steps are `false`. The desktop wire surfaces
     /// this as `ChatMessage.interrupted` (the "stopped" bubble marker).
     pub message_interrupted: Vec<bool>,
+    /// OBS1: for every projected message, WHY an interrupted step was cut
+    /// short (`assistant/message.reason`: `"cancelled"` — a user stop — or
+    /// `"failed"` — a turn failure mid-step). Parallel to `messages` and
+    /// `message_interrupted`; user messages, unmarked steps, and pre-reason
+    /// logs (the original D6 finalizes wrote no reason) are `None`, which
+    /// hosts read as "cancelled".
+    pub message_interrupt_reason: Vec<Option<String>>,
     /// Number of started turns (`turn/start` events).
     pub turn_count: usize,
     /// Summed token usage across all `turn/end` (and finalized-step)
@@ -66,6 +73,7 @@ impl Default for ConversationProjection {
             messages: Vec::new(),
             message_origin_seqs: Vec::new(),
             message_interrupted: Vec::new(),
+            message_interrupt_reason: Vec::new(),
             turn_count: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
@@ -105,6 +113,10 @@ struct AssistantStep {
     /// D6: the log finalized this step as interrupted
     /// (`assistant/message.interrupted: true`) — a cancelled run's partial.
     interrupted: bool,
+    /// OBS1: why the finalized step was cut short
+    /// (`assistant/message.reason`: `"cancelled"` | `"failed"`); `None` for
+    /// unmarked steps and pre-reason logs (read as "cancelled").
+    interrupt_reason: Option<String>,
 }
 
 impl AssistantStep {
@@ -115,6 +127,7 @@ impl AssistantStep {
             text: String::new(),
             tool_uses: Vec::new(),
             interrupted: false,
+            interrupt_reason: None,
         }
     }
 
@@ -165,6 +178,9 @@ impl ConversationFolder {
             .message_origin_seqs
             .push((step.first_seq, step.last_seq));
         self.out.message_interrupted.push(step.interrupted);
+        self.out
+            .message_interrupt_reason
+            .push(step.interrupt_reason.clone());
     }
 
     fn push_user_text(&mut self, seq: u64, content: &str) {
@@ -174,6 +190,7 @@ impl ConversationFolder {
         });
         self.out.message_origin_seqs.push((seq, seq));
         self.out.message_interrupted.push(false);
+        self.out.message_interrupt_reason.push(None);
     }
 
     /// Fold one durable event body into the conversation state.
@@ -201,12 +218,16 @@ impl ConversationFolder {
                 // Authoritative finalize (interrupt coalescing): replaces any
                 // partially streamed text for this step. D6: an interrupted
                 // finalize also MARKS the step so the reloaded message keeps
-                // its "stopped" status.
+                // its "stopped" status. OBS1: the finalize's `reason`
+                // distinguishes a cancelled run's partial from a FAILED
+                // turn's — a failure-side finalize surfaces the same marker
+                // family with a failed tone.
                 let first_seq = self.step.as_ref().map_or(event.seq, |s| s.first_seq);
                 let mut step = AssistantStep::new(first_seq);
                 step.last_seq = event.seq;
                 step.text = p.content.clone();
                 step.interrupted = p.interrupted;
+                step.interrupt_reason = p.reason.clone();
                 self.step = Some(step);
             }
             SessionEventBody::ToolCall(p) => {
@@ -261,6 +282,7 @@ impl ConversationFolder {
         });
         self.out.message_origin_seqs.push((seq, seq));
         self.out.message_interrupted.push(false);
+        self.out.message_interrupt_reason.push(None);
     }
 
     fn finish(mut self) -> ConversationProjection {
@@ -1304,6 +1326,7 @@ mod tests {
                         content: "authoritative full text".into(),
                         usage: None,
                         interrupted: true,
+                        reason: None,
                     },
                 ),
             ),
@@ -1335,6 +1358,7 @@ mod tests {
                         content: "partial".into(),
                         usage: None,
                         interrupted: true,
+                        reason: None,
                     },
                 ),
             ),
@@ -1343,8 +1367,47 @@ mod tests {
         let proj = project_conversation(&events);
         assert_eq!(proj.messages.len(), 2);
         assert_eq!(proj.message_interrupted, vec![false, true]);
+        // OBS1: a pre-reason log (no `reason` field) reads as "cancelled".
+        assert_eq!(proj.message_interrupt_reason, vec![None, None]);
         let value = serde_json::to_value(&proj.messages[1]).unwrap();
         assert_eq!(value["content"][0]["text"], "partial");
+    }
+
+    /// OBS1: a failed finalize marks its message the same way a cancelled
+    /// one does, and the parallel reason array carries the distinction
+    /// (`"failed"` vs `"cancelled"`) for hosts to render a different tone.
+    #[test]
+    fn test_failed_finalize_carries_the_failed_reason() {
+        let events = [
+            user(0, "q"),
+            chunk(1, "从前有一片海，"),
+            chunk(2, "海面上…"),
+            ev(
+                3,
+                103,
+                SessionEventBody::AssistantMessage(
+                    shannon_types::session_event::AssistantMessagePayload {
+                        content: "从前有一片海，海面上…".into(),
+                        usage: None,
+                        interrupted: true,
+                        reason: Some(
+                            shannon_types::session_event::AssistantMessagePayload::REASON_FAILED
+                                .into(),
+                        ),
+                    },
+                ),
+            ),
+            turn_end(4, None),
+        ];
+        let proj = project_conversation(&events);
+        assert_eq!(proj.messages.len(), 2);
+        assert_eq!(proj.message_interrupted, vec![false, true]);
+        assert_eq!(
+            proj.message_interrupt_reason,
+            vec![None, Some("failed".into())]
+        );
+        let value = serde_json::to_value(&proj.messages[1]).unwrap();
+        assert_eq!(value["content"][0]["text"], "从前有一片海，海面上…");
     }
 
     #[test]

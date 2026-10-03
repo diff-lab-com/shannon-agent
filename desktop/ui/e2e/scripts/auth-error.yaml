@@ -3,9 +3,10 @@
 # 2 个分片后 query:failed，payload.error 含 "authentication failed" 措辞
 # （后端分类器按措辞分类）且 error_kind:'auth' → 断言 auth 专用横幅
 # （auth-error-banner：provider 名 + Settings→Models 深链 + Update key），
-# 而非普通错误横幅。断言在 spec（chat-script.errors.spec.ts）。
+# 而非普通错误横幅；流中半截仍以失败标记气泡提交（OBS1）。断言在 spec
+# （chat-script.errors.spec.ts）。
 name: auth-error
-description: auth 失败 — error_kind auth → ApiKey 深链横幅而非普通错误横幅
+description: auth 失败 — error_kind auth → ApiKey 深链横幅而非普通错误横幅，半截以失败标记气泡提交（OBS1）
 seed:
   config:
     hasKey: true

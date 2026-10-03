@@ -123,6 +123,13 @@ export interface ChatMessage {
    *  history (the L0 log finalizes interrupted turns with the same flag), so
    *  the marker survives session switches and restarts. Absent otherwise. */
   interrupted?: boolean
+  /** OBS1 (unify the failed half) — WHY an interrupted partial was cut
+   *  short: "cancelled" (user stop, D6) or "failed" (the turn failed
+   *  mid-step; the L0 log now keeps its streamed prefix the same way and the
+   *  QUERY_FAILED handler commits the bucket as a failed-marked bubble).
+   *  Absent on completed messages and on cancelled partials from older
+   *  history; a bare `interrupted` flag reads as "cancelled". */
+  interrupted_reason?: string
 }
 
 export interface ToolCall {

@@ -119,6 +119,11 @@ export class ScriptPlayer {
   /** D6: set when the open turn was cancelled — finishTurn then records the
    *  turn's streamed text as the session tail's partial assistant message. */
   private cancelSettled = false
+  /** OBS1: set when the open turn failed — finishTurn then records the
+   *  turn's streamed text as the session tail's partial assistant message,
+   *  failed-marked (the real backend's failed close keeps the prefix the
+   *  same way a cancelled one does). */
+  private failedSettled = false
 
   constructor(runtime?: Partial<PlayerRuntime>) {
     this.runtime = {
@@ -147,6 +152,7 @@ export class ScriptPlayer {
     this.phase = 'armed'
     // S-4 fix: a fresh script lifecycle starts with no recorded sends.
     this.cancelSettled = false
+    this.failedSettled = false
     resetRecordedSends()
     this.runtime.onSeed(script.seed ?? null)
     return { ok: true, errors: [] }
@@ -167,6 +173,7 @@ export class ScriptPlayer {
     this.phase = 'idle'
     // S-4 fix: back to the pre-script world — no recorded sends either.
     this.cancelSettled = false
+    this.failedSettled = false
     resetRecordedSends()
     this.runtime.onSeed(null)
   }
@@ -395,6 +402,12 @@ export class ScriptPlayer {
     if (event === 'query:cancelled' && this.turn) {
       this.cancelSettled = true
     }
+    // OBS1: a scripted `query:failed` terminal settles the turn as a failed
+    // run — finishTurn then persists the streamed partial into the session
+    // tail, failed-marked (mirrors the real backend's failed finalize).
+    if (event === 'query:failed' && this.turn) {
+      this.failedSettled = true
+    }
     this.runtime.emit(event, payload)
   }
 
@@ -488,7 +501,15 @@ export class ScriptPlayer {
     // matches the bucket the AppContext committed.
     if (this.cancelSettled) {
       this.cancelSettled = false
-      recordSeedPartialAssistant(this.turn?.sessionId, this.turn?.streamedText ?? null)
+      recordSeedPartialAssistant(this.turn?.sessionId, this.turn?.streamedText ?? null, 'cancelled')
+    }
+    if (this.failedSettled) {
+      this.failedSettled = false
+      recordSeedPartialAssistant(
+        this.turn?.sessionId,
+        this.turn?.streamedText ?? null,
+        'failed',
+      )
     }
     this.turn = null
     this.parkKind = null

@@ -85,16 +85,23 @@ describe('AppContext — W3-4 per-turn memory citation snapshot', () => {
     expect(assistants[0].injected_memories).toBeUndefined()
   })
 
-  it('drops the snapshot when the run fails — no leak onto a later turn', async () => {
+  it('the failed partial keeps its own chips; the snapshot never leaks onto a later turn (OBS1)', async () => {
     vi.mocked(api.sendMessage).mockResolvedValue({ query_id: 'q1', injected_memories: citations })
     const result = renderHook(() => useApp(), { wrapper }).result
     await waitFor(() => expect(result.current.loading).toBe(false))
     await setupStreamingSession(result)
 
     act(() => { flush(EVENT_NAMES.QUERY_FAILED, { error: 'boom', session_id: SESSION_A }) })
-    expect(result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
+    // OBS1 (flipped from the discard pin): the failed partial commits as a
+    // bubble and keeps the chips that informed it (same rule as the
+    // completed/cancelled commit).
+    const partials = result.current.messages.filter(m => m.role === 'assistant')
+    expect(partials).toHaveLength(1)
+    expect(partials[0].injected_memories).toEqual(citations)
+    expect(partials[0].interrupted_reason).toBe('failed')
 
-    // The next turn commits WITHOUT the failed turn's citations.
+    // The next turn commits WITHOUT the failed turn's citations (the
+    // snapshot was popped — it can only ride the turn it informed).
     vi.mocked(api.sendMessage).mockResolvedValue({ query_id: 'q2', injected_memories: [] })
     await act(async () => { await result.current.sendMessage('again') })
     act(() => {
@@ -103,8 +110,8 @@ describe('AppContext — W3-4 per-turn memory citation snapshot', () => {
     act(() => { flush(EVENT_NAMES.QUERY_COMPLETED, { session_id: SESSION_A }) })
 
     const assistants = result.current.messages.filter(m => m.role === 'assistant')
-    expect(assistants).toHaveLength(1)
-    expect(assistants[0].injected_memories).toBeUndefined()
+    expect(assistants).toHaveLength(2)
+    expect(assistants[1].injected_memories).toBeUndefined()
   })
 
   it('keys the snapshot per session — a background completion never lands on the visible session', async () => {

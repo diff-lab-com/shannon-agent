@@ -305,6 +305,12 @@ pub struct StoredSession {
     /// answer). Hosts surface this on the wire as the message's "stopped"
     /// marker; absent entries mean `false`.
     pub message_interrupted: Vec<bool>,
+    /// OBS1: per-message interrupt reasons (parallel to `messages` and
+    /// `message_interrupted`) — `"cancelled"` (user stop, D6) or `"failed"`
+    /// (a turn failed mid-step, whose streamed prefix the log now keeps the
+    /// same way). `None` for unmarked messages and pre-reason logs; hosts
+    /// read a bare interrupted flag as "cancelled".
+    pub message_interrupt_reason: Vec<Option<String>>,
 }
 
 /// Listing summary ([`SessionStore::list`]).
@@ -465,6 +471,7 @@ impl SessionStore {
             },
             messages: proj.messages,
             message_interrupted: proj.message_interrupted,
+            message_interrupt_reason: proj.message_interrupt_reason,
         }
     }
 
@@ -992,6 +999,7 @@ impl SessionStore {
                     content: assistant.clone(),
                     usage: None,
                     interrupted: false,
+                    reason: None,
                 },
             ))?;
             push(SessionEventBody::TurnEnd(TurnEndPayload {
@@ -1386,6 +1394,108 @@ mod tests {
         assert!(
             loaded.message_interrupted[3],
             "the partial assistant message keeps its interrupted (stopped) flag"
+        );
+        assert_eq!(
+            loaded.message_interrupt_reason[3].as_deref(),
+            Some(shannon_types::session_event::AssistantMessagePayload::REASON_CANCELLED),
+            "the cancelled partial carries its reason for the wire"
+        );
+    }
+
+    /// OBS1 (unify the failed half) — the reload contract for a FAILED turn:
+    /// the engine emits `QueryEvent::Failed` through the bus (error row +
+    /// failed boundary) after two streamed chunks. The reload carries the
+    /// partial assistant text flagged interrupted WITH the `"failed"`
+    /// reason, while the surrounding completed turn stays unmarked.
+    #[test]
+    fn failed_turn_reloads_with_partial_text_and_failed_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+
+        // Turn 1 completes normally (driven through the production tee API).
+        {
+            let tee = crate::session_log::TeeHandle::open_in_dir(
+                tmp.path(),
+                &id.to_string(),
+                "test-model",
+                None,
+            );
+            tee.record_turn_start(Some("q-done".into()));
+            tee.record_user_message("first question");
+            for input in crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Text {
+                query_id: uuid::Uuid::new_v4(),
+                content: "full answer".into(),
+            }) {
+                tee.record_bus_input(&input);
+            }
+            for input in
+                crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Completed {
+                    query_id: uuid::Uuid::new_v4(),
+                    outcome: Default::default(),
+                })
+            {
+                tee.record_bus_input(&input);
+            }
+            tee.close();
+        }
+        // Turn 2 fails mid-stream: user message → chunks → QueryEvent::Failed.
+        {
+            let tee = crate::session_log::TeeHandle::open_in_dir(
+                tmp.path(),
+                &id.to_string(),
+                "test-model",
+                None,
+            );
+            tee.record_turn_start(Some("q-failed".into()));
+            tee.record_user_message("second question");
+            for chunk in ["从前有一片海，", "海面上…"] {
+                for input in
+                    crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Text {
+                        query_id: uuid::Uuid::new_v4(),
+                        content: chunk.into(),
+                    })
+                {
+                    tee.record_bus_input(&input);
+                }
+            }
+            for input in crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Failed {
+                query_id: uuid::Uuid::new_v4(),
+                error: "upstream connection reset while streaming".into(),
+            }) {
+                tee.record_bus_input(&input);
+            }
+            tee.close();
+        }
+
+        let loaded = store.load(&id).unwrap().expect("session exists");
+        assert_eq!(loaded.messages.len(), 4); // user, assistant, user, partial assistant
+        assert_eq!(loaded.message_interrupted.len(), 4);
+        assert_eq!(loaded.message_interrupt_reason.len(), 4);
+        let rendered: Vec<serde_json::Value> = loaded
+            .messages
+            .iter()
+            .map(|m| serde_json::to_value(m).unwrap())
+            .collect();
+        assert_eq!(rendered[1]["role"], "assistant");
+        assert!(
+            !loaded.message_interrupted[1],
+            "a completed turn is not marked"
+        );
+        assert_eq!(loaded.message_interrupt_reason[1], None);
+        assert_eq!(rendered[3]["role"], "assistant");
+        assert_eq!(
+            rendered[3]["content"][0]["text"], "从前有一片海，海面上…",
+            "the reload projection carries the failed turn's partial text"
+        );
+        assert!(
+            loaded.message_interrupted[3],
+            "the partial assistant message keeps its interrupted flag"
+        );
+        assert_eq!(
+            loaded.message_interrupt_reason[3].as_deref(),
+            Some(shannon_types::session_event::AssistantMessagePayload::REASON_FAILED),
+            "the failed partial is distinguishable from a cancelled one"
         );
     }
 

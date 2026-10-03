@@ -1874,6 +1874,7 @@
   "chat.message.regenerate.started": "되감았습니다 — 이전 답변을 다시 생성하는 중…",
   "chat.message.regenerate.failed": "답변을 다시 생성할 수 없습니다",
   "chat.message.stopped": "중지됨",
+  "chat.message.failedPartial": "생성 실패",
   "chat.message.edit.aria": "메시지 편집",
   "chat.message.edit.button": "편집",
   "chat.edit.banner": "{time}에 작성한 메시지를 편집 중입니다 — 전송하면 해당 메시지 직전으로 대화가 되돌아갑니다",

@@ -184,10 +184,11 @@ describe('AppContext — P0-3 rejected-attachment toasts', () => {
 // B0 P1-2 — a failed/cancelled run leaves no ghost streaming bubble: the
 // run's buckets are dropped and, for the visible session, the projections
 // (streamingText / thinkingText / activeToolCalls) reset along with
-// isQuerying. D6 refined the CANCEL half: the dropped bucket is COMMITTED
-// as a stopped-marked assistant bubble (keep the partial output), so the
-// cancel test below pins the commit instead of the old full discard; the
-// FAILED path keeps the approved no-bubble cleanup.
+// isQuerying. D6 refined the CANCEL half and OBS1 the FAILED half: the
+// dropped bucket is COMMITTED as a marked assistant bubble (keep the partial
+// output — stopped flag for a cancel, interrupted_reason 'failed' for a
+// failure), so the tests below pin the commits instead of the old full
+// discard.
 describe('AppContext — B0 P1-2 ghost-bubble cleanup on fail/cancel', () => {
   async function setupStreamingSession() {
     const { result } = renderHook(() => useApp(), { wrapper })
@@ -211,19 +212,28 @@ describe('AppContext — B0 P1-2 ghost-bubble cleanup on fail/cancel', () => {
     return result
   }
 
-  it('QUERY_FAILED clears streaming/thinking/tool calls and the buckets', async () => {
+  it('QUERY_FAILED commits the partial as a failed-marked bubble and clears the projections (OBS1)', async () => {
     const result = await setupStreamingSession()
 
     act(() => { flush(EVENT_NAMES.QUERY_FAILED, { error: 'engine exploded', session_id: SESSION_A }) })
 
+    // OBS1 (flipped from the B0 P1-2 discard pin): the streamed partial
+    // commits as the assistant bubble, flagged `interrupted` + reason
+    // 'failed' — the fields the failed bubble marker renders from. The error
+    // banner still surfaces ("what now"), the bubble records "what was
+    // generated" (the backend mirrors the commit in the L0 finalize).
     expect(result.current.error).toBe('engine exploded')
     expect(result.current.isQuerying).toBe(false)
     expect(result.current.streamingText).toBe('')
     expect(result.current.thinkingText).toBe('')
     expect(result.current.activeToolCalls).toHaveLength(0)
-    // No ghost assistant bubble is committed, and the failure did not leave
-    // residue in the session's bucket (switching away and back stays clean).
-    expect(result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
+    const partials = result.current.messages.filter(m => m.role === 'assistant')
+    expect(partials).toHaveLength(1)
+    expect(partials[0]!.content).toBe('partial answer')
+    expect(partials[0]!.interrupted).toBe(true)
+    expect(partials[0]!.interrupted_reason).toBe('failed')
+    // The commit consumed the bucket: switching away and back replays the
+    // committed bubble, not a resurrected stream.
     await act(async () => { await result.current.switchSession(SESSION_B) })
     await act(async () => { await result.current.switchSession(SESSION_A) })
     expect(result.current.streamingText).toBe('')
@@ -684,7 +694,9 @@ describe('AppContext — F-1 fix: query events route by owner, not the claimed s
         })
       })
       // The failure settles AND is attributed to the sender: latch released,
-      // auth banner on the visible (sending) session, no ghost bubble.
+      // auth banner on the visible (sending) session. Its bucket is empty
+      // (no QUERY_TEXT ever streamed), so per OBS1's empty-bucket rule no
+      // bubble commits.
       expect(result.current.isQuerying).toBe(false)
       expect(result.current.error).toBe('Authentication failed')
       expect(result.current.errorKind).toBe('auth')

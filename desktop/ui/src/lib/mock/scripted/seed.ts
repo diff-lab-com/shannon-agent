@@ -349,18 +349,31 @@ export function recordSeedUserSend(sessionId: string | null | undefined, message
  * text into its session's tail, flagged `interrupted` — the scripted
  * counterpart of the real backend's interrupted-turn finalize (the engine
  * tee writes `assistant/message(interrupted: true)` on the cancel path, so a
- * log-backed reload brings the marked partial bubble back). An empty partial
- * (stop before the first token) records nothing, matching the no-bubble
- * commit. Completed replies stay unrecorded (the S-4 tail models accepted
- * sends; assistant completion persistence remains the pre-existing gap).
+ * log-backed reload brings the marked partial bubble back). OBS1: a FAILED
+ * turn's partial is recorded the same way with `interrupted_reason:
+ * 'failed'` (the real backend's failed close keeps the prefix identically).
+ * An empty partial (stop/fail before the first token) records nothing,
+ * matching the no-bubble commit. Completed replies stay unrecorded (the S-4
+ * tail models accepted sends; assistant completion persistence remains the
+ * pre-existing gap).
  */
-export function recordSeedPartialAssistant(sessionId: string | null | undefined, text: string | null): void {
+export function recordSeedPartialAssistant(
+  sessionId: string | null | undefined,
+  text: string | null,
+  reason?: 'cancelled' | 'failed',
+): void {
   if (text == null || text === '') return
   const session = targetSession(sessionId)
   if (!session) return
   const box = recordedSends()
   const tail = box.bySession.get(session.id) ?? []
-  tail.push({ role: 'assistant', content: text, timestamp: Date.now(), interrupted: true })
+  tail.push({
+    role: 'assistant',
+    content: text,
+    timestamp: Date.now(),
+    interrupted: true,
+    ...(reason != null ? { interrupted_reason: reason } : {}),
+  })
   box.bySession.set(session.id, tail)
 }
 

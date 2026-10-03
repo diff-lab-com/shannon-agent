@@ -434,7 +434,7 @@ describe('L1 state machine — approval journeys (#4)', () => {
 })
 
 describe('L1 state machine — failure journeys (#5)', () => {
-  it('auth-error classifies errorKind "auth" and cleans the stream', async () => {
+  it('auth-error classifies errorKind "auth" and commits the failed partial', async () => {
     const script = loadFixture('auth-error')
     const h = await makeHarness()
     h.player.load(script)
@@ -442,13 +442,20 @@ describe('L1 state machine — failure journeys (#5)', () => {
     await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
     await waitFor(() => expect(h.result.current.error).toBe('Authentication failed: invalid x-api-key (HTTP 401)'))
     expect(h.result.current.errorKind).toBe('auth')
-    // B0 P1-2: no ghost bubble, no residual stream state.
+    // OBS1 (flipped from the B0 P1-2 discard anchor): the streamed partial
+    // COMMITS as the assistant bubble, flagged `interrupted` + reason
+    // 'failed' — the dedicated auth banner still handles "what now"; no
+    // residual stream state.
     expect(h.result.current.streamingText).toBe('')
     expect(h.result.current.isQuerying).toBe(false)
-    expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
+    const partials = h.result.current.messages.filter(m => m.role === 'assistant')
+    expect(partials).toHaveLength(1)
+    expect(partials[0]!.content).toBe(textChunksOf(script, 0).join(''))
+    expect(partials[0]!.interrupted).toBe(true)
+    expect(partials[0]!.interrupted_reason).toBe('failed')
   })
 
-  it('mid-stream-fail: "other" classification + retry preserves attachments and replays the reply (A-3 fixed)', { timeout: 30_000 }, async () => {
+  it('mid-stream-fail: "other" classification, failed partial commits, retry preserves attachments and replays the reply (A-3 fixed + OBS1)', { timeout: 30_000 }, async () => {
     const script = loadFixture('mid-stream-fail')
     const h = await makeHarness()
     h.player.load(script)
@@ -469,7 +476,13 @@ describe('L1 state machine — failure journeys (#5)', () => {
     expect(h.result.current.errorKind).toBe('other')
     expect(h.result.current.streamingText).toBe('')
     expect(h.result.current.isQuerying).toBe(false)
-    expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
+    // OBS1 (flipped from the no-ghost-bubble anchor): the two streamed
+    // chunks commit as a failed-marked partial bubble.
+    const failedPartials = h.result.current.messages.filter(m => m.role === 'assistant')
+    expect(failedPartials).toHaveLength(1)
+    expect(failedPartials[0]!.content).toBe(textChunksOf(script, 0).join(''))
+    expect(failedPartials[0]!.interrupted).toBe(true)
+    expect(failedPartials[0]!.interrupted_reason).toBe('failed')
     expect(h.player.snapshot().sentTurns).toBe(1)
 
     // Retry — exactly what ComposerRetryButton does: resend the last user
@@ -505,9 +518,13 @@ describe('L1 state machine — failure journeys (#5)', () => {
     expect(retryUser?.file_attachments).toEqual([
       { name: 'story-notes.md', path: '/Users/demo/Downloads/story-notes.md', size: 0 },
     ])
+    // The failed partial stays above the retried exchange: partial + reply.
     const assistants = h.result.current.messages.filter(m => m.role === 'assistant')
-    expect(assistants).toHaveLength(1)
-    expect(assistants[0]!.content).toBe(textChunksOf(script, 1).join(''))
+    expect(assistants).toHaveLength(2)
+    expect(assistants[0]!.content).toBe(textChunksOf(script, 0).join(''))
+    expect(assistants[0]!.interrupted_reason).toBe('failed')
+    expect(assistants[1]!.content).toBe(textChunksOf(script, 1).join(''))
+    expect(assistants[1]!.interrupted).toBeUndefined()
   })
 })
 

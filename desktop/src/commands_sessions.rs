@@ -868,8 +868,12 @@ pub async fn load_session(
 
     // Convert shannon_core Messages to ChatMessages. D6: the projection's
     // per-message interrupted flags ride along, so a cancelled run's partial
-    // assistant message keeps its "stopped" marker across reloads.
+    // assistant message keeps its "stopped" marker across reloads. OBS1: the
+    // interrupt reasons ride along too ("cancelled" | "failed"), so a FAILED
+    // turn's partial — whose prefix the log now keeps exactly like a
+    // cancelled one — reloads with its distinguishable failed marker.
     let interrupted_flags = session_data.message_interrupted.clone();
+    let interrupt_reasons = session_data.message_interrupt_reason.clone();
     let messages: Vec<ChatMessage> = session_data
         .messages
         .into_iter()
@@ -897,6 +901,7 @@ pub async fn load_session(
                 .copied()
                 .unwrap_or(false)
                 .then_some(true),
+            interrupted_reason: interrupt_reasons.get(i).and_then(Clone::clone),
         })
         .collect();
 
@@ -1038,7 +1043,9 @@ pub async fn switch_session(
 
     // Load new session by projecting its L0 log. D6: interrupted flags ride
     // along (same contract as load_session) so a cancelled run's partial
-    // assistant message keeps its "stopped" marker across switches.
+    // assistant message keeps its "stopped" marker across switches. OBS1:
+    // interrupt reasons ride along too (same contract), so a FAILED turn's
+    // partial keeps its failed marker across switches.
     let messages = match state
         .l0_store()
         .load(&session_uuid)
@@ -1046,6 +1053,7 @@ pub async fn switch_session(
     {
         Some(data) => {
             let interrupted_flags = data.message_interrupted.clone();
+            let interrupt_reasons = data.message_interrupt_reason.clone();
             data.messages
                 .into_iter()
                 .enumerate()
@@ -1071,6 +1079,7 @@ pub async fn switch_session(
                         .copied()
                         .unwrap_or(false)
                         .then_some(true),
+                    interrupted_reason: interrupt_reasons.get(i).and_then(Clone::clone),
                 })
                 .collect()
         }

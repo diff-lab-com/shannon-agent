@@ -1,9 +1,10 @@
 # ChatScript: mid-stream-fail — journey #5b（矩阵#5）。
 #
 # 第一轮：2 个分片后 query:failed (error_kind:'other') → 普通错误横幅 +
-# ComposerRetryButton、无 ghost bubble。点击 Retry → send_message 再次被
-# 调用（snapshot().sentTurns === 2 断言）→ 第二轮消费。断言在 spec
-# （chat-script.errors.spec.ts）。
+# ComposerRetryButton；流中半截以失败标记气泡提交（OBS1，与 D6 的取消半截
+# 统一：横幅管"错了怎么办"，气泡记录"生成了什么"）。点击 Retry →
+# send_message 再次被调用（snapshot().sentTurns === 2 断言）→ 第二轮在半截
+# 气泡之下消费。断言在 spec（chat-script.errors.spec.ts）。
 #
 # 草稿预置附件（spec 用 addInitScript 写 localStorage `shannon.draft.<id>`，
 # 同 attachments journey）→ 第一轮发送携带附件，Retry 重发必须保留它。
@@ -12,7 +13,7 @@
 # knownIssue 标记已移除（chunk 步骤恢复执行），spec/L1 断言已翻转为
 # 「重发的 send_message 携带原附件路径 + 重试轮正常播放回复」。
 name: mid-stream-fail
-description: 流中失败 — 横幅 + Retry → 重发（A-3 已修复：附件保留）→ 会话继续
+description: 流中失败 — 横幅 + Retry，半截以失败标记气泡提交（OBS1）→ 重发（A-3 已修复：附件保留）→ 会话继续
 seed:
   config:
     hasKey: true

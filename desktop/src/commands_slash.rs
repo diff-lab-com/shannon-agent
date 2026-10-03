@@ -367,6 +367,7 @@ pub async fn compact_session(
                         timestamp: now,
                         file_attachments: None,
                         interrupted: None,
+                        interrupted_reason: None,
                     });
                 }
                 if !assistant.is_empty() {
@@ -376,6 +377,7 @@ pub async fn compact_session(
                         timestamp: now,
                         file_attachments: None,
                         interrupted: None,
+                        interrupted_reason: None,
                     });
                 }
             }

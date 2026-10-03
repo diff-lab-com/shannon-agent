@@ -107,6 +107,7 @@ fn build_session_bodies(count: usize) -> Vec<SessionEventBody> {
                     content: "response text".into(),
                     usage: None,
                     interrupted: false,
+                    reason: None,
                 },
             )),
         }

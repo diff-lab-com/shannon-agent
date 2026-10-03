@@ -381,6 +381,15 @@ pub struct ChatMessage {
     /// completed message, so the wire shape is fully backward compatible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interrupted: Option<bool>,
+    /// OBS1 (unify the failed half): WHY an interrupted partial was cut
+    /// short — `"cancelled"` (user stop, D6) or `"failed"` (the turn failed
+    /// mid-step; the L0 log now keeps its streamed prefix the same way).
+    /// Absent on completed messages, on cancelled partials from pre-reason
+    /// logs, and from older wire producers; consumers read a bare
+    /// `interrupted` flag as "cancelled", so the wire stays backward
+    /// compatible in both directions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupted_reason: Option<String>,
 }
 
 /// File attachment for chat messages.
@@ -1486,6 +1495,7 @@ pub async fn send_message(
             timestamp: now,
             file_attachments: attachments,
             interrupted: None,
+            interrupted_reason: None,
         });
         first
     };
@@ -1819,8 +1829,9 @@ pub async fn send_message(
                     //    affordances a completed turn would have.
                     // The authoritative log trace itself is written by the
                     // engine tee (an interrupted close finalizes the streamed
-                    // text as `assistant/message(interrupted: true)`), so a
-                    // reload projection brings the same partial back.
+                    // text as `assistant/message(interrupted: true,
+                    // reason: "cancelled")`), so a reload projection brings
+                    // the same partial back.
                     if !final_content.is_empty() {
                         let mut messages = session_for_task.messages.lock().await;
                         messages.push(ChatMessage {
@@ -1829,6 +1840,11 @@ pub async fn send_message(
                             timestamp: chrono_timestamp(),
                             file_attachments: None,
                             interrupted: Some(true),
+                            interrupted_reason: Some(
+                                shannon_types::session_event::AssistantMessagePayload
+                                    ::REASON_CANCELLED
+                                    .to_string(),
+                            ),
                         });
                     }
                     {
@@ -2059,6 +2075,7 @@ pub async fn send_message(
                                 timestamp: chrono_timestamp(),
                                 file_attachments: None,
                                 interrupted: None,
+                                interrupted_reason: None,
                             });
                         }
 
@@ -2209,6 +2226,32 @@ pub async fn send_message(
                         });
                     }
                     QueryEvent::Failed { error, .. } => {
+                        // OBS1 (unify the failed half with D6): whatever the
+                        // run already streamed stays. The engine tee finalizes
+                        // the open step as
+                        // `assistant/message(interrupted: true, reason:
+                        // "failed")` (the failure event closes the turn on the
+                        // log side), so a reload brings the partial back WITH
+                        // its failed marker; this buffer commit keeps
+                        // `get_conversation` and the visible session in
+                        // agreement with the log without a reload — the same
+                        // bookkeeping the cancel path does. No /rewind
+                        // checkpoint: failed turns never recorded one.
+                        if !final_content.is_empty() {
+                            let mut messages = session_for_task.messages.lock().await;
+                            messages.push(ChatMessage {
+                                role: "assistant".into(),
+                                content: final_content.clone(),
+                                timestamp: chrono_timestamp(),
+                                file_attachments: None,
+                                interrupted: Some(true),
+                                interrupted_reason: Some(
+                                    shannon_types::session_event::AssistantMessagePayload
+                                        ::REASON_FAILED
+                                        .to_string(),
+                                ),
+                            });
+                        }
                         let _ = app.emit(
                             event_names::QUERY_FAILED,
                             events::query_failed_payload(
@@ -2828,6 +2871,7 @@ mod tests {
             timestamp: 1700000000,
             file_attachments: None,
             interrupted: None,
+            interrupted_reason: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let deserialized: ChatMessage = serde_json::from_str(&json).unwrap();
@@ -2845,6 +2889,7 @@ mod tests {
                 timestamp: 0,
                 file_attachments: None,
                 interrupted: None,
+                interrupted_reason: None,
             };
             assert_eq!(msg.role, *role);
         }
@@ -3147,6 +3192,7 @@ mod tests {
                 timestamp: 100,
                 file_attachments: None,
                 interrupted: None,
+                interrupted_reason: None,
             });
             msgs.push(ChatMessage {
                 role: "assistant".to_string(),
@@ -3154,6 +3200,7 @@ mod tests {
                 timestamp: 101,
                 file_attachments: None,
                 interrupted: None,
+                interrupted_reason: None,
             });
         }
         let msgs = session.messages.lock().await;

@@ -5,11 +5,14 @@
 //   dedicated provider-key banner (deep link, Update key) — NOT the plain
 //   error banner.
 //
-//   mid-stream: 2 chunks then error_kind:'other' → plain banner + retry, no
-//   ghost bubble; clicking Retry re-sends (sentTurns 1 → 2) and the session
-//   continues. A-3 fixed (R4 group 1): the retry resend carries the last
-//   user message's attachment paths — the retried bubble shows the
-//   attachment chip and the wire log proves the preserved path.
+//   mid-stream: 2 chunks then error_kind:'other' → plain banner + retry; the
+//   streamed partial COMMITS as a failed-marked bubble (OBS1 — unified with
+//   D6's cancelled-partial behavior; the banner manages "what now", the
+//   bubble records "what was generated"). Clicking Retry re-sends
+//   (sentTurns 1 → 2) and the session continues below the partial. A-3 fixed
+//   (R4 group 1): the retry resend carries the last user message's
+//   attachment paths — the retried bubble shows the attachment chip and the
+//   wire log proves the preserved path.
 import { expect, test } from '@playwright/test'
 
 import { ChatPage } from './helpers/ChatPage'
@@ -45,6 +48,12 @@ test.describe('scripted chat backend — failure journeys (#5)', () => {
     // dedicated banner) and the composer is free again.
     await expect(page.getByText('invalid x-api-key')).toHaveCount(0)
     await expect(chat.sendButton()).toBeVisible({ timeout: 5_000 })
+    // OBS1 (unified with D6): the streamed partial still commits as a
+    // failed-marked bubble — the dedicated banner handles "what now", the
+    // bubble records "what was generated".
+    await expect(chat.streamingCursor()).toHaveCount(0)
+    await expect(chat.bubbles()).toHaveCount(2)
+    await expect(chat.bubbleAt(1).getByTestId('message-failed-marker')).toBeVisible()
     await expectNoConsoleErrors(page)
   })
 
@@ -75,9 +84,13 @@ test.describe('scripted chat backend — failure journeys (#5)', () => {
     await expect(page.getByText('upstream connection reset while streaming')).toBeVisible({ timeout: 10_000 })
     await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible()
 
-    // No ghost bubble: the partial stream is dropped, nothing committed.
+    // OBS1 (flipped from the no-ghost-bubble anchor): the streamed partial
+    // commits as a failed-marked bubble — user + partial = 2. The banner
+    // manages "what now"; the bubble records "what was generated" (the real
+    // backend mirrors the commit in the L0 failed finalize).
     await expect(chat.streamingCursor()).toHaveCount(0)
-    await expect(chat.bubbles()).toHaveCount(1)
+    await expect(chat.bubbles()).toHaveCount(2)
+    await expect(chat.bubbleAt(1).getByTestId('message-failed-marker')).toBeVisible()
     const preRetry = await mockSnapshot(page)
     expect(preRetry.sentTurns).toBe(1)
     // The failing turn went out WITH the draft-restored attachment.
@@ -93,9 +106,10 @@ test.describe('scripted chat backend — failure journeys (#5)', () => {
     // The re-sent turn appended a second user bubble with the same text
     // (user bubbles carry chrome, not a .prose body — substring assert).
     // Its scripted reply replays and commits fast (a single chunk step), so
-    // assert the settled transcript directly: user + reply = 3 bubbles.
-    await expect(chat.bubbles()).toHaveCount(3, { timeout: 15_000 })
-    await expect(chat.bubbleAt(1)).toContainText(STORY)
+    // assert the settled transcript directly: user + failed partial +
+    // retried user + reply = 4 bubbles.
+    await expect(chat.bubbles()).toHaveCount(4, { timeout: 15_000 })
+    await expect(chat.bubbleAt(2)).toContainText(STORY)
 
     // A-3 fixed: the retry resend kept the last user message's attachments —
     // the wire log carries the original path…
@@ -104,10 +118,12 @@ test.describe('scripted chat backend — failure journeys (#5)', () => {
       turnIndex: 1,
       attachments: [NOTES_PATH],
     })
-    // …and the retried bubble renders the attachment card. The reply bubble
-    // (already settled above) carries the replayed scripted text.
-    await expect(chat.bubbleAt(1).getByText('story-notes.md')).toBeVisible()
-    await expect(chat.bubbleAt(2)).toContainText('重试后的流式回复')
+    // …and the retried bubble renders the attachment card. The failed
+    // partial stays above the retried exchange; the reply bubble (already
+    // settled above) carries the replayed scripted text.
+    await expect(chat.bubbleAt(2).getByText('story-notes.md')).toBeVisible()
+    await expect(chat.bubbleAt(3)).toContainText('重试后的流式回复')
+    await expect(chat.bubbleAt(1).getByTestId('message-failed-marker')).toBeVisible()
     await expectNoConsoleErrors(page)
   })
 

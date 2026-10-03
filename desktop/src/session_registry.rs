@@ -884,6 +884,7 @@ mod tests {
             timestamp: 0,
             file_attachments: None,
             interrupted: None,
+            interrupted_reason: None,
         };
         a.messages.try_lock().expect("a lock").push(msg);
         assert!(

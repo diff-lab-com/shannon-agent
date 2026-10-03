@@ -1806,6 +1806,7 @@ fn write_session_file_with_cwd(
                     content: reply["content"].as_str().unwrap_or_default().into(),
                     usage: None,
                     interrupted: false,
+                    reason: None,
                 },
             ));
         }
