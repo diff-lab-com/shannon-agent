@@ -370,7 +370,7 @@
     },
     "nord": {
       "mode": "dark",
-      "comment": "Nord — error #bf616a→#b45761 (hue kept) + on-error #2e3440→#ffffff: #bf616a is a WCAG dead-zone (white tops out at 4.09:1), the darkened error clears AA 4.5:1 at 4.69:1 (color-on-error PAIRS gate, 2026-10-03)",
+      "comment": "Nord — error #bf616a→#b45761 (hue kept) + on-error #2e3440→#ffffff: #bf616a is a WCAG dead-zone (white tops out at 4.09:1), the darkened error clears AA 4.5:1 at 4.69:1 (color-on-error PAIRS gate, 2026-10-03). destructive stays #bf616a on purpose: it never carries white text (no on-destructive pair — solid-danger flows use error/on-error); its roles are aria-invalid borders + status dots (non-text 3:1 vs background = 3.05:1, PAIRS-gated 2026-10-03) where error's darker #b45761 would fail at 2.66:1 — the two tokens are role-pinned to opposite ends of the same dead zone, so equal values are arithmetically impossible.",
       "vars": {
         "--radius": "0.625rem",
         "--material-base": "var(--color-surface-dim)",
