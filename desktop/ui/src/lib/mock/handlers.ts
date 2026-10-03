@@ -22,7 +22,7 @@ import {
 // setScriptSeed) these accessors answer with the script's seed data instead
 // of the global demo singletons; unarmed they all return null/undefined and
 // every handler below behaves exactly as before.
-import { clearRecordedSends, clearSeedSessionModel, recordSavedTextFile, recordSeedSessionArchived, recordSeedSessionDeleted,
+import { clearRecordedSends, clearSeedSessionModel, getScriptSeed, recordSavedTextFile, recordSeedSessionArchived, recordSeedSessionDeleted,
   recordSeedSessionRenamed, recordSeedSessionUnarchived, recordSeedUserSend, savedPlanForWorkingDir,
   seedSaveTextFileShouldFail, seededArchivedSessions, seededBudget, seededCheckpoints, seededConfigPatch,
   seededMessagesWithRecorded, seededProviderStatusPatch, seededRewoundMessages, seededSearchSessions,
@@ -440,10 +440,6 @@ export const handlers: Record<string, MockHandler> = {
   // dialog, so the mock reports the user-cancel resolution (null), which is
   // the exact shape FileCard's save-as "cancel backs out silently" branch
   // handles.
-  async 'plugin:dialog|save'() {
-    await delay(40)
-    return null
-  },
   // W2 journey #20: the chat-fence HTML artifact's interactive registration
   // — demo mode has no artifact scripting host, so the registration ALWAYS
   // fails and HtmlRenderer falls back to the static preview (the honest
