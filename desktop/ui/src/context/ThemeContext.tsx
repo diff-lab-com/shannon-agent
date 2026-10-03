@@ -100,7 +100,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return 1.0
   })
 
-  const resolvedTheme: ResolvedTheme = theme === 'system' ? getSystemTheme() : theme
+  // F-theme-system: the OS scheme lives in STATE, not in a render-time read.
+  // resolvedTheme used to call getSystemTheme() during render while the
+  // prefers-color-scheme listener "refreshed" it via setThemeState('system')
+  // — the SAME value, which hits React's eager bail-out: no re-render, so a
+  // live OS light↔dark switch never recomputed resolvedTheme and
+  // data-theme/data-theme-mode went stale. Writing the REAL new value below
+  // is a genuine state change (and if the new scheme truly equals the stored
+  // one, skipping the re-render is correct).
+  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(getSystemTheme)
+
+  const resolvedTheme: ResolvedTheme = theme === 'system' ? systemTheme : theme
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', resolvedTheme)
@@ -116,13 +126,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('shannon.fontScale', fontScale.toString())
   }, [fontScale])
 
+  // Attached for every mode (not just theme='system'): an OS flip while the
+  // user sits on an explicit theme must still update systemTheme, or a later
+  // switch back to 'system' would resolve from a stale scheme. Non-color
+  // system settings (fontScale, contrast) have their own seams and are
+  // untouched by this listener.
   useEffect(() => {
-    if (theme !== 'system') return
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const handler = () => setThemeState('system') // triggers re-render with new resolvedTheme
+    const handler = () => setSystemTheme(getSystemTheme())
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
-  }, [theme])
+  }, [])
 
   const setTheme = useCallback((newTheme: ThemeName) => {
     setThemeState(newTheme)
