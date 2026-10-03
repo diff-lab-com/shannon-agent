@@ -7,7 +7,8 @@
 
 - 页面来源：网关移动端口（默认 `127.0.0.1:33430`）的 **GET /** 直接返回页面（`gateway/src/mobile/web/page.ts`）。
 - 协议：NDJSON JSON-RPC `shannon/*`（`shannon/pair`、`shannon/device.resume`、
-  `shannon/task.dispatch`、`shannon/task.list`、`shannon/event` 推送）。
+  `shannon/task.dispatch`、`shannon/task.list`、`shannon/event` 推送；
+  r2-w2 起另有 §J 会话、§L1/§L2 审批、§M 设备四面，见 §8）。
 - 任务管线：与 IM 渠道（P1-4）完全同一套——按设备分会话串行（lane）→ 审批回环 → 生命周期回推
   （`router/lifecycle.ts`：🚀 已开始 / ✅ 完成 / ❌ 失败）。
 
@@ -130,3 +131,79 @@ relay 端到端加密通道的浏览器支持（§7），或使用原生客户�
 - 页面配对暂无二维码扫一扫（用粘贴令牌）；BarcodeDetector 可用时再加。
 - 任务列表为内存日志，重启清空；跨进程持久化待需要时再做。
 - 执行基线比 balanced 宽松（AutoEdit），Balanced profile 落地为后续项 **P1-4b**（见 §4）。
+
+---
+
+## 8. 跨仓 RPC 面补遗：§J / §L1 / §L2 / §M（r2-w2 起的移动协议面）
+
+§K 任务面随「四个动作」落地（见 §3）；本节补齐同一批跨仓适配 spec（shannon-mobile
+`docs/cross-repo-adaptation-spec.md` §J–§M）中其余四面的调用说明。形状以 gateway 实现
+为准（`gateway/src/mobile/`）；可选键一律「引擎缺席即省略、从不造值」，手机按诚实降级渲染。
+
+### 8.1 §J 会话面（`shannon/session.list` / `shannon/session.history`）
+
+落点：`engineSessions.ts`（引擎帧匹配 + wire 映射）、`engineBridge.ts`（RPC 门面，
+引擎 WS 一次性 call 透传）。两个方法都要求已配对会话，否则 `PAIRING_REQUIRED`。
+
+**`shannon/session.list`** —— 请求 `{}`（v1 无参数，未知键忽略）。响应 `{sessions: [...]}`：
+
+- 条目 `{id, agentId?, title?, updatedAt?, totalInputTokens?, totalOutputTokens?}`：
+  `id` 必填，无可用 id 的条目直接跳过；`updatedAt` 为 ISO-8601 UTC（引擎给 epoch ms 时归一）；
+- `agentId`/`title` 与两个 token 总量（C8 会话级花费）都是**引擎有数才上 wire**——引擎未暴露
+  会话归属时 `agentId` 键省略，手机按 §J1 的跳过规则处理（不猜归属，条目不进 Chat 列表）；
+- 引擎不可达映射为 `ENGINE_ERROR`（与「空列表」可区分，死引擎不冒充空花名册）。
+
+**`shannon/session.history`** —— 请求 `{sessionId（必填，缺省 → BAD_PARAMS）, before?, limit?}`，
+响应 `{sessionId, messages: [{role, content, ts?}], hasMore}`：
+
+- 未知 sessionId **不是错误**：回 `{sessionId, messages: [], hasMore: false}`——手机把它理解为
+  「服务端还没有该会话内容」，保留本地记录而不是清空线程；
+- 分页是引擎侧语义、gateway 透传：`limit` 默认 50、`<1` 钳为 1；`before` 为 ISO-8601 锚点，
+  锚定该 ts 在转录中**首次出现**的条目（同 ts 相邻消息视为一体，页边界不落组中间），
+  返回严格早于锚点的最新 `limit` 条，`messages` 恒按时间升序；`hasMore` 表示锚点之前
+  还有更早消息（手机 `loadEarlier` 以本地最早一条的 ts 作 `before` 逐页前移）；
+- `ts` 可选：引擎给 epoch ms 时归一为 ISO-8601；无 `ts` 的条目手机按收到时刻处理。
+
+### 8.2 §L1 审批富信息（`approval.request` additive 字段）
+
+落点：`engineBridge.ts` `mapEngineEvent`（透传）、`approvalRegistry.ts` `engineAgent`/`engineRisk`（归一）。
+
+- 六键基线对老引擎**字节不变**：`request_id` / `tool_name` / `tool_input` / `description` /
+  `is_destructive` / `diff_preview`；
+- 三个 additive 富键，引擎缺席即省略键、从不造值：`ts`（引擎侧 epoch ms）、
+  `agent {id, name}`、`risk {scope: local|repo|system, reversible[, destructive]}`；
+- 风险带合成（gateway `approvalRegistry.ts` 与手机 mapper 同规则）：`destructive || scope==system`
+  → high，`!reversible` → medium，否则 low；引擎未给 `risk` 时退回 `is_destructive` 的 high/low。
+
+### 8.3 §L2 审批恢复面（`shannon/approval.list` / `shannon/snapshot.pendingApprovals`）
+
+落点：`approvalRegistry.ts`（进程内注册表）、`pairing.ts`（两个 RPC 入口）、
+`engineBridge.ts` 与派发 hub（两个生产者）。
+
+- 两个入口同一形状：`shannon/approval.list` → `{pendingApprovals: [...]}`；`shannon/snapshot`
+  的 `pendingApprovals` 数组逐字相同（手机重连后恢复审批队列，任选一路）；
+- 条目即手机 `approvalFromMap` 契约：`approvalId` / `kind` / `headline` / `risk`（合成带）/
+  `timestamp`（ISO）/ `toolInput`；富键 `agentId` / `agentName` / `scope` / `diffTitle` 缺席省略；
+- 注册表生命周期：两个生产者（引擎桥的 `shannon/query` 直查流 + 派发管线的 `requestApproval`），
+  三个消解点（签名 `approval/decide` 成功、300 秒超时按拒绝、hub 内部 Y/N settle）；
+  清理惰性——TTL 330 秒（引擎 300 秒自拒 + 30 秒结算余量）+ 200 条环形上限（最旧先出）；
+- **重启语义（2026-10-03 与 mobile 对账结论）**：注册表是**进程内存态，刻意不落盘**。
+  gateway 重启后 `snapshot.pendingApprovals` 为空，直到引擎下一次 `approval.request` 重新落账。
+  引擎侧审批不因此丢：引擎自己在 300 秒超时拒绝，不会留下等不到答复的僵尸审批；损失窗口
+  只有「重启后 → 引擎超时前」手机暂看不到该审批。注册表落盘或引擎侧重放列为评估项，
+  消费级场景下暂缓，确有需要时另立项。
+
+### 8.4 §M 设备面（`shannon/device.list` / `shannon/device.revoke`）
+
+落点：`pairing.ts`（`toWireDeviceEntry` + 两个 handler）、`bootstrap.ts`（`device.revoked` 广播）。
+
+- **`device.list`** → `{devices: [{deviceId, label?, pairedAt?, lastSeenAt?}]}`：camelCase 键名 +
+  ISO-8601 UTC 时间戳，**永不回 `public_key`**。重塑仅发生在 RPC 层——磁盘 registry
+  （`~/.shannon/mobile-devices.json`）保持与桌面 Rust 镜像一致的 snake_case 格式不动；
+- **`device.revoke`**：请求键 `deviceId`（camelCase），兼容收 `device_id`（pre-§M 手机）；
+  已配对会话即信任边界，可吊销**任意**已注册设备（2026-10-03 裁决——「丢失手机」正是本面的
+  存在意义，二次确认由手机 UI 承担）；已配对校验不通过一律 `PAIRING_REQUIRED`；
+  结果 `{revoked: <deviceId|false>, removed: bool}`——诚实 no-op 也是 success（手机对 miss
+  保持列表原样，不幻吊销）；
+- 吊销成功向**其他**在线设备广播 `shannon/event {type: "device.revoked", device_id}`；
+  被吊销设备自身被排除在广播外，靠下一次 RPC 的 `PAIRING_REQUIRED` 察觉。
