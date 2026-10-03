@@ -1,6 +1,6 @@
 {
   "name": "mid-stream-fail",
-  "description": "流中失败 — 横幅 + Retry → 重发（A-3 已修复：附件保留）→ 会话继续",
+  "description": "流中失败 — 横幅 + Retry，半截以失败标记气泡提交（OBS1）→ 重发（A-3 已修复：附件保留）→ 会话继续",
   "seed": {
     "config": {
       "hasKey": true

@@ -1,6 +1,6 @@
 {
   "name": "auth-error",
-  "description": "auth 失败 — error_kind auth → ApiKey 深链横幅而非普通错误横幅",
+  "description": "auth 失败 — error_kind auth → ApiKey 深链横幅而非普通错误横幅，半截以失败标记气泡提交（OBS1）",
   "seed": {
     "config": {
       "hasKey": true

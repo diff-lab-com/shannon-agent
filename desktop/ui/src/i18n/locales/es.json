@@ -1874,6 +1874,7 @@
   "chat.message.regenerate.started": "Rewound — regenerating the previous reply…",
   "chat.message.regenerate.failed": "Couldn't regenerate the reply",
   "chat.message.stopped": "Detenido",
+  "chat.message.failedPartial": "Error",
   "chat.message.edit.aria": "Edit message",
   "chat.message.edit.button": "Editar",
   "chat.edit.banner": "Editando tu mensaje de {time} — al enviarlo, la conversación retrocede justo antes de ese mensaje",

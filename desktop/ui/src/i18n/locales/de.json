@@ -1874,6 +1874,7 @@
   "chat.message.regenerate.started": "Zurückgespult — vorherige Antwort wird neu generiert…",
   "chat.message.regenerate.failed": "Antwort konnte nicht neu generiert werden",
   "chat.message.stopped": "Gestoppt",
+  "chat.message.failedPartial": "Fehlgeschlagen",
   "chat.message.edit.aria": "Nachricht bearbeiten",
   "chat.message.edit.button": "Bearbeiten",
   "chat.edit.banner": "Du bearbeitest deine Nachricht von {time} — das Senden spult die Konversation kurz davor zurück",

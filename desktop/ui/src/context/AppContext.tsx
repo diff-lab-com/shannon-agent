@@ -1298,21 +1298,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // session that owns the run — a background run failing must not
           // overwrite the on-screen session's composer/error state (its
           // failure is still surfaced by the rail's red dot via
-          // noteSessionActivity). B0 P1-2: a failed run leaves no ghost
-          // bubble — drop the run's buckets AND the visible projections.
-          // Persisting the partial text needs a backend commit path (none
-          // exists yet), so clearing is the approved behavior.
+          // noteSessionActivity). OBS1 (unify the failed half with D6): a
+          // failed run's streamed text is COMMITTED as the assistant bubble —
+          // flagged `interrupted` + `interrupted_reason: 'failed'` so the
+          // bubble renders the failed marker — instead of being wiped (B0
+          // P1-2's discard semantics). The backend mirrors this durably (the
+          // engine tee finalizes the failed turn in the L0 log; the desktop
+          // buffer gets the same partial), so reloads and session switches
+          // bring the identical marked bubble back. An empty bucket (fail
+          // before the first token) keeps the no-bubble shape. The error
+          // banner and Retry stay: the banner manages "what now", the bubble
+          // records "what was generated".
           setSessionQuerying(key, false)
           cancelStreamFlush()
+          const finalText = streamingBucketsRef.current.get(key) ?? ''
           streamingBucketsRef.current.set(key, '')
           thinkingBucketsRef.current.set(key, '')
-          // W3-4: a failed run commits no bubble — drop its citation
-          // snapshot so it can't leak onto a later turn's.
+          // W3-4: the run is over — pop its citation snapshot. A committed
+          // partial keeps its own chips (the memories DID inform it, same
+          // rule as the completed commit); an empty commit drops them so
+          // they can never leak onto a later turn's bubble.
+          const citations = pendingInjectedMemoriesRef.current.get(key)
           pendingInjectedMemoriesRef.current.delete(key)
           if (key === visibleKey) {
+            if (finalText) {
+              setMessages(msgs => [...msgs, {
+                role: 'assistant',
+                content: finalText,
+                timestamp: Date.now(),
+                interrupted: true,
+                interrupted_reason: 'failed',
+                // W3-4: citation chips ride only a non-empty snapshot.
+                ...(citations && citations.length > 0 ? { injected_memories: citations } : {}),
+              }])
+            }
             setChatError(p.error, p.error_kind === 'auth' ? 'auth' : 'other')
             setStreamingText('')
             setThinkingText('')
+            // Review P2-4: completed tool cards must not linger under the
+            // committed partial reply until the next send/switch.
             setActiveToolCalls([])
             // P2-19: run failed — clear the progress pill with the cards.
             setToolProgress(null)

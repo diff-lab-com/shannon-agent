@@ -1893,6 +1893,7 @@
   "chat.message.regenerate.started": "已回退——正在重新生成上一条回复……",
   "chat.message.regenerate.failed": "重新生成回复失败",
   "chat.message.stopped": "已停止",
+  "chat.message.failedPartial": "生成失败",
   "chat.message.edit.aria": "编辑消息",
   "chat.message.edit.button": "编辑",
   "chat.edit.banner": "正在编辑 {time} 发送的消息——发送后将回退到该消息之前",

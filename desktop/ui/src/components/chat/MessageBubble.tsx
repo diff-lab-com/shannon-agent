@@ -528,10 +528,24 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
             </div>
           )}
         </div>
-        {/* D6 (keep the partial output): a cancelled run's committed partial
-            answer is visibly marked — the reply stays, but it is not a
-            complete one. Chip style mirrors the sandbox-denied pill. */}
-        {!isTool && message.interrupted === true && (
+        {/* D6 (keep the partial output) + OBS1 (unify the failed half): a
+            cancelled or failed run's committed partial answer is visibly
+            marked — the reply stays, but it is not a complete one. One chip
+            family, two tones: the neutral surface chip reads "stopped" (user
+            stop), the error-toned one reads "failed" (the turn failed
+            mid-step) — the same shapes the wire's `interrupted` +
+            `interrupted_reason` carry. Style mirrors the sandbox-denied
+            pill; the failed tone reuses the error-container pair. */}
+        {!isTool && message.interrupted === true && message.interrupted_reason === 'failed' && (
+          <div
+            className="flex items-center gap-xs self-start px-xs py-[1px] rounded-sm bg-error-container text-on-error-container font-label-xs w-fit"
+            data-testid="message-failed-marker"
+          >
+            <span className="material-symbols-outlined icon-xs" aria-hidden="true">error</span>
+            {t('chat.message.failedPartial')}
+          </div>
+        )}
+        {!isTool && message.interrupted === true && message.interrupted_reason !== 'failed' && (
           <div
             className="flex items-center gap-xs self-start px-xs py-[1px] rounded-sm bg-surface-container-high text-on-surface-variant font-label-xs w-fit"
             data-testid="message-stopped-marker"

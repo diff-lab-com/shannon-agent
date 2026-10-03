@@ -740,6 +740,9 @@ describe('D6 cancelled-turn partial persistence', () => {
       content: '海浪拍岸，',
       timestamp: expect.any(Number),
       interrupted: true,
+      // OBS1 parity: the real backend's cancelled finalize now carries the
+      // reason, so the mock tail does too (renders the same "stopped" chip).
+      interrupted_reason: 'cancelled',
     })
     // The turn checkpoint exists too (the desktop cancel path records it),
     // so the partial bubble keeps its rewind/regenerate affordances.
@@ -765,6 +768,36 @@ describe('D6 cancelled-turn partial persistence', () => {
     expect(player.snapshot().phase).toBe('done')
     const reloaded = seededMessagesWithRecorded('sess-d6')!
     expect(reloaded[1]).toMatchObject({ role: 'assistant', content: '先看一下花销', interrupted: true })
+  })
+
+  // OBS1 (unify the failed half): a scripted `query:failed` terminal records
+  // the turn's streamed partial the same way, failed-marked — the reload
+  // readers serve the identical failed-marked bubble the live QUERY_FAILED
+  // handler committed.
+  it('a failed turn records its streamed partial with interrupted_reason "failed"', async () => {
+    const { player } = makeHarness()
+    player.load({
+      name: 'obs1-failed-partial',
+      turns: [{
+        user: '讲个故事',
+        script: [
+          { event: 'query:text', chunks: ['从前有一片海，', '海面上…'], chunkDelayMs: 10 },
+          { event: 'query:failed', payload: { error: 'upstream reset', error_kind: 'other' } },
+        ],
+      }],
+    })
+    player.handleSendMessage({ sessionId: 'sess-d6', message: '讲个故事' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(player.snapshot().phase).toBe('done')
+    const reloaded = seededMessagesWithRecorded('sess-d6')!
+    expect(reloaded).toHaveLength(2)
+    expect(reloaded[1]).toEqual({
+      role: 'assistant',
+      content: '从前有一片海，海面上…',
+      timestamp: expect.any(Number),
+      interrupted: true,
+      interrupted_reason: 'failed',
+    })
   })
 
   it('a completed turn records no assistant row (unchanged S-4 tail shape)', () => {

@@ -1874,6 +1874,7 @@
   "chat.message.regenerate.started": "Rewound — regenerating the previous reply…",
   "chat.message.regenerate.failed": "Couldn't regenerate the reply",
   "chat.message.stopped": "Interrompu",
+  "chat.message.failedPartial": "Échec",
   "chat.message.edit.aria": "Edit message",
   "chat.message.edit.button": "Modifier",
   "chat.edit.banner": "Modification de ton message de {time} — l’envoi rembobine la conversation juste avant",
