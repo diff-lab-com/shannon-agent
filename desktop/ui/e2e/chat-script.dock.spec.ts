@@ -23,6 +23,35 @@ function dockWidth(page: Page): Promise<string> {
 function stored(page: Page, key: string): Promise<string | null> {
   return page.evaluate((k) => localStorage.getItem(k), key)
 }
+
+/**
+ * Bounded re-press anchor for the plan-mode shortcut.
+ *
+ * WHY: a one-shot Ctrl+Shift+P press is lossy under CI-grade CPU
+ * starvation — the composer anchor below proves ChatInput is mounted, but
+ * the press itself can still be dropped before it reaches ChatInput's
+ * window keydown handler (observed in CI: no `configure` invoke,
+ * `approval_mode` never armed, banner never renders — #239, second
+ * occurrence). A real user simply presses the shortcut again; this anchor
+ * does exactly that, BOUNDED: at most 3 presses total, and every re-press
+ * first requires the banner to still be absent — a WORKING toggle is never
+ * double-fired, because the second press of an already-armed toggle would
+ * exit plan mode. The boundedness is the honesty guarantee: a permanently
+ * dead shortcut exhausts both the press budget and the finite `toPass`
+ * window, so the test still fails — the anchor cannot mask a real
+ * regression.
+ */
+async function pressPlanModeShortcut(page: Page): Promise<void> {
+  const banner = page.getByTestId('plan-mode-banner')
+  let presses = 0
+  await expect(async () => {
+    if (presses < 3 && !(await banner.isVisible())) {
+      await page.keyboard.press('Control+Shift+p')
+      presses += 1
+    }
+    await expect(banner).toBeVisible({ timeout: 6_000 })
+  }).toPass({ timeout: 30_000 })
+}
 async function openSession(page: Page): Promise<void> {
   await page.getByTestId('desktop-session-row-script-sess-dock').click()
   await expect(page.getByRole('heading', { name: 'Dock journey' })).toBeVisible({ timeout: 10_000 })
@@ -103,7 +132,7 @@ test.describe('scripted chat backend — dock-interactions (journey #20)', () =>
 
     // Auto-dock source 1: entering plan mode (Ctrl+Shift+P) opens the dock
     // ON the plan tab and shows the composer banner.
-    await page.keyboard.press('Control+Shift+p')
+    await pressPlanModeShortcut(page)
     await expect(page.getByText('Plan mode active — the agent will propose a plan before any file changes.')).toBeVisible({ timeout: 10_000 })
     await expect(dock(page)).toBeVisible({ timeout: 5_000 })
     await expect(page.getByRole('tab', { name: 'Plan' })).toHaveAttribute('aria-selected', 'true')
@@ -169,7 +198,7 @@ test.describe('scripted chat backend — dock-interactions (journey #20)', () =>
     await loadChatScriptObject(page, failing, test.info())
     await openSession(page)
 
-    await page.keyboard.press('Control+Shift+p')
+    await pressPlanModeShortcut(page)
     await expect(page.getByTestId('plan-panel')).toBeVisible({ timeout: 10_000 })
     const boxes = page.locator('[data-testid="plan-panel"] input[type="checkbox"]')
     await expect(boxes).toHaveCount(3)
