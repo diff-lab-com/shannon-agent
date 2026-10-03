@@ -15,6 +15,7 @@ import { ChatPage } from './helpers/ChatPage'
 import { loadChatScript } from './helpers/scriptLoader'
 import { expectNoConsoleErrors } from './helpers/watchdog'
 import { mockSnapshot } from './helpers/knownIssues'
+import { emitWebviewDrop } from './helpers/webviewDrop'
 
 const ROW = 'desktop-session-row-script-sess-queue'
 const UP = 'Move queued message up (sends sooner)'
@@ -22,19 +23,6 @@ const UP = 'Move queued message up (sends sooner)'
 // The D9-b attachment (inside the demo working dir — no refusal badge).
 const ATT_PATH = '/Users/demo/workspace/my-startup/report-draft.md'
 const ATT_NAME = ATT_PATH.split('/').pop()!
-
-/**
- * Deliver a Tauri v2 webview drag-drop through the mock event bridge — the
- * demo-mode path into the composer's mergePaths (the native attach dialog is
- * not drivable in the harness). Same bridge the edit-rewind A-26 test uses.
- */
-async function emitWebviewDrop(page: import('@playwright/test').Page, paths: string[]): Promise<void> {
-  await page.evaluate((dropped) => {
-    ;(window as unknown as {
-      __shannonMock: { emit(name: string, payload: unknown): void }
-    }).__shannonMock.emit('tauri://drag-drop', { paths: dropped, position: { x: 0, y: 0 } })
-  }, paths)
-}
 
 test.describe('scripted chat backend — queue-steer (journey #9)', () => {
   test('three queued prompts: chips, cap toast keeps the draft, reorder, FIFO drain order', async ({ page }) => {
