@@ -5,12 +5,14 @@ import os from 'node:os'
 import path from 'path'
 import pkg from './package.json' with { type: 'json' }
 
-// Parallel workers = half the machine's CPUs (min 2). Half leaves headroom
-// for the editor/TS server on dev machines and for sibling CI jobs; the
-// floor keeps 4-vCPU CI runners at 2 workers. The default pool is `forks`
-// (vitest 2.x), so `maxForks` is the binding limit — `maxThreads` is kept
-// in sync for anyone switching pools.
-const workers = Math.max(2, Math.floor(os.availableParallelism() / 2))
+// Parallel workers = half the machine's CPUs (min 2) on dev machines; CI
+// runners (ubuntu-latest, public repo) are 4-core/16GB, so use all 4 — the
+// unit gate dropped 455s → 231s per shard when this went 2 → 4 (#242
+// follow-up). The default pool is `forks` (vitest 2.x), so `maxForks` is the
+// binding limit — `maxThreads` is kept in sync for anyone switching pools.
+const workers = process.env.CI
+  ? 4
+  : Math.max(2, Math.floor(os.availableParallelism() / 2))
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
