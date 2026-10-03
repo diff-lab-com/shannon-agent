@@ -147,6 +147,12 @@ for (const method of ['matches', 'webkitMatchesSelector'] as const) {
     configurable: true,
     writable: true,
     value(this: Element, selector: string, ...rest: unknown[]) {
+      // STRICT equality is deliberate, not sloppiness: widening this to a
+      // substring/prefix match can't cover compound selectors anyway
+      // (`:modal.foo`, `.x:modal` re-enter nwsapi's own parse path and the
+      // mutual recursion revives for those calls). The exact-match intercept
+      // is the honest boundary — anything compound must be fixed in nwsapi,
+      // not papered over here.
       if (selector === ':modal' || selector === ':fullscreen') return false
       return (impl as (...args: unknown[]) => boolean).apply(this, [selector, ...rest])
     },
