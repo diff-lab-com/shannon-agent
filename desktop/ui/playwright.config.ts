@@ -6,7 +6,11 @@ export default defineConfig({
   // state matrix / dynamic a11y / long-session perf) live beside the PR
   // specs but run ONLY under playwright.chat-nightly.config.ts. The PR gate
   // set is unchanged — these five files did not exist before this ignore.
-  testIgnore: /chat-script\.(fuzz|fuzz-found|visual-matrix|a11y|perf)\.spec\.ts/,
+  // Wave-2 task 6 (D8 decision): the env/cross-cutting journeys
+  // multi-window / voice-input / i18n-theme join the same nightly-only
+  // family — they depend on browser environment seams (two-page instances,
+  // fake media devices, locale/theme storage) and stay out of the PR gate.
+  testIgnore: /chat-script\.(fuzz|fuzz-found|visual-matrix|a11y|perf|multi-window|voice-input|i18n-theme)\.spec\.ts/,
   // Warm the vite dev server (lazy /chat chunk compiled) before the first
   // worker's first spec — see e2e/global-setup.ts for the CI incidents
   // this closes.

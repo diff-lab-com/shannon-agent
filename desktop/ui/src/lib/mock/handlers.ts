@@ -9,8 +9,9 @@ import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS, MOCK_PROVIDER_PROFILES } from './data/config'
 import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo, TerminalSettings, FileIndexEntry } from '@/types'
 import { MOCK_TERMINAL_OUTPUT_EVENT, MOCK_TERMINAL_EXIT_EVENT } from '../runtime/terminalEvents'
+import { dispatchEvent } from './eventBridge'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
-import type { MemoryGraph } from '@/lib/tauri-api'
+import type { MemoryGraph, VoiceLocalConfig, WhisperModelInfo } from '@/lib/tauri-api'
 import {
   MOCK_SKILL_CATALOG,
   MOCK_AGENT_CATALOG,
@@ -29,7 +30,6 @@ import { clearRecordedSends, clearSeedSessionModel, getScriptSeed, recordSavedTe
   seededSessionModel, seededSessions, seededUsage, seedSessionDeleteFails, setSeedSessionModel } from './scripted/seed'
 // wave-2 J15: canned /diff payloads behind the scripted seed gate (data/slash.ts).
 import { scriptedGitDiffFixture } from './data/slash'
-import { dispatchEvent } from './eventBridge'
 
 /**
  * W2 journey #19: the scripted session mutations notify the rail exactly
@@ -52,6 +52,18 @@ const archivedSessions = new Set<string>()
 // P1-3: mutable desktop config so execution-mode / sandbox switches in the
 // demo feel live (get_config hands out a fresh clone of this).
 const demoConfig = clone(MOCK_CONFIG)
+
+// Wave-2 task 6: mutable local-voice (whisper-rs) config behind
+// get/save_voice_local_config. Starts disabled — the unarmed demo's
+// get_config gains a `voice_local` key ONLY after an explicit save, so the
+// un-scripted demo boot payload stays byte-identical to the pre-handler
+// behavior (seed-handlers.test.ts guards the defaults).
+const demoVoiceLocal: VoiceLocalConfig = {
+  enabled: false,
+  model: null,
+  language: null,
+  auto_download: true,
+}
 
 // P1-6: ids already imported in this demo session — re-applying the same
 // migration surfaces as skipped (conflict handling), never duplicates.
@@ -496,6 +508,67 @@ export const handlers: Record<string, MockHandler> = {
     return seeded?.[0]?.id ?? null
   },
   async cancel_query() { await delay(30) },
+
+  // --- Speech-to-text (wave-2 task 6, voice-input journey) ---
+  // Previously these five voice commands were UNMOCKED_ALLOWLIST entries
+  // ("no browser equivalent") and demo mode threw for them. The nightly
+  // voice-input journey exercises the real UI path (MicButton →
+  // MediaRecorder → base64 → transcribe command → transcript into the
+  // composer draft), so the two transcribe commands and the local-voice
+  // config pair now answer deterministically instead. Model
+  // download/delete stays unmocked (GB-scale OS work, still allowlisted).
+  // Fixed transcripts are deliberately DIFFERENT per command so a journey
+  // can prove WHICH provider served a recording (cloud default vs local
+  // whisper after the config switch below).
+  async transcribe_audio() {
+    await delay(60)
+    return { text: 'Cloud transcript: stand up the staging cluster.' }
+  },
+  async transcribe_audio_local_base64() {
+    await delay(60)
+    return { text: 'Local transcript: whisper ran on device.' }
+  },
+  async transcribe_audio_local() {
+    await delay(60)
+    return { text: 'Local transcript: whisper ran on device.' }
+  },
+
+  // P2-5e local-voice config — mutable like demoConfig so the Settings
+  // card's toggle "feels live". Saving mirrors the value into
+  // demoConfig.voice_local (the get_config projection ChatInput reads to
+  // pick its provider) and re-emits `config-updated`, exactly like the
+  // real backend's config-write path, so the composer flips provider
+  // without a reload.
+  async get_voice_local_config() {
+    await delay()
+    return clone(demoVoiceLocal)
+  },
+  async save_voice_local_config(args: { voiceLocal?: VoiceLocalConfig }) {
+    await delay()
+    const next = args?.voiceLocal
+    if (!next) return
+    demoVoiceLocal.enabled = !!next.enabled
+    demoVoiceLocal.model = next.model ?? null
+    demoVoiceLocal.language = next.language ?? null
+    demoVoiceLocal.auto_download = next.auto_download !== false
+    demoConfig.voice_local = clone(demoVoiceLocal)
+    dispatchEvent('config-updated', {})
+  },
+  // Cloud-STT (Whisper endpoint) config: the Settings card probes it on
+  // mount. Null = "not configured" — the honest demo default (the real
+  // unset state), so the card renders its setup affordances instead of
+  // console-noising.
+  async get_stt_config() {
+    await delay()
+    return null
+  },
+  async list_whisper_models() {
+    await delay()
+    return [
+      { model: 'tiny.en', filename: 'ggml-tiny.en.bin', approx_size_mb: 78, downloaded: true, verified: true, size_bytes: 81_905_536 },
+      { model: 'base', filename: 'ggml-base.bin', approx_size_mb: 148, downloaded: false, verified: false, size_bytes: null },
+    ] satisfies WhisperModelInfo[]
+  },
 
   // --- Config ---
   async get_config() {
