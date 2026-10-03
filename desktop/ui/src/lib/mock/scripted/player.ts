@@ -30,7 +30,8 @@
 
 import type { ChatScript, ScriptSeed, ScriptStep } from './schema'
 import { TERMINAL_EVENTS, validateScript } from './schema'
-import { recordSeedPartialAssistant, recordSeedUserSend, resetRecordedSends, setScriptSeed } from './seed'
+import { recordSeedPartialAssistant, recordSeedUserSend, resetRecordedSends, seededSessionModel, setScriptSeed } from './seed'
+
 
 export type PlayerPhase =
   | 'idle'             // no script loaded
@@ -65,6 +66,14 @@ export interface SendRecord {
   attachments: string[] | null
   budgetBypass: boolean
   sessionId: string | null
+  /**
+   * Chat-testing W2 (journey #17): the session-scoped model override in
+   * effect at SEND time (the seed's `session.modelOverride`, as mutated by
+   * composer-chip switches) — the "a model/tier switch takes effect on the
+   * NEXT turn" assertion surface. `null` = the session inherits the global
+   * default (the engine resolves the request model backend-side).
+   */
+  model: string | null
 }
 
 export const DEFAULT_CHUNK_DELAY_MS = 30
@@ -203,6 +212,9 @@ export class ScriptPlayer {
       attachments,
       budgetBypass: args?.budgetBypass === true,
       sessionId: (args?.sessionId ?? null) as string | null,
+      // Journey #17: the override registry's state at send time — a chip
+      // switch lands here only from the NEXT send on (next-turn semantics).
+      model: seededSessionModel(args?.sessionId as string | null | undefined)?.model ?? null,
     })
     const sessionId = (args?.sessionId ?? null) as string | null
     if (this.script.turns[turnIndex]?.sendRejects) {

@@ -46,3 +46,32 @@ turns:
       # card leaves with the run — P2-4 semantics).
       - waitFor: ui
       - event: query:completed
+  # ── W2 G22 扩展：背板关闭 = Deny（点击 scrim → respond_permission false）──
+  - user: "再删一次 dist 目录（用背板关闭弹窗）"
+    script:
+      - event: query:text
+        chunks: ["这条同样需要批准；这次点弹窗外背板即视为拒绝。"]
+        chunkDelayMs: 200
+      - event: permission-request
+        payload:
+          request_id: pr-deny-2
+          tool: Bash
+          risk: high
+          input:
+            command: "rm -rf dist"
+          reason:
+            source: rule
+            ruleName: "destructive-command"
+      - event: query:tool-start
+        payload:
+          tool_use_id: tool-rm-2
+          tool_name: Bash
+          tool_input:
+            command: "rm -rf dist"
+      - event: query:tool-result
+        payload:
+          tool_use_id: tool-rm-2
+          result: "Permission denied: user rejected the Bash command"
+          is_error: true
+      - waitFor: ui
+      - event: query:completed

@@ -6,7 +6,7 @@
 // no seed is armed every accessor returns undefined and handlers behave
 // byte-identically to the pre-scripted defaults.
 
-import type { ChatMessage, SessionInfo } from '@/types'
+import type { ArchivedSessionRow, ChatMessage, SessionInfo } from '@/types'
 import type { ScriptSeed } from './schema'
 import { realmSingleton } from '../realmState'
 
@@ -24,6 +24,175 @@ function seedState(): SeedStateBox {
 /** Arm the override (loadScript). Pass null to clear (reset). */
 export function setScriptSeed(seed: ScriptSeed | null): void {
   seedState().seed = seed
+  // W2 journeys: the session-runtime registry below is derived from the
+  // seed, so it follows the exact same lifecycle (load re-arms, reset clears).
+  resetSeedSessionRuntime()
+}
+
+// ── W2 journeys: seeded session-lifecycle + model-override registry ────────
+//
+// Mutable state for SEEDED sessions — renames / deletes / archives issued
+// through the sidebar while a script is armed, plus the session-model
+// override the composer chip reads and writes (backend
+// `SessionState.model_override` twin). Realm-global for the same
+// two-module-graph reason as the seed itself; handlers consult it ONLY
+// while a seed is armed, so the un-scripted demo path stays untouched.
+
+interface SeedSessionRuntime {
+  deleted: Set<string>
+  archived: Set<string>
+  renamed: Map<string, string>
+  modelOverrides: Map<string, { provider: string; model: string }>
+}
+
+function seedSessionRuntime(): SeedSessionRuntime {
+  return realmSingleton<SeedSessionRuntime>('__shannonMockSeedSessionRuntime', () => ({
+    deleted: new Set(),
+    archived: new Set(),
+    renamed: new Map(),
+    modelOverrides: new Map(),
+  }))
+}
+
+/** Clear + re-arm the registry (script load/reset — a fresh lifecycle).
+ *  Also clears the save_text_file store: a new script is a fresh world. */
+export function resetSeedSessionRuntime(): void {
+  const rt = seedSessionRuntime()
+  rt.deleted.clear()
+  rt.archived.clear()
+  rt.renamed.clear()
+  rt.modelOverrides.clear()
+  savedFiles().files.clear()
+  const seed = seedState().seed
+  // Re-arm the seeded overrides: the chip reads them via get_session_model
+  // on mount, before any UI action could have written the registry.
+  for (const s of seed?.sessions ?? []) {
+    if (s.modelOverride) rt.modelOverrides.set(s.id, { ...s.modelOverride })
+  }
+}
+
+function findSeedSession(sessionId: string | null | undefined) {
+  const seed = seedState().seed
+  if (!seed?.sessions?.length) return null
+  return seed.sessions.find(s => s.id === sessionId) ?? null
+}
+
+/** Record a seeded session's rename (rename_session while armed). */
+export function recordSeedSessionRenamed(sessionId: string, title: string): void {
+  if (!findSeedSession(sessionId)) return
+  seedSessionRuntime().renamed.set(sessionId, title)
+}
+
+/** Record a seeded session's delete (delete_session while armed). A delete
+ *  also leaves the archive registry — the archived lens' 永久删除 removes
+ *  the whole session, exactly like the backend's L0 directory wipe. */
+export function recordSeedSessionDeleted(sessionId: string): void {
+  if (!findSeedSession(sessionId)) return
+  const rt = seedSessionRuntime()
+  rt.deleted.add(sessionId)
+  rt.archived.delete(sessionId)
+}
+
+/** Record a seeded session's archive / restore (archive/unarchive_session
+ *  while armed). Archived rows leave list_sessions and surface through
+ *  list_archived_sessions until restored. */
+export function recordSeedSessionArchived(sessionId: string): void {
+  if (!findSeedSession(sessionId)) return
+  seedSessionRuntime().archived.add(sessionId)
+}
+
+export function recordSeedSessionUnarchived(sessionId: string): void {
+  if (!findSeedSession(sessionId)) return
+  seedSessionRuntime().archived.delete(sessionId)
+}
+
+/** True when the seeded session is marked deleteFails (the deterministic
+ *  refused-delete fixture behind DeleteSessionModal's failure branch). */
+export function seedSessionDeleteFails(sessionId: string): boolean {
+  return findSeedSession(sessionId)?.deleteFails === true
+}
+
+/**
+ * The session-scoped model override for `get_session_model` and the
+ * player's send-time `model` stamp. `null` sessionId resolves to the FIRST
+ * seeded session (the scripted "current conversation" rule, same as
+ * seededMessages); an id matching no seeded session resolves to null — the
+ * demo map answers instead. Chip switches update the registry via
+ * setSeedSessionModel/clearSeedSessionModel, so the NEXT send observes the
+ * switch (the "takes effect next turn" anchor).
+ */
+export function seededSessionModel(sessionId?: string | null): { provider: string; model: string } | null {
+  const seed = seedState().seed
+  if (!seed?.sessions?.length) return null
+  const id = sessionId == null ? seed.sessions[0]!.id : sessionId
+  return seedSessionRuntime().modelOverrides.get(id) ?? null
+}
+
+/** Chip switch (set_session_model while armed): update the registry. */
+export function setSeedSessionModel(sessionId: string | null | undefined, override: { provider: string; model: string }): void {
+  const seed = seedState().seed
+  if (!seed?.sessions?.length) return
+  const id = sessionId == null ? seed.sessions[0]!.id : sessionId
+  if (!seed.sessions.some(s => s.id === id)) return
+  seedSessionRuntime().modelOverrides.set(id, { ...override })
+}
+
+/** Chip reset (clear_session_model while armed): back to inheriting the
+ *  global default. */
+export function clearSeedSessionModel(sessionId: string | null | undefined): void {
+  const seed = seedState().seed
+  if (!seed?.sessions?.length) return
+  const id = sessionId == null ? seed.sessions[0]!.id : sessionId
+  seedSessionRuntime().modelOverrides.delete(id)
+}
+
+// ── W2 journey #20: save_text_file store (plan write-back + failure) ───────
+
+interface SavedFilesBox {
+  files: Map<string, string>
+}
+
+function savedFiles(): SavedFilesBox {
+  return realmSingleton<SavedFilesBox>('__shannonMockSavedFiles', () => ({ files: new Map() }))
+}
+
+/**
+ * `save_text_file` while armed: record the write (in-memory demo twin of
+ * the disk write). `get_session_plan` serves the written content back so a
+ * PlanPanel checkbox tick survives its own refresh. With
+ * `config.saveTextFileFails` the handler rejects BEFORE recording — the
+ * rollback-to-engine-truth half of the journey.
+ */
+export function seedSaveTextFileShouldFail(): boolean {
+  return seedState().seed?.config?.saveTextFileFails === true
+}
+
+export function recordSavedTextFile(path: string, content: string): void {
+  savedFiles().files.set(path, content)
+}
+
+/** The written plan content under `<workingDir>/.shannon/plans/*.md`, or
+ *  null when nothing was written there (or no script armed — the store is
+ *  global but only written through the armed save handler). */
+export function savedPlanForWorkingDir(workingDir: string): { id: string; title: string; status: string; created_at: string; content: string } | null {
+  const prefix = `${workingDir}/.shannon/plans/`
+  for (const [path, content] of savedFiles().files) {
+    if (!path.startsWith(prefix)) continue
+    // The exact header layout PlanPanel writes (PlanManager::save_plan_to_file
+    // format): `# Plan: <title>\nCreated: <created>\nStatus: <status>\n\n<body>`.
+    const title = /^# Plan: (.*)$/m.exec(content)?.[1] ?? 'Plan'
+    const created = /^Created: (.*)$/m.exec(content)?.[1] ?? new Date().toISOString()
+    const status = /^Status: (.*)$/m.exec(content)?.[1] ?? 'pending'
+    const body = content.replace(/^# Plan: .*\nCreated: .*\nStatus: .*\n\n/, '')
+    return {
+      id: path.slice(prefix.length).replace(/\.md$/, ''),
+      title,
+      status,
+      created_at: created,
+      content: body,
+    }
+  }
+  return null
 }
 
 /** Raw override, or null when no script is loaded. */
@@ -31,19 +200,57 @@ export function getScriptSeed(): ScriptSeed | null {
   return seedState().seed
 }
 
-/** SessionInfo rows for `list_sessions` while a seed is armed. */
+/** SessionInfo rows for `list_sessions` while a seed is armed. Renames,
+ *  deletes and archives issued through the sidebar while armed are
+ *  projected here (the scripted twin of the backend session registry). */
 export function seededSessions(): SessionInfo[] | null {
   const seed = seedState().seed
   const sessions = seed?.sessions
   if (!sessions) return null
+  const rt = seedSessionRuntime()
   const now = Date.now()
-  return sessions.map((s, i) => ({
-    id: s.id,
-    title: s.title,
-    created_at: now - (sessions.length - i) * 60_000,
-    message_count: s.messages.length,
-    updated_at: now - i * 60_000,
-  }))
+  return sessions
+    .filter(s => !rt.deleted.has(s.id) && !rt.archived.has(s.id))
+    .map((s, i) => ({
+      id: s.id,
+      title: rt.renamed.get(s.id) ?? s.title,
+      created_at: now - (sessions.length - i) * 60_000,
+      message_count: s.messages.length,
+      updated_at: now - i * 60_000,
+      ...(s.workingDir ? { working_dir: s.workingDir } : {}),
+    }))
+}
+
+/**
+ * ArchivedSessionRow list for `list_archived_sessions` while a seed is
+ * armed (the session-lifecycle journey's 已归档 section). Null when
+ * unarmed — the demo handler keeps its (empty) roster.
+ */
+export function seededArchivedSessions(): ArchivedSessionRow[] | null {
+  const seed = seedState().seed
+  if (!seed?.sessions) return null
+  const rt = seedSessionRuntime()
+  const now = Date.now()
+  return seed.sessions
+    .filter(s => rt.archived.has(s.id))
+    .map(s => ({
+      id: s.id,
+      title: rt.renamed.get(s.id) ?? s.title,
+      updated_at: now,
+    }))
+}
+
+/**
+ * Title search over the VISIBLE seeded sessions for `search_sessions` while
+ * a seed is armed (the backend's title-first contract). Null when unarmed —
+ * the demo handler keeps its roster.
+ */
+export function seededSearchSessions(query: string): SessionInfo[] | null {
+  if (!seedState().seed?.sessions) return null
+  const q = query.trim().toLowerCase()
+  const visible = seededSessions() ?? []
+  if (!q) return visible
+  return visible.filter(s => s.title.toLowerCase().includes(q))
 }
 
 /**
@@ -315,15 +522,18 @@ export function seededRewoundMessages(sessionId: string | null | undefined, turn
 }
 
 /**
- * Config patch for `get_config`: `provider` swap and the hasKey=false shape
- * (`api_key: null`). Null while unarmed — handlers keep their defaults.
+ * Config patch for `get_config`: `provider` swap, the hasKey=false shape
+ * (`api_key: null`) and, W2 journey #17, the boot `approval_mode` (any
+ * engine value — the composer pill echoes unknown ones verbatim). Null
+ * while unarmed — handlers keep their defaults.
  */
-export function seededConfigPatch(): { provider?: string; api_key?: string | null } | null {
+export function seededConfigPatch(): { provider?: string; api_key?: string | null; approval_mode?: string } | null {
   const config = seedState().seed?.config
   if (!config) return null
-  const patch: { provider?: string; api_key?: string | null } = {}
+  const patch: { provider?: string; api_key?: string | null; approval_mode?: string } = {}
   if (config.provider != null) patch.provider = config.provider
   if (config.hasKey === false) patch.api_key = null
+  if (config.approvalMode != null) patch.approval_mode = config.approvalMode
   return Object.keys(patch).length ? patch : null
 }
 

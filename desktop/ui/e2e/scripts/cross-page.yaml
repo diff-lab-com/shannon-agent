@@ -20,7 +20,12 @@ seed:
         - role: user
           content: 帮我建一个待办清单文件
         - role: assistant
-          content: 已创建 todo.md，共 3 条待办。
+          content: |-
+            已创建 todo.md，共 3 条待办。可以用下面的命令核对：
+
+            ```bash
+            echo terminal-journey-ok
+            ```
           toolCalls:
             - toolUseId: tool-write-todo
               toolName: write_file

@@ -58,13 +58,12 @@ const SRC_ROOT = resolve(process.cwd(), 'src')
  * by adding real handlers, never by editing the scan.
  */
 const UNMOCKED_ALLOWLIST: Record<string, string> = {
-  // Session/worktree lifecycle — static demo sessions are never archived,
-  // branched, or attached to real worktrees/session windows.
-  // (list_archived_sessions left this list: the /chat boot fetches it every
-  // time, so R1 gave it a real handler instead — see handlers.ts.)
-  archive_session: 'session mutation on a live engine session',
+  // Session/worktree lifecycle — static demo sessions are never branched or
+  // attached to real worktrees/session windows. (archive_session /
+  // unarchive_session left this list in the W2 chat-testing wave: the
+  // sidebar Archive action got a real demo handler + scripted seed registry,
+  // same as list_archived_sessions before it.)
   branch_session: 'session mutation on a live engine session',
-  unarchive_session: 'session mutation on a live engine session',
   set_session_working_dir: 'session mutation on a live engine session',
   reveal_session_in_main: 'multi-window navigation (demo has one window)',
   open_session_window: 'session windows need the real Tauri shell',
@@ -153,9 +152,10 @@ const UNMOCKED_ALLOWLIST: Record<string, string> = {
   open_artifact_externally: 'OS/updater/file surface — browser cannot perform it',
   path_exists: 'OS/updater/file surface — browser cannot perform it',
   read_text_file: 'OS/updater/file surface — browser cannot perform it',
-  // (save_text_file left the list: wave-2 J15 gave it a real no-op handler —
-  // the /export journey drives the save-dialog success half end to end. The
-  // demo write is intentionally a no-op: no fs behind the mock.)
+  // (save_text_file left this list in the W2 chat-testing wave: J15 /export
+  // and the J20 PlanPanel write-back both need a demo handler — an in-memory
+  // store, plus the scripted saveTextFileFails failure fixture so the 计划 tab
+  // journey can pin both the write-back and the rollback. No fs behind the mock.)
   save_text_file_via_dialog: 'OS/native save dialog + fs write — browser cannot perform it',
   reveal_in_folder: 'OS/updater/file surface — browser cannot perform it',
   // (run_file_diagnostics left the list: wave-2 J18 gave it a real handler —
@@ -170,13 +170,15 @@ const UNMOCKED_ALLOWLIST: Record<string, string> = {
   detect_slash: 'only fires on live engine turns',
 
   // Misc one-off engine/gateway probes that demo pages never reach.
+  // (register/unregister_interactive_artifact left this list in the W2
+  // chat-testing wave: the chat-fence HTML artifact path DOES reach them —
+  // the demo handler throws so HtmlRenderer's static-hint fallback is the
+  // demo truth, and the failure stays off coreMock's console.error path.)
   get_provider_allowlist: 'engine/gateway probe demo never reaches',
   featured_vendor_to_entry: 'engine/gateway probe demo never reaches',
   verify_signature: 'engine/gateway probe demo never reaches',
   probe_url_frameable: 'engine/gateway probe demo never reaches',
   seed_sample_data: 'engine/gateway probe demo never reaches',
-  register_interactive_artifact: 'engine/gateway probe demo never reaches',
-  unregister_interactive_artifact: 'engine/gateway probe demo never reaches',
   test_all_providers: 'engine/gateway probe demo never reaches',
   scan_prompt_injection: 'engine/gateway probe demo never reaches',
   scan_prompt_injection_with_readme: 'engine/gateway probe demo never reaches',

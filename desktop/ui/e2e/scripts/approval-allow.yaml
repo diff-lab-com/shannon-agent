@@ -47,3 +47,69 @@ turns:
       # leaves with the run — P2-4 semantics).
       - waitFor: ui
       - event: query:completed
+  # ── W2 G22 扩展：risk 四级补 low/medium，reason 三源补 llm/default/legacy ──
+  # turn 2：low risk + llm 置信度 reason（Header.tsx 的 llm 分支，四舍五入%）。
+  - user: "读取 notes.txt（低风险，分类器判定）"
+    script:
+      - event: query:text
+        chunks: ["读取低风险文件前需要你的许可。"]
+        chunkDelayMs: 200
+      - event: permission-request
+        payload:
+          request_id: pr-allow-2
+          tool: read_file
+          risk: low
+          input:
+            path: /Users/demo/workspace/notes.txt
+          reason:
+            source: llm
+            confidence: 0.868
+      - event: query:tool-result
+        payload:
+          tool_use_id: tool-read-2
+          result: "hello"
+          is_error: false
+      - waitFor: ui
+      - event: query:completed
+  # turn 3：medium risk + default reason（无 source 字段 → policy default 分支）。
+  - user: "写 build artifact（中风险，无匹配规则）"
+    script:
+      - event: query:text
+        chunks: ["中风险操作需要你的许可。"]
+        chunkDelayMs: 200
+      - event: permission-request
+        payload:
+          request_id: pr-allow-3
+          tool: write_file
+          risk: medium
+          input:
+            file_path: /Users/demo/workspace/out.txt
+          reason:
+            source: default
+      - event: query:tool-result
+        payload:
+          tool_use_id: tool-write-3
+          result: "ok"
+          is_error: false
+      - waitFor: ui
+      - event: query:completed
+  # turn 4：legacy 兼容 —— 无 reason 字段的 payload 不渲染理由行。
+  - user: "列目录（legacy 载荷，无 reason）"
+    script:
+      - event: query:text
+        chunks: ["旧版载荷没有 reason 字段。"]
+        chunkDelayMs: 200
+      - event: permission-request
+        payload:
+          request_id: pr-allow-4
+          tool: Bash
+          risk: low
+          input:
+            command: "pwd"
+      - event: query:tool-result
+        payload:
+          tool_use_id: tool-pwd-4
+          result: "/Users/demo"
+          is_error: false
+      - waitFor: ui
+      - event: query:completed

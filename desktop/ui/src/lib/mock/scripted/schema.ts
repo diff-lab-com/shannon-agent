@@ -98,6 +98,29 @@ export interface ScriptSeedSession {
   id: string
   title: string
   messages: ScriptSeedMessage[]
+  /**
+   * Chat-testing W2 (journey #20): the session's working directory —
+   * `get_conversation`/`list_sessions` project it as `working_dir`, which is
+   * what Chat.tsx resolves as the page `workingDir` (plan panel fetch,
+   * run-panel cwd). Without it a seeded session never reaches the plan
+   * checklist journey.
+   */
+  workingDir?: string
+  /**
+   * Chat-testing W2 (journey #17): the session-scoped model override
+   * (backend `SessionState.model_override`). `get_session_model` answers it
+   * and the composer chip renders the "· session" suffix; chip switches
+   * update the same override so the NEXT send's snapshot `model` reflects
+   * the switch (the "takes effect next turn" anchor).
+   */
+  modelOverride?: { provider: string; model: string }
+  /**
+   * Chat-testing W2 (journey #19): when true, `delete_session` for THIS
+   * seeded session REJECTS — the deterministic stand-in for the real
+   * backend's refused delete (busy/archived session), exercising the
+   * DeleteSessionModal's "failure keeps the dialog open" branch.
+   */
+  deleteFails?: boolean
 }
 
 export interface ScriptSeed {
@@ -113,6 +136,21 @@ export interface ScriptSeed {
      * "return to an over-budget session" shape.
      */
     spentUsd?: number
+    /**
+     * Chat-testing W2 (journey #17): the desktop config's `approval_mode`
+     * as armed at boot. Accepts ANY engine value — including ones outside
+     * the composer's four-tier table (e.g. `bypass_permissions`), which the
+     * approval-mode pill must echo verbatim via its honest rawLabel
+     * fallback instead of masquerading as a listed tier.
+     */
+    approvalMode?: string
+    /**
+     * Chat-testing W2 (journey #20): while true, `save_text_file` REJECTS —
+     * the write-failure injection the PlanPanel checkbox rollback (engine
+     * truth wins) needs. Unset, the write records into the mock store and
+     * `get_session_plan` serves the written content back.
+     */
+    saveTextFileFails?: boolean
   }
   sessions?: ScriptSeedSession[]
 }
@@ -178,6 +216,8 @@ export const chatScriptSchema = {
             hasKey: { type: 'boolean' },
             budgetUsd: { type: ['number', 'null'] },
             spentUsd: { type: 'number', minimum: 0 },
+            approvalMode: { type: 'string', minLength: 1 },
+            saveTextFileFails: { type: 'boolean' },
           },
         },
         sessions: {
@@ -189,6 +229,17 @@ export const chatScriptSchema = {
             properties: {
               id: { type: 'string', minLength: 1 },
               title: { type: 'string' },
+              workingDir: { type: 'string', minLength: 1 },
+              modelOverride: {
+                type: 'object',
+                required: ['provider', 'model'],
+                additionalProperties: false,
+                properties: {
+                  provider: { type: 'string', minLength: 1 },
+                  model: { type: 'string', minLength: 1 },
+                },
+              },
+              deleteFails: { type: 'boolean' },
               messages: {
                 type: 'array',
                 items: {

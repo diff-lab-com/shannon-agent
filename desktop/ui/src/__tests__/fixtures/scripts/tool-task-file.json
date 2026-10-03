@@ -10,6 +10,52 @@
         "id": "script-sess-tool",
         "title": "Write todo.md",
         "messages": []
+      },
+      {
+        "id": "script-sess-files",
+        "title": "Generated files",
+        "messages": [
+          {
+            "role": "user",
+            "content": "生成报告 PDF、数据 CSV 和一份笔记"
+          },
+          {
+            "role": "assistant",
+            "content": "三个文件都生成好了：report.pdf、data.csv、notes.md。",
+            "toolCalls": [
+              {
+                "toolUseId": "tool-file-pdf",
+                "toolName": "write_file",
+                "toolInput": {
+                  "file_path": "/Users/demo/workspace/shannon-demo/report.pdf",
+                  "content": "%PDF-1.4 minimal stub"
+                },
+                "result": "wrote 1 block",
+                "isError": false
+              },
+              {
+                "toolUseId": "tool-file-csv",
+                "toolName": "write_file",
+                "toolInput": {
+                  "file_path": "/Users/demo/workspace/shannon-demo/data.csv",
+                  "content": "name,qty\nmilk,2\ntea,1"
+                },
+                "result": "wrote 3 lines",
+                "isError": false
+              },
+              {
+                "toolUseId": "tool-file-md",
+                "toolName": "write_file",
+                "toolInput": {
+                  "file_path": "/Users/demo/workspace/shannon-demo/notes.md",
+                  "content": "# Notes\nhello"
+                },
+                "result": "wrote 2 lines",
+                "isError": false
+              }
+            ]
+          }
+        ]
       }
     ]
   },
