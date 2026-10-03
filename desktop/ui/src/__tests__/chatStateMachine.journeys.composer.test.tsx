@@ -97,7 +97,11 @@ async function sendAndPlay(
   })
 }
 
-async function awaitSettled(h: Harness, timeout = 10_000): Promise<void> {
+/**
+ * Same settle budget as the shared suite's awaitSettled: a 30s default so
+ * chunk-timer lag under load never reads as a product regression.
+ */
+async function awaitSettled(h: Harness, timeout = 30_000): Promise<void> {
   await waitFor(() => expect(h.result.current.isQuerying).toBe(false), { timeout })
 }
 

@@ -135,10 +135,15 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     expect((await mockSnapshot(page)).sends[1]).toMatchObject({ turnIndex: 1, model: SWITCH_MODEL })
     await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
 
-    // Reset to default: the override is dropped — the chip re-inherits (no
-    // more "· session"), and the NEXT send observes the inheritance (null).
+    // Reset to default: the override is dropped — the chip re-inherits the
+    // PROMOTED global default (GPT-5, from "Set as default" above) and keeps
+    // the global effort tier: the exact inherited-state label "GPT-5 · Deep".
+    // The bare not.toContainText('session') would also pass on a wrong-model
+    // or placeholder chip, so pin the positive label too (next send observes
+    // the inheritance as model: null).
     await chip.click()
     await page.getByTestId('model-action-clear-override').click()
+    await expect(chip).toContainText('GPT-5 · Deep', { timeout: 5_000 })
     await expect(chip).not.toContainText('session', { timeout: 5_000 })
 
     await chat.send(script.turns[2]!.user)

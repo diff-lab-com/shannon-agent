@@ -16,6 +16,7 @@ import { ChatPage } from './helpers/ChatPage'
 import { loadChatScript, readChatScript } from './helpers/scriptLoader'
 import { expectNoConsoleErrors } from './helpers/watchdog'
 import { mockSnapshot } from './helpers/knownIssues'
+import { emitWebviewDrop } from './helpers/webviewDrop'
 import type { ChatScript } from '../src/lib/mock/scripted/schema'
 
 const script = readChatScript('edit-rewind') as ChatScript
@@ -48,21 +49,6 @@ async function startEdit(page: import('@playwright/test').Page, index: number): 
   // Scope to the bubble — every user message carries an Edit button.
   await bubble.getByRole('button', { name: 'Edit message' }).click()
   await expect(page.getByTestId('edit-banner')).toBeVisible()
-}
-
-/**
- * Deliver a Tauri v2 webview drag-drop through the mock event bridge — the
- * demo-mode path into the composer's mergePaths (the native attach dialog is
- * not drivable in the harness). The real @tauri-apps/api webview listener
- * registers `tauri://drag-drop` through plugin:event|listen, which the mock
- * bridge fans out to.
- */
-async function emitWebviewDrop(page: import('@playwright/test').Page, paths: string[]): Promise<void> {
-  await page.evaluate((dropped) => {
-    ;(window as unknown as {
-      __shannonMock: { emit(name: string, payload: unknown): void }
-    }).__shannonMock.emit('tauri://drag-drop', { paths: dropped, position: { x: 0, y: 0 } })
-  }, paths)
 }
 
 test.describe('scripted chat backend — edit-rewind (journey #10)', () => {

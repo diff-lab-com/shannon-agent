@@ -172,8 +172,12 @@ export function recordSavedTextFile(path: string, content: string): void {
 }
 
 /** The written plan content under `<workingDir>/.shannon/plans/*.md`, or
- *  null when nothing was written there (or no script armed — the store is
- *  global but only written through the armed save handler). */
+ *  null when nothing was written there. The store is global and the demo
+ *  `save_text_file` handler records even when NO script is armed (only the
+ *  `saveTextFileFails` rejection is seed-gated), so a plain demo page's
+ *  plan-path write leaks into a later unarmed `get_session_plan` — bounded
+ *  in practice: the demo has no workingDir source, and setScriptSeed's
+ *  lifecycle clears the store. */
 export function savedPlanForWorkingDir(workingDir: string): { id: string; title: string; status: string; created_at: string; content: string } | null {
   const prefix = `${workingDir}/.shannon/plans/`
   for (const [path, content] of savedFiles().files) {

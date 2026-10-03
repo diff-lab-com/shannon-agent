@@ -169,8 +169,16 @@ async function sendAndPlay(
   })
 }
 
-/** Wait for a turn to settle (isQuerying falls for the visible session). */
-async function awaitSettled(h: Harness, timeout = 10_000): Promise<void> {
+/**
+ * Wait for a turn to settle (isQuerying falls for the visible session).
+ *
+ * The default budget is 30s, not a bare waitFor 5s: under load (CI burners,
+ * parallel suites) the chunk timers and the ~50ms throttled projections can
+ * lag far past 10s, which is what turned cancel-matrix runs red without any
+ * product fault. One default here covers every call; waitFor-dense cases that
+ * predate the bump keep their explicit timeouts.
+ */
+async function awaitSettled(h: Harness, timeout = 30_000): Promise<void> {
   await waitFor(() => expect(h.result.current.isQuerying).toBe(false), { timeout })
 }
 
