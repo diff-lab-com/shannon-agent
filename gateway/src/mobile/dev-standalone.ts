@@ -25,11 +25,14 @@
  * The fake engine speaks the `shannon-api-protocol` WS surface (session_info
  * handshake, text/tool/usage events, approval_request → HTTP
  * /api/approval/respond → continue → completed, cancel → cancelled, and the
- * §J `sessions.list` / `session.history` one-shots backed by two static fake
- * sessions) with a deterministic script: every turn streams two text deltas,
- * then requests an Edit approval (with §L1 ts/agent/risk rich fields), then
- * (allow) applies the patch narratively or (deny) stands down, and completes.
- * It exists ONLY for joint debugging — production never imports this module.
+ * §J `sessions.list` / `session.history` one-shots backed by three static
+ * fake sessions — history implements §J2 engine-side pagination: `before`
+ * anchor with same-ts group integrity, `limit` clamp to 1, newest-window
+ * pages, `has_more`) with a deterministic script: every turn streams two text
+ * deltas, then requests an Edit approval (with §L1 ts/agent/risk rich fields),
+ * then (allow) applies the patch narratively or (deny) stands down, and
+ * completes. It exists ONLY for joint debugging — production never imports
+ * this module.
  *
  * Scope note: the standalone host serves the FULL §K task face (this file
  * wires `createTaskHandlers` + the mobile-only dispatch pipeline from
@@ -59,6 +62,7 @@ import { ApprovalRegistry } from "./approvalRegistry.js";
 import { createMobileDispatchPipeline } from "./dispatchPipeline.js";
 import { MobileDispatchHub } from "./hub.js";
 import { createTaskHandlers } from "./taskHandlers.js";
+import { fakeHistoryPage, type FakeHistoryMessage } from "./fakeEngineHistory.js";
 
 const bindHost = process.env.SHANNON_MOBILE_HOST ?? "127.0.0.1";
 const bindPort = Number(process.env.SHANNON_MOBILE_PORT ?? 0);
@@ -73,6 +77,15 @@ interface PendingApproval {
   resolve: (choice: "allow_once" | "deny") => void;
 }
 
+/** One §J2 recordTurn: user + assistant share the turn's epoch-ms ts — the
+ *  same-ts group a page boundary must not split. */
+function seedTurn(ts: number, user: string, assistant: string): FakeHistoryMessage[] {
+  return [
+    { role: "user", content: user, ts },
+    { role: "assistant", content: assistant, ts },
+  ];
+}
+
 class FakeEngine {
   private httpServer: Server | null = null;
   private wss: WebSocketServer | null = null;
@@ -80,18 +93,28 @@ class FakeEngine {
   private turnSeq = 0;
   readonly port = 0;
 
-  // §J dev data: two fake sessions with transcripts so the phone's Chat list
-  // seeding (sessions.list) and thread fills (session.history) have something
-  // honest to render during joint debugging. Static — the fake engine's turns
-  // don't write back into them (it exists only to exercise the wire).
-  // Token totals (C8): sess-dev-0001 carries real positive ints so the smoke
-  // sees the session.list token keys end to end; sess-dev-0002 deliberately
-  // omits them — "engine has no data → wire omits the keys" is the degradation
-  // path the phone must render honestly (never invent 0).
+  // §J dev data: three fake sessions with transcripts so the phone's Chat
+  // list seeding (sessions.list) and thread fills (session.history) have
+  // something honest to render during joint debugging. Static — the fake
+  // engine's turns don't write back into them (it exists only to exercise
+  // the wire).
+  //  - sess-dev-0001 is the full §J1 entry: agent ownership ("agent-dev-1" —
+  //    the same agent the approval gate reports) + real token totals (C8).
+  //    Its 2-message ts-less transcript is the mobile smoke's default-page
+  //    pin (gateway_smoke.dart check 20) — don't grow it here.
+  //  - sess-dev-0002 deliberately omits agentId and the token totals —
+  //    "engine has no data → wire omits the keys" is the degradation path
+  //    the phone must render honestly (never invent 0; §J1 skips agent-less
+  //    entries, so this one intentionally stays out of the phone's Chat
+  //    list while remaining present on the wire).
+  //  - sess-dev-0003 is the pagination fixture: five recordTurn turns
+  //    (epoch-ms ts, one shared ts per user+assistant pair) spanning ~21h,
+  //    so before-anchored loadEarlier walks are exercisable against the
+  //    fake without a real engine.
   private readonly sessions = [
     {
       session_id: "sess-dev-0001",
-      agent_id: null,
+      agent_id: "agent-dev-1",
       title: "Fix flaky login tests",
       updated_at: new Date(Date.now() - 3 * 60_000).toISOString(),
       total_input_tokens: 1834,
@@ -116,6 +139,39 @@ class FakeEngine {
           role: "assistant",
           content: "Draft ready: highlights on direct-link E2E, mobile TLS pinning, and the relay auto-reconnect.",
         },
+      ],
+    },
+    {
+      session_id: "sess-dev-0003",
+      agent_id: "agent-dev-2",
+      title: "Audit the token refresh path",
+      updated_at: new Date(Date.now() - 5 * 3_600_000).toISOString(),
+      transcript: [
+        ...seedTurn(
+          Date.now() - 26 * 3_600_000,
+          "Audit the token refresh path for races.",
+          "Found two: an unlocked clock read and a retry write that can clobber a newer token. Patching both now.",
+        ),
+        ...seedTurn(
+          Date.now() - 22 * 3_600_000,
+          "How confident are you in the retry fix?",
+          "Pinned with 50 serial runs, all green — the flake is gone.",
+        ),
+        ...seedTurn(
+          Date.now() - 18 * 3_600_000,
+          "Ship it, then draft the changelog entry.",
+          "Shipped as patch 1; changelog line: token refresh no longer races concurrent retries.",
+        ),
+        ...seedTurn(
+          Date.now() - 9 * 3_600_000,
+          "The changelog reads stiff — soften it.",
+          "Reworded: refresh tokens now survive overlapping retries without dropping writes.",
+        ),
+        ...seedTurn(
+          Date.now() - 5 * 3_600_000,
+          "Good. Anything else from the audit worth tracking?",
+          "One follow-up: the legacy cache path still assumes single-device — filed for the next cycle.",
+        ),
       ],
     },
   ] as const;
@@ -203,16 +259,18 @@ class FakeEngine {
         }
         if (frame.type === "session.history") {
           const session = this.sessions.find((s) => s.session_id === frame.session_id);
-          const messages = session ? [...session.transcript] : [];
-          const limit =
-            typeof frame.limit === "number" && Number.isFinite(frame.limit) && frame.limit >= 1
-              ? Math.floor(frame.limit)
-              : 50;
+          // §J2 pagination lives engine-side — see fakeEngineHistory.ts for
+          // the anchor/clamp/newest-window semantics (unit-tested there).
+          const { page, hasMore } = fakeHistoryPage(
+            session ? [...session.transcript] : [],
+            typeof frame.before === "string" ? frame.before : undefined,
+            typeof frame.limit === "number" ? frame.limit : undefined,
+          );
           send({
             type: "session.transcript",
             session_id: frame.session_id ?? "",
-            messages: messages.slice(0, limit),
-            has_more: messages.length > limit,
+            messages: page,
+            has_more: hasMore,
           });
           return;
         }
