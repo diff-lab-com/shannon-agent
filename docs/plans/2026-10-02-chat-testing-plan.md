@@ -512,6 +512,31 @@ v1 执行结果（R1–R6）已覆盖基建与 §9.2 修正面；v2 增量剩余
 
 ---
 
-## 10. R7 执行结果（待本 wave 合并前补写）
+## 10. R7 执行结果 (2026-10-03，v2 增量 wave 全部合并)
 
-> 占位：wave-2 六 PR（§9.6）合并前由 controller 汇总补写执行结果。
+§9 的 v2 增量由独立会话的 agent 团队实施（6 实现分域 worktree 并行 + 5 审查 + 修复轮，全 PR 审查 Approved 零 Critical），7 个 PR 全部合并 dev：
+
+| PR | 内容 |
+|---|---|
+| #235 | quickwin：A-25/A-26（编辑态附件所见即所发 + attachments-only 可提交）、D9-a（删 Alt+Up 广告+十语 key）、D9-b 翻转钉测；额外证实并修复 handleAttach append→replace 契约违约 |
+| #236 | P1.5：e2e/helpers/testids.ts 注册表（51 静态+7 模板）、七处 testid 补齐、权限弹窗可访问名（与 #231 殊途同归，rebase 取并集） |
+| #237 | J15 slash（9 剧本+L1 parse 表）、J16 file-mention、J18 draft-bridge 三契约；errors/Ctrl+F/attachments 扩展；flushSync 出 commit phase 产品修复（G11 揭示，failing-then-passing） |
+| #238 | seed schema 五字段三件套（modelOverride/approvalMode/workingDir/deleteFails/saveTextFileFails）；J17/J19/J20；G19/G21/G22 扩展 |
+| #239 | J21 multi-window 双页投影、J22 voice（7 个 STT mock）、G15 i18n-theme——全部 nightly-only（D8） |
+| #244 | 急救：#243 误删 PROMPT_QUEUE_CAP 致 dev tsc 红，Fast checks 过后 admin 合入 |
+| #246 | D9-a 后记：#232 在并行 wave 实现了 A-22 历史回溯，D9-a 删除的广告变成假话——revert 恢复提示行与十语 key（见下"并行裁定"） |
+
+### 与并行 wave 的交织（记录在案）
+本 wave 执行期间 dev 先后合入 #231/#232（D6+A-22）/ #233 / #240 / #241 / #242 / #243。三次 rebase 冲突全部集中在 mock 层（handlers/schema/coverage allowlist/player imports）——**教训：并行改 mock 层时冲突必须 grep 重复键**（git auto-merge 会让双 `save_text_file`/双 `plugin:dialog|save` 静默共存、后者覆盖前者）；#236 与 #231 对权限弹窗可访问名的修法殊途同归，取 dev 侧+叠加 testId。
+
+### 并行裁定（controller 代裁，供用户否决）
+- **D9-a 部分翻转**：D9-a 删除广告时 A-22 未实现（真话删除）；#232 随后实现了历史回溯，恢复广告才诚实 → #246 revert。
+- **D7 维持 dev 侧裁定**：#243 把"队列不持久化"文档化为有意设计（PROMPT_QUEUE_CAP 注释含勿无产品裁定修复警示）——与本 wave §8 D7"补持久化"拍板冲突，以 dev 侧现状为准、持久化维持 backlog，待用户明确否决再动。
+
+### R7 新发现的待修缺陷（已钉现状断言，修复时翻转）
+- **F-voice-gate**：voice factory stub `isSupported()` 恒真——无 MediaRecorder 环境也渲染 MicButton 并吐 stub 文本（ChatInput 门禁永真，与注释宣称矛盾）。
+- **F-theme-system**：ThemeContext 同值 setState eager bailout——system 主题不随 OS 切换即时重算（代码自注释"triggers re-render"不成立）。
+- a11yDebt 候选：Header 两个下拉展开后被虚拟化消息气泡赢 hit-test（现 spec 以 dispatchEvent workaround 驱动）。
+
+### Parked minors（不阻塞，随手清）
+visual-matrix welcome 基线语义（下次 nightly `--update-snapshots`）；slash spec 一处负断言 waitForTimeout(800)；MessageArea 内联 ref→useCallback；emitWebviewDrop helper 两 spec 重复可入 helpers；CONTRIBUTING 的 KNOWN_FUZZ_WEDGES 位置引用已在本 wave 修正。
