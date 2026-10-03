@@ -30,7 +30,6 @@ import { clearRecordedSends, clearSeedSessionModel, getScriptSeed, recordSavedTe
   seededSessionModel, seededSessions, seededUsage, seedSessionDeleteFails, setSeedSessionModel } from './scripted/seed'
 // wave-2 J15: canned /diff payloads behind the scripted seed gate (data/slash.ts).
 import { scriptedGitDiffFixture } from './data/slash'
-import { dispatchEvent } from './eventBridge'
 
 /**
  * W2 journey #19: the scripted session mutations notify the rail exactly
