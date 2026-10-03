@@ -1,12 +1,13 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { ThemeProvider, useTheme } from '@/context/ThemeContext'
 
 function ThemeConsumer() {
-  const { theme, setTheme, themes, fontScale, setFontScale } = useTheme()
+  const { theme, setTheme, resolvedTheme, themes, fontScale, setFontScale } = useTheme()
   return (
     <div>
       <span data-testid="current-theme">{theme}</span>
+      <span data-testid="resolved-theme">{resolvedTheme}</span>
       <span data-testid="theme-count">{themes.length}</span>
       <span data-testid="font-scale">{fontScale.toString()}</span>
       <button data-testid="set-font-scale" onClick={() => setFontScale(1.15)}>
@@ -241,5 +242,131 @@ describe('ThemeContext — scheme registry (U9)', () => {
     fireEvent.click(screen.getByTestId('btn-system'))
     expect(document.documentElement.getAttribute('data-theme')).toBe('tokyo-night')
     expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark')
+  })
+})
+
+describe('ThemeContext — live OS scheme switch in system mode (F-theme-system)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    document.documentElement.removeAttribute('data-theme')
+    document.documentElement.removeAttribute('data-theme-mode')
+  })
+
+  let matchMediaSpy: ReturnType<typeof vi.spyOn>
+
+  afterEach(() => {
+    // Targeted restore — vi.restoreAllMocks() would also wipe the setup
+    // file's global mocks (e.g. tauri-api configure → mockResolvedValue).
+    matchMediaSpy.mockRestore()
+  })
+
+  // A controllable matchMedia: the provider registers its change listener on
+  // the object this factory returns, and `flip` mutates `matches` + fires the
+  // listeners exactly like a real prefers-color-scheme change does.
+  function createSchemeMedia(startsDark: boolean) {
+    type SchemeListener = (e: MediaQueryListEvent) => void
+    const listeners = new Set<SchemeListener>()
+    const mql = {
+      matches: startsDark,
+      media: '(prefers-color-scheme: dark)',
+      onchange: null,
+      addEventListener: (type: string, cb: SchemeListener) => {
+        if (type === 'change') listeners.add(cb)
+      },
+      removeEventListener: (type: string, cb: SchemeListener) => {
+        if (type === 'change') listeners.delete(cb)
+      },
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      flip(dark: boolean) {
+        mql.matches = dark
+        const event = { matches: dark, media: mql.media } as MediaQueryListEvent
+        for (const cb of [...listeners]) cb(event)
+      },
+    }
+    return mql
+  }
+
+  function mountWithMedia(mql: ReturnType<typeof createSchemeMedia>) {
+    matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation(() => mql as unknown as MediaQueryList)
+    return render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+  }
+
+  it('recomputes resolvedTheme + data-theme(-mode) when the OS flips light↔dark', () => {
+    const mq = createSchemeMedia(false) // boot light → material
+    mountWithMedia(mq)
+
+    fireEvent.click(screen.getByTestId('btn-system'))
+    expect(screen.getByTestId('resolved-theme')).toHaveTextContent('material')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('material')
+    expect(document.documentElement.getAttribute('data-theme-mode')).toBe('light')
+
+    // OS flips to dark — the listener must write the REAL new scheme (a
+    // same-value setState bail-out used to swallow this: F-theme-system).
+    act(() => mq.flip(true))
+    expect(screen.getByTestId('resolved-theme')).toHaveTextContent('tokyo-night')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('tokyo-night')
+    expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark')
+
+    // And back.
+    act(() => mq.flip(false))
+    expect(screen.getByTestId('resolved-theme')).toHaveTextContent('material')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('material')
+    expect(document.documentElement.getAttribute('data-theme-mode')).toBe('light')
+  })
+
+  it('keeps tracking OS flips that happened while an explicit theme was active', () => {
+    // The listener must not be scoped to theme='system': a flip while the
+    // user sits on dracula must not leave a stale scheme for the later
+    // switch back to 'system'.
+    const mq = createSchemeMedia(false)
+    mountWithMedia(mq)
+
+    fireEvent.click(screen.getByTestId('btn-dracula'))
+    act(() => mq.flip(true))
+    // Explicit theme is untouched by the OS flip...
+    expect(screen.getByTestId('resolved-theme')).toHaveTextContent('dracula')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dracula')
+    expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark')
+
+    // ...but switching back to system resolves from the CURRENT OS scheme.
+    fireEvent.click(screen.getByTestId('btn-system'))
+    expect(screen.getByTestId('resolved-theme')).toHaveTextContent('tokyo-night')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('tokyo-night')
+  })
+
+  it('does not re-render consumers when the flip resolves to the same scheme', () => {
+    // If the new scheme truthfully equals the stored one, skipping the
+    // re-render is correct — the guard is that a REAL flip still lands.
+    let renders = 0
+    function RenderCounter() {
+      renders += 1
+      const { resolvedTheme } = useTheme()
+      return <span data-testid="counter-theme">{resolvedTheme}</span>
+    }
+    const mq = createSchemeMedia(true) // boot dark → tokyo-night
+    matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation(() => mq as unknown as MediaQueryList)
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+        <RenderCounter />
+      </ThemeProvider>
+    )
+    fireEvent.click(screen.getByTestId('btn-system'))
+    expect(screen.getByTestId('counter-theme')).toHaveTextContent('tokyo-night')
+
+    const afterSwitch = renders
+    act(() => mq.flip(true)) // same value — no state change, no re-render
+    expect(screen.getByTestId('counter-theme')).toHaveTextContent('tokyo-night')
+    expect(renders).toBe(afterSwitch)
+
+    act(() => mq.flip(false)) // real change — must land
+    expect(screen.getByTestId('counter-theme')).toHaveTextContent('material')
+    expect(renders).toBe(afterSwitch + 1)
   })
 })

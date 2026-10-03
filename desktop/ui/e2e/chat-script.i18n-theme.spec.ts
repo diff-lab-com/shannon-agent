@@ -10,11 +10,15 @@
 //      setLocale entry point): /chat → Settings → 简体中文 → back — the
 //      stream keeps accumulating across the unmount/remount and the final
 //      bubble is the exact chunk sum (流式中切语言不丢流).
-//   3. LIVE theme switch mid-stream via colorScheme emulation + theme
-//      'system' (ThemeContext listens on the media query — a real user
-//      path, no reload): data-theme/data-theme-mode flip instantly, the
-//      app-level Toaster follows the RESOLVED theme (App.tsx ThemedToaster
-//      → sonner's data-sonner-theme), and the stream survives.
+//   3. LIVE theme switch mid-stream through the REAL settings UI (the only
+//      setTheme entry point): /chat → Settings → Material — the stream keeps
+//      accumulating and the final bubble is the exact chunk sum.
+//   4. LIVE OS scheme flip with theme='system' via colorScheme emulation
+//      (ThemeContext's media-query listener is a real user path, no reload):
+//      F-theme-system — data-theme/data-theme-mode recompute instantly both
+//      directions, the app-level Toaster follows the RESOLVED theme
+//      (App.tsx ThemedToaster → sonner's data-sonner-theme), and the
+//      parked stream survives the flips (流式中切主题不丢流).
 //   4. G14: the sidebar sessions skeleton in the boot's catalogLoading
 //      window (seeded empty roster), handing over to the empty-state card.
 // session-switch-overlay is NOT repeated here — chat-script.session-switch
@@ -161,25 +165,75 @@ test.describe('i18n / theme (G15, nightly-only)', () => {
     await expectNoConsoleErrors(page)
   })
 
-  test('FINDING (pinned): with theme=system an OS scheme flip does NOT live-update <html data-theme>', async ({ page }) => {
-    // ThemeContext's prefers-color-scheme listener calls
-    // setThemeState('system') — the SAME value — so React bails out and
-    // resolvedTheme is never recomputed: a system-theme user's live OS
-    // switch (light↔dark) leaves the app on the stale theme until some
-    // other re-render of the PROVIDER happens (streaming state lives below
-    // ThemeProvider, so it never re-renders it). Pinned as-is; the fix is a
-    // one-line force-update in ThemeContext — flip this test when it lands.
+  test('live OS scheme flip with theme=system: <html> recomputes, the Toaster follows, the stream survives', async ({ page }) => {
+    // F-theme-system, flipped from the pinned FINDING: ThemeContext's
+    // prefers-color-scheme listener used to "refresh" via
+    // setThemeState('system') — the SAME value — so React bailed out and a
+    // system-theme user's live OS switch (light↔dark) left data-theme
+    // stale. The listener now writes the real new scheme into state, so
+    // resolvedTheme, <html data-theme(-mode)> and the resolved-theme
+    // Toaster recompute instantly — mid-stream too.
     await page.addInitScript(() => {
       window.localStorage.setItem('shannon-theme', 'system')
     })
-    await gotoChat(page)
+    await loadChatScriptObject(page, {
+      name: 'theme-system-stream-hold',
+      description: 'parked stream so the OS scheme flip happens mid-stream',
+      seed: { config: { hasKey: true }, sessions: [{ id: 'theme-system-hold-sess', title: 'System hold', messages: [] }] },
+      turns: [
+        {
+          user: '边流式边切系统主题',
+          script: [
+            { event: 'query:text', chunks: ['系统流一 ', '系统流二 '], chunkDelayMs: 50 },
+            { waitFor: 'ui' },
+          ],
+        },
+      ],
+    })
+    const chat = new ChatPage(page)
+    await expect(chat.composer()).toBeVisible({ timeout: 15_000 })
 
-    // Playwright default colorScheme is light → 'system' resolves to the
+    // sonner mounts the [data-sonner-toaster] ol only while a toast lives;
+    // summon one through the app's own watchdog-clean path. Toasts stack,
+    // so visibility anchors on the FRONT toast only.
+    const frontToast = page.locator('[data-sonner-toast][data-front="true"]')
+    async function summonToast(): Promise<void> {
+      await page.evaluate(() => {
+        (window as unknown as {
+          __shannonMock: { control: { emitNow(name: string, payload?: Record<string, unknown>): void } }
+        }).__shannonMock.control.emitNow('session-auto-unarchived', { session_id: 'theme-system-hold-sess', title: 'System hold' })
+      })
+      await expect(frontToast).toBeVisible({ timeout: 10_000 })
+    }
+
+    // Playwright's default colorScheme is light → 'system' resolves to the
     // light material scheme.
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'material')
+    await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'light')
 
+    // Park a stream mid-flight, then flip the OS scheme under it.
+    await chat.send('边流式边切系统主题')
+    await chat.expectStreamingCursor()
+
+    // OS flips to dark: the resolved theme recomputes LIVE, and the Toaster
+    // follows the RESOLVED theme (G4), not a fixed value.
     await page.emulateMedia({ colorScheme: 'dark' })
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'tokyo-night')
+    await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark')
+    await summonToast()
+    await expect(page.locator('[data-sonner-toaster]')).toHaveAttribute('data-sonner-theme', 'dark')
+
+    // And back to light — both directions, still mid-stream.
+    await page.emulateMedia({ colorScheme: 'light' })
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'material')
+    await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'light')
+
+    // Mid-stream continuity across the scheme flips: the parked stream is
+    // intact and settles into the EXACT chunk sum — nothing lost.
+    await page.evaluate(() => (window as unknown as { __shannonMock: { control: { resume(): void } } }).__shannonMock.control.resume())
+    await expect(page.getByText('系统流一 系统流二', { exact: false })).toBeVisible()
+    await chat.expectBubbleText(1, '系统流一 系统流二')
+    await expect(page.getByRole('button', { name: 'Stop generation' })).toHaveCount(0)
 
     await expectNoConsoleErrors(page)
   })
