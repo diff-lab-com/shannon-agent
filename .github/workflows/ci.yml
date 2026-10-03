@@ -900,7 +900,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
-    timeout-minutes: 20
+    # 30 min (raised from 20, 2026-10-03): the old cap left only ~40%
+    # headroom over the job's 10-12 min median, and once killed a stalled
+    # job before cargo-semver-checks had run a single step (run
+    # 37057376956 attempt 1 — checkout completed, ~20 min of log silence,
+    # canceled).
+    timeout-minutes: 30
     # Semver is a required gate (flipped from advisory in the v0.8.0 cycle).
     # Previously advisory because breaking changes are routine before 1.0 — they
     # remain allowed as long as the minor version bumps (0.8.x -> 0.9.0);
@@ -1024,6 +1029,18 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # 2026-10-03 (semver cache): cargo-semver-checks builds its rustdoc
+          # passes into ./semver-checks/target, which nothing cached before —
+          # the action's own prefix-key only caches the BASELINE rustdoc, so
+          # the ~7.5 min current-side dependency compile was re-paid on every
+          # PR. Deliberately its own ci-semver family, NOT the ci-v4
+          # workspace family: this job builds with the action's latest
+          # stable toolchain (rustc >=1.91, see the note below), not the
+          # repo's 1.88 pin.
+          shared-key: ci-semver
+          cache-directories: semver-checks/target
       - name: Install libdbus + Tauri system deps
         # shannon-mcp-saas → keyring → libdbus-sys needs pkg-config +
         # libdbus-1-dev at build time (also needed for the baseline rustdoc).
