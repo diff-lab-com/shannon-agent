@@ -27,11 +27,15 @@
  * (allow) applies the patch narratively or (deny) stands down, and completes.
  * It exists ONLY for joint debugging — production never imports this module.
  *
- * Scope note: the standalone host wires the engine-bridge + pairing handlers
- * only (createMobileHandlers without `tasks`), so `shannon/task.dispatch` /
- * `shannon/task.list` answer METHOD_NOT_FOUND here — the §K task face needs
- * the full desktop bootstrap (router + hub). Exercise it against the real
- * gateway; the fake engine's value is the direct `shannon/query` stream.
+ * Scope note: the standalone host serves the FULL §K task face (this file
+ * wires `createTaskHandlers` + the mobile-only dispatch pipeline from
+ * `dispatchPipeline.ts` — hub → SessionRouter lane → §K3 task turn handler →
+ * engine — the same components the live bootstrap assembles), so
+ * `shannon/task.dispatch` / `shannon/task.list` run the real journal + task
+ * stream against the fake engine. What it deliberately does NOT mount is the
+ * desktop-pairing `access` surface (`shannon/pairing.pending` / `.approve`):
+ * there is no IM allowlist / pairing store to serve here — exercise that
+ * against the real gateway.
  *
  * Exits on stdin EOF or SIGINT.
  */
@@ -46,6 +50,10 @@ import {
   PairTokenStore,
 } from "./pairing.js";
 import { MobileServer } from "./server.js";
+import { ApprovalRegistry } from "./approvalRegistry.js";
+import { createMobileDispatchPipeline } from "./dispatchPipeline.js";
+import { MobileDispatchHub } from "./hub.js";
+import { createTaskHandlers } from "./taskHandlers.js";
 
 const bindHost = process.env.SHANNON_MOBILE_HOST ?? "127.0.0.1";
 const bindPort = Number(process.env.SHANNON_MOBILE_PORT ?? 0);
@@ -294,17 +302,51 @@ const tokens = new PairTokenStore({
   ttlMs: Number(process.env.SHANNON_TOKEN_TTL_MS ?? 75_000),
 });
 const registry = new DeviceRegistry();
+
+// ── §K task face (the REAL dispatch pipeline) ────────────────────────────────
+// Same composition the bootstrap builds for platform "mobile": a dispatch
+// hub (journal + §K3 structured stream + approval parking) fed into the
+// mobile-only SessionRouter pipeline (serial per-device lane → §K3 task turn
+// handler → engine), with `shannon/task.*` served off the same hub. The fake
+// engine's scripted turns (text deltas → Edit approval gate → usage →
+// completed) exercise the whole chain end to end.
+const DEFAULT_MODEL = "claude-sonnet-4-6";
+const approvals = new ApprovalRegistry();
+const hub = new MobileDispatchHub({ logger, approvals });
+const pipeline = createMobileDispatchPipeline({
+  hub,
+  engineWsUrl,
+  engineHttpBaseUrl: engineHttpBase,
+  defaultModel: DEFAULT_MODEL,
+  logger,
+});
+hub.setSubmit(pipeline.submit);
+
 const handlers = createMobileHandlers({
   engine: {
     engineWsUrl,
     engineHttpBaseUrl: engineHttpBase,
-    defaultModel: "claude-sonnet-4-6",
+    defaultModel: DEFAULT_MODEL,
     version: GATEWAY_VERSION,
     logger,
+    // §K: a signed shannon/approval/decide unblocks a dispatched task's
+    // parked approval lane (same wiring as the bootstrap).
+    approvalDecisionSink: (requestId, choice) => hub.settleApproval(requestId, choice),
   },
   tokens,
   registry,
   logger,
+  // §L2: the same registry the hub feeds — approval.list / snapshot
+  // pendingApprovals stay truthful in dev too.
+  approvalRegistry: approvals,
+  tasks: createTaskHandlers({
+    hub,
+    // review §P1-13 parity: revoked devices can't dispatch (dev registries
+    // are in-memory, but the check mirrors the live wiring exactly).
+    isDeviceTrusted: (deviceId) => registry.has(deviceId),
+  }),
+  // `access` (shannon/pairing.pending / .approve) intentionally NOT mounted —
+  // no IM allowlist / pairing store exists in this host (see header).
 });
 
 const server = new MobileServer({
@@ -313,6 +355,9 @@ const server = new MobileServer({
   logger,
   handlers,
   servePage: false,
+  // P2-1: hand every accepted connection to the hub so paired devices become
+  // push targets for the §K3 task stream.
+  onContext: (ctx) => hub.registerConnection(ctx),
 });
 const handle = await server.start();
 const record = tokens.issue();
@@ -335,6 +380,7 @@ const shutdown = (): void => {
   stopping = true;
   void (async () => {
     await server.stop().catch(() => {});
+    await pipeline.stop().catch(() => {});
     await engine?.stop().catch(() => {});
     process.exit(0);
   })();

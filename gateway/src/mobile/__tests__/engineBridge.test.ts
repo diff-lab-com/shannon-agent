@@ -520,10 +520,13 @@ describe("shannon/session.list + session.history (§J)", () => {
           session_id: "sess-1",
           title: "Refactor transport client",
           updated_at: "2026-06-28T14:21:00Z",
+          // C8 additive: lifetime token totals ride through camelCase.
+          total_input_tokens: 1520,
+          total_output_tokens: 843,
           preview: "…",
           turn_count: 4,
         },
-        { session_id: "sess-2", title: null, updated_at: null },
+        { session_id: "sess-2", title: null, updated_at: null }, // no totals → keys omitted
         { session_id: "", title: "unusable" }, // no id → dropped
       ],
     }));
@@ -532,12 +535,46 @@ describe("shannon/session.list + session.history (§J)", () => {
     const res = await rpc(socket, "shannon/session.list", {});
     expect(res.result).toEqual({
       sessions: [
-        { id: "sess-1", title: "Refactor transport client", updatedAt: "2026-06-28T14:21:00Z" },
+        {
+          id: "sess-1",
+          title: "Refactor transport client",
+          updatedAt: "2026-06-28T14:21:00Z",
+          totalInputTokens: 1520,
+          totalOutputTokens: 843,
+        },
         { id: "sess-2" },
       ],
     });
     // v1 request frame is the bare type tag (unknown params never forwarded).
     expect(engine.sent).toEqual([{ type: "sessions.list" }]);
+    socket.close();
+  });
+
+  it("session.list token totals: non-numeric / negative engine values are omitted, camelCase fallback accepted", async () => {
+    const engine = new SessionFakeEngine(() => ({
+      type: "sessions_snapshot",
+      sessions: [
+        {
+          session_id: "sess-a",
+          total_input_tokens: "many", // junk → omitted
+          total_output_tokens: -4, // nonsense → omitted
+        },
+        {
+          session_id: "sess-b",
+          totalInputTokens: 10, // camelCase fallback (engine WS convention tolerance)
+          totalOutputTokens: 0, // zero IS a usable value
+        },
+      ],
+    }));
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/session.list", {});
+    expect(res.result).toEqual({
+      sessions: [
+        { id: "sess-a" },
+        { id: "sess-b", totalInputTokens: 10, totalOutputTokens: 0 },
+      ],
+    });
     socket.close();
   });
 
