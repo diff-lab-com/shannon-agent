@@ -296,12 +296,14 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
         insta::assert_snapshot!("replay_mockito_session", rendered);
 
         // Broadcast integrity: the live stream carried both request texts and
-        // the tool round-trip (the engine never broadcasts `Started`, which is
-        // a tee-owned boundary).
-        assert!(matches!(
-            broadcast.first(),
-            Some(QueryEvent::Started { .. })
-        ) || !broadcast.is_empty());
+        // the tool round-trip. Since P0-A3 the engine's FIRST broadcast frame
+        // is `Started` (the query acknowledgment); the durable tee boundary
+        // stays tee-owned, so the replay above is unchanged by it.
+        assert!(
+            matches!(broadcast.first(), Some(QueryEvent::Started { .. })),
+            "the first live frame must be Started, got {:?}",
+            broadcast.first()
+        );
         assert!(broadcast.iter().any(|e| matches!(
             e,
             QueryEvent::Text { content, .. } if content == "Listing."

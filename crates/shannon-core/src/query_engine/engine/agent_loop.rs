@@ -759,6 +759,17 @@ impl QueryEngine {
             // Prevent OS sleep during long-running queries (drops on exit)
             let _sleep_guard = crate::prevent_sleep::PreventSleepGuard::new();
 
+            // Wire contract (P0-A3): `QueryEvent::Started` is the FIRST frame
+            // of every accepted query — the SSE contract has always named it
+            // (`SseEventName::Started`), but nothing emitted it, so clients
+            // never saw the acknowledgment that their query was accepted. It
+            // maps to no durable L0 row (`query_event_to_bus_inputs` keeps
+            // the turn boundary tee-owned via `record_turn_start` below, so
+            // the session log is unchanged). Every consumer — the WS host,
+            // the desktop loops, the REPL, the headless CLI — already
+            // matches the variant into its ignore arm.
+            send_event!(tx, QueryEvent::Started { query_id });
+
             // ---- §4.8: mount the built-in subscriptions on this session's
             // bus. The L0 writer is now a subscriber ("log-as-subscribe"),
             // so in-process distribution and persistence share one path;

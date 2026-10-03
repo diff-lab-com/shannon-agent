@@ -428,8 +428,9 @@ impl SessionTee {
         }));
     }
 
-    /// Record `turn/start` for a query. The engine never broadcasts a
-    /// `Started` QueryEvent, so the tee owns this boundary.
+    /// Record `turn/start` for a query. The engine's `Started` stream frame
+    /// (P0-A3) maps to no durable row, so the tee still owns this boundary —
+    /// and unlike the frame, this call carries the real query id.
     pub fn record_turn_start(&mut self, query_id: Option<String>) {
         self.turn_open = true;
         // §4.15 online signals: re-arm the per-turn takeover latch.
