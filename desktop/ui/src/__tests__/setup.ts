@@ -133,6 +133,26 @@ Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: tru
 // Mock getAnimations for base-ui ScrollArea
 Element.prototype.getAnimations = vi.fn().mockReturnValue([])
 
+// jsdom 24 + nwsapi 2.2.27: matching ':modal'/' :fullscreen' recurses between
+// nwsapi's isModal/isFullscreen and the jsdom matcher until a RangeError is
+// finally swallowed by nwsapi's try/catch — ~20s of CPU PER CALL. floating-ui's
+// isTopLayer() (getOffsetParent → every popup positioning pass, so every Base
+// UI Menu/Select/Dialog in jsdom) hits exactly this. Nothing in the suite
+// exercises the HTML top layer (no requestFullscreen / dialog.showModal), so
+// the honest answer in this environment is always false; guard without
+// changing behavior for any other selector.
+for (const method of ['matches', 'webkitMatchesSelector'] as const) {
+  const impl = Element.prototype[method]
+  Object.defineProperty(Element.prototype, method, {
+    configurable: true,
+    writable: true,
+    value(this: Element, selector: string, ...rest: unknown[]) {
+      if (selector === ':modal' || selector === ':fullscreen') return false
+      return (impl as (...args: unknown[]) => boolean).apply(this, [selector, ...rest])
+    },
+  })
+}
+
 class IntersectionObserverMock {
   readonly root = null
   readonly rootMargin = ''
