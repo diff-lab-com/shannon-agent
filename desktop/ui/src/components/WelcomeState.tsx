@@ -80,12 +80,10 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
             </Button>
           ))}
         </div>
-        {/* D9-a: the shortcuts row keeps only the live affordances — the
-            Alt+Up input-history item used to advertise a feature that does
-            not exist (product backlog A-22) and was deleted, key included. */}
         <div className="mt-xl flex items-center justify-center gap-lg text-on-surface-variant opacity-50">
           <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono text-label-xs">{formatShortcut('K')}</kbd> {t('welcomeState.shortcuts.commands')}</span>
           <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono text-label-xs">?</kbd> {t('welcomeState.shortcuts.shortcuts')}</span>
+          <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono text-label-xs">Alt+Up</kbd> {t('welcomeState.shortcuts.history')}</span>
         </div>
       </div>
     </div>

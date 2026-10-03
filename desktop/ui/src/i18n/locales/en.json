@@ -1712,6 +1712,7 @@
   "shortcutsHelp.section.sessions": "Chats",
   "shortcutsHelp.title": "Keyboard Shortcuts",
   "welcomeState.shortcuts.commands": "Commands",
+  "welcomeState.shortcuts.history": "History",
   "welcomeState.shortcuts.shortcuts": "Shortcuts",
   "welcomeState.subtitleItem.code": "write code",
   "welcomeState.subtitleItem.email": "draft emails",
