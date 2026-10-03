@@ -13,15 +13,15 @@ import ChatInput from '@/components/chat/ChatInput'
 import * as api from '@/lib/tauri-api'
 import type * as ReactRouterDom from 'react-router-dom'
 
-// 120s, not the 60s this file shipped with (GB round-1): the commit-chain
+// 300s, not the 120s this file carried since GB round-1: the commit-chain
 // test below has three bounded waits (openSelectOptions 15s + two waitFor
-// 15s) whose worst case (~45s + render overhead) OVERLAPPED the old budget,
-// so under full-suite CPU contention on the 2-core CI runners the framework
-// timeout fired at random instead of an inner bound failing with a clear
-// error. Healthy path measured at 45.6s locally, 2×60s timeouts on CI
-// (2026-10-01). 120s = 2x headroom; a genuinely broken interaction still
-// fails fast at its own 15s bounds.
-vi.setConfig({ testTimeout: 120_000 })
+// 15s) whose worst case (~45s + render overhead) already forced a 60s → 120s
+// bump when the 2-core CI runners contended (2026-10-01). Under the 4-worker
+// unit gate (#242 follow-up) the same test hit the 120s ceiling once more
+// (run 37117293111, shard 2/2) — heavy vitest fork contention again, healthy
+// path still ~45s. 300s = headroom for the noisy-neighbor regime; a genuinely
+// broken interaction still fails fast at its own 15s bounds.
+vi.setConfig({ testTimeout: 300_000 })
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
