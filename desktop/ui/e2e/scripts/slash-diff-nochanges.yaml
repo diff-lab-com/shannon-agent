@@ -1,0 +1,22 @@
+# ChatScript: slash-diff-nochanges — wave-2 journey #15 的 /diff noChanges 态。
+#
+# seed 哨兵：首个会话 id = "diff:nochanges" → scripted 后端的
+# get_session_git_diff 返回 data/slash.ts 的 nochanges fixture
+# （is_repo: true, files: []）→ SlashResultCard 渲染 "No uncommitted
+# changes." 卡。un-scripted demo 路径不经过该哨兵，handler 默认态逐字节
+# 不变（铁律 4）。断言在 spec（chat-script.slash.spec.ts）。
+name: slash-diff-nochanges
+description: /diff noChanges 态 — 干净仓库的安静卡
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: "diff:nochanges"
+      title: Diff nochanges fixture
+      messages: []
+turns:
+  - user: "/diff"
+    script:
+      - event: query:text
+        chunks:
+          - "(unused)"

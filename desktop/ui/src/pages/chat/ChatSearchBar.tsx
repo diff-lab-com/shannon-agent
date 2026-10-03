@@ -81,7 +81,14 @@ export default function ChatSearchBar({
     if (lastQueryRef.current === query) return
     lastQueryRef.current = query
     setActive(0)
-    if (matches.length > 0) goTo(0)
+    if (matches.length > 0) {
+      // Defer the jump to a task: the virtualizer's scrollToIndex flushSyncs
+      // internally, and React refuses a flush while it is already rendering
+      // (this effect runs in the onChange render's commit window) — the call
+      // used to console.error and drop the synchronous scroll.
+      const timer = window.setTimeout(() => goTo(0), 0)
+      return () => window.clearTimeout(timer)
+    }
   }, [query, matches, goTo])
 
   useEffect(() => {

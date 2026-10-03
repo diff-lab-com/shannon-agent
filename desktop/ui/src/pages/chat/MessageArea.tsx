@@ -302,7 +302,16 @@ export default function MessageArea({
                 key={messageKeys[vItem.index]}
                 data-index={vItem.index}
                 data-message-index={vItem.index}
-                ref={virtualizer.measureElement}
+                ref={(el) => {
+                  // Defer the measurement off the ref (commit) phase:
+                  // react-virtual's measureElement notifies with a flushSync
+                  // rerender, and React refuses a flush while the commit is
+                  // still in progress — every jump that mounts rows (e.g. a
+                  // Ctrl+F search landing) console.error'd. A microtask is
+                  // still ahead of first paint; resizes keep riding the
+                  // ResizeObserver as before.
+                  queueMicrotask(() => virtualizer.measureElement(el))
+                }}
                 className="pb-lg"
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vItem.start}px)` }}
               >

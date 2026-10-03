@@ -4,7 +4,7 @@
 // disabled no-match state.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import ChatSearchBar from '@/pages/chat/ChatSearchBar'
 import type { ChatMessage } from '@/types'
 
@@ -66,10 +66,13 @@ describe('ChatSearchBar — matching and counting', () => {
 })
 
 describe('ChatSearchBar — navigation', () => {
-  it('jumps to the first match on query and walks with Enter (virtualized)', () => {
+  it('jumps to the first match on query and walks with Enter (virtualized)', async () => {
     const { virtualizer, onFlash } = renderBar()
     const input = screen.getByLabelText('Search in conversation')
     fireEvent.change(input, { target: { value: 'panda' } })
+    // The first jump is deferred to a task (the virtualizer flushSyncs, which
+    // React rejects inside the onChange commit window) — wait for it to land.
+    await waitFor(() => expect(virtualizer.scrollToIndex).toHaveBeenCalled())
     expect(virtualizer.scrollToIndex).toHaveBeenLastCalledWith(0, { align: 'center' })
     expect(onFlash).toHaveBeenLastCalledWith(0)
     expect(screen.getByTestId('chat-search-count')).toHaveTextContent('1/3')
@@ -89,7 +92,7 @@ describe('ChatSearchBar — navigation', () => {
     expect(screen.getByTestId('chat-search-count')).toHaveTextContent('3/3')
   })
 
-  it('scrolls the DOM node in non-virtualized mode', () => {
+  it('scrolls the DOM node in non-virtualized mode', async () => {
     const parent = document.createElement('div')
     const target = document.createElement('div')
     // "Himalayas" matches the message at index 4.
@@ -102,6 +105,9 @@ describe('ChatSearchBar — navigation', () => {
     })
     fireEvent.change(screen.getByLabelText('Search in conversation'), { target: { value: 'Himalayas' } })
     expect(virtualizer.scrollToIndex).not.toHaveBeenCalled()
+    // Same deferred-task jump as the virtualized path — wait for the landing,
+    // then keep asserting the exact centered scroll.
+    await waitFor(() => expect(target.scrollIntoView).toHaveBeenCalled())
     expect(target.scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
     parent.remove()
   })

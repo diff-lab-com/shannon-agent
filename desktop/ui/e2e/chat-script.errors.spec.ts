@@ -133,6 +133,11 @@ test.describe('scripted chat backend — failure journeys (#5)', () => {
     // the thrown guard — no query ever started, so no stream/cursor).
     await expect(page.getByText('send rejected by scripted backend guard')).toBeVisible({ timeout: 10_000 })
     await expect(chat.streamingCursor()).toHaveCount(0)
+    // G13: the invoke rejection happened BEFORE any user message was
+    // recorded (seed messages are empty and the optimistic append rolled
+    // back) — with no history to re-send, the Retry affordance hides
+    // entirely instead of rendering a dead button.
+    await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0)
 
     // A-1 fixed: the composer still holds the rejected text…
     await expect(chat.composer()).toHaveValue(STORY)
@@ -157,6 +162,91 @@ test.describe('scripted chat backend — failure journeys (#5)', () => {
     await expect(page.getByText('send rejected by scripted backend guard')).toHaveCount(0)
     await expect(chat.bubbleAt(1)).toContainText('重发成功的流式回复')
     expect((await mockSnapshot(page)).sentTurns).toBe(2)
+    await expectNoConsoleErrors(page)
+  })
+
+  // G13 (wave-2): query:notice — the engine's self-healed recoveries
+  // (failover / key rotation) surface as muted in-stream lines, NOT error
+  // banners. They survive the run's completion until the session's next
+  // send, and the bucket caps at 20 lines.
+  test('stream notices render both kinds, survive completion, reset on the next send, and cap at 20', async ({ page }) => {
+    test.setTimeout(90_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'stream-notices', test.info())
+
+    await expect(page.getByRole('heading', { name: 'Stream notices' })).toBeVisible({ timeout: 10_000 })
+    const failover = page.getByTestId('stream-notice-failover')
+    const rotation = page.getByTestId('stream-notice-key_rotation')
+    await chat.send('讲讲故障转移时发生了什么')
+    await chat.expectStreamingCursor()
+
+    await expect(failover).toBeVisible({ timeout: 10_000 })
+    await expect(failover).toContainText('Model fallback')
+    await expect(failover).toContainText('upstream 429 — retried on the fallback model')
+    await expect(rotation).toBeVisible()
+    await expect(rotation).toContainText('API key rotation')
+    await expect(rotation).toContainText('API key #1 rejected — rotated to key #2')
+
+    // Settled (completed + committed): the lines are still there — the run
+    // never failed, so nothing replaces them until the next send.
+    await expect(chat.sendButton()).toBeVisible({ timeout: 20_000 })
+    await expect(chat.bubbles()).toHaveCount(2)
+    await expect(failover).toBeVisible()
+    await expect(rotation).toBeVisible()
+
+    // The next send resets the notice slate for the session.
+    await chat.send('第二条消息应当清掉 notice 行')
+    await expect(chat.bubbles()).toHaveCount(4, { timeout: 15_000 })
+    await expect(page.getByTestId('stream-notice-failover')).toHaveCount(0)
+    await expect(page.getByTestId('stream-notice-key_rotation')).toHaveCount(0)
+
+    // Cap: 22 injected notices keep only the newest 20 (the oldest spill
+    // out of the bucket). emitNow bypasses the player state — same bridge
+    // the script steps ride.
+    await page.evaluate(() => {
+      const mock = (window as unknown as {
+        __shannonMock?: { control: { emitNow(name: string, payload?: Record<string, unknown>): void } }
+      }).__shannonMock
+      for (let i = 0; i < 22; i++) {
+        mock?.control.emitNow('query:notice', { kind: 'failover', message: `notice-${String(i).padStart(2, '0')}` })
+      }
+    })
+    const lines = page.locator('[data-testid^="stream-notice-"]')
+    await expect(lines).toHaveCount(20, { timeout: 10_000 })
+    await expect(page.getByText('notice-00')).toHaveCount(0)
+    await expect(page.getByText('notice-01')).toHaveCount(0)
+    await expect(page.getByText('notice-02')).toBeVisible()
+    await expect(page.getByText('notice-21')).toBeVisible()
+    await expectNoConsoleErrors(page)
+  })
+
+  // G13 (wave-2): the goal-owned guard. The demo goal registry keeps a
+  // RUNNING goal bound to sess-002, so the session seeded here is
+  // goal-owned — any send is refused CLIENT-side before send_message, with
+  // the goal banner (not a stream error), the composer text restored, and
+  // — with no recorded history — no Retry button.
+  test('a goal-owned session blocks sends with the goal banner; nothing reaches the player', async ({ page }) => {
+    test.setTimeout(60_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'goal-owned', test.info())
+    await expect(chat.composer()).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByRole('heading', { name: 'Goal owned' })).toBeVisible({ timeout: 10_000 })
+
+    const BLOCKED = '这条会被 goal 守卫拦截'
+    await chat.send(BLOCKED)
+
+    const banner = page.getByText('A goal run is active on this session', { exact: false })
+    await expect(banner).toBeVisible({ timeout: 10_000 })
+    // The guard runs before any query exists: composer text comes back
+    // (A-1 recovery), no bubbles, and the player never saw the send.
+    await expect(chat.composer()).toHaveValue(BLOCKED)
+    await expect(chat.streamingCursor()).toHaveCount(0)
+    await expect(chat.bubbles()).toHaveCount(0)
+    const snapshot = await mockSnapshot(page)
+    expect(snapshot.sentTurns).toBe(0)
+    expect(snapshot.sends).toHaveLength(0)
+    // No user message exists → nothing to re-send → no Retry affordance.
+    await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0)
     await expectNoConsoleErrors(page)
   })
 })

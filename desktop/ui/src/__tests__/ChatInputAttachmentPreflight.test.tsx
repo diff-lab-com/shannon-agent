@@ -220,4 +220,57 @@ describe('ChatInput — attachment preflight flagging (G3 P0-3)', () => {
     expect(screen.queryByTestId('attachment-chip-issue')).not.toBeInTheDocument()
     expect(screen.getByText('ok.txt')).toBeInTheDocument()
   })
+
+  // G18 (wave-2): the extraction badge shares the issue flag's advisory
+  // lifecycle — it renders from the preflight report and is PRUNED with the
+  // chip, so a removed file can't leave a stale "extracted N sections" mark.
+  it('extraction badges render from the preflight report and prune with their chip', async () => {
+    const onAttach = vi.fn()
+    const { rerender } = renderChatInput({
+      attachedFiles: ['/tmp/report.pdf', '/tmp/notes.txt'],
+      onAttach,
+    })
+    vi.mocked(api.checkAttachmentPaths).mockResolvedValue([
+      {
+        path: '/tmp/report.pdf',
+        ok: true,
+        extraction: {
+          path: '/tmp/report.pdf',
+          kind: 'pdf',
+          extracted: true,
+          sections_total: 12,
+          sections_inlined: 12,
+          truncated: false,
+        },
+      },
+      { path: '/tmp/notes.txt', ok: true },
+    ])
+    await dropPaths(['/tmp/report.pdf', '/tmp/notes.txt'], onAttach)
+
+    // Only the parseable document carries the extraction badge.
+    await waitFor(() => expect(screen.getAllByTestId('attachment-chip-extraction')).toHaveLength(1))
+    expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    expect(screen.getByText('notes.txt')).toBeInTheDocument()
+
+    // The parent removes the pdf chip → its badge must vanish with it.
+    rerender(
+      <I18nProvider>
+        <ChatInput
+          value=""
+          onChange={vi.fn()}
+          onSend={vi.fn()}
+          onExecuteSlash={vi.fn()}
+          attachedFiles={['/tmp/notes.txt']}
+          onAttach={onAttach}
+          onDetachAll={vi.fn()}
+          isQuerying={false}
+          onCancelQuery={vi.fn()}
+          onOpenQuickFix={vi.fn()}
+          onOpenEditor={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(screen.queryByText('report.pdf')).not.toBeInTheDocument())
+    expect(screen.queryByTestId('attachment-chip-extraction')).not.toBeInTheDocument()
+  })
 })

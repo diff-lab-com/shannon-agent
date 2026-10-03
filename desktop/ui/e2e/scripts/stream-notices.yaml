@@ -1,0 +1,49 @@
+# ChatScript: stream-notices — wave-2 journey #5/G13 扩展（errors spec 补洞）。
+#
+# query:notice 两种 kind（failover / key_rotation）→ MessageArea 的
+# StreamNoticeLine（stream-notice-{kind} testid）。notice 不是错误：行在
+# query:completed 后仍存活（「引擎已自愈」的告知要让人看到），直到该会话
+# 下一次发送才被清空（sendMessage 重置 notice 桶）。cap 20 在 spec 用
+# control.emitNow 灌 22 条验证（20 条保留、最旧的被挤出）。
+name: stream-notices
+description: 流中 notice — failover + key_rotation 行渲染、completed 后存活、下次发送清空、cap 20
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-notice
+      title: Stream notices
+      messages: []
+turns:
+  - user: "讲讲故障转移时发生了什么"
+    script:
+      - event: query:text
+        chunks:
+          - "引擎先开始回答。"
+          - "正在切换备用通道…"
+          - "准备继续回答。"
+        # 400ms 分片间隔 → ~1.2s 的流中窗口，cursor 断言稳定可见。
+        chunkDelayMs: 400
+      - event: query:notice
+        payload:
+          kind: failover
+          message: "upstream 429 — retried on the fallback model"
+      - event: query:notice
+        payload:
+          kind: key_rotation
+          message: "API key #1 rejected — rotated to key #2"
+      - event: query:text
+        chunks:
+          - "切换到备用模型后继续回答。"
+      - event: query:usage
+        payload:
+          input_tokens: 64
+          output_tokens: 32
+          cost_usd: 0.0012
+      - event: query:completed
+  - user: "第二条消息应当清掉 notice 行"
+    script:
+      - event: query:text
+        chunks:
+          - "第二条回复，notice 桶已重置。"
+      - event: query:completed

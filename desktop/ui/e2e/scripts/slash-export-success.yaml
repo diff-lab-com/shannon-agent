@@ -1,0 +1,22 @@
+# ChatScript: slash-export-success — wave-2 journey #15 的 /export 成功半区。
+#
+# 与 slash-commands.yaml 同构，但会话标题取 ExportSuccess 前缀：mock 的
+# plugin:dialog|save 以 defaultPath 前缀为哨兵（ExportSuccess* → 返回演示
+# Downloads 路径），save_text_file 成功落定 → "Exported to Markdown" toast。
+# 主 journey（标题 Slash commands）走 null（用户取消）半区。断言在 spec
+# （chat-script.slash.spec.ts）。
+name: slash-export-success
+description: /export 成功半区 — 保存对话框返回路径 → save_text_file → 成功 toast
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-export
+      title: ExportSuccess journey
+      messages: []
+turns:
+  - user: "/export"
+    script:
+      - event: query:text
+        chunks:
+          - "(unused)"

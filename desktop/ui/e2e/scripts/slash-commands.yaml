@@ -1,0 +1,43 @@
+# ChatScript: slash-commands — wave-2 journey #15（方案 §9.4 J15，composer/input 域）。
+#
+# composer 斜杠命令的端到端主 journey。斜杠命令不消耗 player turn（本地执行、
+# 不 send_message），turns 仅供「斜杠形式输入必须作为纯文本发给模型」的
+# 断言（parse 规则的端到端面：/diff now 与 /usr/local/bin 都以原文本进
+# 气泡、走 scripted turn）。
+#
+# seed 会话 messages 为空 → get_session_usage 报 events:0 → /cost 卡渲染
+# legacyHint 行（context-panels journey 只断言了 /cost 主体数值）。
+#
+# 断言在 spec（chat-script.slash.spec.ts）：/goal 表单校验与 goal-start-success、
+# /diff notRepo 卡（真实 handler 默认态）、/export（保存对话框在 harness 不可
+# 用 → 失败 toast 路径，见报告注记）、/new 建会话清空、/cost legacyHint。
+name: slash-commands
+description: 斜杠命令主 journey — /goal 表单 / /diff notRepo / /export / /new / /cost legacyHint / 斜杠形式文本直达模型
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-slash
+      title: Slash commands
+      messages: []
+turns:
+  # turn.user 标注的是「哪次发送会消费这一轮」——player 按 SEND 顺序消费
+  # turn（user 字段只是注释，不参与匹配）。
+  # parse 规则锚点：`/name args` 不执行命令，整条作为纯文本发给模型。
+  - user: "/diff now"
+    script:
+      - event: query:text
+        chunks:
+          - "这条以 /diff 开头但带参数，原样到达模型"
+  # 未知 /token（常见于粘贴的绝对路径）同样作为纯文本发送。
+  - user: "/usr/local/bin"
+    script:
+      - event: query:text
+        chunks:
+          - "未知斜杠 token 也是纯文本"
+  # /new 测试先发一条真实消息，让「建会话并清空」有可见的气泡可清。
+  - user: "/new 之前的一条普通消息"
+    script:
+      - event: query:text
+        chunks:
+          - "普通的流式回复"
