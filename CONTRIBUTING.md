@@ -62,7 +62,7 @@ suite (L1). Rules:
   script; the YAML/JSON parity test must stay green.
 - **Nightly fuzz findings** (`.github/workflows/chat-nightly.yml`) become fixed
   scripts within 48h — see `KNOWN_FUZZ_WEDGES` in
-  `e2e/scripts/fuzz-found-cross-session.yaml` for the pattern (freeze the wedge,
+  `e2e/chat-script.fuzz.spec.ts` for the pattern (freeze the wedge,
   write the flip condition, file the issue).
 - **`UNMOCKED_ALLOWLIST` / armed-vs-unarmed**: any new mock handler must keep
   the un-scripted demo path byte-identical (covered by
