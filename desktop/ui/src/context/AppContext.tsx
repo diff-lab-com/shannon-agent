@@ -80,6 +80,7 @@ const DOCK_OPEN_KEY = 'shannon.dock.open'
 // B1 P2-13: minimum interval between visible streaming-bucket projections.
 const STREAM_FLUSH_MS = 50
 // B1 §4-9: per-session prompt queue capacity (spec: 1–3, we take 3).
+const PROMPT_QUEUE_CAP = 3
 // D7 (intentional, 2026-10-02): the queue is deliberately NOT persisted —
 // it is a minutes-scale waiting area; a restart clears it by design, unlike
 // drafts (which do persist). Do not "fix" this inconsistency without a
