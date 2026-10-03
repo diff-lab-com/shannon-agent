@@ -285,6 +285,27 @@ export default function MessageArea({
     regenerate: index === lastAssistantIndex ? regenerateInfo : undefined,
   })
 
+  // Stable ref identity: an inline arrow here would be a NEW function every
+  // render, so React would detach (null) + re-attach (el) each row on every
+  // render — one wasted idempotent re-measure per row per render. With a
+  // stable callback a row measures once on mount (the virtualizer instance
+  // from useVirtualizer is useState-held, so the identity only ever tracks
+  // that); resizes keep riding the ResizeObserver.
+  const measureRow = useCallback(
+    (el: HTMLElement | null) => {
+      // Defer the measurement off the ref (commit) phase:
+      // react-virtual's measureElement notifies with a flushSync
+      // rerender, and React refuses a flush while the commit is
+      // still in progress — every jump that mounts rows (e.g. a
+      // Ctrl+F search landing) console.error'd. A microtask is
+      // still ahead of first paint; resizes keep riding the
+      // ResizeObserver as before. (el === null on unmount hits
+      // measureElement's disconnected-cache GC branch.)
+      queueMicrotask(() => virtualizer.measureElement(el))
+    },
+    [virtualizer],
+  )
+
   return (
     <div ref={scrollParentRef} className="relative flex-1 overflow-y-auto px-xl pt-lg pb-md">
       <StreamStatusRegion active={streamActive} />
@@ -302,16 +323,7 @@ export default function MessageArea({
                 key={messageKeys[vItem.index]}
                 data-index={vItem.index}
                 data-message-index={vItem.index}
-                ref={(el) => {
-                  // Defer the measurement off the ref (commit) phase:
-                  // react-virtual's measureElement notifies with a flushSync
-                  // rerender, and React refuses a flush while the commit is
-                  // still in progress — every jump that mounts rows (e.g. a
-                  // Ctrl+F search landing) console.error'd. A microtask is
-                  // still ahead of first paint; resizes keep riding the
-                  // ResizeObserver as before.
-                  queueMicrotask(() => virtualizer.measureElement(el))
-                }}
+                ref={measureRow}
                 className="pb-lg"
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vItem.start}px)` }}
               >
