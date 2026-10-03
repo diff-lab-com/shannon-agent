@@ -383,12 +383,13 @@ export default function Chat() {
     }
   }, [blockedPayload, messages, sendMessage])
 
-  // W2-4: what the banner's Continue will actually deliver. `null` = nothing
-  // to deliver (no refused payload held, no recorded user turn) — the action
-  // hides instead of staying a clickable no-op.
-  const continueTarget: 'blocked' | 'last-message' | null = blockedPayload
+  // W2-4: what the banner's Continue will actually deliver. `'none'` =
+  // nothing to deliver (no refused payload held, no recorded user turn) —
+  // the action hides instead of staying a clickable no-op. Required
+  // sentinel (chat-testing 裁定): no null/undefined can reach the banner.
+  const continueTarget: 'blocked' | 'last-message' | 'none' = blockedPayload
     ? 'blocked'
-    : messages.some(m => m.role === 'user') ? 'last-message' : null
+    : messages.some(m => m.role === 'user') ? 'last-message' : 'none'
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollParentRef = useRef<HTMLDivElement>(null)

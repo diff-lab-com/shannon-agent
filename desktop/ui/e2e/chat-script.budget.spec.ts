@@ -7,7 +7,7 @@
 // R2 W2-4 contract (rebase 适配 2026-10-02): the banner's Continue is
 // labeled by what it delivers (Chat.tsx continueTarget derivation:
 // blockedPayload ? 'blocked' : any recorded user turn ? 'last-message' :
-// null → the button hides). This seed derives 'last-message' — the session
+// 'none' → the button hides). This seed derives 'last-message' — the session
 // history carries a recorded user turn and the scripted cap trips MID-TURN
 // (budget:exceeded event), never as a pre-turn refusal, so blockedPayload
 // stays null and the fallback ("resend the LAST recorded user turn") is
@@ -194,7 +194,7 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
 
     // ── Anomaly gate (CHAT-TEST-1): the deterministic drive of the flow. ──
     // 30s to see the three derived buttons in the banner DOM (the exceeded
-    // branch renders them whenever the page passes a non-null continueTarget
+    // branch renders them whenever the page passes a non-'none' continueTarget
     // — jsdom-pinned three-state in src/__tests__/BudgetBanner.test.tsx).
     // Buttons appear → the full click-flow runs exactly as before. Still
     // absent → this is the runner anomaly (never seen outside GitHub 2-core

@@ -26,10 +26,13 @@ export interface BudgetBannerProps {
    * R2 W2-4: what "Continue once" will actually send —
    *   - 'blocked': the payload the pre-turn guard refused (held by the page);
    *   - 'last-message': the recorded last user turn (labeled fallback);
-   *   - null: nothing to deliver — the action hides instead of staying a
-   *     clickable no-op.
+   *   - 'none': nothing to deliver — the action hides instead of staying a
+   *     clickable no-op. Required (chat-testing 裁定 2026-10-03): the old
+   *     `null`-with-optional-slot contract let a JS caller omit the prop and
+   *     slip the `!== null` gate into a bogus continueLast button — the
+   *     sentinel removes undefined from the type surface entirely.
    */
-  continueTarget: 'blocked' | 'last-message' | null
+  continueTarget: 'blocked' | 'last-message' | 'none'
   sessionId: string | null
 }
 
@@ -73,7 +76,10 @@ export default function BudgetBanner({
               {t('budget.exceeded.body', { spent: fmt(exceeded.spentUsd), budget: fmt(exceeded.budgetUsd) })}
             </p>
             <div className="flex flex-wrap gap-sm mt-sm">
-              {continueTarget !== null && (
+              {/* Positive allowlist, not `!== 'none'`: a JS caller bypassing
+                  the type (missing prop → undefined) must also get the hidden
+                  action, not the old continueLast mis-render. */}
+              {(continueTarget === 'blocked' || continueTarget === 'last-message') && (
                 <Button
                   className="px-md py-xs rounded-full bg-primary text-on-primary font-label-md hover:bg-primary/90"
                   onClick={() => { clearExceeded(); onContinueOnce() }}
