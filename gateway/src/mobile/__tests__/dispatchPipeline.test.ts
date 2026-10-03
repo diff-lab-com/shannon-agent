@@ -7,8 +7,11 @@ import type { Logger } from "../../adapters/types.js";
 import type { EngineEvent } from "../../engine/runtime.js";
 import type { EngineWsClient } from "../../engine/wsClient.js";
 import { createConsoleLogger } from "../../logger.js";
+import { ActiveQueryRegistry } from "../../router/activeQueries.js";
 import { ApprovalRegistry } from "../approvalRegistry.js";
+import { createEngineHandlers } from "../engineBridge.js";
 import { createMobileDispatchPipeline } from "../dispatchPipeline.js";
+import { TASK_CANCELLED_ERROR } from "../taskTurnHandler.js";
 import { MobileDispatchHub } from "../hub.js";
 import { createTaskHandlers } from "../taskHandlers.js";
 import type { MethodContext } from "../server.js";
@@ -257,5 +260,83 @@ describe("mobile dispatch pipeline (the dev-standalone §K assembly)", () => {
     expect(events.map((e) => e.type)).toEqual(["query.started", "query.failed"]);
     expect(events[1]).toMatchObject({ session_id: taskId });
     expect(events[1].error).toContain("ECONNREFUSED");
+  });
+
+  it("cancel roundtrip: shannon/cancel interrupts the dispatched task's lane client → query.failed + journal failed + registry cleared", async () => {
+    // The shared registry — the SAME instance the engine bridge below holds,
+    // exactly what dev-standalone/bootstrap construct.
+    const activeQueries = new ActiveQueryRegistry();
+    const hub = new MobileDispatchHub({ logger });
+    // A lane client that parks mid-turn until cancel() fires, then emits the
+    // engine's `cancelled` terminal (the real EngineWsClient contract).
+    let releaseTurn: (() => void) | null = null;
+    const cancelRequested = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const state = { cancelCalled: false };
+    const pipeline = createMobileDispatchPipeline({
+      hub,
+      engineWsUrl: "ws://engine:33420/api/ws",
+      engineHttpBaseUrl: "http://engine:33420",
+      defaultModel: "claude-sonnet-4-6",
+      logger,
+      activeQueries,
+      engineClientFactory: () =>
+        ({
+          connect: async () => {},
+          close: async () => {},
+          cancel: () => {
+            state.cancelCalled = true;
+            releaseTurn!();
+          },
+          async *runQuery(): AsyncGenerator<EngineEvent> {
+            yield textEvent("partial ");
+            await cancelRequested;
+            yield { type: "cancelled" } as EngineEvent;
+          },
+        }) as unknown as EngineWsClient,
+    });
+    hub.setSubmit(pipeline.submit);
+    const taskHandlers = createTaskHandlers({ hub });
+    // The engine bridge sharing the registry — shannon/cancel's real handler.
+    const bridgeHandlers = createEngineHandlers({
+      engineWsUrl: "ws://engine:33420/api/ws",
+      engineHttpBaseUrl: "http://engine:33420",
+      version: "test",
+      logger,
+      activeQueries,
+    });
+
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+    const res: any = await taskHandlers["shannon/task.dispatch"]!({ prompt: "long run" }, ctx);
+    const taskId = res.result.task.id as string;
+
+    // Turn started → the lane client is registered under the router session key.
+    await vi.waitFor(() => expect(activeQueries.size).toBe(1));
+    expect(state.cancelCalled).toBe(false);
+
+    // The bare device session id — the alias probe (`mobile:dev-1`) is what
+    // finds the dispatched task's lane client.
+    const cancelRes: any = await bridgeHandlers["shannon/cancel"]!({ session_id: "dev-1" }, ctx);
+    expect(cancelRes).toMatchObject({ kind: "result", result: { ok: true } });
+    expect(state.cancelCalled).toBe(true);
+
+    // §K3 failure terminal: journal failed + query.failed(session_id=task.id).
+    await vi.waitFor(() =>
+      expect(hub.listTasks("dev-1")[0]).toMatchObject({ status: "failed", error: TASK_CANCELLED_ERROR }),
+    );
+    expect(eventsOf(ctx).at(-1)).toMatchObject({
+      type: "query.failed",
+      session_id: taskId,
+      error: TASK_CANCELLED_ERROR,
+    });
+    // The turn's terminal left the registry clean — nothing stale for the
+    // lane's next turn.
+    await vi.waitFor(() => expect(activeQueries.size).toBe(0));
+
+    // Cancel with nothing in flight is still an idempotent no-op success.
+    const cancelMiss: any = await bridgeHandlers["shannon/cancel"]!({ session_id: "dev-1" }, ctx);
+    expect(cancelMiss).toMatchObject({ kind: "result", result: { ok: true } });
   });
 });

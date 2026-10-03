@@ -9,6 +9,11 @@
  *   task.progress  {session_id: task.id, usage}     ← per engine usage frame
  *   task.message   {session_id: task.id, text}      ← terminal, final full reply
  *   query.failed   {session_id: task.id, error}     ← terminal, engine failure
+ *                                                    (a CANCELLED turn —
+ *                                                    shannon/cancel → engine
+ *                                                    `cancelled` — lands here
+ *                                                    too: §K3 has no
+ *                                                    query.cancelled terminal)
  *
  * The phone keys its local task thread by the dispatch response's task id and
  * routes these events into it (live_chat_conversations `_onEvent`), so nothing
@@ -41,6 +46,14 @@ export interface MobileTaskTurnHandlerOptions {
   /** Override for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
 }
+
+/**
+ * The `query.failed` error text for a CANCELLED turn (`shannon/cancel` →
+ * engine `cancelled` event → this handler's failure path). Cancel and engine
+ * failure are deliberately NOT distinguished on the task stream — §K3's only
+ * failure terminal is `query.failed` and no new event type was added.
+ */
+export const TASK_CANCELLED_ERROR = "task cancelled";
 
 export function createMobileTaskTurnHandler(
   opts: MobileTaskTurnHandlerOptions,
@@ -91,7 +104,15 @@ export function createMobileTaskTurnHandler(
 
       if (acc.failed !== null) {
         hub.failActiveTask(inbound.chatId, acc.failed);
-      } else if (!acc.cancelled) {
+      } else if (acc.cancelled) {
+        // Cancel terminal (shannon/cancel → engine `cancelled` event). §K3's
+        // task stream has no query.cancelled terminal — cancel and failure
+        // share the failure semantics: journal `failed` + `query.failed`
+        // {session_id: task.id, error} so the phone's thread closes honestly
+        // instead of hanging open (the pre-registry behavior left the task to
+        // be silently flipped to completed by the dispatch resolution).
+        hub.failActiveTask(inbound.chatId, TASK_CANCELLED_ERROR);
+      } else {
         hub.completeActiveTask(inbound.chatId, acc.chunks.join(""));
       }
     },

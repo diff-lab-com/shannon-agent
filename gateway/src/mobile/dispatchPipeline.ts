@@ -34,6 +34,7 @@ import { type Logger } from "../adapters/types.js";
 import { AdapterRegistry } from "../adapters/registry.js";
 import { EngineWsClient } from "../engine/wsClient.js";
 import { SessionRouter } from "../router/router.js";
+import { type ActiveQueryRegistry } from "../router/activeQueries.js";
 import type { InboundSubmit, MobileDispatchHub } from "./hub.js";
 import { createMobileChannelAdapter } from "./channel.js";
 import { createMobileTaskTurnHandler } from "./taskTurnHandler.js";
@@ -59,6 +60,14 @@ export interface MobileDispatchPipelineOptions {
    * bootstrap's `createEngineClient` performs.
    */
   engineClientFactory?: (sessionKey: string) => EngineWsClient;
+  /**
+   * Shared in-flight query registry — the SAME instance the `shannon/*`
+   * handlers' engine bridge holds (the composer creates it once, mirroring
+   * the approval-registry injection). When set, each turn registers its lane
+   * client under the router session key (`mobile:<deviceId>`) so
+   * `shannon/cancel` can interrupt a dispatched task's engine turn.
+   */
+  activeQueries?: ActiveQueryRegistry;
 }
 
 export interface MobileDispatchPipeline {
@@ -99,6 +108,7 @@ export function createMobileDispatchPipeline(
         })),
     turnHandler,
     logger: opts.logger,
+    activeQueries: opts.activeQueries,
   });
 
   return {
