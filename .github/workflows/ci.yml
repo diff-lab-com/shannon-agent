@@ -172,9 +172,10 @@ jobs:
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
           # Only the eval steps below compile; the metadata checks are
-          # cache-agnostic. Shared workspace-compile cache — see the
-          # rationale on the Test job.
-          shared-key: ci-v3
+          # cache-agnostic. Shared workspace-compile cache (ci-v4, rotated
+          # per run) — see the rationale on the Test job.
+          shared-key: ci-v4
+          key: ${{ github.run_id }}
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Generated facade facts are fresh
@@ -307,7 +308,21 @@ jobs:
           # cause of the "GHA cold-cache stall" flakes noted on the eval gate.
           # Bump to ci-v3 to invalidate every pre-split cache (ci-v2's
           # feature-isolation rationale, see git history).
-          shared-key: ci-v3
+          #
+          # 2026-10-03 (ci-v4 unfreeze): actions/cache SKIPS the post-save on
+          # an exact-key hit ("Cache up-to-date."), so under shared-key-only
+          # ci-v3 the whole family kept restoring one partial 2026-10-02
+          # snapshot forever — every job recompiled ~700 crates per run
+          # anyway. `key: github.run_id` makes the exact key unique per run:
+          # restore falls back to the newest ci-v4 entry via the shared-key
+          # prefix, and the post step always saves a fresh snapshot, so the
+          # cache tracks the code instead of freezing. The ci-v3 bump also
+          # orphans the frozen entries for LRU eviction. Watch "Cache Size"
+          # and the compile-step times for ~20 runs (per-run entries grow the
+          # cache population; see the review-workflow budget note in the
+          # 2026-10-02 CI analysis report).
+          shared-key: ci-v4
+          key: ${{ github.run_id }}
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -426,7 +441,8 @@ jobs:
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
           # Same shared cache as the Test job (see the comment there).
-          shared-key: ci-v3
+          shared-key: ci-v4
+          key: ${{ github.run_id }}
       - name: Install Tauri system deps
         # The doctests below compile every workspace lib (shannon-desktop
         # needs the webkit/gtk headers); the feature legs need the xcap
@@ -672,8 +688,10 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
-          # Shared workspace-compile cache — see the rationale on the Test job.
-          shared-key: ci-v3
+          # Shared workspace-compile cache (ci-v4, rotated per run) — see the
+          # rationale on the Test job.
+          shared-key: ci-v4
+          key: ${{ github.run_id }}
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -798,10 +816,12 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
-          # Shared-key joins the ci-v3 cache family; rust-cache automatically
-          # appends matrix values to the key, so each OS leg keeps its own
-          # entry (no cross-OS pollution).
-          shared-key: ci-v3
+          # Shared-key joins the ci-v4 cache family (per-run rotation — see
+          # the rationale on the Test job); rust-cache automatically appends
+          # matrix values to the key, so each OS leg keeps its own entry
+          # (no cross-OS pollution).
+          shared-key: ci-v4
+          key: ${{ github.run_id }}
       # shannon-desktop is excluded below, but shannon-mcp-saas still
       # pulls in `keyring` → `dbus-secret-service` → `dbus` →
       # `libdbus-sys`, whose build.rs runs `pkg-config --libs dbus-1`.
