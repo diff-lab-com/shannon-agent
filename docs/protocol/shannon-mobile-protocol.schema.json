@@ -37,7 +37,8 @@
         "shannon/device.revoke",
         "shannon/approval.list",
         "shannon/session.list",
-        "shannon/session.history"
+        "shannon/session.history",
+        "shannon/push.register"
       ]
     },
     "errorCodes": {

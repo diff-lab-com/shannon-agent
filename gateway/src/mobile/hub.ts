@@ -37,6 +37,21 @@ import { WebSocket } from "ws";
 import { sharedPushSeq, type SeqCounter } from "./seq.js";
 import type { PushReplayBuffer } from "./pushReplay.js";
 
+/**
+ * §O3 wake trigger — the desktop→relay Push-to-Wake leg plugs in here.
+ * `seq` is the push cursor at fire time (the payload §O3 pins: {handle, seq}
+ * is assembled relay-side from the device binding + this cursor).
+ */
+export type PushWakeSink = (deviceId: string, seq: number, event: ShannonEvent) => void;
+
+/** §O3 trigger set: approval asks + turn terminals (the "phone in pocket" moments). */
+const WAKE_EVENT_TYPES: ReadonlySet<ShannonEvent["type"]> = new Set([
+  "approval.request",
+  "query.completed",
+  "query.failed",
+  "query.cancelled",
+]);
+
 import {
   type ApprovalReq,
   type Logger,
@@ -134,6 +149,17 @@ export interface MobileDispatchHubOptions {
    * phone missed while offline. Same instance the pairing handlers read.
    */
   replay?: PushReplayBuffer;
+  /**
+   * §O3: the Push-to-Wake trigger seam. Fired for `approval.request` and turn
+   * terminals (`query.completed` / `query.failed` / `query.cancelled`) with
+   * the target device, the push seq, and the event — the future desktop→relay
+   * `wake(deviceId, seq)` leg plugs in here (relay-side does the 10s
+   * debounce/merge per §O3, so the seam stays fire-and-forget). Deliberately
+   * NOT wired into the direct-query stream loop: an interactive
+   * `shannon/query` means the user is already looking at the phone.
+   * Absent (today: no relay) → inert.
+   */
+  wake?: PushWakeSink;
 }
 
 export class MobileDispatchHub {
@@ -145,6 +171,7 @@ export class MobileDispatchHub {
   private readonly seq: SeqCounter;
   private readonly approvals: ApprovalRegistry | null;
   private readonly replay: PushReplayBuffer | null;
+  private readonly wake: PushWakeSink | null;
 
   /** deviceId → open, session-bound contexts. */
   private readonly byDevice = new Map<string, Set<MethodContext>>();
@@ -170,6 +197,7 @@ export class MobileDispatchHub {
     this.seq = opts.seqCounter ?? sharedPushSeq;
     this.approvals = opts.approvals ?? null;
     this.replay = opts.replay ?? null;
+    this.wake = opts.wake ?? null;
   }
 
   /** Current push seq head — feeds `shannon/snapshot` / `shannon/resume`. */
@@ -249,6 +277,17 @@ export class MobileDispatchHub {
   pushEvent(deviceId: string, event: ShannonEvent): boolean {
     const seq = this.seq.next();
     this.replay?.record(deviceId, seq, event);
+    // §O3: wake on approval asks + turn terminals — fired BEFORE the socket
+    // check on purpose: an offline device is exactly who needs waking.
+    if (this.wake && WAKE_EVENT_TYPES.has(event.type)) {
+      try {
+        this.wake(deviceId, seq, event);
+      } catch (err) {
+        // A broken wake must never fail the push itself (same posture as the
+        // §M2 device.revoked broadcast).
+        this.logger.warn(`wake sink failed: ${(err as Error).message}`);
+      }
+    }
     const sockets = this.byDevice.get(deviceId);
     if (!sockets || sockets.size === 0) return false;
     const frame = JSON.stringify({

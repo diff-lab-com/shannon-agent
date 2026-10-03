@@ -98,6 +98,25 @@ export type DeviceSignatureVerifier = (
   signature: string,
 ) => boolean;
 
+/** §O2: one vendor push binding the phone registered. */
+export interface PushBindingRequest {
+  platform: "fcm" | "apns";
+  /** The vendor device push token (non-empty; opaque to the gateway). */
+  token: string;
+}
+
+/**
+ * §O2: the desktop↔relay binding leg. The gateway only ever sees the vendor
+ * token on the E2E channel; the sink forwards it to the relay (which assigns
+ * the random handle) and reports the handle back for the phone to keep.
+ * Rejection throws — the handler maps it to a structured error (the phone's
+ * honest "推送不可用" state).
+ */
+export type PushBindingSink = (
+  deviceId: string,
+  binding: PushBindingRequest,
+) => Promise<{ handle: string }>;
+
 export interface EngineBridgeOptions {
   /** Engine WS URL, e.g. `ws://127.0.0.1:33420/api/ws`. */
   engineWsUrl: string;
@@ -173,6 +192,16 @@ export interface EngineBridgeOptions {
    * only).
    */
   activeQueries?: ActiveQueryRegistry;
+  /**
+   * §O2: the push-binding sink — the desktop↔relay binding leg of the
+   * Push-to-Wake face (spec `cross-repo-adaptation-spec.md` §O2). When wired,
+   * `shannon/push.register` forwards `{platform, token}` upstream and returns
+   * the relay-allocated handle. Absent (today: no relay repo wired yet) the
+   * face still exists but answers a structured NOT_IMPLEMENTED — the phone's
+   * honest "推送不可用" state per §O2's degraded tri-state, never a fake
+   * success.
+   */
+  pushBindingSink?: PushBindingSink;
 }
 
 /** Sentinel key for queries without a session_id (P1.2 replaces it with a device id). */
@@ -640,6 +669,63 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           result: mapSessionTranscript(transcript, params.sessionId as string),
         };
       });
+    },
+
+    // ── §O2 push face (Push-to-Wake registration; cross-repo spec §O2) ─────
+    // Registration rides the E2E channel (device identity is free — the same
+    // trust level as task.dispatch); the desktop proxies the binding to the
+    // relay via `pushBindingSink`. The wire contract is enable/platform/token
+    // in, {ok, handle} out; every unsupported configuration degrades to a
+    // STRUCTURED error so the phone can render an honest "推送不可用" —
+    // never a mocked success (§O2 渐进契约).
+    "shannon/push.register": async (raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
+      const params = (raw ?? {}) as { enable?: unknown; platform?: unknown; token?: unknown };
+      const enable = params.enable ?? true;
+      if (typeof enable !== "boolean") {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: "params.enable (boolean, default true) is required when present",
+        };
+      }
+      // Unregister is a local no-op until a binding exists — honestly ok.
+      if (enable === false) return { kind: "result", result: { ok: true } };
+      if (params.platform !== "fcm" && params.platform !== "apns") {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: "params.platform must be 'fcm' or 'apns'",
+        };
+      }
+      if (typeof params.token !== "string" || params.token.length === 0) {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: "params.token (non-empty string) is required",
+        };
+      }
+      if (!opts.pushBindingSink) {
+        return {
+          kind: "error",
+          code: ShannonError.NOT_IMPLEMENTED,
+          message: "push relay binding not configured on this gateway",
+        };
+      }
+      try {
+        const { handle } = await opts.pushBindingSink(ctx.sessionId as string, {
+          platform: params.platform,
+          token: params.token,
+        });
+        return { kind: "result", result: { ok: true, handle } };
+      } catch (err) {
+        return {
+          kind: "error",
+          code: ShannonError.ENGINE_ERROR,
+          message: `push binding rejected: ${(err as Error).message}`,
+        };
+      }
     },
 
     // ── pairing (P1.2) ────────────────────────────────────────────────────

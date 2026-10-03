@@ -46,7 +46,8 @@ export type ShannonMethod =
   | "shannon/device.revoke"
   | "shannon/approval.list"
   | "shannon/session.list"
-  | "shannon/session.history";
+  | "shannon/session.history"
+  | "shannon/push.register";
 
 /**
  * Runtime mirror of [ShannonMethod] — the SINGLE SOURCE both the type above
@@ -75,6 +76,7 @@ export const SHANNON_METHODS = [
   "shannon/approval.list",
   "shannon/session.list",
   "shannon/session.history",
+  "shannon/push.register",
 ] as const satisfies readonly ShannonMethod[];
 
 // Compile-time guard: every member of the union is present in the runtime
