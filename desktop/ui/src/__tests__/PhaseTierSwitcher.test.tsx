@@ -1,8 +1,12 @@
 // R3-3 — chat header Plan/Act tier pair: config→label wiring only (per the
 // batch brief the popover interaction itself is e2e territory).
+// w3 fix/header-dropdown-hit-test — plus the portal stacking contract: the
+// popover must mount at body level carrying the z-modal token class, so it
+// escapes the header's contain:paint stacking context and real pointer
+// clicks reach the radios (jsdom can't hit-test; e2e proves the rest).
 
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { PhaseTierSwitcher } from '@/components/chat/PhaseTierSwitcher'
 
 const mockCtx = vi.hoisted(() => ({
@@ -33,5 +37,20 @@ describe('PhaseTierSwitcher (R3-3 header pair)', () => {
     unmount()
     renderSwitcher({ plan_tier: 'ultra', act_tier: 'haiku' })
     expect(screen.getByTestId('phase-tier-switcher').getAttribute('aria-label')).toContain('Inherit')
+  })
+})
+
+describe('PhaseTierSwitcher portal stacking contract (w3 hit-test fix)', () => {
+  it('mounts the open popover as a body-level portal carrying the z-modal token class', () => {
+    const { container } = renderSwitcher(null)
+    fireEvent.click(screen.getByTestId('phase-tier-switcher'))
+    const menu = screen.getByTestId('phase-tier-menu')
+    expect(menu.parentElement).toBe(document.body)
+    expect(container.contains(menu)).toBe(false)
+    expect(menu).toHaveClass('z-modal')
+    // Outside-click still closes it with the menu portalled away from the
+    // trigger wrapper.
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByTestId('phase-tier-menu')).toBeNull()
   })
 })

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useIntl, type PrimitiveType } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -34,6 +35,17 @@ const TIER_LABEL_KEY: Record<string, string> = {
  * its synced approval_mode) on the backend and takes effect on the next
  * turn. The `custom` row is a navigation shortcut to the Profiles settings
  * page rather than an activation target.
+ *
+ * The menu is a **body-level portal** (w3 fix/header-dropdown-hit-test):
+ * inline it used to live inside the header's `<header class="glass-surface
+ * fixed z-header">`, whose `contain: paint` (plus backdrop-filter and the
+ * z-header + fixed pair) forms a stacking context AND clips descendants to
+ * the 64px bar — the dropdown's `z-modal` was trapped inside and its body
+ * painted/hit-tested away under the chat message area, so real pointer
+ * clicks never reached the options (specs had to fake clicks with
+ * dispatchEvent). Portalled to body with the `z-modal` token class the
+ * menu paints above the chat main area (token scale: header 40 < modal 50)
+ * without leaving the design-token system.
  */
 export function ExecutionModeSwitcher() {
   const intl = useIntl()
@@ -45,7 +57,13 @@ export function ExecutionModeSwitcher() {
   const [busy, setBusy] = useState(false)
   const [focus, setFocus] = useState(-1)
   const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  // Viewport-anchored position for the portalled menu, computed from the
+  // trigger box on open (and on window resize while open — the header is
+  // fixed, so page scroll never moves the anchor). jsdom reports zero rects
+  // and the menu still mounts; only pixel alignment depends on this.
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null)
 
   const state = deriveExecutionMode(config)
   const options: Array<{ key: string; tier: ExecutionMode; profile: string | null }> = [
@@ -55,13 +73,30 @@ export function ExecutionModeSwitcher() {
 
   useEffect(() => {
     if (!open) return
+    // Portal means the menu is no longer inside `ref` — treat presses inside
+    // the menu itself as "inside" or every pick's mousedown would close the
+    // menu before the click lands.
     const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const target = e.target as Node
+      if (ref.current?.contains(target) || menuRef.current?.contains(target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
+  }, [open])
+
+  // Keep the portalled menu anchored under the trigger across resizes.
+  // Layout effect: the menu's FIRST painted frame must already sit at the
+  // trigger — a passive effect would paint one frame at the viewport corner.
+  useLayoutEffect(() => {
+    if (!open) return
+    const updatePos = () => {
+      const rect = ref.current?.getBoundingClientRect()
+      if (rect) setMenuPos({ top: rect.bottom, right: window.innerWidth - rect.right })
+    }
+    updatePos()
+    window.addEventListener('resize', updatePos)
+    return () => window.removeEventListener('resize', updatePos)
   }, [open])
 
   // P2-10: opening the menu moves focus to the selected item (listbox
@@ -161,9 +196,11 @@ export function ExecutionModeSwitcher() {
           expand_more
         </span>
       </Button>
-      {open && (
+      {open && createPortal(
         <div
-          className="glass-overlay animate-panel-in absolute right-0 top-full mt-sm w-[240px] rounded-xl z-modal py-sm"
+          ref={menuRef}
+          className="glass-overlay animate-panel-in fixed mt-sm w-[240px] rounded-xl z-modal py-sm"
+          style={{ top: menuPos?.top ?? 0, right: menuPos?.right ?? 0 }}
           role="listbox"
           aria-label={t('execMode.menu.aria')}
           onKeyDown={handleKeyDown}
@@ -206,7 +243,8 @@ export function ExecutionModeSwitcher() {
           <div className="px-md pt-xs pb-sm text-label-sm text-on-surface-variant" aria-hidden="true">
             {t('execMode.menu.hint')}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

@@ -168,25 +168,18 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await expect(approvalPill(page)).toContainText('standard')
 
     // Permissive tier: activate_permission_profile('permissive') → the mock
-    // mirrors the backend mapping (auto_edit) — the pill re-renders. Driven
-    // through the menu's own roving-focus keyboard contract (its Enter reads
-    // the internal focus index, not the DOM focus): Home jumps to Strict
-    // (idx 0), two ArrowDowns step to Permissive (idx 2), Enter activates.
-    // The pointer path is unusable here — the dropdown opens over the
-    // virtualized message area whose bubbles win the hit-test (report:
-    // stacking observation).
+    // mirrors the backend mapping (auto_edit) — the pill re-renders. The
+    // pick goes through a REAL pointer click: the menu renders in a
+    // body-level portal at the z-modal token, so it wins the hit-test over
+    // the message area (w3 fix/header-dropdown-hit-test — the old
+    // dispatchEvent('click') workaround is retired; reverting the portal
+    // must turn this spec red).
     const execMenu = () => page.getByRole('listbox', { name: 'Execution mode options' })
-    /** The dropdown opens OVER the virtualized message area, whose bubbles
-     *  win the pointer hit-test, and the menu's roving-index keyboard path
-     *  reads per-render closures (a11yDebt observation — recorded in the
-     *  report). Drive the pick by SYNTHESIZING the click event on the
-     *  option: React's delegated onClick fires with the right closure, no
-     *  hit-test involved. */
     const pickTier = async (name: string) => {
       await execModeTrigger(page).click()
       const option = execMenu().getByRole('option', { name })
       await option.waitFor({ timeout: 5_000 })
-      await option.dispatchEvent('click')
+      await option.click()
       await execMenu().waitFor({ timeout: 5_000 }).catch(() => {}) // menu closes on pick
     }
     await pickTier('Permissive')
@@ -204,12 +197,13 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await expect.poll(async () => (await getConfig(page)).approval_mode).toBe('suggest')
 
     // PhaseTierSwitcher (testid already exists): Act → Fast writes the
-    // global act_tier the backend resolves on the next query. Same synthetic
-    // click as the tier switcher — the popover opens over the message area.
+    // global act_tier the backend resolves on the next query. Same real
+    // pointer click as the tier switcher — the popover is portal-mounted at
+    // the z-modal token, so the hit-test reaches the radio.
     await page.getByTestId('phase-tier-switcher').click()
     const actFast = page.getByTestId('phase-tier-menu').getByRole('radiogroup', { name: 'Execution tier' }).getByRole('radio', { name: 'Fast' })
     await actFast.waitFor({ timeout: 5_000 })
-    await actFast.dispatchEvent('click')
+    await actFast.click()
     await expect(page.getByText('Execution tier: Fast')).toBeVisible({ timeout: 5_000 })
     await expect(page.getByTestId('phase-tier-switcher')).toContainText('Fast')
     await expect.poll(async () => (await getConfig(page)).act_tier).toBe('fast')

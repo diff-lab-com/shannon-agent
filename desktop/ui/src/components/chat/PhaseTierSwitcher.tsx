@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useIntl, type PrimitiveType } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -28,6 +29,16 @@ import {
  * Deliberately NOT a Base UI Select: the hand-rolled popover (same pattern
  * as the neighboring ExecutionModeSwitcher) keeps the control jsdom-stable
  * for tests and consistent with the header's existing controls.
+ *
+ * The popover is a **body-level portal** (w3 fix/header-dropdown-hit-test):
+ * inline it sat inside the header's `glass-surface fixed z-header` element,
+ * whose `contain: paint` (plus backdrop-filter and the z-index + fixed
+ * pair) forms a stacking context AND clips descendants to the 64px bar —
+ * the `z-modal` dropdown was trapped inside and its body painted/hit-tested
+ * away under the chat message area, so real pointer clicks never reached
+ * the radios. Portalled to body with the `z-modal` token class the popover
+ * paints above the chat main area (token scale: header 40 < modal 50)
+ * without leaving the design-token system.
  */
 
 const PREFS: readonly PhaseTierPref[] = ['inherit', 'fast', 'standard', 'pro'] as const
@@ -87,6 +98,12 @@ export function PhaseTierSwitcher() {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState<PhaseTierPref | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  // Viewport-anchored position for the portalled popover, computed from the
+  // trigger box on open (and on window resize while open — the header is
+  // fixed, so page scroll never moves the anchor). jsdom reports zero rects
+  // and the popover still mounts; only pixel alignment depends on this.
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null)
 
   // Lenient readers — legacy/junk stored values render as 继承 (inherit),
   // mirroring the backend's normalize (a bad value never misleads).
@@ -95,13 +112,30 @@ export function PhaseTierSwitcher() {
 
   useEffect(() => {
     if (!open) return
+    // Portal means the popover is no longer inside `ref` — treat presses
+    // inside the popover itself as "inside" or every pick's mousedown would
+    // close it before the click lands.
     const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const target = e.target as Node
+      if (ref.current?.contains(target) || menuRef.current?.contains(target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
+  }, [open])
+
+  // Keep the portalled popover anchored under the trigger across resizes.
+  // Layout effect: the popover's FIRST painted frame must already sit at
+  // the trigger — a passive effect would paint one frame at the corner.
+  useLayoutEffect(() => {
+    if (!open) return
+    const updatePos = () => {
+      const rect = ref.current?.getBoundingClientRect()
+      if (rect) setMenuPos({ top: rect.bottom, right: window.innerWidth - rect.right })
+    }
+    updatePos()
+    window.addEventListener('resize', updatePos)
+    return () => window.removeEventListener('resize', updatePos)
   }, [open])
 
   const handlePick = async (phase: 'plan' | 'act', pref: PhaseTierPref) => {
@@ -153,9 +187,11 @@ export function PhaseTierSwitcher() {
         </span>
         <span className="material-symbols-outlined icon-sm" aria-hidden="true">expand_more</span>
       </Button>
-      {open && (
+      {open && createPortal(
         <div
-          className="glass-overlay animate-panel-in absolute right-0 top-full mt-sm w-[320px] rounded-xl z-modal py-sm"
+          ref={menuRef}
+          className="glass-overlay animate-panel-in fixed mt-sm w-[320px] rounded-xl z-modal py-sm"
+          style={{ top: menuPos?.top ?? 0, right: menuPos?.right ?? 0 }}
           role="dialog"
           aria-label={t('chat.phaseTier.title')}
           data-testid="phase-tier-menu"
@@ -176,7 +212,8 @@ export function PhaseTierSwitcher() {
             onPick={(pref) => { void handlePick('act', pref) }}
             t={t}
           />
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
