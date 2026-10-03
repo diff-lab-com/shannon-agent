@@ -53,6 +53,11 @@ export const PAIRS = [
   ['color-on-secondary-container', 'color-secondary-container', 4.5, 'MD3 secondary-container label'],
   ['color-on-tertiary-container', 'color-tertiary-container', 4.5, 'MD3 tertiary-container label'],
   ['color-on-error-container', 'color-error-container', 4.5, 'MD3 error-container label'],
+  // Solid-error labels (2026-10-03, R5 + chat-testing 裁定): the solid
+  // `bg-error` + `text-on-error` family (destructive buttons, stop pill,
+  // badges) was the one error template pair outside the gate — nord sat at
+  // 3.05:1 on it. Same AA contract as the sibling status hues.
+  ['color-on-error', 'color-error', 4.5, 'MD3 error label'],
   // Status hues (success/warning/info) complete the error template — every
   // theme must pass the same four-role AA contract (2026-09 status-tokens PR).
   ['color-on-success', 'color-success', 4.5, 'MD3 success label'],

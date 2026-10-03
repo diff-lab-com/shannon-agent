@@ -14,15 +14,19 @@
 // The L2 spec (e2e/chat-script.budget.spec.ts) leans on this pin and skips
 // its click-flow with a logged reason if the runner anomaly ever reappears.
 //
-// R2 W2-4 contract (rebase 适配 2026-10-02): the exceeded bar's Continue is
-// labeled by what it will actually DELIVER — the `continueTarget` prop
-// drives a three-state contract:
-//   - 'blocked'       → en['budget.exceeded.continue']  ("send the blocked
-//                       message" — the payload the pre-turn guard refused);
-//   - 'last-message'  → en['budget.exceeded.continueLast'] ("resend the
-//                       last message" — the recorded-turn fallback);
-//   - null            → NO Continue button (hides instead of a clickable
-//                       no-op); Raise budget… and Stop remain.
+// R2 W2-4 contract (rebase 适配 2026-10-02; 'none' sentinel 2026-10-03): the
+// exceeded bar's Continue is labeled by what it will actually DELIVER — the
+// required `continueTarget` prop drives a three-state contract:
+//   - 'blocked'  → en['budget.exceeded.continue']  ("send the blocked
+//                  message" — the payload the pre-turn guard refused);
+//   - 'last-message' → en['budget.exceeded.continueLast'] ("resend the
+//                  last message" — the recorded-turn fallback);
+//   - 'none'     → NO Continue button (hides instead of a clickable no-op);
+//                  Raise budget… and Stop remain.
+// The union has no null/undefined member and the component gate is a
+// positive allowlist, so the old sharp edge (a MISSING prop slipping the
+// `!== null` gate into a bogus continueLast render) is closed at both the
+// type and the runtime layer — pinned below.
 // Every assertion references en.json by KEY — a copy drift fails here by
 // name, never by a hardcoded string.
 
@@ -86,8 +90,8 @@ describe('BudgetBanner — exceeded bar Continue three-state (R2 W2-4)', () => {
     expect(getByRole('button', { name: STOP })).toBeInTheDocument()
   })
 
-  it('continueTarget=null hides Continue but keeps Raise budget… and Stop', () => {
-    renderBanner({ exceeded: PAYLOAD, continueTarget: null })
+  it("continueTarget='none' hides Continue but keeps Raise budget… and Stop", () => {
+    renderBanner({ exceeded: PAYLOAD, continueTarget: 'none' })
     // Neither Continue variant renders — the action hides instead of
     // staying a clickable no-op.
     expect(screen.queryByRole('button', { name: CONTINUE_BLOCKED })).toBeNull()
@@ -96,18 +100,39 @@ describe('BudgetBanner — exceeded bar Continue three-state (R2 W2-4)', () => {
     expect(screen.getByRole('button', { name: STOP })).toBeInTheDocument()
   })
 
-  it('an undefined continueTarget still renders a Continue button (continueLast branch) — current behavior, flagged', () => {
-    // PRODUCTS-CODE SHARP EDGE, recorded not fixed (test-only adaptation):
-    // the component gates on `continueTarget !== null`, so a MISSING prop
-    // (undefined) passes the gate and falls into the non-'blocked' branch —
-    // the banner renders an actionable "resend the last message" button
-    // where a strict reading of the contract (nothing to deliver → hide)
-    // suggests hiding. Every real call site passes the prop explicitly
-    // (Chat.tsx), so this only bites future consumers; revisit if the
-    // component ever renders without the page's derivation.
+  it('an undefined continueTarget hides Continue too — runtime layer of the closed sharp edge', () => {
+    // Was (recorded, flagged): a MISSING prop slipped the old `!== null`
+    // gate and rendered a bogus continueLast button. Now the component gate
+    // is a positive allowlist ('blocked' | 'last-message'), so even a JS
+    // caller bypassing the type gets the hidden action, never the
+    // mislabeled button.
     renderBanner({ exceeded: PAYLOAD, continueTarget: undefined })
-    expect(screen.getByRole('button', { name: CONTINUE_LAST })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: CONTINUE_BLOCKED })).toBeNull()
+    expect(screen.queryByRole('button', { name: CONTINUE_LAST })).toBeNull()
+    expect(screen.getByRole('button', { name: RAISE })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: STOP })).toBeInTheDocument()
+  })
+
+  it('type pin: undefined is not assignable to the required continueTarget union', () => {
+    // Compile layer of the closed sharp edge: the required prop has no
+    // null/undefined member, so a missing/undefined arg is a type error.
+    // The @ts-expect-error below fails as an "unused directive" the moment
+    // the prop type is widened to accept undefined again — the pin holds
+    // the type, not just the runtime.
+    const props: BannerProps = {
+      warning: null,
+      exceeded: PAYLOAD,
+      clearWarning: vi.fn(),
+      clearExceeded: vi.fn(),
+      onContinueOnce: vi.fn(),
+      sessionId: 'sess-budget',
+      // @ts-expect-error — 'none' (not undefined) is the contract for
+      // "nothing to deliver"; this must stay a compile error.
+      continueTarget: undefined,
+    }
+    render(<BudgetBanner {...props} />)
+    expect(screen.queryByRole('button', { name: CONTINUE_LAST })).toBeNull()
+    expect(screen.getByRole('button', { name: RAISE })).toBeInTheDocument()
   })
 
   it.each([

@@ -118,7 +118,7 @@ describe('BudgetBanner', () => {
     const clearWarning = vi.fn()
     render(
       <BudgetBanner warning={payload} exceeded={null} clearWarning={clearWarning}
-        clearExceeded={vi.fn()} onContinueOnce={vi.fn()} continueTarget={null} sessionId="s1" />,
+        clearExceeded={vi.fn()} onContinueOnce={vi.fn()} continueTarget="none" sessionId="s1" />,
       { wrapper },
     )
     expect(screen.getByText('Approaching the budget limit')).toBeTruthy()
@@ -171,7 +171,7 @@ describe('BudgetBanner', () => {
   it('hides the continue action when there is nothing to deliver', () => {
     render(
       <BudgetBanner warning={null} exceeded={payload} clearWarning={vi.fn()}
-        clearExceeded={vi.fn()} onContinueOnce={vi.fn()} continueTarget={null} sessionId="s1" />,
+        clearExceeded={vi.fn()} onContinueOnce={vi.fn()} continueTarget="none" sessionId="s1" />,
       { wrapper },
     )
     expect(screen.queryByRole('button', { name: /Continue —/ })).not.toBeTruthy()
