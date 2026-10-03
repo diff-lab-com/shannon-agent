@@ -462,6 +462,11 @@ async function startMobileServer(
       // §K: a signed shannon/approval/decide unblocks the dispatched task's
       // parked approval lane (the Y/N-text settle left the RPC face).
       approvalDecisionSink: (requestId, choice) => dispatchHub.settleApproval(requestId, choice),
+      // r2-w2d: shannon/cancel that reaches an in-flight turn also deny-settles
+      // the device's parked approvals, so a cancel landing inside the approval
+      // window delivers the task stream's query.failed terminal immediately
+      // instead of after the parked ask's 300s timeout.
+      cancelPendingApprovals: (deviceId: string) => dispatchHub.cancelPendingApprovals(deviceId),
     },
     tokens,
     registry,

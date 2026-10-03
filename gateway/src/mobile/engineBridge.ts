@@ -152,6 +152,19 @@ export interface EngineBridgeOptions {
    */
   approvalDecisionSink?: (requestId: string, choice: GatewayApprovalChoice) => void;
   /**
+   * r2-w2d: deny-settle every approval the device still has parked in the
+   * dispatch hub — wired to `MobileDispatchHub.cancelPendingApprovals`.
+   * `shannon/cancel` invokes this with the cancel's device id (the session key)
+   * at the same time it cancels the in-flight engine client: the parked
+   * approval is the cancelled turn's own gate, and settling it unblocks the
+   * approval round-trip NOW so the turn observes the engine's `cancelled`
+   * terminal and the task stream's `query.failed` lands immediately instead of
+   * after the device answers or the 300s timeout. Absent → cancel keeps its
+   * legacy no-settle behavior (a cancel is still delivered; only the terminal
+   * timing regresses to the parking window).
+   */
+  cancelPendingApprovals?: (deviceId: string) => number;
+  /**
    * Shared in-flight query registry (see `../router/activeQueries.ts`). When
    * injected, the bridge registers its direct `shannon/query` clients here AND
    * `shannon/cancel` probes the dispatch pipeline's lane entries
@@ -363,6 +376,19 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       const client = activeQueries.get(key) ?? activeQueries.get(deviceLaneKey(key));
       if (client) {
         client.cancel();
+        // r2-w2d: the interrupted turn may be parked at its own approval gate —
+        // deny-settle this device's parked approvals so the lane's approval
+        // round-trip unblocks now and the `cancelled` terminal (→ §K3
+        // `query.failed`) is delivered immediately, not after the parked ask
+        // times out. Direct `shannon/query` turns never park in the hub, so
+        // this is a 0-entry no-op for them (behavior unchanged); a parked
+        // approval for a DIFFERENT device is never touched.
+        const settled = opts.cancelPendingApprovals?.(key) ?? 0;
+        if (settled > 0) {
+          opts.logger.info(
+            `shannon/cancel: deny-settled ${settled} parked approval(s) for key=${key}`,
+          );
+        }
       } else {
         // Idempotent: a cancel for nothing-in-flight is a no-op success, matching
         // the engine's own cancel semantics.

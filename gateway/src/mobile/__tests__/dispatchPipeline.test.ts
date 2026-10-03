@@ -339,4 +339,119 @@ describe("mobile dispatch pipeline (the dev-standalone §K assembly)", () => {
     const cancelMiss: any = await bridgeHandlers["shannon/cancel"]!({ session_id: "dev-1" }, ctx);
     expect(cancelMiss).toMatchObject({ kind: "result", result: { ok: true } });
   });
+
+  it("cancel inside the approval-parking window: parked approval deny-settles → query.failed arrives immediately (r2-w2d), approval.list clears, journal failed", async () => {
+    // The dev-standalone/bootstrap assembly: shared ActiveQueryRegistry AND
+    // shared ApprovalRegistry, the bridge wired to the hub's cancel settle.
+    const activeQueries = new ActiveQueryRegistry();
+    const approvals = new ApprovalRegistry();
+    const hub = new MobileDispatchHub({ logger, approvals });
+
+    // A lane client that parks at its approval gate until cancel() fires, then
+    // emits the engine's `cancelled` terminal — the real contract (cancel
+    // frame → engine aborts the parked query → `cancelled`). Before the fix
+    // the cancel reached the engine but the turn handler stayed blocked in
+    // resolveApprovalInChannel for the full 300s approval window.
+    const posts: Array<{ url: string; body: any }> = [];
+    const fetchImpl = (async (url: any, init?: any) => {
+      posts.push({ url: String(url), body: JSON.parse(init?.body ?? "{}") });
+      return { ok: true, status: 200 } as unknown as Response;
+    }) as unknown as typeof fetch;
+    let releaseCancelled: (() => void) | null = null;
+    const cancelRequested = new Promise<void>((resolve) => {
+      releaseCancelled = resolve;
+    });
+    const state = { cancelCalled: false };
+    const pipeline = createMobileDispatchPipeline({
+      hub,
+      engineWsUrl: "ws://engine:33420/api/ws",
+      engineHttpBaseUrl: "http://engine:33420",
+      defaultModel: "claude-sonnet-4-6",
+      logger,
+      activeQueries,
+      fetchImpl,
+      engineClientFactory: () =>
+        ({
+          connect: async () => {},
+          close: async () => {},
+          cancel: () => {
+            state.cancelCalled = true;
+            releaseCancelled!();
+          },
+          async *runQuery(): AsyncGenerator<EngineEvent> {
+            yield {
+              type: "approval_request",
+              request_id: "req-cancel-park-1",
+              tool_name: "Edit",
+              tool_input: { path: "src/main.rs" },
+              description: "apply patch",
+              is_destructive: false,
+              diff_preview: "- 1;\n+ 2;",
+            } as EngineEvent;
+            await cancelRequested;
+            yield { type: "cancelled" } as EngineEvent;
+          },
+        }) as unknown as EngineWsClient,
+    });
+    hub.setSubmit(pipeline.submit);
+    const taskHandlers = createTaskHandlers({ hub });
+    // The engine bridge sharing both registries — shannon/cancel's real
+    // handler with the hub settle injected (the bootstrap/dev wiring).
+    const bridgeHandlers = createEngineHandlers({
+      engineWsUrl: "ws://engine:33420/api/ws",
+      engineHttpBaseUrl: "http://engine:33420",
+      version: "test",
+      logger,
+      activeQueries,
+      approvalRegistry: approvals,
+      cancelPendingApprovals: (deviceId) => hub.cancelPendingApprovals(deviceId),
+    });
+
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+    const t0 = Date.now();
+    const res: any = await taskHandlers["shannon/task.dispatch"]!({ prompt: "risky op" }, ctx);
+    const taskId = res.result.task.id as string;
+
+    // The turn is parked at its approval gate: the ask is pushed, visible to
+    // the restore face AND still parked in the hub (the lane is blocked in
+    // resolveApprovalInChannel — the parking window the cancel must hit).
+    await vi.waitFor(() => expect(hub.hasPendingApproval("dev-1")).toBe(true));
+    expect(approvals.listPending().map((r) => r.requestId)).toEqual(["req-cancel-park-1"]);
+    expect(state.cancelCalled).toBe(false);
+
+    // Cancel INSIDE the parking window (bare device session id — the lane
+    // alias probe finds the dispatched task's client).
+    const cancelRes: any = await bridgeHandlers["shannon/cancel"]!({ session_id: "dev-1" }, ctx);
+    expect(cancelRes).toMatchObject({ kind: "result", result: { ok: true } });
+    expect(state.cancelCalled).toBe(true);
+
+    // The terminal lands WITHOUT the approval timeout: the parked ask was
+    // deny-settled by the cancel, unblocking the lane to observe the engine's
+    // `cancelled` event. (A regression here hangs on the 300s hub timeout —
+    // vi.waitFor + the test's own budget fail long before that.)
+    await vi.waitFor(() =>
+      expect(hub.listTasks("dev-1")[0]).toMatchObject({ status: "failed", error: TASK_CANCELLED_ERROR }),
+    );
+    const elapsedMs = Date.now() - t0;
+    expect(elapsedMs).toBeLessThan(10_000);
+    expect(eventsOf(ctx).at(-1)).toMatchObject({
+      type: "query.failed",
+      session_id: taskId,
+      error: TASK_CANCELLED_ERROR,
+    });
+
+    // The deny decision still rode the engine POST (existing tolerance: the
+    // engine may have already aborted the query — a failed POST only warns).
+    expect(posts).toEqual([
+      { url: "http://engine:33420/api/approval/respond", body: { request_id: "req-cancel-park-1", choice: "deny" } },
+    ]);
+
+    // approval.list 出清: the settled ask left the restore face, and nothing
+    // stays parked in the hub.
+    expect(approvals.listPending()).toEqual([]);
+    expect(hub.hasPendingApproval("dev-1")).toBe(false);
+    // The turn's terminal also cleaned the shared registry.
+    await vi.waitFor(() => expect(activeQueries.size).toBe(0));
+  });
 });

@@ -349,6 +349,10 @@ const handlers = createMobileHandlers({
     // §K: a signed shannon/approval/decide unblocks a dispatched task's
     // parked approval lane (same wiring as the bootstrap).
     approvalDecisionSink: (requestId, choice) => hub.settleApproval(requestId, choice),
+    // r2-w2d: shannon/cancel inside the approval-parking window deny-settles
+    // the device's parked approvals (same wiring as the bootstrap) — the
+    // cancelled task's query.failed terminal lands immediately.
+    cancelPendingApprovals: (deviceId: string) => hub.cancelPendingApprovals(deviceId),
     // Shared with the pipeline above — cancel reaches dispatched tasks.
     activeQueries,
   },
