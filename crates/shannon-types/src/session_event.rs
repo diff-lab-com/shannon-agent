@@ -299,8 +299,9 @@ pub struct AssistantChunkPayload {
 }
 
 /// Payload for [`SessionEventKind::AssistantMessage`]: a finalized assistant
-/// message. When a step is interrupted, the event finalizes the prefix with
-/// `interrupted: true`.
+/// message. When a step is interrupted (a user stop, or a turn failure
+/// mid-step), the event finalizes the prefix with `interrupted: true` plus a
+/// `reason` naming why.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssistantMessagePayload {
     /// Full message content.
@@ -311,6 +312,22 @@ pub struct AssistantMessagePayload {
     /// True when the step was interrupted before completing.
     #[serde(default)]
     pub interrupted: bool,
+    /// Why the step was cut short: [`Self::REASON_CANCELLED`] (the user
+    /// stopped the run — D6's interrupt coalescing) or
+    /// [`Self::REASON_FAILED`] (the turn failed mid-step — the failed close
+    /// keeps the streamed prefix the same way). Absent on events written
+    /// before this field existed (including the original D6 cancelled
+    /// finalizes), which consumers must read as "cancelled" — the bare
+    /// `interrupted: true` flag predates any failure-side finalize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl AssistantMessagePayload {
+    /// The step was cut short by a user stop (D6).
+    pub const REASON_CANCELLED: &'static str = "cancelled";
+    /// The step was cut short by a turn failure.
+    pub const REASON_FAILED: &'static str = "failed";
 }
 
 /// Payload for [`SessionEventKind::ToolCall`]. `arguments` is kept as the
@@ -722,6 +739,7 @@ mod tests {
                         cost_usd: Some(0.001),
                     }),
                     interrupted: false,
+                    reason: None,
                 })
             }
             SessionEventKind::ToolCall => SessionEventBody::ToolCall(ToolCallPayload {

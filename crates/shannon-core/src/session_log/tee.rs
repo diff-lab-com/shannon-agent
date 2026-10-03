@@ -252,7 +252,8 @@ pub struct SessionTee {
     /// mirroring the projection's step fold). An interrupted close finalizes
     /// it as one authoritative `assistant/message(interrupted: true)` row —
     /// the partial marker the conversation reload reads — instead of leaving
-    /// the step's text implied by `assistant/chunk` rows alone.
+    /// the step's text implied by `assistant/chunk` rows alone. OBS1: a
+    /// failed close finalizes it the same way, with `reason: "failed"`.
     step_text: String,
 }
 
@@ -551,22 +552,35 @@ impl SessionTee {
         // This is the vocabulary's designed interrupt coalescing (the
         // projection replaces the open step's chunk-derived text with this
         // content and marks the message), so a reload carries the partial
-        // answer back WITH its stopped marker — no new record type. Completed
-        // and failed closes keep the chunk-row record unchanged.
-        let partial = if reason == TurnEndPayload::REASON_INTERRUPTED {
+        // answer back WITH its stopped marker — no new record type. OBS1
+        // (unify the failed half): a FAILED close finalizes the open step
+        // the same way — the failure's chunk rows were already durable, so
+        // without the finalize a reload resurrected the half-answer with NO
+        // marker while the live turn had discarded it. The finalize's
+        // `reason` distinguishes the two (`cancelled` vs `failed`); the
+        // completed close keeps the chunk-row record unchanged.
+        let finalize_reason = match reason {
+            TurnEndPayload::REASON_INTERRUPTED => Some(AssistantMessagePayload::REASON_CANCELLED),
+            TurnEndPayload::REASON_FAILED => Some(AssistantMessagePayload::REASON_FAILED),
+            _ => None,
+        };
+        let partial = if finalize_reason.is_some() {
             std::mem::take(&mut self.step_text)
         } else {
             self.step_text.clear();
             String::new()
         };
-        if !partial.is_empty() {
-            self.record_body(SessionEventBody::AssistantMessage(
-                AssistantMessagePayload {
-                    content: partial,
-                    usage: None,
-                    interrupted: true,
-                },
-            ));
+        if let Some(finalize_reason) = finalize_reason {
+            if !partial.is_empty() {
+                self.record_body(SessionEventBody::AssistantMessage(
+                    AssistantMessagePayload {
+                        content: partial,
+                        usage: None,
+                        interrupted: true,
+                        reason: Some(finalize_reason.to_string()),
+                    },
+                ));
+            }
         }
         let usage = self.turn_usage.take().or_else(|| {
             self.bare_tokens.map(|tokens| TokenUsage {
@@ -1480,6 +1494,11 @@ mod tests {
             SessionEventBody::AssistantMessage(p) => {
                 assert_eq!(p.content, "海浪拍岸，月光洒落，");
                 assert!(p.interrupted, "the finalize carries the interrupted flag");
+                assert_eq!(
+                    p.reason.as_deref(),
+                    Some(AssistantMessagePayload::REASON_CANCELLED),
+                    "the finalize names the cancelled close reason"
+                );
             }
             other => panic!("wrong body: {other:?}"),
         }
@@ -1491,8 +1510,89 @@ mod tests {
         }
     }
 
+    // ── OBS1: a FAILED turn keeps its partial output the same way ───────────
+    //
+    // The production failure path is: the engine emits `QueryEvent::Failed`
+    // through the bus (error row + failed turn boundary), and until OBS1 the
+    // streamed prefix survived only as unmarked `assistant/chunk` rows — a
+    // reload resurrected the half-answer with no marker while the live turn
+    // had discarded it. The failed close now finalizes the open step exactly
+    // like the interrupted one, with `reason: "failed"`.
+
+    /// The full failure shape (production bus path): user message → turn
+    /// start → streamed chunks → `QueryEvent::Failed`. The log must carry the
+    /// partial text as an authoritative interrupted assistant/message with
+    /// `reason: "failed"` BEFORE the failed turn/end.
+    #[test]
+    fn failed_close_finalizes_the_open_step_text_with_failed_reason() {
+        let dir = TempDir::new().expect("tempdir");
+        {
+            let mut tee = open_tee(&dir);
+            tee.record_user_message("讲个故事");
+            tee.record_turn_start(Some("q-fail".into()));
+            for input in crate::session_log::query_event_to_bus_inputs(&QueryEvent::Text {
+                query_id: query_id(),
+                content: "从前有一片海，".into(),
+            }) {
+                tee.record_bus_input(&input);
+            }
+            for input in crate::session_log::query_event_to_bus_inputs(&QueryEvent::Text {
+                query_id: query_id(),
+                content: "海面上…".into(),
+            }) {
+                tee.record_bus_input(&input);
+            }
+            // The engine's failure event: error row + failed boundary, in
+            // that order (the §4.8 mapping's two-input batch).
+            for input in crate::session_log::query_event_to_bus_inputs(&QueryEvent::Failed {
+                query_id: query_id(),
+                error: "upstream connection reset while streaming".into(),
+            }) {
+                tee.record_bus_input(&input);
+            }
+            tee.close();
+        }
+        let bodies = read_bodies(&dir);
+        let kinds: Vec<SessionEventKind> = bodies.iter().map(|b| b.kind()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SessionEventKind::SessionStart,
+                SessionEventKind::UserMessage,
+                SessionEventKind::TurnStart,
+                SessionEventKind::AssistantChunk,
+                SessionEventKind::AssistantChunk,
+                // OBS1: the failed close finalizes the partial text before the
+                // failed turn boundary, after the error row.
+                SessionEventKind::Error,
+                SessionEventKind::AssistantMessage,
+                SessionEventKind::TurnEnd,
+            ],
+            "failed close must finalize the partial text"
+        );
+        match &bodies[6] {
+            SessionEventBody::AssistantMessage(p) => {
+                assert_eq!(p.content, "从前有一片海，海面上…");
+                assert!(p.interrupted, "the finalize carries the interrupted flag");
+                assert_eq!(
+                    p.reason.as_deref(),
+                    Some(AssistantMessagePayload::REASON_FAILED),
+                    "the finalize names the failed close reason"
+                );
+            }
+            other => panic!("wrong body: {other:?}"),
+        }
+        match &bodies[7] {
+            SessionEventBody::TurnEnd(TurnEndPayload { reason, .. }) => {
+                assert_eq!(reason, TurnEndPayload::REASON_FAILED);
+            }
+            other => panic!("wrong body: {other:?}"),
+        }
+    }
+
     /// Completed turns keep the chunk-row record exactly as before — NO
-    /// assistant/message finalize (the D6 marker is exclusive to interrupts).
+    /// assistant/message finalize (the finalize marker is exclusive to
+    /// interrupted and failed closes; OBS1's negative control).
     #[test]
     fn completed_close_writes_no_finalize_row() {
         let dir = TempDir::new().expect("tempdir");
@@ -1567,6 +1667,10 @@ mod tests {
             "only the open step's text is finalized — the first step stays in its own rows"
         );
         assert!(finalize.interrupted);
+        assert_eq!(
+            finalize.reason.as_deref(),
+            Some(AssistantMessagePayload::REASON_CANCELLED)
+        );
     }
 
     /// Thinking-only partials finalize nothing (the conversation keeps only
