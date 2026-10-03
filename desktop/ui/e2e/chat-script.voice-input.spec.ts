@@ -202,32 +202,24 @@ test.describe('voice input (journey #22, nightly-only) — supported environment
   })
 })
 
-test.describe('voice input (journey #22, nightly-only) — capture seam removed (FINDING pinned)', () => {
-  test('even with getUserMedia removed the mic renders and yields the stub transcript (supported-gate is dead code)', async ({ page }) => {
-    // Remove the exact seam useVoice's provider checks: no mediaDevices →
-    // createRemoteProvider().isSupported() false. PINNED CURRENT STATE (not
-    // the intended behavior): the FACTORY (lib/voice/factory.ts) falls back
-    // to the stub provider for any unsupported kind, and the stub reports
-    // isSupported() === true — so ChatInput's `voice.supported` gate can
-    // never close and the MicButton renders in EVERY environment, with the
-    // stub's canned transcript flowing into the draft. Expected behavior
-    // ("no provider → no mic button", B4 P2-5) is a finding for the fix
-    // PR: the factory must surface the unsupported provider (or the gate
-    // must read the real kind), and this test flips to toHaveCount(0).
+test.describe('voice input (journey #22, nightly-only) — capture seam removed (unsupported environment)', () => {
+  test('no mic renders when getUserMedia is unavailable, and no stub transcript can flow', async ({ page }) => {
+    // Remove the exact seam lib/voice's isSupported() checks: no mediaDevices
+    // → createRemoteProvider().isSupported() false → the factory's stub
+    // fallback. F-voice-gate FIX (was a pinned FINDING): the stub now reports
+    // isSupported() === false, so ChatInput's `voice.supported` gate finally
+    // closes — "no STT provider → no mic button" (B4 P2-5). The stub's canned
+    // transcript ("This is a stub transcript...") can never reach the draft
+    // again; the composer stays pristine.
     await page.addInitScript(() => {
       Object.defineProperty(navigator, 'mediaDevices', { get: () => undefined, configurable: true })
     })
-    await gotoChat(page)
+    const chat = await gotoChat(page)
 
-    await expect(page.getByRole('button', { name: 'Start voice recording' })).toHaveCount(1)
+    await expect(page.getByRole('button', { name: 'Start voice recording' })).toHaveCount(0)
 
-    // The stub path is what an "unsupported" user actually gets today.
-    await page.getByRole('button', { name: 'Start voice recording' }).click()
-    await page.getByRole('button', { name: 'Stop recording' }).click()
-    await expect(page.getByRole('textbox', { name: 'Message' })).toHaveValue(
-      'This is a stub transcript. Real STT backend not configured.',
-      { timeout: 15_000 },
-    )
+    // No doomed recording possible → the composer keeps its boot state.
+    await expect(chat.composer()).toHaveValue('')
     expect((await mockSnapshot(page)).sentTurns).toBe(0)
 
     await expectNoConsoleErrors(page)
