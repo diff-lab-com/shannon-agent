@@ -919,30 +919,45 @@ describe('L1 state machine — cancel-matrix #4 (approval-wait stop)', () => {
 })
 
 describe('L1 state machine — cancel-matrix #3 (stop → instant resend, A-17 fixed)', () => {
-  // De-race note (裁定修复波, carried through the A-17 flip): CI shard2
-  // failed this test with `expected '' to contain '新流丁'` — the chunk
-  // flush orchestration (real setTimeout macrotasks, capped at 60ms each)
-  // is itself asynchronous and, under 2-core CI CPU contention, slower than
-  // a direct assertion. Every point that waits for a state CHANGE (stream
-  // start, run settle) stays a WAITING assertion (this file's established
-  // RTL waitFor — act-integrated, same semantics as vi.waitFor/expect.poll)
-  // with an explicit 5s window; the post-drop asserts are direct reads —
-  // the late events are dropped no-ops, so they ride a projection the wait
-  // above already observed.
+  // De-race note (w3 flaky fix, carries the A-17 flip): CI failed this test
+  // three times with `AssertionError: expected true to be false` — the
+  // awaitSettled helper timing out because isQuerying never fell. Root cause
+  // (reproduced 4/30 under shard-like load, instrumented dump): the
+  // `pauseAt(1)` marker is only consumed when a turn's stepIndex REACHES 1.
+  // Turn 0 scripts a single chunked step, so the marker fired only when the
+  // second chunk's 60ms timer beat the stop; when `handleCancelQuery` halted
+  // the turn first, the leftover marker survived into turn 1 and parked it
+  // at stepIndex 1 — BETWEEN the chunk step and its `query:completed` step.
+  // q-1 then never terminated (no settle event, isQuerying correctly stuck),
+  // and the 10s awaitSettled timed out. The product code was right in every
+  // failure: the A-17 query_id filter dropped the late q-0 events and the
+  // bucket never polluted (`新流甲…丁` intact, no `旧流迟到`).
+  //
+  // Fix: the stop now lands on the deterministically PARKED turn 0 — the
+  // test waits for `phase === 'waitingUi'` (the park that consumes the
+  // marker) before cancelling. Both chunk interleavings were already being
+  // exercised nondeterministically; this pins the safe one without touching
+  // any assertion. The streaming-wait points remain WAITING assertions with
+  // explicit windows (this file's established RTL waitFor), and the settle
+  // waits carry the R5 waitFor-dense budget (30s, aligned with the it
+  // timeout) for CI-shard headroom.
   it('late old-turn events are dropped by query_id: the new stream stays intact and the composer stays busy', { timeout: 30_000 }, async () => {
     const script = loadFixture('cancel-then-resend')
     const h = await makeHarness()
     h.player.load(script)
 
-    // Turn 0 streams; stop settles it (the mock's cancel is synchronous —
-    // the RACE is modeled by the late events below, which is exactly how
-    // the real backend delivers them: after the latch reopens).
+    // Turn 0 streams to its pauseAt park; stop settles it (the mock's cancel
+    // is synchronous — the RACE is modeled by the late events below, which
+    // is exactly how the real backend delivers them: after the latch
+    // reopens). Waiting for the park matters: it consumes the pauseAt
+    // marker, so a fast stop can no longer leave it armed for turn 1.
     h.player.pauseAt(1)
     await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
     await waitFor(() => expect(h.result.current.streamingText).toContain('旧流'), { timeout: 5_000 })
+    await waitFor(() => expect(h.player.snapshot().phase).toBe('waitingUi'), { timeout: 5_000 })
     await act(async () => { await h.result.current.cancelQuery() })
     await act(async () => { expect(h.player.handleCancelQuery()).toBe(true) })
-    await awaitSettled(h)
+    await awaitSettled(h, 30_000)
 
     // Instant resend — the new turn streams (its own query id, recorded as
     // the session's current one from the q-1 send response — the A-17 fix).
@@ -970,7 +985,7 @@ describe('L1 state machine — cancel-matrix #3 (stop → instant resend, A-17 f
     // pre-pollution loss, and the injected late chunk never mixed in.
     // Waiting: the commit is the tail of the chunk macrotask chain, the
     // exact thing CI contention stretches past a direct read.
-    await awaitSettled(h)
+    await awaitSettled(h, 30_000)
     const reply = h.result.current.messages.filter(m => m.role === 'assistant').at(-1)
     expect(reply!.content).toBe(textChunksOf(script, 1).join(''))
     expect(reply!.content).not.toContain('旧流迟到')
