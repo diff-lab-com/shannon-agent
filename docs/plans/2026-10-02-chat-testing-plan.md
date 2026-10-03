@@ -433,6 +433,8 @@ MVP = P0+P1+P2 ≈ **1.5 周**；全量 ≈ **3 周**。每 Phase 独立成 PR�
 | C10 | §2.2 事件桥实现注意 | `plugin:event\|listen`/`plugin:event\|unlisten` 作为新"命令"进入 mock 层后，**必须同步登记 tripwire**（`mock-handlers-coverage.test.ts` 双向检查：新命令无 handler 失败、handler 被删也失败），或显式加入 allowlist 并注明原因（§附录 B-4） |
 | C11 | §1.1 组件零覆盖清单（精确化） | **零测试引用**：AttachmentChip、SlashResultCard、QueueChips、DeleteSessionModal、InlinePanelModal、ComposerContext；**仅间接覆盖**（无专属测试）：BudgetBanner、BudgetDialog、ContextBreakdownCard、GoalStartForm、diffStats、sessionModelPromotion、MessageArea、ComposerPanel、ContextPanel、PlanPanel、ApiKeyBanner。§3 L1 补测范围据此扩展 |
 
+> 排期归属（v2 定稿搬运时丢失，照备份补回）：C10 的 `plugin:event|listen/unlisten` tripwire 登记排入 **P1.5（0.5d）**——testid 补齐（§9.5 清单）+ tripwire 登记 + `e2e/helpers/testids.ts`，与 P0 spike 可并行。
+
 ### 9.3 捕虫清单扩充（A-23…A-26，复核新发现）
 
 | # | 位置 | 疑点 |

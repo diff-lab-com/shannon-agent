@@ -1,6 +1,6 @@
 # ChatScript: session-lifecycle — journey #19（W2 §9.4，gap G7）。
 #
-# 侧栏会话生命周期旅程：61 条 seed 会话（55 条 cap-NN 撑过 50 条渲染上限 +
+# 侧栏会话生命周期旅程：62 条 seed 会话（55 条 cap-NN 撑过 50 条渲染上限 +
 # 7 条交互会话）。断言在 spec（chat-script.session-lifecycle.spec.ts）：
 #   - 内联重命名（⋯菜单 → Rename，armed rename 投影进 list_sessions）；
 #   - pin → shannon-sessions-pinned 持久化 → reload 后仍置顶带 pin 标记；
@@ -9,7 +9,7 @@
 #   - DeleteSessionModal：普通删除成功关闭；deleteFails 固定装置拒绝 →
 #     对话框保持打开（错误走共享横幅）；归档行的永久删除变体；
 #   - 搜索：title 防抖（250ms，≥3 字符走后端 search_sessions 的 seed 分支）；
-#   - 50 条 cap：sidebar-show-all 展开全部 61 行。
+#   - 50 条 cap：sidebar-show-all 展开全部 62 行。
 #
 # seed 顺序即新旧：cap 会话在最前（最旧，渲染在轨底），交互会话在最后
 # （最新，渲染在轨顶），保证交互行不被 50 条 cap 裁掉。
