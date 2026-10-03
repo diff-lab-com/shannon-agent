@@ -218,8 +218,22 @@ test.describe('voice input (journey #22, nightly-only) — capture seam removed 
 
     await expect(page.getByRole('button', { name: 'Start voice recording' })).toHaveCount(0)
 
-    // No doomed recording possible → the composer keeps its boot state.
-    await expect(chat.composer()).toHaveValue('')
+    // Positive control: the composer is alive and its value channel works —
+    // so the emptiness below is the closed gate's verdict, not a dead input.
+    await chat.composer().fill('positive control')
+    await expect(chat.composer()).toHaveValue('positive control')
+    await chat.composer().fill('')
+
+    // No doomed recording possible → no stub transcript can reach the draft.
+    // Sample across a bounded window so a LATE async arrival still fails —
+    // a single-instant empty check only proves "not yet" (w3 review Minor 3:
+    // the bare empty-value + sentTurns pair was near-tautological once the
+    // mic-count anchor held).
+    const probeUntil = Date.now() + 1_500
+    while (Date.now() < probeUntil) {
+      expect(await chat.composer().inputValue()).toBe('')
+      await page.waitForTimeout(250)
+    }
     expect((await mockSnapshot(page)).sentTurns).toBe(0)
 
     await expectNoConsoleErrors(page)
