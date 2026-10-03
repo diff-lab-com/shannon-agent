@@ -172,9 +172,10 @@ jobs:
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
           # Only the eval steps below compile; the metadata checks are
-          # cache-agnostic. Shared workspace-compile cache — see the
-          # rationale on the Test job.
-          shared-key: ci-v3
+          # cache-agnostic. Shared workspace-compile cache (ci-v4, rotated
+          # per run) — see the rationale on the Test job.
+          shared-key: ci-v4
+          key: ${{ github.run_id }}
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Generated facade facts are fresh
@@ -307,7 +308,21 @@ jobs:
           # cause of the "GHA cold-cache stall" flakes noted on the eval gate.
           # Bump to ci-v3 to invalidate every pre-split cache (ci-v2's
           # feature-isolation rationale, see git history).
-          shared-key: ci-v3
+          #
+          # 2026-10-03 (ci-v4 unfreeze): actions/cache SKIPS the post-save on
+          # an exact-key hit ("Cache up-to-date."), so under shared-key-only
+          # ci-v3 the whole family kept restoring one partial 2026-10-02
+          # snapshot forever — every job recompiled ~700 crates per run
+          # anyway. `key: github.run_id` makes the exact key unique per run:
+          # restore falls back to the newest ci-v4 entry via the shared-key
+          # prefix, and the post step always saves a fresh snapshot, so the
+          # cache tracks the code instead of freezing. The ci-v3 bump also
+          # orphans the frozen entries for LRU eviction. Watch "Cache Size"
+          # and the compile-step times for ~20 runs (per-run entries grow the
+          # cache population; see the review-workflow budget note in the
+          # 2026-10-02 CI analysis report).
+          shared-key: ci-v4
+          key: ${{ github.run_id }}
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -353,8 +368,13 @@ jobs:
         # keep that test target included (or re-home it explicitly).
         run: |
           set -o pipefail
-          # Guard against stale cached binaries with unexpected feature sets.
-          cargo clean -p shannon-tools
+          # (The old `cargo clean -p shannon-tools` stale-feature guard was
+          # removed 2026-10-03: it recompiled shannon-tools plus the four
+          # crates downstream of it — ~3 min per shard, on the merge
+          # critical path — and its motive is gone since test-features
+          # builds its feature shapes in the isolated target-feature dir
+          # (see that job). If a stale-binary mystery ever appears, suspect
+          # this removal first.)
           if cargo nextest run --workspace --config-file .config/nextest.toml --profile ci --partition hash:${{ matrix.shard }}/2 2>&1 | tee /tmp/nextest-test.log; then
             exit 0
           fi
@@ -426,7 +446,8 @@ jobs:
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
           # Same shared cache as the Test job (see the comment there).
-          shared-key: ci-v3
+          shared-key: ci-v4
+          key: ${{ github.run_id }}
       - name: Install Tauri system deps
         # The doctests below compile every workspace lib (shannon-desktop
         # needs the webkit/gtk headers); the feature legs need the xcap
@@ -672,8 +693,10 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
-          # Shared workspace-compile cache — see the rationale on the Test job.
-          shared-key: ci-v3
+          # Shared workspace-compile cache (ci-v4, rotated per run) — see the
+          # rationale on the Test job.
+          shared-key: ci-v4
+          key: ${{ github.run_id }}
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -798,10 +821,12 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
-          # Shared-key joins the ci-v3 cache family; rust-cache automatically
-          # appends matrix values to the key, so each OS leg keeps its own
-          # entry (no cross-OS pollution).
-          shared-key: ci-v3
+          # Shared-key joins the ci-v4 cache family (per-run rotation — see
+          # the rationale on the Test job); rust-cache automatically appends
+          # matrix values to the key, so each OS leg keeps its own entry
+          # (no cross-OS pollution).
+          shared-key: ci-v4
+          key: ${{ github.run_id }}
       # shannon-desktop is excluded below, but shannon-mcp-saas still
       # pulls in `keyring` → `dbus-secret-service` → `dbus` →
       # `libdbus-sys`, whose build.rs runs `pkg-config --libs dbus-1`.
@@ -875,7 +900,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
-    timeout-minutes: 20
+    # 30 min (raised from 20, 2026-10-03): the old cap left only ~40%
+    # headroom over the job's 10-12 min median, and once killed a stalled
+    # job before cargo-semver-checks had run a single step (run
+    # 37057376956 attempt 1 — checkout completed, ~20 min of log silence,
+    # canceled).
+    timeout-minutes: 30
     # Semver is a required gate (flipped from advisory in the v0.8.0 cycle).
     # Previously advisory because breaking changes are routine before 1.0 — they
     # remain allowed as long as the minor version bumps (0.8.x -> 0.9.0);
@@ -999,6 +1029,18 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # 2026-10-03 (semver cache): cargo-semver-checks builds its rustdoc
+          # passes into ./semver-checks/target, which nothing cached before —
+          # the action's own prefix-key only caches the BASELINE rustdoc, so
+          # the ~7.5 min current-side dependency compile was re-paid on every
+          # PR. Deliberately its own ci-semver family, NOT the ci-v4
+          # workspace family: this job builds with the action's latest
+          # stable toolchain (rustc >=1.91, see the note below), not the
+          # repo's 1.88 pin.
+          shared-key: ci-semver
+          cache-directories: semver-checks/target
       - name: Install libdbus + Tauri system deps
         # shannon-mcp-saas → keyring → libdbus-sys needs pkg-config +
         # libdbus-1-dev at build time (also needed for the baseline rustdoc).

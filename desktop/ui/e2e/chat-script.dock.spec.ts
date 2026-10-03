@@ -26,6 +26,14 @@ function stored(page: Page, key: string): Promise<string | null> {
 async function openSession(page: Page): Promise<void> {
   await page.getByTestId('desktop-session-row-script-sess-dock').click()
   await expect(page.getByRole('heading', { name: 'Dock journey' })).toBeVisible({ timeout: 10_000 })
+  // The Header heading alone does NOT prove the chat page is interactive:
+  // it renders from `sessions.find(currentSessionId)` the moment the boot
+  // binding lands, while the lazy Chat chunk (and ChatInput with it) may
+  // still be compiling under load. Both one-shot Ctrl+Shift+P presses below
+  // need ChatInput's window keydown handler — a press dispatched before it
+  // mounts is silently dropped (observed in CI: no `configure` invoke, plan
+  // mode never armed, dock never auto-opened). Anchor the composer itself.
+  await expect(page.getByRole('textbox', { name: 'Message' })).toBeVisible({ timeout: 15_000 })
 }
 
 test.describe('scripted chat backend — dock-interactions (journey #20)', () => {
