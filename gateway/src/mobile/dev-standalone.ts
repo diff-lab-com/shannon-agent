@@ -1,14 +1,18 @@
 /**
  * Dev-only standalone mobile host: boots the REAL gateway mobile server
  * (pairing + engine bridge, `requireSession` enforced) with in-memory pair
- * tokens / device registry, and prints one JSON line
+ * tokens / device registry, and prints TWO JSON lines
  *
  *   {"host":..,"port":<n>,"token":"..","expiresAt":<epochMs>,"enginePort":<n>}
  *
- * plus a ready-to-paste QR v1 payload, so a client smoke test
+ * — line 1 = device A, line 2 = device B (same shape, different tokens, same
+ * host/port/expiry; the mobile smoke pairs a second bystander device from
+ * line 2 for its "events reach ONLY the initiating device" negative check),
+ * plus a ready-to-paste QR v1 payload per line, so a client smoke test
  * (shannon-mobile `tool/gateway_smoke.dart`) or an on-device joint-debug
  * session can exercise the live `shannon/*` wire contract without the desktop
- * app.
+ * app. Line 1 stays byte-compatible with the historical single-line boot
+ * record, so consumers that take the first parseable line are unaffected.
  *
  * Environment:
  *  - SHANNON_MOBILE_HOST (default 127.0.0.1) — bind host (e.g. 0.0.0.0 for LAN)
@@ -44,6 +48,7 @@ import { WebSocket, WebSocketServer } from "ws";
 
 import { createConsoleLogger } from "../logger.js";
 import { GATEWAY_VERSION } from "../version.js";
+import { ActiveQueryRegistry } from "../router/activeQueries.js";
 import {
   createMobileHandlers,
   DeviceRegistry,
@@ -79,12 +84,18 @@ class FakeEngine {
   // seeding (sessions.list) and thread fills (session.history) have something
   // honest to render during joint debugging. Static — the fake engine's turns
   // don't write back into them (it exists only to exercise the wire).
+  // Token totals (C8): sess-dev-0001 carries real positive ints so the smoke
+  // sees the session.list token keys end to end; sess-dev-0002 deliberately
+  // omits them — "engine has no data → wire omits the keys" is the degradation
+  // path the phone must render honestly (never invent 0).
   private readonly sessions = [
     {
       session_id: "sess-dev-0001",
       agent_id: null,
       title: "Fix flaky login tests",
       updated_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+      total_input_tokens: 1834,
+      total_output_tokens: 902,
       transcript: [
         { role: "user", content: "The login tests fail about one in five runs — investigate." },
         {
@@ -313,12 +324,18 @@ const registry = new DeviceRegistry();
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 const approvals = new ApprovalRegistry();
 const hub = new MobileDispatchHub({ logger, approvals });
+// Shared in-flight query registry: the engine bridge (shannon/query/cancel)
+// and the dispatch pipeline's lane clients register against ONE instance, so
+// shannon/cancel can interrupt a dispatched task's engine turn (same
+// instance-injection pattern as the approval registry above).
+const activeQueries = new ActiveQueryRegistry();
 const pipeline = createMobileDispatchPipeline({
   hub,
   engineWsUrl,
   engineHttpBaseUrl: engineHttpBase,
   defaultModel: DEFAULT_MODEL,
   logger,
+  activeQueries,
 });
 hub.setSubmit(pipeline.submit);
 
@@ -332,6 +349,8 @@ const handlers = createMobileHandlers({
     // §K: a signed shannon/approval/decide unblocks a dispatched task's
     // parked approval lane (same wiring as the bootstrap).
     approvalDecisionSink: (requestId, choice) => hub.settleApproval(requestId, choice),
+    // Shared with the pipeline above — cancel reaches dispatched tasks.
+    activeQueries,
   },
   tokens,
   registry,
@@ -360,19 +379,28 @@ const server = new MobileServer({
   onContext: (ctx) => hub.registerConnection(ctx),
 });
 const handle = await server.start();
-const record = tokens.issue();
-const exp = record.expiresAt;
-const qr = { v: 1, scheme: "ws", host: qrHost, port: handle.port, token: record.token, exp };
-process.stdout.write(
-  `${JSON.stringify({
+// Two consecutive one-time tokens: line 1 is device A (the original smoke
+// flow), line 2 is device B — the mobile smoke's "dispatch events reach ONLY
+// the initiating device" negative half needs a second paired bystander.
+// PairTokenStore.issue() has no rate limit / single-mint assumption (single-USE
+// applies to consume only), so back-to-back issuance is fine; both tokens are
+// minted against ONE issuedAt so the two lines share the same expiresAt.
+const bootIssuedAt = Date.now();
+const bootLine = (token: string, expiresAt: number): string => {
+  const qr = { v: 1, scheme: "ws", host: qrHost, port: handle.port, token, exp: expiresAt };
+  return JSON.stringify({
     host: qrHost,
     port: handle.port,
-    token: record.token,
-    expiresAt: exp,
+    token,
+    expiresAt,
     enginePort: engineHttpBase,
     qr: JSON.stringify(qr),
-  })}\n`,
-);
+  });
+};
+const recordA = tokens.issue({ issuedAt: bootIssuedAt });
+const recordB = tokens.issue({ issuedAt: bootIssuedAt });
+process.stdout.write(`${bootLine(recordA.token, recordA.expiresAt)}\n`);
+process.stdout.write(`${bootLine(recordB.token, recordB.expiresAt)}\n`);
 
 let stopping = false;
 const shutdown = (): void => {

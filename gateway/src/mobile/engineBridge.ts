@@ -21,12 +21,20 @@
  * "__anon__" when none) so `shannon/cancel` can find and interrupt it. P1.2's
  * device pairing replaces the anon key with a stable device session id, and
  * verifies the Ed25519 signature on every approval decision.
+ *
+ * The registry itself is the SHARED `ActiveQueryRegistry` (injectable via
+ * `opts.activeQueries`; defaults to a private instance): the dispatch
+ * pipeline's per-lane clients register under their router session key
+ * (`mobile:<deviceId>`) for the duration of each turn, so `shannon/cancel`
+ * can also interrupt a dispatched task's engine turn — the cancel lookup
+ * probes the bare device session id first, then that lane-key alias.
  */
 
 import { respondToApproval, type GatewayApprovalChoice } from "../engine/httpClient.js";
 import { EngineWsClient, type EngineWsClientOptions } from "../engine/wsClient.js";
-import type { EngineEvent } from "../engine/runtime.js";
-import type { Logger } from "../adapters/types.js";
+import { type EngineEvent } from "../engine/runtime.js";
+import { type Logger } from "../adapters/types.js";
+import { deviceLaneKey, ActiveQueryRegistry } from "../router/activeQueries.js";
 import { approvalMessage, approvalMessageV2, approvalDecideTimestampWindowMs } from "./crypto.js";
 import { approvalWireItem, engineAgent, engineRisk, type ApprovalRegistry } from "./approvalRegistry.js";
 import {
@@ -143,6 +151,15 @@ export interface EngineBridgeOptions {
    * besides the 300s timeout).
    */
   approvalDecisionSink?: (requestId: string, choice: GatewayApprovalChoice) => void;
+  /**
+   * Shared in-flight query registry (see `../router/activeQueries.ts`). When
+   * injected, the bridge registers its direct `shannon/query` clients here AND
+   * `shannon/cancel` probes the dispatch pipeline's lane entries
+   * (`mobile:<deviceId>`) — one instance across both producers, created by the
+   * composer. Absent → a private instance (legacy behavior, direct queries
+   * only).
+   */
+  activeQueries?: ActiveQueryRegistry;
 }
 
 /** Sentinel key for queries without a session_id (P1.2 replaces it with a device id). */
@@ -158,8 +175,10 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
     opts.engineClientFactory ?? ((o) => new EngineWsClient(o));
   const fetchImpl = opts.fetchImpl ?? fetch;
 
-  /** session key → in-flight client (for cancel). One query per key at a time. */
-  const activeQueries = new Map<string, EngineClient>();
+  /** session key → in-flight client (for cancel). One query per key at a time.
+   *  Shared with the dispatch pipeline's lane clients when injected (see
+   *  `ActiveQueryRegistry`) so cancel reaches dispatched tasks too. */
+  const activeQueries = opts.activeQueries ?? new ActiveQueryRegistry();
   let modelOverride: string | null = null;
 
   const requireSession = opts.requireSession === true;
@@ -337,7 +356,11 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       // Ownership (mirror of query): a bound device may only cancel its own
       // in-flight turn — params.session_id can't reach another device's query.
       const key = requireSession ? ctx.sessionId! : params.session_id ?? ANON_KEY;
-      const client = activeQueries.get(key);
+      // Two producers share the registry: the bridge's own query clients sit
+      // under the bare key (device session id / anon), a dispatched task's
+      // lane client sits under `mobile:<deviceId>`. Probe both — direct first,
+      // then the lane alias — so cancel interrupts dispatched tasks too.
+      const client = activeQueries.get(key) ?? activeQueries.get(deviceLaneKey(key));
       if (client) {
         client.cancel();
       } else {

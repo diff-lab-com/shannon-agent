@@ -7,6 +7,7 @@ import { AdapterRegistry } from "./adapters/registry.js";
 import { EngineWsClient } from "./engine/wsClient.js";
 import { SessionRouter, type EngineClientFactory } from "./router/router.js";
 import { type TurnHandler } from "./router/types.js";
+import { ActiveQueryRegistry } from "./router/activeQueries.js";
 import { createApprovalTurnHandler } from "./router/approvalTurnHandler.js";
 import { type AdapterConfig, type GatewayConfig, type LogLevel } from "./config/types.js";
 import { type SecretProvider } from "./secrets/types.js";
@@ -177,6 +178,11 @@ export async function bootstrap(
   const dispatchHub = mobileEnabled
     ? new MobileDispatchHub({ logger, approvals: approvalRegistry ?? undefined })
     : null;
+  // Shared in-flight query registry: the engine bridge (shannon/query +
+  // shannon/cancel) and the router's per-lane clients register against ONE
+  // instance, so cancel reaches a dispatched task's engine turn too —
+  // the same instance-injection pattern as the approval registry above.
+  const activeQueries = mobileEnabled ? new ActiveQueryRegistry() : null;
   if (dispatchHub) {
     registry.register(createMobileChannelAdapter({ hub: dispatchHub }));
   }
@@ -219,7 +225,7 @@ export async function bootstrap(
     },
   };
 
-  const router = new SessionRouter({ registry, clientFactory, turnHandler, logger });
+  const router = new SessionRouter({ registry, clientFactory, turnHandler, logger, activeQueries: activeQueries ?? undefined });
 
   // P2-1: dispatched tasks enter the router here — the same trigger-free,
   // lane-serialized, lifecycle-wrapped pipeline the IM adapters feed.
@@ -331,10 +337,19 @@ export async function bootstrap(
   logger.info(`shannon-gateway up: ${registry.size} adapter(s) started`);
 
   const mobile = mobileEnabled
-    ? await startMobileServer(config, logger, opts, dispatchHub!, approvalRegistry!, engineAuthToken, {
-        allowlist,
-        pairing: accessPairing,
-      })
+    ? await startMobileServer(
+        config,
+        logger,
+        opts,
+        dispatchHub!,
+        approvalRegistry!,
+        activeQueries!,
+        engineAuthToken,
+        {
+          allowlist,
+          pairing: accessPairing,
+        },
+      )
     : null;
   if (mobile) {
     logger.info(
@@ -383,6 +398,8 @@ async function startMobileServer(
   dispatchHub: MobileDispatchHub,
   /** §L2: shared pending-approval registry (also wired into the hub). */
   approvals: ApprovalRegistry,
+  /** Shared in-flight query registry (also wired into the SessionRouter). */
+  activeQueries: ActiveQueryRegistry,
   engineAuthToken: string | null,
   /** T9: the IM access stores the desktop pairing-approval RPC serves. */
   access: { allowlist: Allowlist; pairing: PairingStore },
@@ -438,6 +455,10 @@ async function startMobileServer(
       fetchImpl: opts.mobileFetchImpl,
       engineAuthToken,
       approvalRegistry: approvals,
+      // Shared in-flight query registry: shannon/cancel can interrupt a
+      // dispatched task's lane turn (the router registers its clients on the
+      // same instance for the duration of each turn).
+      activeQueries,
       // §K: a signed shannon/approval/decide unblocks the dispatched task's
       // parked approval lane (the Y/N-text settle left the RPC face).
       approvalDecisionSink: (requestId, choice) => dispatchHub.settleApproval(requestId, choice),

@@ -121,9 +121,15 @@ export class PairTokenStore {
    * Mint a fresh one-time token. The desktop QR (P1.3) displays it. In file mode
    * the record is appended to disk so a separate consumer process (the gateway)
    * can validate it; in memory mode it lives in the `pending` map.
+   *
+   * `opts.issuedAt` overrides the clock for THIS mint (dev boot prints several
+   * tokens that must share one expiry ms; normal callers omit it). Purely a
+   * timestamp choice — no rate limiting or single-issue constraint exists
+   * here; consecutive `issue()` calls are always fine (single-use applies to
+   * `consume` only).
    */
-  issue(): PairTokenRecord {
-    const issuedAt = this.now();
+  issue(opts?: { issuedAt?: number }): PairTokenRecord {
+    const issuedAt = opts?.issuedAt ?? this.now();
     const record: PairTokenRecord = {
       token: generatePairToken(),
       issuedAt,
