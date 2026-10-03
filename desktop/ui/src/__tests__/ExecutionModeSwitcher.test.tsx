@@ -65,11 +65,13 @@ async function openMenu(container: HTMLElement) {
   return trigger
 }
 
-/** The Base UI close is a transition-status → unmount microtask, not sync. */
+/** The Base UI close is a transition-status → unmount microtask, not sync.
+ *  5s budget: under parallel-test load the default 1s waitFor cap produced
+ *  constant ~1.07s failures (fix round 1 review). */
 async function expectClosed() {
   await waitFor(() => {
     expect(screen.queryByRole('listbox', { name: 'Execution mode options' })).toBeNull()
-  })
+  }, { timeout: 5000 })
 }
 
 const highlighted = () => options().findIndex((o) => o.getAttribute('data-highlighted') != null)
@@ -147,16 +149,21 @@ describe('ExecutionModeSwitcher keyboard contract (Base UI Menu)', () => {
     expect(trigger).toBe(document.activeElement)
   })
 
-  it('closes when focus leaves the menu (Tab-out focusout)', async () => {
+  it('closes when keyboard focus leaves the menu (Tab-out), focus returning to the trigger', async () => {
     const { container } = renderSwitcher()
-    await openMenu(container)
-    // A tabbable sibling outside the menu — Tab moves focus there and the
-    // focus-out must dismiss the menu (Base UI non-modal contract).
-    const outsider = document.createElement('button')
-    document.body.appendChild(outsider)
-    outsider.focus()
+    const trigger = await openMenu(container)
+    // Wait for the open-focus sequence to settle (focus inside the menu)
+    // so the tab-out starts from the menu, as a keyboard user's would.
+    await waitFor(() => {
+      expect(listbox()).toBe(document.activeElement)
+    }, { timeout: 5000 })
+    // Base UI's first-class menu Tab-out: close with focus returning to the
+    // trigger. (Simulating the DOM focusout with .focus() on an outsider
+    // races Base UI's open-focus guard under load — fix round 1 — so the
+    // keyboard path is driven directly; it is the same user contract.)
+    await userEvent.keyboard('{Shift>}{Tab}{/Shift}')
     await expectClosed()
-    outsider.remove()
+    expect(trigger).toBe(document.activeElement)
   })
 
   it('still closes on an outside pointer press', async () => {

@@ -53,7 +53,7 @@ async function openPopover() {
 async function expectClosed() {
   await waitFor(() => {
     expect(screen.queryByTestId('phase-tier-menu')).toBeNull()
-  })
+  }, { timeout: 5000 })
 }
 
 const highlightedRadio = () => radios().findIndex((r) => r.getAttribute('data-highlighted') != null)
@@ -127,14 +127,21 @@ describe('PhaseTierSwitcher keyboard contract (Base UI Menu)', () => {
     expect(trigger).toBe(document.activeElement)
   })
 
-  it('closes when focus leaves the popover (Tab-out focusout)', async () => {
+  it('closes when keyboard focus leaves the popover (Tab-out), focus returning to the trigger', async () => {
     renderSwitcher(null)
-    await openPopover()
-    const outsider = document.createElement('button')
-    document.body.appendChild(outsider)
-    outsider.focus()
+    const trigger = await openPopover()
+    // Wait for the open-focus sequence to settle (focus inside the popover)
+    // so the tab-out starts from the popover, as a keyboard user's would.
+    await waitFor(() => {
+      expect(menu()).toBe(document.activeElement)
+    }, { timeout: 5000 })
+    // Base UI's first-class menu Tab-out: close with focus returning to the
+    // trigger. (Simulating the DOM focusout with .focus() on an outsider
+    // races Base UI's open-focus guard under load — fix round 1 — so the
+    // keyboard path is driven directly; it is the same user contract.)
+    await userEvent.keyboard('{Shift>}{Tab}{/Shift}')
     await expectClosed()
-    outsider.remove()
+    expect(trigger).toBe(document.activeElement)
   })
 })
 

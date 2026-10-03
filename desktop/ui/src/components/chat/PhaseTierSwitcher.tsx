@@ -81,7 +81,7 @@ function PhaseGroup({
               'flex-1 justify-center px-sm py-xs h-auto rounded-lg font-label-sm cursor-pointer outline-none transition-colors',
               value === pref
                 ? 'bg-primary-container text-on-primary-container font-bold'
-                : 'text-on-surface-variant',
+                : 'text-on-surface-variant hover:bg-primary/5',
               'data-[highlighted]:bg-primary/10',
             )}
           >
@@ -132,7 +132,7 @@ export function PhaseTierSwitcher() {
   })
 
   return (
-    <Menu.Root open={open} onOpenChange={setOpen} modal={false}>
+    <Menu.Root open={open} onOpenChange={setOpen} modal={false} highlightItemOnHover={false}>
       <Menu.Trigger
         render={
           <Button

@@ -103,7 +103,10 @@ export function ExecutionModeSwitcher() {
       : t(TIER_LABEL_KEY[state.mode])
 
   return (
-    <Menu.Root open={open} onOpenChange={setOpen} modal={false}>
+    // highlightItemOnHover={false} keeps CSS :hover (bg-primary/5, the
+    // pre-Base-UI hover paint) separate from the keyboard's data-highlighted
+    // (primary-container) — zero visual drift, per fix round 1.
+    <Menu.Root open={open} onOpenChange={setOpen} modal={false} highlightItemOnHover={false}>
       <Menu.Trigger
         render={
           <Button
@@ -165,7 +168,7 @@ export function ExecutionModeSwitcher() {
                     'flex w-full cursor-pointer items-center justify-between gap-sm px-md py-sm text-left font-label-md outline-none transition-colors',
                     selected
                       ? 'text-primary font-bold'
-                      : 'text-on-surface',
+                      : 'text-on-surface hover:bg-primary/5',
                     'data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container',
                   )}
                   onClick={() => void handlePick(option)}

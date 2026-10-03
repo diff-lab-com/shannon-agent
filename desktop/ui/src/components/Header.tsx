@@ -70,7 +70,10 @@ function HeaderModelSelector() {
   }
 
   return (
-    <Menu.Root open={open} onOpenChange={setOpen} modal={false}>
+    // highlightItemOnHover={false} keeps CSS :hover (bg-primary/5, the
+    // pre-Base-UI hover paint) separate from the keyboard's data-highlighted
+    // (primary-container) — zero visual drift, per fix round 1.
+    <Menu.Root open={open} onOpenChange={setOpen} modal={false} highlightItemOnHover={false}>
       <Menu.Trigger
         render={
           <Button
@@ -106,7 +109,7 @@ function HeaderModelSelector() {
                   closeOnClick={false}
                   className={cn(
                     'flex w-full cursor-pointer items-center justify-between gap-sm px-md py-sm text-left outline-none transition-colors',
-                    m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface',
+                    m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5',
                     'data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container',
                   )}
                   onClick={() => void handleModelSwitch(m.id)}

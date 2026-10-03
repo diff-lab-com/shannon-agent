@@ -187,7 +187,7 @@ describe('Header component', () => {
     fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
     await waitFor(() => {
       expect(screen.queryByRole('listbox', { name: 'Select model' })).toBeNull()
-    })
+    }, { timeout: 5000 })
     expect(document.activeElement).toBe(trigger)
   })
 
