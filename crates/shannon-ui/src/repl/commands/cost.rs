@@ -441,8 +441,7 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
                 if let Ok(mut perms) = engine.permissions().write() {
                     perms.enter_plan_mode(session_id);
                 }
-                repl.state.approval_mode =
-                    shannon_engine::permissions::ApprovalMode::Plan;
+                repl.state.approval_mode = shannon_engine::permissions::ApprovalMode::Plan;
                 if let Ok(mut flag) = repl.plan_mode_flag.write() {
                     *flag = true;
                 }

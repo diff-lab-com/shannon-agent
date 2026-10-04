@@ -577,13 +577,12 @@ fn apply_session_approval_mode(
     pm: &mut shannon_engine::permissions::PermissionManager,
     token: &str,
 ) -> Result<(), String> {
-    let mode = shannon_engine::permissions::ApprovalMode::from_str_ci(token)
-        .ok_or_else(|| {
-            format!(
-                "unknown approval mode '{token}'; valid: {}",
-                shannon_engine::permissions::ApprovalMode::all_names().join(", ")
-            )
-        })?;
+    let mode = shannon_engine::permissions::ApprovalMode::from_str_ci(token).ok_or_else(|| {
+        format!(
+            "unknown approval mode '{token}'; valid: {}",
+            shannon_engine::permissions::ApprovalMode::all_names().join(", ")
+        )
+    })?;
     if mode == shannon_engine::permissions::ApprovalMode::BypassPermissions {
         shannon_engine::permissions::ensure_bypass_allowed()?;
     }
@@ -3019,7 +3018,7 @@ mod tests {
                     model: Some("llama3".to_string()),
                     session_id: None,
                     attachments: None,
-                approval_mode: None,
+                    approval_mode: None,
                 })
                 .unwrap(),
             ))
@@ -3053,7 +3052,7 @@ mod tests {
                     model: None,
                     session_id: None,
                     attachments: None,
-                approval_mode: None,
+                    approval_mode: None,
                 })
                 .unwrap(),
             ))
@@ -3343,7 +3342,7 @@ mod tests {
             model: Some("gpt-4o".to_string()),
             session_id: None,
             attachments: None,
-        approval_mode: None,
+            approval_mode: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("hello world"));

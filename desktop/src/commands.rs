@@ -3757,12 +3757,10 @@ fn send_attachment_domain_follows_session_wd_over_global() {
     // Session wd wins: the domain is the session directory.
     let resolved = resolve_send_working_dir(Some(&session_wd), Some(&global_wd));
     let domain = require_attachment_working_dir(resolved.as_deref()).unwrap();
-    let (collected, rejected) =
-        collect_attachments(&[in_session.display().to_string()], &domain);
+    let (collected, rejected) = collect_attachments(&[in_session.display().to_string()], &domain);
     assert!(rejected.is_empty(), "unexpected rejections: {rejected:?}");
     assert_eq!(collected.len(), 1);
-    let (collected, rejected) =
-        collect_attachments(&[in_global.display().to_string()], &domain);
+    let (collected, rejected) = collect_attachments(&[in_global.display().to_string()], &domain);
     assert!(collected.is_empty());
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0].reason, OutOfWorkingDir);
@@ -3770,8 +3768,7 @@ fn send_attachment_domain_follows_session_wd_over_global() {
     // No session wd: unchanged global-only behavior.
     let resolved = resolve_send_working_dir(None, Some(&global_wd));
     let domain = require_attachment_working_dir(resolved.as_deref()).unwrap();
-    let (collected, rejected) =
-        collect_attachments(&[in_global.display().to_string()], &domain);
+    let (collected, rejected) = collect_attachments(&[in_global.display().to_string()], &domain);
     assert!(rejected.is_empty(), "unexpected rejections: {rejected:?}");
     assert_eq!(collected.len(), 1);
 }

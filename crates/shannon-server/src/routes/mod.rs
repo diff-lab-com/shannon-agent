@@ -116,8 +116,8 @@ pub async fn create_session(
     }
     let approval_mode = parse_approval_mode_token(request.approval_mode.as_deref())
         .map_err(|e| CreateSessionError { error: e })?;
-    let engine = build_engine(config, approval_mode)
-        .map_err(|e| CreateSessionError { error: e })?;
+    let engine =
+        build_engine(config, approval_mode).map_err(|e| CreateSessionError { error: e })?;
     let summary = state.sessions.create(engine).await;
     Ok(Json(CreateSessionResponse {
         id: summary.id,

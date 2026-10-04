@@ -553,8 +553,8 @@ pub(crate) fn profile_approval_mode(
 ) -> Result<Option<&'static str>, String> {
     match name {
         "" => Ok(None),
-        "strict" | "balanced" => Ok(Some("suggest")),
-        "permissive" => Ok(Some("auto_edit")),
+        "strict" | "balanced" => Ok(Some("ask")),
+        "permissive" => Ok(Some("auto-edit")),
         custom => {
             let def = registry.get(custom).ok_or_else(|| {
                 format!(
@@ -570,9 +570,9 @@ pub(crate) fn profile_approval_mode(
             let auto_write = any(&def.auto_approve, &["Edit", "Write", "MultiEdit"]);
             let auto_bash = any(&def.auto_approve, &["Bash"]);
             Ok(Some(if auto_read && auto_write && auto_bash {
-                "auto_edit"
+                "auto-edit"
             } else {
-                "suggest"
+                "ask"
             }))
         }
     }

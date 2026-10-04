@@ -821,6 +821,12 @@ export function mapEngineEvent(ev: EngineEvent): ShannonEvent | null {
       return null;
     case "error":
       return { type: "query.failed", error: ev.message };
+    case "approval.mode":
+      // K4/P2-3: ack frame for approval.mode requests. The gateway never
+      // SENDS approval.mode requests (mode changes are a desktop/TUI
+      // capability), so a well-formed engine never pushes this here — ack
+      // and drop, same posture as the session.* frames above.
+      return null;
     default: {
       // Exhaustiveness guard — if EngineEvent gains a variant, this errors at
       // compile time, forcing mapEngineEvent to handle it.

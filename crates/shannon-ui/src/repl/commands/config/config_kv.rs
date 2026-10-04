@@ -205,14 +205,21 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
         };
         // Design §7.1: the listing mirrors the UI model — the 3-stop autonomy
         // ladder plus the plan workflow tier, then expert modes separately.
-        let mut msg = format!("Current approval mode: {current} [{}]\n\n", current.short_label());
+        let mut msg = format!(
+            "Current approval mode: {current} [{}]\n\n",
+            current.short_label()
+        );
         msg.push_str("Autonomy ladder (Shift+Tab cycles):\n");
         for name in ["ask", "auto-edit", "full-auto"] {
             let mode = ApprovalMode::from_str_ci(name).expect("ladder token parses");
             let marker = if mode == current { " *" } else { "" };
             msg.push_str(&format!("  {name}{marker} — {}\n", mode.description()));
         }
-        let plan_marker = if current == ApprovalMode::Plan { " *" } else { "" };
+        let plan_marker = if current == ApprovalMode::Plan {
+            " *"
+        } else {
+            ""
+        };
         msg.push_str(&format!(
             "  plan{plan_marker} — {} (workflow tier: enter via /plan)\n",
             ApprovalMode::Plan.description()
@@ -245,7 +252,8 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
             // P2-4: entering bypass from the REPL always confirms, and honors
             // the root refusal / SHANNON_DISABLE_BYPASS kill switch.
             if let Err(e) = shannon_engine::permissions::ensure_bypass_allowed() {
-                repl.chat.add_message(ChatRole::System, format!("Bypass refused: {e}"));
+                repl.chat
+                    .add_message(ChatRole::System, format!("Bypass refused: {e}"));
                 return Ok(());
             }
             repl.show_confirm_dialog(

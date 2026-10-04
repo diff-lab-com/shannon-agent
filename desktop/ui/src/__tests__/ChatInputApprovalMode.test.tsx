@@ -142,10 +142,10 @@ async function openSelectOptions(trigger: HTMLElement, count: number): Promise<H
   }
 }
 
-describe('ChatInput approval-mode switcher (GB P2-4, round-1 R3)', () => {
+describe('ChatInput approval-mode switcher (4+3 model, 2026-10-05)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    configOverride = makeConfig('suggest')
+    configOverride = makeConfig('ask')
     vi.mocked(api.configure).mockReset()
     vi.mocked(api.configure).mockResolvedValue(undefined)
   })
@@ -154,43 +154,50 @@ describe('ChatInput approval-mode switcher (GB P2-4, round-1 R3)', () => {
     document.querySelectorAll('[data-slot="select-content"]').forEach(n => n.remove())
   })
 
-  it('renders the SHARED table label for the current config mode (auto_edit → Permissive)', () => {
+  it('renders the SHARED table label for the current config mode (auto_edit → Auto Edit)', () => {
     configOverride = makeConfig('auto_edit')
     renderChatInput()
     const pill = screen.getByLabelText('Permission mode')
-    // 'auto_edit' is the permissive tier — the pill shows ITS label, proving
-    // the composer reads the same table the settings page writes.
-    expect(pill).toHaveTextContent(/permissive/i)
+    // Legacy 'auto_edit' normalizes to the auto-edit ladder tier — the pill
+    // shows ITS label, proving the composer reads the same table the
+    // settings page writes.
+    expect(pill).toHaveTextContent(/auto edit/i)
   })
 
-  it('suggest renders as the Balanced tier (R3 naming by engine semantics)', () => {
+  it('suggest renders as the Ask tier (legacy alias of the ladder base)', () => {
     renderChatInput()
-    expect(screen.getByLabelText('Permission mode')).toHaveTextContent(/balanced/i)
+    expect(screen.getByLabelText('Permission mode')).toHaveTextContent(/ask/i)
   })
 
-  it('renders out-of-table engine values honestly via the raw string (R3: confirm)', () => {
+  it('renders unknown engine values honestly via the raw string', () => {
+    configOverride = makeConfig('mystery-mode')
+    renderChatInput()
+    // A value this UI does not manage shows raw instead of dressing itself
+    // up as a tier the user could meaningfully pick.
+    expect(screen.getByLabelText('Permission mode')).toHaveTextContent('mystery-mode')
+  })
+
+  it('legacy confirm normalizes to the Ask tier (no fake raw readout)', () => {
     configOverride = makeConfig('confirm')
     renderChatInput()
-    // confirm ≡ suggest engine-side; the pill shows the raw value instead of
-    // dressing it up as a tier the user could meaningfully pick.
-    expect(screen.getByLabelText('Permission mode')).toHaveTextContent('confirm')
+    expect(screen.getByLabelText('Permission mode')).toHaveTextContent(/ask/i)
   })
 
   it('picking a tier commits configure(approval_mode) + refreshConfig — the General-page write', async () => {
     renderChatInput()
     const trigger = screen.getByLabelText('Permission mode')
     fireEvent.click(trigger)
-    const opts = await openSelectOptions(trigger, 4)
-    const permissive = opts.find(o => /permissive/i.test(o.textContent ?? ''))
-    expect(permissive).toBeTruthy()
-    fireEvent.pointerDown(permissive!, { button: 0 })
-    fireEvent.pointerUp(permissive!, { button: 0 })
-    fireEvent.click(permissive!)
+    const opts = await openSelectOptions(trigger, 3)
+    const autoEdit = opts.find(o => /auto edit/i.test(o.textContent ?? ''))
+    expect(autoEdit).toBeTruthy()
+    fireEvent.pointerDown(autoEdit!, { button: 0 })
+    fireEvent.pointerUp(autoEdit!, { button: 0 })
+    fireEvent.click(autoEdit!)
     // The commit chain is async (Base UI commit → onValueChange → await
     // configure → await refreshConfig) — generous explicit timeouts replace
     // waitFor's 1s default that the round-3 CI runner outran. Order-specific:
     // refreshConfig is only asserted after configure landed.
-    await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'auto_edit' }), { timeout: POPUP_TIMEOUT })
+    await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'auto-edit' }), { timeout: POPUP_TIMEOUT })
     await waitFor(() => expect(mockRefreshConfig).toHaveBeenCalled(), { timeout: POPUP_TIMEOUT })
   })
 
@@ -198,7 +205,7 @@ describe('ChatInput approval-mode switcher (GB P2-4, round-1 R3)', () => {
     renderChatInput()
     const trigger = screen.getByLabelText('Permission mode')
     fireEvent.click(trigger)
-    await openSelectOptions(trigger, 4)
+    await openSelectOptions(trigger, 3)
     const popups = document.querySelectorAll('[data-slot="select-content"]')
     const last = popups[popups.length - 1]
     expect(last?.textContent).toMatch(/high-risk actions/i)
@@ -206,10 +213,12 @@ describe('ChatInput approval-mode switcher (GB P2-4, round-1 R3)', () => {
   })
 
   it('an out-of-table current value never hides the listed tiers (pill is display-only)', () => {
-    configOverride = makeConfig('dont_ask')
+    configOverride = makeConfig('plan_ro')
     renderChatInput()
     const pill = screen.getByLabelText('Permission mode')
-    expect(pill).toHaveTextContent('dont_ask')
+    // Legacy plan_ro normalizes to the readonly EXPERT mode — labeled
+    // honestly (Strict), just not one of the three quick tiers.
+    expect(pill).toHaveTextContent(/strict/i)
     // The title still carries the honest description + the high-risk note.
     expect(pill).toHaveAttribute('title', expect.stringContaining('High-risk actions'))
   })

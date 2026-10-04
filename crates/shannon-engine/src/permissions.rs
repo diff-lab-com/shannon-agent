@@ -247,7 +247,9 @@ impl ApprovalMode {
             Self::Plan => "Read-only until the plan is approved, then auto-run within the plan",
             Self::Readonly => "Only read operations — no writes, no bash",
             Self::DontAsk => "Never waits: allow rules and reads pass, the rest is denied (CI)",
-            Self::BypassPermissions => "Skip all checks except deny rules (dangerous, trusted env only)",
+            Self::BypassPermissions => {
+                "Skip all checks except deny rules (dangerous, trusted env only)"
+            }
         }
     }
 
@@ -1523,7 +1525,9 @@ impl PermissionManager {
     /// P3-2: true when a budget is configured and fully consumed.
     fn auto_approval_budget_exhausted(&self) -> bool {
         self.max_auto_approvals > 0
-            && self.auto_approval_count.load(std::sync::atomic::Ordering::Relaxed)
+            && self
+                .auto_approval_count
+                .load(std::sync::atomic::Ordering::Relaxed)
                 >= self.max_auto_approvals
     }
 
@@ -2342,7 +2346,10 @@ impl PermissionManager {
             tool_name.to_string(),
             tool_input.clone(),
             risk_level,
-            format!("Approve to continue: {}", Self::format_input_summary(tool_input)),
+            format!(
+                "Approve to continue: {}",
+                Self::format_input_summary(tool_input)
+            ),
         );
         prompt.limit_triggered = true;
         prompt
@@ -2464,7 +2471,10 @@ pub fn load_settings_permission_files(pm: &mut PermissionManager) -> usize {
             continue;
         };
         let Ok(doc) = serde_json::from_str::<serde_json::Value>(&content) else {
-            tracing::warn!("Skipping invalid settings file {}: parse error", path.display());
+            tracing::warn!(
+                "Skipping invalid settings file {}: parse error",
+                path.display()
+            );
             continue;
         };
         let Some(perms) = doc.get("permissions") else {
@@ -2488,8 +2498,7 @@ pub fn apply_configured_profile(pm: &mut PermissionManager, profile: &str) {
             Some(def) => pm.apply_custom_profile_def(def),
             None => tracing::warn!("custom permission profile '{name}' not found"),
         }
-    } else if let Some(p) = crate::permission_profile::PermissionProfile::from_str_lossy(profile)
-    {
+    } else if let Some(p) = crate::permission_profile::PermissionProfile::from_str_lossy(profile) {
         pm.apply_profile(p);
     } else {
         tracing::warn!("unknown permission_profile '{profile}'");
@@ -2532,7 +2541,8 @@ pub fn ensure_bypass_allowed() -> Result<(), String> {
 }
 
 /// Convert classifier RiskLevel to permissions RiskLevel.
-fn convert_classifier_risk(risk: crate::permission_classifier::RiskLevel) -> RiskLevel {    match risk {
+fn convert_classifier_risk(risk: crate::permission_classifier::RiskLevel) -> RiskLevel {
+    match risk {
         crate::permission_classifier::RiskLevel::None => RiskLevel::Safe,
         crate::permission_classifier::RiskLevel::Low => RiskLevel::Low,
         crate::permission_classifier::RiskLevel::Medium => RiskLevel::Medium,
@@ -3122,7 +3132,10 @@ mod tests {
         // Legacy aliases: `auto` keeps pointing at AutoEdit (historical
         // Shannon display name); classifier spellings map conservatively to
         // Ask; plan-readonly folds into Readonly.
-        assert_eq!(ApprovalMode::from_str_ci("auto"), Some(ApprovalMode::AutoEdit));
+        assert_eq!(
+            ApprovalMode::from_str_ci("auto"),
+            Some(ApprovalMode::AutoEdit)
+        );
         assert_eq!(
             ApprovalMode::from_str_ci("suggest"),
             Some(ApprovalMode::Ask)
@@ -3355,11 +3368,8 @@ mod tests {
 
         // Allow-listed tools pass
         mgr.allow_tool("Bash");
-        let result = mgr.classify_and_check(
-            sid,
-            "Bash",
-            &serde_json::json!({"command": "cargo test"}),
-        );
+        let result =
+            mgr.classify_and_check(sid, "Bash", &serde_json::json!({"command": "cargo test"}));
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
     }
@@ -3642,17 +3652,27 @@ mod tests {
     #[test]
     fn test_approval_mode_descriptions() {
         assert!(ApprovalMode::Ask.description().contains("Reads run freely"));
-        assert!(ApprovalMode::AutoEdit
-            .description()
-            .contains("File edits run without asking"));
-        assert!(ApprovalMode::FullAuto
-            .description()
-            .contains("below critical risk"));
-        assert!(ApprovalMode::Readonly.description().contains("read operations"));
+        assert!(
+            ApprovalMode::AutoEdit
+                .description()
+                .contains("File edits run without asking")
+        );
+        assert!(
+            ApprovalMode::FullAuto
+                .description()
+                .contains("below critical risk")
+        );
+        assert!(
+            ApprovalMode::Readonly
+                .description()
+                .contains("read operations")
+        );
         assert!(ApprovalMode::DontAsk.description().contains("Never waits"));
-        assert!(ApprovalMode::BypassPermissions
-            .description()
-            .contains("Skip all checks"));
+        assert!(
+            ApprovalMode::BypassPermissions
+                .description()
+                .contains("Skip all checks")
+        );
     }
 
     // ── P0/P3-2 convergence regression tests ────────────────────────────
@@ -3673,12 +3693,12 @@ mod tests {
             ApprovalMode::Readonly,
         ] {
             mgr.set_approval_mode(mode);
-            let result = mgr.classify_and_check(
-                sid,
-                "Bash",
-                &serde_json::json!({"command": "echo hi"}),
+            let result =
+                mgr.classify_and_check(sid, "Bash", &serde_json::json!({"command": "echo hi"}));
+            assert!(
+                result.is_err(),
+                "deny must bind in {mode:?}, got {result:?}"
             );
-            assert!(result.is_err(), "deny must bind in {mode:?}, got {result:?}");
         }
     }
 
@@ -3687,11 +3707,7 @@ mod tests {
         let mut mgr = PermissionManager::new();
         mgr.set_approval_mode(ApprovalMode::DontAsk);
         let sid = Uuid::new_v4();
-        let result = mgr.classify_and_check(
-            sid,
-            "Write",
-            &serde_json::json!({"path": "/tmp/x"}),
-        );
+        let result = mgr.classify_and_check(sid, "Write", &serde_json::json!({"path": "/tmp/x"}));
         assert!(matches!(result, Err(PermissionError::Denied(_))));
         // …and never silently waves a critical tool through
         assert!(result.is_err());
@@ -3772,20 +3788,32 @@ mod tests {
         // ask-rule forces a prompt even in full-auto…
         pm.set_approval_mode(ApprovalMode::FullAuto);
         let r = pm
-            .classify_and_check(sid_of(), "WebFetch", &serde_json::json!({"url": "https://x"}))
+            .classify_and_check(
+                sid_of(),
+                "WebFetch",
+                &serde_json::json!({"url": "https://x"}),
+            )
             .unwrap();
         assert!(r.is_some(), "ask rules must force prompts");
 
         // deny-rule blocks even bypass…
         pm.set_approval_mode(ApprovalMode::BypassPermissions);
         assert!(
-            pm.classify_and_check(sid_of(), "Bash", &serde_json::json!({"command": "sudo rm x"}))
-                .is_err()
+            pm.classify_and_check(
+                sid_of(),
+                "Bash",
+                &serde_json::json!({"command": "sudo rm x"})
+            )
+            .is_err()
         );
         // …and the allow-rule auto-approves under ask mode.
         pm.set_approval_mode(ApprovalMode::Ask);
         let r = pm
-            .classify_and_check(sid_of(), "Bash", &serde_json::json!({"command": "git status"}))
+            .classify_and_check(
+                sid_of(),
+                "Bash",
+                &serde_json::json!({"command": "git status"}),
+            )
             .unwrap();
         assert!(r.is_none(), "allow rules pre-approve");
     }

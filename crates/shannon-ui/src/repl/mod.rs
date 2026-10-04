@@ -928,7 +928,9 @@ impl Repl {
 
         // P1-3: configured profile (strict/balanced/permissive/custom:<name>)
         // applies before settings rules and session interactions.
-        if let Some(profile) = shannon_core::unified_config::ShannonConfig::configured_permission_profile() {
+        if let Some(profile) =
+            shannon_core::unified_config::ShannonConfig::configured_permission_profile()
+        {
             shannon_engine::permissions::apply_configured_profile(
                 &mut permission_manager,
                 &profile,

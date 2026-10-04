@@ -3262,7 +3262,8 @@ fn test_approval_mode_default_is_auto() {
 fn test_repl_default_approval_label() {
     let state = ReplState::default();
     assert_eq!(
-        state.approval_mode_label(), "EDIT",
+        state.approval_mode_label(),
+        "EDIT",
         "default label should match AutoEdit"
     );
 }

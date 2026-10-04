@@ -182,7 +182,11 @@ fn approval_mode_cycle_is_consistent() {
     // Cycle visits the three autonomy-ladder stops in order
     let start = ApprovalMode::Ask;
     let mut current = start;
-    let expected_cycle = [ApprovalMode::Ask, ApprovalMode::AutoEdit, ApprovalMode::FullAuto];
+    let expected_cycle = [
+        ApprovalMode::Ask,
+        ApprovalMode::AutoEdit,
+        ApprovalMode::FullAuto,
+    ];
     for expected in &expected_cycle {
         assert_eq!(current, *expected);
         current = current.cycle_next();
@@ -193,7 +197,10 @@ fn approval_mode_cycle_is_consistent() {
     assert_eq!(ApprovalMode::Plan.cycle_next(), ApprovalMode::Ask);
     assert_eq!(ApprovalMode::Readonly.cycle_next(), ApprovalMode::Ask);
     assert_eq!(ApprovalMode::DontAsk.cycle_next(), ApprovalMode::Ask);
-    assert_eq!(ApprovalMode::BypassPermissions.cycle_next(), ApprovalMode::Ask);
+    assert_eq!(
+        ApprovalMode::BypassPermissions.cycle_next(),
+        ApprovalMode::Ask
+    );
 }
 
 // ── PermissionRule basics ──────────────────────────────────────────────────

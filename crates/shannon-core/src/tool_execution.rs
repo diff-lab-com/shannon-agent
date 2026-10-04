@@ -41,7 +41,7 @@ pub fn is_file_modifying_tool(tool_name: &str) -> bool {
 /// server hosts) are no-ops, keeping their process-cwd inheritance exactly
 /// as before. This is the other half of the env-block invariant: the
 /// prompt advertises
-/// [`QueryEngineConfig::effective_working_directory`](crate::query_engine::types::QueryEngineConfig::effective_working_directory)
+/// [`QueryEngineConfig::effective_working_directory`](crate::query_engine::QueryEngineConfig::effective_working_directory)
 /// and Bash spawns run in that same directory.
 pub fn inject_bash_default_cwd(
     tool_inputs: &mut [(String, String, serde_json::Value)],
@@ -107,7 +107,11 @@ mod tests {
     // -- B2-2: Bash default-cwd dispatch injection --
 
     fn bash_call(json: serde_json::Value) -> (String, String, serde_json::Value) {
-        (format!("call-{}", uuid::Uuid::new_v4()), "Bash".to_string(), json)
+        (
+            format!("call-{}", uuid::Uuid::new_v4()),
+            "Bash".to_string(),
+            json,
+        )
     }
 
     /// The core invariant: with a configured session working directory, a
@@ -152,6 +156,9 @@ mod tests {
         let mut calls = vec![bash_call(serde_json::json!({ "command": "pwd" }))];
         let before = calls[0].2.clone();
         inject_bash_default_cwd(&mut calls, None);
-        assert_eq!(calls[0].2, before, "None working_directory must not touch inputs");
+        assert_eq!(
+            calls[0].2, before,
+            "None working_directory must not touch inputs"
+        );
     }
 }

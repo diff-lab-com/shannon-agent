@@ -239,8 +239,8 @@ pub async fn get_session_querying(
     state: tauri::State<'_, AppState>,
     session_id: String,
 ) -> Result<bool, String> {
-    let uuid = uuid::Uuid::parse_str(session_id.trim())
-        .map_err(|e| format!("invalid sessionId: {e}"))?;
+    let uuid =
+        uuid::Uuid::parse_str(session_id.trim()).map_err(|e| format!("invalid sessionId: {e}"))?;
     Ok(state.registry.is_querying(uuid).await)
 }
 

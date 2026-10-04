@@ -654,10 +654,8 @@ impl QueryEngine {
     pub fn with_working_directory(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         let dir = dir.into();
         if self.config.repo_map_root.is_none() {
-            self.repo_map_injector = RepoMapInjector::new(
-                Some(&dir),
-                self.config.repo_map_budget_tokens,
-            );
+            self.repo_map_injector =
+                RepoMapInjector::new(Some(&dir), self.config.repo_map_budget_tokens);
         }
         self.config.working_directory = Some(dir);
         self

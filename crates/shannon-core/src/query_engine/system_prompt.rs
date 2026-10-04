@@ -411,12 +411,15 @@ mod tests {
         };
         let tools = tools_empty();
         let injector = RepoMapInjector::new(None, 0);
-        let out = build(&inputs_for_test(&cfg, LlmProvider::Anthropic, &tools, &injector));
+        let out = build(&inputs_for_test(
+            &cfg,
+            LlmProvider::Anthropic,
+            &tools,
+            &injector,
+        ));
         let blocks = out.blocks.expect("non-empty");
         assert!(
-            blocks
-                .iter()
-                .any(|b| b.text.contains("B22WD_MARKER")),
+            blocks.iter().any(|b| b.text.contains("B22WD_MARKER")),
             "CLAUDE.md from the configured session dir must be injected: {:?}",
             blocks.iter().map(|b| &b.text).collect::<Vec<_>>()
         );
@@ -442,16 +445,22 @@ mod tests {
             .expect("configured dir resolves");
         let tools = tools_empty();
         let injector = RepoMapInjector::new(None, 0);
-        let out = build(&inputs_for_test(&cfg, LlmProvider::Anthropic, &tools, &injector));
+        let out = build(&inputs_for_test(
+            &cfg,
+            LlmProvider::Anthropic,
+            &tools,
+            &injector,
+        ));
         let blocks = out.blocks.expect("non-empty");
         let env_block = blocks
             .iter()
             .find(|b| b.text.contains("## Environment"))
             .expect("env block present");
         assert!(
-            env_block
-                .text
-                .contains(&format!("Working directory: {}", session_dir.path().display())),
+            env_block.text.contains(&format!(
+                "Working directory: {}",
+                session_dir.path().display()
+            )),
             "env block must advertise the session dir: {}",
             env_block.text
         );
@@ -488,7 +497,12 @@ mod tests {
         let expected = std::env::current_dir().expect("test process has a cwd");
         let tools = tools_empty();
         let injector = RepoMapInjector::new(None, 0);
-        let out = build(&inputs_for_test(&cfg, LlmProvider::Anthropic, &tools, &injector));
+        let out = build(&inputs_for_test(
+            &cfg,
+            LlmProvider::Anthropic,
+            &tools,
+            &injector,
+        ));
         let blocks = out.blocks.expect("non-empty");
         let env_block = blocks
             .iter()

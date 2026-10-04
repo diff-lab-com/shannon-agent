@@ -1167,8 +1167,7 @@ pub fn execute_pending_action(repl: &mut Repl, action: &str) -> Result<()> {
                     shannon_engine::permissions::ApprovalMode::BypassPermissions;
                 let label = repl.state.approval_mode.short_label();
                 repl.state.status = format!("Mode: {label}");
-                repl.state.toast =
-                    Some((format!("  Mode: {label}  "), std::time::Instant::now()));
+                repl.state.toast = Some((format!("  Mode: {label}  "), std::time::Instant::now()));
                 repl.chat.add_message(
                     ChatRole::System,
                     "Permission bypass enabled — all checks skipped (deny rules still apply)."
