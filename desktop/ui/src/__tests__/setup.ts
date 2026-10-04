@@ -192,6 +192,9 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   // unbound exactly as before; the binding test overrides this per scenario.
   getActiveSessionId: vi.fn().mockResolvedValue(null),
   cancelQuery: vi.fn().mockResolvedValue(undefined),
+  // B1-4 (P1-3) — the stop watchdog's reconciliation read. Default: backend
+  // idle; the watchdog tests override per scenario.
+  getSessionQuerying: vi.fn().mockResolvedValue(false),
   // B0 P0-2 — webview file drag-drop. Default: registration resolves with a
   // no-op unlisten and no events ever fire; drag-flow tests override it.
   onWebviewFileDrop: vi.fn().mockResolvedValue(() => {}),

@@ -170,6 +170,17 @@ export async function cancelQuery(sessionId?: string): Promise<void> {
   await invoke('cancel_query', { sessionId: sessionId ?? null })
 }
 
+/**
+ * B1-4 (P1-3) — whether the backend still has a live query on THIS session.
+ * The stop button's settle watchdog reconciles against this when the
+ * `query:cancelled` terminal event never arrives (backend emits are
+ * fire-and-forget). Read-only: an unknown session reports idle and the
+ * backend never materializes a registry entry for it.
+ */
+export async function getSessionQuerying(sessionId: string): Promise<boolean> {
+  return invoke<boolean>('get_session_querying', { sessionId })
+}
+
 // --- Webview file drag-drop (Tauri v2) ---
 //
 // B0 P0-2: with the webview's `dragDropEnabled` (default on), HTML5
