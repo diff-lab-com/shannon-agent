@@ -1014,6 +1014,23 @@ pub(crate) fn require_attachment_working_dir(
         .ok_or_else(|| tagged_error("no_working_dir", NO_WORKING_DIR_ATTACHMENT_ERROR))
 }
 
+/// B2-1 (P0-2 stopgap) — the working directory a send runs in: the TARGET
+/// session's own `working_dir` when it has one, else the global
+/// `desktop_cfg.working_dir`.
+///
+/// The global value is whatever the last `switch_session` /
+/// `change_working_dir` left behind (P0-2), so a multi-window send routed to
+/// a session in a different directory must not trust it. Sessions without
+/// their own wd keep the previous global-only behavior exactly.
+pub(crate) fn resolve_send_working_dir(
+    session_meta_wd: Option<&str>,
+    global: Option<&str>,
+) -> Option<String> {
+    session_meta_wd
+        .map(str::to_string)
+        .or_else(|| global.map(str::to_string))
+}
+
 /// P0-3 — resolve, gate and read the requested attachment paths.
 ///
 /// The send pipeline's refusal bookkeeping, extracted from `send_message`
@@ -1245,6 +1262,46 @@ pub async fn send_message(
         budget_bypass,
     )
     .await?;
+
+    // B2-1 (P0-2 / R8-① stopgap): the engine still reads the PROCESS cwd in
+    // four places — project instructions, env block, bash spawn, repo-map
+    // fallback — and the memory project key below freezes `current_dir` at
+    // construction, yet only `switch_session` retargets it (on every switch).
+    // A send routed to a non-focused session (multi-window) therefore built
+    // its engine in whatever directory the last switch left behind. Re-point
+    // the process cwd at the TARGET session's own working_dir before
+    // anything downstream reads it (attachment collection just below, engine
+    // build further down).
+    //
+    // KNOWN RESIDUALS, accepted by R9-① until B2-2 lands the full
+    // `QueryEngineConfig.working_directory` chain and removes every
+    // process-level flip (docs/plans/2026-10-05-chat-r3-improvement-plan.md
+    // §六 B2-1/B2-2): (a) the set→read span stays a race window, so two
+    // windows sending to different-directory sessions at the same instant
+    // can interleave; (b) this very set drags the NEXT bash spawn of any
+    // OTHER streaming session's turn into this directory (process-singleton
+    // cwd — architecturally unfixable at this layer); (c) a switch mid-turn
+    // still skews the turn in flight. Best-effort on purpose: the recorded
+    // directory may have been deleted since the session set it — warn and
+    // send in the current directory rather than block the turn.
+    let session_working_dir = {
+        let sessions = state.sessions.lock().await;
+        sessions
+            .iter()
+            .find(|s| s.id == session_id.to_string())
+            .and_then(|meta| meta.working_dir.clone())
+    };
+    if let Some(wd) = &session_working_dir {
+        if let Err(e) = std::env::set_current_dir(wd) {
+            tracing::warn!(
+                session_id = %session_id,
+                working_dir = %wd,
+                error = %e,
+                "failed to set process cwd to the session's working_dir — send proceeds in the current directory (B2-1 stopgap; B2-2 removes the process-level flip)"
+            );
+        }
+    }
+
     // Attachment collection + hard size caps run BEFORE the querying latch:
     // the latch is only cleared when the spawned query task finishes, so a
     // rejected send must happen before it is taken (mirrors the pre-turn
@@ -1261,7 +1318,15 @@ pub async fn send_message(
         Some(paths) => {
             let working_dir = {
                 let cfg = state.desktop_config.read().await;
-                require_attachment_working_dir(cfg.working_dir.as_deref())
+                // B2-1: the target session's own wd wins over the global
+                // pointer — the global value is whatever session was focused
+                // last (P0-2), which a multi-window send must not trust.
+                // Sessions without their own wd resolve exactly as before.
+                let resolved = resolve_send_working_dir(
+                    session_working_dir.as_deref(),
+                    cfg.working_dir.as_deref(),
+                );
+                require_attachment_working_dir(resolved.as_deref())
             }?;
             let (collected, rejected) = collect_attachments(paths, &working_dir);
             (Some(collected), rejected)
@@ -3651,6 +3716,68 @@ fn require_attachment_working_dir_rejects_unset_without_cwd_fallback() {
         require_attachment_working_dir(Some("/tmp/proj")).unwrap(),
         std::path::PathBuf::from("/tmp/proj")
     );
+}
+
+#[test]
+fn resolve_send_working_dir_prefers_session_meta_over_global() {
+    // B2-1 (P0-2 stopgap) priority: the TARGET session's own working_dir
+    // wins over the global pointer in every combination; sessions without
+    // their own wd fall back to the global value (previous behavior), and
+    // with neither there is no domain (the caller's unset handling applies).
+    assert_eq!(
+        resolve_send_working_dir(Some("/a/session"), Some("/a/global")),
+        Some("/a/session".to_string())
+    );
+    assert_eq!(
+        resolve_send_working_dir(Some("/a/session"), None),
+        Some("/a/session".to_string())
+    );
+    assert_eq!(
+        resolve_send_working_dir(None, Some("/a/global")),
+        Some("/a/global".to_string())
+    );
+    assert_eq!(resolve_send_working_dir(None, None), None);
+}
+
+#[test]
+fn send_attachment_domain_follows_session_wd_over_global() {
+    // The exact helper chain `send_message`'s attachment branch runs, driven
+    // over REAL directories: the global config points at `global_dir` while
+    // the target session's meta points at `session_dir` — the multi-window
+    // P0-2 shape. The attachment domain must follow the SESSION directory
+    // (file inside it accepted, the global-dir file rejected as out of
+    // scope), and a session WITHOUT its own wd must keep resolving against
+    // the global value exactly as before.
+    use RejectedAttachmentReason::OutOfWorkingDir;
+    let session_dir = tempfile::tempdir().unwrap();
+    let global_dir = tempfile::tempdir().unwrap();
+    let in_session = session_dir.path().join("notes.md");
+    let in_global = global_dir.path().join("other.md");
+    std::fs::write(&in_session, "session file").unwrap();
+    std::fs::write(&in_global, "global file").unwrap();
+    let session_wd = session_dir.path().to_string_lossy().into_owned();
+    let global_wd = global_dir.path().to_string_lossy().into_owned();
+
+    // Session wd wins: the domain is the session directory.
+    let resolved = resolve_send_working_dir(Some(&session_wd), Some(&global_wd));
+    let domain = require_attachment_working_dir(resolved.as_deref()).unwrap();
+    let (collected, rejected) =
+        collect_attachments(&[in_session.display().to_string()], &domain);
+    assert!(rejected.is_empty(), "unexpected rejections: {rejected:?}");
+    assert_eq!(collected.len(), 1);
+    let (collected, rejected) =
+        collect_attachments(&[in_global.display().to_string()], &domain);
+    assert!(collected.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].reason, OutOfWorkingDir);
+
+    // No session wd: unchanged global-only behavior.
+    let resolved = resolve_send_working_dir(None, Some(&global_wd));
+    let domain = require_attachment_working_dir(resolved.as_deref()).unwrap();
+    let (collected, rejected) =
+        collect_attachments(&[in_global.display().to_string()], &domain);
+    assert!(rejected.is_empty(), "unexpected rejections: {rejected:?}");
+    assert_eq!(collected.len(), 1);
 }
 
 #[test]
