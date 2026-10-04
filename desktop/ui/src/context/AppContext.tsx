@@ -224,13 +224,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null)
-  // B1-3 (P1-4): latest-ref mirror of `permissionRequest` — deleteSessionAction
-  // must not read the state through a stale useCallback closure (the callback
-  // memoizes over a narrow dep list; the mirror is refreshed every render).
-  // MERGE NOTE: B1-2 (terminal handlers' permission cleanup) adds a same-named
-  // ref in its own branch — keep exactly one on merge, mirroring in both places.
+  // B1-2 (P1-1): latest-ref mirror of the state above. The query:* listeners
+  // below register once on mount (empty effect deps), so their closures can
+  // never read fresh state — a terminal handler can only tell whether the
+  // pending prompt belongs to the settling session through this ref. All
+  // writes funnel through `applyPermissionRequest` so ref and state move in
+  // the same synchronous step (same pattern as visibleSessionIdRef).
+  // B1-3 (P1-4): deleteSessionAction reads the same mirror through its own
+  // stale-closure-prone callback — the render-time assignment below keeps the
+  // ref honest even if a future write ever bypasses the helper.
   const permissionRequestRef = useRef<PermissionRequest | null>(null)
   permissionRequestRef.current = permissionRequest
+  const applyPermissionRequest = useCallback((next: PermissionRequest | null) => {
+    permissionRequestRef.current = next
+    setPermissionRequest(next)
+  }, [])
   // /rewind: checkpoints for the current session (turn indices + previews).
   const [checkpoints, setCheckpoints] = useState<CheckpointInfo[]>([])
   // PM-12: persisted 👍/👎 for the current session's messages.
@@ -493,6 +501,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     map.set(sessionId, next)
     setSessionActivity(Object.fromEntries(map))
   }, [])
+
+  // B1-2 (P1-1): a run's terminal event ends the approval prompt it raised.
+  // Without this, stop/fail/cancel left the dialog hanging and the rail's
+  // amber dot lit while the backend auto-Denied the orphaned prompt after its
+  // 300s timeout (commands_permissions::prompt_user) — the eventual「允许」
+  // then reported "Permission request not found". Matching is on the prompt's
+  // session_id against the terminal event's OWNER key (the same key the
+  // handlers settle by), so another session's prompt — and a session-less one
+  // from the `request_permission` command — is never dismissed here.
+  const clearPermissionForSession = useCallback((sessionKey: string) => {
+    const pending = permissionRequestRef.current
+    if (!pending || pending.session_id !== sessionKey) return
+    applyPermissionRequest(null)
+    noteSessionApproval(pending.session_id, false)
+  }, [applyPermissionRequest, noteSessionApproval])
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -968,7 +991,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   ) => {
     try {
       await api.respondPermission(requestId, allow, options)
-      setPermissionRequest(null)
+      // B1-2 (P1-1): through the helper so the latest-ref mirror moves with
+      // the state (the query:* terminal handlers read the ref).
+      applyPermissionRequest(null)
       // Batch B2: resolve the rail's amber dot for the prompt's session.
       if (permissionRequest?.session_id) noteSessionApproval(permissionRequest.session_id, false)
     } catch (e) {
@@ -978,7 +1003,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // (Header) attach a no-op catch of their own.
       throw e
     }
-  }, [permissionRequest, noteSessionApproval, setChatError])
+  }, [permissionRequest, applyPermissionRequest, noteSessionApproval, setChatError])
 
   const refreshCheckpoints = useCallback(async () => {
     if (!currentSessionId) {
@@ -1273,6 +1298,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // visibility; a pending throttled flush must die BEFORE the
           // buckets are cleared so it can't resurrect stale text.
           setSessionQuerying(key, false)
+          // B1-2 (P1-1): the run is over — its own pending approval dialog
+          // and rail dot go with it (main window, background session too).
+          clearPermissionForSession(key)
           cancelStreamFlush()
           const finalText = streamingBucketsRef.current.get(key) ?? ''
           streamingBucketsRef.current.set(key, '')
@@ -1337,6 +1365,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // banner and Retry stay: the banner manages "what now", the bubble
           // records "what was generated".
           setSessionQuerying(key, false)
+          // B1-2 (P1-1): same ghost-prompt dismissal as QUERY_COMPLETED.
+          clearPermissionForSession(key)
           cancelStreamFlush()
           const finalText = streamingBucketsRef.current.get(key) ?? ''
           streamingBucketsRef.current.set(key, '')
@@ -1400,6 +1430,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // SENDING session (F-1 owner routing) — a mismatched event sid can
           // never route the commit (or the unlock) onto another chat.
           setSessionQuerying(key, false)
+          // B1-2 (P1-1): same ghost-prompt dismissal as QUERY_COMPLETED —
+          // stopping a run while its approval dialog is up must not leave
+          // the dialog (or the rail's amber dot) hanging.
+          clearPermissionForSession(key)
           cancelStreamFlush()
           const finalText = streamingBucketsRef.current.get(key) ?? ''
           streamingBucketsRef.current.set(key, '')
@@ -1438,9 +1472,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // Window mode: only prompt for this window's own session — a
           // foreign session's approval dialog must not pop up here.
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          // B1-2 (P1-1): no query_id freshness filter here — the wire payload
+          // (shannon_types::events::PermissionRequest) carries no query_id to
+          // test against. A stale prompt is instead retracted by its run's
+          // terminal events (clearPermissionForSession in the three handlers
+          // above). Through the helper so the ref mirror stays in step.
           // Batch B2: amber dot on the owning session's rail row.
           noteSessionApproval(p.session_id, true)
-          setPermissionRequest(p)
+          applyPermissionRequest(p)
         }),
         listen(EVENT_NAMES.SESSIONS_UPDATED, () => { refreshSessions() }),
         // 卡A resume-unarchive: opening an archived session silently
