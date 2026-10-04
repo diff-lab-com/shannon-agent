@@ -255,18 +255,27 @@ export default function MessageArea({
   // X-2: surface a "scroll to latest" FAB whenever the user is scrolled
   // away from the bottom. Cheap: one passive scroll listener, no re-render
   // unless the boolean actually flips.
+  // P2-6: the subscription itself is mount-stable — `update` hangs off the
+  // stable ref so a growing `messages.length` only re-runs the distance
+  // check (content growth can push the viewport off the bottom), it no
+  // longer tears down and re-arms the listener once per message.
   const [showScrollFab, setShowScrollFab] = useState(false)
+  const updateScrollFab = useCallback(() => {
+    const el = scrollParentRef.current
+    if (!el) return
+    const dist = el.scrollHeight - el.clientHeight - el.scrollTop
+    setShowScrollFab(dist > SCROLL_FROM_BOTTOM_THRESHOLD_PX)
+  }, [scrollParentRef])
   useEffect(() => {
     const el = scrollParentRef.current
     if (!el) return
-    const update = () => {
-      const dist = el.scrollHeight - el.clientHeight - el.scrollTop
-      setShowScrollFab(dist > SCROLL_FROM_BOTTOM_THRESHOLD_PX)
-    }
-    update()
-    el.addEventListener('scroll', update, { passive: true })
-    return () => el.removeEventListener('scroll', update)
-  }, [scrollParentRef, messages.length])
+    updateScrollFab()
+    el.addEventListener('scroll', updateScrollFab, { passive: true })
+    return () => el.removeEventListener('scroll', updateScrollFab)
+  }, [scrollParentRef, updateScrollFab])
+  useEffect(() => {
+    updateScrollFab()
+  }, [messages.length, updateScrollFab])
   const scrollToBottom = useCallback(() => {
     const el = scrollParentRef.current
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
