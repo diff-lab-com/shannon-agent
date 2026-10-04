@@ -6,7 +6,7 @@
 // events, and whenever callers ask via `refresh` (e.g. after the budget
 // dialog saves).
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import * as api from '@/lib/tauri-api'
 import { EVENT_NAMES, type BudgetStatusPayload } from '@/types'
@@ -40,18 +40,27 @@ export function useSessionBudget(currentSessionId: string | null): SessionBudget
 
   // Budget events imply spend moved (or the cap changed via the banner's
   // raise action) — refresh so badges stay live without polling.
+  //
+  // P2-7: the session filter used to close over `currentSessionId`, so
+  // every switch tore down and re-registered both listeners through the
+  // async listen()/unlisten round-trip — an event landing in that gap was
+  // silently dropped (the same A-12 window `useBudgetGuard` already
+  // fixed). One registration for the hook's lifetime; ownership is checked
+  // against the latest session id at delivery time.
+  const sessionRef = useRef(currentSessionId)
+  useEffect(() => { sessionRef.current = currentSessionId }, [currentSessionId])
+
   useEffect(() => {
-    if (!currentSessionId) return
     const unlisteners: Promise<() => void>[] = [
       listen<BudgetStatusPayload>(EVENT_NAMES.BUDGET_WARNING, e => {
-        if (e.payload.sessionId === currentSessionId) refresh()
+        if (e.payload.sessionId === sessionRef.current) refresh()
       }),
       listen<BudgetStatusPayload>(EVENT_NAMES.BUDGET_EXCEEDED, e => {
-        if (e.payload.sessionId === currentSessionId) refresh()
+        if (e.payload.sessionId === sessionRef.current) refresh()
       }),
     ]
     return () => { unlisteners.forEach(p => void p.then(fn => fn())) }
-  }, [currentSessionId, refresh])
+  }, [refresh])
 
   return { budget, usage, refresh }
 }
