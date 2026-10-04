@@ -1450,7 +1450,8 @@ fn test_repl_plan_reject() {
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("rejected"));
     assert!(!repl.state.plan.active);
-    assert_eq!(repl.state.status, "Ready");
+    // P0-2: exiting plan restores the snapshotted ladder mode (auto-edit).
+    assert_eq!(repl.state.status, "Mode: EDIT");
 }
 
 #[test]
@@ -1473,7 +1474,8 @@ fn test_repl_plan_done() {
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("completed"));
     assert!(!repl.state.plan.active);
-    assert_eq!(repl.state.status, "Ready");
+    // P0-2: done exits plan and restores the snapshotted ladder mode.
+    assert_eq!(repl.state.status, "Mode: EDIT");
 }
 
 #[test]
@@ -2280,10 +2282,13 @@ fn test_repl_mode_shows_current() {
         "/mode should show current mode"
     );
     assert!(
-        last_msg.contains("default"),
-        "/mode should list available modes"
+        last_msg.contains("ask"),
+        "/mode should list the ask ladder stop"
     );
-    assert!(last_msg.contains("auto"), "/mode should list auto");
+    assert!(
+        last_msg.contains("auto-edit"),
+        "/mode should list auto-edit"
+    );
     assert!(
         last_msg.contains("full-auto"),
         "/mode should list full-auto"
@@ -2326,7 +2331,7 @@ fn test_repl_mode_invalid() {
         last_msg.contains("Unknown mode"),
         "/mode invalid should show error"
     );
-    assert!(last_msg.contains("default"), "should list valid modes");
+    assert!(last_msg.contains("ask"), "should list valid modes");
 }
 
 #[test]
@@ -2336,8 +2341,8 @@ fn test_repl_mode_suggest_alias() {
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
-        last_msg.contains("default"),
-        "'ask' should map to 'default' mode"
+        last_msg.contains("Approval mode set to: ask"),
+        "'ask' should select the ask mode"
     );
 }
 
@@ -3212,38 +3217,37 @@ fn test_rewind_then_rewind_again() {
 fn test_approval_mode_cycle_sequence() {
     use shannon_engine::permissions::ApprovalMode;
 
-    // Verify the cycle order: Suggest → AutoEdit → Plan → FullAuto → Suggest
-    let mode = ApprovalMode::Suggest;
+    // Verify the cycle order: Ask → AutoEdit → FullAuto → Ask
+    let mode = ApprovalMode::Ask;
     assert_eq!(mode.cycle_next(), ApprovalMode::AutoEdit);
 
     let mode = ApprovalMode::AutoEdit;
-    assert_eq!(mode.cycle_next(), ApprovalMode::Plan);
-
-    let mode = ApprovalMode::Plan;
     assert_eq!(mode.cycle_next(), ApprovalMode::FullAuto);
 
     let mode = ApprovalMode::FullAuto;
-    assert_eq!(mode.cycle_next(), ApprovalMode::Suggest);
+    assert_eq!(mode.cycle_next(), ApprovalMode::Ask);
 
-    // BypassPermissions and DontAsk cycle back to Suggest
+    // Plan and expert modes are not cycle stops — they reset to Ask
+    assert_eq!(ApprovalMode::Plan.cycle_next(), ApprovalMode::Ask);
+    assert_eq!(ApprovalMode::Readonly.cycle_next(), ApprovalMode::Ask);
     assert_eq!(
         ApprovalMode::BypassPermissions.cycle_next(),
-        ApprovalMode::Suggest
+        ApprovalMode::Ask
     );
-    assert_eq!(ApprovalMode::DontAsk.cycle_next(), ApprovalMode::Suggest);
+    assert_eq!(ApprovalMode::DontAsk.cycle_next(), ApprovalMode::Ask);
 }
 
 #[test]
 fn test_approval_mode_short_labels() {
     use shannon_engine::permissions::ApprovalMode;
 
-    assert_eq!(ApprovalMode::Suggest.short_label(), "ASK");
+    assert_eq!(ApprovalMode::Ask.short_label(), "ASK");
     assert_eq!(ApprovalMode::Plan.short_label(), "PLAN");
     assert_eq!(ApprovalMode::AutoEdit.short_label(), "EDIT");
-    assert_eq!(ApprovalMode::FullAuto.short_label(), "AUTO");
-    assert_eq!(ApprovalMode::BypassPermissions.short_label(), "FULL");
-    assert_eq!(ApprovalMode::DontAsk.short_label(), "FULL");
-    assert_eq!(ApprovalMode::Readonly.short_label(), "ASK");
+    assert_eq!(ApprovalMode::FullAuto.short_label(), "FULL");
+    assert_eq!(ApprovalMode::BypassPermissions.short_label(), "BYPASS");
+    assert_eq!(ApprovalMode::DontAsk.short_label(), "CI");
+    assert_eq!(ApprovalMode::Readonly.short_label(), "RO");
 }
 
 #[test]
@@ -3258,7 +3262,7 @@ fn test_approval_mode_default_is_auto() {
 fn test_repl_default_approval_label() {
     let state = ReplState::default();
     assert_eq!(
-        state.approval_mode_label, "EDIT",
+        state.approval_mode_label(), "EDIT",
         "default label should match AutoEdit"
     );
 }
@@ -3271,7 +3275,7 @@ fn test_repl_set_bypass_pending_action() {
     super::commands::execute_pending_action(&mut repl, "set_bypass_mode").unwrap();
 
     // Verify label updated
-    assert_eq!(repl.state.approval_mode_label, "FULL");
+    assert_eq!(repl.state.approval_mode_label(), "BYPASS");
 
     // Verify PermissionManager was updated
     if let Some(ref engine) = repl.query_engine {
@@ -3418,19 +3422,19 @@ fn test_load_permission_rules_claude_settings() {
 fn test_approval_mode_label_syncs_with_permissions() {
     let mut repl = Repl::new().unwrap();
 
-    // Default should be EDIT (AutoEdit)
-    assert_eq!(repl.state.approval_mode_label, "EDIT");
+    // Default should be EDIT (auto-edit)
+    assert_eq!(repl.state.approval_mode_label(), "EDIT");
 
     // Use /mode to change to readonly
     repl.prompt.set_input("/mode readonly".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
 
-    assert_eq!(repl.state.approval_mode_label, "ASK");
+    assert_eq!(repl.state.approval_mode_label(), "RO");
 
     // Change back to default
     repl.prompt.set_input("/mode default".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    assert_eq!(repl.state.approval_mode_label, "ASK");
+    assert_eq!(repl.state.approval_mode_label(), "ASK");
 }
 
 #[test]
@@ -3440,7 +3444,7 @@ fn test_permission_mode_bypass_not_in_cycle() {
     // Verify BypassPermissions is NOT reachable via cycle_next from any safe mode.
     // It can only be set via /mode or the confirmation dialog.
     let safe_modes = [
-        ApprovalMode::Suggest,
+        ApprovalMode::Ask,
         ApprovalMode::AutoEdit,
         ApprovalMode::Plan,
         ApprovalMode::FullAuto,

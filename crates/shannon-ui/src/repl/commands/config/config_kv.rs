@@ -203,10 +203,23 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
             let permissions = recover_lock(query_engine.permissions().read());
             permissions.approval_mode()
         };
-        let mut msg = format!("Current approval mode: {current}\n\nAvailable modes:\n");
-        for name in ApprovalMode::all_names() {
-            let mode = ApprovalMode::from_str_ci(name)
-                .expect("from_str_ci should return valid mode for all_names()");
+        // Design §7.1: the listing mirrors the UI model — the 3-stop autonomy
+        // ladder plus the plan workflow tier, then expert modes separately.
+        let mut msg = format!("Current approval mode: {current} [{}]\n\n", current.short_label());
+        msg.push_str("Autonomy ladder (Shift+Tab cycles):\n");
+        for name in ["ask", "auto-edit", "full-auto"] {
+            let mode = ApprovalMode::from_str_ci(name).expect("ladder token parses");
+            let marker = if mode == current { " *" } else { "" };
+            msg.push_str(&format!("  {name}{marker} — {}\n", mode.description()));
+        }
+        let plan_marker = if current == ApprovalMode::Plan { " *" } else { "" };
+        msg.push_str(&format!(
+            "  plan{plan_marker} — {} (workflow tier: enter via /plan)\n",
+            ApprovalMode::Plan.description()
+        ));
+        msg.push_str("\nExpert modes (/mode <name>):\n");
+        for name in ["readonly", "dontAsk", "bypassPermissions"] {
+            let mode = ApprovalMode::from_str_ci(name).expect("expert token parses");
             let marker = if mode == current { " *" } else { "" };
             msg.push_str(&format!("  {name}{marker} — {}\n", mode.description()));
         }
@@ -217,6 +230,31 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     match ApprovalMode::from_str_ci(trimmed) {
+        Some(ApprovalMode::Plan) => {
+            // D-3: plan is a workflow tier entered via /plan (which snapshots
+            // the ladder mode and arms the write gate) — not a bare mode set.
+            repl.chat.add_message(
+                ChatRole::System,
+                "Plan is a workflow tier — enter it with `/plan <description>`; \
+                 approve with `/plan approve`; exit with `/plan off` (restores your previous mode)."
+                    .to_string(),
+            );
+            Ok(())
+        }
+        Some(ApprovalMode::BypassPermissions) => {
+            // P2-4: entering bypass from the REPL always confirms, and honors
+            // the root refusal / SHANNON_DISABLE_BYPASS kill switch.
+            if let Err(e) = shannon_engine::permissions::ensure_bypass_allowed() {
+                repl.chat.add_message(ChatRole::System, format!("Bypass refused: {e}"));
+                return Ok(());
+            }
+            repl.show_confirm_dialog(
+                "Bypass Permissions",
+                "This will skip ALL permission checks. Only use in trusted environments.\n\nAre you sure?",
+                "set_bypass_mode",
+            );
+            Ok(())
+        }
         Some(mode) => {
             let query_engine = match repl.query_engine.as_ref() {
                 Some(e) => e,
@@ -229,7 +267,7 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
                 }
             };
             recover_lock(query_engine.permissions().write()).set_approval_mode(mode);
-            repl.state.approval_mode_label = mode.short_label().to_string();
+            repl.state.approval_mode = mode;
             {
                 repl.chat.add_message(
                     ChatRole::System,

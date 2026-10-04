@@ -3923,5 +3923,13 @@
   "inbox.runStatus.succeeded": "Succeeded",
   "extensions.credentialStorage.label": "Credential storage",
   "extensions.credentialStorage.keyring": "OS keychain",
-  "extensions.credentialStorage.file": "Local file (restricted)"
+  "extensions.credentialStorage.file": "Local file (restricted)",
+  "settings.general.approvalMode.ask.label": "Ask",
+  "settings.general.approvalMode.ask.description": "Reads run freely; everything else asks first",
+  "settings.general.approvalMode.unattended.label": "Unattended (CI)",
+  "settings.general.approvalMode.unattended.description": "Never waits: allow-listed tools and reads pass, the rest is denied",
+  "settings.general.approvalMode.bypass.label": "Bypass approvals",
+  "settings.general.approvalMode.bypass.description": "Skip all checks except deny rules — trusted environments only",
+  "settings.general.approvalMode.advanced": "Advanced",
+  "settings.general.approvalMode.advanced.none": "Reset to a ladder tier"
 }

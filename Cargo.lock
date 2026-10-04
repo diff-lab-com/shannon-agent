@@ -7210,6 +7210,7 @@ dependencies = [
  "serde_json",
  "shannon-codegen",
  "shannon-core",
+ "shannon-engine",
  "shannon-types",
  "tempfile",
  "thiserror 2.0.18",

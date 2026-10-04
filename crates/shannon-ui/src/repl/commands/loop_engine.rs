@@ -607,8 +607,8 @@ pub(crate) fn handle_project(repl: &mut Repl, args: &str) -> Result<()> {
             let mode = perms
                 .read()
                 .map(|p| p.approval_mode())
-                .unwrap_or(shannon_engine::permissions::ApprovalMode::Suggest);
-            msg.push_str(&format!("\n  Permission mode: {mode:?}"));
+                .unwrap_or(shannon_engine::permissions::ApprovalMode::Ask);
+            msg.push_str(&format!("\n  Permission mode: {mode}"));
         }
 
         if repl.state.plan.active {
@@ -738,20 +738,27 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
                 );
             }
             "permissions" => {
-                let mode = match value {
-                    "auto-edit" => shannon_engine::permissions::ApprovalMode::AutoEdit,
-                    "full-auto" => shannon_engine::permissions::ApprovalMode::FullAuto,
-                    "readonly" => shannon_engine::permissions::ApprovalMode::Readonly,
-                    _ => shannon_engine::permissions::ApprovalMode::Suggest,
+                // P2-2: accept the full token set via from_str_ci; unknown
+                // values report instead of silently degrading to ask.
+                let Some(mode) = shannon_engine::permissions::ApprovalMode::from_str_ci(value)
+                else {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!(
+                            "Unknown permission mode '{value}'. Valid: {}",
+                            shannon_engine::permissions::ApprovalMode::all_names().join(", ")
+                        ),
+                    );
+                    return Ok(());
                 };
                 if let Some(ref engine) = repl.query_engine {
                     if let Ok(mut perms) = engine.permissions().write() {
                         perms.set_approval_mode(mode);
                     }
-                    repl.state.approval_mode_label = mode.short_label().to_string();
+                    repl.state.approval_mode = mode;
                 }
                 repl.chat
-                    .add_message(ChatRole::System, format!("Permission mode set to: {value}"));
+                    .add_message(ChatRole::System, format!("Permission mode set to: {mode}"));
             }
             "notifications" => {
                 repl.notifications_enabled = value == "on" || value == "true" || value == "enabled";

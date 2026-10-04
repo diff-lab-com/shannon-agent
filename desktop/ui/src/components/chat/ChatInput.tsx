@@ -834,7 +834,7 @@ export default function ChatInput({
     }
   }
 
-  const currentMode = config?.approval_mode || 'suggest'
+  const currentMode = config?.approval_mode || 'auto-edit'
   const planModeActive = currentMode === 'plan'
   // GB P2-4: the pill reads the SHARED five-tier table (same source as
   // Settings → General). Values outside the table (engine-only aliases)
@@ -848,7 +848,7 @@ export default function ChatInput({
   // writing the same `approval_mode` key, which read as overlapping modes.)
   const handlePlanToggle = async () => {
     try {
-      await api.configure({ key: 'approval_mode', value: planModeActive ? 'suggest' : 'plan' })
+      await api.configure({ key: 'approval_mode', value: planModeActive ? 'ask' : 'plan' })
       await refreshConfig()
     } catch (err) {
       toastError(t('chat.input.planMode.failed'), err)

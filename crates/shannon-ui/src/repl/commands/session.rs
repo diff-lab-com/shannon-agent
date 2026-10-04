@@ -1010,11 +1010,9 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
 
     // Handle plan mode deactivation
     if args == "off" || args == "exit" || args == "end" {
-        if let Ok(mut flag) = repl.plan_mode_flag.write() {
-            *flag = false;
-        }
-        repl.state.plan.active = false;
-        repl.state.plan.approved = false;
+        // P0-2 / design §5: exiting restores the snapshotted ladder mode and
+        // clears plan approval.
+        repl.exit_plan_restore_mode("off");
         repl.chat.add_message(
             ChatRole::System,
             "Plan mode deactivated. Write operations are now enabled.".to_string(),
@@ -1022,16 +1020,11 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Delegate to cost::handle_plan for all other cases (creates plan, status, approve, reject, etc.)
-    // and also activate the plan-mode flag so write tools are blocked.
+    // Delegate to cost::handle_plan for all other cases (creates plan, status,
+    // approve, reject, etc.). The create path inside cost.rs owns setting the
+    // plan-mode flag and `enter_plan_mode`; re-setting the flag here would
+    // re-block writes after an approval had lifted them.
     super::cost::handle_plan(repl, args)?;
-
-    // If a plan was created (active and has content), also set the engine flag
-    if repl.state.plan.active {
-        if let Ok(mut flag) = repl.plan_mode_flag.write() {
-            *flag = true;
-        }
-    }
 
     Ok(())
 }

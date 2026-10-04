@@ -233,61 +233,10 @@ pub(crate) struct TabCompletionState {
 /// }
 /// ```
 fn load_permission_rules(pm: &mut PermissionManager) {
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let home = dirs::home_dir();
-
-    let mut paths = Vec::new();
-    if let Some(ref h) = home {
-        paths.push(h.join(".shannon").join("settings.json"));
-    }
-    paths.push(cwd.join(".shannon").join("settings.json"));
-    paths.push(cwd.join(".claude").join("settings.json"));
-
-    for path in paths {
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let doc: serde_json::Value = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("Skipping invalid settings file {}: {e}", path.display());
-                continue;
-            }
-        };
-
-        let perms = match doc.get("permissions") {
-            Some(p) => p,
-            None => continue,
-        };
-
-        if let Some(allow_arr) = perms.get("allow").and_then(|v| v.as_array()) {
-            for item in allow_arr {
-                if let Some(s) = item.as_str() {
-                    // Simple tool names like "Bash" or glob patterns like "mcp__*"
-                    if s.contains('(') || s.contains('*') || s.contains('?') {
-                        pm.allow_pattern(s);
-                    } else {
-                        pm.allow_tool(s);
-                    }
-                }
-            }
-        }
-
-        if let Some(deny_arr) = perms.get("deny").and_then(|v| v.as_array()) {
-            for item in deny_arr {
-                if let Some(s) = item.as_str() {
-                    if s.contains('(') || s.contains('*') || s.contains('?') {
-                        pm.deny_pattern(s);
-                    } else {
-                        pm.deny_tool(s);
-                    }
-                }
-            }
-        }
-
-        tracing::info!("Loaded permission rules from {}", path.display());
-    }
+    // P1-1/P1-2: delegate to the shared engine loader — same file precedence
+    // (user → project .shannon → project .claude), now also honouring the
+    // `ask` list and `permissions.defaultMode`.
+    shannon_engine::permissions::load_settings_permission_files(pm);
 }
 
 /// Extract a domain/URL from tool input for network-related tools.
@@ -976,6 +925,15 @@ impl Repl {
 
         // Create permission manager
         let mut permission_manager = PermissionManager::new();
+
+        // P1-3: configured profile (strict/balanced/permissive/custom:<name>)
+        // applies before settings rules and session interactions.
+        if let Some(profile) = shannon_core::unified_config::ShannonConfig::configured_permission_profile() {
+            shannon_engine::permissions::apply_configured_profile(
+                &mut permission_manager,
+                &profile,
+            );
+        }
 
         // Register destructive MCP tools with permission manager
         for name in tool_registry.destructive_tool_names() {

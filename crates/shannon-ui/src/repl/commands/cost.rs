@@ -348,6 +348,18 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
             }
             repl.state.plan.approved = true;
             repl.state.status = "Plan approved".to_string();
+            // P0-2: approval unlocks plan-scoped auto-run — the engine's
+            // permission gate promotes Plan to the full-auto floor, and the
+            // plan write gate lifts so implementation tools can run.
+            if let Some(ref engine) = repl.query_engine {
+                let session_id = engine.session_id();
+                if let Ok(mut perms) = engine.permissions().write() {
+                    perms.approve_plan(session_id);
+                }
+                if let Ok(mut flag) = repl.plan_mode_flag.write() {
+                    *flag = false;
+                }
+            }
             // Save plan to disk
             let plan_dir = std::path::Path::new(&repl.state.working_directory)
                 .join(".claude")
@@ -374,8 +386,7 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
                     .add_message(ChatRole::System, "No active plan to reject.".to_string());
                 return Ok(());
             }
-            repl.state.plan = super::super::PlanState::default();
-            repl.state.status = "Ready".to_string();
+            repl.exit_plan_restore_mode("rejected");
             repl.chat
                 .add_message(ChatRole::System, "Plan rejected and cleared.".to_string());
         }
@@ -386,8 +397,7 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
                 return Ok(());
             }
             let desc = repl.state.plan.description.clone();
-            repl.state.plan = super::super::PlanState::default();
-            repl.state.status = "Ready".to_string();
+            repl.exit_plan_restore_mode("done");
             repl.chat.add_message(
                 ChatRole::System,
                 format!("Plan '{desc}' completed and cleared."),
@@ -424,6 +434,19 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
                 scroll_offset: 0,
             };
             repl.state.status = "Plan mode — review plan".to_string();
+            // P0-2 / design §5: entering plan snapshots the current ladder
+            // mode (restored on exit) and switches the engine to Plan.
+            if let Some(ref engine) = repl.query_engine {
+                let session_id = engine.session_id();
+                if let Ok(mut perms) = engine.permissions().write() {
+                    perms.enter_plan_mode(session_id);
+                }
+                repl.state.approval_mode =
+                    shannon_engine::permissions::ApprovalMode::Plan;
+                if let Ok(mut flag) = repl.plan_mode_flag.write() {
+                    *flag = true;
+                }
+            }
             let msg = format!(
                 "Plan created: {description}\n\n{plan_content}\n\nUse /plan approve to approve, /plan reject to discard, or /plan help for more options."
             );
@@ -622,66 +645,34 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
         }
         "mode" => {
             let mode_name = parts.get(1).copied().unwrap_or("");
-            match mode_name {
-                "strict" | "suggest" => {
-                    if let Some(ref engine) = repl.query_engine {
-                        if let Ok(mut perms) = engine.permissions().write() {
-                            perms.set_approval_mode(
-                                shannon_engine::permissions::ApprovalMode::Suggest,
-                            );
-                        }
-                    }
-                    repl.state.approval_mode_label = "ASK".to_string();
-                    repl.chat.add_message(
-                        ChatRole::System,
-                        "Permission mode: **suggest** (strict)\n\
-                         All potentially dangerous tools require explicit approval."
-                            .to_string(),
-                    );
-                }
-                "auto" | "auto-accept" | "yolo" | "full-auto" => {
-                    if let Some(ref engine) = repl.query_engine {
-                        if let Ok(mut perms) = engine.permissions().write() {
-                            perms.set_approval_mode(
-                                shannon_engine::permissions::ApprovalMode::FullAuto,
-                            );
-                        }
-                    }
-                    repl.state.approval_mode_label = "AUTO".to_string();
-                    repl.chat.add_message(
-                        ChatRole::System,
-                        "Permission mode: **full-auto**\n\
-                         All tools are automatically approved. Use with caution."
-                            .to_string(),
-                    );
-                }
-                "plan" | "readonly" => {
-                    if let Some(ref engine) = repl.query_engine {
-                        if let Ok(mut perms) = engine.permissions().write() {
-                            perms.set_approval_mode(
-                                shannon_engine::permissions::ApprovalMode::Readonly,
-                            );
-                        }
-                    }
-                    repl.state.approval_mode_label = "ASK".to_string();
-                    repl.chat.add_message(
-                        ChatRole::System,
-                        "Permission mode: **readonly**\n\
-                         Tools will only read, not modify files."
-                            .to_string(),
-                    );
-                }
-                _ => {
-                    repl.chat.add_message(
-                        ChatRole::System,
-                        "Permission Modes:\n\
-                         /perms mode suggest   — Require approval for dangerous tools\n\
-                         /perms mode auto      — Auto-accept all tool executions\n\
-                         /perms mode readonly  — Read-only, no file modifications"
-                            .to_string(),
-                    );
+            // P0-5: `/perms mode` and `/mode` share one vocabulary — tokens
+            // parse through `from_str_ci`, so `plan` means Plan everywhere.
+            let Some(mode) = shannon_engine::permissions::ApprovalMode::from_str_ci(mode_name)
+            else {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Permission Modes (same tokens as /mode):\n\
+                     /perms mode ask        — Reads run freely, the rest asks\n\
+                     /perms mode auto-edit  — File edits run without asking\n\
+                     /perms mode full-auto  — Everything below critical runs\n\
+                     /perms mode plan       — Plan first, approve, then auto-run\n\
+                     /perms mode readonly   — Read-only, no file modifications\n\
+                     /perms mode ci         — Never waits, denies instead (CI)\n\
+                     /perms mode bypass     — Skip all checks (dangerous)"
+                        .to_string(),
+                );
+                return Ok(());
+            };
+            if let Some(ref engine) = repl.query_engine {
+                if let Ok(mut perms) = engine.permissions().write() {
+                    perms.set_approval_mode(mode);
                 }
             }
+            repl.state.approval_mode = mode;
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Permission mode: **{}** — {}", mode, mode.description()),
+            );
         }
         _ => {
             repl.chat.add_message(

@@ -89,7 +89,7 @@ fn render_scene(scene: &SceneData) -> String {
             render_ctx.spinner = Some(spinner);
             render_ctx.progress_bar = pb;
             render_ctx.sidebar_tab = state.sidebar_tab;
-            render_ctx.approval_mode = Some(&state.approval_mode_label);
+            render_ctx.approval_mode = Some(state.approval_mode_label());
             MainLayoutWidget::render_with_ctx(f, &render_ctx);
 
             // Overlays (mutually exclusive in normal rendering order)
@@ -281,6 +281,7 @@ fn scene_permission() -> SceneData {
         is_destructive: false,
         risk_reason: "File write operation".to_string(),
         reason: Default::default(),
+        limit_triggered: false,
     });
 
     SceneData {

@@ -662,7 +662,7 @@ impl Default for DesktopConfig {
             working_dir: None,
             theme: None,
             mcp_servers: Vec::new(),
-            approval_mode: Some("confirm".into()),
+            approval_mode: Some("auto-edit".into()),
             strategic_focus: None,
             performance_strategy: None,
             memory_enabled: None,
@@ -1548,7 +1548,7 @@ mod tests {
         let config = DesktopConfig::default();
         assert!(config.working_dir.is_none());
         assert!(config.theme.is_none());
-        assert_eq!(config.approval_mode, Some("confirm".into()));
+        assert_eq!(config.approval_mode, Some("auto-edit".into()));
     }
 
     /// R6: settings.json carries the `mcpServers` OAuth blob — it must land

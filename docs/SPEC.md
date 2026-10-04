@@ -1050,10 +1050,11 @@ model = "claude-sonnet-4-20250514"
 max_tokens = 8192
 temperature = 0.7
 
-[permissions]
-auto_approve_safe = true
-deny_patterns = ["rm -rf /", "mkfs"]
-allowed_paths = ["/home/user/projects"]
+# NOTE (2026-10-05): the old speculative [permissions] TOML schema
+# (auto_approve_safe / deny_patterns / allowed_paths) never existed in code
+# and has been removed. Permission rules live in settings.json
+# (permissions.allow / ask / deny) and the startup mode in
+# permissions.defaultMode; see docs-mdbook/src/features/permissions.md.
 
 [session]
 persist_directory = "~/.shannon/sessions"
@@ -1069,7 +1070,7 @@ SHANNON_API_KEY=sk-...
 SHANNON_BASE_URL=https://api.anthropic.com
 SHANNON_MAX_TOKENS=8192
 SHANNON_TEMPERATURE=0.7
-SHANNON_PERMISSIONS_MODE=ask
+SHANNON_MCP_AUTO_APPROVE=1   # (example env; the old SHANNON_PERMISSIONS_MODE never existed)
 ```
 
 **CLI Override**:

@@ -73,6 +73,12 @@ pub struct QueryRequest {
     /// Optional multimodal attachments delivered alongside `prompt`.
     #[serde(default)]
     pub attachments: Option<Vec<MessageAttachment>>,
+    /// K4/P2-3: optional per-query approval mode (one of the seven tokens).
+    /// Absent = the server-side default (settings `defaultMode` / profile /
+    /// engine default). Refused with 400 on unknown tokens; bypass is
+    /// subject to the same server-side guardrails as the CLI.
+    #[serde(default)]
+    pub approval_mode: Option<String>,
 }
 
 /// Aggregated JSON response returned by `POST /api/query`.
@@ -293,6 +299,16 @@ pub enum WsClientMessage {
     /// Cancel the current in-progress query.
     #[serde(rename = "cancel")]
     Cancel,
+    /// K4/P2-3: request an approval-mode change for this connection's
+    /// session. Answered with [`WsServerMessage::ApprovalMode`]. The server
+    /// is the authority: a mode the server refuses (unknown token, or
+    /// bypass/dontAsk blocked by policy) answers `ok: false` with the reason.
+    #[serde(rename = "approval.mode")]
+    SetApprovalMode {
+        /// One of the seven approval tokens: `ask`, `plan`, `auto-edit`,
+        /// `full-auto`, `readonly`, `dontAsk`, `bypassPermissions`.
+        mode: String,
+    },
     /// Enumerate the persisted sessions the engine can serve (R2-W2: the
     /// phone's session picker). Answered with
     /// [`WsServerMessage::SessionsSnapshot`].
@@ -413,6 +429,18 @@ pub enum WsServerMessage {
     /// Error in protocol.
     #[serde(rename = "error")]
     Error { message: String },
+    /// K4/P2-3: answer to `WsClientMessage::SetApprovalMode` — echoes the
+    /// mode that is NOW in effect (the server's choice, not the request's).
+    #[serde(rename = "approval.mode")]
+    ApprovalMode {
+        /// The effective approval token after the change (unchanged when
+        /// `ok` is false).
+        mode: String,
+        /// False when the server refused the change; `error` carries why.
+        ok: bool,
+        #[serde(default)]
+        error: Option<String>,
+    },
     /// Answer to `WsClientMessage::SessionsList` (R2-W2): the persisted
     /// sessions, most recently active first.
     #[serde(rename = "sessions.snapshot")]

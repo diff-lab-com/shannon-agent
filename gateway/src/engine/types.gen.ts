@@ -18,6 +18,7 @@ export interface MessageAttachment {
 }
 
 export interface QueryRequest {
+  approval_mode: string | null;
   attachments: MessageAttachment[] | null;
   model: string | null;
   prompt: string;
@@ -139,6 +140,10 @@ export interface WsClientMessageInfo {
 export interface WsClientMessageCancel {
   type: "cancel";
 }
+export interface WsClientMessageApprovalMode {
+  type: "approval.mode";
+  mode: string;
+}
 export interface WsClientMessageSessionsList {
   type: "sessions.list";
 }
@@ -154,6 +159,7 @@ export type WsClientMessage =
   | WsClientMessageClear
   | WsClientMessageInfo
   | WsClientMessageCancel
+  | WsClientMessageApprovalMode
   | WsClientMessageSessionsList
   | WsClientMessageSessionHistory;
 
@@ -214,6 +220,12 @@ export interface WsServerMessageError {
   type: "error";
   message: string;
 }
+export interface WsServerMessageApprovalMode {
+  type: "approval.mode";
+  error?: string | null;
+  mode: string;
+  ok: boolean;
+}
 export interface WsServerMessageSessionsSnapshot {
   type: "sessions.snapshot";
   sessions: SessionSummary[];
@@ -237,6 +249,7 @@ export type WsServerMessage =
   | WsServerMessageApprovalRequest
   | WsServerMessageSessionInfo
   | WsServerMessageError
+  | WsServerMessageApprovalMode
   | WsServerMessageSessionsSnapshot
   | WsServerMessageSessionTranscript;
 

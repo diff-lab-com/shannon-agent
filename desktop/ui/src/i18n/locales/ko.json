@@ -3923,5 +3923,13 @@
   "inbox.runStatus.succeeded": "성공",
   "extensions.credentialStorage.label": "자격 증명 저장 위치",
   "extensions.credentialStorage.keyring": "OS 키체인",
-  "extensions.credentialStorage.file": "로컬 파일(제한됨)"
+  "extensions.credentialStorage.file": "로컬 파일(제한됨)",
+  "settings.general.approvalMode.ask.label": "묻기",
+  "settings.general.approvalMode.ask.description": "읽기는 자유, 나머지는 먼저 확인",
+  "settings.general.approvalMode.unattended.label": "무인(CI)",
+  "settings.general.approvalMode.unattended.description": "대기하지 않음: 허용 목록과 읽기는 통과, 나머지는 거부",
+  "settings.general.approvalMode.bypass.label": "승인 우회",
+  "settings.general.approvalMode.bypass.description": "거부 규칙을 제외한 모든 검사 건너뛰기 — 신뢰할 수 있는 환경 전용",
+  "settings.general.approvalMode.advanced": "고급 모드",
+  "settings.general.approvalMode.advanced.none": "일반 단계로 되돌리기"
 }

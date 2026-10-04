@@ -41,7 +41,7 @@ use axum::routing::{get, post};
 use futures::{SinkExt, StreamExt};
 use shannon_api_protocol::{SessionSummary, TranscriptMessage};
 use shannon_engine::api::{ContentBlock, LlmClient, LlmClientConfig, Message, MessageContent};
-use shannon_engine::permissions::{PermissionChoice, PermissionManager};
+use shannon_engine::permissions::PermissionChoice;
 use shannon_engine::state::StateManager;
 use shannon_types::session_event::SessionEvent;
 use std::collections::HashMap;
@@ -154,6 +154,10 @@ pub struct WsSession {
     pub messages: Vec<Message>,
     /// The model override for this session.
     pub model: Option<String>,
+    /// K4/P2-3: session-persistent approval mode token. `None` = server
+    /// default (settings defaultMode / profile / engine default). Applied to
+    /// every engine built for this session.
+    pub approval_mode: Option<String>,
 }
 
 // ── ShannonApiServer ───────────────────────────────────────────────────
@@ -555,6 +559,38 @@ async fn models_handler(State(state): State<AppState>) -> Json<ModelsResponse> {
 /// connection's own session id for WebSocket). A malformed hint is silently
 /// ignored rather than rejected — the session id is attribution metadata,
 /// not an auth credential, so a bad hint must never block a query.
+/// P0-6/P1 wiring for served sessions: configured profile + settings rules
+/// (allow/ask/deny + defaultMode) — CLI parity for REST/WS engines, never a
+/// bare engine-default manager.
+fn server_permissions() -> shannon_engine::permissions::PermissionManager {
+    let mut pm = shannon_engine::permissions::PermissionManager::new();
+    if let Some(profile) = crate::unified_config::ShannonConfig::configured_permission_profile() {
+        shannon_engine::permissions::apply_configured_profile(&mut pm, &profile);
+    }
+    shannon_engine::permissions::load_settings_permission_files(&mut pm);
+    pm
+}
+
+/// K4/P2-3: apply a session's approval-mode token to a manager, enforcing the
+/// bypass guardrails. Returns Err(reason) when the mode is unknown/refused.
+fn apply_session_approval_mode(
+    pm: &mut shannon_engine::permissions::PermissionManager,
+    token: &str,
+) -> Result<(), String> {
+    let mode = shannon_engine::permissions::ApprovalMode::from_str_ci(token)
+        .ok_or_else(|| {
+            format!(
+                "unknown approval mode '{token}'; valid: {}",
+                shannon_engine::permissions::ApprovalMode::all_names().join(", ")
+            )
+        })?;
+    if mode == shannon_engine::permissions::ApprovalMode::BypassPermissions {
+        shannon_engine::permissions::ensure_bypass_allowed()?;
+    }
+    pm.set_approval_mode(mode);
+    Ok(())
+}
+
 fn resolve_session_id(hint: Option<&str>, fallback: Uuid) -> Uuid {
     hint.and_then(|s| Uuid::parse_str(s).ok())
         .unwrap_or(fallback)
@@ -683,8 +719,14 @@ async fn query_handler(
 
     // Create a fresh engine per request (stateless).
     // Same tools=[] fix as the WS path: serve the server's registry, not a
-    // fresh empty one.
-    let permissions = PermissionManager::new();
+    // fresh empty one. K4/P2-3: the request may pin an approval mode.
+    let mut permissions = server_permissions();
+    if let Some(token) = req.approval_mode.as_deref() {
+        apply_session_approval_mode(&mut permissions, token).map_err(|message| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message,
+        })?;
+    }
     let state_mgr = StateManager::new();
     let mut engine =
         QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
@@ -866,10 +908,9 @@ async fn stream_query_sse(
         LlmClient::new_unauthenticated(config.clone())
     };
 
-    // Create a fresh engine per request (stateless).
-    // Same tools=[] fix as the WS path: serve the server's registry, not a
-    // fresh empty one.
-    let permissions = PermissionManager::new();
+    // Create a fresh engine per request (stateless). Settings/profile
+    // bootstrap shared with the WS path.
+    let permissions = server_permissions();
     let state_mgr = StateManager::new();
     let mut engine =
         QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
@@ -1289,6 +1330,7 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
     let session = Arc::new(Mutex::new(WsSession {
         messages: Vec::new(),
         model: None,
+        approval_mode: None,
     }));
 
     // Register session
@@ -1401,7 +1443,15 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                 // could only emit tool calls as text, and the approval chain
                 // was structurally unreachable. Use the server's registry
                 // (populated by the desktop's loopback setup via with_tools).
-                let permissions = PermissionManager::new();
+                let mut permissions = server_permissions();
+                {
+                    let s = session.lock().await;
+                    if let Some(token) = s.approval_mode.as_deref() {
+                        if let Err(e) = apply_session_approval_mode(&mut permissions, token) {
+                            tracing::warn!(session = %session_id, error = %e, "stored approval mode refused");
+                        }
+                    }
+                }
                 let state_mgr = StateManager::new();
                 let mut engine = QueryEngine::with_defaults_arc(
                     client,
@@ -1638,6 +1688,42 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                     },
                 )
                 .await;
+            }
+            WsClientMessage::SetApprovalMode { mode } => {
+                // K4/P2-3: the server is the authority. WS engines are built
+                // per query, so the mode persists on the session state and is
+                // applied to every subsequent engine build (`server_permissions`
+                // path validates again — defense in depth). ACK carries the
+                // effective mode either way.
+                let current = {
+                    let s = session.lock().await;
+                    s.approval_mode
+                        .clone()
+                        .unwrap_or_else(|| "auto-edit".to_string())
+                };
+                let ack = match apply_session_approval_mode(
+                    &mut shannon_engine::permissions::PermissionManager::new(),
+                    &mode,
+                ) {
+                    Ok(()) => {
+                        {
+                            let mut s = session.lock().await;
+                            s.approval_mode = Some(mode.clone());
+                        }
+                        tracing::info!(session = %session_id, %mode, "WS approval mode changed");
+                        WsServerMessage::ApprovalMode {
+                            mode: mode.clone(),
+                            ok: true,
+                            error: None,
+                        }
+                    }
+                    Err(e) => WsServerMessage::ApprovalMode {
+                        mode: current,
+                        ok: false,
+                        error: Some(e),
+                    },
+                };
+                let _ = send_msg(&mut sender, ack).await;
             }
             WsClientMessage::SessionsList => {
                 // R2-W2: the engine's own L0 container, read on demand —
@@ -2844,7 +2930,7 @@ mod tests {
         let mut engine = QueryEngine::with_defaults(
             LlmClient::new(test_config()),
             ToolRegistry::new(),
-            PermissionManager::new(),
+            shannon_engine::permissions::PermissionManager::new(),
             StateManager::with_sessions_dir(dir.join("sessions")).unwrap(),
         );
 
@@ -2871,7 +2957,7 @@ mod tests {
         let mut engine = QueryEngine::with_defaults(
             LlmClient::new(test_config()),
             ToolRegistry::new(),
-            PermissionManager::new(),
+            shannon_engine::permissions::PermissionManager::new(),
             state,
         );
 
@@ -2933,6 +3019,7 @@ mod tests {
                     model: Some("llama3".to_string()),
                     session_id: None,
                     attachments: None,
+                approval_mode: None,
                 })
                 .unwrap(),
             ))
@@ -2966,6 +3053,7 @@ mod tests {
                     model: None,
                     session_id: None,
                     attachments: None,
+                approval_mode: None,
                 })
                 .unwrap(),
             ))
@@ -3255,6 +3343,7 @@ mod tests {
             model: Some("gpt-4o".to_string()),
             session_id: None,
             attachments: None,
+        approval_mode: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("hello world"));
@@ -3732,6 +3821,7 @@ mod tests {
         let session = Arc::new(Mutex::new(WsSession {
             messages: vec![],
             model: None,
+            approval_mode: None,
         }));
 
         // Insert
@@ -3903,6 +3993,7 @@ mod tests {
         let session = WsSession {
             messages: vec![],
             model: None,
+            approval_mode: None,
         };
         assert!(session.messages.is_empty());
         assert!(session.model.is_none());
@@ -3913,6 +4004,7 @@ mod tests {
         let session = Arc::new(Mutex::new(WsSession {
             messages: vec![],
             model: None,
+            approval_mode: None,
         }));
 
         {
@@ -3929,6 +4021,7 @@ mod tests {
         let session = Arc::new(Mutex::new(WsSession {
             messages: vec![],
             model: None,
+            approval_mode: None,
         }));
 
         let test_msg = Message {

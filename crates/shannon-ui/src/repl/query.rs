@@ -1058,7 +1058,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     render_ctx.progress_bar = pb;
                     render_ctx.sidebar_info = sidebar_info.as_ref();
                     render_ctx.sidebar_tab = state.sidebar_tab;
-                    render_ctx.approval_mode = Some(&state.approval_mode_label);
+                    render_ctx.approval_mode = Some(state.approval_mode_label());
                     render_ctx.focus_mode = state.focus_mode;
                     render_ctx.fullscreen_mode = state.fullscreen_mode;
                     render_ctx.auto_follow = state.auto_follow;
@@ -1425,20 +1425,15 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             }
             repl.query_engine = Some(engine);
 
-            // Sync approval mode if changed during streaming
+            // P0-1: forward-sync UI state from the engine (the engine is the
+            // single source of truth). The old label→engine reverse-sync
+            // silently mutated modes via lossy short labels.
             if let Some(ref engine) = repl.query_engine {
-                let engine_label = {
+                let mode = {
                     let perms = shannon_types::recover_lock(engine.permissions().read());
-                    perms.approval_mode().short_label().to_string()
+                    perms.approval_mode()
                 };
-                if engine_label != repl.state.approval_mode_label {
-                    if let Some(mode) = shannon_engine::permissions::ApprovalMode::from_label(
-                        &repl.state.approval_mode_label,
-                    ) {
-                        let mut perms = shannon_types::recover_lock(engine.permissions().write());
-                        perms.set_approval_mode(mode);
-                    }
-                }
+                repl.state.approval_mode = mode;
             }
 
             let rendered = repl.output_renderer.render_output(&response, "assistant");
@@ -1601,21 +1596,13 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             if let Some(mut engine) = engine_opt {
                 engine.add_user_message(input.to_string());
                 repl.query_engine = Some(engine);
-                // Sync approval mode if changed during streaming
+                // P0-1: forward-sync UI state from the engine (see above).
                 if let Some(ref engine) = repl.query_engine {
-                    let engine_label = {
+                    let mode = {
                         let perms = shannon_types::recover_lock(engine.permissions().read());
-                        perms.approval_mode().short_label().to_string()
+                        perms.approval_mode()
                     };
-                    if engine_label != repl.state.approval_mode_label {
-                        if let Some(mode) = shannon_engine::permissions::ApprovalMode::from_label(
-                            &repl.state.approval_mode_label,
-                        ) {
-                            let mut perms =
-                                shannon_types::recover_lock(engine.permissions().write());
-                            perms.set_approval_mode(mode);
-                        }
-                    }
+                    repl.state.approval_mode = mode;
                 }
             }
             let is_cancelled = e == "cancelled";

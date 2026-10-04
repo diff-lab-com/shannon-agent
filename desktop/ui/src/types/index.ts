@@ -1484,12 +1484,19 @@ export interface TaskWorktreeDto {
 export type ViewMode = 'verbose' | 'normal' | 'summary'
 
 export type ApprovalMode =
-  | 'suggest'
+  // Canonical tokens (docs/plans/2026-10-04-permission-mode-naming-design.md)
+  | 'ask'
   | 'plan'
+  | 'auto-edit'
+  | 'full-auto'
+  | 'readonly'
+  | 'dontAsk'
+  | 'bypassPermissions'
+  // Legacy stored values (still parsed by the desktop backend)
+  | 'suggest'
   | 'auto'
   | 'auto_edit'
   | 'full_auto'
-  | 'readonly'
   | 'plan_ro'
   | 'bypass_permissions'
   | 'dont_ask'

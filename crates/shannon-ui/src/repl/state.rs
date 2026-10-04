@@ -247,8 +247,9 @@ pub struct ReplState {
     pub prompt_bar_color: Option<String>,
     /// Active tab in the sidebar panel
     pub sidebar_tab: SidebarTab,
-    /// Cached approval mode label for display (updated on mode change)
-    pub approval_mode_label: String,
+    /// Current approval mode (P0-1: the enum is the single source of truth;
+    /// status-bar labels are derived via `approval_mode_label()`).
+    pub approval_mode: shannon_engine::permissions::ApprovalMode,
     /// Active sub-agents for sidebar display (refreshed from agent_registry)
     pub active_agents: Vec<AgentDisplay>,
     /// Agent dashboard state (auto-created when agents exist, auto-removed when none)
@@ -663,7 +664,7 @@ impl Default for ReplState {
             session_picker_show_all: false,
             prompt_bar_color: None,
             sidebar_tab: SidebarTab::default(),
-            approval_mode_label: "EDIT".to_string(),
+            approval_mode: shannon_engine::permissions::ApprovalMode::default(),
             profile_migration_hint_shown: false,
             active_agents: Vec::new(),
             agent_dashboard: None,
@@ -722,6 +723,11 @@ impl Default for ReplState {
 }
 
 impl ReplState {
+    /// P0-1: display-only label derived from the authoritative enum field.
+    pub fn approval_mode_label(&self) -> &'static str {
+        self.approval_mode.short_label()
+    }
+
     /// True while the spinner or a progress indicator is animating — the
     /// main loop must keep today's per-tick frame cadence (review §P2-5).
     ///

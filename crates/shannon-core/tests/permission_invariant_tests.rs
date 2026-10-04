@@ -1,8 +1,9 @@
 //! Permission system invariant tests.
 //!
 //! Validates that ApprovalMode behaviors are consistent with documented semantics:
-//! - BypassPermissions/DontAsk always auto-approve
-//! - PlanReadonly/Readonly deny all/most operations
+//! - BypassPermissions auto-approves; DontAsk passes pre-approved tools at the
+//!   `should_auto_approve` level (its never-wait denial lives in the gate)
+//! - Readonly denies all/most operations
 //! - Risk level ordering is correct
 //! - Permission rule precedence is consistent
 
@@ -41,14 +42,14 @@ fn dont_ask_auto_approves_all_tools() {
 }
 
 #[test]
-fn plan_readonly_denies_all_tools() {
-    let mode = ApprovalMode::PlanReadonly;
+fn readonly_denies_all_variants() {
+    let mode = ApprovalMode::Readonly;
     let tools = ["Bash", "Write", "Edit", "Read", "Glob", "Grep"];
     for tool in &tools {
-        // PlanReadonly returns false from should_auto_approve for everything
+        // Readonly returns false from should_auto_approve for everything
         assert!(
             !mode.should_auto_approve(tool, RiskLevel::Safe),
-            "PlanReadonly should not auto-approve '{tool}'"
+            "Readonly should not auto-approve '{tool}'"
         );
     }
 }
@@ -67,28 +68,28 @@ fn readonly_denies_all_tools() {
 
 #[test]
 fn suggest_auto_approves_readonly_at_low_risk() {
-    let mode = ApprovalMode::Suggest;
+    let mode = ApprovalMode::Ask;
     // is_read_only_tool_name uses lowercase names (read, glob, grep)
     assert!(
         mode.should_auto_approve("read", RiskLevel::Safe),
-        "Suggest should auto-approve 'read' at Safe risk"
+        "Ask should auto-approve 'read' at Safe risk"
     );
     assert!(
         mode.should_auto_approve("glob", RiskLevel::Low),
-        "Suggest should auto-approve 'glob' at Low risk"
+        "Ask should auto-approve 'glob' at Low risk"
     );
 }
 
 #[test]
 fn suggest_denies_write_tools() {
-    let mode = ApprovalMode::Suggest;
+    let mode = ApprovalMode::Ask;
     assert!(
         !mode.should_auto_approve("write", RiskLevel::Safe),
-        "Suggest should not auto-approve 'write'"
+        "Ask should not auto-approve 'write'"
     );
     assert!(
         !mode.should_auto_approve("bash", RiskLevel::Safe),
-        "Suggest should not auto-approve 'bash'"
+        "Ask should not auto-approve 'bash'"
     );
 }
 
@@ -96,8 +97,8 @@ fn suggest_denies_write_tools() {
 fn suggest_name_case_sensitivity_tracked() {
     // Document the mismatch: tools are registered as "Read"/"Bash"/"Glob"
     // but is_read_only_tool_name checks lowercase "read"/"bash"/"glob".
-    // This means Suggest mode with PascalCase tool names won't auto-approve read-only tools.
-    let mode = ApprovalMode::Suggest;
+    // This means Ask mode with PascalCase tool names won't auto-approve read-only tools.
+    let mode = ApprovalMode::Ask;
     let pascal_names = ["Read", "Glob", "Grep", "Bash", "Write"];
     let mut mismatched = Vec::new();
     for name in &pascal_names {
@@ -178,21 +179,21 @@ fn all_modes_parse_roundtrip() {
 
 #[test]
 fn approval_mode_cycle_is_consistent() {
-    // Cycle should visit these modes in order
-    let start = ApprovalMode::Suggest;
+    // Cycle visits the three autonomy-ladder stops in order
+    let start = ApprovalMode::Ask;
     let mut current = start;
-    let expected_cycle = [
-        ApprovalMode::Suggest,
-        ApprovalMode::AutoEdit,
-        ApprovalMode::Plan,
-        ApprovalMode::FullAuto,
-    ];
+    let expected_cycle = [ApprovalMode::Ask, ApprovalMode::AutoEdit, ApprovalMode::FullAuto];
     for expected in &expected_cycle {
         assert_eq!(current, *expected);
         current = current.cycle_next();
     }
-    // Should cycle back to Suggest
-    assert_eq!(current, ApprovalMode::Suggest);
+    // Should cycle back to Ask
+    assert_eq!(current, ApprovalMode::Ask);
+    // Plan and expert modes are not cycle stops — they reset to Ask
+    assert_eq!(ApprovalMode::Plan.cycle_next(), ApprovalMode::Ask);
+    assert_eq!(ApprovalMode::Readonly.cycle_next(), ApprovalMode::Ask);
+    assert_eq!(ApprovalMode::DontAsk.cycle_next(), ApprovalMode::Ask);
+    assert_eq!(ApprovalMode::BypassPermissions.cycle_next(), ApprovalMode::Ask);
 }
 
 // ── PermissionRule basics ──────────────────────────────────────────────────
@@ -213,15 +214,13 @@ fn permission_rule_creation() {
 #[test]
 fn all_approval_modes_have_descriptions() {
     let modes = [
-        ApprovalMode::Suggest,
+        ApprovalMode::Ask,
         ApprovalMode::Plan,
         ApprovalMode::AutoEdit,
         ApprovalMode::FullAuto,
         ApprovalMode::BypassPermissions,
         ApprovalMode::DontAsk,
         ApprovalMode::Readonly,
-        ApprovalMode::Auto,
-        ApprovalMode::PlanReadonly,
     ];
     for mode in &modes {
         let desc = mode.description();

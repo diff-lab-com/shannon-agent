@@ -132,7 +132,7 @@ fn apply_readonly_custom_profile() {
     let mut pm = PermissionManager::new();
     pm.apply_custom_profile_def(&def);
 
-    assert_eq!(pm.approval_mode(), ApprovalMode::Suggest);
+    assert_eq!(pm.approval_mode(), ApprovalMode::Ask);
     assert!(pm.is_tool_destructive("Bash"));
     assert!(pm.is_tool_destructive("Write"));
     assert!(!pm.is_tool_destructive("Read"));
@@ -196,7 +196,7 @@ deny = ["Bash", "Write", "Edit", "MultiEdit"]
     // Apply audit
     let audit_profile = registry.get("audit").expect("audit should exist");
     pm.apply_custom_profile_def(audit_profile);
-    assert_eq!(pm.approval_mode(), ApprovalMode::Suggest);
+    assert_eq!(pm.approval_mode(), ApprovalMode::Ask);
     assert!(pm.is_tool_destructive("Bash"));
     assert!(pm.is_tool_destructive("MultiEdit"));
 }

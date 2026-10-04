@@ -1150,18 +1150,29 @@ pub fn execute_pending_action(repl: &mut Repl, action: &str) -> Result<()> {
             repl.running = false;
         }
         "set_bypass_mode" => {
+            // P2-4: root refusal / SHANNON_DISABLE_BYPASS kill switch apply
+            // even to the confirmed dialog path.
+            if let Err(e) = shannon_engine::permissions::ensure_bypass_allowed() {
+                repl.chat
+                    .add_message(ChatRole::System, format!("Bypass refused: {e}"));
+                return Ok(());
+            }
             if let Some(ref query_engine) = repl.query_engine {
                 let mut perms = recover_lock(query_engine.permissions().write());
                 perms.set_approval_mode(
                     shannon_engine::permissions::ApprovalMode::BypassPermissions,
                 );
                 drop(perms);
-                repl.state.approval_mode_label = "FULL".to_string();
-                repl.state.status = "Mode: FULL".to_string();
-                repl.state.toast = Some(("  Mode: FULL  ".to_string(), std::time::Instant::now()));
+                repl.state.approval_mode =
+                    shannon_engine::permissions::ApprovalMode::BypassPermissions;
+                let label = repl.state.approval_mode.short_label();
+                repl.state.status = format!("Mode: {label}");
+                repl.state.toast =
+                    Some((format!("  Mode: {label}  "), std::time::Instant::now()));
                 repl.chat.add_message(
                     ChatRole::System,
-                    "Permission bypass enabled — all checks skipped.".to_string(),
+                    "Permission bypass enabled — all checks skipped (deny rules still apply)."
+                        .to_string(),
                 );
             }
         }
