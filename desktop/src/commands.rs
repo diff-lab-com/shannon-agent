@@ -1780,18 +1780,12 @@ pub async fn send_message(
         )
     });
 
-    // P2-5b: per-session in-process fan-out. Every event the loop
-    // emits to the Tauri wire is also pushed onto `session_for_task`'s
-    // mpsc channel so a future in-process consumer (the thread
-    // switcher being built in a follow-up iteration) can subscribe to
-    // *this session's* stream without conflating it with siblings.
-    // Best-effort — channel send errors are silently ignored (the
-    // Tauri wire + `messages` buffer still cover the user-visible path).
-    let session = session_for_task.clone();
-    let session_for_inproc = session.clone();
-    let route_event = move |evt: crate::session_registry::SessionEvent| {
-        session_for_inproc.try_send_event(evt);
-    };
+    // R9-③ (B2-3): the per-session in-process event channel this loop
+    // used to additionally feed (`route_event` → `try_send_event`) is
+    // removed — it was unbounded with zero consumers, so every event
+    // payload accumulated for the process lifetime. `app.emit` below is
+    // the only event surface; a future SessionsPanel revival rebuilds the
+    // channel bounded-with-consumer per chat-upgrade P2-5b.
     let return_qid = qid_str.clone();
     // Engine→UI permission bridge: each prompt from the query pipeline
     // becomes a pending Tauri permission; the scoped user decision maps back
@@ -1949,9 +1943,6 @@ pub async fn send_message(
                             session_id: Some(session_id_str.clone()),
                         },
                     );
-                    route_event(crate::session_registry::SessionEvent::Status(
-                        crate::session_registry::SessionEventStatus::Cancelled,
-                    ));
                     break;
                 }
                 crate::commands::StreamStep::Ended => break,
@@ -1967,9 +1958,6 @@ pub async fn send_message(
                             content,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::QueryText(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TEXT, payload);
                     }
                     QueryEvent::ToolUseRequest {
@@ -1993,9 +1981,6 @@ pub async fn send_message(
                             tool_input,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::ToolStart(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TOOL_START, payload);
                     }
                     QueryEvent::ToolUseResult {
@@ -2025,9 +2010,6 @@ pub async fn send_message(
                             meta: meta_val,
                             tokens_used,
                         };
-                        route_event(crate::session_registry::SessionEvent::ToolResult(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TOOL_RESULT, payload);
                     }
                     QueryEvent::Progress { query_id: _, message } => {
@@ -2047,9 +2029,6 @@ pub async fn send_message(
                                 message,
                                 session_id: Some(session_id_str.clone()),
                             };
-                            route_event(crate::session_registry::SessionEvent::Notice(
-                                payload.clone(),
-                            ));
                             let _ = app.emit(crate::events::QUERY_NOTICE_EVENT, payload);
                         }
                     }
@@ -2068,9 +2047,6 @@ pub async fn send_message(
                             message: msg,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::ToolProgress(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TOOL_PROGRESS, payload);
                     }
                     QueryEvent::Thinking { content, .. } => {
@@ -2079,9 +2055,6 @@ pub async fn send_message(
                             content,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::Thinking(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_THINKING, payload);
                     }
                     QueryEvent::Usage {
@@ -2121,9 +2094,6 @@ pub async fn send_message(
                             cost_usd,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::Usage(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_USAGE, payload);
 
                         // P0-4 mid-turn budget enforcement (logic in the
@@ -2186,9 +2156,6 @@ pub async fn send_message(
                                 session_id: Some(session_id_str.clone()),
                             },
                         );
-                        route_event(crate::session_registry::SessionEvent::Status(
-                            crate::session_registry::SessionEventStatus::Completed,
-                        ));
                         // T5: the turn succeeded — a previous failure entry
                         // for this session is resolved (mark read).
                         crate::inbox_session_events::resolve_session_failure(
@@ -2340,9 +2307,6 @@ pub async fn send_message(
                                 Some(session_id_str.clone()),
                             ),
                         );
-                        route_event(crate::session_registry::SessionEvent::Status(
-                            crate::session_registry::SessionEventStatus::Failed(error.clone()),
-                        ));
                         // T5: the turn failed — surface it in the unified
                         // needs-attention inbox (same source as the rail's
                         // red dot; dedup: one entry per session).
@@ -2372,9 +2336,6 @@ pub async fn send_message(
                             Some(session_id_str.clone()),
                         ),
                     );
-                    route_event(crate::session_registry::SessionEvent::Status(
-                        crate::session_registry::SessionEventStatus::Failed(err_string.clone()),
-                    ));
                     // T5: stream error — same needs-attention write as the
                     // engine `Failed` event above.
                     crate::inbox_session_events::record_session_failure(
@@ -2417,9 +2378,6 @@ pub async fn send_message(
                 event_names::QUERY_FAILED,
                 events::query_failed_payload(&qid_str, &panic_msg, Some(session_id_str.clone())),
             );
-            route_event(crate::session_registry::SessionEvent::Status(
-                crate::session_registry::SessionEventStatus::Failed(panic_msg.clone()),
-            ));
             crate::commands_notifications::fire_query_notification_logged(
                 &notifier_arc,
                 crate::commands_notifications::NotificationKind::Failed(panic_msg),
