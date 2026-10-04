@@ -322,6 +322,36 @@ describe('B1 §4-9 — prompt queue primitives', () => {
     })
     expect(result.current.promptQueue.map(q => q.text)).toEqual(['b-one'])
   })
+
+  // B3-1 (P1-2, R9-②): the rail's 「队列 N」badge reads this projection —
+  // a background session's parked queue must stay visible (the drain only
+  // runs for the session on screen), and depth 0 must drop out entirely so
+  // the chip unmounts instead of rendering 「队列 0」.
+  it('projects a per-session queue depth for the sidebar badge', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+    await act(async () => { await result.current.createSession() })
+
+    // Park two prompts on A, then switch away: A's backlog stays in the
+    // projection (the rail badge keeps counting) and B — no queue — is
+    // absent rather than mapped to 0.
+    await act(async () => {
+      expect(result.current.enqueuePrompt('a-one', [])).toBe(true)
+      expect(result.current.enqueuePrompt('a-two', [])).toBe(true)
+    })
+    expect(result.current.queueDepthsBySession).toEqual({ [SESSION_A]: 2 })
+    await act(async () => { await result.current.switchSession(SESSION_B) })
+    expect(result.current.queueDepthsBySession).toEqual({ [SESSION_A]: 2 })
+
+    // Back on A the drain takes the head; the depth follows down to empty,
+    // where the session leaves the record.
+    await act(async () => { await result.current.switchSession(SESSION_A) })
+    await act(async () => { result.current.dequeuePrompt() })
+    expect(result.current.queueDepthsBySession).toEqual({ [SESSION_A]: 1 })
+    await act(async () => { result.current.dequeuePrompt() })
+    expect(result.current.queueDepthsBySession).toEqual({})
+  })
 })
 
 describe('B1-3 (P1-4) — deleteSessionAction cleans up session-scoped state', () => {

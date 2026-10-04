@@ -1708,6 +1708,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void loadInitialData()
   }, [loadInitialData])
 
+  // B3-1 (P1-2, R9-②): per-session queue DEPTH for the rail. `promptQueues`
+  // itself is already the raw keyed store; the chat slice projects only the
+  // VISIBLE session's FIFO (chatValue.promptQueue) and the drain effect only
+  // runs on the Chat page for the session on screen — so a session parked
+  // with queued prompts while another is on screen would otherwise be
+  // invisible. The rail badge (depth-only numbers; the rail never renders
+  // item text) is that backlog's only surface; auto-drain was ruled out by
+  // R9-②, so visibility — not sending — is the fix. Recomputes only when a
+  // queue mutates (enqueue/dequeue/drop publish a fresh record).
+  const queueDepthsBySession = useMemo(() => {
+    const depths: Record<string, number> = {}
+    for (const [id, queue] of Object.entries(promptQueues)) {
+      if (queue.length > 0) depths[id] = queue.length
+    }
+    return depths
+  }, [promptQueues])
+
   const visibleKey = windowSessionId ?? currentSessionId ?? ''
   const chatValue = useMemo<ChatContextValue>(() => ({
     messages, streamingText, thinkingText, isQuerying, isCancelInFlight, activeToolCalls, toolProgress, streamNotices, usage, runProcess,
@@ -1725,8 +1742,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, switchingSession, createSession, createSessionInWorktree, switchSession: switchToSession,
     deleteSession: deleteSessionAction, renameSession: renameSessionAction, refreshSessions,
     sessionSources, addSessionSource, removeSessionSource,
+    queueDepthsBySession,
   }), [sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, switchingSession, createSession, createSessionInWorktree, switchToSession,
-    deleteSessionAction, renameSessionAction, refreshSessions, sessionSources, addSessionSource, removeSessionSource])
+    deleteSessionAction, renameSessionAction, refreshSessions, sessionSources, addSessionSource, removeSessionSource, queueDepthsBySession])
 
   const catalogValue = useMemo<CatalogContextValue>(() => ({
     status, config, providerStatus, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,

@@ -3479,6 +3479,8 @@
   "sidebar.sessions.lastActivity.aria": "最后活跃 {time}",
   "sidebar.sessions.awaitingApproval.badge": "等待审批",
   "sidebar.sessions.error.badge": "上次运行失败",
+  "sidebar.sessions.queue.label": "队列 {n}",
+  "sidebar.sessions.queue.title": "{n} 条消息将在回到该会话后发送",
   "nav.search": "搜索",
   "nav.automation": "自动化",
   "sidebar.model.badge.aria": "当前模型 {model}（{provider}），点击管理",
