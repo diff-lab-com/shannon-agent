@@ -356,6 +356,31 @@ export default function Chat() {
   // user message exists at all — still has a working action.
   const [blockedPayload, setBlockedPayload] = useState<{ text: string; attachments: string[] } | null>(null)
 
+  // P1-8: latest-ref mirrors of the composer — the two rejection recoveries
+  // below run in promise continuations whose `input`/`attachedFiles` closure
+  // is the render snapshot from send time (empty by definition: handleSend
+  // clears synchronously before the IPC). Whether the user typed since is
+  // judged at settle time through these refs.
+  const composerInputRef = useRef(input)
+  composerInputRef.current = input
+  const composerFilesRef = useRef(attachedFiles)
+  composerFilesRef.current = attachedFiles
+
+  // P1-8: shared rejection recovery for the blocked-send paths (manual send,
+  // queue drain). An empty composer gets the old behavior verbatim — the
+  // refused text and chips come back. A composer the user has typed into
+  // since wins: their draft is never clobbered, the refused payload is still
+  // parked as the banner's continue target, and a toast says where it went.
+  const restoreBlockedSend = useCallback((text: string, attachments: string[]) => {
+    setBlockedPayload({ text, attachments })
+    if (composerInputRef.current.trim() === '' && composerFilesRef.current.length === 0) {
+      setInput(text)
+      setAttachedFiles(attachments)
+      return
+    }
+    toast.info(t('chat.send.blockedKept'))
+  }, [t])
+
   const continuePastBudget = useCallback(() => {
     if (blockedPayload) {
       const { text, attachments } = blockedPayload
@@ -576,9 +601,9 @@ export default function Chat() {
         setBlockedPayload(null)
         if (visibleSessionId) clearDraft(visibleSessionId)
       } else {
-        setInput(trimmed)
-        setAttachedFiles(filePaths ?? [])
-        setBlockedPayload({ text: trimmed, attachments: filePaths ?? [] })
+        // P1-8: the recovery must not clobber text typed while the IPC was
+        // in flight — see restoreBlockedSend.
+        restoreBlockedSend(trimmed, filePaths ?? [])
       }
     })
   }
@@ -655,15 +680,15 @@ export default function Chat() {
           drainBlockedRef.current = true
           // R2 W2-4: the dequeued head was refused before recording — return
           // it to the composer and hold it for the banner's continue instead
-          // of silently dropping user content.
-          setInput(item.text)
-          setAttachedFiles(item.attachments)
-          setBlockedPayload({ text: item.text, attachments: item.attachments })
+          // of silently dropping user content. P1-8: unless the user typed
+          // while the send was in flight — then only the banner hold (and a
+          // toast), never a clobbered draft (see restoreBlockedSend).
+          restoreBlockedSend(item.text, item.attachments)
         }
       })
     // `promptQueue` re-triggers the drain for the next item once the new run
     // settles; sendMessage flips isQuerying synchronously during the send.
-  }, [isQuerying, promptQueue, dequeuePrompt, executeSlash, sendMessage, hasPendingSteer])
+  }, [isQuerying, promptQueue, dequeuePrompt, executeSlash, sendMessage, hasPendingSteer, restoreBlockedSend])
 
   // Attach files via Tauri's native dialog so the backend receives real
   // absolute paths (the backend reads bytes via std::fs and base64-encodes).
