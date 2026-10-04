@@ -15,7 +15,7 @@ import { describeBackendError } from '@/lib/backendError'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
-import { clearDraft } from '@/lib/composerDraft'
+import { clearDraft, tombstoneDraft } from '@/lib/composerDraft'
 import { basenameOf } from '@/lib/fileRefs'
 import {
   beginRun as runBegin,
@@ -1105,6 +1105,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // tab's sources, and the pending citation snapshot (W3-4). Without
       // these a deleted session's mid-run backend cancel (its terminal
       // event arrives after the delete) or leftover slots would linger.
+      // B1-3-RESIDUE: tombstone BEFORE the clear. When this is the OPEN
+      // session, the pointer flip below makes Chat's draft switch-flush
+      // persist the still-typed composer text under this id — resurrecting
+      // the key cleared here (the 300ms debounce straddling the delete hits
+      // the same hole). The tombstone makes the write layer drop both.
+      tombstoneDraft(id)
       clearDraft(id)
       setSessionQuerying(id, false)
       setSessionSources(prev => {

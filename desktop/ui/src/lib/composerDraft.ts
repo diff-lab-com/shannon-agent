@@ -24,7 +24,25 @@ export function readDraft(sessionId: string): { text: string; attachments: strin
   } catch { return null }
 }
 
+// B1-3-RESIDUE: ids whose draft key must never be (re)written. Deleting the
+// OPEN session clears `shannon.draft.<id>` and then flips the pointer to
+// null, and Chat's draft switch-flush (plus the 300ms debounce straddling
+// the delete) can still persist the composer text under the deleted id —
+// resurrecting the just-cleared key as stale residue across restarts. The
+// guard lives at this single write choke point (not in Chat.tsx) so both
+// straggler paths are covered; deleteSessionAction tombstones before
+// clearing. Session ids are UUIDs and never reused, so the set only grows
+// with deletions per app run — bounded enough to ignore.
+const tombstonedDraftIds = new Set<string>()
+
+export function tombstoneDraft(sessionId: string): void {
+  tombstonedDraftIds.add(sessionId)
+}
+
 export function writeDraft(sessionId: string, text: string, attachments: string[]): 'saved' | 'oversize' | 'failed' {
+  // A tombstoned (deleted) session's draft is dropped, not persisted. Not
+  // 'oversize' — the caller toasts on that; a refused residue write is silent.
+  if (tombstonedDraftIds.has(sessionId)) return 'failed'
   try {
     const payload = JSON.stringify({ text, attachments, updatedAt: Date.now() })
     // Size cap: a runaway draft must not crowd the quota for the dock's
