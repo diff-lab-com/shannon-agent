@@ -96,6 +96,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // currently running; `isQuerying` (below) projects the VISIBLE session's
   // entry, so gating/stop/error UI all key off the session on screen.
   const [queryingSessions, setQueryingSessions] = useState<Record<string, true>>({})
+  // P1-7 fix: synchronous mirror of the per-session latch — a send the
+  // backend REJECTS (concurrent-query guard) must know whether THIS call was
+  // the one that turned the latch on, or its catch would clear a run another
+  // window still owns (the backend lock is per session, not per window).
+  // Kept during render, the same pattern as runProcessRef below.
+  const queryingSessionsRef = useRef<Record<string, true>>({})
+  queryingSessionsRef.current = queryingSessions
   // S-3/A-18 companion (R4 group 7): a cancel command is in flight for these
   // sessions — set by `cancelQuery` before the IPC, cleared when the run
   // settles (the same choke point that clears `queryingSessions`) or when
@@ -672,6 +679,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }))
     // B1 P1-5: the run is tracked on ITS session — other sessions keep a
     // usable composer while this one streams.
+    // P1-7 fix: whether THIS send takes the latch. The backend lock is per
+    // session, so a second window's send to the same session is rejected
+    // while the first window's run streams on — the catch below must then
+    // leave the winner's latch alone (clearing it shows idle mid-run).
+    const iStartedThis = !queryingSessionsRef.current[targetKey]
     setSessionQuerying(targetSessionId, true)
     // A-4 fix: the optimistic user message carries its attachments in the
     // backend ChatMessage's wire shape (commands.rs: file_attachments of
@@ -753,7 +765,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return next
       })
       setChatError(describeBackendError(String(e), messageFor))
-      setSessionQuerying(targetSessionId, false)
+      // P1-7 fix: clear the latch only when this send took it — a send that
+      // found the session already running must leave that run's latch on
+      // (the run settles through its own query events, not this rejection).
+      if (iStartedThis) setSessionQuerying(targetSessionId, false)
       // A-17 fix: the send was rejected before starting any run — restore
       // the superseded query records (the previous query may still be live).
       if (prevQueryId !== undefined) currentQueryIdsRef.current.set(targetKey, prevQueryId)
