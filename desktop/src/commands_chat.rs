@@ -232,7 +232,8 @@ pub async fn cancel_query(
 /// session the registry does not know reports idle (`false`) and is NOT
 /// materialized (`get_or_create` would resurrect a deleted session's
 /// entry just by asking about it). A malformed id is a hard error, same
-/// vocabulary as [`SessionRegistry::resolve_explicit_or_active`].
+/// vocabulary as
+/// [`SessionRegistry::resolve_explicit_or_active`](crate::session_registry::SessionRegistry::resolve_explicit_or_active).
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn get_session_querying(
