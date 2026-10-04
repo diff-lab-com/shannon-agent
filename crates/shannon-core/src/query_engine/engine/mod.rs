@@ -372,8 +372,14 @@ impl QueryEngine {
         let session_id = Uuid::new_v4();
         let effective_max_context_tokens =
             Self::resolve_max_context_tokens(client.model(), config.max_context_tokens);
+        // B2-2: the repo-map root prefers the explicit override, then the
+        // configured session working directory, then (inside the injector)
+        // the process cwd at injection time.
         let repo_map_injector = RepoMapInjector::new(
-            config.repo_map_root.as_deref(),
+            config
+                .repo_map_root
+                .as_deref()
+                .or(config.working_directory.as_deref()),
             config.repo_map_budget_tokens,
         );
         Self {
@@ -431,8 +437,14 @@ impl QueryEngine {
         );
         let mut defaults = QueryEngineConfig::default();
         Self::apply_env_overrides(&mut defaults);
+        // B2-2: repo-map root fallback chain — explicit override, then the
+        // configured session working directory (None on the defaults path),
+        // then the process cwd at injection time.
         let repo_map_injector = RepoMapInjector::new(
-            defaults.repo_map_root.as_deref(),
+            defaults
+                .repo_map_root
+                .as_deref()
+                .or(defaults.working_directory.as_deref()),
             defaults.repo_map_budget_tokens,
         );
         Self {
@@ -523,8 +535,14 @@ impl QueryEngine {
         let model = client.model().to_string();
         let effective_max_context_tokens =
             Self::resolve_max_context_tokens(client.model(), config.max_context_tokens);
+        // B2-2: repo-map root fallback chain — explicit override, then the
+        // configured session working directory, then the process cwd at
+        // injection time.
         let repo_map_injector = RepoMapInjector::new(
-            config.repo_map_root.as_deref(),
+            config
+                .repo_map_root
+                .as_deref()
+                .or(config.working_directory.as_deref()),
             config.repo_map_budget_tokens,
         );
         Self {
@@ -623,26 +641,44 @@ impl QueryEngine {
         self.memory.as_ref()
     }
 
-    /// Pin the session's working directory for host-dependent reads keyed on
-    /// the session's location (memory injection/extraction project key).
-    /// Hosts running multiple sessions in one process MUST set this — the
-    /// process cwd races between sessions. See
+    /// Pin the session's working directory for every host-dependent read:
+    /// the memory injection/extraction project key, project instructions,
+    /// the prompt env block, the repo-map root fallback and the default
+    /// `cwd` of Bash spawns. Hosts running multiple sessions in one process
+    /// MUST set this — the process cwd races between sessions. See
     /// [`QueryEngineConfig::working_directory`](crate::query_engine::QueryEngineConfig::working_directory).
+    ///
+    /// B2-2: unless an explicit `repo_map_root` override is configured, the
+    /// repo-map injector is re-pinned to this directory as well (a fresh
+    /// injector, cold cache — the engine is typically rebuilt per turn).
     pub fn with_working_directory(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
-        self.config.working_directory = Some(dir.into());
+        let dir = dir.into();
+        if self.config.repo_map_root.is_none() {
+            self.repo_map_injector = RepoMapInjector::new(
+                Some(&dir),
+                self.config.repo_map_budget_tokens,
+            );
+        }
+        self.config.working_directory = Some(dir);
         self
+    }
+
+    /// The pinned session working directory, if one was configured via
+    /// [`Self::with_working_directory`]. Hosts use this to assert their
+    /// wiring (B2-2); the engine's own read points go through
+    /// [`QueryEngineConfig::effective_working_directory`](crate::query_engine::QueryEngineConfig::effective_working_directory).
+    pub fn working_directory(&self) -> Option<&std::path::Path> {
+        self.config.working_directory.as_deref()
     }
 
     /// The project key memory reads/writes use: the explicitly configured
     /// session working directory when set, else the process current
     /// directory, else `"default"`.
     pub(crate) fn memory_project_key(&self) -> String {
-        if let Some(dir) = self.config.working_directory.as_ref() {
-            return dir.display().to_string();
-        }
-        std::env::current_dir()
+        self.config
+            .effective_working_directory()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "default".to_string())
+            .unwrap_or_else(|| "default".to_string())
     }
 
     /// Attach a context injector for project instructions and preference memory.

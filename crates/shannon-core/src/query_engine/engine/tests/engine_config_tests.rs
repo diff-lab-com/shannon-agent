@@ -702,3 +702,120 @@ fn test_cache_hit_rate_accumulation_across_usage_events() {
         "Hit rate should be < 60%, got {hit_rate:.3}"
     );
 }
+
+// ── B2-2 (P0-2): session working-directory threading ────────────────
+
+#[test]
+fn with_working_directory_pins_config_and_repo_map_root() {
+    // The builder is the desktop's entry point (attach_shared_memory): the
+    // config AND the repo-map injector must both land on the session dir,
+    // so every host-dependent read keeps using it for the engine's life.
+    let engine = create_test_engine().with_working_directory("/tmp/session-b22");
+    assert_eq!(
+        engine.config.working_directory.as_deref(),
+        Some(std::path::Path::new("/tmp/session-b22"))
+    );
+    assert_eq!(
+        engine.repo_map_injector.root_override(),
+        Some(std::path::Path::new("/tmp/session-b22")),
+        "repo-map root must follow the session working directory"
+    );
+}
+
+#[test]
+fn working_directory_seeds_repo_map_root_at_construction() {
+    // Engines built straight from a config carrying working_directory (no
+    // explicit repo_map_root) get the injector seeded at construction —
+    // the read point never falls through to the racing process cwd.
+    let client = create_test_client();
+    let config = QueryEngineConfig {
+        working_directory: Some(std::path::PathBuf::from("/tmp/session-seed")),
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(
+        client,
+        ToolRegistry::new(),
+        PermissionManager::new(),
+        StateManager::new(),
+        config,
+    );
+    assert_eq!(
+        engine.repo_map_injector.root_override(),
+        Some(std::path::Path::new("/tmp/session-seed"))
+    );
+}
+
+#[test]
+fn explicit_repo_map_root_wins_over_working_directory() {
+    // Priority preserved: an explicit repo_map_root override beats the
+    // session working directory, on both the construction and the builder
+    // path (the builder must not clobber the override).
+    let client = create_test_client();
+    let config = QueryEngineConfig {
+        repo_map_root: Some(std::path::PathBuf::from("/tmp/explicit-root")),
+        working_directory: Some(std::path::PathBuf::from("/tmp/session-seed")),
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(
+        client,
+        ToolRegistry::new(),
+        PermissionManager::new(),
+        StateManager::new(),
+        config,
+    );
+    assert_eq!(
+        engine.repo_map_injector.root_override(),
+        Some(std::path::Path::new("/tmp/explicit-root"))
+    );
+
+    let client = create_test_client();
+    let config = QueryEngineConfig {
+        repo_map_root: Some(std::path::PathBuf::from("/tmp/explicit-root")),
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(
+        client,
+        ToolRegistry::new(),
+        PermissionManager::new(),
+        StateManager::new(),
+        config,
+    )
+    .with_working_directory("/tmp/session-b22");
+    assert_eq!(
+        engine.repo_map_injector.root_override(),
+        Some(std::path::Path::new("/tmp/explicit-root"))
+    );
+    assert_eq!(
+        engine.config.working_directory.as_deref(),
+        Some(std::path::Path::new("/tmp/session-b22")),
+        "session wd is still pinned for the other read points"
+    );
+}
+
+#[test]
+fn memory_project_key_follows_configured_working_directory() {
+    // Regression anchor for the B2-2 refactor of memory_project_key onto
+    // effective_working_directory: configured dir wins, unconfigured falls
+    // back to the process cwd.
+    let client = create_test_client();
+    let config = QueryEngineConfig {
+        working_directory: Some(std::path::PathBuf::from("/tmp/session-mem")),
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(
+        client,
+        ToolRegistry::new(),
+        PermissionManager::new(),
+        StateManager::new(),
+        config,
+    );
+    assert_eq!(engine.memory_project_key(), "/tmp/session-mem");
+
+    let engine = create_test_engine();
+    assert_eq!(
+        engine.memory_project_key(),
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "default".to_string())
+    );
+}

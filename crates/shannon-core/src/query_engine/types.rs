@@ -948,8 +948,10 @@ pub struct QueryEngineConfig {
     /// Token budget for the repo map injection. Defaults to 2,000 tokens,
     /// which fits comfortably alongside the rest of the system prompt.
     pub repo_map_budget_tokens: usize,
-    /// Optional override for the repo map root. Defaults to the current
-    /// working directory when the engine is asked to inject.
+    /// Optional override for the repo map root. Resolution order: this
+    /// override, then [`working_directory`](Self::working_directory)
+    /// (B2-2), then the current working directory when the engine is asked
+    /// to inject.
     pub repo_map_root: Option<std::path::PathBuf>,
     /// When `true` (default), the engine auto-injects working-directory
     /// context into every request's system blocks: smart-context keyword
@@ -983,14 +985,31 @@ pub struct QueryEngineConfig {
     /// tool-calling API. Default `true`; opt-out via env
     /// `SHANNON_MARKDOWN_TOOL_FALLBACK=false`.
     pub markdown_tool_fallback: bool,
-    /// Explicit working directory for host-dependent reads keyed on the
-    /// session's location: the memory injection/extraction project key and
-    /// (indirectly) prompt-content decisions. When `None` the process
-    /// `current_dir()` is used — which is wrong for hosts running several
-    /// sessions in one process (the desktop used to flip the process cwd on
-    /// every session switch, racing the memory project key). Hosts SHOULD
-    /// set this per session.
+    /// Explicit working directory for the engine's host-dependent reads:
+    /// the memory injection/extraction project key, project instructions
+    /// (CLAUDE.md/AGENTS.md), the prompt env block, the repo-map root
+    /// fallback and the default `cwd` of Bash spawns. When `None` the
+    /// process `current_dir()` is used — which is wrong for hosts running
+    /// several sessions in one process (the desktop used to flip the
+    /// process cwd on every session switch, racing every read point).
+    /// Hosts SHOULD set this per session.
     pub working_directory: Option<std::path::PathBuf>,
+}
+
+impl QueryEngineConfig {
+    /// The directory the engine's host-dependent reads use: the explicitly
+    /// configured [`working_directory`](Self::working_directory) when set,
+    /// else the process current directory (`None` when that cannot be
+    /// determined either — callers keep their own terminal fallback).
+    ///
+    /// B2-2 (P0-2): every engine-side CWD read point goes through this so
+    /// an engine built for one session keeps reading that session's
+    /// directory for its whole lifetime, regardless of process-cwd churn.
+    pub fn effective_working_directory(&self) -> Option<std::path::PathBuf> {
+        self.working_directory
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+    }
 }
 
 impl Default for QueryEngineConfig {
@@ -2157,5 +2176,28 @@ mod tests {
         let opus = lookup_pricing("anthropic.claude-opus-4-20250514-v1:0");
         assert!((opus.input_price_per_mtok - 15.0).abs() < 1e-9);
         assert!((opus.output_price_per_mtok - 75.0).abs() < 1e-9);
+    }
+
+    // -- B2-2 (P0-2): session working-directory resolution --
+
+    /// Resolution order: the configured `working_directory` wins; without
+    /// one the process current directory is the fallback (the pre-B2-2
+    /// semantics REPL/CLI/server keep).
+    #[test]
+    fn effective_working_directory_prefers_config_then_process_cwd() {
+        let configured = QueryEngineConfig {
+            working_directory: Some(std::path::PathBuf::from("/tmp/session-a")),
+            ..Default::default()
+        };
+        assert_eq!(
+            configured.effective_working_directory(),
+            Some(std::path::PathBuf::from("/tmp/session-a"))
+        );
+
+        let unconfigured = QueryEngineConfig::default();
+        assert_eq!(
+            unconfigured.effective_working_directory(),
+            std::env::current_dir().ok()
+        );
     }
 }
