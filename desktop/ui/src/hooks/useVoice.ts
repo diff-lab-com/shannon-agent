@@ -120,7 +120,10 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   // change seen mid-capture is deferred, and every path back to
   // `idle` renders — so running on every commit behind a cheap
   // signature compare is the simplest wiring that can't miss the
-  // post-idle rebuild.
+  // post-idle rebuild. Deliberately dependency-free: runs behind a cheap
+  // signature compare on every commit (the deps suggestion would skip the
+  // post-idle rebuild this relies on).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const signature = buildSignature(provider, local)
     if (builtSigRef.current === signature) return
