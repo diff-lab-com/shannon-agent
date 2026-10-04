@@ -1,0 +1,43 @@
+# ChatScript: session-switch-tee — B3-5 pin（plan §七-11 可选项 / R8-③ tee 契约钉）。
+#
+# R8-③ 结论：user 消息在轮首写入 L0（agent_loop producer 启动即
+# record_user_message_with_count + record_turn_start，且属 tee 的强制
+# durable boundary flush 类别），所以「流式中切走再切回，投影必含本轮
+# user 气泡、无问有答不存在」。本剧本给该契约一个 journey 级钉子：
+# A 长流（8 × 700ms，切走再切回后仍有 ~2s 流量）→ completed，spec 断言
+# 切回时 user 气泡在场、本轮在屏上完整收敛（恰一条 user 气泡 + 全文回复，
+# tee 不双写、尾巴不丢），再走一次往返确认投影稳定。
+#
+# 与 session-switch-race 的分工：那边钉 failed 收尾 + 横幅归属（A-5），
+# 这里钉 completed 收尾 + tee 不重复。
+name: session-switch-tee
+description: R8-③ tee 契约钉 — A 流中切走再切回 user 气泡在场，切回后 completed 完整收敛、无双写
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-tee-a
+      title: Tee A
+      messages: []
+    - id: script-sess-tee-b
+      title: Tee B
+      messages:
+        - role: user
+          content: B 的历史问题
+        - role: assistant
+          content: B 的历史回答。
+turns:
+  - user: T 的长问题
+    script:
+      - event: query:text
+        chunks:
+          - "甲，"
+          - "乙，"
+          - "丙，"
+          - "丁，"
+          - "戊，"
+          - "己，"
+          - "庚，"
+          - "辛。"
+        chunkDelayMs: 700
+      - event: query:completed
