@@ -3,12 +3,16 @@
 // path (corrupted payloads read as null, quota failures write as 'failed',
 // clears never throw). Extracted verbatim from pages/Chat.tsx so
 // deleteSessionAction can clear a session's draft on delete (B1-3/P1-4).
+// B1-3-RESIDUE adds the tombstone half: a deleted session's id is barred
+// from every write path, so Chat's switch-flush/debounce stragglers cannot
+// resurrect the cleared key.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   clearDraft,
   draftKey,
   readDraft,
+  tombstoneDraft,
   writeDraft,
 } from '@/lib/composerDraft'
 
@@ -70,5 +74,29 @@ describe('composerDraft (B1 §4-11)', () => {
     expect(readDraft('s2')).toEqual({ text: 'keep me in', attachments: [] })
     // A missing key (already gone / never written) must not throw.
     expect(() => clearDraft('never-written')).not.toThrow()
+  })
+
+  // B1-3-RESIDUE: deleteSessionAction tombstones the id before clearing so
+  // Chat's switch-flush (and the debounce straddling the delete) cannot
+  // write the composer text back under the deleted id. Dedicated ids here —
+  // the tombstone is module-level and deliberately has no reset.
+  it('drops writes for a tombstoned id and leaves other ids untouched', () => {
+    // Typed but unsent — the debounce has landed the draft on disk.
+    writeDraft('t-residue', 'typed before delete', [])
+    // The delete: tombstone + clear, in deleteSessionAction's order.
+    tombstoneDraft('t-residue')
+    clearDraft('t-residue')
+    expect(localStorage.getItem('shannon.draft.t-residue')).toBeNull()
+
+    // The switch-flush straggler arrives after the delete: refused.
+    expect(writeDraft('t-residue', 'resurrected', ['/tmp/x'])).toBe('failed')
+    expect(localStorage.getItem('shannon.draft.t-residue')).toBeNull()
+    // The same id stays refused on every later write.
+    expect(writeDraft('t-residue', 'resurrected again', [])).toBe('failed')
+    expect(localStorage.getItem('shannon.draft.t-residue')).toBeNull()
+
+    // Sibling sessions keep their full draft contract.
+    expect(writeDraft('t-survivor', 'still writable', ['a'])).toBe('saved')
+    expect(readDraft('t-survivor')).toEqual({ text: 'still writable', attachments: ['a'] })
   })
 })

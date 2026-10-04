@@ -11,7 +11,6 @@ import { expect, test, type Page } from '@playwright/test'
 import { ChatPage } from './helpers/ChatPage'
 import { loadChatScript } from './helpers/scriptLoader'
 import { expectNoConsoleErrors } from './helpers/watchdog'
-import { annotateKnownIssues } from './helpers/knownIssues'
 
 const MAIN = 'script-sess-life-main'
 
@@ -136,15 +135,14 @@ test.describe('scripted chat backend — session-lifecycle (journey #19)', () =>
   // real-page interaction, where Chat's debounced/switch-flush draft writers
   // are also live while a session goes away underneath them.
   //
-  // FINDING B1-3-RESIDUE (B3-5, recorded — no production change in this
-  // pack): deleting the CURRENTLY OPEN session re-writes its draft key after
-  // deleteSessionAction's clearDraft — the deleted id rides out through
-  // Chat.tsx's switch-flush effect (visibleSessionId → null with the text
-  // still in the composer ⇒ persistDraft(previousId, input)), resurrecting
-  // `shannon.draft.<id>` as stale residue across restarts. The unit test
-  // could not see it (no Chat page mounted). Flip condition: when the flush
-  // skips sessions that no longer exist (or the clear lands after it), the
-  // second journey below flips to asserting the key is GONE.
+  // B1-3-RESIDUE (found by B3-5, since fixed): deleting the CURRENTLY OPEN
+  // session used to re-write the key after deleteSessionAction's clearDraft —
+  // the deleted id rode out through Chat's switch-flush (visibleSessionId →
+  // null with the text still in the composer ⇒ persistDraft(previousId,
+  // input)), resurrecting `shannon.draft.<id>` as stale residue. The fix
+  // tombstones the id on delete at the write layer (lib/composerDraft), so
+  // the flush and the straddling debounce are both refused; the second
+  // journey below asserts the key is GONE for that OPEN-session shape.
   test('deleting a session from another session clears its typed draft (B1-3: no shannon.draft.<id> residue)', async ({ page }) => {
     test.setTimeout(90_000)
     const chat = new ChatPage(page)
@@ -180,16 +178,11 @@ test.describe('scripted chat backend — session-lifecycle (journey #19)', () =>
   })
 
   // The same journey with the deletion fired from the deleted session's OWN
-  // view — the B1-3-RESIDUE shape above. Current behavior asserted (the
-  // switch-flush resurrects the key); see the finding comment for the flip.
-  test('deleting the OPEN session currently resurrects its draft via the switch flush (B1-3-RESIDUE anchored)', async ({ page }) => {
+  // view — the exact shape that used to resurrect the key (B1-3-RESIDUE,
+  // fixed: the delete tombstones the id, so the switch-flush write is
+  // dropped at the write layer).
+  test('deleting the OPEN session clears its typed draft too (B1-3-RESIDUE: no residue)', async ({ page }) => {
     test.setTimeout(90_000)
-    annotateKnownIssues(test.info(), {
-      'B1-3-RESIDUE': 'Deleting the open session re-writes shannon.draft.<id> after '
-        + 'deleteSessionAction cleared it — Chat.tsx\'s draft switch-flush persists '
-        + 'the still-typed text under the deleted id once visibleSessionId flips to '
-        + 'null. Current behavior asserted; flip to "key is null" when fixed.',
-    })
     const chat = new ChatPage(page)
     await loadChatScript(page, 'session-lifecycle', test.info())
     await row(page, MAIN).click()
@@ -207,13 +200,13 @@ test.describe('scripted chat backend — session-lifecycle (journey #19)', () =>
     await expect(dialog).toBeVisible()
     await page.getByTestId('delete-session-confirm').click()
     await expect(dialog).toHaveCount(0, { timeout: 10_000 })
+    // The row leaving means the pointer flip already committed — the flush
+    // writer has fired (and been refused) by the time this settles.
     await expect(row(page, MAIN)).toHaveCount(0, { timeout: 10_000 })
 
-    // CURRENT behavior: the switch-flush writer resurrects the deleted
-    // session's draft (B1-3-RESIDUE). When the fix lands this flips to
-    // `.toBeNull()` — mirroring the clean path pinned above.
-    const residue = await page.evaluate(k => localStorage.getItem(k), DRAFT_KEY)
-    expect(residue).toContain('删除我之前没发出去的草稿')
+    // The key died with the session and stays dead: the switch-flush
+    // straggler hits the tombstone, mirroring the clean path pinned above.
+    expect(await page.evaluate(k => localStorage.getItem(k), DRAFT_KEY)).toBeNull()
     await expectNoConsoleErrors(page)
   })
 

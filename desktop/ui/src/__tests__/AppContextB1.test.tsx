@@ -13,6 +13,7 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { AppProvider, useApp } from '@/context/AppContext'
 import { EVENT_NAMES } from '@/types'
 import * as api from '@/lib/tauri-api'
+import { writeDraft } from '@/lib/composerDraft'
 
 const SESSION_A = 'aaaa1111-0000-4000-8000-00000000000a'
 const SESSION_B = 'bbbb2222-0000-4000-8000-00000000000b'
@@ -376,6 +377,31 @@ describe('B1-3 (P1-4) — deleteSessionAction cleans up session-scoped state', (
     expect(
       JSON.parse(localStorage.getItem(`shannon.draft.${SESSION_B}`)!).text,
     ).toBe('other session')
+  })
+
+  // B1-3-RESIDUE: deleting the OPEN session must not just clear the draft —
+  // the id must become unwritable, or Chat's switch-flush (this layer can't
+  // see it; no Chat is mounted here) re-persists the composer text under the
+  // deleted id right after the pointer flips to null. The tombstone the
+  // delete leaves behind is what the flush's writeDraft hits — assert the
+  // straggler write is refused and the key stays gone.
+  it('deleting the OPEN session bars the deleted id from every later draft write', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    // SESSION_A becomes the open session…
+    await act(async () => { await result.current.createSession() })
+    expect(result.current.currentSessionId).toBe(SESSION_A)
+    writeDraft(SESSION_A, 'typed, never sent', [])
+
+    // …and dies while on screen.
+    await act(async () => { await result.current.deleteSession(SESSION_A) })
+    expect(localStorage.getItem(`shannon.draft.${SESSION_A}`)).toBeNull()
+
+    // The switch-flush straggler (same writeDraft the page routes through)
+    // finds the tombstone: refused, the key does not come back.
+    expect(writeDraft(SESSION_A, 'resurrected by the flush', [])).toBe('failed')
+    expect(localStorage.getItem(`shannon.draft.${SESSION_A}`)).toBeNull()
   })
 
   it('drops the run and cancel-in-flight latches with the deleted session', async () => {
