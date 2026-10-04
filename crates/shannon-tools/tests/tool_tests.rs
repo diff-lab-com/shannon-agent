@@ -468,6 +468,30 @@ async fn test_bash_tool_with_working_directory() {
     assert!(!result.is_error);
 }
 
+/// B2-2 invariant, spawn side: the `cwd` field a Bash call carries (the
+/// engine injects the session working directory into exactly this field
+/// when the model omits it — see shannon-core `inject_bash_default_cwd`)
+/// must be the directory the child process actually runs in.
+#[tokio::test]
+async fn test_bash_tool_spawns_in_requested_cwd() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let tool = BashTool::new();
+    let result = tool
+        .execute(serde_json::json!({
+            "command": "pwd",
+            "cwd": dir.path().to_string_lossy()
+        }))
+        .await
+        .unwrap();
+    assert!(!result.is_error, "pwd failed: {}", result.content);
+    let reported = result.content.trim();
+    assert_eq!(
+        std::path::Path::new(reported).canonicalize().unwrap(),
+        dir.path().canonicalize().unwrap(),
+        "bash must spawn in the requested cwd, got {reported}"
+    );
+}
+
 #[tokio::test]
 async fn test_bash_tool_with_timeout() {
     let tool = BashTool::new();
