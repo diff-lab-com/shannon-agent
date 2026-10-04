@@ -45,6 +45,7 @@
 
 use dashmap::DashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -202,6 +203,15 @@ pub struct SessionState {
     pub messages: Mutex<Vec<ChatMessage>>,
     pub querying: Mutex<bool>,
     pub cancellation_token: Mutex<Option<CancellationToken>>,
+    /// B1-4 (P1-3): a stop landed in `send_message`'s latch→token window —
+    /// the querying latch was already up but the cancellation token was not
+    /// stored yet, so there was nothing to fire and (pre-fix) the cancel
+    /// silently "succeeded" with no `query:cancelled` ever emitted. The
+    /// flag records that intent; `send_message` checks-and-consumes it
+    /// right after storing the token and cancels the fresh run immediately.
+    /// `AtomicBool` (not a `Mutex<bool>`): the critical sections are single
+    /// loads/stores, never spanning an `await`.
+    pub cancel_pending: AtomicBool,
     pub session_id: Uuid,
     /// R2-1: session-level model override ([`SessionModelOverride`]).
     /// `None` = inherit the global default (`AppState::client_config`).
@@ -248,6 +258,7 @@ impl SessionState {
             messages: Mutex::new(Vec::new()),
             querying: Mutex::new(false),
             cancellation_token: Mutex::new(None),
+            cancel_pending: AtomicBool::new(false),
             session_id,
             model_override: std::sync::Mutex::new(None),
             memory_disabled: std::sync::Mutex::new(false),
@@ -300,6 +311,27 @@ impl SessionState {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *guard = disabled;
+    }
+
+    /// B1-4 (P1-3): record that a stop landed in the cancel window — see
+    /// [`SessionState::cancel_pending`]. Only meaningful while `querying`
+    /// is up; the caller (`cancel_session_query`) checks that.
+    pub fn set_cancel_pending(&self) {
+        self.cancel_pending.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// B1-4 (P1-3): consume the pending-cancel marker (read-and-clear in
+    /// one step), so a windowed stop can never fire twice or leak onto a
+    /// later, legitimate run.
+    pub fn take_cancel_pending(&self) -> bool {
+        self.cancel_pending.swap(false, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// B1-4 (P1-3): clear the marker without reading it — the query loop's
+    /// exit path does this with the latch reset, so a spurious windowed
+    /// stop (double press) cannot outlive its querying epoch.
+    pub fn clear_cancel_pending(&self) {
+        self.cancel_pending.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -588,6 +620,23 @@ mod tests {
         assert!(!reg.any_querying().await, "query ended → idle again");
     }
 
+    /// B1-4 (P1-3): the stop watchdog's reconciliation read. An absent
+    /// session reports idle — and must NOT be materialized (asking about a
+    /// deleted session must not resurrect its registry entry).
+    #[tokio::test]
+    async fn session_registry_is_querying_reports_false_without_materializing() {
+        let reg = SessionRegistry::new();
+        let ghost = Uuid::new_v4();
+        assert!(!reg.is_querying(ghost).await, "unknown session is idle");
+        assert!(
+            reg.get(SessionKey(ghost)).is_none(),
+            "the read must not create the entry it asked about"
+        );
+        let key = reg.create();
+        *reg.get(key).unwrap().querying.lock().await = true;
+        assert!(reg.is_querying(key.0).await, "latched session reads busy");
+    }
+
     #[test]
     fn session_registry_destroy_returns_true_when_present_false_otherwise() {
         let reg = SessionRegistry::new();
@@ -628,6 +677,38 @@ mod tests {
             reg.active_key(),
             None,
             "destroying the active session must clear the active pointer"
+        );
+    }
+
+    /// B1-3 (R8-②): after `destroy`, `get_or_create` for the same key must
+    /// materialise a BRAND-NEW entry — the deleted session's state (messages
+    /// buffer, bypass flags, and above all the unbounded per-session event
+    /// channel) is released, not resurrected. `delete_session` relies on
+    /// this: the entry it destroys after a successful store delete must not
+    /// leak its event backlog for the rest of the process lifetime.
+    #[test]
+    fn session_registry_destroy_then_get_or_create_materialises_fresh_state() {
+        let reg = SessionRegistry::new();
+        let key = reg.create();
+        let dead = reg.get(key).expect("fixture: entry exists");
+        // Leave markable state on the doomed entry — a fresh replacement
+        // must not inherit any of it.
+        dead.set_memory_disabled(true);
+
+        assert!(reg.destroy(key));
+        let fresh = reg.get_or_create(key);
+        assert!(
+            !Arc::ptr_eq(&dead, &fresh),
+            "get_or_create after destroy must not resurrect the dead entry"
+        );
+        assert!(
+            !fresh.memory_disabled_snapshot(),
+            "the replacement entry starts from defaults"
+        );
+        assert_eq!(
+            reg.list().len(),
+            1,
+            "destroy + get_or_create leaves exactly one live entry"
         );
     }
 

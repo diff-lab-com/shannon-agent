@@ -323,3 +323,95 @@ describe('B1 §4-9 — prompt queue primitives', () => {
     expect(result.current.promptQueue.map(q => q.text)).toEqual(['b-one'])
   })
 })
+
+describe('B1-3 (P1-4) — deleteSessionAction cleans up session-scoped state', () => {
+  it('clears the deleted session\'s persisted draft, and only its own', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    // Seed directly under the storage contract's key format — the cleanup
+    // must target the same key the composer writes (`shannon.draft.<id>`).
+    localStorage.setItem(
+      `shannon.draft.${SESSION_A}`,
+      JSON.stringify({ text: 'half-typed', attachments: [], updatedAt: 1 }),
+    )
+    localStorage.setItem(
+      `shannon.draft.${SESSION_B}`,
+      JSON.stringify({ text: 'other session', attachments: [], updatedAt: 1 }),
+    )
+
+    await act(async () => { await result.current.deleteSession(SESSION_A) })
+
+    expect(localStorage.getItem(`shannon.draft.${SESSION_A}`)).toBeNull()
+    expect(
+      JSON.parse(localStorage.getItem(`shannon.draft.${SESSION_B}`)!).text,
+    ).toBe('other session')
+  })
+
+  it('drops the run and cancel-in-flight latches with the deleted session', async () => {
+    // Deferred cancel IPC + no terminal event: the ONLY thing that can
+    // clear the latches is the delete itself. (The hook's projections are
+    // visible-session-only — the deleted session is the current one here,
+    // so both projections must read idle the moment the delete lands.)
+    let releaseCancel: () => void = () => {}
+    const cancelSpy = vi.spyOn(api, 'cancelQuery').mockImplementation(
+      () => new Promise<void>((resolve) => { releaseCancel = resolve }),
+    )
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('run in A') })
+    // Hold the IPC open (same pattern as the S-3 test above): cancelQuery
+    // starts, but its promise stays pending for the rest of the test — so
+    // nothing but the delete can clear the latches.
+    let cancelPromise: Promise<void> = Promise.resolve()
+    await act(async () => { cancelPromise = result.current.cancelQuery() })
+    expect(result.current.isCancelInFlight).toBe(true)
+    expect(result.current.isQuerying).toBe(true)
+
+    await act(async () => { await result.current.deleteSession(SESSION_A) })
+    expect(result.current.isQuerying).toBe(false)
+    expect(result.current.isCancelInFlight).toBe(false)
+
+    releaseCancel()
+    await act(async () => { await cancelPromise })
+    cancelSpy.mockRestore()
+  })
+
+  it('drops the deleted session\'s Context-tab sources, keeps other sessions\'', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    act(() => { result.current.addSessionSource(SESSION_A, 'https://a.example') })
+    act(() => { result.current.addSessionSource(SESSION_B, 'https://b.example') })
+
+    await act(async () => { await result.current.deleteSession(SESSION_A) })
+
+    expect(result.current.sessionSources[SESSION_A]).toBeUndefined()
+    expect(result.current.sessionSources[SESSION_B]).toEqual(['https://b.example'])
+  })
+
+  it('dismisses a permission prompt aimed at the deleted session, keeps others', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    const prompt = (session: string) => ({
+      tool: 'bash', input: {}, risk: 'low',
+      request_id: `req-${session}`, session_id: session,
+    })
+    act(() => flush(EVENT_NAMES.PERMISSION_REQUEST, prompt(SESSION_A)))
+    expect(result.current.permissionRequest?.request_id).toBe(`req-${SESSION_A}`)
+
+    // A prompt for ANOTHER session must survive deleting an unrelated one.
+    await act(async () => { await result.current.deleteSession(SESSION_B) })
+    expect(result.current.permissionRequest?.request_id).toBe(`req-${SESSION_A}`)
+
+    // Deleting the prompt's own session dismisses it (unanswerable — the
+    // backend denied it when the session died).
+    await act(async () => { await result.current.deleteSession(SESSION_A) })
+    expect(result.current.permissionRequest).toBeNull()
+  })
+})

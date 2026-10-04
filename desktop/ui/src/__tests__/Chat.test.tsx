@@ -1106,6 +1106,41 @@ describe('Chat page', () => {
       act(() => { settle() })
       await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledWith('belongs to A', undefined))
     })
+
+    it('B1-1: steers parked for sessions A and B BOTH deliver — the single-slot overwrite is gone', async () => {
+      resetCtx()
+      ctx.currentSessionId = 'sess-A'
+      ctx.isQuerying = true
+      const { settle } = renderChatRerenderable()
+
+      const input = screen.getByPlaceholderText(/Reply generating/)
+      fireEvent.change(input, { target: { value: 'belongs to A' } })
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+      expect(ctx.cancelQuery).toHaveBeenCalledTimes(1)
+
+      // The user lands on B — also streaming — and steers there too. The
+      // single-slot implementation overwrote A's text right here (it had
+      // already left the composer), losing it without a trace.
+      ctx.currentSessionId = 'sess-B'
+      act(() => { settle() })
+      const inputB = screen.getByPlaceholderText(/Reply generating/)
+      fireEvent.change(inputB, { target: { value: 'belongs to B' } })
+      fireEvent.keyDown(inputB, { key: 'Enter', ctrlKey: true })
+      expect(ctx.cancelQuery).toHaveBeenCalledTimes(2)
+      expect(ctx.sendMessage).not.toHaveBeenCalled()
+
+      // B settles while B is on screen: B's steer goes out, A's stays parked.
+      ctx.isQuerying = false
+      act(() => { settle() })
+      await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledWith('belongs to B', undefined))
+      expect(ctx.sendMessage).toHaveBeenCalledTimes(1)
+
+      // Back on A: A's steer delivers too — both texts, each once.
+      ctx.currentSessionId = 'sess-A'
+      act(() => { settle() })
+      await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledWith('belongs to A', undefined))
+      expect(ctx.sendMessage).toHaveBeenCalledTimes(2)
+    })
   })
 
   // ── R2 W2-4: budget block → return-to-composer + honest "Continue once" ──
