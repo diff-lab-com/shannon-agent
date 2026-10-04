@@ -899,7 +899,7 @@ describe('L1 state machine — cancel-matrix #2 (tool execution stop)', () => {
 })
 
 describe('L1 state machine — cancel-matrix #4 (approval-wait stop)', () => {
-  it('stop while a permission prompt waits settles the run; the prompt itself stays up (current behavior recorded)', { timeout: 30_000 }, async () => {
+  it('stop while a permission prompt waits settles the run; the dialog is dismissed with it (B1-2)', { timeout: 30_000 }, async () => {
     const script = loadFixture('cancel-approval-wait')
     const h = await makeHarness()
     h.player.load(script)
@@ -915,14 +915,14 @@ describe('L1 state machine — cancel-matrix #4 (approval-wait stop)', () => {
     expect(h.result.current.activeToolCalls).toHaveLength(0)
     expect(h.result.current.error).toBeNull()
 
-    // CURRENT BEHAVIOR (recorded for the report): QUERY_CANCELLED does not
-    // touch permissionRequest — the dialog stays up after the run is gone.
-    expect(h.result.current.permissionRequest).toMatchObject({ request_id: 'pr-cancel-1' })
-    // A late Allow still goes through: the command resolves and the prompt
-    // clears (respondPermissionAction clears it on success).
-    await act(async () => { await h.result.current.respondPermission('pr-cancel-1', false) })
+    // B1-2 (P1-1) FIXED (was: the dialog stayed up over the settled run):
+    // the run's terminal event dismisses its own pending approval prompt and
+    // clears the rail's amber dot — the backend auto-Denies the orphaned
+    // request after its 300s timeout, so a late「允许」would report
+    // "Permission request not found".
     expect(h.result.current.permissionRequest).toBeNull()
-    expect(api.respondPermission).toHaveBeenCalledWith('pr-cancel-1', false, undefined)
+    expect(h.result.current.sessionActivity[SESSION_A]?.awaitingApproval).toBe(false)
+    expect(api.respondPermission).not.toHaveBeenCalled()
   })
 })
 

@@ -8,6 +8,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import { parseSlashInput, type SlashCommand, type SlashResult } from '@/lib/slash/commands'
 import { recordInputHistory } from '@/lib/inputHistory'
+import { clearDraft, DRAFT_MAX_KB, readDraft, writeDraft } from '@/lib/composerDraft'
 import { clearDiffStatsCache } from '@/components/chat/diffStats'
 import { toastError } from '@/lib/errorToast'
 import { setActiveWorkingDir } from '@/lib/fileRefs'
@@ -43,45 +44,12 @@ const QuickFixPanel = lazy(() => import('@/pages/QuickFix'))
 const EditorPanel = lazy(() => import('@/pages/EditorPage'))
 
 // ── B1 §4-11 per-session draft storage ───────────────────────────────────
-const DRAFT_KEY_PREFIX = 'shannon.draft.'
+// The key/storage helpers live in lib/composerDraft.ts (extracted for
+// AppContext's deleteSessionAction, B1-3); only the page-local tuning
+// (debounce) stays here.
 const DRAFT_DEBOUNCE_MS = 300
-const DRAFT_MAX_BYTES = 64 * 1024
 // B1 §4-12: how long the search-jump bubble keeps its ring (ms).
 const SEARCH_FLASH_MS = 1200
-
-function draftKey(sessionId: string): string {
-  return `${DRAFT_KEY_PREFIX}${sessionId}`
-}
-
-function readDraft(sessionId: string): { text: string; attachments: string[] } | null {
-  try {
-    const raw = localStorage.getItem(draftKey(sessionId))
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { text?: unknown; attachments?: unknown }
-    if (typeof parsed.text !== 'string' || !Array.isArray(parsed.attachments)) return null
-    return {
-      text: parsed.text,
-      attachments: parsed.attachments.filter((a): a is string => typeof a === 'string'),
-    }
-  } catch { return null }
-}
-
-function writeDraft(sessionId: string, text: string, attachments: string[]): 'saved' | 'oversize' | 'failed' {
-  try {
-    const payload = JSON.stringify({ text, attachments, updatedAt: Date.now() })
-    // Size cap: a runaway draft must not crowd the quota for the dock's
-    // persisted keys. Oversized drafts simply stay in-memory — A-21 fix:
-    // the skip used to be silent; the caller now warns (console + a
-    // one-shot toast) instead of letting a reload eat the text unnoticed.
-    if (payload.length > DRAFT_MAX_BYTES) return 'oversize'
-    localStorage.setItem(draftKey(sessionId), payload)
-    return 'saved'
-  } catch { return 'failed' /* quota / private mode — drafts are best-effort */ }
-}
-
-function clearDraft(sessionId: string): void {
-  try { localStorage.removeItem(draftKey(sessionId)) } catch { /* noop */ }
-}
 
 /// 2026-09-29 provider review §3-A1: the banner shows ONLY when there is
 /// genuinely something to fix —
@@ -184,7 +152,7 @@ export default function Chat() {
   const oversizeDraftToastedRef = useRef(false)
   const persistDraft = useCallback((sessionId: string, text: string, attachments: string[]) => {
     if (writeDraft(sessionId, text, attachments) !== 'oversize') return
-    console.warn(`[Chat] draft for session ${sessionId} exceeds the ${Math.round(DRAFT_MAX_BYTES / 1024)}KB persistence cap — kept in memory only, lost on reload`)
+    console.warn(`[Chat] draft for session ${sessionId} exceeds the ${DRAFT_MAX_KB}KB persistence cap — kept in memory only, lost on reload`)
     if (oversizeDraftToastedRef.current) return
     oversizeDraftToastedRef.current = true
     toast.warning(t('chat.draft.oversize'))
@@ -612,9 +580,9 @@ export default function Chat() {
   // an interrupted steer flushes first on the same isQuerying→false commit;
   // the drain below also gates on hasPendingSteer so both never send in one
   // commit (the drain would otherwise burn a queued item against the
-  // backend's concurrent-query guard). Round-1 review: the pending steer is
-  // parked under its session key (a settle observed on another session
-  // never receives it) and a cancel that never settles hands the draft back
+  // backend's concurrent-query guard). Round-1 review: steers park in a
+  // per-session FIFO (a settle observed on another session never receives
+  // them; B1-1) and a cancel that never settles hands the drafts back
   // after 15s with a notice instead of waiting forever.
   const { steer, hasPendingSteer } = useSteerSend({
     visibleSessionId,
@@ -622,8 +590,12 @@ export default function Chat() {
     cancelQuery,
     sendMessage,
     onSendRejected: (pending, reason) => {
-      setInput(pending.text)
-      setAttachedFiles(pending.attachments)
+      // A timeout returns every still-waiting steer of the session in one
+      // batch, one callback per entry — append rather than overwrite, or
+      // the batch would clobber itself back down to its last entry (the
+      // restore-side shape of the very loss B1-1 fixes).
+      setInput(prev => (prev ? `${prev}\n${pending.text}` : pending.text))
+      setAttachedFiles(prev => Array.from(new Set([...prev, ...pending.attachments])))
       if (reason === 'timeout') toast.error(t('chat.steer.timeout'))
     },
   })

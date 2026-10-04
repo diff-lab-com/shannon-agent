@@ -15,6 +15,7 @@ import { describeBackendError } from '@/lib/backendError'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
+import { clearDraft } from '@/lib/composerDraft'
 import { basenameOf } from '@/lib/fileRefs'
 import {
   beginRun as runBegin,
@@ -79,6 +80,13 @@ function logSoftFailure(what: string, e: unknown) {
 const DOCK_OPEN_KEY = 'shannon.dock.open'
 // B1 P2-13: minimum interval between visible streaming-bucket projections.
 const STREAM_FLUSH_MS = 50
+// B1-4 (P1-3): bound on how long a stop may wait for its `query:cancelled`
+// settle before the watchdog reconciles against backend truth — backend
+// emits are fire-and-forget, so the terminal event can be lost. Same 15s
+// bound (and one extra round for a slow teardown) as the steer settle
+// watchdog (useSteerSend DEFAULT_SETTLE_TIMEOUT_MS).
+const CANCEL_SETTLE_WATCHDOG_MS = 15_000
+const CANCEL_SETTLE_WATCHDOG_ROUNDS = 2
 // B1 §4-9: per-session prompt queue capacity (spec: 1–3, we take 3).
 const PROMPT_QUEUE_CAP = 3
 // D7 (intentional, 2026-10-02): the queue is deliberately NOT persisted —
@@ -223,6 +231,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null)
+  // B1-2 (P1-1): latest-ref mirror of the state above. The query:* listeners
+  // below register once on mount (empty effect deps), so their closures can
+  // never read fresh state — a terminal handler can only tell whether the
+  // pending prompt belongs to the settling session through this ref. All
+  // writes funnel through `applyPermissionRequest` so ref and state move in
+  // the same synchronous step (same pattern as visibleSessionIdRef).
+  // B1-3 (P1-4): deleteSessionAction reads the same mirror through its own
+  // stale-closure-prone callback — the render-time assignment below keeps the
+  // ref honest even if a future write ever bypasses the helper.
+  const permissionRequestRef = useRef<PermissionRequest | null>(null)
+  permissionRequestRef.current = permissionRequest
+  const applyPermissionRequest = useCallback((next: PermissionRequest | null) => {
+    permissionRequestRef.current = next
+    setPermissionRequest(next)
+  }, [])
   // /rewind: checkpoints for the current session (turn indices + previews).
   const [checkpoints, setCheckpoints] = useState<CheckpointInfo[]>([])
   // PM-12: persisted 👍/👎 for the current session's messages.
@@ -291,6 +314,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // B1 P1-5: the visible session's own run gates this session's composer,
   // stop button and error surface — never another session's.
   const isQuerying = !!queryingSessions[visibleSessionIdRef.current ?? '']
+  // B1-4 (P1-3): render-time mirror of the latch map — the stop watchdog's
+  // timer callback must read CURRENT membership without a stale closure
+  // (same pattern as runProcessRef above).
+  const queryingSessionsRef = useRef(queryingSessions)
+  queryingSessionsRef.current = queryingSessions
 
   // B1 P2-13: token-by-token setStreamingText re-parsed the whole markdown
   // document per token (O(n²) over a long reply). Buckets still absorb every
@@ -347,6 +375,120 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // S-3/A-18 companion: the cancel-in-flight projection for the VISIBLE
   // session — what the stop button renders from.
   const isCancelInFlight = !!cancelInFlightSessions[visibleSessionIdRef.current ?? '']
+
+  // B1-4 (P1-3) — the stop settle watchdog. Backend emits are
+  // fire-and-forget, so the `query:cancelled` event a stop waits for can
+  // be lost; without a backstop the composer stays latched and the stop
+  // button renders "cancelling" forever. One timer per session is armed
+  // when the cancel IPC resolves; on expiry it reconciles the (still
+  // latched) session against backend truth via get_session_querying and
+  // runs the cancelled settle itself when the backend is already idle.
+  const cancelWatchdogRef = useRef<Map<string, number>>(new Map())
+  // B1-2 hand-off: settleCancelledRun (below) must dismiss a pending approval
+  // dialog on the session it settles, but clearPermissionForSession and its
+  // own deps are declared later in this setup. The ref is filled where the
+  // callback is born; the settle reads it through here.
+  const clearPermissionForSessionRef = useRef<(sessionKey: string) => void>(() => {})
+  const disarmCancelWatchdog = useCallback((key: string) => {
+    const timer = cancelWatchdogRef.current.get(key)
+    if (timer != null) {
+      window.clearTimeout(timer)
+      cancelWatchdogRef.current.delete(key)
+    }
+  }, [])
+
+  // D6 (keep the partial output): a cancelled run's streamed text is
+  // COMMITTED as the assistant bubble — flagged `interrupted` so the
+  // bubble renders the "stopped" marker — instead of being wiped with
+  // the run (B0 P1-2's discard semantics). The backend mirrors this
+  // durably (the engine tee finalizes the interrupted turn in the L0
+  // log; the desktop buffer gets the same partial), so reloads and
+  // session switches bring the identical marked bubble back. An empty
+  // bucket (stop before the first token) keeps the no-bubble shape.
+  // §P2-18 scoping like QUERY_COMPLETED: the run's own session commits
+  // ITS OWN bucket; a background session's partial lands on its reload
+  // projection, not another session's screen. `key` is the SENDING
+  // session (F-1 owner routing, resolved by the caller) — a mismatched
+  // event sid can never route the commit (or the unlock) onto another
+  // chat. Shared by the QUERY_CANCELLED listener and the stop watchdog,
+  // so a lost terminal event settles exactly like a delivered one.
+  const settleCancelledRun = useCallback((key: string) => {
+    // Whichever path wins (event or watchdog), the wait is over.
+    disarmCancelWatchdog(key)
+    setSessionQuerying(key, false)
+    // B1-2 (P1-1): the ghost-prompt dismissal rides the shared settle, so a
+    // watchdog settle (lost `query:cancelled`) and a delivered one land in
+    // exactly the same state — dialog and amber dot included. Read through a
+    // latest-ref: clearPermissionForSession is declared further down (its own
+    // deps mature later), and a deps-array entry here would read it in TDZ.
+    clearPermissionForSessionRef.current(key)
+    cancelStreamFlush()
+    const finalText = streamingBucketsRef.current.get(key) ?? ''
+    streamingBucketsRef.current.set(key, '')
+    thinkingBucketsRef.current.set(key, '')
+    // W3-4: the run is over — pop its citation snapshot. A committed
+    // partial keeps its own chips (the memories DID inform it, same
+    // rule as the completed commit); an empty commit drops them so
+    // they can never leak onto a later turn's bubble.
+    const citations = pendingInjectedMemoriesRef.current.get(key)
+    pendingInjectedMemoriesRef.current.delete(key)
+    if (key === (visibleSessionIdRef.current ?? '')) {
+      setSubagentLive(null)
+      if (finalText) {
+        setMessages(msgs => [...msgs, {
+          role: 'assistant',
+          content: finalText,
+          timestamp: Date.now(),
+          interrupted: true,
+          // W3-4: citation chips ride only a non-empty snapshot.
+          ...(citations && citations.length > 0 ? { injected_memories: citations } : {}),
+        }])
+      }
+      setStreamingText('')
+      setThinkingText('')
+      // Review P2-4: completed tool cards must not linger under the
+      // committed partial reply until the next send/switch.
+      setActiveToolCalls([])
+      // P2-19: no progress chip may outlive the run.
+      setToolProgress(null)
+      // GB P2-3: settle the run tab (not a failure — the user stopped it).
+      setRunProcess(prev => runEnd(prev, Date.now(), false))
+    }
+  }, [disarmCancelWatchdog, setSessionQuerying, cancelStreamFlush])
+
+  // Arms (or re-arms) the session's watchdog. `round` bounds the wait:
+  // one reconcile, plus ONE more round when the backend reports still
+  // running (a slow teardown — e.g. a long tool subprocess kill). After
+  // that it gives up and keeps the status quo; a real terminal event, if
+  // it ever arrives, still settles everything.
+  const armCancelWatchdog = useCallback((key: string, round: number) => {
+    // cancelInFlight already deduplicates the IPC; this keeps the timer
+    // single too (a repeated stop must not stack watchdogs).
+    if (cancelWatchdogRef.current.has(key)) return
+    const schedule = (r: number) => {
+      const timer = window.setTimeout(() => {
+        cancelWatchdogRef.current.delete(key)
+        // Settled in the meantime (a late event won the race) — nothing to do.
+        if (!queryingSessionsRef.current[key]) return
+        void api.getSessionQuerying(key)
+          .then(backendQuerying => {
+            // A late terminal event may have settled the latch while the
+            // IPC was in flight — re-check before touching anything.
+            if (!queryingSessionsRef.current[key]) return
+            if (backendQuerying) {
+              if (r < CANCEL_SETTLE_WATCHDOG_ROUNDS) schedule(r + 1)
+              else console.warn('[chat] cancel settle watchdog gave up — backend still querying', key)
+              return
+            }
+            // Backend idle, latch stuck: the lost event's settle, verbatim.
+            settleCancelledRun(key)
+          })
+          .catch(e => logSoftFailure('cancel settle watchdog', e))
+      }, CANCEL_SETTLE_WATCHDOG_MS)
+      cancelWatchdogRef.current.set(key, timer)
+    }
+    schedule(round)
+  }, [settleCancelledRun])
 
   // A-17 fix: true when `queryId` names a dead or superseded query of the
   // session at `sessionKey` — such an event is a late delivery of a
@@ -485,6 +627,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     map.set(sessionId, next)
     setSessionActivity(Object.fromEntries(map))
   }, [])
+
+  // B1-2 (P1-1): a run's terminal event ends the approval prompt it raised.
+  // Without this, stop/fail/cancel left the dialog hanging and the rail's
+  // amber dot lit while the backend auto-Denied the orphaned prompt after its
+  // 300s timeout (commands_permissions::prompt_user) — the eventual「允许」
+  // then reported "Permission request not found". Matching is on the prompt's
+  // session_id against the terminal event's OWNER key (the same key the
+  // handlers settle by), so another session's prompt — and a session-less one
+  // from the `request_permission` command — is never dismissed here.
+  const clearPermissionForSession = useCallback((sessionKey: string) => {
+    const pending = permissionRequestRef.current
+    if (!pending || pending.session_id !== sessionKey) return
+    applyPermissionRequest(null)
+    noteSessionApproval(pending.session_id, false)
+  }, [applyPermissionRequest, noteSessionApproval])
+  // Fill the hand-off ref settleCancelledRun reads (declaration order above).
+  clearPermissionForSessionRef.current = clearPermissionForSession
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -781,6 +940,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCancelInFlightSessions(prev => (prev[key] ? prev : { ...prev, [key]: true }))
     try {
       await api.cancelQuery(targetSessionId ?? undefined)
+      // B1-4 (P1-3): the IPC resolved, but its `query:cancelled` terminal
+      // event is fire-and-forget on the wire — arm the settle watchdog so
+      // a lost event cannot leave the stop button on "cancelling" forever.
+      armCancelWatchdog(key, 1)
     } catch (e) {
       setCancelInFlightSessions(prev => {
         if (!prev[key]) return prev
@@ -793,7 +956,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // UNARCHIVED uses.
       toastError(messageFor('chat.error.cancelFailed'), e)
     }
-  }, [windowSessionId, currentSessionId])
+  }, [windowSessionId, currentSessionId, armCancelWatchdog])
 
   const createSession = useCallback(async () => {
     try {
@@ -917,6 +1080,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       streamNoticesBucketsRef.current.delete(id)
       // B1 §4-9: its queued prompts die with the session too.
       dropPromptQueue(id)
+      // B1-3 (P1-4): the rest of the session-scoped state dies with it —
+      // the persisted draft, the run/composer latches (this also clears
+      // the cancel-in-flight slot via the same choke point), the Context
+      // tab's sources, and the pending citation snapshot (W3-4). Without
+      // these a deleted session's mid-run backend cancel (its terminal
+      // event arrives after the delete) or leftover slots would linger.
+      clearDraft(id)
+      setSessionQuerying(id, false)
+      setSessionSources(prev => {
+        if (!(id in prev)) return prev
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      pendingInjectedMemoriesRef.current.delete(id)
+      // A permission prompt aimed AT the deleted session is unanswerable —
+      // dismiss it. Latest-ref read, not the closure's state (see the
+      // declaration above); other sessions' prompts stay up.
+      if (permissionRequestRef.current?.session_id === id) setPermissionRequest(null)
       if (currentSessionId === id) {
         setMessages([])
         setStreamNotices([])
@@ -925,7 +1107,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       await refreshSessions()
     } catch (e) { setChatError(String(e)) }
-  }, [currentSessionId, refreshSessions, dropPromptQueue, setChatError])
+  }, [currentSessionId, refreshSessions, dropPromptQueue, setSessionQuerying, setChatError])
 
   const renameSessionAction = useCallback(async (id: string, title: string) => {
     try {
@@ -941,7 +1123,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   ) => {
     try {
       await api.respondPermission(requestId, allow, options)
-      setPermissionRequest(null)
+      // B1-2 (P1-1): through the helper so the latest-ref mirror moves with
+      // the state (the query:* terminal handlers read the ref).
+      applyPermissionRequest(null)
       // Batch B2: resolve the rail's amber dot for the prompt's session.
       if (permissionRequest?.session_id) noteSessionApproval(permissionRequest.session_id, false)
     } catch (e) {
@@ -951,7 +1135,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // (Header) attach a no-op catch of their own.
       throw e
     }
-  }, [permissionRequest, noteSessionApproval, setChatError])
+  }, [permissionRequest, applyPermissionRequest, noteSessionApproval, setChatError])
 
   const refreshCheckpoints = useCallback(async () => {
     if (!currentSessionId) {
@@ -1246,6 +1430,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // visibility; a pending throttled flush must die BEFORE the
           // buckets are cleared so it can't resurrect stale text.
           setSessionQuerying(key, false)
+          // B1-2 (P1-1): the run is over — its own pending approval dialog
+          // and rail dot go with it (main window, background session too).
+          clearPermissionForSession(key)
           cancelStreamFlush()
           const finalText = streamingBucketsRef.current.get(key) ?? ''
           streamingBucketsRef.current.set(key, '')
@@ -1310,6 +1497,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // banner and Retry stay: the banner manages "what now", the bubble
           // records "what was generated".
           setSessionQuerying(key, false)
+          // B1-2 (P1-1): same ghost-prompt dismissal as QUERY_COMPLETED.
+          clearPermissionForSession(key)
           cancelStreamFlush()
           const finalText = streamingBucketsRef.current.get(key) ?? ''
           streamingBucketsRef.current.set(key, '')
@@ -1359,61 +1548,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (isStaleQueryEvent(key, p.query_id)) return
           retireQueryEvent(key, p.query_id)
           noteSessionActivity(key === claimedKey ? sid : key, 'end')
-          // D6 (keep the partial output): a cancelled run's streamed text is
-          // COMMITTED as the assistant bubble — flagged `interrupted` so the
-          // bubble renders the "stopped" marker — instead of being wiped with
-          // the run (B0 P1-2's discard semantics). The backend mirrors this
-          // durably (the engine tee finalizes the interrupted turn in the L0
-          // log; the desktop buffer gets the same partial), so reloads and
-          // session switches bring the identical marked bubble back. An empty
-          // bucket (stop before the first token) keeps the no-bubble shape.
-          // §P2-18 scoping like QUERY_COMPLETED: the run's own session
-          // commits ITS OWN bucket; a background session's partial lands on
-          // its reload projection, not another session's screen. `key` is the
-          // SENDING session (F-1 owner routing) — a mismatched event sid can
-          // never route the commit (or the unlock) onto another chat.
-          setSessionQuerying(key, false)
-          cancelStreamFlush()
-          const finalText = streamingBucketsRef.current.get(key) ?? ''
-          streamingBucketsRef.current.set(key, '')
-          thinkingBucketsRef.current.set(key, '')
-          // W3-4: the run is over — pop its citation snapshot. A committed
-          // partial keeps its own chips (the memories DID inform it, same
-          // rule as the completed commit); an empty commit drops them so
-          // they can never leak onto a later turn's bubble.
-          const citations = pendingInjectedMemoriesRef.current.get(key)
-          pendingInjectedMemoriesRef.current.delete(key)
-          if (key === visibleKey) {
-            setSubagentLive(null)
-            if (finalText) {
-              setMessages(msgs => [...msgs, {
-                role: 'assistant',
-                content: finalText,
-                timestamp: Date.now(),
-                interrupted: true,
-                // W3-4: citation chips ride only a non-empty snapshot.
-                ...(citations && citations.length > 0 ? { injected_memories: citations } : {}),
-              }])
-            }
-            setStreamingText('')
-            setThinkingText('')
-            // Review P2-4: completed tool cards must not linger under the
-            // committed partial reply until the next send/switch.
-            setActiveToolCalls([])
-            // P2-19: no progress chip may outlive the run.
-            setToolProgress(null)
-            // GB P2-3: settle the run tab (not a failure — the user stopped it).
-            setRunProcess(prev => runEnd(prev, Date.now(), false))
-          }
+          // D6 (keep the partial output) / §P2-18 scoping / W3-4 citation
+          // snapshot: the settle body lives in settleCancelledRun, shared
+          // with the B1-4 stop watchdog so a lost `query:cancelled` and a
+          // delivered one land in exactly the same state — B1-2 (P1-1)'s
+          // ghost-prompt dismissal rides inside it, so whichever side
+          // settles, the dialog and its amber dot go with it.
+          settleCancelledRun(key)
         }),
         listen(EVENT_NAMES.PERMISSION_REQUEST, (e) => {
           const p = e.payload as PermissionRequest
           // Window mode: only prompt for this window's own session — a
           // foreign session's approval dialog must not pop up here.
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          // B1-2 (P1-1): no query_id freshness filter here — the wire payload
+          // (shannon_types::events::PermissionRequest) carries no query_id to
+          // test against. A stale prompt is instead retracted by its run's
+          // terminal events (clearPermissionForSession in the three handlers
+          // above). Through the helper so the ref mirror stays in step.
           // Batch B2: amber dot on the owning session's rail row.
           noteSessionApproval(p.session_id, true)
-          setPermissionRequest(p)
+          applyPermissionRequest(p)
         }),
         listen(EVENT_NAMES.SESSIONS_UPDATED, () => { refreshSessions() }),
         // 卡A resume-unarchive: opening an archived session silently
@@ -1468,11 +1623,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     register()
+    // B1-4: capture the (useRef-stable) watchdog map once — the cleanup
+    // below runs after this provider is gone and must clear pending timers.
+    const watchdogTimers = cancelWatchdogRef.current
     return () => {
       cancelled = true
       unlisteners.forEach(fn => fn())
       // B1 P2-13: a pending streaming flush must not fire post-unmount.
       cancelStreamFlush()
+      // B1-4: the same for the stop watchdogs — no settle callback may run
+      // after this provider is gone.
+      watchdogTimers.forEach(timer => window.clearTimeout(timer))
+      watchdogTimers.clear()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
