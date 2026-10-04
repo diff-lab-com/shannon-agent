@@ -257,6 +257,9 @@ interface SessionsSectionProps {
   sessionActivity: Record<string, SessionActivity>
   /** P2-⑥: goal runs keyed by the session they own (badge + iterations). */
   goalRunsBySession: Record<string, GoalRunDto>
+  /** B3-1 (P1-2, R9-②): queued-prompt count per session id — the row's
+   *  「队列 N」chip. Depth-only; sessions without a queue are absent. */
+  queueDepthsBySession?: Record<string, number>
   currentSessionId: string | null
   switchSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
@@ -273,7 +276,7 @@ interface DeleteTarget {
   permanent?: boolean
 }
 
-export function SessionsSection({ sessions, sessionActivity, goalRunsBySession = {}, currentSessionId, switchSession, renameSession, deleteSession, closeMobile }: SessionsSectionProps) {
+export function SessionsSection({ sessions, sessionActivity, goalRunsBySession = {}, queueDepthsBySession = {}, currentSessionId, switchSession, renameSession, deleteSession, closeMobile }: SessionsSectionProps) {
   const t = useT()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
@@ -1226,6 +1229,10 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     const idleState = !isRunning && activity?.awaitingApproval
       ? 'approval'
       : !isRunning && activity?.failed ? 'failed' : null
+    // B3-1 (P1-2, R9-②): prompts parked while this session streams (or sits
+    // in the background) — the drain only runs for the session on screen, so
+    // the rail carries the backlog count instead of leaving it invisible.
+    const queueDepth = queueDepthsBySession[session.id] ?? 0
     const agoBadge = !isRunning
       ? formatRelativeTime(session.updated_at ?? session.created_at, nowTick, t)
       : ''
@@ -1348,6 +1355,27 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               <span className="flex-1 truncate">
                 <HighlightText text={session.title || untitled} query={query.trim()} />
               </span>
+              {/* B3-1 (P1-2, R9-②): the 「队列 N」chip — same compact-badge
+                  language as the goal badge (icon + count, no click target);
+                  contrast pairs mirror the elapsed badge (on-primary-container
+                  on the active row, text-secondary elsewhere). Pure display:
+                  a queued backlog sends only when the user returns to the
+                  session (auto-drain ruled out by R9-②), so the tooltip says
+                  exactly that. */}
+              {queueDepth > 0 && (
+                <span
+                  role="img"
+                  aria-label={t('sidebar.sessions.queue.title', { n: queueDepth })}
+                  title={t('sidebar.sessions.queue.title', { n: queueDepth })}
+                  className={cn(
+                    'flex items-center gap-[2px] shrink-0 rounded-sm px-[3px] whitespace-nowrap',
+                    isActive ? 'text-on-primary-container' : 'text-secondary',
+                  )}
+                >
+                  <span className="material-symbols-outlined icon-xs" aria-hidden="true">low_priority</span>
+                  <span className="font-label-xs tabular-nums">{t('sidebar.sessions.queue.label', { n: queueDepth })}</span>
+                </span>
+              )}
               {/* P0-②: live elapsed badge while running; Batch B1: relative
                   time-ago on idle rows — the rail answers "which session is
                   live, how long, and when was the rest last active". */}
