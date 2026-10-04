@@ -12,7 +12,7 @@
 import { expect, test } from '@playwright/test'
 
 import { ChatPage } from './helpers/ChatPage'
-import { loadChatScript } from './helpers/scriptLoader'
+import { expectMockPhase, loadChatScript } from './helpers/scriptLoader'
 import { expectNoConsoleErrors } from './helpers/watchdog'
 import { mockSnapshot } from './helpers/knownIssues'
 import { emitWebviewDrop } from './helpers/webviewDrop'
@@ -141,6 +141,99 @@ test.describe('scripted chat backend — queue-steer (journey #9)', () => {
     await expect(chat.bubbles()).toHaveCount(4, { timeout: 15_000 })
     await expect(page.getByTestId('prompt-queue-chip').filter({ hasText: '队列第一条' })).toBeVisible()
     expect((await mockSnapshot(page)).sentTurns).toBe(2)
+    await expectNoConsoleErrors(page)
+  })
+})
+
+test.describe('scripted chat backend — cross-session-steer (B3-5 pin, plan §七-1 / B1-1)', () => {
+  // The B1-1 loss shape, staged for real: steer A mid-stream, switch to B
+  // inside the park window, steer B while A's steer is STILL parked — the
+  // moment the old single global slot let B's park silently destroy A's
+  // text. The FIFO fix keeps both; each session receives its own steer text
+  // and nothing cross-writes (the sends ledger pins sessionIds).
+  //
+  // Harness notes: the player runs ONE turn at a time, so every send/steer
+  // below is gated on the phase — a send while a turn is open would fall
+  // through to the default handler and never settle. The 3.5s-gapped
+  // onCancel playback in the YAML is the deterministic park window the
+  // switch (and B's own steering) lives in; A's settle lands OFF-SCREEN and
+  // must deliver only on return (Imp-2 at journey level).
+  test('steer A → switch to B → steer B while A is parked: both steers survive, each session gets its own text', async ({ page }) => {
+    test.setTimeout(120_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'cross-session-steer', test.info())
+
+    // Session A streams (turn 0, 6 × 500ms) — the steering window.
+    await expect(async () => {
+      await page.getByTestId('desktop-session-row-script-sess-xsteer-a').click()
+      await expect(page.getByRole('heading', { name: 'Cross steer A' })).toBeVisible({ timeout: 5_000 })
+    }).toPass({ timeout: 30_000 })
+    await chat.send('A 的长任务')
+    await chat.expectStreamingCursor()
+
+    // Steer A: cancel + park (the onCancel playback keeps the run settling
+    // for ~3.6s — the window everything below fits into).
+    await chat.composer().fill('A 的加急补充')
+    await chat.composer().press('Control+Enter')
+    await expect(chat.composer()).toHaveValue('')
+
+    // Into B inside the window. A settles off-screen mid-leg; nothing of A's
+    // may surface here — not the streamed text, not the parked steer.
+    await expect(async () => {
+      await page.getByTestId('desktop-session-row-script-sess-xsteer-b').click()
+      await expect(page.getByRole('heading', { name: 'Cross steer B' })).toBeVisible({ timeout: 5_000 })
+    }).toPass({ timeout: 30_000 })
+    await expect(page.getByText('B 的历史回答。')).toBeVisible()
+    await expect(page.getByText('A 的加急补充')).toHaveCount(0)
+    await expect(chat.composer()).toHaveValue('')
+
+    // Deterministic gate: A's settle landed (phase armed) while B is on
+    // screen. The parked steer waits for ITS session — no delivery, no bleed.
+    await expectMockPhase(page, 'armed', 20_000)
+    await expect(page.getByText('A 的加急补充')).toHaveCount(0)
+    await expect(page.getByText('收尾', { exact: false })).toHaveCount(0)
+
+    // B streams its own turn (turn 1)…
+    await chat.send('B 的问题')
+    await chat.expectStreamingCursor()
+    // …and steers WHILE A's steer is still parked: with a single global slot
+    // this park overwrote A's text for good (the B1-1 loss); the per-session
+    // FIFO keeps both.
+    await chat.composer().fill('B 的加急补充')
+    await chat.composer().press('Control+Enter')
+    await expect(chat.composer()).toHaveValue('')
+
+    // B settles → ITS steer delivers first (B is the visible session). The
+    // cancelled turn commits its partial as a stopped-marked bubble; B's
+    // seeded history (2 messages) offsets the layout — [history ×2, user,
+    // stopped partial, steer user, steer reply].
+    await expect(chat.bubbleAt(3).getByTestId('message-stopped-marker')).toBeVisible({ timeout: 15_000 })
+    await expect(chat.bubbleAt(4)).toContainText('B 的加急补充', { timeout: 15_000 })
+    await expect(chat.bubbleAt(5)).toContainText('回复：B 收到加急。', { timeout: 15_000 })
+    await expect(page.getByTestId('message-stopped-marker')).toHaveCount(1)
+
+    // Back to A: only NOW does A's parked steer deliver (turn 3), into A —
+    // with the full B1-1 overlap having passed through the queue.
+    await expect(async () => {
+      await page.getByTestId('desktop-session-row-script-sess-xsteer-a').click()
+      await expect(page.getByRole('heading', { name: 'Cross steer A' })).toBeVisible({ timeout: 5_000 })
+    }).toPass({ timeout: 30_000 })
+    await expect(chat.bubbleAt(1)).toContainText('收尾二。')
+    await expect(chat.bubbleAt(1).getByTestId('message-stopped-marker')).toBeVisible()
+    await expect(chat.bubbleAt(2)).toContainText('A 的加急补充', { timeout: 15_000 })
+    await expect(chat.bubbleAt(3)).toContainText('回复：A 收到加急。', { timeout: 15_000 })
+    // No cross-write in either direction: A's screen never shows B's steer.
+    await expect(page.getByText('B 的加急补充')).toHaveCount(0)
+
+    // The ledger: four sends, each anchored to its OWN session id, in
+    // delivery order — A's steer delivered last, after B's.
+    const sends = (await mockSnapshot(page)).sends
+    expect(sends).toHaveLength(4)
+    expect(sends[0]).toMatchObject({ message: 'A 的长任务', sessionId: 'script-sess-xsteer-a' })
+    expect(sends[1]).toMatchObject({ message: 'B 的问题', sessionId: 'script-sess-xsteer-b' })
+    expect(sends[2]).toMatchObject({ message: 'B 的加急补充', sessionId: 'script-sess-xsteer-b' })
+    expect(sends[3]).toMatchObject({ message: 'A 的加急补充', sessionId: 'script-sess-xsteer-a' })
+    expect((await mockSnapshot(page)).sentTurns).toBe(4)
     await expectNoConsoleErrors(page)
   })
 })
