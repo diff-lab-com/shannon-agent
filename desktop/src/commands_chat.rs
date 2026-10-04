@@ -226,6 +226,24 @@ pub async fn cancel_query(
     cancel_session_query(&state, session_id.as_deref()).await
 }
 
+/// B1-4 (P1-3): whether THIS session currently has a live query — the
+/// single-session read the frontend's stop watchdog reconciles against
+/// when the `query:cancelled` terminal event never arrives. Read-only: a
+/// session the registry does not know reports idle (`false`) and is NOT
+/// materialized (`get_or_create` would resurrect a deleted session's
+/// entry just by asking about it). A malformed id is a hard error, same
+/// vocabulary as [`SessionRegistry::resolve_explicit_or_active`].
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn get_session_querying(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<bool, String> {
+    let uuid = uuid::Uuid::parse_str(session_id.trim())
+        .map_err(|e| format!("invalid sessionId: {e}"))?;
+    Ok(state.registry.is_querying(uuid).await)
+}
+
 /// Body of [`cancel_query`], split out so the routing behavior is testable
 /// without a Wry app handle.
 ///
@@ -250,6 +268,18 @@ async fn cancel_session_query(state: &AppState, session_id: Option<&str>) -> Res
 
     if let Some(token) = token_opt {
         token.cancel();
+    } else if *session.querying.lock().await {
+        // B1-4 (P1-3): the stop landed in `send_message`'s latch→token
+        // window (the latch is up but the token is not stored yet), where
+        // this used to be a silent success — no token fired, no
+        // `query:cancelled` would ever be emitted, and the frontend's stop
+        // button waited forever. Record the intent instead;
+        // `send_message` consumes it right after storing the token and
+        // cancels the fresh run immediately. With the latch DOWN there is
+        // nothing running and nothing to wait for — the historical no-op
+        // stays (and must not set the flag, or the next legitimate send
+        // would start pre-cancelled).
+        session.set_cancel_pending();
     }
 
     Ok(())
@@ -1472,5 +1502,130 @@ mod tests {
             assert!(!*q, "the loop exit reopened the latch");
             *q = true;
         }
+    }
+
+    // === B1-4 (P1-3): the cancel window (latch up, token not yet stored) ===
+    //
+    // send_message latches the session and only afterwards stores the
+    // cancellation token. A stop landing between the two used to take the
+    // None token and silently "succeed" — nothing fired, no
+    // `query:cancelled` would ever be emitted, and the frontend's stop
+    // button waited forever. These tests replay the sequence at the same
+    // level the command bodies run (plain AppState, no Wry handle): the
+    // windowed stop records a pending marker; send_message's post-latch
+    // block (store token → consume marker → cancel) kills the fresh run
+    // immediately; the loop exit clears any spurious marker with the latch.
+
+    /// The full windowed-stop sequence: cancel with the latch up but no
+    /// token stored records the intent; storing the token and consuming
+    /// the marker (the exact statements of send_message's post-latch
+    /// block) leaves the fresh token cancelled, so the spawned loop emits
+    /// `query:cancelled` on its first stream step.
+    #[tokio::test]
+    async fn cancel_in_the_send_window_sets_pending_and_the_stored_token_fires() {
+        let state = AppState::new();
+        let key = state.registry.create();
+        let session = state.registry.get(key).unwrap();
+
+        // send_message's check-and-set has latched the session; the token
+        // store has NOT happened yet.
+        {
+            let mut q = session.querying.lock().await;
+            *q = true;
+        }
+
+        super::cancel_session_query(&state, Some(&key.0.to_string()))
+            .await
+            .expect("cancel succeeds");
+
+        // send_message's post-latch block: store the token, then consume
+        // the marker and cancel the fresh run with it.
+        let token = CancellationToken::new();
+        *session.cancellation_token.lock().await = Some(token.clone());
+        assert!(
+            session.take_cancel_pending(),
+            "the windowed stop must be recorded as pending, not silently dropped"
+        );
+        token.cancel();
+
+        assert!(
+            token.is_cancelled(),
+            "the fresh run must start pre-cancelled — the windowed stop's \
+             `query:cancelled` comes from its own first stream step"
+        );
+        assert!(
+            !session.take_cancel_pending(),
+            "the marker is consumed exactly once"
+        );
+    }
+
+    /// The windowed-stop marker must not poison the NEXT run: a double
+    /// stop records a spurious pending (the first stop already fired the
+    /// token, the second found None with the latch still up), and the
+    /// query loop's exit path clears the flag together with the latch.
+    #[tokio::test]
+    async fn cancel_window_flag_does_not_outlive_its_querying_epoch() {
+        let state = AppState::new();
+        let key = state.registry.create();
+        let session = state.registry.get(key).unwrap();
+        let token = seed_token(&state, key).await;
+        {
+            let mut q = session.querying.lock().await;
+            *q = true;
+        }
+
+        // First stop: normal path — token taken and fired.
+        super::cancel_session_query(&state, Some(&key.0.to_string()))
+            .await
+            .expect("first stop fires the token");
+        assert!(token.is_cancelled());
+
+        // Second stop in the same epoch: token already taken → spurious
+        // pending marker (the latch is still up).
+        super::cancel_session_query(&state, Some(&key.0.to_string()))
+            .await
+            .expect("second stop succeeds");
+        assert!(
+            session.take_cancel_pending(),
+            "the double stop records a spurious marker"
+        );
+
+        // The loop exit path (commands.rs bottom) resets latch + token and
+        // clears the marker — replay of its exact statements.
+        {
+            let mut q = session.querying.lock().await;
+            *q = false;
+        }
+        {
+            let mut t = session.cancellation_token.lock().await;
+            *t = None;
+        }
+        session.clear_cancel_pending();
+
+        // The NEXT send's consume finds nothing — no inherited stop.
+        assert!(
+            !session.take_cancel_pending(),
+            "the marker must not outlive its querying epoch"
+        );
+    }
+
+    /// Cancel on an idle session (no latch, no token — e.g. a stop racing
+    /// a settle): the historical no-op must NOT record a pending marker,
+    /// or the next legitimate send would start pre-cancelled.
+    #[tokio::test]
+    async fn cancel_of_an_idle_session_records_no_pending() {
+        let state = AppState::new();
+        let key = state.registry.create();
+        let session = state.registry.get(key).unwrap();
+        assert!(!*session.querying.lock().await, "fixture: idle session");
+
+        super::cancel_session_query(&state, Some(&key.0.to_string()))
+            .await
+            .expect("cancel succeeds");
+
+        assert!(
+            !session.take_cancel_pending(),
+            "an idle cancel must not arm the window marker"
+        );
     }
 }

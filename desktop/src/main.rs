@@ -143,6 +143,9 @@ fn main() {
             commands_chat::get_provider_allowlist,
             commands_chat::get_status,
             commands_chat::cancel_query,
+            // B1-4 (P1-3) — the stop watchdog's reconciliation read
+            // (per-session latch, no entry materialization).
+            commands_chat::get_session_querying,
             commands_chat::list_tools,
             // R2-1 — session-level model override (composer chip): picking a
             // model in the chip only re-targets the current session; the

@@ -1286,6 +1286,21 @@ pub async fn send_message(
         *token_guard = Some(cancel_token.clone());
     }
 
+    // B1-4 (P1-3): a stop that landed in the latch→token window above had
+    // nothing to fire — it was recorded as pending instead of being dropped.
+    // Consume it now that the token exists: cancelling immediately makes the
+    // freshly spawned loop take its Cancelled branch on the first stream
+    // step and emit `query:cancelled`, so the frontend's stop settles the
+    // normal way instead of waiting for a terminal event that would never
+    // have come.
+    if active_session.take_cancel_pending() {
+        tracing::warn!(
+            session_id = %session_id,
+            "cancel landed in the send latch→token window — cancelling the fresh run immediately"
+        );
+        cancel_token.cancel();
+    }
+
     // Add user message
     let now = chrono_timestamp();
 
@@ -2359,6 +2374,12 @@ pub async fn send_message(
             let mut token_guard = session_for_task.cancellation_token.lock().await;
             *token_guard = None;
         }
+        // B1-4 (P1-3): a double-stop can leave a spurious pending-cancel
+        // behind (the first stop already fired the token; the second found
+        // None while the latch was still up). Clear the flag with the latch
+        // so it never outlives its querying epoch — the NEXT run must not
+        // inherit an old stop.
+        session_for_task.clear_cancel_pending();
     });
 
     Ok(SendMessageResponse {
