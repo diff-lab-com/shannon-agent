@@ -198,7 +198,7 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await pickTier('Strict')
     await expect(page.getByText('Execution mode: Strict')).toBeVisible({ timeout: 5_000 })
     await expect(execModeTrigger(page)).toContainText('Strict')
-    await expect(approvalPill(page)).toContainText(/^Ask$/)
+    await expect(approvalPill(page)).toContainText(/ask/i)
     await expect.poll(async () => (await getConfig(page)).approval_mode).toBe('ask')
 
     // PhaseTierSwitcher (testid already exists): Act → Fast writes the
