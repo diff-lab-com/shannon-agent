@@ -25,7 +25,7 @@ import {
   insertMention,
   relativeToWorkingDir,
 } from '@/lib/fileMention'
-import { imageFilesFromClipboard, blobToBase64, PASTE_IMAGE_MIME_TO_EXT, MAX_PASTED_IMAGE_BYTES } from '@/lib/pasteImage'
+import { imageFilesFromClipboard, clipboardHasText, blobToBase64, PASTE_IMAGE_MIME_TO_EXT, MAX_PASTED_IMAGE_BYTES } from '@/lib/pasteImage'
 import * as api from '@/lib/tauri-api'
 import type { RejectedAttachmentReason, AttachmentExtractionReport } from '@/types'
 import { toastError } from '@/lib/errorToast'
@@ -594,10 +594,19 @@ export default function ChatInput({
       }
     }
   }
+  //
+  // P2-2 — mixed image+text pastes (Excel ranges, "copy image with
+  // caption") used to swallow the text: the handler preventDefault'd the
+  // whole event the moment an image was present. The text is only kept by
+  // the browser's default insertion, so that default stays live whenever
+  // the clipboard also carries string items; we never insert text
+  // ourselves, so there is no double-insert path. Image-only pastes (the
+  // screenshot-tool case) still preventDefault — nothing else on the
+  // clipboard would be lost.
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const images = imageFilesFromClipboard(e.clipboardData)
     if (images.length === 0) return
-    e.preventDefault()
+    if (!clipboardHasText(e.clipboardData)) e.preventDefault()
     void handlePastedImages(images)
   }
 
