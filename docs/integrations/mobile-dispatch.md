@@ -229,3 +229,8 @@ relay 端到端加密通道的浏览器支持（§7），或使用原生客户�
   `{handle, seq}` 两字段）。交互式 `shannon/query` 不触发——用户正看着手机；
 - **live-sync 协同**：wake 亮屏后手机走既有 `device.resume` + live-sync
   `resume.replayed`（§O4 环形缓冲，见 8.3 的恢复面语义）收敛离线窗口事件。
+  重放的**应用语义**按 mobile spec §O4 车道幂等分流裁决（mobile PR #26）执行：
+  id 键控面取数据（approval 按 `request_id` 原位 upsert）、chat 内容面失效+定向重拉
+  （`session_id` 路由）、usage 面跳过（`task.progress` 的 usage 变体可凭
+  「有 `usage` 无 `content`」判别）。gateway 侧 wire 逐字同形、**不加重放标记**——
+  分流上下文由 resume 批次本身提供（§O4 裁决：约束落在手机扇出实现，gateway 缓冲零改动）。

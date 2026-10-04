@@ -648,9 +648,10 @@ impl QueryEngine {
             // carry the environment block (cwd/date/platform/git/sandbox)
             // — pre-extraction behavior. build_env_block is what the
             // structured path uses; reuse it so every prompt shape stays
-            // in sync.
+            // in sync. B2-2: the cwd prefers the configured session
+            // working directory, same as the structured path.
             let mut local = LOCAL_MODEL_SYSTEM_PROMPT.to_string();
-            if let Ok(cwd) = std::env::current_dir() {
+            if let Some(cwd) = config.effective_working_directory() {
                 local.push_str(&crate::query_engine::system_prompt::build_env_block(&cwd));
             }
             Some(local)
@@ -2592,6 +2593,20 @@ impl QueryEngine {
                                             }
 
                                             if !tool_inputs.is_empty() {
+                                                // B2-2 (P0-2): pin Bash spawns to the
+                                                // session's working directory. The
+                                                // engine config is per-instance; the
+                                                // tool registry is shared across
+                                                // sessions, so the default lives here
+                                                // at the dispatch seam rather than on
+                                                // the tool. Explicit `cwd` wins; a
+                                                // None working directory (REPL/CLI/
+                                                // server) leaves the input — and the
+                                                // process-cwd inheritance — untouched.
+                                                crate::tool_execution::inject_bash_default_cwd(
+                                                    &mut tool_inputs,
+                                                    config.working_directory.as_deref(),
+                                                );
                                                 // Phase 1: Check permissions and hooks (sequential — may need user input)
                                                 let mut approved_tools: Vec<(
                                                     String,

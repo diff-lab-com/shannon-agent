@@ -12,7 +12,7 @@
 
 use crate::commands::{AppState, ChatMessage, SessionMeta, chrono_timestamp};
 use crate::scheduled_commands::TaskWorktreeDto;
-use crate::session_registry::SessionKey;
+use crate::session_registry::{SessionKey, SessionRegistry};
 use crate::{config, events, events::event_names};
 use serde::Serialize;
 use shannon_core::session_log::SessionCuration;
@@ -1095,12 +1095,14 @@ pub async fn switch_session(
     }
     state.registry.set_active(SessionKey(session_uuid));
 
-    // Restore working_dir from session metadata if present.
+    // Restore working_dir from session metadata if present. B2-2: this only
+    // moves the "user's current project" pointer (global config + UI emit) —
+    // the process cwd stays put, engines pin their own directory via
+    // `QueryEngineConfig.working_directory` at send time.
     {
         let sessions = state.sessions.lock().await;
         if let Some(meta) = sessions.iter().find(|s| s.id == id) {
             if let Some(ref wd) = meta.working_dir {
-                let _ = std::env::set_current_dir(wd);
                 let mut desktop_cfg = state.desktop_config.write().await;
                 desktop_cfg.working_dir = Some(wd.clone());
                 let _ = app_handle.emit(
@@ -1142,8 +1144,11 @@ pub async fn switch_session(
 }
 
 /// Set working directory for a session. Updates in-memory metadata, the
-/// process cwd, and the persisted desktop config. Pass an empty string to
-/// reset to the Shannon home directory.
+/// persisted desktop config, and — for the current session — the process-wide
+/// "current project" pointer (global config + CONFIG_UPDATED emit). Pass an
+/// empty string to reset. B2-2: the process cwd is NOT touched — engines pin
+/// their own directory via `QueryEngineConfig.working_directory` at send
+/// time.
 #[tauri::command]
 pub async fn set_session_working_dir(
     state: tauri::State<'_, AppState>,
@@ -1175,13 +1180,11 @@ pub async fn set_session_working_dir(
         crate::commands_projects::adopt_working_dir(&state, dir);
     }
 
-    // If this is the current session, switch process cwd + desktop config
+    // If this is the current session, update the global "current project"
+    // pointer + emit. B2-2: no process-cwd flip.
     let current = state.registry.active_key();
     let is_current = current == Some(SessionKey(session_uuid));
     if is_current {
-        if let Some(ref p) = wd {
-            let _ = std::env::set_current_dir(p);
-        }
         let mut desktop_cfg = state.desktop_config.write().await;
         desktop_cfg.working_dir = wd.clone();
         drop(desktop_cfg);
@@ -1239,10 +1242,10 @@ pub async fn create_session_worktree(
         }
     }
 
-    // If this is the current session, switch process cwd + desktop config
+    // If this is the current session, update the global "current project"
+    // pointer + emit. B2-2: no process-cwd flip.
     let current = state.registry.active_key();
     if current == Some(SessionKey(session_uuid)) {
-        let _ = std::env::set_current_dir(&wt_path);
         let mut desktop_cfg = state.desktop_config.write().await;
         desktop_cfg.working_dir = Some(wt_path.clone());
         drop(desktop_cfg);
@@ -1261,6 +1264,27 @@ pub async fn create_session_worktree(
     Ok(wt.into())
 }
 
+/// B1-3 (R8-②): take + cancel the session's in-flight query token, if one
+/// is registered. Same shape as `cancel_session_query` (commands_chat) —
+/// the streaming loop observes the cancellation via its `select!` and
+/// unwinds on its own; we do not wait for it (发完即删不等待) — but split
+/// out so `delete_session` can run it before the L0 directory disappears
+/// and the registry contract stays testable without a Wry app handle.
+/// Unknown ids are a no-op: a session this process never queried has no
+/// entry and nothing to cancel.
+async fn cancel_session_run(registry: &SessionRegistry, key: SessionKey) {
+    let Some(session) = registry.get(key) else {
+        return;
+    };
+    let token_opt = {
+        let mut token_guard = session.cancellation_token.lock().await;
+        token_guard.take()
+    };
+    if let Some(token) = token_opt {
+        token.cancel();
+    }
+}
+
 /// Delete a session by ID. If the session had a bound worktree (working_dir
 /// pointing inside the default worktree base), the worktree is removed too —
 /// best-effort, logs failures but does not block session deletion.
@@ -1271,6 +1295,12 @@ pub async fn delete_session(
     id: String,
 ) -> Result<bool, String> {
     let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
+
+    // B1-3 (R8-②): a running query must not outlive its session. Cancel the
+    // in-flight token BEFORE the L0 directory disappears, so the engine loop
+    // unwinds instead of streaming (and billing) into a deleted session and
+    // the tee writer keeps appending to the soon-to-be-unlinked inode.
+    cancel_session_run(&state.registry, SessionKey(session_uuid)).await;
 
     // Capture working_dir before deleting so we can clean up worktree
     let working_dir = {
@@ -1293,6 +1323,14 @@ pub async fn delete_session(
             let mut sessions = state.sessions.lock().await;
             sessions.retain(|s| s.id != id);
         }
+
+        // B1-3 (R8-②): recycle the registry entry — its SessionState
+        // (rolling messages + the unbounded per-session event channel)
+        // would otherwise be pinned until process exit for a session that
+        // no longer exists. Only after the store delete succeeded: a failed
+        // deletion leaves the live session's state untouched. `destroy`
+        // also clears the active pointer if this was the focused session.
+        state.registry.destroy(SessionKey(session_uuid));
 
         // Best-effort worktree cleanup: if working_dir lives under the
         // default worktree base dir, remove the worktree. Failures are
@@ -2209,6 +2247,61 @@ mod archive_tests {
             source_tool_calls: vec![],
             refined: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod delete_cleanup_tests {
+    // B1-3 (R8-②) registry contract of the delete path. `delete_session`
+    // itself needs a Wry app handle + `tauri::State`, so the pinning here is
+    // hermetic: the cancel seam (`cancel_session_run`) plus the registry
+    // `destroy` it hands off to, in the exact sequence the command runs
+    // them (cancel before the store delete; destroy only on success —
+    // see the two call sites above).
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn cancel_session_run_takes_and_fires_the_registered_token() {
+        let registry = SessionRegistry::new();
+        let key = SessionKey::new();
+        let session = registry.get_or_create(key);
+        let token = CancellationToken::new();
+        *session.cancellation_token.lock().await = Some(token.clone());
+
+        cancel_session_run(&registry, key).await;
+        assert!(token.is_cancelled(), "the registered run token must fire");
+        // Take-and-cancel: the slot is drained — a later cancel finds
+        // nothing to fire (same contract as cancel_session_query).
+        assert!(session.cancellation_token.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn cancel_session_run_is_a_noop_for_unknown_sessions() {
+        let registry = SessionRegistry::new();
+        // Must not panic — and must not materialise an entry for a session
+        // this process never queried (that's `get_or_create`'s job, not
+        // ours; deleting an unqueried session stays allocation-free).
+        cancel_session_run(&registry, SessionKey::new()).await;
+        assert_eq!(registry.list().len(), 0, "no entry was created");
+    }
+
+    #[tokio::test]
+    async fn destroy_after_cancel_releases_the_registry_entry() {
+        // The delete-success tail of `delete_session`: the cancelled run's
+        // entry (with its unbounded per-session event channel) is dropped,
+        // and the token stays cancelled — no resurrection of either.
+        let registry = SessionRegistry::new();
+        let key = SessionKey::new();
+        let session = registry.get_or_create(key);
+        let token = CancellationToken::new();
+        *session.cancellation_token.lock().await = Some(token.clone());
+
+        cancel_session_run(&registry, key).await;
+        assert!(registry.destroy(key), "entry present, destroy succeeds");
+        assert!(registry.get(key).is_none(), "entry is gone from the map");
+        assert!(token.is_cancelled());
     }
 }
 

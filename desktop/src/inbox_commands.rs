@@ -1386,6 +1386,10 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
             let engine = crate::commands_memory::attach_shared_memory(
                 QueryEngine::with_defaults_arc(client, tools, permissions, state_manager),
                 &memory_store,
+                // B2-2: the routine's directory (if any) is pinned right
+                // below — pass None here so the freeze below stays the only
+                // wd write (pre-B2-2 behavior otherwise).
+                None,
             );
             // P-E1: the routine's project drives the engine's host-dependent
             // reads (memory injection/extraction project key) — an existing

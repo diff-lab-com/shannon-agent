@@ -1771,6 +1771,7 @@
   "chat.input.steer.aria": "Enviar ahora (interrumpir el turno actual)",
   "chat.input.steer.title": "Enviar ahora — interrumpe el turno actual y envía de inmediato (Ctrl+Enter)",
   "chat.draft.oversize": "El borrador supera el límite de persistencia de 64KB — se mantiene solo en esta ventana; se perderá al recargar",
+  "chat.send.blockedKept": "Mensaje bloqueado y conservado — reenvíalo desde el banner de presupuesto superior",
   "chat.steer.timeout": "No se pudo entregar el mensaje de interrupción: se restauró en el cuadro de texto",
   "chat.input.placeholder": "Pregúntale lo que quieras a Shannon...",
   "chat.input.stop.aria": "Detener la generación",

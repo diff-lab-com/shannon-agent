@@ -508,6 +508,9 @@ export const handlers: Record<string, MockHandler> = {
     return seeded?.[0]?.id ?? null
   },
   async cancel_query() { await delay(30) },
+  // B1-4 (P1-3): the stop watchdog's reconciliation read. Demo runs never
+  // stream a live query, so the honest answer is always idle.
+  async get_session_querying() { await delay(); return false },
 
   // --- Speech-to-text (wave-2 task 6, voice-input journey) ---
   // Previously these five voice commands were UNMOCKED_ALLOWLIST entries

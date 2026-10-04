@@ -1011,6 +1011,25 @@ pub(crate) fn require_attachment_working_dir(
         .ok_or_else(|| tagged_error("no_working_dir", NO_WORKING_DIR_ATTACHMENT_ERROR))
 }
 
+/// B2-2 (P0-2) — the working directory a send runs in: the TARGET session's
+/// own `working_dir` when it has one, else the global `desktop_cfg.working_dir`.
+///
+/// The engine's directory chain is pinned separately via
+/// `QueryEngineConfig.working_directory` (see `send_message`); this resolver
+/// stays for the attachment domain. The global value is whatever the last
+/// `switch_session` / `change_working_dir` left behind (the "user's current
+/// project" UI pointer), so a multi-window send routed to a session in a
+/// different directory must not trust it. Sessions without their own wd keep
+/// the previous global-only behavior exactly.
+pub(crate) fn resolve_send_working_dir(
+    session_meta_wd: Option<&str>,
+    global: Option<&str>,
+) -> Option<String> {
+    session_meta_wd
+        .map(str::to_string)
+        .or_else(|| global.map(str::to_string))
+}
+
 /// P0-3 — resolve, gate and read the requested attachment paths.
 ///
 /// The send pipeline's refusal bookkeeping, extracted from `send_message`
@@ -1242,6 +1261,30 @@ pub async fn send_message(
         budget_bypass,
     )
     .await?;
+
+    // B2-2 (P0-2 / R8-① / R9-① 正解): the engine's host-dependent reads —
+    // project instructions (CLAUDE.md/AGENTS.md), the prompt env block, the
+    // repo-map root fallback, the memory project key and the default `cwd`
+    // of Bash spawns — all key off `QueryEngineConfig.working_directory`,
+    // pinned per engine instance below. No process-cwd flip happens here:
+    // the engine built for THIS send keeps the TARGET session's directory
+    // for its whole lifetime, so a concurrent send to a different-directory
+    // session, a switch mid-turn, or a background bash can no longer drag
+    // this turn's reads elsewhere (the B2-1 stopgap's three residual
+    // windows are gone with the process-singleton cwd itself).
+    //
+    // Sessions without their own working_dir leave `None`: the engine then
+    // falls back to the process cwd at read time (shannon-core's default),
+    // and the attachment domain below keeps resolving against the global
+    // config — exactly the pre-B2-1 behavior.
+    let session_working_dir = {
+        let sessions = state.sessions.lock().await;
+        sessions
+            .iter()
+            .find(|s| s.id == session_id.to_string())
+            .and_then(|meta| meta.working_dir.clone())
+    };
+
     // Attachment collection + hard size caps run BEFORE the querying latch:
     // the latch is only cleared when the spawned query task finishes, so a
     // rejected send must happen before it is taken (mirrors the pre-turn
@@ -1258,7 +1301,15 @@ pub async fn send_message(
         Some(paths) => {
             let working_dir = {
                 let cfg = state.desktop_config.read().await;
-                require_attachment_working_dir(cfg.working_dir.as_deref())
+                // B2-1: the target session's own wd wins over the global
+                // pointer — the global value is whatever session was focused
+                // last (P0-2), which a multi-window send must not trust.
+                // Sessions without their own wd resolve exactly as before.
+                let resolved = resolve_send_working_dir(
+                    session_working_dir.as_deref(),
+                    cfg.working_dir.as_deref(),
+                );
+                require_attachment_working_dir(resolved.as_deref())
             }?;
             let (collected, rejected) = collect_attachments(paths, &working_dir);
             (Some(collected), rejected)
@@ -1281,6 +1332,21 @@ pub async fn send_message(
     {
         let mut token_guard = active_session.cancellation_token.lock().await;
         *token_guard = Some(cancel_token.clone());
+    }
+
+    // B1-4 (P1-3): a stop that landed in the latch→token window above had
+    // nothing to fire — it was recorded as pending instead of being dropped.
+    // Consume it now that the token exists: cancelling immediately makes the
+    // freshly spawned loop take its Cancelled branch on the first stream
+    // step and emit `query:cancelled`, so the frontend's stop settles the
+    // normal way instead of waiting for a terminal event that would never
+    // have come.
+    if active_session.take_cancel_pending() {
+        tracing::warn!(
+            session_id = %session_id,
+            "cancel landed in the send latch→token window — cancelling the fresh run immediately"
+        );
+        cancel_token.cancel();
     }
 
     // Add user message
@@ -1593,11 +1659,17 @@ pub async fn send_message(
     // is built so the memory layer (injection + auto-extraction) is attached
     // only when this session actually uses memory. The engine is rebuilt per
     // turn, so a toggle takes effect on the next send without restart.
+    //
+    // B2-2: the TARGET session's working_dir rides along — with_working_directory
+    // pins the engine's whole host-dependent read chain (project instructions,
+    // env block, bash default cwd, repo map, memory project key) to the
+    // session's directory instead of the process cwd.
     let memory_disabled = active_session.memory_disabled_snapshot();
     let mut engine = crate::commands_memory::attach_shared_memory_if(
         QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
         &state.memory_store,
         memory_disabled,
+        session_working_dir.as_deref(),
     );
     // W3-4 — per-turn citation snapshot: the entries this turn's system
     // prompt is about to inject. Computed right after the store is attached
@@ -1697,18 +1769,12 @@ pub async fn send_message(
         )
     });
 
-    // P2-5b: per-session in-process fan-out. Every event the loop
-    // emits to the Tauri wire is also pushed onto `session_for_task`'s
-    // mpsc channel so a future in-process consumer (the thread
-    // switcher being built in a follow-up iteration) can subscribe to
-    // *this session's* stream without conflating it with siblings.
-    // Best-effort — channel send errors are silently ignored (the
-    // Tauri wire + `messages` buffer still cover the user-visible path).
-    let session = session_for_task.clone();
-    let session_for_inproc = session.clone();
-    let route_event = move |evt: crate::session_registry::SessionEvent| {
-        session_for_inproc.try_send_event(evt);
-    };
+    // R9-③ (B2-3): the per-session in-process event channel this loop
+    // used to additionally feed (`route_event` → `try_send_event`) is
+    // removed — it was unbounded with zero consumers, so every event
+    // payload accumulated for the process lifetime. `app.emit` below is
+    // the only event surface; a future SessionsPanel revival rebuilds the
+    // channel bounded-with-consumer per chat-upgrade P2-5b.
     let return_qid = qid_str.clone();
     // Engine→UI permission bridge: each prompt from the query pipeline
     // becomes a pending Tauri permission; the scoped user decision maps back
@@ -1866,9 +1932,6 @@ pub async fn send_message(
                             session_id: Some(session_id_str.clone()),
                         },
                     );
-                    route_event(crate::session_registry::SessionEvent::Status(
-                        crate::session_registry::SessionEventStatus::Cancelled,
-                    ));
                     break;
                 }
                 crate::commands::StreamStep::Ended => break,
@@ -1884,9 +1947,6 @@ pub async fn send_message(
                             content,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::QueryText(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TEXT, payload);
                     }
                     QueryEvent::ToolUseRequest {
@@ -1910,9 +1970,6 @@ pub async fn send_message(
                             tool_input,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::ToolStart(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TOOL_START, payload);
                     }
                     QueryEvent::ToolUseResult {
@@ -1942,9 +1999,6 @@ pub async fn send_message(
                             meta: meta_val,
                             tokens_used,
                         };
-                        route_event(crate::session_registry::SessionEvent::ToolResult(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TOOL_RESULT, payload);
                     }
                     QueryEvent::Progress { query_id: _, message } => {
@@ -1964,9 +2018,6 @@ pub async fn send_message(
                                 message,
                                 session_id: Some(session_id_str.clone()),
                             };
-                            route_event(crate::session_registry::SessionEvent::Notice(
-                                payload.clone(),
-                            ));
                             let _ = app.emit(crate::events::QUERY_NOTICE_EVENT, payload);
                         }
                     }
@@ -1985,9 +2036,6 @@ pub async fn send_message(
                             message: msg,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::ToolProgress(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TOOL_PROGRESS, payload);
                     }
                     QueryEvent::Thinking { content, .. } => {
@@ -1996,9 +2044,6 @@ pub async fn send_message(
                             content,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::Thinking(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_THINKING, payload);
                     }
                     QueryEvent::Usage {
@@ -2038,9 +2083,6 @@ pub async fn send_message(
                             cost_usd,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::Usage(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_USAGE, payload);
 
                         // P0-4 mid-turn budget enforcement (logic in the
@@ -2103,9 +2145,6 @@ pub async fn send_message(
                                 session_id: Some(session_id_str.clone()),
                             },
                         );
-                        route_event(crate::session_registry::SessionEvent::Status(
-                            crate::session_registry::SessionEventStatus::Completed,
-                        ));
                         // T5: the turn succeeded — a previous failure entry
                         // for this session is resolved (mark read).
                         crate::inbox_session_events::resolve_session_failure(
@@ -2257,9 +2296,6 @@ pub async fn send_message(
                                 Some(session_id_str.clone()),
                             ),
                         );
-                        route_event(crate::session_registry::SessionEvent::Status(
-                            crate::session_registry::SessionEventStatus::Failed(error.clone()),
-                        ));
                         // T5: the turn failed — surface it in the unified
                         // needs-attention inbox (same source as the rail's
                         // red dot; dedup: one entry per session).
@@ -2289,9 +2325,6 @@ pub async fn send_message(
                             Some(session_id_str.clone()),
                         ),
                     );
-                    route_event(crate::session_registry::SessionEvent::Status(
-                        crate::session_registry::SessionEventStatus::Failed(err_string.clone()),
-                    ));
                     // T5: stream error — same needs-attention write as the
                     // engine `Failed` event above.
                     crate::inbox_session_events::record_session_failure(
@@ -2334,9 +2367,6 @@ pub async fn send_message(
                 event_names::QUERY_FAILED,
                 events::query_failed_payload(&qid_str, &panic_msg, Some(session_id_str.clone())),
             );
-            route_event(crate::session_registry::SessionEvent::Status(
-                crate::session_registry::SessionEventStatus::Failed(panic_msg.clone()),
-            ));
             crate::commands_notifications::fire_query_notification_logged(
                 &notifier_arc,
                 crate::commands_notifications::NotificationKind::Failed(panic_msg),
@@ -2356,6 +2386,12 @@ pub async fn send_message(
             let mut token_guard = session_for_task.cancellation_token.lock().await;
             *token_guard = None;
         }
+        // B1-4 (P1-3): a double-stop can leave a spurious pending-cancel
+        // behind (the first stop already fired the token; the second found
+        // None while the latch was still up). Clear the flag with the latch
+        // so it never outlives its querying epoch — the NEXT run must not
+        // inherit an old stop.
+        session_for_task.clear_cancel_pending();
     });
 
     Ok(SendMessageResponse {
@@ -2566,6 +2602,9 @@ pub async fn start_background_task(
         let engine = crate::commands_memory::attach_shared_memory(
             QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
             &memory_store,
+            // B2-2: background tasks have no session directory of their
+            // own — keep the process-cwd freeze (pre-B2-2 behavior).
+            None,
         );
 
         let query_id = uuid::Uuid::new_v4();
@@ -3669,6 +3708,72 @@ fn require_attachment_working_dir_rejects_unset_without_cwd_fallback() {
         require_attachment_working_dir(Some("/tmp/proj")).unwrap(),
         std::path::PathBuf::from("/tmp/proj")
     );
+}
+
+#[test]
+fn resolve_send_working_dir_prefers_session_meta_over_global() {
+    // B2-2 (P0-2) priority: the TARGET session's own working_dir wins over
+    // the global pointer in every combination; sessions without their own
+    // wd fall back to the global value (previous behavior), and with
+    // neither there is no domain (the caller's unset handling applies).
+    // The same session-meta value is what `send_message` pins the engine
+    // with (`attach_shared_memory_if(.., session_working_dir.as_deref())`
+    // → `with_working_directory`), so this resolver and the engine's
+    // directory chain always agree.
+    assert_eq!(
+        resolve_send_working_dir(Some("/a/session"), Some("/a/global")),
+        Some("/a/session".to_string())
+    );
+    assert_eq!(
+        resolve_send_working_dir(Some("/a/session"), None),
+        Some("/a/session".to_string())
+    );
+    assert_eq!(
+        resolve_send_working_dir(None, Some("/a/global")),
+        Some("/a/global".to_string())
+    );
+    assert_eq!(resolve_send_working_dir(None, None), None);
+}
+
+#[test]
+fn send_attachment_domain_follows_session_wd_over_global() {
+    // The exact helper chain `send_message`'s attachment branch runs, driven
+    // over REAL directories: the global config points at `global_dir` while
+    // the target session's meta points at `session_dir` — the multi-window
+    // P0-2 shape. The attachment domain must follow the SESSION directory
+    // (file inside it accepted, the global-dir file rejected as out of
+    // scope), and a session WITHOUT its own wd must keep resolving against
+    // the global value exactly as before.
+    use RejectedAttachmentReason::OutOfWorkingDir;
+    let session_dir = tempfile::tempdir().unwrap();
+    let global_dir = tempfile::tempdir().unwrap();
+    let in_session = session_dir.path().join("notes.md");
+    let in_global = global_dir.path().join("other.md");
+    std::fs::write(&in_session, "session file").unwrap();
+    std::fs::write(&in_global, "global file").unwrap();
+    let session_wd = session_dir.path().to_string_lossy().into_owned();
+    let global_wd = global_dir.path().to_string_lossy().into_owned();
+
+    // Session wd wins: the domain is the session directory.
+    let resolved = resolve_send_working_dir(Some(&session_wd), Some(&global_wd));
+    let domain = require_attachment_working_dir(resolved.as_deref()).unwrap();
+    let (collected, rejected) =
+        collect_attachments(&[in_session.display().to_string()], &domain);
+    assert!(rejected.is_empty(), "unexpected rejections: {rejected:?}");
+    assert_eq!(collected.len(), 1);
+    let (collected, rejected) =
+        collect_attachments(&[in_global.display().to_string()], &domain);
+    assert!(collected.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].reason, OutOfWorkingDir);
+
+    // No session wd: unchanged global-only behavior.
+    let resolved = resolve_send_working_dir(None, Some(&global_wd));
+    let domain = require_attachment_working_dir(resolved.as_deref()).unwrap();
+    let (collected, rejected) =
+        collect_attachments(&[in_global.display().to_string()], &domain);
+    assert!(rejected.is_empty(), "unexpected rejections: {rejected:?}");
+    assert_eq!(collected.len(), 1);
 }
 
 #[test]

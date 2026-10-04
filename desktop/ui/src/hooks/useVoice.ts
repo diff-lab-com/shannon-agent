@@ -3,6 +3,7 @@ import {
   createVoiceProvider,
   defaultVoiceConfig,
   type VoiceProvider,
+  type VoiceProviderConfig,
   type VoiceProviderError,
 } from '@/lib/voice'
 
@@ -47,6 +48,26 @@ export interface UseVoiceResult {
   reset: () => void
 }
 
+// B1-5 P1-5: identity of the resolved STT config — everything the
+// factory branches on, string-normalized (`null`/`undefined` both
+// collapse to ''), so any provider/model/language change produces a
+// new value.
+function buildSignature(
+  provider: 'cloud' | 'local',
+  local?: UseVoiceOptions['local'],
+): string {
+  return [provider, local?.model ?? '', local?.language ?? ''].join('|')
+}
+
+function configFor(
+  provider: 'cloud' | 'local',
+  local?: UseVoiceOptions['local'],
+): VoiceProviderConfig {
+  return provider === 'local'
+    ? { kind: 'local' as const, local: local ?? { model: null, language: null } }
+    : defaultVoiceConfig()
+}
+
 export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const { onTranscript, onError, provider = 'cloud', local } = options
   const [state, setState] = useState<VoiceState>('idle')
@@ -58,21 +79,29 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const errorRef = useRef(onError)
   errorRef.current = onError
 
-  // Build the provider once. The kind is resolved from
-  // `options.provider` (P2-5e). When the local provider is
-  // selected and MediaRecorder is unavailable, the factory
-  // falls back to the stub — same fallback semantics as the
-  // cloud provider. The stub reports `isSupported() === false`
-  // (F-voice-gate), so a fallback environment surfaces here as
-  // `supported: false` and the UI hides the mic.
+  // Build the provider lazily on first render. The kind is resolved
+  // from `options.provider` (P2-5e). When the local provider is
+  // selected and MediaRecorder is unavailable, the factory falls back
+  // to the stub — same fallback semantics as the cloud provider. The
+  // stub reports `isSupported() === false` (F-voice-gate), so a
+  // fallback environment surfaces here as `supported: false` and the
+  // UI hides the mic.
+  // B1-5 P1-5: this first build is only the starting point — ChatInput
+  // renders before the config has loaded (cold start straight into
+  // /chat), so it can resolve to plain cloud even for local-STT
+  // users. Each build is stamped with the config signature and
+  // rebuilt by the effect below whenever that signature drifts.
   const providerRef = useRef<VoiceProvider | null>(null)
+  const builtSigRef = useRef<string | null>(null)
   if (!providerRef.current) {
-    const config = provider === 'local'
-      ? { kind: 'local' as const, local: local ?? { model: null, language: null } }
-      : defaultVoiceConfig()
-    providerRef.current = createVoiceProvider(config)
+    providerRef.current = createVoiceProvider(configFor(provider, local))
+    builtSigRef.current = buildSignature(provider, local)
   }
-  const supported = providerRef.current.isSupported()
+  // `supported` is state rather than a per-render providerRef read so
+  // a rebuilt provider re-reports it (the effect refreshes it on every
+  // rebuild). Initialized from the first build so first-render output
+  // is identical to the pre-B1-5 lazy-read behavior.
+  const [supported, setSupported] = useState(() => providerRef.current?.isSupported() ?? false)
 
   const handleError = useCallback((err: VoiceProviderError) => {
     if (!err.silent) {
@@ -84,6 +113,29 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   useEffect(() => {
     return () => { providerRef.current?.abort() }
   }, [])
+
+  // B1-5 P1-5: rebuild the provider whenever the resolved config
+  // changes (config arriving late after a cold start, or the user
+  // flipping Settings → Voice). Deliberately dependency-free: a
+  // change seen mid-capture is deferred, and every path back to
+  // `idle` renders — so running on every commit behind a cheap
+  // signature compare is the simplest wiring that can't miss the
+  // post-idle rebuild.
+  useEffect(() => {
+    const signature = buildSignature(provider, local)
+    if (builtSigRef.current === signature) return
+    if (state !== 'idle') {
+      // A capture is in flight — aborting here would cut off the
+      // user's audio mid-recording. Skip now; the commit that lands
+      // back on idle (onEnd) picks the rebuild up.
+      return
+    }
+    providerRef.current?.abort()
+    const next = createVoiceProvider(configFor(provider, local))
+    providerRef.current = next
+    builtSigRef.current = signature
+    setSupported(next.isSupported())
+  })
 
   const startRecording = useCallback(async () => {
     setError(null)

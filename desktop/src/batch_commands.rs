@@ -596,6 +596,9 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
                 StateManager::new(),
             ),
             &memory_store,
+            // B2-2: best-of-N batches have no session directory — keep the
+            // process-cwd freeze (pre-B2-2 behavior).
+            None,
         );
 
         let session_id = uuid::Uuid::new_v4();

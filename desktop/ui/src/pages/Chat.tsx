@@ -8,6 +8,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import { parseSlashInput, type SlashCommand, type SlashResult } from '@/lib/slash/commands'
 import { recordInputHistory } from '@/lib/inputHistory'
+import { clearDraft, DRAFT_MAX_KB, readDraft, writeDraft } from '@/lib/composerDraft'
 import { clearDiffStatsCache } from '@/components/chat/diffStats'
 import { toastError } from '@/lib/errorToast'
 import { setActiveWorkingDir } from '@/lib/fileRefs'
@@ -43,45 +44,12 @@ const QuickFixPanel = lazy(() => import('@/pages/QuickFix'))
 const EditorPanel = lazy(() => import('@/pages/EditorPage'))
 
 // ── B1 §4-11 per-session draft storage ───────────────────────────────────
-const DRAFT_KEY_PREFIX = 'shannon.draft.'
+// The key/storage helpers live in lib/composerDraft.ts (extracted for
+// AppContext's deleteSessionAction, B1-3); only the page-local tuning
+// (debounce) stays here.
 const DRAFT_DEBOUNCE_MS = 300
-const DRAFT_MAX_BYTES = 64 * 1024
 // B1 §4-12: how long the search-jump bubble keeps its ring (ms).
 const SEARCH_FLASH_MS = 1200
-
-function draftKey(sessionId: string): string {
-  return `${DRAFT_KEY_PREFIX}${sessionId}`
-}
-
-function readDraft(sessionId: string): { text: string; attachments: string[] } | null {
-  try {
-    const raw = localStorage.getItem(draftKey(sessionId))
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { text?: unknown; attachments?: unknown }
-    if (typeof parsed.text !== 'string' || !Array.isArray(parsed.attachments)) return null
-    return {
-      text: parsed.text,
-      attachments: parsed.attachments.filter((a): a is string => typeof a === 'string'),
-    }
-  } catch { return null }
-}
-
-function writeDraft(sessionId: string, text: string, attachments: string[]): 'saved' | 'oversize' | 'failed' {
-  try {
-    const payload = JSON.stringify({ text, attachments, updatedAt: Date.now() })
-    // Size cap: a runaway draft must not crowd the quota for the dock's
-    // persisted keys. Oversized drafts simply stay in-memory — A-21 fix:
-    // the skip used to be silent; the caller now warns (console + a
-    // one-shot toast) instead of letting a reload eat the text unnoticed.
-    if (payload.length > DRAFT_MAX_BYTES) return 'oversize'
-    localStorage.setItem(draftKey(sessionId), payload)
-    return 'saved'
-  } catch { return 'failed' /* quota / private mode — drafts are best-effort */ }
-}
-
-function clearDraft(sessionId: string): void {
-  try { localStorage.removeItem(draftKey(sessionId)) } catch { /* noop */ }
-}
 
 /// 2026-09-29 provider review §3-A1: the banner shows ONLY when there is
 /// genuinely something to fix —
@@ -184,7 +152,7 @@ export default function Chat() {
   const oversizeDraftToastedRef = useRef(false)
   const persistDraft = useCallback((sessionId: string, text: string, attachments: string[]) => {
     if (writeDraft(sessionId, text, attachments) !== 'oversize') return
-    console.warn(`[Chat] draft for session ${sessionId} exceeds the ${Math.round(DRAFT_MAX_BYTES / 1024)}KB persistence cap — kept in memory only, lost on reload`)
+    console.warn(`[Chat] draft for session ${sessionId} exceeds the ${DRAFT_MAX_KB}KB persistence cap — kept in memory only, lost on reload`)
     if (oversizeDraftToastedRef.current) return
     oversizeDraftToastedRef.current = true
     toast.warning(t('chat.draft.oversize'))
@@ -355,6 +323,31 @@ export default function Chat() {
   // had erased the blocked one), and a first-turn block — where no earlier
   // user message exists at all — still has a working action.
   const [blockedPayload, setBlockedPayload] = useState<{ text: string; attachments: string[] } | null>(null)
+
+  // P1-8: latest-ref mirrors of the composer — the two rejection recoveries
+  // below run in promise continuations whose `input`/`attachedFiles` closure
+  // is the render snapshot from send time (empty by definition: handleSend
+  // clears synchronously before the IPC). Whether the user typed since is
+  // judged at settle time through these refs.
+  const composerInputRef = useRef(input)
+  composerInputRef.current = input
+  const composerFilesRef = useRef(attachedFiles)
+  composerFilesRef.current = attachedFiles
+
+  // P1-8: shared rejection recovery for the blocked-send paths (manual send,
+  // queue drain). An empty composer gets the old behavior verbatim — the
+  // refused text and chips come back. A composer the user has typed into
+  // since wins: their draft is never clobbered, the refused payload is still
+  // parked as the banner's continue target, and a toast says where it went.
+  const restoreBlockedSend = useCallback((text: string, attachments: string[]) => {
+    setBlockedPayload({ text, attachments })
+    if (composerInputRef.current.trim() === '' && composerFilesRef.current.length === 0) {
+      setInput(text)
+      setAttachedFiles(attachments)
+      return
+    }
+    toast.info(t('chat.send.blockedKept'))
+  }, [t])
 
   const continuePastBudget = useCallback(() => {
     if (blockedPayload) {
@@ -576,9 +569,9 @@ export default function Chat() {
         setBlockedPayload(null)
         if (visibleSessionId) clearDraft(visibleSessionId)
       } else {
-        setInput(trimmed)
-        setAttachedFiles(filePaths ?? [])
-        setBlockedPayload({ text: trimmed, attachments: filePaths ?? [] })
+        // P1-8: the recovery must not clobber text typed while the IPC was
+        // in flight — see restoreBlockedSend.
+        restoreBlockedSend(trimmed, filePaths ?? [])
       }
     })
   }
@@ -612,9 +605,9 @@ export default function Chat() {
   // an interrupted steer flushes first on the same isQuerying→false commit;
   // the drain below also gates on hasPendingSteer so both never send in one
   // commit (the drain would otherwise burn a queued item against the
-  // backend's concurrent-query guard). Round-1 review: the pending steer is
-  // parked under its session key (a settle observed on another session
-  // never receives it) and a cancel that never settles hands the draft back
+  // backend's concurrent-query guard). Round-1 review: steers park in a
+  // per-session FIFO (a settle observed on another session never receives
+  // them; B1-1) and a cancel that never settles hands the drafts back
   // after 15s with a notice instead of waiting forever.
   const { steer, hasPendingSteer } = useSteerSend({
     visibleSessionId,
@@ -622,8 +615,12 @@ export default function Chat() {
     cancelQuery,
     sendMessage,
     onSendRejected: (pending, reason) => {
-      setInput(pending.text)
-      setAttachedFiles(pending.attachments)
+      // A timeout returns every still-waiting steer of the session in one
+      // batch, one callback per entry — append rather than overwrite, or
+      // the batch would clobber itself back down to its last entry (the
+      // restore-side shape of the very loss B1-1 fixes).
+      setInput(prev => (prev ? `${prev}\n${pending.text}` : pending.text))
+      setAttachedFiles(prev => Array.from(new Set([...prev, ...pending.attachments])))
       if (reason === 'timeout') toast.error(t('chat.steer.timeout'))
     },
   })
@@ -655,15 +652,15 @@ export default function Chat() {
           drainBlockedRef.current = true
           // R2 W2-4: the dequeued head was refused before recording — return
           // it to the composer and hold it for the banner's continue instead
-          // of silently dropping user content.
-          setInput(item.text)
-          setAttachedFiles(item.attachments)
-          setBlockedPayload({ text: item.text, attachments: item.attachments })
+          // of silently dropping user content. P1-8: unless the user typed
+          // while the send was in flight — then only the banner hold (and a
+          // toast), never a clobbered draft (see restoreBlockedSend).
+          restoreBlockedSend(item.text, item.attachments)
         }
       })
     // `promptQueue` re-triggers the drain for the next item once the new run
     // settles; sendMessage flips isQuerying synchronously during the send.
-  }, [isQuerying, promptQueue, dequeuePrompt, executeSlash, sendMessage, hasPendingSteer])
+  }, [isQuerying, promptQueue, dequeuePrompt, executeSlash, sendMessage, hasPendingSteer, restoreBlockedSend])
 
   // Attach files via Tauri's native dialog so the backend receives real
   // absolute paths (the backend reads bytes via std::fs and base64-encodes).

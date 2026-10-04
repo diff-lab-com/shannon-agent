@@ -1153,6 +1153,9 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                 StateManager::new(),
             ),
             &deps.memory_store,
+            // B2-2: goal runs keep their pre-B2-2 directory behavior (the
+            // process-cwd freeze).
+            None,
         );
         engine.set_session_id(session_id);
         match engine.restore_session(session_id) {
