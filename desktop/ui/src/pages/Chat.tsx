@@ -580,9 +580,9 @@ export default function Chat() {
   // an interrupted steer flushes first on the same isQuerying→false commit;
   // the drain below also gates on hasPendingSteer so both never send in one
   // commit (the drain would otherwise burn a queued item against the
-  // backend's concurrent-query guard). Round-1 review: the pending steer is
-  // parked under its session key (a settle observed on another session
-  // never receives it) and a cancel that never settles hands the draft back
+  // backend's concurrent-query guard). Round-1 review: steers park in a
+  // per-session FIFO (a settle observed on another session never receives
+  // them; B1-1) and a cancel that never settles hands the drafts back
   // after 15s with a notice instead of waiting forever.
   const { steer, hasPendingSteer } = useSteerSend({
     visibleSessionId,
@@ -590,8 +590,12 @@ export default function Chat() {
     cancelQuery,
     sendMessage,
     onSendRejected: (pending, reason) => {
-      setInput(pending.text)
-      setAttachedFiles(pending.attachments)
+      // A timeout returns every still-waiting steer of the session in one
+      // batch, one callback per entry — append rather than overwrite, or
+      // the batch would clobber itself back down to its last entry (the
+      // restore-side shape of the very loss B1-1 fixes).
+      setInput(prev => (prev ? `${prev}\n${pending.text}` : pending.text))
+      setAttachedFiles(prev => Array.from(new Set([...prev, ...pending.attachments])))
       if (reason === 'timeout') toast.error(t('chat.steer.timeout'))
     },
   })
