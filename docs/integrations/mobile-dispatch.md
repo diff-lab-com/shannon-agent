@@ -207,3 +207,25 @@ relay 端到端加密通道的浏览器支持（§7），或使用原生客户�
   保持列表原样，不幻吊销）；
 - 吊销成功向**其他**在线设备广播 `shannon/event {type: "device.revoked", device_id}`；
   被吊销设备自身被排除在广播外，靠下一次 RPC 的 `PAIRING_REQUIRED` 察觉。
+
+### 8.5 §O 推送面（`shannon/push.register` + wake 触发；r2 跟进批）
+
+落点：`engineBridge.ts`（§O2 注册面）、`hub.ts` `setWake`（§O3 触发缝）、
+`relay/pushRelayBinding.ts`（desktop↔relay 帧，契约见
+`docs/protocol/relay-push-wake-frames.md`）、`relay/relayHost.ts`（控制帧旁路）。
+
+- **`shannon/push.register`** —— 请求 `{enable?: bool(默认 true), platform: "fcm"|"apns",
+  token: "<厂商设备 token>"}`，响应 `{ok: true, handle: "<relay 分配的随机句柄>"}`；
+  `enable:false` 为注销（本地诚实 ok）。要求已配对会话（`PAIRING_REQUIRED`）；
+  token 经桌面沿 relay 控制面转发（`push.bind` 帧），relay 分配 handle 并把
+  `deviceId→handle→token`（加密落盘）存为绑定；
+- **三态诚实降级（§O2，契约测试钉死）**：relay host 模式未开 → `NOT_IMPLEMENTED`；
+  relay 已连但厂商凭据未配置（`not_configured`）→ 同 `NOT_IMPLEMENTED`（推送不可用
+  单一码）；其余 relay 拒绝 → `ENGINE_ERROR`。手机对结构化错误一律渲染「推送不可用」，
+  **永不 mock 成功**；
+- **唤醒触发（§O3）**：派发管线在 `approval.request` 与 turn 终态
+  （`query.completed`/`failed`/`cancelled`）推送时向 relay 发 `push.wake {deviceId, seq}`
+  （fire-and-forget；relay 按句柄取最大 seq、10s 窗口合并，厂商推送体锁死
+  `{handle, seq}` 两字段）。交互式 `shannon/query` 不触发——用户正看着手机；
+- **live-sync 协同**：wake 亮屏后手机走既有 `device.resume` + live-sync
+  `resume.replayed`（§O4 环形缓冲，见 8.3 的恢复面语义）收敛离线窗口事件。

@@ -39,6 +39,8 @@ import {
   generateHostE2EKeyPair,
 } from "./mobile/relay/e2e.js";
 import { startRelayHost, type RelayHostHandle } from "./mobile/relay/relayHost.js";
+import { PushRelayBinding } from "./mobile/relay/pushRelayBinding.js";
+import { ShannonError } from "./mobile/protocol.js";
 import { generateQrV2Payload, generateRelaySessionId } from "./mobile/relay/qrV2.js";
 import { evaluateTrigger, resolveTriggerConfig } from "./router/trigger.js";
 import { withTaskLifecycle } from "./router/lifecycle.js";
@@ -342,6 +344,12 @@ export async function bootstrap(
   await registry.startAll(ctx);
   logger.info(`shannon-gateway up: ${registry.size} adapter(s) started`);
 
+  // §O3: late-bound push-relay leg — the relay host connection (and with it
+  // the push.bind/wake carrier) assembles BELOW, after startMobileServer has
+  // built the handlers; the sink reads this cell per call. Null = relay host
+  // mode off → push.register keeps its honest NOT_IMPLEMENTED degradation.
+  const pushRelayRef: { current: PushRelayBinding | null } = { current: null };
+
   const mobile = mobileEnabled
     ? await startMobileServer(
         config,
@@ -356,6 +364,7 @@ export async function bootstrap(
           pairing: accessPairing,
         },
         pushReplay!,
+        pushRelayRef,
       )
     : null;
   if (mobile) {
@@ -412,6 +421,12 @@ async function startMobileServer(
   access: { allowlist: Allowlist; pairing: PairingStore },
   /** §O4: shared replay ring (also wired into the hub + server ctx). */
   pushReplay: PushReplayBuffer,
+  /**
+   * §O3: late-bound push-relay leg (the relay host connection assembles after
+   * this function returns). Null = relay host mode off → push.register stays
+   * in its honest NOT_IMPLEMENTED degradation.
+   */
+  pushRelayRef: { current: PushRelayBinding | null },
 ): Promise<{ handle: { stop(): Promise<void> }; port: number }> {
   const mobileCfg = config.mobile!;
   const host = mobileCfg.host ?? "0.0.0.0";
@@ -464,6 +479,19 @@ async function startMobileServer(
       fetchImpl: opts.mobileFetchImpl,
       engineAuthToken,
       approvalRegistry: approvals,
+      // §O2/§O3: forward push bindings to the relay over its control side
+      // channel (late-bound — the relay host leg connects below). Relay host
+      // mode off → the honest NOT_IMPLEMENTED degradation (§O2 tri-state).
+      pushBindingSink: async (deviceId, binding) => {
+        const relay = pushRelayRef.current;
+        if (!relay) {
+          throw Object.assign(
+            new Error("push relay not connected (relay host mode disabled)"),
+            { code: ShannonError.NOT_IMPLEMENTED },
+          );
+        }
+        return relay.bind(deviceId, binding);
+      },
       // Shared in-flight query registry: shannon/cancel can interrupt a
       // dispatched task's lane turn (the router registers its clients on the
       // same instance for the duration of each turn).
@@ -578,6 +606,21 @@ async function startMobileServer(
       logger.info(`relay host: initial pair window closed (${err.message}); ` +
         "host stays registered for late joins via auto-reconnect/re-pair");
     });
+
+    // §O3/§T6: the Push-to-Wake leg rides this same relay connection —
+    // pushBindingSink forwards shannon/push.register over it, and the hub's
+    // wake seam fires push.wake on approval asks / turn terminals. Frames per
+    // docs/protocol/relay-push-wake-frames.md; until the relay ships its half
+    // the ack timeout surfaces the honest structured error to the phone.
+    const pushRelay = new PushRelayBinding(
+      {
+        send: (frame) => relayHandle.sendControl(frame),
+        onFrame: (handler) => relayHandle.onControl(handler),
+      },
+      { logger },
+    );
+    pushRelayRef.current = pushRelay;
+    dispatchHub.setWake((deviceId, seq) => pushRelay.wake(deviceId, seq));
 
     // Generate the QR v2 payload for the phone to scan. The LAN-endpoint
     // scheme reflects TLS, not the relay scheme: with mobile.tls the phone

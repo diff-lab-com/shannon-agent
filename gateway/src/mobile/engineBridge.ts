@@ -720,9 +720,14 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         });
         return { kind: "result", result: { ok: true, handle } };
       } catch (err) {
+        // Sinks may carry a phone-visible ShannonError on the error (the
+        // §T6 push-relay binding maps relay `not_configured` →
+        // NOT_IMPLEMENTED, keeping the tri-state's single 推送不可用 code);
+        // anything else is the generic structured upstream refusal.
+        const carried = (err as { code?: unknown }).code;
         return {
           kind: "error",
-          code: ShannonError.ENGINE_ERROR,
+          code: typeof carried === "number" ? carried : ShannonError.ENGINE_ERROR,
           message: `push binding rejected: ${(err as Error).message}`,
         };
       }
