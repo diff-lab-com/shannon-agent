@@ -205,6 +205,24 @@ impl ShannonConfig {
         }
     }
 
+    /// P1-3: the configured `permission_profile` string.
+    ///
+    /// Precedence: `SHANNON_PERMISSION_PROFILE` env override, then the
+    /// `permission_profile` key from `~/.shannon/config.toml` / `.shannon.toml`.
+    pub fn configured_permission_profile() -> Option<String> {
+        if let Ok(v) = std::env::var("SHANNON_PERMISSION_PROFILE") {
+            if !v.trim().is_empty() {
+                return Some(v.trim().to_string());
+            }
+        }
+        ConfigBuilder::new()
+            .load_global_toml()
+            .load_local_toml()
+            .build()
+            .permission_profile
+            .filter(|s| !s.trim().is_empty())
+    }
+
     /// Parse the `permission_profile` field into a `PermissionProfile`.
     ///
     /// Returns `None` if the field is unset or contains an unrecognised value.

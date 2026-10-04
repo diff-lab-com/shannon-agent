@@ -448,7 +448,7 @@ describe('ChatInput', () => {
     // the option's icon ligature text). Case-insensitive: the ligature/icon
     // rendering differs between jsdom environments. Round-1 R3: suggest is
     // the Balanced tier of the shared four-tier table.
-    expect(modeSelect).toHaveTextContent(/balanced/i)
+    expect(modeSelect).toHaveTextContent(/ask/i)
   })
 
   it('shows correct icons for querying states', () => {

@@ -32,18 +32,17 @@ use tokio_util::sync::CancellationToken;
 /// agent-teams bridge (`crate::agent_teams::enable`) can reuse the same
 /// case-insensitive mapping for sub-agent permission inheritance.
 pub(crate) fn parse_approval_mode(mode_str: &str) -> ApprovalMode {
+    // P2-1/P2-2: the engine owns the vocabulary (`from_str_ci` covers every
+    // canonical token plus the legacy aliases); the desktop only adds its
+    // own legacy 4-tier tier names.
+    if let Some(mode) = ApprovalMode::from_str_ci(mode_str) {
+        return mode;
+    }
     match mode_str.to_lowercase().as_str() {
-        "suggest" | "default" => ApprovalMode::Suggest,
-        "plan" => ApprovalMode::Plan,
-        "auto" => ApprovalMode::Auto,
-        "auto_edit" | "autoedit" => ApprovalMode::AutoEdit,
-        "full_auto" | "fullauto" => ApprovalMode::FullAuto,
-        "readonly" | "read-only" => ApprovalMode::Readonly,
-        "plan_ro" | "plan-ro" | "planreadonly" => ApprovalMode::PlanReadonly,
-        "bypass_permissions" | "bypasspermissions" => ApprovalMode::BypassPermissions,
-        "dont_ask" | "dontask" => ApprovalMode::DontAsk,
-        "confirm" => ApprovalMode::Suggest, // "confirm" maps to Suggest (ask each time)
-        _ => ApprovalMode::Suggest,         // Default to safe mode
+        "confirm" | "balanced" => ApprovalMode::Ask,
+        "permissive" => ApprovalMode::AutoEdit,
+        "strict" => ApprovalMode::Readonly,
+        _ => ApprovalMode::Ask, // Default to safe mode
     }
 }
 
@@ -56,15 +55,13 @@ pub(crate) fn parse_approval_mode(mode_str: &str) -> ApprovalMode {
 /// matching SECURITY.md's promise that unattended paths honour the user's
 /// chosen mode.
 pub(crate) fn unattended_approval_mode(approval_mode_str: Option<&str>) -> ApprovalMode {
-    match approval_mode_str {
-        Some(s) => match s {
-            "full_auto" => ApprovalMode::FullAuto,
-            "auto_edit" => ApprovalMode::AutoEdit,
-            "auto" => ApprovalMode::Auto,
-            "plan" => ApprovalMode::Plan,
-            _ => ApprovalMode::Suggest,
-        },
-        None => ApprovalMode::Suggest,
+    match approval_mode_str.map(parse_approval_mode) {
+        // Recognised ladder tokens pass through unchanged; bypass/dontAsk and
+        // anything unrecognised — and the unset case — stay at the most
+        // conservative mode (SECURITY.md: unattended paths never inherit
+        // more power than the user configured).
+        Some(mode @ (ApprovalMode::FullAuto | ApprovalMode::AutoEdit | ApprovalMode::Plan)) => mode,
+        _ => ApprovalMode::Ask,
     }
 }
 
@@ -3766,12 +3763,10 @@ fn send_attachment_domain_follows_session_wd_over_global() {
     // Session wd wins: the domain is the session directory.
     let resolved = resolve_send_working_dir(Some(&session_wd), Some(&global_wd));
     let domain = require_attachment_working_dir(resolved.as_deref()).unwrap();
-    let (collected, rejected) =
-        collect_attachments(&[in_session.display().to_string()], &domain);
+    let (collected, rejected) = collect_attachments(&[in_session.display().to_string()], &domain);
     assert!(rejected.is_empty(), "unexpected rejections: {rejected:?}");
     assert_eq!(collected.len(), 1);
-    let (collected, rejected) =
-        collect_attachments(&[in_global.display().to_string()], &domain);
+    let (collected, rejected) = collect_attachments(&[in_global.display().to_string()], &domain);
     assert!(collected.is_empty());
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0].reason, OutOfWorkingDir);
@@ -3779,8 +3774,7 @@ fn send_attachment_domain_follows_session_wd_over_global() {
     // No session wd: unchanged global-only behavior.
     let resolved = resolve_send_working_dir(None, Some(&global_wd));
     let domain = require_attachment_working_dir(resolved.as_deref()).unwrap();
-    let (collected, rejected) =
-        collect_attachments(&[in_global.display().to_string()], &domain);
+    let (collected, rejected) = collect_attachments(&[in_global.display().to_string()], &domain);
     assert!(rejected.is_empty(), "unexpected rejections: {rejected:?}");
     assert_eq!(collected.len(), 1);
 }
@@ -3844,27 +3838,36 @@ fn resolve_write_target_rejects_dotdot_traversal() {
 mod pure_function_tests {
     use super::*;
 
-    // ── parse_approval_mode: covers all 11 variants + fallback ───────
+    // ── parse_approval_mode: one vocabulary + legacy aliases ────────────
 
     #[test]
     fn parse_approval_mode_maps_every_documented_alias() {
         use shannon_engine::permissions::ApprovalMode;
-        assert_eq!(parse_approval_mode("suggest"), ApprovalMode::Suggest);
-        assert_eq!(parse_approval_mode("default"), ApprovalMode::Suggest);
+        // Canonical tokens
+        assert_eq!(parse_approval_mode("ask"), ApprovalMode::Ask);
         assert_eq!(parse_approval_mode("plan"), ApprovalMode::Plan);
-        assert_eq!(parse_approval_mode("auto"), ApprovalMode::Auto);
+        assert_eq!(parse_approval_mode("auto-edit"), ApprovalMode::AutoEdit);
+        assert_eq!(parse_approval_mode("full-auto"), ApprovalMode::FullAuto);
+        assert_eq!(parse_approval_mode("readonly"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("dontAsk"), ApprovalMode::DontAsk);
+        assert_eq!(
+            parse_approval_mode("bypassPermissions"),
+            ApprovalMode::BypassPermissions
+        );
+        // Legacy aliases (stored desktop configs)
+        assert_eq!(parse_approval_mode("suggest"), ApprovalMode::Ask);
+        assert_eq!(parse_approval_mode("default"), ApprovalMode::Ask);
+        assert_eq!(parse_approval_mode("confirm"), ApprovalMode::Ask);
+        assert_eq!(parse_approval_mode("auto"), ApprovalMode::AutoEdit);
         assert_eq!(parse_approval_mode("auto_edit"), ApprovalMode::AutoEdit);
         assert_eq!(parse_approval_mode("autoedit"), ApprovalMode::AutoEdit);
         assert_eq!(parse_approval_mode("full_auto"), ApprovalMode::FullAuto);
         assert_eq!(parse_approval_mode("fullauto"), ApprovalMode::FullAuto);
-        assert_eq!(parse_approval_mode("readonly"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("full"), ApprovalMode::FullAuto);
         assert_eq!(parse_approval_mode("read-only"), ApprovalMode::Readonly);
-        assert_eq!(parse_approval_mode("plan_ro"), ApprovalMode::PlanReadonly);
-        assert_eq!(parse_approval_mode("plan-ro"), ApprovalMode::PlanReadonly);
-        assert_eq!(
-            parse_approval_mode("planreadonly"),
-            ApprovalMode::PlanReadonly
-        );
+        assert_eq!(parse_approval_mode("plan_ro"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("plan-ro"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("planreadonly"), ApprovalMode::Readonly);
         assert_eq!(
             parse_approval_mode("bypass_permissions"),
             ApprovalMode::BypassPermissions
@@ -3875,28 +3878,30 @@ mod pure_function_tests {
         );
         assert_eq!(parse_approval_mode("dont_ask"), ApprovalMode::DontAsk);
         assert_eq!(parse_approval_mode("dontask"), ApprovalMode::DontAsk);
-        assert_eq!(parse_approval_mode("confirm"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("ci"), ApprovalMode::DontAsk);
+        // Unknown falls back to the safe mode
+        assert_eq!(parse_approval_mode("garbage"), ApprovalMode::Ask);
     }
 
     // ---- review §P1-2: unattended approval mode requires explicit opt-in ----
 
     #[test]
-    fn unattended_approval_mode_defaults_to_suggest_not_fullauto() {
+    fn unattended_approval_mode_defaults_to_ask_not_fullauto() {
         // SECURITY.md promises unattended paths honour the user's chosen
         // mode. FullAuto must require explicit opt-in.
         assert_eq!(
             unattended_approval_mode(None),
-            ApprovalMode::Suggest,
+            ApprovalMode::Ask,
             "no approval_mode_str must not silently promote to FullAuto"
         );
         assert_eq!(
             unattended_approval_mode(Some("")),
-            ApprovalMode::Suggest,
+            ApprovalMode::Ask,
             "empty approval_mode_str must not silently promote to FullAuto"
         );
         assert_eq!(
             unattended_approval_mode(Some("garbage")),
-            ApprovalMode::Suggest,
+            ApprovalMode::Ask,
             "unknown approval_mode_str must not silently promote to FullAuto"
         );
     }
@@ -3908,29 +3913,42 @@ mod pure_function_tests {
             unattended_approval_mode(Some("full_auto")),
             ApprovalMode::FullAuto,
         );
-        // Other explicit strings map to their mode.
+        // Other explicit ladder tokens map to their mode.
         assert_eq!(
             unattended_approval_mode(Some("auto_edit")),
             ApprovalMode::AutoEdit
         );
-        assert_eq!(unattended_approval_mode(Some("auto")), ApprovalMode::Auto);
+        assert_eq!(
+            unattended_approval_mode(Some("auto")),
+            ApprovalMode::AutoEdit
+        );
         assert_eq!(unattended_approval_mode(Some("plan")), ApprovalMode::Plan);
+        // Bypass / dontAsk are never inherited by unattended paths.
+        assert_eq!(
+            unattended_approval_mode(Some("bypass_permissions")),
+            ApprovalMode::Ask,
+        );
+        assert_eq!(
+            unattended_approval_mode(Some("dont_ask")),
+            ApprovalMode::Ask,
+        );
     }
 
     #[test]
     fn parse_approval_mode_is_case_insensitive() {
         use shannon_engine::permissions::ApprovalMode;
-        assert_eq!(parse_approval_mode("SUGGEST"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("SUGGEST"), ApprovalMode::Ask);
         assert_eq!(parse_approval_mode("Plan"), ApprovalMode::Plan);
         assert_eq!(parse_approval_mode("FULL_AUTO"), ApprovalMode::FullAuto);
+        assert_eq!(parse_approval_mode("Auto-Edit"), ApprovalMode::AutoEdit);
     }
 
     #[test]
     fn parse_approval_mode_unknown_falls_back_to_suggest() {
         use shannon_engine::permissions::ApprovalMode;
-        assert_eq!(parse_approval_mode(""), ApprovalMode::Suggest);
-        assert_eq!(parse_approval_mode("yolo"), ApprovalMode::Suggest);
-        assert_eq!(parse_approval_mode("sudo"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode(""), ApprovalMode::Ask);
+        assert_eq!(parse_approval_mode("yolo"), ApprovalMode::Ask);
+        assert_eq!(parse_approval_mode("sudo"), ApprovalMode::Ask);
     }
 
     // ── detect_media_type ─────────────────────────────────────────────

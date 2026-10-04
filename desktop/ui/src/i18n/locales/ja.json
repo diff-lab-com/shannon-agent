@@ -3933,5 +3933,13 @@
   "inbox.runStatus.succeeded": "成功",
   "extensions.credentialStorage.label": "認証情報の保存先",
   "extensions.credentialStorage.keyring": "OSキーチェーン",
-  "extensions.credentialStorage.file": "ローカルファイル（制限付き）"
+  "extensions.credentialStorage.file": "ローカルファイル（制限付き）",
+  "settings.general.approvalMode.ask.label": "確認",
+  "settings.general.approvalMode.ask.description": "読み取りは自由、それ以外は事前に確認",
+  "settings.general.approvalMode.unattended.label": "無人（CI）",
+  "settings.general.approvalMode.unattended.description": "待機しない：許可リストと読み取りは実行、それ以外は拒否",
+  "settings.general.approvalMode.bypass.label": "承認をバイパス",
+  "settings.general.approvalMode.bypass.description": "拒否ルール以外のチェックを省略 — 信頼できる環境のみ",
+  "settings.general.approvalMode.advanced": "詳細モード",
+  "settings.general.approvalMode.advanced.none": "通常ティアへ戻す"
 }

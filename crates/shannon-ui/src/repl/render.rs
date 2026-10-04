@@ -230,7 +230,7 @@ pub fn draw_frame(
             progress_bar: pb,
             sidebar_info: sidebar_ref,
             sidebar_tab: state.sidebar_tab,
-            approval_mode: Some(&state.approval_mode_label),
+            approval_mode: Some(state.approval_mode_label()),
             focus_mode: state.focus_mode,
             fullscreen_mode: state.fullscreen_mode,
             auto_follow: state.auto_follow,

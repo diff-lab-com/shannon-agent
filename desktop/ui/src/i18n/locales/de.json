@@ -3933,5 +3933,13 @@
   "inbox.runStatus.succeeded": "Erfolgreich",
   "extensions.credentialStorage.label": "Anmeldedaten-Speicher",
   "extensions.credentialStorage.keyring": "OS-Schlüsselbund",
-  "extensions.credentialStorage.file": "Lokale Datei (eingeschränkt)"
+  "extensions.credentialStorage.file": "Lokale Datei (eingeschränkt)",
+  "settings.general.approvalMode.ask.label": "Fragen",
+  "settings.general.approvalMode.ask.description": "Lesezugriffe laufen frei; alles andere fragt zuerst",
+  "settings.general.approvalMode.unattended.label": "Unbeaufsichtigt (CI)",
+  "settings.general.approvalMode.unattended.description": "Wartet nie: erlaubte Tools und Lesezugriffe laufen, der Rest wird abgelehnt",
+  "settings.general.approvalMode.bypass.label": "Genehmigungen umgehen",
+  "settings.general.approvalMode.bypass.description": "Überspringt alle Prüfungen außer Verbotsregeln — nur vertrauenswürdige Umgebungen",
+  "settings.general.approvalMode.advanced": "Erweitert",
+  "settings.general.approvalMode.advanced.none": "Zur Standardstufe zurückkehren"
 }

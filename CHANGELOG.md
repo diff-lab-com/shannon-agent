@@ -3,6 +3,40 @@
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
+## [Unreleased] — Permission-mode convergence (2026-10-05)
+
+Permission modes converge to a 4+3 model ([design](docs/plans/2026-10-04-permission-mode-naming-design.md), [plan](docs/plans/2026-10-04-permission-modes-improvement-plan.md)). **Read the breaking notes before upgrading.**
+
+### Breaking / behavior changes
+
+- **`ApprovalMode` shrinks 9 → 7 variants.** Removed: `Suggest` (renamed **`Ask`**, token `ask`), `Auto` (the classifier mode is now the decision engine inside auto modes; `auto-classifier`/`classifier` inputs map conservatively to `ask`), `PlanReadonly` (folded into `readonly`). Old serde values deserialize via aliases.
+- **`auto-edit` is the canonical token for the file-edit tier** (Display was `auto`); `auto` remains an alias of it, so existing `--permission-mode auto` / desktop configs keep their meaning. Claude Code's `acceptEdits` / `default` parse as before.
+- **`dontAsk` now means "never waits"**: pre-approved tools and reads pass, everything else is **denied** (previously it was identical to bypass). Aligns with Claude Code; CI users pairing it with `--allowed-tools` get the documented behavior.
+- **Desktop default `approval_mode` moves `confirm` → `auto-edit`** (K1: the engine default, matching the TUI; `confirm` still parses as `ask`).
+- **Team agents error on unknown `--permission-mode`** (previously silently degraded to full-auto — a coordinator typo handed agents *more* power).
+- **`--yes` / bypass guardrails**: refused as root (override `SHANNON_ALLOW_ROOT_BYPASS=1` for containers) and killed by `SHANNON_DISABLE_BYPASS=1`.
+- **The breaker takes exit code 8**, not 7 as the plan first specced — rc 7 was already `NoProgress` and CI harnesses branch on it.
+
+### Fixed (Phase 0)
+
+- Status-bar labels no longer silently mutate the active mode (label round-trip loss: `Auto`→`FullAuto`, `Readonly`→`Suggest`, …). The REPL stores the enum; labels are display-only and bijective (ASK/EDIT/FULL/PLAN/RO/CI/BYPASS).
+- `Plan` mode is real: `/plan approve` promotes the session to the full-auto floor (deny rules + critical denial still bind) and lifts the write gate; `/plan off` / reject / first Shift+Tab restore the snapshotted ladder mode.
+- Deny rules are effective in **every** mode including `bypassPermissions` (the global deny gate runs before mode overrides).
+- `/perms mode plan` now means `Plan` (was mapped to `readonly`); `/perms mode` and `/mode` share one token vocabulary.
+- Destructive MCP tools (`destructiveHint`) are registered on headless / team / served surfaces, not just the REPL — the always-confirm guard is no longer TUI-only.
+
+### Added
+
+- **Rule layer (P1-1)**: `settings.json` `permissions.ask` is honored (forced prompts in every mode; denied under `dontAsk`); all three lists also feed the rule checker (`Bash(cmd *)` patterns work).
+- **`permissions.defaultMode` (P1-2)** seeds the startup mode; project-level files cannot set bypass/dontAsk (poisoning guard).
+- **`permission_profile` / `SHANNON_PERMISSION_PROFILE` (P1-3) now actually applies** (built-ins + `custom:<name>` from `.shannon/profiles/*.toml`), before any explicit mode choice.
+- **Audit rows record the full mode token** (e.g. `full-auto`), not the lossy status-bar label (P1-4).
+- **`--max-auto-approvals N` / `permissions.max_auto_approvals` (K5/P3-2)**: breaker, default off; interactive prompt carries `limit_triggered`, headless exits 8.
+- **Protocol (K4/P2-3)**: `POST /v1/sessions` and `/api/query` accept an optional `approval_mode` (400 on unknown tokens); WS gains `approval.mode` request/ack frames. Served engines bootstrap from settings/profile instead of a bare manager; REST `/api/query` can pin a mode per call.
+- **UI convergence (P2-2)**: TUI Shift+Tab cycles the 3-stop ladder (ASK → EDIT → FULL), `/mode` lists daily vs expert groups; desktop switcher shows the same 3 tiers with expert modes in Settings → General → "Advanced"; `ExecutionModeSwitcher` stays profile-scoped (rule presets).
+- **Dual `ApprovalMode` (shannon-commands `Auto|Manual|Smart`) removed** — one vocabulary across the codebase.
+
+
 
 ### Desktop — MCP OAuth tokens and data-source credentials move into the OS keyring (2026-10-02)
 

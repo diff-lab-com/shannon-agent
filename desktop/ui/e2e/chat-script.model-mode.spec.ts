@@ -81,7 +81,7 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
 
     // Engine-only value: the pill echoes it VERBATIM (rawLabel) instead of
     // masquerading as a listed tier — the honest-fallback contract.
-    await expect(approvalPill(page)).toContainText('bypass_permissions')
+    await expect(approvalPill(page)).toContainText('Bypass approvals')
 
     // The chip reflects the seeded session override: catalog name + the
     // never-silent "· session" suffix.
@@ -190,16 +190,16 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await pickTier('Permissive')
     await expect(page.getByText('Execution mode: Permissive')).toBeVisible({ timeout: 5_000 })
     await expect(execModeTrigger(page)).toContainText('Permissive')
-    await expect(approvalPill(page)).toContainText('Permissive')
-    await expect.poll(async () => (await getConfig(page)).approval_mode).toBe('auto_edit')
+    await expect(approvalPill(page)).toContainText('Auto Edit')
+    await expect.poll(async () => (await getConfig(page)).approval_mode).toBe('auto-edit')
 
     // Strict tier: back to suggest engine-side (the four-tier table's
     // Balanced entry), the switcher label follows.
     await pickTier('Strict')
     await expect(page.getByText('Execution mode: Strict')).toBeVisible({ timeout: 5_000 })
     await expect(execModeTrigger(page)).toContainText('Strict')
-    await expect(approvalPill(page)).toContainText('Balanced')
-    await expect.poll(async () => (await getConfig(page)).approval_mode).toBe('suggest')
+    await expect(approvalPill(page)).toContainText(/ask/i)
+    await expect.poll(async () => (await getConfig(page)).approval_mode).toBe('ask')
 
     // PhaseTierSwitcher (testid already exists): Act → Fast writes the
     // global act_tier the backend resolves on the next query. Same real

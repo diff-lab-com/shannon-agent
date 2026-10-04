@@ -13,7 +13,7 @@ import { readDensityPref, setDensityPref, type DensityPref } from '@/lib/density
 import { getLinkTarget, setLinkTarget as setLinkTargetPref, type LinkTarget } from '@/lib/openLink'
 import { Switch } from '@/components/ui/switch'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
-import { APPROVAL_MODES, approvalModeOption } from '@/lib/approvalModes'
+import { APPROVAL_MODES, ADVANCED_MODES, approvalModeOption } from '@/lib/approvalModes'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import MigrationWizard from '@/components/migration/MigrationWizard'
 import PersonaPackSettings from './PersonaPackSettings'
@@ -162,6 +162,31 @@ export default function GeneralSettings() {
               <span className="material-symbols-outlined icon-sm shrink-0 mt-[2px]" aria-hidden="true">gpp_maybe</span>
               {t('chat.input.mode.highRiskNote')}
             </p>
+            {/* Design §7.2: expert modes (readonly / dontAsk / bypass) are
+                not in the quick tiers — they live behind this advanced
+                picker. Selecting one writes the same approval_mode key. */}
+            <div className="mt-md flex items-center gap-sm px-xs">
+              <label
+                className="font-label-md text-on-surface-variant whitespace-nowrap"
+                htmlFor="approval-mode-advanced"
+              >
+                {t('settings.general.approvalMode.advanced')}
+              </label>
+              <select
+                id="approval-mode-advanced"
+                className="flex-1 min-w-0 bg-surface-container-low border border-outline-variant/30 rounded-lg px-sm py-xs font-body-md text-on-surface cursor-pointer"
+                value={ADVANCED_MODES.find(m => m.value === currentMode.value)?.value ?? ''}
+                onChange={e => {
+                  const option = ADVANCED_MODES.find(m => m.value === e.target.value)
+                  if (option) handleModeChange(option)
+                }}
+              >
+                <option value="">{t('settings.general.approvalMode.advanced.none')}</option>
+                {ADVANCED_MODES.map(m => (
+                  <option key={m.value} value={m.value}>{t(m.labelKey)}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </section>
 

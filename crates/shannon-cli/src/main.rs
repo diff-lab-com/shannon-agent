@@ -82,6 +82,11 @@ enum HeadlessExitCode {
     /// budget. A model-failure class must not collide with infra rc values
     /// harnesses already branch on.
     NoProgress = 7,
+    /// 8 - the auto-approval budget (`--max-auto-approvals` /
+    /// `permissions.max_auto_approvals`) was exhausted. P3-2 originally
+    /// specced exit 7, but rc 7 was already `NoProgress` (harnesses branch on
+    /// it), so the breaker takes the next free code.
+    AutoApprovalLimit = 8,
 }
 
 impl From<HeadlessExitCode> for i32 {
@@ -147,6 +152,11 @@ fn classify_headless_failure(error: &str) -> HeadlessExitCode {
         || err_lower.contains("context_length")
     {
         HeadlessExitCode::ContextOverflow
+    } else if err_lower.contains("auto-approval limit") || err_lower.contains("approval budget") {
+        // P3-2: budget breaker trips before the generic permission class —
+        // the message contains neither "permission" nor "denied" but CI
+        // should still distinguish budget-stop from plain denial (exit 8).
+        HeadlessExitCode::AutoApprovalLimit
     } else if err_lower.contains("permission") || err_lower.contains("denied") {
         HeadlessExitCode::PermissionDenied
     } else {
@@ -637,10 +647,17 @@ struct Cli {
     lang: Option<String>,
 
     /// Auto-approve all tool executions (non-interactive mode only).
-    /// Without this flag, non-interactive mode uses FullAuto (allows all non-critical tools).
-    /// With this flag, even critical tools are allowed (BypassPermissions).
+    /// Without this flag, non-interactive mode uses full-auto (allows all non-critical tools).
+    /// With this flag, even critical tools are allowed (bypassPermissions).
+    /// Refused as root or when SHANNON_DISABLE_BYPASS=1 is set.
     #[arg(short = 'y', long)]
     yes: bool,
+
+    /// Auto-approval budget (K5/P3-2): stop after N consecutive automatic
+    /// approvals in auto modes and require a human decision (headless: exit
+    /// code 8). 0 disables the breaker. Env/setting: `max_auto_approvals`.
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    max_auto_approvals: u32,
 
     /// Run as a team agent process (internal flag for multi-agent coordination).
     /// Reads JSON-RPC from stdin, executes tasks using the full LLM + tool stack,
@@ -1935,6 +1952,12 @@ fn print_redaction_suggestion_notice() {
 /// `bypass_all` when true, skips all permission checks (BypassPermissions mode).
 /// `resume_session` when provided, injects prior conversation history into the engine.
 #[allow(clippy::too_many_arguments)]
+/// P1-3: the configured `permission_profile` string (env override > config).
+fn configured_permission_profile() -> Option<String> {
+    shannon_core::unified_config::ShannonConfig::configured_permission_profile()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_noninteractive_query(
     query: &str,
     stream: bool,
@@ -1945,6 +1968,7 @@ fn run_noninteractive_query(
     goal: Option<String>,
     attachments: Vec<shannon_engine::api::ContentBlock>,
     permission_mode: Option<&str>,
+    max_auto_approvals: u32,
     mcp_approve: &[String],
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
@@ -2172,19 +2196,44 @@ fn run_noninteractive_query(
         };
 
         let mut permissions = shannon_engine::permissions::PermissionManager::new();
-        // Non-interactive mode: use FullAuto by default (allows all non-critical tools),
-        // or BypassPermissions with --yes flag (allows everything including critical).
+        // P1-3: configured profile applies first; explicit CLI mode (resolved
+        // below) wins over the profile.
+        if let Some(profile) = configured_permission_profile() {
+            shannon_engine::permissions::apply_configured_profile(&mut permissions, &profile);
+        }
+        // P1-1/P1-2: settings.json rules (allow/ask/deny) + defaultMode.
+        shannon_engine::permissions::load_settings_permission_files(&mut permissions);
+        // P0-6: destructive MCP tools prompt in every non-bypass mode, on
+        // every surface — not just the REPL.
+        for name in tools.destructive_tool_names() {
+            permissions.register_destructive_tool(name);
+        }
+        for (name, ro) in tools.tool_read_only_flags() {
+            permissions.register_tool_read_only(name, ro);
+        }
+
+        // Non-interactive mode: use full-auto by default (allows all non-critical tools),
+        // or bypassPermissions with --yes flag (allows everything including critical).
         // An explicit --permission-mode wins over both defaults (it was silently
         // ignored on this path before — roadmap E7 QA finding).
         if let Some(mode) = permission_mode {
             let mode = shannon_engine::permissions::ApprovalMode::from_str_ci(mode)
                 .ok_or_else(|| anyhow::anyhow!("unknown --permission-mode '{mode}'"))?;
+            if mode == shannon_engine::permissions::ApprovalMode::BypassPermissions {
+                shannon_engine::permissions::ensure_bypass_allowed()
+                    .map_err(|e| anyhow::anyhow!(e))?;
+            }
             permissions.set_approval_mode(mode);
         } else if bypass_all {
+            shannon_engine::permissions::ensure_bypass_allowed().map_err(|e| anyhow::anyhow!(e))?;
+            eprintln!(
+                "Warning: --yes enables bypassPermissions (all checks skipped). Refused as root / with SHANNON_DISABLE_BYPASS=1."
+            );
             permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::BypassPermissions);
         } else {
             permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
         }
+        permissions.set_max_auto_approvals(max_auto_approvals);
         let state = StateManager::new();
 
         let base_engine = QueryEngine::with_defaults(client, tools, permissions, state)
@@ -2565,6 +2614,8 @@ fn run_headless_query(
     notify: bool,
     goal: Option<String>,
     mcp_approve: &[String],
+    permission_mode: Option<&str>,
+    max_auto_approvals: u32,
 ) -> Result<()> {
     // Arm structured crash capture when the dogfood loop (or any CI harness)
     // points SHANNON_CRASH_DIR at a scratch directory; no-op otherwise.
@@ -2722,9 +2773,39 @@ fn run_headless_query(
             shannon_engine::api::LlmClient::new_unauthenticated(client_config)
         };
 
-        // Permissions: FullAuto in headless mode (auto-approve non-critical, deny critical)
+        // Permissions: full-auto by default in headless mode (auto-approve
+        // non-critical, deny critical); an explicit --permission-mode now
+        // wins on this path too (P0-4 — it was silently ignored before).
         let mut permissions = shannon_engine::permissions::PermissionManager::new();
-        permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
+        // P1-3: configured profile applies first; explicit CLI mode (resolved
+        // below) wins over the profile.
+        if let Some(profile) = configured_permission_profile() {
+            shannon_engine::permissions::apply_configured_profile(&mut permissions, &profile);
+        }
+        // P1-1/P1-2: settings.json rules (allow/ask/deny) + defaultMode.
+        shannon_engine::permissions::load_settings_permission_files(&mut permissions);
+        // P0-6: destructive MCP tools prompt in every non-bypass mode, on
+        // every surface — not just the REPL.
+        for name in tools.destructive_tool_names() {
+            permissions.register_destructive_tool(name);
+        }
+        for (name, ro) in tools.tool_read_only_flags() {
+            permissions.register_tool_read_only(name, ro);
+        }
+
+        let resolved_mode = match permission_mode {
+            Some(mode) => {
+                let parsed = shannon_engine::permissions::ApprovalMode::from_str_ci(mode)
+                    .ok_or_else(|| anyhow::anyhow!("unknown --permission-mode '{mode}'"))?;
+                if parsed == shannon_engine::permissions::ApprovalMode::BypassPermissions {
+                    shannon_engine::permissions::ensure_bypass_allowed().map_err(|e| anyhow::anyhow!(e))?;
+                }
+                parsed
+            }
+            None => shannon_engine::permissions::ApprovalMode::FullAuto,
+        };
+        permissions.set_approval_mode(resolved_mode);
+        permissions.set_max_auto_approvals(max_auto_approvals);
         let state = headless_state_manager()?;
         let mut engine = QueryEngine::with_defaults(client, tools, permissions, state)
             .with_plan_mode_active(plan_mode_flag);
@@ -3338,6 +3419,12 @@ fn fire_headless_completion_notification(exit_code: HeadlessExitCode, prompt: &s
                 .collect::<String>(),
             NotificationLevel::Warning,
         ),
+        HeadlessExitCode::AutoApprovalLimit => (
+            "Shannon — auto-approval budget reached",
+            "The auto-approval budget ran out; raise --max-auto-approvals or allow the operation."
+                .to_string(),
+            NotificationLevel::Warning,
+        ),
         HeadlessExitCode::PermissionDenied => (
             "Shannon — permission denied",
             "A required tool was blocked in non-interactive mode.".to_string(),
@@ -3835,14 +3922,35 @@ fn run_team_agent_mode(
         };
 
         let mut permissions = shannon_engine::permissions::PermissionManager::new();
+        // P1-3: configured profile applies first; explicit CLI mode (resolved
+        // below) wins over the profile.
+        if let Some(profile) = configured_permission_profile() {
+            shannon_engine::permissions::apply_configured_profile(&mut permissions, &profile);
+        }
+        // P1-1/P1-2: settings.json rules (allow/ask/deny) + defaultMode.
+        shannon_engine::permissions::load_settings_permission_files(&mut permissions);
+        // P0-6: destructive MCP tools prompt in every non-bypass mode, on
+        // every surface — not just the REPL.
+        for name in tools.destructive_tool_names() {
+            permissions.register_destructive_tool(name);
+        }
+        for (name, ro) in tools.tool_read_only_flags() {
+            permissions.register_tool_read_only(name, ro);
+        }
+
+        // P0-4: unknown modes must error, not silently degrade to full-auto —
+        // a coordinator typo would otherwise hand the agent MORE power than
+        // the team config asked for. Absent flag: conservative ask.
         let approval_mode = match permission_mode {
-            Some("auto") => shannon_engine::permissions::ApprovalMode::AutoEdit,
-            Some("plan") => shannon_engine::permissions::ApprovalMode::Plan,
-            Some("full-auto") => shannon_engine::permissions::ApprovalMode::FullAuto,
-            Some("dontAsk") => shannon_engine::permissions::ApprovalMode::DontAsk,
-            Some("readonly") => shannon_engine::permissions::ApprovalMode::Readonly,
-            _ => shannon_engine::permissions::ApprovalMode::FullAuto,
+            Some(mode) => shannon_engine::permissions::ApprovalMode::from_str_ci(mode)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("unknown --permission-mode '{mode}' for team agent")
+                })?,
+            None => shannon_engine::permissions::ApprovalMode::Ask,
         };
+        if approval_mode == shannon_engine::permissions::ApprovalMode::BypassPermissions {
+            shannon_engine::permissions::ensure_bypass_allowed().map_err(|e| anyhow::anyhow!(e))?;
+        }
         permissions.set_approval_mode(approval_mode);
         let state = StateManager::new();
 
@@ -5705,6 +5813,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.notify,
             cli.goal.clone(),
             &cli.mcp_approve,
+            cli.permission_mode.as_deref(),
+            cli.max_auto_approvals,
         );
     }
 
@@ -5740,6 +5850,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.goal.clone(),
             parse_attachments(&cli.attach)?,
             cli.permission_mode.as_deref(),
+            cli.max_auto_approvals,
             &cli.mcp_approve,
         );
     }
@@ -5767,6 +5878,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.goal.clone(),
             parse_attachments(&cli.attach)?,
             cli.permission_mode.as_deref(),
+            cli.max_auto_approvals,
             &cli.mcp_approve,
         );
     }
@@ -5801,6 +5913,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.goal.clone(),
             parse_attachments(&cli.attach)?,
             cli.permission_mode.as_deref(),
+            cli.max_auto_approvals,
             &cli.mcp_approve,
         );
     }
@@ -6055,6 +6168,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 cli.goal.clone(),
                 parse_attachments(&cli.attach)?,
                 cli.permission_mode.as_deref(),
+                cli.max_auto_approvals,
                 &cli.mcp_approve,
             )?;
         }

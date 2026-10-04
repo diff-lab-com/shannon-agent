@@ -12,8 +12,10 @@ import { createVoiceProvider, type VoiceProviderConfig } from '@/lib/voice'
 // Wrap (not replace) the real factory so each test can assert on the
 // config the hook resolved, while jsdom's missing MediaRecorder still
 // exercises the genuine stub-fallback path (F-voice-gate).
+import type * as VoiceModule from '@/lib/voice'
+
 vi.mock('@/lib/voice', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/voice')>()
+  const actual = await importOriginal<typeof VoiceModule>()
   return {
     ...actual,
     createVoiceProvider: vi.fn(actual.createVoiceProvider),

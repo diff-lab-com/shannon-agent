@@ -34,6 +34,7 @@ fn query_request_serialization() {
         model: Some("gpt-4o".to_string()),
         session_id: None,
         attachments: None,
+        approval_mode: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     assert!(json.contains("hello world"));

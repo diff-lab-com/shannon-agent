@@ -3933,5 +3933,13 @@
   "inbox.runStatus.succeeded": "Con éxito",
   "extensions.credentialStorage.label": "Almacenamiento de credenciales",
   "extensions.credentialStorage.keyring": "Llavero del sistema",
-  "extensions.credentialStorage.file": "Archivo local (restringido)"
+  "extensions.credentialStorage.file": "Archivo local (restringido)",
+  "settings.general.approvalMode.ask.label": "Preguntar",
+  "settings.general.approvalMode.ask.description": "Lecturas libres; todo lo demás pide confirmación",
+  "settings.general.approvalMode.unattended.label": "Sin supervisión (CI)",
+  "settings.general.approvalMode.unattended.description": "Nunca espera: herramientas permitidas y lecturas pasan, el resto se deniega",
+  "settings.general.approvalMode.bypass.label": "Omitir aprobaciones",
+  "settings.general.approvalMode.bypass.description": "Omite todas las comprobaciones excepto reglas de denegación — solo entornos de confianza",
+  "settings.general.approvalMode.advanced": "Avanzado",
+  "settings.general.approvalMode.advanced.none": "Volver a un nivel estándar"
 }

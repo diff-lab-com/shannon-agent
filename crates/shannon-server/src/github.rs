@@ -326,7 +326,25 @@ async fn spawn_github_routine_run(
 
     let started = Instant::now();
     // Session creation identical to POST /v1/sessions.
-    let engine = crate::routes::build_engine(client_config);
+    // Routine serve is fire-and-forget: a bootstrap failure logs and falls
+    // back to the legacy bare engine rather than 500-ing the webhook.
+    let engine = match crate::routes::build_engine(client_config, None) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!(error = %e, "routine serve: engine bootstrap failed; legacy fallback");
+            let client = if state.client_config.provider.requires_auth() {
+                shannon_engine::api::LlmClient::new(state.client_config.clone())
+            } else {
+                shannon_engine::api::LlmClient::new_unauthenticated(state.client_config.clone())
+            };
+            shannon_core::query_engine::QueryEngine::with_defaults(
+                client,
+                shannon_core::tools::ToolRegistry::new(),
+                shannon_engine::permissions::PermissionManager::new(),
+                shannon_engine::state::StateManager::new(),
+            )
+        }
+    };
     let session_id = sessions.create(engine).await.id;
 
     let run_id_for_task = run_id.clone();

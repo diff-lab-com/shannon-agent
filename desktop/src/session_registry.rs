@@ -192,21 +192,24 @@ impl SessionState {
     /// [`SessionState::cancel_pending`]. Only meaningful while `querying`
     /// is up; the caller (`cancel_session_query`) checks that.
     pub fn set_cancel_pending(&self) {
-        self.cancel_pending.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.cancel_pending
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// B1-4 (P1-3): consume the pending-cancel marker (read-and-clear in
     /// one step), so a windowed stop can never fire twice or leak onto a
     /// later, legitimate run.
     pub fn take_cancel_pending(&self) -> bool {
-        self.cancel_pending.swap(false, std::sync::atomic::Ordering::Relaxed)
+        self.cancel_pending
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// B1-4 (P1-3): clear the marker without reading it — the query loop's
     /// exit path does this with the latch reset, so a spurious windowed
     /// stop (double press) cannot outlive its querying epoch.
     pub fn clear_cancel_pending(&self) {
-        self.cancel_pending.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.cancel_pending
+            .store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

@@ -35,15 +35,14 @@ describe('GeneralSettings', () => {
     expect(screen.getByText('Approval Mode')).toBeInTheDocument()
   })
 
-  it('renders the four shared approval tiers (round-1 R3: strict/balanced/permissive/full)', () => {
+  it('renders the three shared ladder tiers (4+3: ask/auto-edit/full-auto)', () => {
     render(wrap(<GeneralSettings />))
-    expect(screen.getAllByText('Strict').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('Balanced').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('Permissive').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Ask').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Auto Edit').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('Full').length).toBeGreaterThanOrEqual(1)
-    // R3: the no-op suggest/confirm pair left the table — the settings page
-    // can no longer offer two tiers that behave identically.
-    expect(screen.queryByText('Confirm')).not.toBeInTheDocument()
+    // The expert tiers (Strict et al.) live behind the Advanced picker, not
+    // the quick segmented control.
+    expect(screen.queryByRole('radio', { name: 'Strict' })).not.toBeInTheDocument()
   })
 
   // Round-2 review: the factory-default `approval_mode: "confirm"` is an
@@ -58,27 +57,44 @@ describe('GeneralSettings', () => {
     approval_mode: approvalMode,
   })
 
-  it('round-2: factory-default "confirm" selects NO tier and reads out the raw value', async () => {
+  it('legacy factory-default "confirm" normalizes into the Ask tier', async () => {
     vi.mocked(api.getConfig).mockResolvedValueOnce(configWith('confirm'))
     render(wrap(<GeneralSettings />))
-    // every radio unchecked — no tier may claim the confirm value
+    // Legacy values normalize for display: confirm ≡ ask, and the ask tier
+    // radio is the one that selects.
     await waitFor(() => {
       const radios = screen.getAllByRole('radio')
-      expect(radios).toHaveLength(4)
-      for (const radio of radios) expect(radio).toHaveAttribute('aria-checked', 'false')
+      expect(radios).toHaveLength(3)
+      expect(screen.getByRole('radio', { name: 'Ask' })).toHaveAttribute('aria-checked', 'true')
+      for (const radio of radios) {
+        if (radio !== screen.getByRole('radio', { name: 'Ask' })) {
+          expect(radio).toHaveAttribute('aria-checked', 'false')
+        }
+      }
     })
-    // the raw engine value is named, with the honest switch hint
-    expect(screen.getByTestId('approval-mode-raw-hint')).toHaveTextContent('confirm')
-    expect(screen.getByTestId('approval-mode-raw-hint')).toHaveTextContent(/engine-managed value/i)
+    expect(screen.queryByTestId('approval-mode-raw-hint')).not.toBeInTheDocument()
   })
 
-  it('round-2: an in-table config still selects its tier (suggest → Balanced)', async () => {
-    vi.mocked(api.getConfig).mockResolvedValueOnce(configWith('suggest'))
+  it('an in-table config still selects its tier (auto_edit → Auto Edit)', async () => {
+    vi.mocked(api.getConfig).mockResolvedValueOnce(configWith('auto_edit'))
     render(wrap(<GeneralSettings />))
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'Balanced' })).toHaveAttribute('aria-checked', 'true'))
-    expect(screen.getByRole('radio', { name: 'Strict' })).toHaveAttribute('aria-checked', 'false')
-    expect(screen.getByRole('radio', { name: 'Permissive' })).toHaveAttribute('aria-checked', 'false')
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Auto Edit' })).toHaveAttribute('aria-checked', 'true'))
+    expect(screen.getByRole('radio', { name: 'Ask' })).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByRole('radio', { name: 'Full' })).toHaveAttribute('aria-checked', 'false')
     expect(screen.queryByTestId('approval-mode-raw-hint')).not.toBeInTheDocument()
+  })
+
+  it('an expert config (bypass_permissions) selects no quick tier and names itself', async () => {
+    vi.mocked(api.getConfig).mockResolvedValueOnce(configWith('bypass_permissions'))
+    render(wrap(<GeneralSettings />))
+    // Expert modes are not quick tiers: no radio selects, but the current
+    // mode line still states the truth (Bypass approvals).
+    await waitFor(() => {
+      for (const radio of screen.getAllByRole('radio')) {
+        expect(radio).toHaveAttribute('aria-checked', 'false')
+      }
+    })
+    expect(screen.getByText(/Current:/)).toHaveTextContent(/bypass/i)
   })
 
   it('renders provider section', () => {

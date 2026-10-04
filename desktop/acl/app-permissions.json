@@ -785,6 +785,15 @@
       }
     },
     {
+      "identifier": "allow-get-session-querying",
+      "description": "Enables the get_session_querying command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_session_querying"
+        ]
+      }
+    },
+    {
       "identifier": "allow-get-session-context-breakdown",
       "description": "Enables the get_session_context_breakdown command without any pre-configured scope.",
       "commands": {
@@ -3218,6 +3227,7 @@
       "permissions": [
         "allow-estimate-task-cost",
         "allow-get-session-budget",
+        "allow-get-session-querying",
         "allow-get-session-context-breakdown",
         "allow-get-session-usage",
         "allow-get-usage-by-session",

@@ -553,8 +553,8 @@ pub(crate) fn profile_approval_mode(
 ) -> Result<Option<&'static str>, String> {
     match name {
         "" => Ok(None),
-        "strict" | "balanced" => Ok(Some("suggest")),
-        "permissive" => Ok(Some("auto_edit")),
+        "strict" | "balanced" => Ok(Some("ask")),
+        "permissive" => Ok(Some("auto-edit")),
         custom => {
             let def = registry.get(custom).ok_or_else(|| {
                 format!(
@@ -570,9 +570,9 @@ pub(crate) fn profile_approval_mode(
             let auto_write = any(&def.auto_approve, &["Edit", "Write", "MultiEdit"]);
             let auto_bash = any(&def.auto_approve, &["Bash"]);
             Ok(Some(if auto_read && auto_write && auto_bash {
-                "auto_edit"
+                "auto-edit"
             } else {
-                "suggest"
+                "ask"
             }))
         }
     }
@@ -754,19 +754,16 @@ mod tests {
 
     #[test]
     fn builtin_profile_approval_mode_mapping_is_frozen() {
-        // 严格 = suggest, 平衡 = suggest, 宽松 = auto_edit (P1-3 mapping).
+        // 严格 = ask, 平衡 = ask, 宽松 = auto-edit (4+3 tokens, 2026-10-05).
         let reg = empty_registry();
-        assert_eq!(
-            profile_approval_mode("strict", &reg).unwrap(),
-            Some("suggest")
-        );
+        assert_eq!(profile_approval_mode("strict", &reg).unwrap(), Some("ask"));
         assert_eq!(
             profile_approval_mode("balanced", &reg).unwrap(),
-            Some("suggest")
+            Some("ask")
         );
         assert_eq!(
             profile_approval_mode("permissive", &reg).unwrap(),
-            Some("auto_edit")
+            Some("auto-edit")
         );
         assert_eq!(profile_approval_mode("", &reg).unwrap(), None);
         assert!(profile_approval_mode("nope", &reg).is_err());
@@ -783,7 +780,7 @@ mod tests {
     #[test]
     fn apply_active_profile_noop_when_unset() {
         let mut mgr = shannon_engine::permissions::PermissionManager::new();
-        mgr.set_approval_mode(shannon_engine::permissions::ApprovalMode::Auto);
+        mgr.set_approval_mode(shannon_engine::permissions::ApprovalMode::AutoEdit);
         apply_active_profile(&mut mgr, None);
         apply_active_profile(&mut mgr, Some(""));
         apply_active_profile(&mut mgr, Some("   "));
@@ -791,7 +788,7 @@ mod tests {
         // Approval mode untouched by a no-op activation.
         assert_eq!(
             mgr.approval_mode(),
-            shannon_engine::permissions::ApprovalMode::Auto
+            shannon_engine::permissions::ApprovalMode::AutoEdit
         );
     }
 
@@ -808,7 +805,7 @@ mod tests {
         // overrides with the configured approval_mode afterwards.
         assert_eq!(
             mgr.approval_mode(),
-            shannon_engine::permissions::ApprovalMode::Suggest
+            shannon_engine::permissions::ApprovalMode::Ask
         );
         // Strict marks Write/Bash destructive (the 严格↔平衡 differentiator).
         assert!(mgr.is_tool_destructive("Write"));

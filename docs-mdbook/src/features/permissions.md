@@ -1,43 +1,49 @@
 # Permissions
 
-Shannon provides a configurable permission system to control what tools can do.
+Shannon controls what tools may do without asking through **approval modes** (a 4+3 model) plus an **allow/ask/deny rule layer** that is effective in every mode.
 
-## Approval Modes
+## Approval modes (4 + 3)
+
+Autonomy ladder — `Shift+Tab` in the terminal cycles the three stops; the desktop composer pill mirrors them:
 
 | Mode | Behavior |
 |------|----------|
-| `Strict` | Require approval for every tool call |
-| `Balanced` | Auto-approve reads, require approval for writes |
-| `Permissive` | Auto-approve non-destructive, deny destructive |
-| `FullAuto` | Auto-approve everything except critical operations |
-| `BypassPermissions` | Approve all (only with explicit `--yes` flag) |
+| `ask` | Reads run freely; every other tool asks first. |
+| `auto-edit` | File edits run without asking; commands still ask. **Engine default.** |
+| `full-auto` | Everything below critical risk runs automatically. |
 
-## Permission Classifier
+Workflow tier — entered via `/plan`, never a cycle stop:
 
-The `PermissionClassifier` evaluates each tool call:
+| Mode | Behavior |
+|------|----------|
+| `plan` | Read-only until the plan is approved; approval unlocks plan-scoped auto-run (deny rules and critical-risk denial still bind). Exiting restores the previous ladder mode. |
 
-1. **Rule-based classification** — Fast, deterministic
-2. **LLM fallback** — For ambiguous cases (confidence < 0.7, Medium+ risk)
+Expert modes — explicit `/mode` in the terminal, Settings → General → "Advanced" in the desktop:
 
-Classification tiers:
-- `allow` — Auto-approve
-- `soft_deny` — Prompt user
-- `hard_deny` — Block execution
-- Explicit user intent overrides classification
+| Mode | Behavior |
+|------|----------|
+| `readonly` | Read-only analysis; writes and bash are denied. |
+| `dontAsk` | Never waits: allow-listed tools and reads pass, the rest is **denied** (CI posture). |
+| `bypassPermissions` | Skips all checks except deny rules. Guardrails: refused as root, `SHANNON_DISABLE_BYPASS=1` kill switch, first-use confirmation. |
 
-## Permission Profiles
+## Rule layer (settings.json)
 
-Pre-configured profiles for common workflows:
+`permissions.allow` / `permissions.ask` / `permissions.deny` are effective in **every mode**:
 
-| Profile | Reads | Writes | Destructive |
-|---------|-------|--------|-------------|
-| `strict` | approve | approve | deny |
-| `balanced` | auto | approve | deny |
-| `permissive` | auto | auto | deny |
-| `custom` | configurable | configurable | configurable |
+- `deny` blocks even under `bypassPermissions`;
+- `ask` forces a prompt even in `full-auto` (and is denied under `dontAsk`);
+- `allow` pre-approves but never overrides critical-risk denial.
 
-Set via config or `SHANNON_PERMISSION_PROFILE` env var.
+`permissions.defaultMode` seeds the startup mode; project-level files may not set bypass/dontAsk.
 
-## CI/Headless Mode
+## Permission classifier
 
-In headless mode (`--prompt`), `FullAuto` is the default. `BypassPermissions` requires explicit `--yes` flag.
+The rule-based `PermissionClassifier` (5 risk levels, bash command analysis, MCP verb classification) is the decision engine inside the auto modes. An optional LLM hardening layer (`permissions.llm_fallback`) can escalate ambiguous medium+ risk cases — it may only tighten, never loosen, a verdict.
+
+## Permission profiles
+
+`permission_profile` in `config.toml` (or `SHANNON_PERMISSION_PROFILE`): `strict` / `balanced` / `permissive` / `custom:<name>` from `.shannon/profiles/*.toml`. A profile applies on startup; an explicit mode choice (CLI flag, `/mode`, desktop tier) wins.
+
+## CI / headless
+
+Headless (`--prompt`) defaults to `full-auto`; `--yes` requests `bypassPermissions` (subject to the guardrails above). `--permission-mode <token>` overrides on every headless path. The `permissions.max_auto_approvals` breaker (default off, `--max-auto-approvals N`) forces exit code 8 when the budget is exhausted.

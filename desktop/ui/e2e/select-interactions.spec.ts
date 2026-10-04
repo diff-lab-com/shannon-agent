@@ -12,7 +12,7 @@
 //  - reasoning effort is FOLDED into the model chip's dropdown as a
 //    namespaced section — there is no separate Reasoning combobox;
 //  - the permission dropdown offers the FOUR shared tiers
-//    (Strict/Balanced/Permissive/Full) — `plan` is owned by the composer's
+//    (Ask/Auto Edit/Full) — `plan` is owned by the composer's
 //    plan toggle and `confirm` is an out-of-table engine value, so neither
 //    is a dropdown option;
 //  - the Header model selector is hidden on /chat (the composer chip is the
@@ -27,12 +27,12 @@ test.describe('Select interactions', () => {
 
     const trigger = page.getByRole('combobox', { name: 'Permission mode' })
     await trigger.click()
-    // GB round-1 R3: the shared four-tier table (the demo mock's legacy
+    // 4+3 model: the shared three-ladder table (the demo mock's legacy
     // 'standard' value shows as the raw readout with nothing selected).
-    // Permissive writes `auto_edit` — a REAL state change the demo
+    // Auto Edit writes `auto-edit` — a REAL state change the demo
     // configure persists.
-    await page.getByRole('option', { name: 'Permissive' }).click()
-    await expect(trigger).toContainText(/permissive/i, { timeout: 10000 })
+    await page.getByRole('option', { name: 'Auto Edit' }).click()
+    await expect(trigger).toContainText(/auto edit/i, { timeout: 10000 })
   })
 
   test('reasoning effort commits from the model chip dropdown', async ({ page }) => {

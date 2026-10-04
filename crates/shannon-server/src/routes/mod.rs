@@ -15,7 +15,25 @@ use uuid::Uuid;
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateSessionRequest {
     pub model: Option<String>,
+    /// K4/P2-3: optional approval mode token (`ask` / `plan` / `auto-edit` /
+    /// `full-auto` / `readonly` / `dontAsk` / `bypassPermissions`). Unknown
+    /// tokens are rejected with 400; bypass runs the server-side guardrails.
+    #[serde(default)]
+    pub approval_mode: Option<String>,
 }
+/// K4/P2-3: error body for session-create failures (unknown mode, refused
+/// bypass). Returned with 400.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct CreateSessionError {
+    pub error: String,
+}
+
+impl axum::response::IntoResponse for CreateSessionError {
+    fn into_response(self) -> axum::response::Response {
+        (axum::http::StatusCode::BAD_REQUEST, axum::Json(self)).into_response()
+    }
+}
+
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct CreateSessionResponse {
     pub id: Uuid,
@@ -91,18 +109,21 @@ impl ApiError {
 pub async fn create_session(
     State(state): State<AppState>,
     Json(request): Json<CreateSessionRequest>,
-) -> Json<CreateSessionResponse> {
+) -> Result<Json<CreateSessionResponse>, CreateSessionError> {
     let mut config = state.client_config.clone();
     if let Some(model) = request.model {
         config.model = model;
     }
-    let engine = build_engine(config);
+    let approval_mode = parse_approval_mode_token(request.approval_mode.as_deref())
+        .map_err(|e| CreateSessionError { error: e })?;
+    let engine =
+        build_engine(config, approval_mode).map_err(|e| CreateSessionError { error: e })?;
     let summary = state.sessions.create(engine).await;
-    Json(CreateSessionResponse {
+    Ok(Json(CreateSessionResponse {
         id: summary.id,
         created_at: summary.created_at,
         message_count: summary.message_count,
-    })
+    }))
 }
 
 /// Build a fresh `QueryEngine` from an LLM client config — the exact engine
@@ -111,18 +132,52 @@ pub async fn create_session(
 /// execution (P2-7) so both paths stay identical.
 pub(crate) fn build_engine(
     config: shannon_engine::api::LlmClientConfig,
-) -> shannon_core::query_engine::QueryEngine {
+    approval_mode: Option<shannon_engine::permissions::ApprovalMode>,
+) -> Result<shannon_core::query_engine::QueryEngine, String> {
     let client = if config.provider.requires_auth() {
         shannon_engine::api::LlmClient::new(config)
     } else {
         shannon_engine::api::LlmClient::new_unauthenticated(config)
     };
-    shannon_core::query_engine::QueryEngine::with_defaults(
+    // K4/P2-3: served sessions get the same permission bootstrap as the CLI —
+    // configured profile, settings rules + defaultMode — and never a bare
+    // engine-default manager.
+    let mut permissions = shannon_engine::permissions::PermissionManager::new();
+    if let Some(profile) =
+        shannon_core::unified_config::ShannonConfig::configured_permission_profile()
+    {
+        shannon_engine::permissions::apply_configured_profile(&mut permissions, &profile);
+    }
+    shannon_engine::permissions::load_settings_permission_files(&mut permissions);
+    if let Some(mode) = approval_mode {
+        if mode == shannon_engine::permissions::ApprovalMode::BypassPermissions {
+            shannon_engine::permissions::ensure_bypass_allowed()?;
+        }
+        permissions.set_approval_mode(mode);
+    }
+    Ok(shannon_core::query_engine::QueryEngine::with_defaults(
         client,
         shannon_core::tools::ToolRegistry::new(),
-        shannon_engine::permissions::PermissionManager::new(),
+        permissions,
         shannon_engine::state::StateManager::new(),
-    )
+    ))
+}
+
+/// K4/P2-3: parse a wire approval-mode token with an HTTP-shaped error.
+pub(crate) fn parse_approval_mode_token(
+    token: Option<&str>,
+) -> Result<Option<shannon_engine::permissions::ApprovalMode>, String> {
+    match token {
+        None => Ok(None),
+        Some(t) => shannon_engine::permissions::ApprovalMode::from_str_ci(t)
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "unknown approval_mode '{t}'; valid: {}",
+                    shannon_engine::permissions::ApprovalMode::all_names().join(", ")
+                )
+            }),
+    }
 }
 
 #[utoipa::path(get, path = "/v1/sessions/{id}", params(("id" = Uuid, Path)), responses((status = 200, body = CreateSessionResponse), (status = 404)))]

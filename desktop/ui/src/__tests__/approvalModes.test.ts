@@ -1,63 +1,98 @@
-// GB P2-4 — the shared approval-tier table (round-1 R3: FOUR tiers).
+// approvalModes — the shared approval-tier table (4+3 model, 2026-10-05).
 //
 // History: the composer and Settings → General each carried their own
 // five-value table over the same `approval_mode` key and never agreed; the
-// first unification kept General's five — but two of them (suggest and
-// confirm) behave IDENTICALLY engine-side (`"confirm" => Suggest` in
-// desktop/src/commands.rs), so switching between them was a no-op. The
-// controller ruling merges the table to four tiers named by REAL engine
-// semantics: strict(readonly) / balanced(suggest) / permissive(auto_edit) /
-// full(full_auto). These tests pin that shape.
+// round-1 R3 unification kept four tiers; the 2026-10-05 convergence moved
+// to the 4+3 model (docs/plans/2026-10-04-permission-mode-naming-design.md):
+// THREE autonomy-ladder quick tiers (ask / auto-edit / full-auto), plan as a
+// composer-owned workflow tier, and readonly / dontAsk / bypassPermissions
+// as EXPERT modes reachable from Settings → General "Advanced". Legacy
+// stored values normalize to their canonical tier for display. These tests
+// pin that shape.
 
 import { describe, it, expect } from 'vitest'
-import { APPROVAL_MODES, approvalModeOption } from '@/lib/approvalModes'
+import { ADVANCED_MODES, APPROVAL_MODES, approvalModeOption, normalizeApprovalMode } from '@/lib/approvalModes'
 
-describe('APPROVAL_MODES (shared composer + settings table)', () => {
-  it('lists exactly the four engine-distinct tiers, most to least supervised', () => {
+describe('APPROVAL_MODES (shared composer + settings quick tiers)', () => {
+  it('lists exactly the three ladder stops, most to least supervised', () => {
     expect(APPROVAL_MODES.map(m => m.value)).toEqual([
-      'readonly',
-      'suggest',
-      'auto_edit',
-      'full_auto',
+      'ask',
+      'auto-edit',
+      'full-auto',
     ])
   })
 
-  it('every tier maps to a DISTINCT engine behavior (no suggest≡confirm no-ops)', () => {
+  it('every tier maps to a DISTINCT engine behavior', () => {
     const values = APPROVAL_MODES.map(m => m.value)
     expect(new Set(values).size).toBe(values.length)
-    // The no-op pair is gone by construction…
+    // The old no-op pair (suggest≡confirm) is gone by construction — the
+    // ladder base is `ask`, with both legacy spellings normalizing into it.
+    expect(values).not.toContain('suggest')
     expect(values).not.toContain('confirm')
-    // …and the engine folds "confirm" into Suggest, i.e. Balanced's value.
-    // (Contract mirrored from desktop/src/commands.rs parse_approval_mode.)
-    expect(values).toContain('suggest')
   })
 
   it('every tier carries label + description message ids, icon and tone', () => {
     for (const mode of APPROVAL_MODES) {
-      expect(mode.labelKey, mode.value).toMatch(/^settings\.general\.approvalMode\.(strict|balanced|permissive|full)\./)
-      expect(mode.descriptionKey, mode.value).toMatch(/^settings\.general\.approvalMode\.(strict|balanced|permissive|full)\./)
+      expect(mode.labelKey, mode.value).toMatch(/^settings\.general\.approvalMode\.(ask|autoEdit|full)\./)
+      expect(mode.descriptionKey, mode.value).toMatch(/^settings\.general\.approvalMode\.(ask|autoEdit|full)\./)
       expect(mode.icon, mode.value).toBeTruthy()
       expect(mode.tone, mode.value).toBeTruthy()
     }
   })
 })
 
+describe('ADVANCED_MODES (expert tiers, Settings "Advanced" picker)', () => {
+  it('lists readonly / dontAsk / bypassPermissions, never quick-pickable', () => {
+    expect(ADVANCED_MODES.map(m => m.value)).toEqual([
+      'readonly',
+      'dontAsk',
+      'bypassPermissions',
+    ])
+    for (const adv of ADVANCED_MODES) {
+      expect(APPROVAL_MODES.find(m => m.value === adv.value)).toBeUndefined()
+    }
+  })
+})
+
+describe('normalizeApprovalMode (legacy stored values)', () => {
+  it('folds the legacy vocabulary into the canonical tiers', () => {
+    expect(normalizeApprovalMode('suggest')).toBe('ask')
+    expect(normalizeApprovalMode('confirm')).toBe('ask')
+    expect(normalizeApprovalMode('default')).toBe('ask')
+    expect(normalizeApprovalMode('auto')).toBe('auto-edit')
+    expect(normalizeApprovalMode('auto_edit')).toBe('auto-edit')
+    expect(normalizeApprovalMode('permissive')).toBe('auto-edit')
+    expect(normalizeApprovalMode('full_auto')).toBe('full-auto')
+    expect(normalizeApprovalMode('full')).toBe('full-auto')
+    expect(normalizeApprovalMode('strict')).toBe('readonly')
+    expect(normalizeApprovalMode('plan_ro')).toBe('readonly')
+    expect(normalizeApprovalMode('dont_ask')).toBe('dontAsk')
+    expect(normalizeApprovalMode('bypass_permissions')).toBe('bypassPermissions')
+  })
+})
+
 describe('approvalModeOption', () => {
-  it('resolves each listed tier', () => {
+  it('resolves each listed ladder tier', () => {
     for (const mode of APPROVAL_MODES) {
       expect(approvalModeOption(mode.value)).toBe(mode)
     }
   })
 
-  it('falls back to Balanced (suggest) for a blank/missing config value', () => {
+  it('resolves each expert tier', () => {
+    for (const mode of ADVANCED_MODES) {
+      expect(approvalModeOption(mode.value)).toBe(mode)
+    }
+  })
+
+  it('falls back to auto-edit (the engine default) for a blank/missing config value', () => {
     expect(approvalModeOption(null)).toBe(APPROVAL_MODES[1])
     expect(approvalModeOption(undefined)).toBe(APPROVAL_MODES[1])
     expect(approvalModeOption('')).toBe(APPROVAL_MODES[1])
-    expect(APPROVAL_MODES[1].value).toBe('suggest')
+    expect(APPROVAL_MODES[1].value).toBe('auto-edit')
   })
 
-  it('the engine alias "auto" shows the permissive tier (same AutoEdit behavior)', () => {
-    expect(approvalModeOption('auto')).toBe(APPROVAL_MODES[2])
+  it('the engine legacy alias "auto" shows the auto-edit tier (same AutoEdit behavior)', () => {
+    expect(approvalModeOption('auto')).toBe(APPROVAL_MODES[1])
   })
 
   it('plan keeps its own honest labels (owned by the composer plan toggle)', () => {
@@ -67,19 +102,16 @@ describe('approvalModeOption', () => {
     expect(APPROVAL_MODES).not.toContain(plan)
   })
 
-  it('R3: "confirm" is an OUT-OF-TABLE value — raw readout, never a fake tier', () => {
+  it('legacy "confirm" normalizes into the ask tier — no fake raw readout', () => {
     const option = approvalModeOption('confirm')
-    expect(option.value).toBe('confirm')
-    expect(option.rawLabel).toBe('confirm')
-    expect(APPROVAL_MODES).not.toContain(option)
-    // And it must not masquerade as the balanced tier it behaves like.
-    expect(option.labelKey).not.toBe(APPROVAL_MODES[1].labelKey)
+    expect(option.value).toBe('ask')
+    expect(option).toBe(APPROVAL_MODES[0])
   })
 
   it('unknown engine aliases keep their raw value as the pill label', () => {
-    const option = approvalModeOption('dont_ask')
-    expect(option.value).toBe('dont_ask')
-    expect(option.rawLabel).toBe('dont_ask')
+    const option = approvalModeOption('mystery-mode')
+    expect(option.value).toBe('mystery-mode')
+    expect(option.rawLabel).toBe('mystery-mode')
     expect(APPROVAL_MODES).not.toContain(option)
   })
 })

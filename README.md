@@ -172,19 +172,31 @@ Full MCP implementation compatible with Claude Code's MCP ecosystem:
 
 ### Permission Modes
 
-What the agent may do without asking is governed by an approval mode. The names are each single-valued — `auto`, `full-auto`, and the Auto classifier are three different modes:
+What the agent may do without asking is governed by an approval mode — a 4+3 model (design: [docs/plans/2026-10-04-permission-mode-naming-design.md](docs/plans/2026-10-04-permission-mode-naming-design.md)):
+
+Autonomy ladder (terminal `Shift+Tab` cycles these three; desktop composer pill mirrors it):
 
 | Mode | Behavior |
 |---|---|
-| `default` (suggest) | Confirm every tool execution. |
-| `plan` | The agent proposes a plan first; once you approve it, tool calls within that plan run without per-call prompts. |
-| `auto` (auto-edit) | Auto-approve file edits/writes only — shell and other risky tools still ask. This is the engine default. |
-| `full-auto` | Auto-approve everything except critical-risk operations. |
-| `auto-classifier` | A background safety classifier decides per operation: low risk runs silently, medium+ asks, critical is denied. |
-| `readonly` / `plan-readonly` | Read-only operations only; `plan-readonly` additionally denies tool execution entirely (analysis only). |
-| `bypass-permissions` / `dont-ask` | Never prompt — including critical operations. Use with extreme caution. |
+| `ask` (aliases: `default`, `suggest`) | Reads run freely; every other tool asks first. |
+| `auto-edit` (aliases: `acceptEdits`, `auto`) | File edits run without asking; commands still ask. **This is the engine default.** |
+| `full-auto` | Everything below critical risk runs automatically. |
 
-In the terminal, BackTab cycles the common modes (default → auto → plan → full-auto); the desktop app exposes them in Settings → General and in the chat header's mode switcher.
+Workflow tier (single-column, entered via `/plan` — never in the cycle):
+
+| Mode | Behavior |
+|---|---|
+| `plan` | Read-only until you approve the plan; approval unlocks plan-scoped auto-run (critical-risk operations and deny rules still bind). Exiting restores your previous mode. |
+
+Expert modes (explicit `/mode` in the terminal; Settings → General → "Advanced" in the desktop):
+
+| Mode | Behavior |
+|---|---|
+| `readonly` | Read-only analysis — no writes, no bash. |
+| `dontAsk` | Never waits: allow-listed tools and reads pass, everything else is **denied** (CI posture; pair with `--allowed-tools`). |
+| `bypassPermissions` | Skips all checks except deny rules. Guardrailed: refused as root, `SHANNON_DISABLE_BYPASS=1` kill switch, first-use confirmation. |
+
+Allow / ask / deny rules in `settings.json` (`permissions.allow/ask/deny`) layer on top and are effective in **every** mode — deny rules even under `bypassPermissions`. `permissions.defaultMode` picks your startup mode (project files may not set bypass/dontAsk). The `permissions.max_auto_approvals` breaker (default off) forces a human decision after N consecutive auto-approvals; headless runs exit with code 8 when it trips.
 
 ### Plugin & Skill System
 

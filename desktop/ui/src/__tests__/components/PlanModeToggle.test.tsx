@@ -98,11 +98,11 @@ describe('ChatInput — Plan Mode B3 enhancements (banner + shortcut funnel)', (
     expect(screen.getByRole('button', { name: 'Exit plan mode' })).toBeInTheDocument()
   })
 
-  it('clicking Exit button reverts to suggest mode', async () => {
+  it('clicking Exit button reverts to ask mode', async () => {
     renderWithMode('plan')
     fireEvent.click(screen.getByRole('button', { name: 'Exit plan mode' }))
     await waitFor(() => {
-      expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'suggest' })
+      expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'ask' })
     })
   })
 
@@ -120,7 +120,7 @@ describe('ChatInput — Plan Mode B3 enhancements (banner + shortcut funnel)', (
     const evt = new KeyboardEvent('keydown', { key: 'P', shiftKey: true, ctrlKey: true, bubbles: true })
     window.dispatchEvent(evt)
     await waitFor(() => {
-      expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'suggest' })
+      expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'ask' })
     })
   })
 

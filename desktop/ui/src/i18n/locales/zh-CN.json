@@ -3933,5 +3933,13 @@
   "inbox.runStatus.succeeded": "已成功",
   "extensions.credentialStorage.label": "凭据存储位置",
   "extensions.credentialStorage.keyring": "OS 钥匙串",
-  "extensions.credentialStorage.file": "本地文件（受限）"
+  "extensions.credentialStorage.file": "本地文件（受限）",
+  "settings.general.approvalMode.ask.label": "询问",
+  "settings.general.approvalMode.ask.description": "只读自由执行，其余操作先询问",
+  "settings.general.approvalMode.unattended.label": "无人值守（CI）",
+  "settings.general.approvalMode.unattended.description": "从不等待：白名单工具与只读放行，其余一律拒绝",
+  "settings.general.approvalMode.bypass.label": "跳过审批",
+  "settings.general.approvalMode.bypass.description": "跳过除拒绝规则外的所有检查——仅限可信环境",
+  "settings.general.approvalMode.advanced": "高级模式",
+  "settings.general.approvalMode.advanced.none": "切换回常规档位"
 }

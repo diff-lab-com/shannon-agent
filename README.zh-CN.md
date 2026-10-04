@@ -172,19 +172,31 @@ BYOK、无中间商：连接一次提供商，Shannon 即在本地保存密钥�
 
 ### 权限模式
 
-代理无需确认即可执行的操作范围由审批模式（approval mode）控制。每个名称各有一个明确含义 —— 特别注意 `auto`、`full-auto` 与 Auto 分类器是三个不同的模式：
+代理无需确认即可执行的操作范围由审批模式控制，采用 4+3 模型（设计文档：[docs/plans/2026-10-04-permission-mode-naming-design.md](docs/plans/2026-10-04-permission-mode-naming-design.md)）：
+
+自主权三档（终端 Shift+Tab 依次切换，桌面端输入框档位条与之一致）：
 
 | 模式 | 行为 |
 |---|---|
-| `default`（suggest） | 每次工具执行都需确认。 |
-| `plan` | 代理先给出计划；计划获批后，计划内的工具调用不再逐个确认。 |
-| `auto`（auto-edit） | 仅自动批准文件编辑/写入 —— shell 等高风险工具仍会询问。这是引擎默认值。 |
-| `full-auto` | 自动批准除关键风险操作外的一切。 |
-| `auto-classifier` | 由后台安全分类器逐操作判定：低风险静默执行，中/高风险询问，关键风险直接拒绝。 |
-| `readonly` / `plan-readonly` | 仅允许只读操作；`plan-readonly` 进一步禁止所有工具执行（仅分析）。 |
-| `bypass-permissions` / `dont-ask` | 从不询问 —— 包括关键风险操作。请务必谨慎。 |
+| `ask`（别名 `default` / `suggest`） | 只读自由执行，其余操作先询问。 |
+| `auto-edit`（别名 `acceptEdits` / `auto`） | 文件编辑自动执行，命令仍会询问。**引擎默认值。** |
+| `full-auto` | 关键风险以下的一切自动执行。 |
 
-终端中 BackTab 依次切换常用模式（default → auto → plan → full-auto）；桌面端在「设置 → 通用」与聊天顶栏的模式切换器中提供。
+工作流档（单列，通过 `/plan` 进入，不在循环内）：
+
+| 模式 | 行为 |
+|---|---|
+| `plan` | 规划期间只读；计划获批后计划范围内自动执行（关键风险操作与 deny 规则仍然生效）。退出时恢复之前的档位。 |
+
+专家档（终端显式 `/mode`；桌面端「设置 → 通用 → 高级」）：
+
+| 模式 | 行为 |
+|---|---|
+| `readonly` | 只读分析 —— 不写文件、不执行命令。 |
+| `dontAsk` | 从不等待：白名单工具与只读放行，其余一律**拒绝**（CI 姿态，可配合 `--allowed-tools`）。 |
+| `bypassPermissions` | 跳过除 deny 规则外的一切检查。护栏：root 下拒绝、`SHANNON_DISABLE_BYPASS=1` 总开关、首次使用需确认。 |
+
+`settings.json` 的 allow/ask/deny 规则叠加在模式之上，在**所有模式**下生效 —— 包括 bypassPermissions 下的 deny。`permissions.defaultMode` 设定启动档位（项目级配置不得设 bypass/dontAsk）。`permissions.max_auto_approvals` 熔断器（默认关闭）在连续 N 次自动批准后强制人工决策；headless 触发时以退出码 8 结束。
 
 ### 插件与技能系统
 

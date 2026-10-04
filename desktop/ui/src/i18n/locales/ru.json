@@ -3933,5 +3933,13 @@
   "inbox.runStatus.succeeded": "Успешно",
   "extensions.credentialStorage.label": "Хранилище учётных данных",
   "extensions.credentialStorage.keyring": "Связка ключей ОС",
-  "extensions.credentialStorage.file": "Локальный файл (ограниченный)"
+  "extensions.credentialStorage.file": "Локальный файл (ограниченный)",
+  "settings.general.approvalMode.ask.label": "Спрашивать",
+  "settings.general.approvalMode.ask.description": "Чтение свободно; всё остальное — с подтверждением",
+  "settings.general.approvalMode.unattended.label": "Без присмотра (CI)",
+  "settings.general.approvalMode.unattended.description": "Не ждёт: разрешённые инструменты и чтение проходят, остальное отклоняется",
+  "settings.general.approvalMode.bypass.label": "Без проверок",
+  "settings.general.approvalMode.bypass.description": "Пропускает все проверки, кроме запретов — только доверенные среды",
+  "settings.general.approvalMode.advanced": "Расширенные",
+  "settings.general.approvalMode.advanced.none": "Вернуться к обычной ступени"
 }

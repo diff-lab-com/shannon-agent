@@ -3933,5 +3933,13 @@
   "inbox.runStatus.succeeded": "Réussi",
   "extensions.credentialStorage.label": "Stockage des identifiants",
   "extensions.credentialStorage.keyring": "Trousseau du système",
-  "extensions.credentialStorage.file": "Fichier local (restreint)"
+  "extensions.credentialStorage.file": "Fichier local (restreint)",
+  "settings.general.approvalMode.ask.label": "Demander",
+  "settings.general.approvalMode.ask.description": "Lectures libres ; tout le reste demande d'abord",
+  "settings.general.approvalMode.unattended.label": "Sans supervision (CI)",
+  "settings.general.approvalMode.unattended.description": "N'attend jamais : outils autorisés et lectures passent, le reste est refusé",
+  "settings.general.approvalMode.bypass.label": "Contourner les approbations",
+  "settings.general.approvalMode.bypass.description": "Ignore toutes les vérifications sauf les règles de refus — environnements de confiance uniquement",
+  "settings.general.approvalMode.advanced": "Avancé",
+  "settings.general.approvalMode.advanced.none": "Revenir à un palier standard"
 }

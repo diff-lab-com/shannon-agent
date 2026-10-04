@@ -5,16 +5,23 @@ use shannon_types::recover_lock;
 impl super::Repl {
     /// Cycle the approval mode and sync UI state.
     ///
-    /// Cycles through 4 core modes: ASK → EDIT → PLAN → AUTO → ASK.
-    /// Other modes (FULL, etc.) are set explicitly via /mode.
+    /// Cycles the three autonomy-ladder stops: ASK → EDIT → FULL → ASK.
+    /// Plan is a workflow tier, not a ladder stop (design §5.5): while a plan
+    /// is active, the FIRST Shift+Tab exits plan mode and restores the
+    /// snapshotted ladder mode; expert modes (RO/CI/BYPASS) reset to ASK.
     pub fn cycle_approval_mode(&mut self) {
         use shannon_engine::permissions::ApprovalMode;
+
+        if self.state.plan.active {
+            self.exit_plan_restore_mode("Shift+Tab");
+            return;
+        }
 
         let current = if let Some(ref query_engine) = self.query_engine {
             let perms = recover_lock(query_engine.permissions().read());
             perms.approval_mode()
         } else {
-            ApprovalMode::from_label(&self.state.approval_mode_label).unwrap_or_default()
+            self.state.approval_mode
         };
 
         let next = current.cycle_next();
@@ -31,21 +38,48 @@ impl super::Repl {
                 perms.set_approval_mode(next);
                 drop(perms);
             }
-            let label = next.short_label().to_string();
+            self.state.approval_mode = next;
+            let label = next.short_label();
             self.state.status = format!("Mode: {label}");
             self.state.toast = Some((format!("  Mode: {label}  "), std::time::Instant::now()));
-            self.state.approval_mode_label = label;
         }
+    }
+
+    /// Design §5.5 / P0-2: leave plan mode, restore the snapshotted ladder
+    /// mode, and lift the plan write gate. `via` names the trigger for the
+    /// toast (`/plan off`, `Shift+Tab`, `rejected`).
+    pub fn exit_plan_restore_mode(&mut self, via: &str) {
+        let restored = if let Some(ref query_engine) = self.query_engine {
+            let session_id = query_engine.session_id();
+            let restored = {
+                let mut perms = recover_lock(query_engine.permissions().write());
+                perms.exit_plan_mode(session_id)
+            };
+            if let Ok(mut flag) = self.plan_mode_flag.write() {
+                *flag = false;
+            }
+            restored
+        } else {
+            shannon_engine::permissions::ApprovalMode::Ask
+        };
+        self.state.plan = super::PlanState::default();
+        self.state.approval_mode = restored;
+        let label = restored.short_label();
+        self.state.status = format!("Mode: {label}");
+        self.state.toast = Some((
+            format!("  Exited plan mode ({via}) — restored {label}  "),
+            std::time::Instant::now(),
+        ));
     }
 
     /// Sync the approval mode label from the PermissionManager to UI state.
     pub(crate) fn sync_approval_mode_label(&mut self) {
         if let Some(ref query_engine) = self.query_engine {
-            let label = {
+            let mode = {
                 let perms = recover_lock(query_engine.permissions().read());
-                perms.approval_mode().short_label().to_string()
+                perms.approval_mode()
             };
-            self.state.approval_mode_label = label;
+            self.state.approval_mode = mode;
         }
     }
 
@@ -325,7 +359,7 @@ impl super::Repl {
             "cost_usd": self.state.total_cost_usd,
             "turn_count": self.state.turn_count,
             "streaming_active": self.state.streaming_active,
-            "approval_mode": self.state.approval_mode_label,
+            "approval_mode": self.state.approval_mode.to_string(),
         });
 
         // P0-2: bounded, concurrent-read execution — see
