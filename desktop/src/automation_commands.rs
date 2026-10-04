@@ -754,19 +754,16 @@ mod tests {
 
     #[test]
     fn builtin_profile_approval_mode_mapping_is_frozen() {
-        // 严格 = suggest, 平衡 = suggest, 宽松 = auto_edit (P1-3 mapping).
+        // 严格 = ask, 平衡 = ask, 宽松 = auto-edit (4+3 tokens, 2026-10-05).
         let reg = empty_registry();
-        assert_eq!(
-            profile_approval_mode("strict", &reg).unwrap(),
-            Some("suggest")
-        );
+        assert_eq!(profile_approval_mode("strict", &reg).unwrap(), Some("ask"));
         assert_eq!(
             profile_approval_mode("balanced", &reg).unwrap(),
-            Some("suggest")
+            Some("ask")
         );
         assert_eq!(
             profile_approval_mode("permissive", &reg).unwrap(),
-            Some("auto_edit")
+            Some("auto-edit")
         );
         assert_eq!(profile_approval_mode("", &reg).unwrap(), None);
         assert!(profile_approval_mode("nope", &reg).is_err());
