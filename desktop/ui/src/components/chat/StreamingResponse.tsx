@@ -1,5 +1,7 @@
+import { memo } from 'react'
 import { useIntl } from 'react-intl'
 import { Markdown } from '@/components/chat/Markdown'
+import { splitStreamingMarkdown } from '@/lib/streamingMarkdown'
 import { SubagentBlock, ToolCallDisplay } from '@/components/chat/MessageBubble'
 import { Reasoning } from '@/components/ai-elements'
 import type { ToolCall } from '@/types'
@@ -23,6 +25,32 @@ interface StreamingResponseProps {
  * …" on start, "reply complete" on end) — this component carries no live
  * region of its own. */
 
+/* B3-2 (§三 P1-6): the streaming body used to re-parse the ENTIRE accumulated
+ * text on every ~50ms flush — remark-gfm + remark-math + rehype-highlight +
+ * sanitize + katex over thousands of tokens, O(n²) as the reply grows. The
+ * text is now cut at its last safe blank-line boundary (a boundary that is
+ * provably not inside an open fence/`$$` math block/loose list/indented-code
+ * interior — see lib/streamingMarkdown.ts) into:
+ *   - a finalized prefix, rendered by the memoized component below. While the
+ *     stream appends, the prefix string is value-stable, so React.memo bails
+ *     and NONE of the heavy pipeline runs over it again (no length/hash key
+ *     needed — default shallow props compare already gives exactly that);
+ *   - an active tail, re-parsed each flush, whose size stays at "the last
+ *     paragraph (or open block)" instead of the whole reply.
+ * Both halves ride `deferHighlight` (syntax coloring returns on the
+ * finalized MessageBubble render); paragraphs join seamlessly because the
+ * prefix keeps its trailing blank run, so the DOM is sibling <p> blocks
+ * exactly as a single parse would produce. */
+
+/**
+ * B3-2: memoized renderer for the finalized prefix. Re-renders only when the
+ * prefix itself grows (a new paragraph finalized) — tail updates are invisible
+ * to it, which is what keeps the per-flush cost bounded.
+ */
+const FinalizedMarkdown = memo(function FinalizedMarkdown({ text }: { text: string }) {
+  return <Markdown deferHighlight>{text}</Markdown>
+})
+
 export default function StreamingResponse({
   streamingText,
   thinkingText,
@@ -31,6 +59,9 @@ export default function StreamingResponse({
 }: StreamingResponseProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+  // B3-2: pure per-render split (cheap line scan); prefix is '' until the
+  // first paragraph boundary finalizes.
+  const { prefix, tail } = splitStreamingMarkdown(streamingText)
 
   return (
     <div className="relative" role="presentation">
@@ -56,7 +87,8 @@ export default function StreamingResponse({
           {streamingText && (
             <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-e1">
               <div className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-xs prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
-                <Markdown>{streamingText}</Markdown>
+                {prefix && <FinalizedMarkdown text={prefix} />}
+                <Markdown deferHighlight>{tail}</Markdown>
                 {/* P2-5d typing cursor — CSS-driven (not a moving dot) so it
                     matches Claude Desktop's style. */}
                 <span

@@ -3380,6 +3380,8 @@
   "sidebar.sessions.lastActivity.aria": "Last active {time}",
   "sidebar.sessions.awaitingApproval.badge": "Waiting for approval",
   "sidebar.sessions.error.badge": "Last run failed",
+  "sidebar.sessions.queue.label": "佇列 {n}",
+  "sidebar.sessions.queue.title": "{n} 則訊息將在回到該會話後送出",
   "nav.search": "搜尋",
   "nav.automation": "自動化",
   "sidebar.model.badge.aria": "Current model {model} ({provider}) — click to manage",
