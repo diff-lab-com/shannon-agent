@@ -10,18 +10,19 @@
 ## 1. 传输与信任
 
 - 帧走**桌面既有的 relay 控制面 WSS 连接**（桌面出站连 relay 的那条注册了 session 的
-  连接），与内容 E2E 帧共路不同帧类型。JSON 文本帧，UTF-8。
+  连接），与内容 E2E 帧共路不同帧类型。JSON 文本帧，UTF-8；类型字段沿用 relay 控制面
+  既有的 `t` 惯例（与 `{t: "register", …}` 同族）。
 - `push.bind` / `push.unbind` / `push.wake` **只接受来自已认证桌面会话**的连接；未认证
   连接发这些帧 → relay 直接关闭连接（与既有控制面纪律一致）。设备身份免费获得：绑定
   指令来自持有该桌面全部 deviceId 的可信会话，relay 保持「哑绑定存储」（§O2 裁决）。
-- v1 帧版本字段 `v: 1`；relay 对未知 `type` 静默忽略（渐进契约，§J–§M 同哲学）。
+- v1 帧版本字段 `v: 1`；relay 对未知 `t` 静默忽略（渐进契约，§J–§M 同哲学）。
 
 ## 2. `push.bind`（注册/轮换二合一，承载 `shannon/push.register` 的转发）
 
 请求（桌面 → relay）：
 
 ```json
-{ "v": 1, "type": "push.bind", "id": "<req-id>",
+{ "v": 1, "t": "push.bind", "id": "<req-id>",
   "deviceId": "<gateway deviceId>",
   "platform": "fcm" | "apns",
   "token": "<厂商设备推送 token>" }
@@ -30,7 +31,7 @@
 响应（relay → 桌面，按 `id` 关联）：
 
 ```json
-{ "v": 1, "type": "push.bind.ack", "id": "<同一 req-id>",
+{ "v": 1, "t": "push.bind.ack", "id": "<同一 req-id>",
   "ok": true, "handle": "<b64url 22 字符>" }
 ```
 
@@ -51,11 +52,11 @@
 ## 3. `push.unbind`（注销，承载 `enable:false` 转发）
 
 ```json
-{ "v": 1, "type": "push.unbind", "id": "<req-id>", "deviceId": "<gateway deviceId>" }
+{ "v": 1, "t": "push.unbind", "id": "<req-id>", "deviceId": "<gateway deviceId>" }
 ```
 
 ```json
-{ "v": 1, "type": "push.unbind.ack", "id": "<同一 req-id>", "ok": true }
+{ "v": 1, "t": "push.unbind.ack", "id": "<同一 req-id>", "ok": true }
 ```
 
 - 未绑定的 deviceId unbind → 仍 `ok: true`（诚实 no-op，§M2 同姿态）；
@@ -64,13 +65,13 @@
 ## 4. `push.wake`（唤醒触发，§O3）
 
 ```json
-{ "v": 1, "type": "push.wake", "deviceId": "<gateway deviceId>", "seq": <live-sync 游标> }
+{ "v": 1, "t": "push.wake", "deviceId": "<gateway deviceId>", "seq": <live-sync 游标> }
 ```
 
 受理回执（异步合并语义——ack 只代表受理，不代表厂商推送已发）：
 
 ```json
-{ "v": 1, "type": "push.wake.ack", "deviceId": "<同一 deviceId>", "accepted": true }
+{ "v": 1, "t": "push.wake.ack", "deviceId": "<同一 deviceId>", "accepted": true }
 ```
 
 - **fire-and-forget**：桌面不等厂商出站结果（§O3「厂商通道自身重试语义之外不做应用层
