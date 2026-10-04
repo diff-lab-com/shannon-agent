@@ -11,6 +11,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { ChatPage } from './helpers/ChatPage'
 import { loadChatScript } from './helpers/scriptLoader'
 import { expectNoConsoleErrors } from './helpers/watchdog'
+import { annotateKnownIssues } from './helpers/knownIssues'
 
 const MAIN = 'script-sess-life-main'
 
@@ -125,6 +126,94 @@ test.describe('scripted chat backend — session-lifecycle (journey #19)', () =>
     await page.getByTestId('delete-session-confirm').click()
     await expect(page.getByTestId('archived-row-script-sess-life-rename')).toHaveCount(0, { timeout: 10_000 })
     await expect(dialog).toHaveCount(0)
+    await expectNoConsoleErrors(page)
+  })
+
+  // B3-5 pin (plan §七-3 / B1-3 journey half): a typed-but-unsent draft must
+  // not outlive its session — deleteSessionAction clears the session's
+  // `shannon.draft.<id>` key, and the AppContext-level unit test
+  // (AppContextB1.test.tsx) pins the storage half; these journeys pin the
+  // real-page interaction, where Chat's debounced/switch-flush draft writers
+  // are also live while a session goes away underneath them.
+  //
+  // FINDING B1-3-RESIDUE (B3-5, recorded — no production change in this
+  // pack): deleting the CURRENTLY OPEN session re-writes its draft key after
+  // deleteSessionAction's clearDraft — the deleted id rides out through
+  // Chat.tsx's switch-flush effect (visibleSessionId → null with the text
+  // still in the composer ⇒ persistDraft(previousId, input)), resurrecting
+  // `shannon.draft.<id>` as stale residue across restarts. The unit test
+  // could not see it (no Chat page mounted). Flip condition: when the flush
+  // skips sessions that no longer exist (or the clear lands after it), the
+  // second journey below flips to asserting the key is GONE.
+  test('deleting a session from another session clears its typed draft (B1-3: no shannon.draft.<id> residue)', async ({ page }) => {
+    test.setTimeout(90_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'session-lifecycle', test.info())
+    await row(page, MAIN).click()
+    await expect(page.getByRole('heading', { name: 'Lifecycle main' })).toBeVisible({ timeout: 10_000 })
+
+    // A draft typed but never sent — the debounced (300ms) write lands it
+    // under the session's key (polled: the debounce is not a fixed sleep).
+    const DRAFT_KEY = `shannon.draft.${MAIN}`
+    await chat.composer().fill('删除我之前没发出去的草稿')
+    await expect
+      .poll(async () => page.evaluate(k => localStorage.getItem(k), DRAFT_KEY), { timeout: 5_000 })
+      .toContain('删除我之前没发出去的草稿')
+
+    // Move to ANOTHER session first (the switch flush keeps MAIN's draft on
+    // disk — that is the persistence contract, not residue), then delete
+    // MAIN from the rail: ⋯ menu → Delete → confirm.
+    await row(page, 'script-sess-life-rename').click()
+    await expect(page.getByRole('heading', { name: 'Rename me' })).toBeVisible({ timeout: 10_000 })
+    await openRowMenu(page, MAIN, 'Lifecycle main')
+    await page.getByRole('menuitem', { name: 'Delete' }).click()
+    const dialog = page.getByRole('alertdialog')
+    await expect(dialog).toBeVisible()
+    await page.getByTestId('delete-session-confirm').click()
+    await expect(dialog).toHaveCount(0, { timeout: 10_000 })
+    await expect(row(page, MAIN)).toHaveCount(0, { timeout: 10_000 })
+
+    // The draft key died with the session — clearDraft is the last writer
+    // (no switch-flush targets a deleted id from here).
+    expect(await page.evaluate(k => localStorage.getItem(k), DRAFT_KEY)).toBeNull()
+    await expectNoConsoleErrors(page)
+  })
+
+  // The same journey with the deletion fired from the deleted session's OWN
+  // view — the B1-3-RESIDUE shape above. Current behavior asserted (the
+  // switch-flush resurrects the key); see the finding comment for the flip.
+  test('deleting the OPEN session currently resurrects its draft via the switch flush (B1-3-RESIDUE anchored)', async ({ page }) => {
+    test.setTimeout(90_000)
+    annotateKnownIssues(test.info(), {
+      'B1-3-RESIDUE': 'Deleting the open session re-writes shannon.draft.<id> after '
+        + 'deleteSessionAction cleared it — Chat.tsx\'s draft switch-flush persists '
+        + 'the still-typed text under the deleted id once visibleSessionId flips to '
+        + 'null. Current behavior asserted; flip to "key is null" when fixed.',
+    })
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'session-lifecycle', test.info())
+    await row(page, MAIN).click()
+    await expect(page.getByRole('heading', { name: 'Lifecycle main' })).toBeVisible({ timeout: 10_000 })
+
+    const DRAFT_KEY = `shannon.draft.${MAIN}`
+    await chat.composer().fill('删除我之前没发出去的草稿')
+    await expect
+      .poll(async () => page.evaluate(k => localStorage.getItem(k), DRAFT_KEY), { timeout: 5_000 })
+      .toContain('删除我之前没发出去的草稿')
+
+    await openRowMenu(page, MAIN, 'Lifecycle main')
+    await page.getByRole('menuitem', { name: 'Delete' }).click()
+    const dialog = page.getByRole('alertdialog')
+    await expect(dialog).toBeVisible()
+    await page.getByTestId('delete-session-confirm').click()
+    await expect(dialog).toHaveCount(0, { timeout: 10_000 })
+    await expect(row(page, MAIN)).toHaveCount(0, { timeout: 10_000 })
+
+    // CURRENT behavior: the switch-flush writer resurrects the deleted
+    // session's draft (B1-3-RESIDUE). When the fix lands this flips to
+    // `.toBeNull()` — mirroring the clean path pinned above.
+    const residue = await page.evaluate(k => localStorage.getItem(k), DRAFT_KEY)
+    expect(residue).toContain('删除我之前没发出去的草稿')
     await expectNoConsoleErrors(page)
   })
 

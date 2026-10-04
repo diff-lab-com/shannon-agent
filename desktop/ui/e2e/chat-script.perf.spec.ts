@@ -194,4 +194,146 @@ test.describe('chat long-session performance guard', () => {
     // A long session under storm must still end clean — no swallowed errors.
     await expectNoConsoleErrors(page)
   })
+
+  // ── B3-5 pin（plan §七-9 / B3-2 代理）───────────────────────────────────
+  //
+  // The long-reply streaming proxy: a single turn streams a >8K-token reply
+  // (~500 chunks × 48 CJK chars ≈ 24K chars — ≥8K tokens even at a
+  // conservative 2 chars/token). NIGHTLY-ONLY like the guard above (the
+  // config testIgnore keeps the whole file out of the PR gate). Same
+  // measurement口径 as the guard: wall-clock completion budget, plus the
+  // B3-2 proxy metric — main-thread LONG-TASK sampling across the stream
+  // (before B3-2's incremental rendering, every coalesced flush re-parses
+  // the whole growing markdown; the long-task totals quantify that tax and
+  // give the B3-2 landing a before/after anchor). Thresholds = measured
+  // local baseline (report attached per run) rounded up with headroom.
+  const LONG_CHUNKS = 500
+  const LONG_CHUNK_CHARS = 48
+  const LONG_CHUNK_DELAY_MS = 120
+  const LONG_STREAM_SPEED = 8 // 120ms/8 = 15ms gap → a dense burst
+  /** Measured baseline 9.1s locally (500 × 15ms stream + settle + commit);
+   *  ×~3 for loaded-runner headroom. */
+  const LONG_COMPLETION_BUDGET_MS = 30_000
+  /** Measured baseline 51ms over 1 task across the whole stream locally
+   *  (the coalesced projection keeps re-parse cost near-invisible at this
+   *  size — B3-2's job is to keep it that way as the surface grows). The
+   *  budget is an absolute jank ceiling: >2s of blocked main thread during
+   *  a ~7.5s stream means streaming went regressive regardless of baseline. */
+  const LONGTASK_TOTAL_BUDGET_MS = 2_000
+
+  const LONG_PHRASE = '流式渲染压力测试句子，覆盖分片边界与增量刷新路径。'
+
+  /** One deterministic chunk of the long reply (shared by the script builder
+   *  and the flush-completeness assert — the expected text IS the script). */
+  function longReplyChunk(i: number): string {
+    const prefix = `第 ${i + 1} 段：`
+    return prefix + LONG_PHRASE.repeat(3).slice(0, LONG_CHUNK_CHARS - prefix.length)
+  }
+
+  function longReplyScript(): ChatScript {
+    const chunks = Array.from({ length: LONG_CHUNKS }, (_, i) => longReplyChunk(i))
+    return {
+      name: 'perf-long-reply',
+      description: `B3-5 perf proxy — 单轮 ${LONG_CHUNKS} 分片长回复（~${LONG_CHUNKS * LONG_CHUNK_CHARS} 字 ≈ >8K token）`,
+      seed: {
+        config: { hasKey: true },
+        sessions: [{ id: 'perf-sess-long-reply', title: 'Perf long reply', messages: [] }],
+      },
+      turns: [{
+        user: '请输出这篇长文全文',
+        script: [
+          { event: 'query:text', chunks, chunkDelayMs: LONG_CHUNK_DELAY_MS },
+          { event: 'query:completed' },
+        ],
+      }],
+    }
+  }
+
+  /** Buffered main-thread long-task accumulator (the B3-2 proxy metric). */
+  async function installLongTaskObserver(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+      const w = window as unknown as {
+        __longtask?: { count: number; totalMs: number; worstMs: number }
+      }
+      w.__longtask = { count: 0, totalMs: 0, worstMs: 0 }
+      new PerformanceObserver((list) => {
+        const box = w.__longtask
+        if (!box) return
+        for (const entry of list.getEntries()) {
+          box.count += 1
+          box.totalMs += entry.duration
+          box.worstMs = Math.max(box.worstMs, entry.duration)
+        }
+      }).observe({ type: 'longtask', buffered: true })
+    })
+  }
+
+  test(`${LONG_CHUNKS}-chunk long reply (~${(LONG_CHUNKS * LONG_CHUNK_CHARS) / 1000}K chars ≈ >8K tokens): completion budget, long-task sample, flush completeness`, async ({ page }) => {
+    test.setTimeout(180_000)
+    const chat = new ChatPage(page)
+    await installLongTaskObserver(page)
+    await loadChatScriptObject(page, longReplyScript(), test.info())
+    await expect(chat.composer()).toBeVisible({ timeout: 15_000 })
+
+    // Dense burst for THIS turn (the constant crosses the browser boundary
+    // explicitly, same as the guard above).
+    await page.evaluate((speed) => {
+      const mock = (window as unknown as {
+        __shannonMock?: { control: { speed: number } }
+      }).__shannonMock
+      if (!mock) throw new Error('window.__shannonMock missing — demo mock build not active?')
+      mock.control.speed = speed
+    }, LONG_STREAM_SPEED)
+
+    // Scope the long-task window to the stream: drop anything boot emitted.
+    await page.evaluate(() => {
+      const box = (window as unknown as { __longtask?: { count: number; totalMs: number; worstMs: number } }).__longtask
+      if (box) { box.count = 0; box.totalMs = 0; box.worstMs = 0 }
+    })
+
+    const t0 = Date.now()
+    await chat.send('请输出这篇长文全文')
+    // Mid-stream liveness: the streaming cursor is up while chunks land.
+    await chat.expectStreamingCursor()
+    // The whole turn (500 chunks + final commit + full-markdown render) must
+    // settle under budget.
+    await expect(chat.sendButton()).toBeVisible({ timeout: LONG_COMPLETION_BUDGET_MS })
+    const completionMs = Date.now() - t0
+
+    // Let the post-commit render flush before sampling the long-task totals.
+    await page.waitForTimeout(1_500)
+    const lt = await page.evaluate(() => (window as unknown as {
+      __longtask?: { count: number; totalMs: number; worstMs: number }
+    }).__longtask)
+
+    // Flush completeness: the committed bubble carries the ENTIRE reply —
+    // every one of the 500 chunks landed through the throttled projection,
+    // tail included (a dropped flush window would truncate the commit).
+    const chunks = Array.from({ length: LONG_CHUNKS }, (_, i) => longReplyChunk(i))
+    await chat.expectBubbleText(1, chunks.join(''))
+
+    const report = {
+      streamChunks: LONG_CHUNKS,
+      approxChars: LONG_CHUNKS * LONG_CHUNK_CHARS,
+      streamSpeed: LONG_STREAM_SPEED,
+      completionMs,
+      completionBudgetMs: LONG_COMPLETION_BUDGET_MS,
+      longtask: { count: lt?.count ?? 0, totalMs: Math.round(lt?.totalMs ?? 0), worstMs: Math.round(lt?.worstMs ?? 0), budgetMs: LONGTASK_TOTAL_BUDGET_MS },
+    }
+    await test.info().attach('perf-long-reply-stats', { body: JSON.stringify(report, null, 2), contentType: 'application/json' })
+    // eslint-disable-next-line no-console
+    console.log(`[perf-long-reply] completion=${completionMs}ms (budget ${LONG_COMPLETION_BUDGET_MS}) · longtask total=${Math.round(lt?.totalMs ?? 0)}ms over ${lt?.count ?? 0} tasks, worst=${Math.round(lt?.worstMs ?? 0)}ms (budget ${LONGTASK_TOTAL_BUDGET_MS})`)
+
+    expect(
+      completionMs,
+      `the ${LONG_CHUNKS}-chunk long reply took ${completionMs}ms to settle (budget ${LONG_COMPLETION_BUDGET_MS}ms)`,
+    ).toBeLessThanOrEqual(LONG_COMPLETION_BUDGET_MS)
+    expect(
+      Math.round(lt?.totalMs ?? 0),
+      `main-thread long-task time during the long-reply stream = ${Math.round(lt?.totalMs ?? 0)}ms over ${lt?.count ?? 0} tasks, worst ${Math.round(lt?.worstMs ?? 0)}ms (budget ${LONGTASK_TOTAL_BUDGET_MS}ms — the B3-2 re-parse tax proxy)`,
+    ).toBeLessThanOrEqual(LONGTASK_TOTAL_BUDGET_MS)
+
+    // A long stream must still end clean — no swallowed errors.
+    await expectNoConsoleErrors(page)
+  })
 })

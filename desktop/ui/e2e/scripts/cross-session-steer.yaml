@@ -1,0 +1,76 @@
+# ChatScript: cross-session-steer — B3-5 pin（plan §七-1 / B1-1 journey）。
+#
+# 老bug形态（B1-1 前的单一全局 steer 槽）：A 流式中 steer（park 等 settle）
+# → 切到 B → B 流式中再 steer → 新 park 覆盖旧槽，A 的文本无痕丢失。
+# B1-1 修复后 steer 按会话键各排各的 FIFO，两个 park 同时在场也各自送达。
+#
+# 本剧本的时序机制：onCancel 收尾播放两片、间隔 3500ms —— steer 的
+# 「已 park 未 settle」窗口 ~3.6s，测试在窗口内切会话；A 的 settle 落在
+# 屏外（B 上不投递、不串写），切回 A 才投递。B 的 steer cancel 走同一条
+# 慢 onCancel（script 级，无 per-turn 变体）——这正好把「A、B 两个 steer
+# 同时 parked」的重叠摆出来，且不额外耗时。
+#
+# 播放器单 turn 语义：只有 phase==='armed' 时发送才走剧本（流中发送会
+# fall through 到默认 handler 且永不 settle），spec 里每次发送/steer 前
+# 都以 phase 为确定性闸门（expectMockPhase / snapshot poll）。
+name: cross-session-steer
+description: B1-1 跨会话 steer — A steer park 跨越切到 B、双 steer 重叠在场、屏外 settle 不串写、切回各收各的（sends 账本钉 sessionId）
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-xsteer-a
+      title: Cross steer A
+      messages: []
+    - id: script-sess-xsteer-b
+      title: Cross steer B
+      messages:
+        - role: user
+          content: B 的历史问题
+        - role: assistant
+          content: B 的历史回答。
+turns:
+  # turn 0（A 发送）：长流，给 steer 留出流中窗口。
+  - user: A 的长任务
+    script:
+      - event: query:text
+        chunks:
+          - "甲，"
+          - "乙，"
+          - "丙，"
+          - "丁，"
+          - "戊，"
+          - "己，"
+        chunkDelayMs: 500
+  # turn 1（B 发送）：A settle 屏外、A 的 steer 仍 parked 时，B 的常规发送。
+  - user: B 的问题
+    script:
+      - event: query:text
+        chunks:
+          - "乙一，"
+          - "乙二，"
+          - "乙三。"
+        chunkDelayMs: 400
+  # turn 2（B steer 投递）：B settle 后 flush 交付的加急文本。
+  - user: B 的加急补充
+    script:
+      - event: query:text
+        chunks:
+          - "回复：B 收到加急。"
+      - event: query:completed
+  # turn 3（A steer 投递）：切回 A 后 flush 交付的加急文本。
+  - user: A 的加急补充
+    script:
+      - event: query:text
+        chunks:
+          - "回复：A 收到加急。"
+      - event: query:completed
+# steer 的 cancel 播放（A、B 两次 steer 共用，script 级）：首片立即、
+# 次片 +3.5s，无终态步 —— 播放器收尾后自动补 query:cancelled，settle ≈ 3.6s。
+onCancel:
+  emit:
+    - event: query:text
+      chunks:
+        - "收尾一，"
+        - "收尾二。"
+      chunkDelayMs: 3500

@@ -210,4 +210,66 @@ test.describe('scripted chat backend — approval journeys (#4)', () => {
     await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
     await expectNoConsoleErrors(page)
   })
+
+  // ── B3-5 pin（plan §七-2 / B1-2）：审批挂起 × run failed ────────────────
+  //
+  // The backend can die while its approval request is still pending (the
+  // engine crashes / the provider drops before the user answers). The real
+  // run's terminal event must dismiss the pending prompt and resolve the
+  // rail's amber dot — the exact half of the B1-2 matrix the cancel leg
+  // (cancel-matrix #4) does not cover. The player cannot script a terminal
+  // while permission-parked, so the failed terminal rides control.emitNow —
+  // the designed injection surface for shapes the turn mechanism cannot
+  // express (same convention as cancel-matrix's late-event legs).
+  test('a failed run dismisses its pending approval prompt: dialog gone, amber dot out, no respond recorded', async ({ page }) => {
+    test.setTimeout(60_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'approval-allow', test.info())
+    await page.getByTestId('desktop-session-row-script-sess-approval').click()
+    await expect(page.getByRole('heading', { name: 'Approval flow' })).toBeVisible({ timeout: 10_000 })
+
+    await chat.send('运行 ls -la 看看当前目录里有什么')
+    await expectMockPhase(page, 'waitingPermission', 10_000)
+    const dialog = page.getByRole('alertdialog')
+    await expect(dialog).toBeVisible({ timeout: 5_000 })
+    // The parked run is still LIVE, so the row carries the running dot (the
+    // amber "Waiting for approval" badge is the idle-with-pending shape);
+    // attribute locator — the dialog's aria-modal masking keeps role queries
+    // blind to the aside.
+    await expect(page.locator('aside [role="img"][aria-label="Running"]')).toBeVisible()
+
+    // The run fails under the open prompt. query_id must be the live turn's
+    // (q-0) so the AppContext freshness filter treats it as the current run's
+    // terminal, not a stale stray.
+    await page.evaluate(() => {
+      (window as unknown as {
+        __shannonMock: { control: { emitNow(name: string, payload: Record<string, unknown>): void } }
+      }).__shannonMock.control.emitNow('query:failed', {
+        query_id: 'q-0',
+        session_id: 'script-sess-approval',
+        error: 'provider died under the open approval',
+        error_kind: 'other',
+      })
+    })
+
+    // B1-2: the prompt is dismissed with its run — dialog gone, the running
+    // dot resolved, and NO ghost "Waiting for approval" dot takes its place
+    // (the pending approval activity must die with the terminal, not survive
+    // it). The scrim-topping portal stop disappears with the settled run and
+    // the user never answered, so the respond ledger stays EMPTY — no ghost
+    // allow/deny, and no 300s-timeout "not found" on a late click. The row's
+    // only residue is the honest "Last run failed" badge.
+    await expect(dialog).toHaveCount(0, { timeout: 5_000 })
+    await expect(page.locator('aside [role="img"][aria-label="Running"]')).toHaveCount(0)
+    await expect(page.getByRole('img', { name: 'Waiting for approval' })).toHaveCount(0)
+    await expect(page.getByTestId('header-stop-while-waiting')).toHaveCount(0)
+    expect((await mockSnapshot(page)).permissionLog).toHaveLength(0)
+    await expect(page.getByRole('img', { name: 'Last run failed' })).toBeVisible()
+
+    // The failed run's UI converges: composer swaps back and the failure
+    // surfaces through the classified banner (a failed run, not a silent one).
+    await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByRole('alert').filter({ hasText: 'provider died under the open approval' })).toBeVisible()
+    await expectNoConsoleErrors(page)
+  })
 })

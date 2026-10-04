@@ -9,6 +9,7 @@ import { expect, test } from '@playwright/test'
 import { ChatPage } from './helpers/ChatPage'
 import { loadChatScript, readChatScript } from './helpers/scriptLoader'
 import { expectNoConsoleErrors } from './helpers/watchdog'
+import { mockSnapshot } from './helpers/knownIssues'
 import type { ChatScript } from '../src/lib/mock/scripted/schema'
 
 const script = readChatScript('session-switch-race') as ChatScript
@@ -71,6 +72,57 @@ test.describe('scripted chat backend — session-switch-race (journey #11)', () 
     // Back to A: the draft survived the round trip (R2-W1 anchor half).
     await openRaceSession(page, 'desktop-session-row-script-sess-race-a', 'Race A')
     await expect(chat.composer()).toHaveValue('A 的草稿')
+    await expectNoConsoleErrors(page)
+  })
+
+  // ── B3-5 pin（plan §七-11 可选项）：R8-③ tee 契约钉 ────────────────────
+  //
+  // R8-③ closed as "won't happen" with a contract to pin: the user message
+  // is written to the L0 log at TURN START (agent_loop records it before the
+  // model sees anything, in tee's forced durable-boundary class), so a
+  // mid-stream switch away and back ALWAYS projects this turn's user bubble
+  // — "reply without a question" cannot exist. The scripted twin is
+  // recordSeedUserSend (accepted sends record at turn start, like the L0
+  // tee). The race journey above pins this shape for a FAILED run; this pin
+  // covers the COMPLETED side: the turn finishes ON A after the return,
+  // exactly one user bubble, the full reply committed — the tee never
+  // double-writes and the tail is not lost.
+  test('R8-③ tee pin: mid-stream round trip keeps the user bubble; the run settles on return with no duplicate tee', async ({ page }) => {
+    test.setTimeout(90_000)
+    const chat = new ChatPage(page)
+    await loadChatScript(page, 'session-switch-tee', test.info())
+
+    // A streams (8 chunks × 700ms — two switch windows wide).
+    await openRaceSession(page, 'desktop-session-row-script-sess-tee-a', 'Tee A')
+    await chat.send('T 的长问题')
+    await chat.expectStreamingCursor()
+
+    // Mid-stream, away to B: nothing of A's turn surfaces there.
+    await openRaceSession(page, 'desktop-session-row-script-sess-tee-b', 'Tee B')
+    await expect(page.getByText('B 的历史回答。')).toBeVisible()
+    await expect(page.getByText('T 的长问题')).toHaveCount(0)
+    await expect(chat.stopButton()).toHaveCount(0)
+
+    // Back mid-stream: the tee contract — the user bubble is present (the
+    // turn-start record), the projection resumes.
+    await openRaceSession(page, 'desktop-session-row-script-sess-tee-a', 'Tee A')
+    await expect(chat.bubbleAt(0)).toContainText('T 的长问题')
+    await chat.expectStreamingCursor()
+
+    // The run completes ON A: exactly one user bubble + the FULL reply
+    // (concatenated chunks, tail included) — no duplicate tee, no loss.
+    await expect(chat.bubbles()).toHaveCount(2, { timeout: 20_000 })
+    await chat.expectBubbleText(1, '甲，乙，丙，丁，戊，己，庚，辛。')
+    expect((await mockSnapshot(page)).sentTurns).toBe(1)
+
+    // Harness note (not asserted): a post-settle second round trip would
+    // re-project WITHOUT the reply — the scripted tail deliberately records
+    // accepted sends and cancelled/failed partials only ("completed replies
+    // stay unrecorded", seed.ts — the S-4 pre-existing gap), so a settled
+    // turn's reply cannot survive a re-switch in this mock. The REAL backend
+    // tee's completed assistant message IS durable; pinning that shape here
+    // would need a mock extension (production code — out of scope for this
+    // test-only pack).
     await expectNoConsoleErrors(page)
   })
 })
