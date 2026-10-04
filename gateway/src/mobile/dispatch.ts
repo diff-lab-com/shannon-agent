@@ -82,7 +82,12 @@ export async function dispatchMessage(
         if (ctx.socket.readyState !== WebSocket.OPEN) return;
         // WP-15 T4: stream frames carry the push cursor as well, so the
         // phone's live-sync sees one monotonic seq across all notifications.
-        send(serializeFrame(notification(ev, sharedPushSeq.next())));
+        const seq = sharedPushSeq.next();
+        // §O4: record the frame under the caller's device session so a drop
+        // mid-query replays on resume. Unbound sockets (open/dev mode) have
+        // no device stream to attribute to — skip.
+        if (ctx.sessionId != null) ctx.replay?.record(ctx.sessionId, seq, ev);
+        send(serializeFrame(notification(ev, seq)));
       }
     }
     send(serializeFrame(successResponse(raw.id, outcome.result)));

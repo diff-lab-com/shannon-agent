@@ -8,6 +8,7 @@ import type { ShannonEvent } from "./protocol.js";
 import { dispatchNdjson } from "./dispatch.js";
 import { MOBILE_PAGE_HTML } from "./web/page.js";
 import { DirectLink, type DirectE2EOptions } from "./directE2E.js";
+import type { PushReplayBuffer } from "./pushReplay.js";
 
 /**
  * The inbound mobile server — a WebSocket endpoint speaking NDJSON `shannon/*`
@@ -51,6 +52,13 @@ export interface MethodContext {
    * re-binds) this connection to a device, so pushes can reach it.
    */
   onSessionBound?: (deviceId: string) => void;
+  /**
+   * §O4: the process-wide replay ring (same instance the hub and the pairing
+   * handlers hold). The direct-query stream loop in `dispatch.ts` records
+   * its seq-stamped frames here so a drop mid-query replays on resume.
+   * Absent in tests/wirings that don't opt into replay.
+   */
+  readonly replay?: PushReplayBuffer;
 }
 
 /** Discriminated handler outcome — unambiguous vs. duck-typing the result. */
@@ -95,6 +103,13 @@ export interface MobileServerOptions {
    * paired devices. The returned detach function (if any) is called on stop.
    */
   onContext?: (ctx: MethodContext) => void | (() => void);
+  /**
+   * §O4: the process-wide replay ring, surfaced on every connection's
+   * MethodContext so the dispatch stream loop can record its frames. The
+   * hub and the pairing handlers receive the SAME instance via their own
+   * options — construct once, inject three ways.
+   */
+  replayBuffer?: PushReplayBuffer;
   /**
    * P2-1: serve the built-in PWA page on GET / (default true). Set false in
    * tests that want the old bare-WS behavior.
@@ -266,6 +281,7 @@ export class MobileServer {
       socket: (link?.socket ?? socket) as WebSocket,
       sessionId: null,
       logger: this.opts.logger,
+      replay: this.opts.replayBuffer,
     };
     const detach = this.opts.onContext?.(ctx);
     if (typeof detach === "function") this.detachers.push(detach);

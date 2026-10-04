@@ -59,6 +59,7 @@ import {
 } from "./pairing.js";
 import { MobileServer } from "./server.js";
 import { ApprovalRegistry } from "./approvalRegistry.js";
+import { PushReplayBuffer } from "./pushReplay.js";
 import { createMobileDispatchPipeline } from "./dispatchPipeline.js";
 import { MobileDispatchHub } from "./hub.js";
 import { createTaskHandlers } from "./taskHandlers.js";
@@ -381,7 +382,10 @@ const registry = new DeviceRegistry();
 // completed) exercise the whole chain end to end.
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 const approvals = new ApprovalRegistry();
-const hub = new MobileDispatchHub({ logger, approvals });
+// §O4: one replay ring shared by hub / server / handlers (bootstrap parity —
+// the dev host exercises the same resume-replay surface the real gateway has).
+const pushReplay = new PushReplayBuffer();
+const hub = new MobileDispatchHub({ logger, approvals, replay: pushReplay });
 // Shared in-flight query registry: the engine bridge (shannon/query/cancel)
 // and the dispatch pipeline's lane clients register against ONE instance, so
 // shannon/cancel can interrupt a dispatched task's engine turn (same
@@ -420,6 +424,8 @@ const handlers = createMobileHandlers({
   // §L2: the same registry the hub feeds — approval.list / snapshot
   // pendingApprovals stay truthful in dev too.
   approvalRegistry: approvals,
+  // §O4: the same ring the hub feeds — resume replays it (bootstrap parity).
+  replayBuffer: pushReplay,
   tasks: createTaskHandlers({
     hub,
     // review §P1-13 parity: revoked devices can't dispatch (dev registries
@@ -439,6 +445,9 @@ const server = new MobileServer({
   // P2-1: hand every accepted connection to the hub so paired devices become
   // push targets for the §K3 task stream.
   onContext: (ctx) => hub.registerConnection(ctx),
+  // §O4: MethodContext carries the ring so the direct-query stream records
+  // its seq-stamped frames (same instance as hub/handlers).
+  replayBuffer: pushReplay,
 });
 const handle = await server.start();
 // Two consecutive one-time tokens: line 1 is device A (the original smoke

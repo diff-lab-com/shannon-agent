@@ -163,6 +163,38 @@ describe("WP-15 T4 — live-sync snapshot / resume / seq", () => {
       h.close();
     }
   });
+
+  it("§O4: direct-query stream frames land in the replay ring; resume replays them verbatim", async () => {
+    const h = await harness({ engineEvents: 3 });
+    const notifications: any[] = [];
+    h.socket.on("message", (data: unknown) => {
+      const msg = JSON.parse(String(data)) as any;
+      if (msg.method === "shannon/event") notifications.push(msg.params);
+    });
+    try {
+      await h.rpc("shannon/query", { prompt: "go" });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(notifications.length).toBeGreaterThanOrEqual(4);
+
+      // Resume from just before the first frame: the device's own buffered
+      // stream comes back as full `shannon/event` params (seq ascending) —
+      // what live_sync.dart's fan-out position will consume.
+      const firstSeq = notifications[0].seq as number;
+      const res = await h.rpc("shannon/resume", { sinceSeq: firstSeq - 1 });
+      expect(res.replayed.length).toBeGreaterThanOrEqual(4);
+      expect(res.replayed[0]).toEqual(notifications[0]);
+      const replaySeqs = res.replayed.map((e: any) => e.seq);
+      for (let i = 1; i < replaySeqs.length; i++) {
+        expect(replaySeqs[i]).toBeGreaterThan(replaySeqs[i - 1]);
+      }
+
+      // Cursor at head → still the pre-buffer empty answer.
+      const head = await h.rpc("shannon/resume", { sinceSeq: res.lastSeq });
+      expect(head.replayed).toEqual([]);
+    } finally {
+      h.close();
+    }
+  });
 });
 
 describe("WP-15 T3 — device revocation bites on live sessions", () => {
