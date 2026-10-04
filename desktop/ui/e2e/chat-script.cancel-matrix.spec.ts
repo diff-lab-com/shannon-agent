@@ -175,8 +175,8 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expectNoConsoleErrors(page)
   })
 
-  // ── 4. 审批等待中 stop（S-3 已修复：scrim 上方挂出可达的 stop）────────
-  test('4. stop while the approval dialog waits: the portal stop settles the run, the dialog lingers, a late respond still works', async ({ page }) => {
+  // ── 4. 审批等待中 stop（S-3 已修复：scrim 上方挂出可达的 stop；B1-2：弹窗随终态消亡）────────
+  test('4. stop while the approval dialog waits: the portal stop settles the run and the dialog is dismissed with it (B1-2)', async ({ page }) => {
     test.setTimeout(60_000)
     const chat = new ChatPage(page)
     await loadChatScript(page, 'cancel-approval-wait', test.info())
@@ -207,16 +207,14 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expect(page.locator('.streaming-cursor')).toHaveCount(0)
     await expect(portalStop).toHaveCount(0)
 
-    // CURRENT BEHAVIOR (recorded): QUERY_CANCELLED does not clear the
-    // permissionRequest — the dialog stays open over a settled run.
-    await expect(dialog).toBeVisible()
-
-    // A late Deny still goes through: the command resolves, the dialog
-    // closes, and the session never enters the error state.
-    await dialog.getByRole('button', { name: 'Deny' }).click()
+    // B1-2 FIXED (was: QUERY_CANCELLED left the dialog open over the settled
+    // run and a late Deny was the only thing closing it): the run's terminal
+    // event dismisses its own pending approval prompt — the backend
+    // auto-Denies the orphaned request after its 300s timeout, so the dialog
+    // must not outlive the run.
     await expect(dialog).toHaveCount(0, { timeout: 5_000 })
     await expect(page.getByRole('alert')).toHaveCount(0)
-    expect((await mockSnapshot(page)).permissionLog).toHaveLength(1)
+    expect((await mockSnapshot(page)).permissionLog).toHaveLength(0)
     await expectNoConsoleErrors(page)
   })
 

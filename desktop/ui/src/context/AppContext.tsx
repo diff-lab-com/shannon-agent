@@ -15,6 +15,7 @@ import { describeBackendError } from '@/lib/backendError'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
+import { clearDraft } from '@/lib/composerDraft'
 import { basenameOf } from '@/lib/fileRefs'
 import {
   beginRun as runBegin,
@@ -230,6 +231,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null)
+  // B1-2 (P1-1): latest-ref mirror of the state above. The query:* listeners
+  // below register once on mount (empty effect deps), so their closures can
+  // never read fresh state — a terminal handler can only tell whether the
+  // pending prompt belongs to the settling session through this ref. All
+  // writes funnel through `applyPermissionRequest` so ref and state move in
+  // the same synchronous step (same pattern as visibleSessionIdRef).
+  // B1-3 (P1-4): deleteSessionAction reads the same mirror through its own
+  // stale-closure-prone callback — the render-time assignment below keeps the
+  // ref honest even if a future write ever bypasses the helper.
+  const permissionRequestRef = useRef<PermissionRequest | null>(null)
+  permissionRequestRef.current = permissionRequest
+  const applyPermissionRequest = useCallback((next: PermissionRequest | null) => {
+    permissionRequestRef.current = next
+    setPermissionRequest(next)
+  }, [])
   // /rewind: checkpoints for the current session (turn indices + previews).
   const [checkpoints, setCheckpoints] = useState<CheckpointInfo[]>([])
   // PM-12: persisted 👍/👎 for the current session's messages.
@@ -368,6 +384,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // latched) session against backend truth via get_session_querying and
   // runs the cancelled settle itself when the backend is already idle.
   const cancelWatchdogRef = useRef<Map<string, number>>(new Map())
+  // B1-2 hand-off: settleCancelledRun (below) must dismiss a pending approval
+  // dialog on the session it settles, but clearPermissionForSession and its
+  // own deps are declared later in this setup. The ref is filled where the
+  // callback is born; the settle reads it through here.
+  const clearPermissionForSessionRef = useRef<(sessionKey: string) => void>(() => {})
   const disarmCancelWatchdog = useCallback((key: string) => {
     const timer = cancelWatchdogRef.current.get(key)
     if (timer != null) {
@@ -395,6 +416,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // Whichever path wins (event or watchdog), the wait is over.
     disarmCancelWatchdog(key)
     setSessionQuerying(key, false)
+    // B1-2 (P1-1): the ghost-prompt dismissal rides the shared settle, so a
+    // watchdog settle (lost `query:cancelled`) and a delivered one land in
+    // exactly the same state — dialog and amber dot included. Read through a
+    // latest-ref: clearPermissionForSession is declared further down (its own
+    // deps mature later), and a deps-array entry here would read it in TDZ.
+    clearPermissionForSessionRef.current(key)
     cancelStreamFlush()
     const finalText = streamingBucketsRef.current.get(key) ?? ''
     streamingBucketsRef.current.set(key, '')
@@ -600,6 +627,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     map.set(sessionId, next)
     setSessionActivity(Object.fromEntries(map))
   }, [])
+
+  // B1-2 (P1-1): a run's terminal event ends the approval prompt it raised.
+  // Without this, stop/fail/cancel left the dialog hanging and the rail's
+  // amber dot lit while the backend auto-Denied the orphaned prompt after its
+  // 300s timeout (commands_permissions::prompt_user) — the eventual「允许」
+  // then reported "Permission request not found". Matching is on the prompt's
+  // session_id against the terminal event's OWNER key (the same key the
+  // handlers settle by), so another session's prompt — and a session-less one
+  // from the `request_permission` command — is never dismissed here.
+  const clearPermissionForSession = useCallback((sessionKey: string) => {
+    const pending = permissionRequestRef.current
+    if (!pending || pending.session_id !== sessionKey) return
+    applyPermissionRequest(null)
+    noteSessionApproval(pending.session_id, false)
+  }, [applyPermissionRequest, noteSessionApproval])
+  // Fill the hand-off ref settleCancelledRun reads (declaration order above).
+  clearPermissionForSessionRef.current = clearPermissionForSession
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -1036,6 +1080,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       streamNoticesBucketsRef.current.delete(id)
       // B1 §4-9: its queued prompts die with the session too.
       dropPromptQueue(id)
+      // B1-3 (P1-4): the rest of the session-scoped state dies with it —
+      // the persisted draft, the run/composer latches (this also clears
+      // the cancel-in-flight slot via the same choke point), the Context
+      // tab's sources, and the pending citation snapshot (W3-4). Without
+      // these a deleted session's mid-run backend cancel (its terminal
+      // event arrives after the delete) or leftover slots would linger.
+      clearDraft(id)
+      setSessionQuerying(id, false)
+      setSessionSources(prev => {
+        if (!(id in prev)) return prev
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      pendingInjectedMemoriesRef.current.delete(id)
+      // A permission prompt aimed AT the deleted session is unanswerable —
+      // dismiss it. Latest-ref read, not the closure's state (see the
+      // declaration above); other sessions' prompts stay up.
+      if (permissionRequestRef.current?.session_id === id) setPermissionRequest(null)
       if (currentSessionId === id) {
         setMessages([])
         setStreamNotices([])
@@ -1044,7 +1107,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       await refreshSessions()
     } catch (e) { setChatError(String(e)) }
-  }, [currentSessionId, refreshSessions, dropPromptQueue, setChatError])
+  }, [currentSessionId, refreshSessions, dropPromptQueue, setSessionQuerying, setChatError])
 
   const renameSessionAction = useCallback(async (id: string, title: string) => {
     try {
@@ -1060,7 +1123,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   ) => {
     try {
       await api.respondPermission(requestId, allow, options)
-      setPermissionRequest(null)
+      // B1-2 (P1-1): through the helper so the latest-ref mirror moves with
+      // the state (the query:* terminal handlers read the ref).
+      applyPermissionRequest(null)
       // Batch B2: resolve the rail's amber dot for the prompt's session.
       if (permissionRequest?.session_id) noteSessionApproval(permissionRequest.session_id, false)
     } catch (e) {
@@ -1070,7 +1135,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // (Header) attach a no-op catch of their own.
       throw e
     }
-  }, [permissionRequest, noteSessionApproval, setChatError])
+  }, [permissionRequest, applyPermissionRequest, noteSessionApproval, setChatError])
 
   const refreshCheckpoints = useCallback(async () => {
     if (!currentSessionId) {
@@ -1365,6 +1430,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // visibility; a pending throttled flush must die BEFORE the
           // buckets are cleared so it can't resurrect stale text.
           setSessionQuerying(key, false)
+          // B1-2 (P1-1): the run is over — its own pending approval dialog
+          // and rail dot go with it (main window, background session too).
+          clearPermissionForSession(key)
           cancelStreamFlush()
           const finalText = streamingBucketsRef.current.get(key) ?? ''
           streamingBucketsRef.current.set(key, '')
@@ -1429,6 +1497,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // banner and Retry stay: the banner manages "what now", the bubble
           // records "what was generated".
           setSessionQuerying(key, false)
+          // B1-2 (P1-1): same ghost-prompt dismissal as QUERY_COMPLETED.
+          clearPermissionForSession(key)
           cancelStreamFlush()
           const finalText = streamingBucketsRef.current.get(key) ?? ''
           streamingBucketsRef.current.set(key, '')
@@ -1481,7 +1551,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // D6 (keep the partial output) / §P2-18 scoping / W3-4 citation
           // snapshot: the settle body lives in settleCancelledRun, shared
           // with the B1-4 stop watchdog so a lost `query:cancelled` and a
-          // delivered one land in exactly the same state.
+          // delivered one land in exactly the same state — B1-2 (P1-1)'s
+          // ghost-prompt dismissal rides inside it, so whichever side
+          // settles, the dialog and its amber dot go with it.
           settleCancelledRun(key)
         }),
         listen(EVENT_NAMES.PERMISSION_REQUEST, (e) => {
@@ -1489,9 +1561,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // Window mode: only prompt for this window's own session — a
           // foreign session's approval dialog must not pop up here.
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          // B1-2 (P1-1): no query_id freshness filter here — the wire payload
+          // (shannon_types::events::PermissionRequest) carries no query_id to
+          // test against. A stale prompt is instead retracted by its run's
+          // terminal events (clearPermissionForSession in the three handlers
+          // above). Through the helper so the ref mirror stays in step.
           // Batch B2: amber dot on the owning session's rail row.
           noteSessionApproval(p.session_id, true)
-          setPermissionRequest(p)
+          applyPermissionRequest(p)
         }),
         listen(EVENT_NAMES.SESSIONS_UPDATED, () => { refreshSessions() }),
         // 卡A resume-unarchive: opening an archived session silently
