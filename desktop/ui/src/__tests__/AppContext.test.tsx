@@ -311,4 +311,48 @@ describe('AppContext', () => {
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.currentSessionId).toBeNull()
   })
+
+  // P2-8: a failed worktree bind must not strand the `new_session` the call
+  // already made — the backend session is deleted best-effort (a failed
+  // delete never masks the original worktree error), and the frontend
+  // pointer rolls back as before.
+  describe('createSessionInWorktree orphan rollback (P2-8)', () => {
+    const ORPHAN_ID = 'c0c0c0c0-0000-4000-8000-00000000c0c0'
+
+    async function renderAndCreate() {
+      const { result } = renderHook(() => useApp(), { wrapper })
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      await act(async () => { await result.current.createSessionInWorktree() })
+      return result
+    }
+
+    beforeEach(() => {
+      vi.mocked(api.newSession).mockResolvedValue(ORPHAN_ID)
+      vi.mocked(api.createSessionWorktree).mockRejectedValue(new Error('git worktree add failed'))
+    })
+
+    it('deletes the backend session when worktree creation fails', async () => {
+      const deleteSpy = vi.spyOn(api, 'deleteSession').mockResolvedValue(true)
+      const result = await renderAndCreate()
+      expect(deleteSpy).toHaveBeenCalledWith(ORPHAN_ID)
+      // The original worktree error is what surfaces — not the rollback.
+      expect(result.current.error).toContain('git worktree add failed')
+      // ...and the composer pointer rolled back (unchanged behavior).
+      expect(result.current.currentSessionId).toBeNull()
+      deleteSpy.mockRestore()
+    })
+
+    it('a failing rollback delete is logged, never masks the worktree error', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const deleteSpy = vi.spyOn(api, 'deleteSession').mockRejectedValue(new Error('delete failed too'))
+      const result = await renderAndCreate()
+      expect(deleteSpy).toHaveBeenCalledWith(ORPHAN_ID)
+      expect(result.current.error).toContain('git worktree add failed')
+      expect(result.current.error).not.toContain('delete failed too')
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('orphan session'), expect.any(Error))
+      warnSpy.mockRestore()
+      deleteSpy.mockRestore()
+    })
+  })
+
 })

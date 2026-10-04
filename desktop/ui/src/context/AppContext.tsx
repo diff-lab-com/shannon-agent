@@ -1008,9 +1008,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       setChatError(String(e))
       if (id) {
-        // Worktree creation failed after session was created — clear
-        // current session to avoid UI showing a session whose working_dir
-        // was never bound to a worktree.
+        // Worktree creation failed after session was created — delete the
+        // orphan backend-side (best-effort: a failed delete is only logged,
+        // the original worktree error is the one worth surfacing), then
+        // clear the current session to avoid the UI showing a session
+        // whose working_dir was never bound to a worktree.
+        try {
+          await api.deleteSession(id)
+        } catch (deleteErr) {
+          logSoftFailure(`orphan session ${id} delete after worktree failure`, deleteErr)
+        }
         setCurrentSessionId(null)
         setMessages([])
         loadedSessionRef.current = null
