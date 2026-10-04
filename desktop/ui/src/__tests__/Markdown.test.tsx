@@ -7,6 +7,11 @@ function renderMd(md: string) {
   return render(<Markdown>{md}</Markdown>, { wrapper: I18nProvider })
 }
 
+/** B3-2: the streaming shape of the component (highlight deferred). */
+function renderMd2(md: string) {
+  return render(<Markdown deferHighlight>{md}</Markdown>, { wrapper: I18nProvider })
+}
+
 describe('Markdown — basic formatting', () => {
   it('renders a paragraph with bold text', () => {
     renderMd('Hello **world**')
@@ -284,6 +289,31 @@ describe('Markdown — GFM footnotes (P1-6)', () => {
   })
 })
 
+describe('Markdown — deferHighlight (B3-2 streaming path)', () => {
+  it('skips syntax highlighting when deferHighlight is set', () => {
+    const { container } = renderMd2('```ts\nconst x = 1\n```')
+    expect(container.querySelector('.hljs-keyword')).toBeNull()
+    // The code itself still renders through the full sanitize pipeline.
+    expect(container.querySelector('pre code')?.textContent).toContain('const x = 1')
+  })
+
+  it('keeps highlighting by default (finalized MessageBubble path unchanged)', () => {
+    const { container } = renderMd('```ts\nconst x = 1\n```')
+    expect(container.querySelector('.hljs-keyword')).not.toBeNull()
+  })
+
+  it('still renders KaTeX math with deferHighlight (sanitize → katex order kept)', () => {
+    const { container } = renderMd2('Energy: $E=mc^2$ indeed.')
+    expect(container.querySelector('.katex')).not.toBeNull()
+    expect(container.querySelector('p')?.textContent).not.toContain('$E')
+  })
+
+  it('still strips raw HTML with deferHighlight (sanitize stays active)', () => {
+    const { container } = renderMd2('hello<script>alert(1)</script>')
+    expect(container.querySelector('script')).toBeNull()
+  })
+})
+
 describe('Markdown — math (KaTeX)', () => {
   it('renders inline $…$ math with KaTeX markup', () => {
     const { container } = renderMd('Energy: $E=mc^2$ indeed.')
@@ -345,13 +375,19 @@ describe('Markdown — images (P2-15)', () => {
     expect(seen).toHaveBeenCalledTimes(1)
   })
 
-  it('does not make remote images interactive', () => {
+  // P2-4 (R9-④): remote images default to the gate placeholder — no <img>
+  // element, hence no request. Full three-state matrix lives in
+  // MarkdownRemoteImageGate.test.tsx; this pins the dock-open pipeline stays
+  // local-only.
+  it('gates remote images behind a placeholder instead of loading them', () => {
     const seen = vi.fn()
     window.addEventListener('shannon:open-artifact-file', seen)
     renderMd('![remote](https://example.com/cat.png)')
-    const img = screen.getByAltText('remote')
-    expect(img.getAttribute('role')).toBeNull()
-    fireEvent.click(img)
+    expect(screen.queryByAltText('remote')).not.toBeInTheDocument()
+    const gate = screen.getByTestId('remote-image-gate')
+    expect(gate).toHaveTextContent('example.com')
+    expect(gate).toHaveTextContent('remote')
+    fireEvent.click(gate)
     window.removeEventListener('shannon:open-artifact-file', seen)
     expect(seen).not.toHaveBeenCalled()
   })

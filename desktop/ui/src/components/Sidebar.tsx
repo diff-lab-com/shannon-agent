@@ -111,7 +111,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
   const navigate = useNavigate();
   // P2-⑩: split-"New" dropdown (goal / routine entry points).
   const [newMenuOpen, setNewMenuOpen] = useState(false);
-  const { createSession, sessions, sessionActivity, goalRunsBySession, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
+  const { createSession, sessions, sessionActivity, goalRunsBySession, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree, queueDepthsBySession } = useSessions();
   const { status, loading: catalogLoading } = useCatalog();
   const intl = useIntl();
   const mod = modKey();
@@ -366,6 +366,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
             sessions={sessions}
             sessionActivity={sessionActivity}
             goalRunsBySession={goalRunsBySession}
+            queueDepthsBySession={queueDepthsBySession}
             currentSessionId={currentSessionId}
             switchSession={switchSession}
             renameSession={renameSession}

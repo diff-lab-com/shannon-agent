@@ -2314,6 +2314,12 @@ pub async fn send_message(
                             crate::commands_notifications::NotificationKind::Failed(error),
                             "query_failed",
                         );
+                        // B3-3 (P2-5): treat engine `Failed` as terminal instead
+                        // of trusting the implicit "Failed is always followed by
+                        // EOF" contract — the background loop already breaks on
+                        // it explicitly. If an engine ever kept streaming after
+                        // a failure, the run would stay querying forever.
+                        break;
                     }
                     // Ignore other events in MVP
                     _ => {}

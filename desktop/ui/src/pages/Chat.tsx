@@ -421,10 +421,16 @@ export default function Chat() {
     // Scroll the virtualized parent directly instead.
     // B0 P1-1: only while the user hasn't scrolled away to read.
     if (!stickToBottomRef.current) return
+    // P2-6: while a run is streaming this effect re-fires on every throttled
+    // flush (≈50 ms) — re-triggering a smooth animation mid-flight fights the
+    // previous one and janks the rail; instant jumps read identically when
+    // content keeps arriving. Idle re-fires (send, session switch, settle)
+    // are one-shot, so they keep the glide.
+    const behavior: ScrollBehavior = isQuerying ? 'auto' : 'smooth'
     const el = scrollParentRef.current
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-    else messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, streamingText])
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior })
+    else messagesEndRef.current?.scrollIntoView({ behavior })
+  }, [messages, streamingText, isQuerying])
 
   const [slashResult, setSlashResult] = useState<SlashResult | null>(null)
   const dismissSlashResult = useCallback(() => setSlashResult(null), [])

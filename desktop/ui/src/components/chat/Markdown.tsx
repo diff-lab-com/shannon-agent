@@ -15,7 +15,9 @@ import { CodeBlock as SharedCodeBlock } from '@/components/code/CodeBlock'
 import { Button } from '@/components/ui/button'
 import { FileRefChip } from '@/components/shared/FileRefChip'
 import { matchSourceLine, SourcePill } from '@/components/chat/SourcePill'
-import { looksLikeFilePath } from '@/lib/fileRefs'
+import { basenameOf, looksLikeFilePath } from '@/lib/fileRefs'
+import { isGatedRemoteImageSrc, remoteImageHost } from '@/lib/remoteImages'
+import { useRemoteImagesAllowed } from '@/hooks/useRemoteImagesAllowed'
 
 // Extend the default sanitize schema so syntax-highlight classes from
 // rehype-highlight (e.g. `hljs-keyword`) survive sanitization. Keep the
@@ -46,15 +48,23 @@ interface MarkdownProps {
    *  callback fires with the DOM input (the caller resolves which checklist
    *  item it is — e.g. by DOM order inside its own container). */
   onCheckboxToggle?: (input: HTMLInputElement) => void
+  /** B3-2: drop rehype-highlight from the pipeline. The live-streaming path
+   *  re-parses on every flush and highlighting is the priciest rehype step,
+   *  so it defers to the finalized MessageBubble render (plain `<Markdown>`)
+   *  where the full text is highlighted once. Everything else — sanitize
+   *  BEFORE katex (§4-14), GFM, math — stays identical either way. */
+  deferHighlight?: boolean
 }
 
-export const Markdown = memo(function Markdown({ children, className, onCheckboxToggle }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ children, className, onCheckboxToggle, deferHighlight }: MarkdownProps) {
   return (
     <div className={className}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[
-          rehypeHighlight,
+          // B3-2: `deferHighlight` (the live-streaming path) drops only the
+          // cosmetic highlighter; the rest of the pipeline is byte-identical.
+          ...(deferHighlight ? [] : [rehypeHighlight]),
           [rehypeSanitize, sanitizeSchema],
           // B2 §4-14: math → KaTeX. Must stay AFTER rehype-sanitize so the
           // KaTeX markup (and its MathML twin) is never stripped; the math
@@ -417,12 +427,21 @@ function MarkdownLink(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
 
 /** P2-15 (§4-16): markdown images load lazily, keep a max height, and open
  *  in the Dock's image tab on click — the same `shannon:open-artifact-file`
- *  pipeline FileRefChip uses (ArtifactLinkHost owns the receiving end). */
+ *  pipeline FileRefChip uses (ArtifactLinkHost owns the receiving end).
+ *
+ *  P2-4 (R9-④): remote http(s) sources render a gate placeholder instead of
+ *  the image — no request leaves the webview until the user admits that one
+ *  src (or flips the global switch in AdvancedSettings). Local sources
+ *  (file://, /abs, asset protocol) pass through exactly as before. */
 function LocalImage(props: React.ImgHTMLAttributes<HTMLImageElement>) {
   const intl = useIntl()
   const { src, alt, ...rest } = props
   const [resolved, setResolved] = useState(src)
   const [localPath, setLocalPath] = useState<string | null>(null)
+  // Per-image admits, keyed by src: a Set (not a boolean) so a later edit of
+  // the same element's src can't inherit an allow the user never gave it.
+  const [admitted, setAdmitted] = useState<Set<string>>(() => new Set())
+  const allowAllRemote = useRemoteImagesAllowed()
   useEffect(() => {
     if (typeof src !== 'string') { setResolved(src); setLocalPath(null); return }
     let mounted = true
@@ -443,12 +462,21 @@ function LocalImage(props: React.ImgHTMLAttributes<HTMLImageElement>) {
     return () => { mounted = false }
   }, [src])
 
+  // The gate reads the raw src (not `resolved`): remote sources are exactly
+  // the ones the resolver leaves untouched, so this holds before and after
+  // the effect settles.
+  const srcStr = typeof src === 'string' ? src : null
+  if (srcStr && isGatedRemoteImageSrc(srcStr) && !allowAllRemote && !admitted.has(srcStr)) {
+    return <RemoteImageGate src={srcStr} alt={alt} onAllow={() => setAdmitted(prev => new Set(prev).add(srcStr))} />
+  }
+
   const openLabel = intl.formatMessage({ id: 'chat.markdown.image.open' })
 
   if (!localPath) {
     // The line-number gutter used to be injected from this effect via a
     // document-wide scan — it now lives in the shared code-block primitive,
-    // scoped per block (components/code/CodeBlock.tsx).
+    // scoped per block (components/code/CodeBlock.tsx). Admitted remote
+    // images land here too, keeping their pre-gate behavior (lazy, plain).
     return <img src={resolved} alt={alt} loading="lazy" className="max-w-full max-h-96 object-contain rounded-lg my-sm" {...rest} />
   }
 
@@ -475,5 +503,45 @@ function LocalImage(props: React.ImgHTMLAttributes<HTMLImageElement>) {
       className="max-w-full max-h-96 object-contain rounded-lg my-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
       {...rest}
     />
+  )
+}
+
+/** P2-4 (R9-④) placeholder for a not-yet-admitted remote image. Renders
+ *  zero network surface (no `<img src>` at all), shows the host the request
+ *  would go to plus the alt/filename, and a button that admits exactly this
+ *  src. The alt stays visible text so the content survives for readers. */
+function RemoteImageGate({ src, alt, onAllow }: { src: string; alt?: ReactNode; onAllow: () => void }) {
+  const intl = useIntl()
+  const host = remoteImageHost(src)
+  // alt first (author intent); otherwise the filename from the URL path.
+  let label = typeof alt === 'string' ? alt : ''
+  if (!label) {
+    try {
+      const name = basenameOf(decodeURIComponent(new URL(src, 'https://shannon.invalid').pathname))
+      if (name && name !== '/') label = name
+    } catch { /* keep empty — the host line alone is fine */ }
+  }
+  return (
+    <span
+      data-testid="remote-image-gate"
+      title={intl.formatMessage({ id: 'chat.markdown.image.gated.why' })}
+      className="my-sm flex max-w-full flex-wrap items-center gap-xs rounded-lg border border-outline-variant/30 bg-surface-container-low px-sm py-xs text-on-surface-variant"
+    >
+      <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">hide_image</span>
+      <span className="min-w-0 flex-1 truncate text-label-sm">
+        <span className="font-medium">{host}</span>
+        {label ? ` · ${label}` : ''}
+      </span>
+      <Button
+        variant="outline"
+        size="sm"
+        className="shrink-0"
+        onClick={onAllow}
+        aria-label={intl.formatMessage({ id: 'chat.markdown.image.gated.allowAria' }, { host })}
+      >
+        <span className="material-symbols-outlined icon-xs" aria-hidden="true">image</span>
+        {intl.formatMessage({ id: 'chat.markdown.image.gated.allow' })}
+      </Button>
+    </span>
   )
 }
