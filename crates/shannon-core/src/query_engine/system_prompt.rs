@@ -26,7 +26,8 @@ use crate::{project_instructions, sandbox, smart_context};
 /// Inputs to system-prompt assembly — the only `QueryEngine` fields the
 /// assembler reads. Carrying a plain struct lets `process_query` describe
 /// "what the prompt sees" in one place and keeps the function pure-ish
-/// (only `std::env::current_dir()` and the helper imports cross the line).
+/// (only the CWD resolution — config `working_directory` first, process
+/// `current_dir()` as fallback — and the helper imports cross the line).
 pub struct SystemPromptInputs<'a> {
     pub config: &'a QueryEngineConfig,
     pub tools: &'a ToolRegistry,
@@ -83,8 +84,13 @@ pub fn build(inputs: &SystemPromptInputs<'_>) -> AssembledSystemPrompt {
     // below instead.
 
     // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions.
+    // B2-2: the scan directory is the engine's configured session working
+    // directory when set (multi-session hosts), else the process cwd.
     if inputs.config.auto_context_enabled {
-        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let working_dir = inputs
+            .config
+            .effective_working_directory()
+            .unwrap_or(std::path::PathBuf::from("."));
         if let Some(ctx) = project_instructions::load_full_context(&working_dir) {
             stable_blocks.push(ctx.content);
         }
@@ -130,10 +136,13 @@ pub fn build(inputs: &SystemPromptInputs<'_>) -> AssembledSystemPrompt {
     }
 
     // Smart context: auto-include relevant files based on query.
+    // B2-2: scan the session working directory (config), not the process cwd.
     if inputs.config.auto_context_enabled {
         let smart_context = {
-            let working_dir =
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let working_dir = inputs
+                .config
+                .effective_working_directory()
+                .unwrap_or(std::path::PathBuf::from("."));
             smart_context::find_relevant_context(inputs.user_message, &working_dir)
         };
         if let Some(ctx) = smart_context::format_context_for_prompt(&smart_context) {
@@ -223,7 +232,11 @@ pub fn build(inputs: &SystemPromptInputs<'_>) -> AssembledSystemPrompt {
 
     // Inject the environment block (cwd, date/time, platform, git context,
     // sandbox self-description). Deliberately LAST and non-cached.
-    if let Ok(cwd) = std::env::current_dir() {
+    // B2-2: the advertised directory is the engine's session working
+    // directory when set, else the process cwd — it must match what a Bash
+    // spawn actually uses (the dispatch seam injects the same value as the
+    // Bash call's default `cwd`).
+    if let Some(cwd) = inputs.config.effective_working_directory() {
         let env_text = build_env_block(&cwd);
         if let Some(ref mut prompt) = system_prompt {
             prompt.push_str(&env_text);
@@ -372,6 +385,122 @@ mod tests {
         assert!(
             block.contains("Today's date") && block.contains("Platform"),
             "date/platform anchors missing: {block}"
+        );
+    }
+
+    // -- B2-2 (P0-2): the session working directory drives the CWD read points --
+
+    /// Project instructions (CLAUDE.md/AGENTS.md) load from the CONFIGURED
+    /// session working directory, not the process cwd: a marker CLAUDE.md in
+    /// the session dir must reach the prompt even though the process cwd
+    /// (and everything above it) holds no such file.
+    #[test]
+    fn project_instructions_follow_configured_working_directory() {
+        let session_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            session_dir.path().join("CLAUDE.md"),
+            "Use the B22WD_MARKER convention for all code.",
+        )
+        .unwrap();
+        let cfg = QueryEngineConfig {
+            system_prompt: Some("base".to_string()),
+            auto_context_enabled: true,
+            repo_map_enabled: false,
+            working_directory: Some(session_dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let tools = tools_empty();
+        let injector = RepoMapInjector::new(None, 0);
+        let out = build(&inputs_for_test(&cfg, LlmProvider::Anthropic, &tools, &injector));
+        let blocks = out.blocks.expect("non-empty");
+        assert!(
+            blocks
+                .iter()
+                .any(|b| b.text.contains("B22WD_MARKER")),
+            "CLAUDE.md from the configured session dir must be injected: {:?}",
+            blocks.iter().map(|b| &b.text).collect::<Vec<_>>()
+        );
+    }
+
+    /// The env block advertises the CONFIGURED session working directory —
+    /// the exact directory the Bash dispatch seam (see
+    /// `crate::tool_execution::inject_bash_default_cwd`) defaults spawns to.
+    /// Both read the same `effective_working_directory()`, so the model is
+    /// never told a directory its shell does not run in.
+    #[test]
+    fn env_block_and_bash_default_cwd_follow_configured_working_directory() {
+        let session_dir = tempfile::tempdir().unwrap();
+        let cfg = QueryEngineConfig {
+            system_prompt: Some("base".to_string()),
+            auto_context_enabled: false,
+            repo_map_enabled: false,
+            working_directory: Some(session_dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let advertised = cfg
+            .effective_working_directory()
+            .expect("configured dir resolves");
+        let tools = tools_empty();
+        let injector = RepoMapInjector::new(None, 0);
+        let out = build(&inputs_for_test(&cfg, LlmProvider::Anthropic, &tools, &injector));
+        let blocks = out.blocks.expect("non-empty");
+        let env_block = blocks
+            .iter()
+            .find(|b| b.text.contains("## Environment"))
+            .expect("env block present");
+        assert!(
+            env_block
+                .text
+                .contains(&format!("Working directory: {}", session_dir.path().display())),
+            "env block must advertise the session dir: {}",
+            env_block.text
+        );
+        // The invariant's other half: a Bash call without an explicit cwd
+        // spawns in the SAME directory.
+        let mut calls = vec![(
+            "call-1".to_string(),
+            "Bash".to_string(),
+            serde_json::json!({ "command": "pwd" }),
+        )];
+        crate::tool_execution::inject_bash_default_cwd(
+            &mut calls,
+            cfg.working_directory.as_deref(),
+        );
+        assert_eq!(
+            calls[0].2.get("cwd").and_then(|v| v.as_str()),
+            Some(advertised.to_string_lossy().as_ref()),
+            "bash default cwd must equal the advertised directory"
+        );
+    }
+
+    /// Fallback preserved: with no configured working directory the env
+    /// block advertises the process cwd — the pre-B2-2 behavior REPL/CLI/
+    /// server hosts rely on.
+    #[test]
+    fn env_block_falls_back_to_process_cwd_when_unconfigured() {
+        let cfg = QueryEngineConfig {
+            system_prompt: Some("base".to_string()),
+            auto_context_enabled: false,
+            repo_map_enabled: false,
+            working_directory: None,
+            ..Default::default()
+        };
+        let expected = std::env::current_dir().expect("test process has a cwd");
+        let tools = tools_empty();
+        let injector = RepoMapInjector::new(None, 0);
+        let out = build(&inputs_for_test(&cfg, LlmProvider::Anthropic, &tools, &injector));
+        let blocks = out.blocks.expect("non-empty");
+        let env_block = blocks
+            .iter()
+            .find(|b| b.text.contains("## Environment"))
+            .expect("env block present");
+        assert!(
+            env_block
+                .text
+                .contains(&format!("Working directory: {}", expected.display())),
+            "env block must fall back to the process cwd ({}): {}",
+            expected.display(),
+            env_block.text
         );
     }
 }

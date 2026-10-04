@@ -71,6 +71,9 @@ pub(crate) async fn restored_engine(
             ),
             &state.memory_store,
             session.memory_disabled_snapshot(),
+            // B2-2: introspection engines are throwaway estimators — keep
+            // the process-cwd freeze (pre-B2-2 behavior).
+            None,
         ),
     };
     engine.set_session_id(session_id);
