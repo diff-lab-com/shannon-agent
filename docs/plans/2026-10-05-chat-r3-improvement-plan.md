@@ -6,6 +6,35 @@
 
 ---
 
+## ✅ 实施结果(2026-10-05,agent team 全量实施完毕)
+
+全部批次经 worktree + agent 并行实施、逐 PR 审查/测试/admin 合并进 dev。**合并 PR 对照表**:
+
+| 方案项 | PR | 内容 | 结果 |
+|---|---|---|---|
+| 方案文档 | #267 | 本文档 + 排期稿落库 | ✅ |
+| B1-1(P0-1) | #269 | steer 槽位按会话 FIFO 化 | ✅ 合并 |
+| B1-2(P1-1) | #271 | 权限弹窗终态联动(payload 无 query_id,过滤项按方案标注跳过) | ✅ 合并 |
+| B1-3(P1-4/R8-②) | #270 | 删除会话清理闭环(后端 cancel+destroy / 前端草稿+槽位) | ✅ 合并 |
+| B1-3b(RESIDUE) | #284 | 修复 #283 发现的「删除当前会话草稿经 switch-flush 复活」旅程级残留(墓碑拦截两条写路径) | ✅ 合并 |
+| B1-4(P1-3) | #272 | 取消空窗后端关闭(cancel_pending)+ stop 看门狗 get_session_querying 对账 | ✅ 合并 |
+| B1-5(P1-5) | #273 | STT provider 按配置签名重建 | ✅ 合并 |
+| B1-6(P1-7/8,P2-1) | #274 | 发送路径三修(闩锁所有权/恢复不覆盖/regenerate 诚实报错) | ✅ 合并 |
+| B2-1(P0-2 止血) | #275 | send_message 按会话 wd 切 CWD + 附件域会话优先(**已被 #277 取代其 set_current_dir 部分**) | ✅ 合并 |
+| B2-2(P0-2 正解) | #277 | working_directory 全链路(system_prompt/env block/repo map/bash dispatch 注入),移除全部进程级 CWD 翻转 | ✅ 合并 |
+| B2-3(P0-3) | #276 | 删除进程内死事件通道(R9-③),净删 315 行 | ✅ 合并 |
+| B3-1(P1-2) | #279 | 侧栏「队列 N」徽标(R9-②) | ✅ 合并 |
+| B3-2(P1-6) | #280 | 流式 Markdown 增量(定稿前缀 memo + 安全切分 + deferHighlight) | ✅ 合并 |
+| B3-3(P2-2/3/5/6/7/8) | #281 | 卫生簇六件 | ✅ 合并 |
+| B3-4(P2-4) | #282 | 远程图片默认拦截(R9-④) | ✅ 合并 |
+| B3-5(§七) | #283 | 五个旅程级 e2e 钉 + nightly 性能代理(**发现 B1-3-RESIDUE → #284 修复**) | ✅ 合并 |
+
+**DoD 门禁(合并后 dev @ 3e59845aa 实测)**: 前端 vitest 全量 **3072 passed / 9 skipped / 0 failed**(278 文件)+ tsc 零错误 + i18n-check OK;desktop lib **1389 绿**;chat_contract_smoke **7 绿**;生产代码 `set_current_dir` 零调用(仅 batch_commands.rs:519 文档注释与 scheduled_commands 测试内既有用法)。e2e:PR-gate 四旅程 spec 本地两轮 16 passed,nightly perf spec 2 passed(CI 复核随门禁)。
+
+**遗留跟进**(均有归属,非阻塞): ① 远程图片占位态的 visual-matrix 新基线(#282 报告,后续视觉规格);② auto-drain 触发器(R9-②,用户反馈驱动);③ nightly perf 阈值按 CI 基线校准(#283 perf-stats 附件);④ B3-5 指出的 steer timeout toast 按条数重复(#269 报告,聚合属 handler 契约调整)。
+
+---
+
 ## 〇、背景、范围与方法
 
 **触发**: 对核心 AI 对话页(`desktop/ui/src/pages/Chat.tsx` 及其全部支撑层)做一轮深度审查,产出可执行改进方案。
@@ -243,3 +272,4 @@ user 消息在**轮首**写入 L0(`agent_loop.rs:817-818`,producer 启动即 `re
 ## 十二、变更记录
 
 - v1(2026-10-05): 综合三轮工作成文——深度审查发现清单(§三)、专项调查 R8(§四)、五项裁定 R9(§五)、批次方案(§六)及测试/风险/执行/验收(§七-十一)。取代 `2026-10-04-chat-r3-review-fix-schedule.md`。
+- v2(2026-10-05 全量实施后): §〇新增实施结果——15 个 PR(#267-#284,三波次 + RESIDUE 修复)全部合并;DoD 门禁实测数据回填;遗留跟进四项归属。**§六的 B2-1 set_current_dir 已被 B2-2 正解取代(保留历史)**;P1-9 已于 §四关闭。
