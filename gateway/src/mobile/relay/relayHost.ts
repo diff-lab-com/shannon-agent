@@ -75,6 +75,18 @@ export interface RelayHostHandle {
   readonly paired: Promise<void>;
   /** Stop the relay host connection. */
   stop(): Promise<void>;
+  /**
+   * §O3/§T6 Push-to-Wake control side channel (docs/protocol/
+   * relay-push-wake-frames.md): send a `push.*` frame over the host's relay
+   * connection. False = link down (frame dropped, caller decides — wake is
+   * fire-and-forget, bind surfaces an unreachable error).
+   */
+  sendControl(frame: Record<string, unknown>): boolean;
+  /**
+   * Subscribe to relay→desktop control frames whose `t` starts with `push.`
+   * (the ack leg of the same contract). Returns the unsubscribe function.
+   */
+  onControl(handler: (frame: Record<string, unknown>) => void): () => void;
 }
 
 /**
@@ -117,6 +129,8 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
   let ws: WebSocket | null = null;
   let reconnectAttempts = 0;
   let reconnectTimer: NodeJS.Timeout | null = null;
+  // §O3/§T6: subscribers to the push.* control side channel (see RelayHostHandle).
+  const controlHandlers: Array<(frame: Record<string, unknown>) => void> = [];
   // v0.3 ECDH mode: channels stay null until the phone's `e2e_hello` arrives
   // (or a legacy sealed frame triggers the fallback). Once established, both
   // channels follow the §G-rev2/§G-rev3 re-pair rules (recv reset, send kept).
@@ -223,6 +237,12 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
 
   function handleControlFrame(ctrl: Record<string, unknown>): void {
     const type = ctrl["t"] as string | undefined;
+    // §O3/§T6: push.* frames belong to the Push-to-Wake side channel, not the
+    // phone-join state machine — hand them to control subscribers verbatim.
+    if (typeof type === "string" && type.startsWith("push.")) {
+      for (const handler of controlHandlers) handler(ctrl);
+      return;
+    }
     switch (type) {
       case "host_ready":
         logger.info("relay host: registered, waiting for phone to join");
@@ -395,6 +415,18 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
       return paired;
     },
     stop,
+    sendControl(frame: Record<string, unknown>): boolean {
+      if (stopped || !ws || ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(JSON.stringify(frame));
+      return true;
+    },
+    onControl(handler: (frame: Record<string, unknown>) => void): () => void {
+      controlHandlers.push(handler);
+      return () => {
+        const i = controlHandlers.indexOf(handler);
+        if (i >= 0) controlHandlers.splice(i, 1);
+      };
+    },
   };
 }
 

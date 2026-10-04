@@ -171,7 +171,8 @@ export class MobileDispatchHub {
   private readonly seq: SeqCounter;
   private readonly approvals: ApprovalRegistry | null;
   private readonly replay: PushReplayBuffer | null;
-  private readonly wake: PushWakeSink | null;
+  /** Mutable: the relay leg late-binds this (see `setWake`). */
+  private wake: PushWakeSink | null;
 
   /** deviceId → open, session-bound contexts. */
   private readonly byDevice = new Map<string, Set<MethodContext>>();
@@ -208,6 +209,15 @@ export class MobileDispatchHub {
   /** Late-bind the router entry point (see `InboundSubmit`). */
   setSubmit(fn: InboundSubmit): void {
     this.submit = fn;
+  }
+
+  /**
+   * §O3: late-bind the wake sink — the relay leg assembles after the hub in
+   * the bootstrap (the relay host connection exists only in relay mode), so
+   * the constructor's `wake` option isn't always reachable from there.
+   */
+  setWake(fn: PushWakeSink): void {
+    this.wake = fn;
   }
 
   // ── connections ────────────────────────────────────────────────────────────
