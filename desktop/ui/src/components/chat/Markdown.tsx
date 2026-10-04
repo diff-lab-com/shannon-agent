@@ -46,15 +46,23 @@ interface MarkdownProps {
    *  callback fires with the DOM input (the caller resolves which checklist
    *  item it is — e.g. by DOM order inside its own container). */
   onCheckboxToggle?: (input: HTMLInputElement) => void
+  /** B3-2: drop rehype-highlight from the pipeline. The live-streaming path
+   *  re-parses on every flush and highlighting is the priciest rehype step,
+   *  so it defers to the finalized MessageBubble render (plain `<Markdown>`)
+   *  where the full text is highlighted once. Everything else — sanitize
+   *  BEFORE katex (§4-14), GFM, math — stays identical either way. */
+  deferHighlight?: boolean
 }
 
-export const Markdown = memo(function Markdown({ children, className, onCheckboxToggle }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ children, className, onCheckboxToggle, deferHighlight }: MarkdownProps) {
   return (
     <div className={className}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[
-          rehypeHighlight,
+          // B3-2: `deferHighlight` (the live-streaming path) drops only the
+          // cosmetic highlighter; the rest of the pipeline is byte-identical.
+          ...(deferHighlight ? [] : [rehypeHighlight]),
           [rehypeSanitize, sanitizeSchema],
           // B2 §4-14: math → KaTeX. Must stay AFTER rehype-sanitize so the
           // KaTeX markup (and its MathML twin) is never stripped; the math
