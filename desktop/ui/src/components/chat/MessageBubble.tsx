@@ -281,11 +281,16 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
     setIsRegenerating(true)
     try {
       await onRewind(regenerate.turnIndex)
-      await sendMessage(
+      // P2-1: sendMessage RESOLVES false when the backend refuses the resend
+      // (budget / concurrent-query / goal guards — it never throws; the error
+      // surface is already up via setChatError). The success toast must only
+      // fire on acceptance — the matching correct branch is commitEdit in
+      // Chat.tsx.
+      const ok = await sendMessage(
         regenerate.content,
         regenerate.attachmentPaths.length > 0 ? regenerate.attachmentPaths : undefined,
       )
-      toast.success(t('chat.message.regenerate.started'))
+      if (ok) toast.success(t('chat.message.regenerate.started'))
     } catch (error) {
       toastError(t('chat.message.regenerate.failed'), error)
     } finally {
