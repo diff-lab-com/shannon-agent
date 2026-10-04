@@ -9,18 +9,27 @@
 // settle (the isQuerying flip), which is exactly the escape hatch the
 // Escape key always offered — with the draft preserved instead of dropped.
 //
+// B1-1 (P0-1): parked steers live in a per-session FIFO, not a single
+// global slot. A lone slot let a steer for session A be silently
+// overwritten by one for session B while A's settle was still awaited —
+// and the text was already gone from the composer, so it was lost without
+// a trace; a park landing while a delivery was in flight was likewise
+// wiped by that delivery's cleanup. Queues only build up when a user fires
+// several interrupts before their runs settle — exactly then losing one is
+// least excusable, so every entry survives and goes out in park order.
+//
 // Round-1 review fixes baked in:
-//   * Imp-1 — the flush effect does NOT clear the pending slot before
-//     sending. It flips `deliveringRef` (a "this settle belongs to the
-//     steer" token) synchronously BEFORE the drain effect runs in the same
-//     commit, and the slot clears only when the delivery RESOLVES — the
-//     drain can never race in and burn a queued item against the backend's
-//     concurrent-query guard.
-//   * Imp-2 — the pending steer is parked under its SESSION key. A settle
-//     observed for a different visible session never delivers (the text
-//     waits for its own session to be on screen again); a parked steer
-//     whose run never settles (cancel IPC failure) is handed back to the
-//     composer after `settleTimeoutMs` instead of waiting forever.
+//   * Imp-1 — the flush effect does NOT release the queue before sending.
+//     It flips `deliveringRef` (a "this settle belongs to the steer" token
+//     carrying the delivered session key) synchronously BEFORE the drain
+//     effect runs in the same commit, and the entry leaves the queue only
+//     when the delivery RESOLVES — the drain can never race in and burn a
+//     queued item against the backend's concurrent-query guard.
+//   * Imp-2 — steers are parked under their SESSION key. A settle observed
+//     for a different visible session never delivers (the text waits for
+//     its own session to be on screen again); a parked steer whose run
+//     never settles (cancel IPC failure) is handed back to the composer
+//     after `settleTimeoutMs` instead of waiting forever.
 
 import { useCallback, useEffect, useRef } from 'react'
 
@@ -45,7 +54,9 @@ export interface SteerSendOptions {
    *  concurrent-query guard raced the cancel). */
   sendMessage: (text: string, attachments?: string[]) => Promise<boolean>
   /** Delivery failed or gave up — the caller restores the composer draft
-   *  (`reason === 'timeout'` warrants a user-facing notice). */
+   *  (`reason === 'timeout'` warrants a user-facing notice; a timeout may
+   *  fire for several queued entries one after another, so append rather
+   *  than overwrite). */
   onSendRejected?: (pending: SteerPending, reason: SteerAbortReason) => void
   /** Dead-wait bound for the settle (cancel IPC failure). Default 15s. */
   settleTimeoutMs?: number
@@ -77,15 +88,22 @@ export function useSteerSend({
   onSendRejected,
   settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS,
 }: SteerSendOptions): SteerSend {
-  const pendingRef = useRef<SteerPending | null>(null)
-  // "This settle belongs to the steer": set synchronously in the flush
-  // effect (which Chat declares above its drain effect) and cleared only
-  // when the delivery resolves — the drain gate reads it in the very same
-  // commit the settle lands in.
-  const deliveringRef = useRef(false)
+  // Per-session FIFO of steers waiting for their session's settle. Entries
+  // are parked under the key they were steered from and never move, so
+  // reading the VISIBLE key's queue head is the Imp-2 session check itself.
+  // Entries leave by object reference (delivery resolution, timeout abort)
+  // — never wholesale, so a park landing mid-delivery always outlives it.
+  const pendingRef = useRef<Map<string, SteerPending[]>>(new Map())
+  // "This settle belongs to the steer": the key whose head is being
+  // delivered right now, or null. Set synchronously in the flush effect
+  // (which Chat declares above its drain effect) and cleared only when the
+  // delivery resolves — the drain gate reads it in the very same commit the
+  // settle lands in. Single-flight by construction: the flush only starts
+  // when this is null.
+  const deliveringRef = useRef<string | null>(null)
   const timeoutRef = useRef<number | null>(null)
-  // Latest-refs: the flush effect runs on isQuerying/visibleSession flips
-  // only, so its closure must not carry stale callbacks.
+  // Latest-refs: the flush effect runs on every render, so its closure must
+  // not carry stale callbacks.
   const sendMessageRef = useRef(sendMessage)
   const onSendRejectedRef = useRef(onSendRejected)
   useEffect(() => {
@@ -98,6 +116,17 @@ export function useSteerSend({
   const visibleSessionIdRef = useRef(visibleSessionId)
   visibleSessionIdRef.current = visibleSessionId
 
+  // Remove one entry, by reference, from its session's queue. The queue
+  // itself stays when it still has tail entries — clearing it wholesale is
+  // the P0-1 loss this hook exists to prevent.
+  const dropPending = useCallback((pending: SteerPending) => {
+    const queue = pendingRef.current.get(pending.sessionKey)
+    if (!queue) return
+    const at = queue.indexOf(pending)
+    if (at >= 0) queue.splice(at, 1)
+    if (queue.length === 0) pendingRef.current.delete(pending.sessionKey)
+  }, [])
+
   const disarmTimeout = useCallback(() => {
     if (timeoutRef.current != null) {
       window.clearTimeout(timeoutRef.current)
@@ -105,21 +134,35 @@ export function useSteerSend({
     }
   }, [])
 
-  const armTimeout = useCallback((armedFor: SteerPending) => {
+  // (Re)arm the dead-wait bound. Re-armed on every park, so the window
+  // counts from the latest park. On expiry only the session the user is
+  // WATCHING gives up: every entry of its queue still waiting for the
+  // settle is returned in park order. The in-flight head (if any) is not
+  // waiting — its own send promise owns its fate now (the flush always
+  // delivers queue[0] and removes it by reference, so the head is exactly
+  // queue[0] while `deliveringRef` holds this key). Off-screen parks are
+  // not a dead wait anyone is watching: they stay parked (delivering on
+  // return) and re-arm to keep checking.
+  const armTimeout = useCallback(() => {
     disarmTimeout()
     timeoutRef.current = window.setTimeout(() => {
       timeoutRef.current = null
-      const pending = pendingRef.current
-      if (!pending || pending !== armedFor) return
-      if (pending.sessionKey !== (visibleSessionIdRef.current ?? '')) {
-        // Parked for a session that is not on screen — not a dead wait the
-        // user is watching. Keep it (it delivers on return) and re-check
-        // after another window.
-        armTimeout(pending)
-        return
+      const visible = visibleSessionIdRef.current ?? ''
+      let offscreenWaiting = false
+      for (const [key, queue] of pendingRef.current) {
+        if (queue.length === 0) continue
+        if (key !== visible) {
+          offscreenWaiting = true
+          continue
+        }
+        const delivering = deliveringRef.current === key
+        for (const pending of delivering ? queue.slice(1) : queue) {
+          onSendRejectedRef.current?.(pending, 'timeout')
+        }
+        if (delivering) queue.length = 1
+        else pendingRef.current.delete(key)
       }
-      pendingRef.current = null
-      onSendRejectedRef.current?.(pending, 'timeout')
+      if (offscreenWaiting) armTimeout()
     }, settleTimeoutMs)
   }, [disarmTimeout, settleTimeoutMs])
 
@@ -149,43 +192,53 @@ export function useSteerSend({
       attachments: files,
       parkedAt: Date.now(),
     }
-    pendingRef.current = pending
-    armTimeout(pending)
+    // Queue tail: a steer parked while this session's earlier steer is
+    // still parked (or being delivered) must outlive it, not replace it.
+    let queue = pendingRef.current.get(pending.sessionKey)
+    if (!queue) {
+      queue = []
+      pendingRef.current.set(pending.sessionKey, queue)
+    }
+    queue.push(pending)
+    armTimeout()
     return true
   }, [isQuerying, cancelQuery, armTimeout])
 
-  // The flush: when the interrupted run settles, deliver the parked message
-  // ahead of the FIFO queue. Chat declares this hook's consumer effect above
-  // its drain effect and gates the drain on hasPendingSteer — and because
-  // `deliveringRef`/the pending slot stay set until the delivery RESOLVES,
-  // the gate holds through the settle commit and the send itself (Imp-1).
+  // The flush: when the interrupted run settles, deliver the queued steers
+  // ahead of the FIFO prompt queue, head first. Chat declares this hook's
+  // consumer effect above its drain effect and gates the drain on
+  // hasPendingSteer — and because `deliveringRef`/the head stay in place
+  // until the delivery RESOLVES, the gate holds through the settle commit
+  // and the send itself (Imp-1). Runs on every render (no dep array): the
+  // gates below make the extra runs no-ops, and a tail parked behind a
+  // finished delivery is picked up by the next commit even when no
+  // isQuerying/visibility flip follows.
   useEffect(() => {
-    if (isQuerying || deliveringRef.current) return
-    const pending = pendingRef.current
+    if (isQuerying || deliveringRef.current != null) return
+    const key = visibleSessionIdRef.current ?? ''
+    const queue = pendingRef.current.get(key)
+    const pending = queue?.[0]
     if (!pending) return
-    // Imp-2: only the steer's OWN session may receive it — a settle observed
-    // while another session is on screen keeps the text parked (it delivers
-    // when its session comes back into view and is idle).
-    if (pending.sessionKey !== (visibleSessionIdRef.current ?? '')) return
-    deliveringRef.current = true
+    deliveringRef.current = key
     disarmTimeout()
     void sendMessageRef.current(pending.text, pending.attachments.length > 0 ? pending.attachments : undefined)
       .then(ok => {
-        deliveringRef.current = false
-        pendingRef.current = null
+        deliveringRef.current = null
+        dropPending(pending)
         if (!ok) onSendRejectedRef.current?.(pending, 'rejected')
       })
       .catch(() => {
-        deliveringRef.current = false
-        pendingRef.current = null
+        deliveringRef.current = null
+        dropPending(pending)
         onSendRejectedRef.current?.(pending, 'rejected')
       })
-  }, [isQuerying, visibleSessionId, disarmTimeout])
+  })
 
   const hasPendingSteer = useCallback(() => {
-    if (deliveringRef.current) return true
-    const pending = pendingRef.current
-    return pending != null && pending.sessionKey === (visibleSessionIdRef.current ?? '')
+    const key = visibleSessionIdRef.current ?? ''
+    if (deliveringRef.current === key) return true
+    const queue = pendingRef.current.get(key)
+    return queue != null && queue.length > 0
   }, [])
 
   return { steer, hasPendingSteer }

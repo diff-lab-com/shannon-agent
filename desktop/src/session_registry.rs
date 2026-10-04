@@ -631,6 +631,38 @@ mod tests {
         );
     }
 
+    /// B1-3 (R8-②): after `destroy`, `get_or_create` for the same key must
+    /// materialise a BRAND-NEW entry — the deleted session's state (messages
+    /// buffer, bypass flags, and above all the unbounded per-session event
+    /// channel) is released, not resurrected. `delete_session` relies on
+    /// this: the entry it destroys after a successful store delete must not
+    /// leak its event backlog for the rest of the process lifetime.
+    #[test]
+    fn session_registry_destroy_then_get_or_create_materialises_fresh_state() {
+        let reg = SessionRegistry::new();
+        let key = reg.create();
+        let dead = reg.get(key).expect("fixture: entry exists");
+        // Leave markable state on the doomed entry — a fresh replacement
+        // must not inherit any of it.
+        dead.set_memory_disabled(true);
+
+        assert!(reg.destroy(key));
+        let fresh = reg.get_or_create(key);
+        assert!(
+            !Arc::ptr_eq(&dead, &fresh),
+            "get_or_create after destroy must not resurrect the dead entry"
+        );
+        assert!(
+            !fresh.memory_disabled_snapshot(),
+            "the replacement entry starts from defaults"
+        );
+        assert_eq!(
+            reg.list().len(),
+            1,
+            "destroy + get_or_create leaves exactly one live entry"
+        );
+    }
+
     #[test]
     fn session_registry_get_or_create_active_returns_a_session() {
         let reg = SessionRegistry::new();

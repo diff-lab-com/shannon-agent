@@ -15,6 +15,7 @@ import { describeBackendError } from '@/lib/backendError'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
+import { clearDraft } from '@/lib/composerDraft'
 import { basenameOf } from '@/lib/fileRefs'
 import {
   beginRun as runBegin,
@@ -229,7 +230,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // pending prompt belongs to the settling session through this ref. All
   // writes funnel through `applyPermissionRequest` so ref and state move in
   // the same synchronous step (same pattern as visibleSessionIdRef).
+  // B1-3 (P1-4): deleteSessionAction reads the same mirror through its own
+  // stale-closure-prone callback — the render-time assignment below keeps the
+  // ref honest even if a future write ever bypasses the helper.
   const permissionRequestRef = useRef<PermissionRequest | null>(null)
+  permissionRequestRef.current = permissionRequest
   const applyPermissionRequest = useCallback((next: PermissionRequest | null) => {
     permissionRequestRef.current = next
     setPermissionRequest(next)
@@ -943,6 +948,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       streamNoticesBucketsRef.current.delete(id)
       // B1 §4-9: its queued prompts die with the session too.
       dropPromptQueue(id)
+      // B1-3 (P1-4): the rest of the session-scoped state dies with it —
+      // the persisted draft, the run/composer latches (this also clears
+      // the cancel-in-flight slot via the same choke point), the Context
+      // tab's sources, and the pending citation snapshot (W3-4). Without
+      // these a deleted session's mid-run backend cancel (its terminal
+      // event arrives after the delete) or leftover slots would linger.
+      clearDraft(id)
+      setSessionQuerying(id, false)
+      setSessionSources(prev => {
+        if (!(id in prev)) return prev
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      pendingInjectedMemoriesRef.current.delete(id)
+      // A permission prompt aimed AT the deleted session is unanswerable —
+      // dismiss it. Latest-ref read, not the closure's state (see the
+      // declaration above); other sessions' prompts stay up.
+      if (permissionRequestRef.current?.session_id === id) setPermissionRequest(null)
       if (currentSessionId === id) {
         setMessages([])
         setStreamNotices([])
@@ -951,7 +975,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       await refreshSessions()
     } catch (e) { setChatError(String(e)) }
-  }, [currentSessionId, refreshSessions, dropPromptQueue, setChatError])
+  }, [currentSessionId, refreshSessions, dropPromptQueue, setSessionQuerying, setChatError])
 
   const renameSessionAction = useCallback(async (id: string, title: string) => {
     try {
