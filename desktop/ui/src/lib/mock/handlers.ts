@@ -1792,8 +1792,8 @@ export const handlers: Record<string, MockHandler> = {
     }
     demoConfig.active_permission_profile = name === '' ? null : name
     // Mirror the backend's mode mapping so the demo header reflects it.
-    if (name === 'strict' || name === 'balanced') demoConfig.approval_mode = 'suggest'
-    else if (name === 'permissive') demoConfig.approval_mode = 'auto_edit'
+    if (name === 'strict' || name === 'balanced') demoConfig.approval_mode = 'ask'
+    else if (name === 'permissive') demoConfig.approval_mode = 'auto-edit'
     return { active: name === '' ? null : name, approval_mode: demoConfig.approval_mode }
   },
   async save_custom_profile(args: { name: string; description?: string; auto_approve: string[]; confirm: string[]; deny: string[] }) {
