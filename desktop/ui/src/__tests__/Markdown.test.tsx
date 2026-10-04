@@ -7,6 +7,11 @@ function renderMd(md: string) {
   return render(<Markdown>{md}</Markdown>, { wrapper: I18nProvider })
 }
 
+/** B3-2: the streaming shape of the component (highlight deferred). */
+function renderMd2(md: string) {
+  return render(<Markdown deferHighlight>{md}</Markdown>, { wrapper: I18nProvider })
+}
+
 describe('Markdown — basic formatting', () => {
   it('renders a paragraph with bold text', () => {
     renderMd('Hello **world**')
@@ -281,6 +286,31 @@ describe('Markdown — GFM footnotes (P1-6)', () => {
   it('renders plain markdown without a footnotes section', () => {
     const { container } = renderMd('Hello **world**')
     expect(container.querySelector('section[data-footnotes]')).toBeNull()
+  })
+})
+
+describe('Markdown — deferHighlight (B3-2 streaming path)', () => {
+  it('skips syntax highlighting when deferHighlight is set', () => {
+    const { container } = renderMd2('```ts\nconst x = 1\n```')
+    expect(container.querySelector('.hljs-keyword')).toBeNull()
+    // The code itself still renders through the full sanitize pipeline.
+    expect(container.querySelector('pre code')?.textContent).toContain('const x = 1')
+  })
+
+  it('keeps highlighting by default (finalized MessageBubble path unchanged)', () => {
+    const { container } = renderMd('```ts\nconst x = 1\n```')
+    expect(container.querySelector('.hljs-keyword')).not.toBeNull()
+  })
+
+  it('still renders KaTeX math with deferHighlight (sanitize → katex order kept)', () => {
+    const { container } = renderMd2('Energy: $E=mc^2$ indeed.')
+    expect(container.querySelector('.katex')).not.toBeNull()
+    expect(container.querySelector('p')?.textContent).not.toContain('$E')
+  })
+
+  it('still strips raw HTML with deferHighlight (sanitize stays active)', () => {
+    const { container } = renderMd2('hello<script>alert(1)</script>')
+    expect(container.querySelector('script')).toBeNull()
   })
 })
 

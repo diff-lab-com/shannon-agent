@@ -3387,6 +3387,8 @@
   "sidebar.sessions.lastActivity.aria": "Last active {time}",
   "sidebar.sessions.awaitingApproval.badge": "Waiting for approval",
   "sidebar.sessions.error.badge": "Last run failed",
+  "sidebar.sessions.queue.label": "Очередь: {n}",
+  "sidebar.sessions.queue.title": "{n} сообщений будут отправлены при возвращении к этой сессии",
   "nav.search": "Поиск",
   "nav.automation": "Автоматизации",
   "sidebar.model.badge.aria": "Current model {model} ({provider}) — click to manage",

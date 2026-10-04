@@ -584,17 +584,68 @@ describe('ChatInput — slash-command menu', () => {
 // and broke the `getByRole('textbox', { name: 'Message' })` E2E contract.
 // The composer keeps its implicit textbox role; menu state (open / count /
 // selection) is announced through a polite status region instead.
+// P2-3 adds the one missing association: aria-controls names the open
+// menu's listbox (there is deliberately no aria-activedescendant).
 describe('ChatInput — slash autocomplete a11y', () => {
+
   it('keeps the textarea a plain textbox while the slash menu is open', () => {
     const { container } = renderChatInput({ value: '/' })
     const textarea = container.querySelector('textarea')!
     expect(textarea).not.toHaveAttribute('role')
     expect(textarea).not.toHaveAttribute('aria-expanded')
     expect(textarea).not.toHaveAttribute('aria-activedescendant')
-    // The listbox itself is still exposed with usable option ids.
+    // P2-3: the open slash listbox is reachable from the textarea via
+    // aria-controls; options stay exposed by role (no option ids needed —
+    // nothing references them).
     const listbox = screen.getByRole('listbox', { name: 'Slash commands' })
-    const optionIds = Array.from(listbox.querySelectorAll('[role="option"]')).map(o => o.id)
-    optionIds.forEach(id => expect(id).toBeTruthy())
+    expect(textarea).toHaveAttribute('aria-controls', listbox.id)
+    expect(listbox.querySelectorAll('[role="option"]').length).toBeGreaterThan(0)
+  })
+
+  it('aria-controls tracks the open menu and drops out when both close', async () => {
+    // Mention universe: one candidate so the '@re' query opens the menu.
+    // (This file mocks tauri-api with the real module spread in, so
+    // getFileTree needs an explicit spy, not mockResolvedValue.)
+    const treeSpy = vi.spyOn(api, 'getFileTree').mockResolvedValue([
+      {
+        name: 'w',
+        path: '/w',
+        type: 'directory',
+        children: [{ name: 'readme.md', path: '/w/readme.md', type: 'file' }],
+      },
+    ] as never)
+    const view = renderChatInput({ value: 'plain text' })
+    const textarea = view.container.querySelector('textarea')!
+    // Both menus closed: no dangling association.
+    expect(textarea).not.toHaveAttribute('aria-controls')
+
+    // Mention menu open → the association names the mention listbox.
+    view.rerender(
+      <I18nProvider>
+        <ChatInput
+          value="see @re"
+          onChange={vi.fn()}
+          onSend={vi.fn()}
+          onExecuteSlash={vi.fn()}
+          attachedFiles={[]}
+          onAttach={vi.fn()}
+          onDetachAll={vi.fn()}
+          isQuerying={false}
+          onCancelQuery={vi.fn()}
+          onOpenQuickFix={vi.fn()}
+          onOpenEditor={vi.fn()}
+          sessionWorkingDir="/w"
+        />
+      </I18nProvider>,
+    )
+    const mentionTextarea = view.container.querySelector('textarea')!
+    const mentionListbox = await screen.findByRole('listbox', { name: 'File mentions' })
+    expect(mentionTextarea).toHaveAttribute('aria-controls', mentionListbox.id)
+
+    // Escape dismisses the menu → the association goes with it.
+    fireEvent.keyDown(mentionTextarea, { key: 'Escape' })
+    expect(mentionTextarea).not.toHaveAttribute('aria-controls')
+    treeSpy.mockRestore()
   })
 
   it('announces menu state and selection through the status region', () => {

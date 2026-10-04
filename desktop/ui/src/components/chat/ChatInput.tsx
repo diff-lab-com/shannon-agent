@@ -25,7 +25,7 @@ import {
   insertMention,
   relativeToWorkingDir,
 } from '@/lib/fileMention'
-import { imageFilesFromClipboard, blobToBase64, PASTE_IMAGE_MIME_TO_EXT, MAX_PASTED_IMAGE_BYTES } from '@/lib/pasteImage'
+import { imageFilesFromClipboard, clipboardHasText, blobToBase64, PASTE_IMAGE_MIME_TO_EXT, MAX_PASTED_IMAGE_BYTES } from '@/lib/pasteImage'
 import * as api from '@/lib/tauri-api'
 import type { RejectedAttachmentReason, AttachmentExtractionReport } from '@/types'
 import { toastError } from '@/lib/errorToast'
@@ -154,10 +154,14 @@ export default function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)
 
-  // P2-9: combobox wiring — the textarea acts as the combobox and points at
-  // the slash listbox via aria-controls/aria-activedescendant.
+  // P2-3 — menu ownership. The composer keeps its implicit multi-line
+  // `textbox` role (see the P2-9 revision note below — no combobox, no
+  // aria-activedescendant); while a menu is open the textarea points at
+  // the visible listbox via aria-controls, and open/count/selection
+  // changes are announced through the polite status regions instead.
+  // The two menus are mutually exclusive by construction, so one
+  // conditional covers both.
   const slashListboxId = useId()
-  const slashOptionId = (name: string) => `${slashListboxId}-opt-${name}`
   // GB P2-10b: the @-mention listbox gets its own namespace of ids.
   const mentionListboxId = useId()
 
@@ -224,6 +228,16 @@ export default function ChatInput({
   const trackCaret = (el: HTMLTextAreaElement) => {
     caretRef.current = el.selectionStart ?? el.value.length
   }
+
+  // P2-3: the id the textarea's aria-controls points at — present exactly
+  // while the owning listbox is rendered (slash wins; the menus are
+  // mutually exclusive, but the order makes that explicit rather than
+  // load-bearing).
+  const openListboxId = slashOpen
+    ? slashListboxId
+    : mentionMatches.length > 0
+      ? mentionListboxId
+      : undefined
 
   // Office Wave 1 A1a — honest notice while an unparseable attachment
   // (.doc/.xls/… legacy format) rides along. Dismissible, but re-arming:
@@ -594,10 +608,19 @@ export default function ChatInput({
       }
     }
   }
+  //
+  // P2-2 — mixed image+text pastes (Excel ranges, "copy image with
+  // caption") used to swallow the text: the handler preventDefault'd the
+  // whole event the moment an image was present. The text is only kept by
+  // the browser's default insertion, so that default stays live whenever
+  // the clipboard also carries string items; we never insert text
+  // ourselves, so there is no double-insert path. Image-only pastes (the
+  // screenshot-tool case) still preventDefault — nothing else on the
+  // clipboard would be lost.
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const images = imageFilesFromClipboard(e.clipboardData)
     if (images.length === 0) return
-    e.preventDefault()
+    if (!clipboardHasText(e.clipboardData)) e.preventDefault()
     void handlePastedImages(images)
   }
 
@@ -971,7 +994,6 @@ export default function ChatInput({
                   <button
                     type="button"
                     role="option"
-                    id={slashOptionId(key)}
                     aria-selected={i === slashActive}
                     onMouseDown={e => {
                       e.preventDefault()
@@ -1042,7 +1064,6 @@ export default function ChatInput({
                 <button
                   type="button"
                   role="option"
-                  id={`${mentionListboxId}-opt-${i}`}
                   aria-selected={i === mentionActive}
                   onMouseDown={e => {
                     e.preventDefault()
@@ -1221,6 +1242,10 @@ export default function ChatInput({
                   : t('chat.input.placeholder.empty')
             }
             aria-label={t('chat.input.ariaLabel')}
+            // P2-3: names the open menu's listbox (absent when both are
+            // closed); selection/announcement flow through the P2-9 status
+            // regions, not aria-activedescendant.
+            aria-controls={openListboxId}
             value={value}
             onChange={e => {
               trackCaret(e.currentTarget)

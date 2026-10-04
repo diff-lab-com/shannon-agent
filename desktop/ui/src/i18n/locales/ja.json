@@ -3386,6 +3386,8 @@
   "sidebar.sessions.lastActivity.aria": "Last active {time}",
   "sidebar.sessions.awaitingApproval.badge": "Waiting for approval",
   "sidebar.sessions.error.badge": "Last run failed",
+  "sidebar.sessions.queue.label": "{n} 件待機",
+  "sidebar.sessions.queue.title": "このセッションに戻ると {n} 件のメッセージを送信します",
   "nav.search": "検索",
   "nav.automation": "オートメーション",
   "sidebar.model.badge.aria": "Current model {model} ({provider}) — click to manage",

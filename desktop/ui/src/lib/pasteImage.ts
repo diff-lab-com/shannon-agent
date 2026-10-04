@@ -46,6 +46,19 @@ export function imageFilesFromClipboard(data: ClipboardDataLike | null | undefin
 }
 
 /**
+ * Whether the clipboard data carries any string-flavored item (plain text,
+ * HTML, …). P2-2 — a mixed image+text paste (Excel/OneNote ranges, "copy
+ * image with caption") must keep the browser's default text insertion while
+ * the image still rides the attachment path, so the composer only calls
+ * preventDefault on an image-only paste.
+ */
+export function clipboardHasText(data: ClipboardDataLike | null | undefined): boolean {
+  const items = data?.items
+  if (!items) return false
+  return Array.from(items).some(item => item.kind === 'string')
+}
+
+/**
  * Read a blob as bare base64 (no `data:` URL prefix) — the exact form
  * `save_pasted_image` expects.
  */

@@ -6,9 +6,13 @@
 // 2. An oversized image is refused client-side (shared 10 MiB cap) with the
 //    i18n message — the backend is never invoked.
 // 3. A text-only paste is NOT intercepted: no backend call, default behavior.
+// 4. P2-2 — a MIXED image+text paste attaches the image but leaves the
+//    event's default (text insertion) alive: preventDefault must NOT fire,
+//    or the pasted text silently vanishes. Image-only pastes still cancel
+//    the default (nothing textual to lose).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, createEvent, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import { toast } from 'sonner'
 import ChatInput from '@/components/chat/ChatInput'
@@ -77,6 +81,15 @@ function pasteWith(items: unknown[]) {
   fireEvent.paste(textarea, { clipboardData: { items } })
 }
 
+/** P2-2 — fires a paste whose native preventDefault is observable. */
+function pasteTracked(items: unknown[]) {
+  const textarea = screen.getByRole('textbox', { name: 'Message' })
+  const event = createEvent.paste(textarea, { clipboardData: { items } })
+  const preventDefault = vi.spyOn(event, 'preventDefault')
+  fireEvent(textarea, event)
+  return preventDefault
+}
+
 const PNG_BYTES = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 
 describe('ChatInput — clipboard image paste (G3b P1-6)', () => {
@@ -116,6 +129,31 @@ describe('ChatInput — clipboard image paste (G3b P1-6)', () => {
     ])
     expect(savePastedImage).not.toHaveBeenCalled()
     expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  // P2-2 — the mixed case that used to eat the text: the image still rides
+  // the attachment path, but the event's default (the browser's own text
+  // insertion) must stay alive.
+  it('a mixed image+text paste attaches the image and does NOT preventDefault', async () => {
+    const onAttach = vi.fn()
+    renderChatInput({ onAttach })
+    const preventDefault = pasteTracked([
+      { kind: 'string', type: 'text/plain', getAsFile: () => null },
+      { kind: 'file', type: 'image/png', getAsFile: () => new File([new Uint8Array(PNG_BYTES)], 'clipboard.png', { type: 'image/png' }) },
+    ])
+    expect(preventDefault).not.toHaveBeenCalled()
+    await waitFor(() => expect(savePastedImage).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(onAttach).toHaveBeenCalledWith(['/home/u/.shannon/cache/pasted/1730000000-deadbeef.png']))
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('an image-only paste still preventDefaults (default insertion has nothing to keep)', async () => {
+    renderChatInput({ onAttach: vi.fn() })
+    const preventDefault = pasteTracked([
+      { kind: 'file', type: 'image/png', getAsFile: () => new File([new Uint8Array(PNG_BYTES)], 'clipboard.png', { type: 'image/png' }) },
+    ])
+    expect(preventDefault).toHaveBeenCalled()
+    await waitFor(() => expect(savePastedImage).toHaveBeenCalledTimes(1))
   })
 
   it('a backend failure toasts the i18n failure title with the cause', async () => {
