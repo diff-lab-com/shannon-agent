@@ -43,6 +43,12 @@ export interface SessionContextValue {
   addSessionSource: (sessionId: string, item: string) => void
   /** Remove one source (by value) from a session's list. */
   removeSessionSource: (sessionId: string, item: string) => void
+  /** B3-1 (P1-2, R9-②): queued-prompt count per session — the sidebar's
+   *  「队列 N」badge. Deliberately depth-only: the full FIFO stays the
+   *  visible session's slice (ChatContext.promptQueue) and the drain keeps
+   *  its Chat-page semantics; this just makes a background session's parked
+   *  backlog visible on the rail. Sessions without a queue are absent. */
+  queueDepthsBySession: Record<string, number>
 }
 
 export const SessionContext = createContext<SessionContextValue | null>(null)

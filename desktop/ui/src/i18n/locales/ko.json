@@ -3380,6 +3380,8 @@
   "sidebar.sessions.lastActivity.aria": "Last active {time}",
   "sidebar.sessions.awaitingApproval.badge": "Waiting for approval",
   "sidebar.sessions.error.badge": "Last run failed",
+  "sidebar.sessions.queue.label": "대기 {n}",
+  "sidebar.sessions.queue.title": "이 세션으로 돌아오면 {n}개의 메시지가 전송됩니다",
   "nav.search": "검색",
   "nav.automation": "자동화",
   "sidebar.model.badge.aria": "Current model {model} ({provider}) — click to manage",

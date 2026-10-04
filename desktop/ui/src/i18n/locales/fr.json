@@ -3380,6 +3380,8 @@
   "sidebar.sessions.lastActivity.aria": "Last active {time}",
   "sidebar.sessions.awaitingApproval.badge": "Waiting for approval",
   "sidebar.sessions.error.badge": "Last run failed",
+  "sidebar.sessions.queue.label": "File : {n}",
+  "sidebar.sessions.queue.title": "{n} messages seront envoyés au retour sur cette session",
   "nav.search": "Recherche",
   "nav.automation": "Automatisations",
   "sidebar.model.badge.aria": "Current model {model} ({provider}) — click to manage",
