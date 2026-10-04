@@ -375,13 +375,19 @@ describe('Markdown — images (P2-15)', () => {
     expect(seen).toHaveBeenCalledTimes(1)
   })
 
-  it('does not make remote images interactive', () => {
+  // P2-4 (R9-④): remote images default to the gate placeholder — no <img>
+  // element, hence no request. Full three-state matrix lives in
+  // MarkdownRemoteImageGate.test.tsx; this pins the dock-open pipeline stays
+  // local-only.
+  it('gates remote images behind a placeholder instead of loading them', () => {
     const seen = vi.fn()
     window.addEventListener('shannon:open-artifact-file', seen)
     renderMd('![remote](https://example.com/cat.png)')
-    const img = screen.getByAltText('remote')
-    expect(img.getAttribute('role')).toBeNull()
-    fireEvent.click(img)
+    expect(screen.queryByAltText('remote')).not.toBeInTheDocument()
+    const gate = screen.getByTestId('remote-image-gate')
+    expect(gate).toHaveTextContent('example.com')
+    expect(gate).toHaveTextContent('remote')
+    fireEvent.click(gate)
     window.removeEventListener('shannon:open-artifact-file', seen)
     expect(seen).not.toHaveBeenCalled()
   })

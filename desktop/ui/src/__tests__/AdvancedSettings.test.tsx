@@ -4,6 +4,7 @@ import { AppProvider } from '@/context/AppContext'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import AdvancedSettings from '@/components/settings/AdvancedSettings'
 import * as api from '@/lib/tauri-api'
+import { setRemoteImagesAllowed, isRemoteImagesAllowed } from '@/lib/remoteImages'
 
 // B2: the「open log directory」entry resolves $HOME/.shannon through the
 // core path API (granted via capabilities) and opens it with the existing
@@ -248,6 +249,32 @@ describe('AdvancedSettings', () => {
     await waitFor(() => {
       expect(api.configure).toHaveBeenCalledWith({ key: 'session_retention_days', value: '0' })
     })
+  })
+
+  // P2-4 (R9-④) — remote images card. Persistence is frontend-local (the
+  // lib/remoteImages localStorage store, like the theme/density keys): the
+  // switch drives the store directly and must NOT touch api.configure.
+  it('renders the remote-images card with the switch defaulting to off and the motivation copy', () => {
+    setRemoteImagesAllowed(false)
+    render(wrap(<AdvancedSettings />))
+    const card = screen.getByTestId('remote-images-card')
+    expect(within(card).getByRole('switch')).toHaveAttribute('aria-checked', 'false')
+    expect(within(card).getByText(/exfiltrate session content via their URLs/i)).toBeInTheDocument()
+  })
+
+  it('persists the remote-images switch to the frontend-local store, not configure', () => {
+    setRemoteImagesAllowed(false)
+    // The configure spy accumulates calls from the sibling tests above —
+    // clear it so this test proves exactly its own switch's write path.
+    vi.mocked(api.configure).mockClear()
+    render(wrap(<AdvancedSettings />))
+    const card = screen.getByTestId('remote-images-card')
+    fireEvent.click(within(card).getByRole('switch'))
+    expect(within(card).getByRole('switch')).toHaveAttribute('aria-checked', 'true')
+    expect(localStorage.getItem('shannon.chat.allowRemoteImages')).toBe('1')
+    expect(isRemoteImagesAllowed()).toBe(true)
+    expect(api.configure).not.toHaveBeenCalled()
+    setRemoteImagesAllowed(false)
   })
 })
 

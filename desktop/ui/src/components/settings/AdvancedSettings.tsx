@@ -14,6 +14,8 @@ import { save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { VoiceSttSettings } from '@/components/settings/VoiceSttSettings'
 import { VoiceLocalSettings } from '@/components/settings/VoiceLocalSettings'
 import { TerminalSettings } from '@/components/settings/TerminalSettings'
+import { setRemoteImagesAllowed } from '@/lib/remoteImages'
+import { useRemoteImagesAllowed } from '@/hooks/useRemoteImagesAllowed'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type { SkillCandidate, CliInstallStatus, AppUpdateInfo } from '@/lib/tauri-api'
@@ -132,6 +134,11 @@ export default function AdvancedSettings() {
   // config on refresh, like the dream switches above.
   const [sessionGcEnabled, setSessionGcEnabled] = useState(config?.session_gc_enabled ?? false)
   const [sessionRetentionDays, setSessionRetentionDays] = useState<number>(config?.session_retention_days ?? 0)
+
+  // P2-4 (R9-④): the remote-image allow switch lives in the frontend-local
+  // store — the hook both reads and (through the store) persists, so the
+  // switch can't lie the way a config-backed toggle can after a failed write.
+  const remoteImagesAllowed = useRemoteImagesAllowed()
 
   useEffect(() => {
     setSessionGcEnabled(config?.session_gc_enabled ?? false)
@@ -470,6 +477,28 @@ export default function AdvancedSettings() {
               </div>
               <Switch checked={encryptionEnabled} onCheckedChange={v => handleToggle('encryption', v, setEncryptionEnabled)} className="shrink-0" aria-label={t('settings.advanced.encryption')} />
             </div>
+          </div>
+        </div>
+
+        {/* P2-4 (R9-④) — remote images in model output are held behind a
+            per-image confirm by default. Frontend-local persistence (the
+            lib/remoteImages localStorage store, like the theme/density
+            keys): the Rust config contract stays untouched, and the switch
+            drives/reads the store directly — no local mirror to drift. */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="remote-images-card">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-sm bg-secondary-container rounded-lg text-on-secondary-container flex items-center justify-center">
+              <span className="material-symbols-outlined">shield</span>
+            </div>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.remoteImages.title')}</h3>
+          </div>
+          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.remoteImages.desc')}</p>
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.remoteImages.enabled')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.remoteImages.enabledDesc')}</div>
+            </div>
+            <Switch checked={remoteImagesAllowed} onCheckedChange={setRemoteImagesAllowed} className="shrink-0" aria-label={t('settings.advanced.remoteImages.enabled')} />
           </div>
         </div>
 
