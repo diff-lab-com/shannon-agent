@@ -1014,14 +1014,16 @@ pub(crate) fn require_attachment_working_dir(
         .ok_or_else(|| tagged_error("no_working_dir", NO_WORKING_DIR_ATTACHMENT_ERROR))
 }
 
-/// B2-1 (P0-2 stopgap) — the working directory a send runs in: the TARGET
-/// session's own `working_dir` when it has one, else the global
-/// `desktop_cfg.working_dir`.
+/// B2-2 (P0-2) — the working directory a send runs in: the TARGET session's
+/// own `working_dir` when it has one, else the global `desktop_cfg.working_dir`.
 ///
-/// The global value is whatever the last `switch_session` /
-/// `change_working_dir` left behind (P0-2), so a multi-window send routed to
-/// a session in a different directory must not trust it. Sessions without
-/// their own wd keep the previous global-only behavior exactly.
+/// The engine's directory chain is pinned separately via
+/// `QueryEngineConfig.working_directory` (see `send_message`); this resolver
+/// stays for the attachment domain. The global value is whatever the last
+/// `switch_session` / `change_working_dir` left behind (the "user's current
+/// project" UI pointer), so a multi-window send routed to a session in a
+/// different directory must not trust it. Sessions without their own wd keep
+/// the previous global-only behavior exactly.
 pub(crate) fn resolve_send_working_dir(
     session_meta_wd: Option<&str>,
     global: Option<&str>,
@@ -1263,27 +1265,21 @@ pub async fn send_message(
     )
     .await?;
 
-    // B2-1 (P0-2 / R8-① stopgap): the engine still reads the PROCESS cwd in
-    // four places — project instructions, env block, bash spawn, repo-map
-    // fallback — and the memory project key below freezes `current_dir` at
-    // construction, yet only `switch_session` retargets it (on every switch).
-    // A send routed to a non-focused session (multi-window) therefore built
-    // its engine in whatever directory the last switch left behind. Re-point
-    // the process cwd at the TARGET session's own working_dir before
-    // anything downstream reads it (attachment collection just below, engine
-    // build further down).
+    // B2-2 (P0-2 / R8-① / R9-① 正解): the engine's host-dependent reads —
+    // project instructions (CLAUDE.md/AGENTS.md), the prompt env block, the
+    // repo-map root fallback, the memory project key and the default `cwd`
+    // of Bash spawns — all key off `QueryEngineConfig.working_directory`,
+    // pinned per engine instance below. No process-cwd flip happens here:
+    // the engine built for THIS send keeps the TARGET session's directory
+    // for its whole lifetime, so a concurrent send to a different-directory
+    // session, a switch mid-turn, or a background bash can no longer drag
+    // this turn's reads elsewhere (the B2-1 stopgap's three residual
+    // windows are gone with the process-singleton cwd itself).
     //
-    // KNOWN RESIDUALS, accepted by R9-① until B2-2 lands the full
-    // `QueryEngineConfig.working_directory` chain and removes every
-    // process-level flip (docs/plans/2026-10-05-chat-r3-improvement-plan.md
-    // §六 B2-1/B2-2): (a) the set→read span stays a race window, so two
-    // windows sending to different-directory sessions at the same instant
-    // can interleave; (b) this very set drags the NEXT bash spawn of any
-    // OTHER streaming session's turn into this directory (process-singleton
-    // cwd — architecturally unfixable at this layer); (c) a switch mid-turn
-    // still skews the turn in flight. Best-effort on purpose: the recorded
-    // directory may have been deleted since the session set it — warn and
-    // send in the current directory rather than block the turn.
+    // Sessions without their own working_dir leave `None`: the engine then
+    // falls back to the process cwd at read time (shannon-core's default),
+    // and the attachment domain below keeps resolving against the global
+    // config — exactly the pre-B2-1 behavior.
     let session_working_dir = {
         let sessions = state.sessions.lock().await;
         sessions
@@ -1291,16 +1287,6 @@ pub async fn send_message(
             .find(|s| s.id == session_id.to_string())
             .and_then(|meta| meta.working_dir.clone())
     };
-    if let Some(wd) = &session_working_dir {
-        if let Err(e) = std::env::set_current_dir(wd) {
-            tracing::warn!(
-                session_id = %session_id,
-                working_dir = %wd,
-                error = %e,
-                "failed to set process cwd to the session's working_dir — send proceeds in the current directory (B2-1 stopgap; B2-2 removes the process-level flip)"
-            );
-        }
-    }
 
     // Attachment collection + hard size caps run BEFORE the querying latch:
     // the latch is only cleared when the spawned query task finishes, so a
@@ -1676,11 +1662,17 @@ pub async fn send_message(
     // is built so the memory layer (injection + auto-extraction) is attached
     // only when this session actually uses memory. The engine is rebuilt per
     // turn, so a toggle takes effect on the next send without restart.
+    //
+    // B2-2: the TARGET session's working_dir rides along — with_working_directory
+    // pins the engine's whole host-dependent read chain (project instructions,
+    // env block, bash default cwd, repo map, memory project key) to the
+    // session's directory instead of the process cwd.
     let memory_disabled = active_session.memory_disabled_snapshot();
     let mut engine = crate::commands_memory::attach_shared_memory_if(
         QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
         &state.memory_store,
         memory_disabled,
+        session_working_dir.as_deref(),
     );
     // W3-4 — per-turn citation snapshot: the entries this turn's system
     // prompt is about to inject. Computed right after the store is attached
@@ -2613,6 +2605,9 @@ pub async fn start_background_task(
         let engine = crate::commands_memory::attach_shared_memory(
             QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
             &memory_store,
+            // B2-2: background tasks have no session directory of their
+            // own — keep the process-cwd freeze (pre-B2-2 behavior).
+            None,
         );
 
         let query_id = uuid::Uuid::new_v4();
@@ -3720,10 +3715,14 @@ fn require_attachment_working_dir_rejects_unset_without_cwd_fallback() {
 
 #[test]
 fn resolve_send_working_dir_prefers_session_meta_over_global() {
-    // B2-1 (P0-2 stopgap) priority: the TARGET session's own working_dir
-    // wins over the global pointer in every combination; sessions without
-    // their own wd fall back to the global value (previous behavior), and
-    // with neither there is no domain (the caller's unset handling applies).
+    // B2-2 (P0-2) priority: the TARGET session's own working_dir wins over
+    // the global pointer in every combination; sessions without their own
+    // wd fall back to the global value (previous behavior), and with
+    // neither there is no domain (the caller's unset handling applies).
+    // The same session-meta value is what `send_message` pins the engine
+    // with (`attach_shared_memory_if(.., session_working_dir.as_deref())`
+    // → `with_working_directory`), so this resolver and the engine's
+    // directory chain always agree.
     assert_eq!(
         resolve_send_working_dir(Some("/a/session"), Some("/a/global")),
         Some("/a/session".to_string())

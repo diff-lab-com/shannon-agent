@@ -1095,12 +1095,14 @@ pub async fn switch_session(
     }
     state.registry.set_active(SessionKey(session_uuid));
 
-    // Restore working_dir from session metadata if present.
+    // Restore working_dir from session metadata if present. B2-2: this only
+    // moves the "user's current project" pointer (global config + UI emit) —
+    // the process cwd stays put, engines pin their own directory via
+    // `QueryEngineConfig.working_directory` at send time.
     {
         let sessions = state.sessions.lock().await;
         if let Some(meta) = sessions.iter().find(|s| s.id == id) {
             if let Some(ref wd) = meta.working_dir {
-                let _ = std::env::set_current_dir(wd);
                 let mut desktop_cfg = state.desktop_config.write().await;
                 desktop_cfg.working_dir = Some(wd.clone());
                 let _ = app_handle.emit(
@@ -1142,8 +1144,11 @@ pub async fn switch_session(
 }
 
 /// Set working directory for a session. Updates in-memory metadata, the
-/// process cwd, and the persisted desktop config. Pass an empty string to
-/// reset to the Shannon home directory.
+/// persisted desktop config, and — for the current session — the process-wide
+/// "current project" pointer (global config + CONFIG_UPDATED emit). Pass an
+/// empty string to reset. B2-2: the process cwd is NOT touched — engines pin
+/// their own directory via `QueryEngineConfig.working_directory` at send
+/// time.
 #[tauri::command]
 pub async fn set_session_working_dir(
     state: tauri::State<'_, AppState>,
@@ -1175,13 +1180,11 @@ pub async fn set_session_working_dir(
         crate::commands_projects::adopt_working_dir(&state, dir);
     }
 
-    // If this is the current session, switch process cwd + desktop config
+    // If this is the current session, update the global "current project"
+    // pointer + emit. B2-2: no process-cwd flip.
     let current = state.registry.active_key();
     let is_current = current == Some(SessionKey(session_uuid));
     if is_current {
-        if let Some(ref p) = wd {
-            let _ = std::env::set_current_dir(p);
-        }
         let mut desktop_cfg = state.desktop_config.write().await;
         desktop_cfg.working_dir = wd.clone();
         drop(desktop_cfg);
@@ -1239,10 +1242,10 @@ pub async fn create_session_worktree(
         }
     }
 
-    // If this is the current session, switch process cwd + desktop config
+    // If this is the current session, update the global "current project"
+    // pointer + emit. B2-2: no process-cwd flip.
     let current = state.registry.active_key();
     if current == Some(SessionKey(session_uuid)) {
-        let _ = std::env::set_current_dir(&wt_path);
         let mut desktop_cfg = state.desktop_config.write().await;
         desktop_cfg.working_dir = Some(wt_path.clone());
         drop(desktop_cfg);

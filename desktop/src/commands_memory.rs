@@ -77,35 +77,51 @@ pub(crate) fn refresh_shared_store(store: &SharedMemoryStore) {
 /// written since the app started is visible to this engine's injection path,
 /// then threads a clone of the shared handle into the engine. All six desktop
 /// engine construction sites call this — pass the handle, never rebuild.
-pub(crate) fn attach_shared_memory(engine: QueryEngine, store: &SharedMemoryStore) -> QueryEngine {
+///
+/// B2-2 (P0-2): `session_wd` pins the engine's whole working-directory
+/// chain (memory project key, project instructions, env block, repo map,
+/// bash default cwd) to the TARGET session's directory. `None` keeps the
+/// B2-1 construction-time freeze of the process cwd — the callers without
+/// a session directory (background tasks, slash diagnostics, batch, goal,
+/// routine runs) resolve exactly as before.
+pub(crate) fn attach_shared_memory(
+    engine: QueryEngine,
+    store: &SharedMemoryStore,
+    session_wd: Option<&str>,
+) -> QueryEngine {
     refresh_shared_store(store);
     let engine = engine.with_memory_arc(store.clone());
-    // Freeze the memory project key at construction time: the desktop flips
-    // the process cwd on every session switch, and an engine built for
-    // session 1 must keep keying memory to session 1's directory after the
-    // user switches to session 2 — previously injection and extraction
-    // re-read the process cwd on every query, so concurrent session engines
-    // raced each other's keys.
-    let cwd = std::env::current_dir().unwrap_or_default();
-    engine.with_working_directory(cwd)
+    pin_working_directory(engine, session_wd)
 }
 
 /// [`attach_shared_memory`] with the session-level "temporary chat" bypass
 /// (P2-5): `disabled = true` returns the engine WITHOUT the shared store, so
 /// the per-turn injection (`agent_loop`'s `format_for_injection`) and the
 /// post-turn auto-extraction both skip — nothing enters or leaves the memory
-/// layer for this session. The working directory is still frozen so the
+/// layer for this session. The working directory is still pinned so the
 /// engine config stays identical apart from the memory handle.
 pub(crate) fn attach_shared_memory_if(
     engine: QueryEngine,
     store: &SharedMemoryStore,
     disabled: bool,
+    session_wd: Option<&str>,
 ) -> QueryEngine {
     if disabled {
-        let cwd = std::env::current_dir().unwrap_or_default();
-        return engine.with_working_directory(cwd);
+        return pin_working_directory(engine, session_wd);
     }
-    attach_shared_memory(engine, store)
+    attach_shared_memory(engine, store, session_wd)
+}
+
+/// Pin the engine's working directory: the session's own `wd` when it has
+/// one, else the B2-1 construction-time freeze of the process cwd.
+fn pin_working_directory(engine: QueryEngine, session_wd: Option<&str>) -> QueryEngine {
+    match session_wd {
+        Some(wd) => engine.with_working_directory(wd),
+        None => {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            engine.with_working_directory(cwd)
+        }
+    }
 }
 
 /// Parse a category string ("preference" / "pattern" / "decision" / "error"
@@ -903,6 +919,7 @@ mod tests {
                     StateManager::new(),
                 ),
                 &shared,
+                None,
             )
         };
         let engine_a = build();
@@ -960,18 +977,65 @@ mod tests {
         };
         // P2-5: disabled → no store attached, so injection AND extraction
         // skip for the session (agent_loop reads `self.memory`).
-        let bypassed = attach_shared_memory_if(build(), &shared, true);
+        let bypassed = attach_shared_memory_if(build(), &shared, true, None);
         assert!(
             bypassed.memory().is_none(),
             "bypassed engine must carry no memory store"
         );
 
         // enabled → same shared handle as attach_shared_memory (P2-4b).
-        let attached = attach_shared_memory_if(build(), &shared, false);
+        let attached = attach_shared_memory_if(build(), &shared, false, None);
         let handle = attached.memory().cloned().expect("attached");
         assert!(
             std::sync::Arc::ptr_eq(&handle, &shared),
             "enabled path must attach the shared store instance"
+        );
+    }
+
+    #[test]
+    fn attach_shared_memory_if_pins_session_working_directory() {
+        // B2-2 (P0-2 正解): the send path threads the TARGET session's wd
+        // into the engine — the exact call `send_message` makes with
+        // `session_working_dir.as_deref()`. The whole host-dependent read
+        // chain (memory project key, project instructions, env block, bash
+        // default cwd, repo map) keys off this value, so the pin must land
+        // on `engine.config.working_directory` verbatim.
+        use shannon_core::query_engine::QueryEngine;
+        use shannon_engine::api::client::LlmClient;
+        use shannon_engine::api::types::LlmClientConfig;
+        use shannon_engine::permissions::PermissionManager;
+        use shannon_engine::state::StateManager;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let shared = open_shared_store_at(dir.path().join("memories"));
+        let build = || {
+            QueryEngine::with_defaults_arc(
+                LlmClient::new(LlmClientConfig::default()),
+                std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+                PermissionManager::new(),
+                StateManager::new(),
+            )
+        };
+
+        // Session wd present → pinned (memory attached and bypassed alike).
+        let pinned = attach_shared_memory_if(build(), &shared, false, Some("/tmp/session-b22"));
+        assert_eq!(
+            pinned.working_directory(),
+            Some(std::path::Path::new("/tmp/session-b22"))
+        );
+        let bypassed = attach_shared_memory_if(build(), &shared, true, Some("/tmp/session-b22"));
+        assert_eq!(
+            bypassed.working_directory(),
+            Some(std::path::Path::new("/tmp/session-b22")),
+            "the temporary-chat path pins the session wd too"
+        );
+
+        // No session wd → the construction-time process-cwd freeze the other
+        // five engine build points rely on (pre-B2-2 behavior).
+        let fallback = attach_shared_memory_if(build(), &shared, false, None);
+        assert_eq!(
+            fallback.working_directory(),
+            std::env::current_dir().ok().as_deref()
         );
     }
 
@@ -1000,7 +1064,7 @@ mod tests {
         // An attached but empty store also yields nothing (0-injection turn).
         let dir = tempfile::TempDir::new().unwrap();
         let shared = open_shared_store_at(dir.path().to_path_buf());
-        let attached = attach_shared_memory(build(), &shared);
+        let attached = attach_shared_memory(build(), &shared, None);
         assert!(turn_injected_memories(&attached, Some("anything")).is_empty());
     }
 
@@ -1027,6 +1091,7 @@ mod tests {
                 StateManager::new(),
             ),
             &shared,
+            None,
         )
         .with_working_directory(PROJECT_KEY);
         let mut entry = MemoryEntry::new(PROJECT_KEY, MemoryCategory::Preference, "use pnpm");
