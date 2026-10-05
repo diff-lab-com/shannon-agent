@@ -37,6 +37,9 @@ const ctx = vi.hoisted(() => ({
   visionConfirm: null as any,
   resolveVisionConfirm: vi.fn().mockResolvedValue(undefined),
   dismissVisionConfirm: vi.fn().mockResolvedValue(undefined),
+  toolsConfirm: null as any,
+  resolveToolsConfirm: vi.fn().mockResolvedValue(undefined),
+  dismissToolsConfirm: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/context/ChatContext', () => ({
@@ -116,6 +119,9 @@ beforeEach(() => {
   ctx.visionConfirm = null
   ctx.resolveVisionConfirm = vi.fn().mockResolvedValue(undefined)
   ctx.dismissVisionConfirm = vi.fn().mockResolvedValue(undefined)
+  ctx.toolsConfirm = null
+  ctx.resolveToolsConfirm = vi.fn().mockResolvedValue(undefined)
+  ctx.dismissToolsConfirm = vi.fn().mockResolvedValue(undefined)
 })
 
 describe('MessageArea — welcome / streaming gating', () => {
@@ -417,5 +423,61 @@ describe('MessageArea — S2-4a vision confirm bar', () => {
     fireEvent.click(screen.getByTestId('vision-confirm-cancel'))
     await act(async () => {})
     expect(ctx.dismissVisionConfirm).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MessageArea — S2-4b tools confirm bar', () => {
+  it('renders nothing when no send is held', () => {
+    renderArea()
+    expect(screen.queryByTestId('tool-confirm-bar')).not.toBeInTheDocument()
+  })
+
+  it('offers the one-click switch when a candidate exists (distinct tool-confirm testids)', async () => {
+    ctx.toolsConfirm = {
+      model: 'llama-4-70b',
+      suggestion: { provider: 'ollama', model: 'qwen3-coder-480b', name: 'Qwen3 Coder 480B' },
+    }
+    renderArea()
+    const bar = screen.getByTestId('tool-confirm-bar')
+    expect(bar).toHaveTextContent('llama-4-70b')
+    expect(bar).toHaveTextContent('Qwen3 Coder 480B')
+    // Distinct from the vision bar: no vision testids leak into the tools
+    // bar and vice versa.
+    expect(screen.queryByTestId('vision-confirm-bar')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('tool-confirm-switch'))
+    await act(async () => {}) // settle the resolver promise
+    expect(ctx.resolveToolsConfirm).toHaveBeenCalledWith('switch')
+    expect(ctx.resolveVisionConfirm).not.toHaveBeenCalled()
+  })
+
+  it('degrades to notice-only (no switch button) without a candidate', () => {
+    ctx.toolsConfirm = { model: 'llama-4-70b', suggestion: null }
+    renderArea()
+    expect(screen.getByTestId('tool-confirm-bar')).toHaveTextContent('model menu')
+    expect(screen.queryByTestId('tool-confirm-switch')).not.toBeInTheDocument()
+    expect(screen.getByTestId('tool-confirm-send-anyway')).toBeInTheDocument()
+  })
+
+  it("'send anyway' and 'cancel' resolve their choices on the tools slot", async () => {
+    ctx.toolsConfirm = { model: 'llama-4-70b', suggestion: null }
+    renderArea()
+    fireEvent.click(screen.getByTestId('tool-confirm-send-anyway'))
+    await act(async () => {}) // settle the resolver promise
+    expect(ctx.resolveToolsConfirm).toHaveBeenCalledWith('send-anyway')
+    fireEvent.click(screen.getByTestId('tool-confirm-cancel'))
+    await act(async () => {})
+    expect(ctx.dismissToolsConfirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the vision bar and the tools bar through the same shared body when both states are somehow set', () => {
+    // Defensive pin: the two bars are mutually exclusive by flow (the
+    // resolvers re-enter sendMessage), but the shared CapabilityConfirmBar
+    // body must render each independently if both states were ever set —
+    // and each keeps its own testid namespace.
+    ctx.visionConfirm = { model: 'deepseek-v4-flash', suggestion: null }
+    ctx.toolsConfirm = { model: 'llama-4-70b', suggestion: null }
+    renderArea()
+    expect(screen.getByTestId('vision-confirm-bar')).toBeInTheDocument()
+    expect(screen.getByTestId('tool-confirm-bar')).toBeInTheDocument()
   })
 })

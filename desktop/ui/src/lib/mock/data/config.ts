@@ -69,13 +69,17 @@ export const MOCK_MODELS: ModelInfo[] = [
   // represented as null (renders "—"). R3-3: the catalog `tier` label rides
   // along too — the real backend populates it from the same classification
   // the plan/act tier controls resolve with.
-  { id: 'claude-opus-4-7', name: 'Claude Opus 4.7', provider: 'anthropic', context_window: 200_000, price_in: 15, price_out: 75, vision: true, tier: 'pro' },
-  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', context_window: 200_000, price_in: 3, price_out: 15, vision: true, tier: 'standard' },
-  { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', provider: 'anthropic', context_window: 200_000, price_in: 0.8, price_out: 4, vision: false, tier: 'fast' },
-  { id: 'gpt-5', name: 'GPT-5', provider: 'openai', context_window: 256_000, price_in: 1.25, price_out: 10, vision: true, tier: 'pro' },
-  { id: 'gpt-5-mini', name: 'GPT-5 Mini', provider: 'openai', context_window: 128_000, price_in: 0.25, price_out: 2, tier: 'fast' },
-  { id: 'gemini-3-pro', name: 'Gemini 3 Pro', provider: 'google', context_window: 2_000_000, price_in: 1.25, price_out: 10, vision: true, tier: 'pro' },
-  { id: 'llama-4-70b', name: 'Llama 4 70B (local)', provider: 'ollama', context_window: 32_000, price_in: 0, price_out: 0, vision: false, tier: 'standard' },
+  // S2-4b: `tools` mirrors the backend wire (models.dev-style entries carry
+  // the bit; null = unknown) so the pre-send tools gate is exercisable in
+  // demo/e2e. The default model claude-sonnet-4-6 is tools:true — ordinary
+  // demo/e2e sends never hit the hold; scripting llama-4-70b does.
+  { id: 'claude-opus-4-7', name: 'Claude Opus 4.7', provider: 'anthropic', context_window: 200_000, price_in: 15, price_out: 75, vision: true, tools: true, tier: 'pro' },
+  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', context_window: 200_000, price_in: 3, price_out: 15, vision: true, tools: true, tier: 'standard' },
+  { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', provider: 'anthropic', context_window: 200_000, price_in: 0.8, price_out: 4, vision: false, tools: true, tier: 'fast' },
+  { id: 'gpt-5', name: 'GPT-5', provider: 'openai', context_window: 256_000, price_in: 1.25, price_out: 10, vision: true, tools: true, tier: 'pro' },
+  { id: 'gpt-5-mini', name: 'GPT-5 Mini', provider: 'openai', context_window: 128_000, price_in: 0.25, price_out: 2, tools: true, tier: 'fast' },
+  { id: 'gemini-3-pro', name: 'Gemini 3 Pro', provider: 'google', context_window: 2_000_000, price_in: 1.25, price_out: 10, vision: true, tools: true, tier: 'pro' },
+  { id: 'llama-4-70b', name: 'Llama 4 70B (local)', provider: 'ollama', context_window: 32_000, price_in: 0, price_out: 0, vision: false, tools: false, tier: 'standard' },
 ]
 
 // R3-2: demo model-profile roster (mirrors the engine providers.toml v2

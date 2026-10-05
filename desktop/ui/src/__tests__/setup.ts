@@ -192,6 +192,15 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
     provider: 'anthropic',
     vision: true,
   }),
+  // S2-4b — tools pre-check default: applies AND tool-capable, so no send
+  // is ever held; the tools-confirm flow tests override per scenario
+  // (tools=false / applies=false / rejection).
+  checkToolsSend: vi.fn().mockResolvedValue({
+    model: 'claude-sonnet-4-6',
+    provider: 'anthropic',
+    applies: true,
+    tools: true,
+  }),
   // P0-3 preflight — default: every path checks clean; chip-flagging tests
   // override per scenario.
   checkAttachmentPaths: vi.fn().mockResolvedValue([]),

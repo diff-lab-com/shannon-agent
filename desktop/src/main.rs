@@ -159,6 +159,12 @@ fn main() {
             // with a one-click switch candidate. The engine gate stays the
             // final backstop.
             commands_chat::check_vision_send,
+            // S2-4b (P-N9) — pre-send tool-capability pre-check: the UI
+            // asks before pointing a tools-carrying send (every desktop
+            // send) at a model KNOWN to lack tool calling, with a one-click
+            // switch candidate. Unknown capability never prompts; sessions
+            // whose send carries no tools report "not applicable".
+            commands_chat::check_tools_send,
             // P2-5 — session-level "temporary chat" (no-memory bypass).
             commands_chat::set_session_memory_bypass,
             commands_chat::get_session_memory_bypass,
