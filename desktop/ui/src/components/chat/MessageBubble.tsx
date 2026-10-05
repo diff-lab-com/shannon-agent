@@ -1,4 +1,4 @@
-import { useState, memo, useEffect, useMemo } from 'react'
+import { useState, memo, useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -26,6 +26,15 @@ import {
   ToolContent,
 } from '@/components/ai-elements'
 import { readShowThinkingPref, shouldShowThinking } from '@/lib/thinkingPref'
+import {
+  ensureToolReadOnlyMap,
+  getToolReadOnlyMapVersion,
+  groupToolSegments,
+  readGroupingPrefs,
+  subscribeToolReadOnlyMap,
+  type ToolGroupUnit,
+} from '@/lib/toolGrouping'
+import { ToolGroupCard } from '@/components/chat/ToolGroupCard'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
 import { ArtifactChipList } from '@/components/artifact/ArtifactChip'
@@ -264,6 +273,19 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const { currentSessionId, switchSession, refreshSessions } = useSessions()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+
+  // Settings R3 T11: the Explore/Terminal/Changes grouping classifies calls
+  // via the read-only map seeded from `list_tools`; that seed is a one-time
+  // async IPC, so subscribe to its arrival and re-group when it lands
+  // (until then classifyTool's name heuristics carry the decision).
+  // The snapshot value itself is unused — subscribing is what re-renders
+  // this bubble on map mutation.
+  useSyncExternalStore(subscribeToolReadOnlyMap, getToolReadOnlyMapVersion)
+  useEffect(() => {
+    void ensureToolReadOnlyMap()
+    // fire-once latch inside ensureToolReadOnlyMap; the version subscription
+    // above re-renders this bubble when the seed lands (map mutation).
+  }, [])
 
   // PM-12: the rating lives in the persisted per-session store, not in a
   // local useState that died with the component tree.
@@ -507,9 +529,16 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                   prefaced by a retry-chain banner linking to the turn timeline
                   — the long-horizon "failed → retried → recovered" narrative
                   stays readable without expanding every card. */}
+              {/* Settings R3 T11 (C6): committed history folds runs of
+                  consecutive same-kind calls (Explore / Terminal / Changes)
+                  into ToolGroupCards — see lib/toolGrouping. Streaming keeps
+                  per-card rendering (controller ruling R10: grouping a live
+                  stream re-folds the tail every flush). The existing special
+                  cards — retry chains, subagent blocks — keep their bespoke
+                  rendering and break any adjacent group. */}
               {(() => {
                 const tcs = message.tool_calls
-                const out: React.ReactNode[] = []
+                const nodes: React.ReactNode[] = []
                 const renderTool = (tc: ToolCall, key: string) =>
                   tc.tool_name === 'agent_spawn' ? (
                     <SubagentBlock key={key} toolCall={tc} />
@@ -521,6 +550,11 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                       durationMs={durationLookup?.get(tc.tool_use_id)}
                     />
                   )
+                // Pass 1 — the P2-⑨ retry-chain walk, now emitting units:
+                // chain members stay non-groupable (the banner precedes them
+                // and the narrative reads card-by-card); everything else is
+                // a grouping candidate except subagent spawns.
+                const units: ToolGroupUnit<ToolCall>[] = []
                 let i = 0
                 while (i < tcs.length) {
                   const tc = tcs[i]
@@ -540,22 +574,49 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                         const line = (tc.result ?? '').split('\n').find(l => l.trim()) ?? ''
                         return line.trim().slice(0, 120)
                       })
-                      out.push(
+                      nodes.push(
                         <RetryChainBanner
                           key={`chain-${tc.tool_use_id}`}
                           count={chainLen}
                           reasons={reasons}
                         />,
                       )
-                      for (let k = i; k <= j; k++) out.push(renderTool(tcs[k], tcs[k].tool_use_id))
+                      for (let k = i; k <= j; k++) units.push({ tc: tcs[k], groupable: false })
                       i = j + 1
                       continue
                     }
                   }
-                  out.push(renderTool(tc, tc.tool_use_id))
+                  units.push({ tc, groupable: tc.tool_name !== 'agent_spawn' })
                   i++
                 }
-                return out
+                // Pass 2 — adjacent same-kind merge, gated on the per-kind
+                // switches (lib/toolGrouping readGroupingPrefs, default ON).
+                for (const seg of groupToolSegments(units, readGroupingPrefs())) {
+                  if (seg.type === 'group') {
+                    const items = seg.items
+                    nodes.push(
+                      <ToolGroupCard
+                        key={`group-${seg.kind}-${items[0].tool_use_id}`}
+                        kind={seg.kind}
+                        count={items.length}
+                        firstToolName={items[0].tool_name}
+                        lastToolName={items[items.length - 1].tool_name}
+                      >
+                        {items.map(tc => (
+                          <ToolCallDisplay
+                            key={tc.tool_use_id}
+                            toolCall={tc}
+                            onViewDiff={onViewDiff}
+                            durationMs={durationLookup?.get(tc.tool_use_id)}
+                          />
+                        ))}
+                      </ToolGroupCard>,
+                    )
+                  } else {
+                    nodes.push(renderTool(seg.tc, seg.tc.tool_use_id))
+                  }
+                }
+                return nodes
               })()}
             </div>
           )}
