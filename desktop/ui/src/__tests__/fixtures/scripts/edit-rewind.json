@@ -44,7 +44,7 @@
             "编辑后的回答：",
             "潮汐按周期可分为半日潮、全日潮和混合潮。"
           ],
-          "chunkDelayMs": 250
+          "chunkDelayMs": 1000
         },
         {
           "event": "query:completed"

@@ -29,6 +29,22 @@ async function pushDraft(page: import('@playwright/test').Page, text: string): P
   }, text)
 }
 
+/**
+ * Open the plus menu and pick an item by keyboard. The menu roves focus via
+ * a post-commit effect (dropdown-menu.tsx: initial focus(0) flushes one
+ * state update after the menu is visible), so an ArrowDown that lands before
+ * that flush computes from -1 and the Enter then fires items[0] (attach)
+ * instead of the intended item — exactly what a starved runner does. Wait
+ * until the initial focus is OBSERVABLE on the first item before keying.
+ */
+async function openPlusMenuAndPick(page: import('@playwright/test').Page, arrowDowns: number): Promise<void> {
+  await page.getByRole('button', { name: 'Attachments and tools' }).click()
+  await expect(page.getByRole('menu', { name: 'Attachments and tools' })).toBeVisible({ timeout: 5_000 })
+  await expect(page.locator('[data-menu-item-index="0"]')).toBeFocused({ timeout: 5_000 })
+  for (let i = 0; i < arrowDowns; i++) await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+}
+
 test.describe('scripted chat backend — draft-bridge (journey #18)', () => {
   test('pushed drafts never auto-send and append instead of overwriting', async ({ page }) => {
     test.setTimeout(60_000)
@@ -74,11 +90,9 @@ test.describe('scripted chat backend — draft-bridge (journey #18)', () => {
     // The plus menu is keyboard-first: it focuses the first item on open,
     // so ArrowDown + Enter picks "Build a presentation" (pointer clicks are
     // flaky here — the item's box never settles under Playwright's
-    // stability check while the composer re-renders).
-    await page.getByRole('button', { name: 'Attachments and tools' }).click()
-    await expect(page.getByRole('menu', { name: 'Attachments and tools' })).toBeVisible({ timeout: 5_000 })
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.press('Enter')
+    // stability check while the composer re-renders). openPlusMenuAndPick
+    // waits out the focus-roving effect before keying.
+    await openPlusMenuAndPick(page, 1)
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible({ timeout: 5_000 })
     await dialog.getByTestId('ppt-outline-input').fill('Title — Wave 2 journeys\nCoverage map')
@@ -121,12 +135,7 @@ test.describe('scripted chat backend — draft-bridge (journey #18)', () => {
 
     // Open the chat-inline editor (plus menu, keyboard-first: ArrowDown ×3
     // → "Editor") and load a file (read_source_file mock).
-    await page.getByRole('button', { name: 'Attachments and tools' }).click()
-    await expect(page.getByRole('menu', { name: 'Attachments and tools' })).toBeVisible({ timeout: 5_000 })
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.press('Enter')
+    await openPlusMenuAndPick(page, 3)
     const modal = page.getByRole('dialog')
     await expect(modal).toBeVisible({ timeout: 10_000 })
     await page.evaluate(() => {

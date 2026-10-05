@@ -34,7 +34,14 @@ turns:
         chunks:
           - "旧流一，"
           - "旧流二。"
-        chunkDelayMs: 400
+        # 1s gap: the stop button only exists while the turn is live — at
+        # 400ms the turn auto-completed (steps end → auto query:completed)
+        # before a starved runner's stop click landed, and the spec burned
+        # its whole budget waiting for a stop button that had already
+        # swapped back (local 4-worker stress repro of the CI red). The
+        # partial text stays containment-asserted (one or both chunks may
+        # have landed before the stop — see the spec comment).
+        chunkDelayMs: 1000
   - user: 第二条（stop 后立刻重发）
     script:
       - event: query:text

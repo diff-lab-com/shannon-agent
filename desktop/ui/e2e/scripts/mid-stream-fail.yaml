@@ -30,7 +30,12 @@ turns:
         chunks:
           - "从前有一片海，"
           - "海面上…"
-        chunkDelayMs: 300
+        # 1s gap: the cursor's on-screen window must outlast a starved
+        # runner's first effective poll — at 300ms the whole turn (chunks +
+        # query:failed) could settle between two polls and the spec's
+        # streaming-cursor assert saw only the already-settled failed banner
+        # (local 4-worker stress repro of the CI red).
+        chunkDelayMs: 1000
       - event: query:failed
         payload:
           error: "upstream connection reset while streaming"

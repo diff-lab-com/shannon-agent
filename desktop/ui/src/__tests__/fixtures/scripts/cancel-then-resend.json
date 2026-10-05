@@ -23,7 +23,7 @@
             "旧流一，",
             "旧流二。"
           ],
-          "chunkDelayMs": 400
+          "chunkDelayMs": 1000
         }
       ]
     },
