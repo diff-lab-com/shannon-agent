@@ -19,11 +19,13 @@ import {
   MessageAvatar,
   MessageContent,
   ResponseStream,
+  Reasoning,
   ActionToolbar,
   Tool,
   ToolHeader,
   ToolContent,
 } from '@/components/ai-elements'
+import { readShowThinkingPref, shouldShowThinking } from '@/lib/thinkingPref'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
 import { ArtifactChipList } from '@/components/artifact/ArtifactChip'
@@ -65,6 +67,11 @@ interface MessageBubbleProps {
   onEditMessage?: (index: number) => void
   /** B1 §4-12: transient highlight ring while a search jump lands here. */
   searchFlash?: boolean
+  /** Settings R3 T9: computed by the list parent (firstAssistantOfTurnFlags
+   *  over the whole message array) — true on the first assistant message
+   *  after the most recent user message. Gates the collapsed thinking block
+   *  under the 'first' display tier ('all' ignores it, 'none' hides both). */
+  isFirstAssistantOfTurn?: boolean
 }
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
@@ -245,7 +252,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   )
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup, regenerate, onEditMessage, searchFlash }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup, regenerate, onEditMessage, searchFlash, isFirstAssistantOfTurn }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const [isBranching, setIsBranching] = useState(false)
   const [pendingBranch, setPendingBranch] = useState(false)
@@ -441,6 +448,18 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
    * report buttons (those actions only make sense for assistant text). */
   const isTool = message.role === 'tool'
 
+  // Settings R3 T9: a committed assistant message's `thinking` field renders
+  // as the same collapsed Reasoning block the live stream uses, gated by the
+  // three-tier display pref (lib/thinkingPref). Hydration note: the engine's
+  // session projection does not persist thinking yet, so reloaded history
+  // carries none today — this renders whenever the field IS present
+  // (hydration data or future persistence) and stays silent otherwise.
+  const showThinking = !isTool && shouldShowThinking(
+    readShowThinkingPref(),
+    !!message.thinking,
+    isFirstAssistantOfTurn === true,
+  )
+
   return (
     <Message from={isTool ? 'system' : 'assistant'} className={cn('flex gap-md max-w-4xl group', searchFlash && 'search-flash rounded-2xl')}>
       <MessageAvatar from="assistant" icon={isTool ? 'build' : 'smart_toy'} />
@@ -449,6 +468,14 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
         {/* W3-4: citation chips for the memories this turn's prompt carried —
             hidden entirely for a bypass / zero-injection turn (empty list). */}
         {!isTool && <MemoryCitationChips memories={message.injected_memories} />}
+        {/* Settings R3 T9: collapsed thinking above the answer, matching the
+            live stream's placement (StreamingResponse renders it as the
+            first block of the content column). */}
+        {showThinking && (
+          <Reasoning header={t('chat.streaming.thinking')} defaultOpen={false}>
+            <p className="whitespace-pre-wrap">{message.thinking}</p>
+          </Reasoning>
+        )}
         <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-e1 min-w-0 overflow-x-auto">
           <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-xs prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
             <Markdown>{message.content}</Markdown>
