@@ -1,19 +1,51 @@
 //! Prevent Sleep
 //!
 //! Platform-aware sleep prevention during long-running operations.
-//! On macOS, uses `caffeinate` to prevent idle sleep.
-//! On other platforms, provides a no-op implementation.
+//! Reference-counted: nested begin/end pairs stay balanced and the platform
+//! backend is only acquired on the 0→1 transition and released on 1→0.
+//!
+//! Platform backends (Settings R3 T3, ruling R3 — no new crates):
+//! - macOS: `caffeinate -i -t 300` child process (`macos` module)
+//! - Linux: `systemd-inhibit --what=idle sleep infinity` child process,
+//!   degrading to a warn-once no-op when the binary is missing (`linux`)
+//! - Windows: `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`
+//!   via the `windows` crate already in the dependency graph (`windows`)
+//! - anything else: inert stubs (`other`)
 
 #[cfg(target_os = "macos")]
-use std::sync::Mutex;
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as platform;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux as platform;
+#[cfg(target_os = "linux")]
+pub use linux::systemd_inhibit_available;
+
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+use windows as platform;
+
+/// Inert fallback so other targets (e.g. freebsd) keep compiling with the
+/// same public API.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+mod other;
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+use other as platform;
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+mod other {
+    pub(super) fn acquire() {}
+    pub(super) fn release() {}
+}
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Reference count for nested sleep prevention
 static PREVENT_SLEEP_REF_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-/// Stored caffeinate child process (macOS only)
-#[cfg(target_os = "macos")]
-static CAFFEINATE_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
 
 /// Whether prevent sleep is currently active
 pub fn is_preventing_sleep() -> bool {
@@ -24,10 +56,7 @@ pub fn is_preventing_sleep() -> bool {
 pub fn start_prevent_sleep() {
     let prev = PREVENT_SLEEP_REF_COUNT.fetch_add(1, Ordering::SeqCst);
     if prev == 0 {
-        #[cfg(target_os = "macos")]
-        {
-            spawn_caffeinate();
-        }
+        platform::acquire();
         tracing::debug!("Sleep prevention started (ref count: {})", prev + 1);
     }
 }
@@ -42,10 +71,7 @@ pub fn stop_prevent_sleep() {
         return;
     }
     if prev == 1 {
-        #[cfg(target_os = "macos")]
-        {
-            kill_caffeinate();
-        }
+        platform::release();
         tracing::debug!("Sleep prevention stopped");
     }
 }
@@ -53,68 +79,9 @@ pub fn stop_prevent_sleep() {
 /// Force stop sleep prevention regardless of reference count
 pub fn force_stop_prevent_sleep() {
     PREVENT_SLEEP_REF_COUNT.store(0, Ordering::SeqCst);
-    #[cfg(target_os = "macos")]
-    {
-        kill_caffeinate();
-    }
+    platform::release();
     tracing::debug!("Sleep prevention force stopped");
 }
-
-/// Platform: spawn caffeinate process (macOS)
-#[cfg(target_os = "macos")]
-fn spawn_caffeinate() {
-    use std::process::{Command, Stdio};
-
-    match Command::new("caffeinate")
-        .args(["-i", "-t", "300"]) // -i: prevent idle sleep, -t: 5 min timeout
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => {
-            tracing::debug!("Started caffeinate (pid: {:?})", child.id());
-            // Take previous child out of the lock before blocking on kill/wait
-            let prev = CAFFEINATE_CHILD
-                .lock()
-                .ok()
-                .and_then(|mut guard| guard.take());
-            if let Some(mut prev) = prev {
-                let _ = prev.kill();
-                let _ = prev.wait();
-            }
-            if let Ok(mut guard) = CAFFEINATE_CHILD.lock() {
-                *guard = Some(child);
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to start caffeinate: {}", e);
-        }
-    }
-}
-
-/// Platform: kill caffeinate process (macOS)
-#[cfg(target_os = "macos")]
-fn kill_caffeinate() {
-    if let Ok(mut guard) = CAFFEINATE_CHILD.lock() {
-        if let Some(ref mut child) = *guard {
-            let _ = child.kill();
-            let _ = child.wait();
-            tracing::debug!("Stopped caffeinate");
-        }
-        *guard = None;
-    }
-}
-
-/// Platform: no-op for non-macOS
-/// Platform: no-op stub for non-macOS (real impl gated by `#[cfg(target_os = "macos")]`)
-#[cfg(not(target_os = "macos"))]
-#[allow(dead_code)] // KEEP: cross-platform stub
-fn spawn_caffeinate() {}
-
-/// Platform: no-op stub for non-macOS
-#[cfg(not(target_os = "macos"))]
-#[allow(dead_code)] // KEEP: cross-platform stub
-fn kill_caffeinate() {}
 
 /// RAII guard that prevents sleep while alive.
 ///
@@ -199,6 +166,25 @@ mod tests {
         start_prevent_sleep();
         start_prevent_sleep();
         force_stop_prevent_sleep();
+        assert!(!is_preventing_sleep());
+    }
+
+    /// Settings R3 T3 — the RAII guard and the raw begin/end pair must be
+    /// interchangeable: a dropped guard releases exactly the count its
+    /// constructor acquired (the shared lock keeps the platform backend
+    /// balanced too).
+    #[test]
+    fn test_guard_drop_releases_once() {
+        let _guard = lock();
+        reset_state();
+
+        start_prevent_sleep();
+        {
+            let _raii = PreventSleepGuard::new();
+            assert!(is_preventing_sleep());
+        }
+        assert!(is_preventing_sleep(), "outer refcount must survive the guard drop");
+        stop_prevent_sleep();
         assert!(!is_preventing_sleep());
     }
 }
