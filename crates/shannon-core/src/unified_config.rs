@@ -729,6 +729,12 @@ pub fn build_client_from_resolved(
         LlmProvider::Anthropic => {
             std::env::var("ANTHROPIC_API_VERSION").unwrap_or_else(|_| "2023-06-01".to_string())
         }
+        // S2-6: Azure's deployments route requires an explicit versioned
+        // query on every request (`endpoint_url` appends it); leave empty and
+        // the client falls back to `AZURE_DEFAULT_API_VERSION` — seeding the
+        // env override here keeps the value visible in config dumps/debug.
+        LlmProvider::Azure => std::env::var("AZURE_OPENAI_API_VERSION")
+            .unwrap_or_else(|_| shannon_engine::api::types::AZURE_DEFAULT_API_VERSION.to_string()),
         _ => String::new(),
     };
 

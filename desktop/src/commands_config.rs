@@ -1397,12 +1397,41 @@ pub async fn test_provider_connection(
     .await)
 }
 
+/// Provider kinds the in-modal **Test connection** cannot cover: selectable,
+/// fully usable providers whose "list models" route has no shared probeable
+/// endpoint, so the probe refuses them with the typed "not supported"
+/// verdict instead of a misleading connectivity failure (review P-N25 — an
+/// honest refusal, but until the S4 batch the form gives no advance notice).
+///
+/// This constant is the single source of truth for "which kinds are not
+/// probeable", promoted from the implicit complement of
+/// [`is_probeable_kind`]'s allowlist so the S4 pre-submit hint ("this
+/// provider type does not support connection testing — save and use it
+/// directly") can consume it without re-deriving the list. Why each kind is
+/// here:
+/// - `azure`: speaks the OpenAI wire format for chat, but its list-models
+///   route (`/openai/models?api-version=…`) is not the shared `/models` the
+///   openai-compatible probe hits.
+/// - `gemini`: bespoke Gemini list-models API (`WireFormat::Gemini`).
+///
+/// Kept consistent with [`is_probeable_kind`] by
+/// `non_probeable_kinds_are_never_probeable` and pinned against the full
+/// selectable-kind set by `selectable_kinds_partition_into_probeable_and_not`
+/// (both below).
+pub(crate) const NON_PROBEABLE_PROVIDER_KINDS: &[&str] = &["azure", "gemini"];
+
 /// Kinds the engine can generically probe / list models for. Mirrors the
-/// allowlist `test_all_providers` uses; `gemini` (and any future kind)
-/// has no shared list-models endpoint, so both commands reject it with a
-/// typed "not supported" verdict instead of a misleading connectivity
-/// failure.
+/// allowlist `test_all_providers` uses; anything outside it — including the
+/// kinds in [`NON_PROBEABLE_PROVIDER_KINDS`] — has no shared list-models
+/// endpoint, so both test commands reject it with a typed "not supported"
+/// verdict instead of a misleading connectivity failure.
 fn is_probeable_kind(kind: &str) -> bool {
+    // Named non-probeable kinds are checked out first so the constant stays
+    // the authoritative deny-list even if the allowlist below ever grows
+    // onto one of them (partition-pinned by the tests).
+    if NON_PROBEABLE_PROVIDER_KINDS.contains(&kind) {
+        return false;
+    }
     matches!(
         kind,
         "anthropic" | "openai" | "deepseek" | "openai-compatible" | "ollama"
@@ -2323,6 +2352,53 @@ pub(crate) fn llm_provider_for_active_mirror(s: &str) -> Option<shannon_engine::
 mod tests {
     use super::*;
     use tauri::Manager;
+
+    // === Probeability partition (S2-6 / review P-N25 single source of truth) ===
+    //
+    // `is_probeable_kind` is an allowlist; `NON_PROBEABLE_PROVIDER_KINDS`
+    // names the complement the S4 batch's pre-submit hint will consume.
+    // Both must stay consistent with the modal's selectable-kind set:
+    // every selectable kind is either probeable or explicitly listed as
+    // not — a kind in neither set would silently change the
+    // Test-connection contract.
+
+    #[test]
+    fn non_probeable_kinds_are_never_probeable() {
+        for kind in NON_PROBEABLE_PROVIDER_KINDS {
+            assert!(
+                !is_probeable_kind(kind),
+                "{kind} is listed non-probeable but the allowlist accepts it"
+            );
+        }
+    }
+
+    #[test]
+    fn selectable_kinds_partition_into_probeable_and_not() {
+        // The selectable-kind vocabulary: the modal's `KIND_INFO` set
+        // (anthropic / openai / deepseek / ollama / gemini /
+        // openai-compatible) plus `azure` — engine-supported (LlmProvider::
+        // Azure, S2-6 catalog + deployments wire) and explicitly named by
+        // review P-N25 even though the modal dropdown does not offer it yet.
+        const SELECTABLE_KINDS: &[&str] = &[
+            "anthropic",
+            "openai",
+            "deepseek",
+            "ollama",
+            "gemini",
+            "openai-compatible",
+            "azure",
+        ];
+        for kind in SELECTABLE_KINDS {
+            assert_eq!(
+                is_probeable_kind(kind),
+                !NON_PROBEABLE_PROVIDER_KINDS.contains(kind),
+                "{kind}: probeable must equal \"not in NON_PROBEABLE_PROVIDER_KINDS\""
+            );
+        }
+        // Exactly the two P-N25 kinds are non-probeable — adding a third
+        // requires updating this pin deliberately.
+        assert_eq!(NON_PROBEABLE_PROVIDER_KINDS.len(), 2);
+    }
 
     #[test]
     fn config_update_round_trips_through_serde() {

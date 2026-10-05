@@ -105,6 +105,16 @@ pub enum LlmProvider {
     DashScope,
 }
 
+/// Default `api-version` query value for Azure OpenAI requests (S2-6).
+///
+/// Azure's deployment-based chat-completions route requires an **explicit**
+/// versioned query (`?api-version=…`) — without it the request 404s. This
+/// fallback keeps default-built configs valid; a resource pinned to another
+/// revision overrides it via the `AZURE_OPENAI_API_VERSION` env var or the
+/// client config's `api_version` field (see `LlmClient::endpoint_url` for
+/// where the value lands on the wire).
+pub const AZURE_DEFAULT_API_VERSION: &str = "2024-10-21";
+
 impl LlmProvider {
     /// Detect provider from a base URL.
     ///
@@ -733,6 +743,11 @@ impl LlmClientConfig {
         let base_url = std::env::var("AZURE_OPENAI_BASE_URL")
             .unwrap_or_else(|_| "https://your-resource.openai.azure.com".to_string());
         let model = std::env::var("AZURE_OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+        // S2-6: the deployments route needs an explicit api-version on every
+        // request; seed it here so the config carries a wire-valid default
+        // (`endpoint_url` would fall back to the same constant anyway).
+        let api_version = std::env::var("AZURE_OPENAI_API_VERSION")
+            .unwrap_or_else(|_| AZURE_DEFAULT_API_VERSION.to_string());
         Self {
             api_key,
             alternate_api_keys: Vec::new(),
@@ -740,7 +755,7 @@ impl LlmClientConfig {
             model,
             max_tokens: 4096,
             timeout_seconds: 120,
-            api_version: String::new(),
+            api_version,
             provider: LlmProvider::Azure,
             extra_headers: HashMap::new(),
             retry_config: RetryConfig::default(),

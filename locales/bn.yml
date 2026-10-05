@@ -104,7 +104,7 @@ commands:
     available: "উপলব্ধ প্রদানকারী:"
     legend: "* = বর্তমান | পরিবর্তনের জন্য /provider <নাম> ব্যবহার করুন"
     switched: "প্রদানকারী: %{provider} | মডেল: %{model}"
-    switched_no_catalog: "প্রদানকারী %{provider} নির্ধারিত হয়েছে। এর নিজস্ব মডেল তালিকা নেই — মডেল বাছতে `/model <provider>/<model-id>` ব্যবহার করুন।"
+    no_catalog_pick_required: "প্রদানকারী %{provider}-এর কোনো মডেল তালিকা নেই, তাই আগের মডেল রাখা হবে না। সদ্য খোলা নির্বাচক থেকে একটি মডেল বাছুন (বাতিল করতে Esc) বা স্পষ্টভাবে বদলান: /provider %{provider} <model-id>"
     no_selection: "কোনো প্রদানকারী নির্বাচিত নয়। প্রথমে /connect <provider> <key> চালান।"
   disconnect:
     usage: "ব্যবহার: /disconnect <provider>\nএকটি প্রদানকারীর সংরক্ষিত সংযোগ (providers.toml-এ তার এন্ট্রি) সরিয়ে দেয় যাতে সেটি আর সংযুক্ত থাকে না। আপনার সংরক্ষিত API কী থেকে যাবে — পুনরায় সংযোগের জন্য /connect আবার চালান।"

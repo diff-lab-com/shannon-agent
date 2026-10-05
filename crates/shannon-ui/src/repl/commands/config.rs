@@ -112,8 +112,11 @@ fn infer_tier_for_model(model_id: &str) -> Option<TierName> {
 /// 4. Refreshes the chat widget via [`sync_active_to_chat`] so the
 ///    first-screen StatusCard reflects the switch immediately.
 ///
-/// `model_id = None` means "switch provider, keep the current model" — used by
-/// `/provider` when a provider has no built-in catalog.
+/// `model_id = None` means "switch provider, keep the current model". Since
+/// S2-6 ruling ⑤ `/provider` no longer uses this for catalog-less targets
+/// (it forces the model picker instead); the auto-switch after
+/// `/disconnect` still does — the user just removed the active provider
+/// explicitly, so the failover target carries the session's model id.
 ///
 /// Returns the resolved context window (`None` when genuinely unknown) so
 /// callers that print a "context: …" label can format it honestly.

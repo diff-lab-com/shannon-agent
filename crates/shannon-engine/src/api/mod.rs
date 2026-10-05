@@ -322,6 +322,72 @@ mod tests {
         assert_eq!(client.endpoint_url(), "http://localhost:11434/api/chat");
     }
 
+    // --- Azure deployment/api-version wire pins (S2-6, review P-N14) ---
+    //
+    // Azure's chat-completions route is path-routed by deployment and
+    // requires an explicit versioned query. The exact wire shape is frozen
+    // here:
+    // {base}/openai/deployments/{deployment}/chat/completions?api-version={v}
+
+    /// Deterministic Azure config for the URL pins (no env reads).
+    fn azure_pin_config(base_url: &str, model: &str, api_version: &str) -> LlmClientConfig {
+        LlmClientConfig {
+            thinking_type: None,
+            base_url: base_url.to_string(),
+            model: model.to_string(),
+            api_version: api_version.to_string(),
+            provider: LlmProvider::Azure,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_endpoint_url_azure_deployment_and_default_api_version() {
+        // Deployment name = model id; an empty api_version falls back to the
+        // default so a default-built config still produces a requestable URL
+        // (pre-S2-6 this composed `{base}/openai/deployments/` — no
+        // deployment, no query — which could only 404).
+        let client = LlmClient::new(azure_pin_config(
+            "https://my-resource.openai.azure.com",
+            "gpt-4o",
+            "",
+        ));
+        assert_eq!(
+            client.endpoint_url(),
+            "https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21"
+        );
+    }
+
+    #[test]
+    fn test_endpoint_url_azure_explicit_api_version_wins() {
+        let client = LlmClient::new(azure_pin_config(
+            "https://my-resource.openai.azure.com/",
+            "gpt-5",
+            "2026-03-01-preview",
+        ));
+        // The explicit version replaces the default; a trailing slash on the
+        // base_url must not double into the path.
+        assert_eq!(
+            client.endpoint_url(),
+            "https://my-resource.openai.azure.com/openai/deployments/gpt-5/chat/completions?api-version=2026-03-01-preview"
+        );
+    }
+
+    #[test]
+    fn test_endpoint_url_azure_trims_whitespace_deployment() {
+        // A deployment id pasted with surrounding whitespace must not break
+        // the path (same treatment every other provider's id gets).
+        let client = LlmClient::new(azure_pin_config(
+            "https://r.openai.azure.com",
+            " gpt-4o-mini ",
+            "",
+        ));
+        assert_eq!(
+            client.endpoint_url(),
+            "https://r.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2024-10-21"
+        );
+    }
+
     // --- Message Serialization Tests ---
 
     #[test]

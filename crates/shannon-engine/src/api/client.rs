@@ -439,8 +439,36 @@ impl LlmClient {
         headers
     }
 
-    /// Get the full endpoint URL for the configured provider
+    /// Get the full endpoint URL for the configured provider.
+    ///
+    /// Azure OpenAI (S2-6) uses path-based deployment routing plus a
+    /// **mandatory** versioned query:
+    ///
+    /// ```text
+    /// POST {base_url}/openai/deployments/{deployment}/chat/completions?api-version={v}
+    /// ```
+    ///
+    /// The deployment name IS the configured model id (`deployment = model`
+    /// semantics — the id the user configures is the Azure deployment name),
+    /// and an empty `api_version` falls back to
+    /// [`AZURE_DEFAULT_API_VERSION`] so a default-built config still produces
+    /// a requestable URL. The pre-S2-6 composition stopped at
+    /// `{base_url}/openai/deployments/` — no deployment, no `api-version` —
+    /// which could only 404; the pin tests in `api/mod.rs` freeze the exact
+    /// wire shape.
     pub(crate) fn endpoint_url(&self) -> String {
+        if self.config.provider == LlmProvider::Azure {
+            let base = self.config.base_url.trim_end_matches('/');
+            let deployment = self.config.model.trim();
+            let api_version = if self.config.api_version.is_empty() {
+                AZURE_DEFAULT_API_VERSION
+            } else {
+                self.config.api_version.as_str()
+            };
+            return format!(
+                "{base}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+            );
+        }
         format!(
             "{}{}",
             self.config.base_url,
@@ -1425,10 +1453,16 @@ impl LlmClient {
         if !target.api_key.is_empty() {
             cfg.api_key = target.api_key.clone();
         }
-        cfg.api_version = if cfg.provider == LlmProvider::Anthropic {
-            "2023-06-01".to_string()
-        } else {
-            String::new()
+        // Per-provider api-version reset: Anthropic pins its date-versioned
+        // header; Azure needs an explicit `api-version` query on its
+        // deployments route (`endpoint_url`), so a hop keeps a wire-valid
+        // value instead of inheriting the previous provider's (possibly
+        // empty) one.
+        cfg.api_version = match cfg.provider {
+            LlmProvider::Anthropic => "2023-06-01".to_string(),
+            LlmProvider::Azure => std::env::var("AZURE_OPENAI_API_VERSION")
+                .unwrap_or_else(|_| AZURE_DEFAULT_API_VERSION.to_string()),
+            _ => String::new(),
         };
         // Terminal hop: no further failover from inside a failover hop.
         cfg.retry_config.fallbacks = Vec::new();

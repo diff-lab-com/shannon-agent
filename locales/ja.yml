@@ -104,7 +104,7 @@ commands:
     available: "利用可能なプロバイダー:"
     legend: "* = 現在 | 切り替えには /provider <名前> を使用"
     switched: "プロバイダー: %{provider} | モデル: %{model}"
-    switched_no_catalog: "プロバイダーを %{provider} に設定しました。内蔵のモデルリストがありません — `/model <provider>/<model-id>` でモデルを選択してください。"
+    no_catalog_pick_required: "%{provider} にはモデルカタログがないため、以前のモデルは引き継がれません。開いたセレクターでモデルを選択するか（Esc でキャンセル）、`/provider %{provider} <model-id>` で明示的に切り替えてください。"
     no_selection: "プロバイダーが選択されていません。先に /connect <provider> <key> を実行してください。"
   disconnect:
     usage: "使い方: /disconnect <provider>\n保存されたプロバイダーの接続（providers.toml のエントリ）を削除し、接続状態を解除します。保存済みのAPIキーは保持されます — 再接続するには /connect を再実行してください。"
