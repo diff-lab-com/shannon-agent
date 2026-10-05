@@ -1,10 +1,40 @@
 # Provider/Model 配置与切换 R2 复审 —— 修复验证 · 竞品对照 · 改进方案
 
-- 日期:2026-10-05 · **状态:v1.2 可执行稿(v1.1 按对抗性审查修订,见配套 [redteam 文档](2026-10-05-provider-model-config-review-r2-redteam.md);v1.2 决策①-⑪用户已全部拍板(①-⑨按建议,⑩⑪按行内默认补录),裁定记录见 §6 末尾——批准后排期稿另出)**
-- 基线:`dev` @ `d9cc1428b`
+- 日期:2026-10-05 · **状态:v1.2 可执行稿 → 已全量实施(v1.1 按对抗性审查修订,见配套 [redteam 文档](2026-10-05-provider-model-config-review-r2-redteam.md);v1.2 决策①-⑪用户已全部拍板,裁定记录见 §6 末尾)**
+- 基线:评审 @ `d9cc1428b` → 实施终点 `b92bf0618`
 - 前作:[2026-09-29 provider/model 配置与支持深度评审](2026-09-29-provider-model-config-review.md)(P0×6/P1×12/P2×24)与 [2026-09-30 后续任务路线图](../plans/2026-09-30-provider-followups-roadmap.md)(R1-R4)。两份文档所列批次(PR #154/#158/#163/#165/#171 及 R5 `fa5436f8a`)已全部合入 dev。
-- 范围:Shannon Desktop(Tauri + React 前端 + Rust 命令层)的模型/provider 配置与切换——功能、UI、使用流程、user journey;引擎/网关配置层仅在与桌面旅程交汇处展开。TUI/CLI 只在旧账核销涉及。
-- 方法:两路代码深查(桌面 UI 旅程走查 + 引擎/网关/命令桥接层审查,全部 file:line 取证)+ 主会话对关键论断逐条回仓抽查复核(清单见 §7)+ 两路竞品官方资料调研(2026-10 时点)。修复验证不看「代码存在」看「链路闭环」:前端交互 → Tauri 命令 → 引擎执行 → 状态回显 → i18n,任何一环缺失记 PARTIAL。
+
+---
+
+## ✅ 实施结果(2026-10-05,agent team 全量实施完毕)
+
+全部批次经 worktree + agent 并行实施、逐 PR 审查/门禁/admin 合并进 dev(基线 `827122346` → 终点 `b92bf0618`)。**合并 PR 对照表**:
+
+| 批次 | PR | 内容 | 结果 |
+|---|---|---|---|
+| 文档 | #291 | 本方案 v1.2 + 红队报告 + 排期稿落库 | ✅ |
+| S1-1 | #295 | 错误分类链:引擎 `ApiError::error_kind()` 单源(含 ProviderError 补回 HTTP status)、query:failed 载荷结构化、402/429/403 专属横幅+深链、chat.error.* ×10 locale | ✅ 合并 |
+| S1-2/3/5 | #292 | pin×failover 可见化、dynamic 死徽章删除(wire 留待 S2-1 复用)、Header 空目录反馈 | ✅ 合并 |
+| S1-4 | #293 | Ollama 默认端口探测(150ms+30s TTL 缓存护栏)、quick-fill 现役化(gpt-5-mini/glm-5.1/kimi-k2.6/MiniMax-M3,双侧钉测)、fetch 联动预填(modelDirty 守卫) | ✅ 合并 |
+| S2-1/3/5+4b位 | #298 | 模型仓(set_provider_models+ModelCurationEditor,护栏⑥+白名单优先级钉)、max_output 接线、tier 扫声明、TOOL_USE 位+wire tools;**顺带修复 save_provider 静默清空模型仓声明的数据丢失 bug** | ✅ 合并 |
+| S2-4a | #297 | vision 预检(check_vision_send)+一键切换+文案桌面化;**证实前缀碰撞确会误继承 vision 位,钉为已知问题**(后由并行会话 #302 收窄为仅图片触发) | ✅ 合并 |
+| S2-6 | #296 | **发现并修复 Azure wire 必然 404**(补 deployment 名+api-version 全链+3 条 URL 钉测)、Azure catalog×4、切换收紧(裁定⑤,plan_switch/ForcePicker)、NON_PROBEABLE 单一事实源 | ✅ 合并 |
+| S2-2 | #304 | per-model 元数据桌面编辑器(行展开 ModelMetaEditor,加入模型仓入口,校验前端镜像,整体覆盖语义钉测,settings.models.vault.* ×10) | ✅ 合并 |
+| S2-4b | #305 | 工具预检门控(check_tools_send+applies 位+CapabilityConfirmBar 泛化);查证桌面 send_message 无条件挂工具且不读 enable_tools→每次发送触发,applies 为未来开关预留 | ✅ 合并 |
+| S3-1/2 | #307 | 共享 ModelPickerRow(chip/Header meta 对齐+source 徽章+why-active 标签)、P-N23 双写收敛、profile×覆盖提示(count_session_model_overrides+model-override-fallback 事件) | ✅ 合并 |
+| S3-4 | #309 | 推荐降级链一键生成(recommend_fallback_chain+外科式 set_provider_fallback_models——规避 upsert_profile 重指 active_target 副作用)+降级语义文档化 | ✅ 合并 |
+| S3-5/6 | #311 | effort picker 二级化(裁定⑪;**发现并修复桌面 configure('effort_level') 从未 arm 的静默无效**)+发送前成本预估(引擎 estimate_text_tokens+CostTracker 计费同源,session/附件双缓存) | ✅ 合并 |
+| S3-3 | #312 | utility 槽位化:compaction 槽真实消费(AuxRole::Compression→CompactEngine summarizer,正交解析器);摘要槽全仓无 LLM 消费点——按红线只落 schema+写入链+UI,未伪造;零行为变化钉测 | ✅ 合并 |
+| S4-Rust | #313 | 导出安全(裁定④:嗅探三模式+逐条警告+redact 保键名+InlineLegacy 拒导,真实二进制 smoke)、dedup 全量去重、模块头六层修正、--explain 桌面 5 键、损坏告警 TUI/桌面对齐、文档两节 | ✅ 合并 |
+| S4-前端 | #314 | 旅程 e2e×4(8 测试,168→176)、mock 补齐(**顺带修复 demo save_provider 不重指 active 槽位的契约 bug**)、a11y(aria-pressed/tablist)、ProviderKind 收口+models_url 输入、P-N25 前置提示、i18n 回填 | ✅ 合并 |
+| S4-c | #315 | models_url 全链接线(ProviderInput→落盘)+gemini 保存门对齐 KIND_INFO | ✅ 合并 |
+| 集成修复 | #299/#300/#303 | 合并破损 E0063×5(core+desktop)、e2e 三连失败根因修复(#297 vision 预检异步往返与同步 UI 反馈的读取竞态;断言零削弱 expect.poll+mock 节拍) | ✅ 合并 |
+
+**DoD 门禁(终点 dev @ b92bf0618 实测)**:vitest **3240 passed / 9 skipped / 0 failed**;desktop nextest **1584 绿**(本机 tauri-only 口径,CI 默认 feature 复核);core 4241+ / cli+ui 6371 绿;e2e **176 passed / 29 skipped / 0 failed**(新增 8 条旅程);fmt/clippy -D warnings/design-token/i18n-check 10 locale/ACL 覆盖/mock tripwire 全绿。
+
+**实施中的重大查证发现**(均已修或钉,细节在各 PR):①Azure wire 此前必然 404(#296 修复);②桌面 `configure('effort_level')` 从未 arm——写入静默无效(#311 修复);③vision 能力前缀碰撞确会误继承(glm-4.5-air 类),钉为已知问题待 schema 语义决策(#297);④桌面 send_message 无条件挂载工具、`enable_tools` 在桌面路径不被读取(#305 查证,applies 位预留);⑤会话摘要/自动标题全仓无 LLM 消费点(#312 诚实落位);⑥save_provider 会静默清空既有模型仓声明 + demo 端不重指 active 槽位(#298/#314 修复)。
+
+**遗留跟进**(均有归属,非阻塞):①摘要槽消费点(未来 LLM 摘要/标题生成点接 `lookup_auxiliary_target(TitleGeneration)` 即活);②无人值守 runner(goal/batch 等)未接 compaction 槽(各 runner 自建引擎,机械增量);③引擎 `model_supports_toolsets` 硬编码名单保持(与能力位对齐有依赖方向障碍,PR #305 说明);④loop 级 LLM 压缩在 async 内的 runtime panic(**既有问题**,建议单独立项);⑤TUI ForcePicker 的 picker 内手动输入语义(#296 遗留);⑥`chat-script.tool-task-file` 全并行偶发流式 flake(既有,--workers=2 稳定);⑦vision 前缀碰撞的 schema 语义决策。
 
 ---
 
