@@ -311,6 +311,26 @@ export async function getShannonHome(): Promise<string> {
   return invoke('get_shannon_home')
 }
 
+// ── Settings R3 T3 — hardware acceleration + prevent sleep ───────────
+
+/** Result of `get_power_capabilities` (serde camelCase). */
+export interface PowerCapabilities {
+  /** `std::env::consts::OS`: 'macos' | 'windows' | 'linux' | … */
+  platform: string
+  /** Whether the prevent-sleep backend is usable on this machine. */
+  keepAwakeSupported: boolean
+}
+
+/**
+ * Platform + keep-awake capability probe. The General settings' System
+ * cards use `platform` to hide the hardware-acceleration card on macOS and
+ * `keepAwakeSupported` to disable the prevent-sleep switches where no
+ * backend exists (Linux without systemd-inhibit).
+ */
+export async function getPowerCapabilities(): Promise<PowerCapabilities> {
+  return invoke('get_power_capabilities')
+}
+
 // ── Batch-3 follow-up — export diagnostics bundle ────────────────────
 
 /** Summary of a written diagnostics zip (logs + crash reports + doctor). */

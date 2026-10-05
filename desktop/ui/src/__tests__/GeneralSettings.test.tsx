@@ -197,4 +197,116 @@ describe('GeneralSettings', () => {
       expect(languageSelect()).toHaveValue('system')
     })
   })
+
+  // Settings R3 T3 — the System group: hardware-acceleration escape hatch
+  // (hidden on macOS, restart-app semantics) + the two prevent-sleep
+  // switches (instant semantics, disabled with a note when the platform
+  // has no backend).
+  describe('System group (hardware acceleration + prevent sleep)', () => {
+    const baseConfig = {
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      api_key: 'sk-test',
+      working_dir: '/tmp',
+      approval_mode: 'normal',
+    }
+
+    beforeEach(() => {
+      vi.mocked(api.getPowerCapabilities).mockResolvedValue({
+        platform: 'linux',
+        keepAwakeSupported: true,
+      })
+    })
+
+    it('renders the System group with both cards on a supported non-macos platform', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue({ ...baseConfig })
+      render(wrap(<GeneralSettings />))
+      await waitFor(() => {
+        expect(screen.getByTestId('settings-hwaccel-switch')).toBeInTheDocument()
+        expect(screen.getByTestId('settings-keepawake-task-switch')).toBeInTheDocument()
+        expect(screen.getByTestId('settings-keepawake-always-switch')).toBeInTheDocument()
+      })
+      expect(screen.getByText('Hardware acceleration')).toBeInTheDocument()
+      expect(screen.getByText('Prevent sleep')).toBeInTheDocument()
+    })
+
+    it('hides the hardware acceleration card on macOS', async () => {
+      vi.mocked(api.getPowerCapabilities).mockResolvedValue({
+        platform: 'macos',
+        keepAwakeSupported: true,
+      })
+      render(wrap(<GeneralSettings />))
+      // The keep-awake card still renders (macOS has caffeinate).
+      await waitFor(() => {
+        expect(screen.getByTestId('settings-keepawake-task-switch')).toBeInTheDocument()
+      })
+      expect(screen.queryByTestId('settings-hwaccel-switch')).not.toBeInTheDocument()
+      expect(screen.queryByText('Hardware acceleration')).not.toBeInTheDocument()
+    })
+
+    it('toggling hardware acceleration writes the config key (restart-app semantics badge shown)', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue({ ...baseConfig, hardware_acceleration: true })
+      render(wrap(<GeneralSettings />))
+      const hwSwitch = await screen.findByTestId('settings-hwaccel-switch')
+      expect(hwSwitch).not.toBeDisabled()
+      fireEvent.click(hwSwitch)
+      await waitFor(() => {
+        expect(api.configure).toHaveBeenCalledWith({ key: 'hardware_acceleration', value: 'false' })
+      })
+      expect(screen.getByText('Restart required')).toBeInTheDocument()
+    })
+
+    it('hardware acceleration defaults on and reads the persisted off state', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue({ ...baseConfig, hardware_acceleration: false })
+      render(wrap(<GeneralSettings />))
+      await waitFor(() => {
+        expect(screen.getByTestId('settings-hwaccel-switch')).toHaveAttribute('aria-checked', 'false')
+      })
+    })
+
+    it('task-run sleep blocker defaults on and writes power.block_sleep_during_tasks', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue({ ...baseConfig })
+      render(wrap(<GeneralSettings />))
+      const taskSwitch = await screen.findByTestId('settings-keepawake-task-switch')
+      // Default on.
+      expect(taskSwitch).toHaveAttribute('aria-checked', 'true')
+      fireEvent.click(taskSwitch)
+      await waitFor(() => {
+        expect(api.configure).toHaveBeenCalledWith({
+          key: 'power.block_sleep_during_tasks',
+          value: 'false',
+        })
+      })
+    })
+
+    it('always-on wake lock defaults off and writes power.keep_awake', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue({ ...baseConfig })
+      render(wrap(<GeneralSettings />))
+      const alwaysSwitch = await screen.findByTestId('settings-keepawake-always-switch')
+      // Default off.
+      expect(alwaysSwitch).toHaveAttribute('aria-checked', 'false')
+      fireEvent.click(alwaysSwitch)
+      await waitFor(() => {
+        expect(api.configure).toHaveBeenCalledWith({ key: 'power.keep_awake', value: 'true' })
+      })
+    })
+
+    it('disables the prevent-sleep switches and shows the unsupported note when the platform has no backend', async () => {
+      vi.mocked(api.getPowerCapabilities).mockResolvedValue({
+        platform: 'linux',
+        keepAwakeSupported: false,
+      })
+      vi.mocked(api.getConfig).mockResolvedValue({ ...baseConfig })
+      render(wrap(<GeneralSettings />))
+      const note = await screen.findByTestId('settings-keepawake-unsupported')
+      expect(note).toHaveTextContent('Sleep prevention is not available on this platform.')
+      // Base UI Switch renders aria-disabled on its <span role="switch">
+      // wrapper rather than the native disabled attribute (same convention
+      // as NotificationsSettings/ConnectionsSettings tests).
+      await waitFor(() => {
+        expect(screen.getByTestId('settings-keepawake-task-switch')).toHaveAttribute('aria-disabled', 'true')
+        expect(screen.getByTestId('settings-keepawake-always-switch')).toHaveAttribute('aria-disabled', 'true')
+      })
+    })
+  })
 })

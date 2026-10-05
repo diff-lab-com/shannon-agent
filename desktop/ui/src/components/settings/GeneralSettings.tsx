@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Spinner } from '@/components/ui/loading-state'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -18,6 +18,7 @@ import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import MigrationWizard from '@/components/migration/MigrationWizard'
 import PersonaPackSettings from './PersonaPackSettings'
 import { FeedbackSummaryCard } from './FeedbackSummaryCard'
+import EffectBadge from './EffectBadge'
 
 // GB P2-4: the tiers come from the SHARED table (lib/approvalModes) — the
 // same values, labels and descriptions the composer's quick switcher
@@ -60,6 +61,24 @@ export default function GeneralSettings() {
   const [saving, setSaving] = useState(false)
   // P1-6 — migration wizard (import from Claude Code / ZCode).
   const [migrationOpen, setMigrationOpen] = useState(false)
+  // Settings R3 T3 — platform + keep-awake capability probe. null = the
+  // probe hasn't answered yet (or failed): the hw-accel card stays hidden
+  // until the platform is known (so macOS never sees a flash) and the
+  // prevent-sleep switches stay enabled (the backend defaults are safe).
+  const [powerCaps, setPowerCaps] = useState<api.PowerCapabilities | null>(null)
+
+  // Settings R3 T3 — probe once on mount.
+  useEffect(() => {
+    let cancelled = false
+    api.getPowerCapabilities()
+      .then(caps => { if (!cancelled) setPowerCaps(caps) })
+      .catch(() => {
+        // Backend missing (web build / old binary): assume supported so the
+        // switches stay usable; the backend defaults are safe.
+        if (!cancelled) setPowerCaps({ platform: 'unknown', keepAwakeSupported: true })
+      })
+    return () => { cancelled = true }
+  }, [])
 
   const handleRerunWizard = () => {
     window.localStorage.removeItem(WELCOME_SEEN_KEY)
@@ -95,6 +114,19 @@ export default function GeneralSettings() {
       toast.success(intl.formatMessage({ id: 'settings.general.approvalMode.updated' }, { label: t(option.labelKey) }))
     } catch (e) { toastError(t('settings.general.approvalMode.updateFailed'), e) }
     setSaving(false)
+  }
+
+  // Settings R3 T3 — write one of the System-group switches. All three are
+  // plain configure writes: `hardware_acceleration` takes effect on the
+  // next launch (the backend injects the disable-GPU env vars before the
+  // webview exists), the two power switches apply immediately on the
+  // backend (keep-awake starts/stops the wake lock; the run-time blocker
+  // is re-read at the start of every run).
+  const handleSystemToggle = async (key: string, value: boolean) => {
+    try {
+      await api.configure({ key, value: String(value) })
+      await refreshConfig()
+    } catch (e) { toastError(t('settings.system.updateFailed'), e) }
   }
 
   return (
@@ -323,6 +355,89 @@ export default function GeneralSettings() {
 
         {/* P2-2 — persona/profile pack (one-file export & import) */}
         <PersonaPackSettings />
+
+        {/* Settings R3 T3 — System group: hardware acceleration + prevent
+            sleep. Rendered before the re-run wizard card so the power
+            switches (a daily concern) stay above the recovery affordance. */}
+        <div className="space-y-xs" data-testid="settings-system-group">
+          <h2 className="font-label-md text-on-surface-variant px-xs pt-sm">
+            {t('settings.system.title')}
+          </h2>
+
+          {/* ① Hardware acceleration — hidden on macOS (WKWebView has no
+              supported escape hatch). `platform` comes from the backend
+              probe; while it is pending the card stays hidden so macOS
+              users never see a flash of a useless card. */}
+          {powerCaps && powerCaps.platform !== 'macos' && (
+            <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+              <div className="flex items-center gap-md mb-xs">
+                <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>developer_board</span>
+                <h3 className="font-headline-md text-headline-md">{t('settings.system.hwAccel.title')}</h3>
+                <span className="flex-1" />
+                <EffectBadge kind="restart-app" />
+              </div>
+              <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.system.hwAccel.help')}</p>
+              <div className="flex justify-between items-center py-sm gap-md">
+                <span className="font-label-md text-on-surface">{t('settings.system.hwAccel.toggle')}</span>
+                <Switch
+                  checked={config?.hardware_acceleration !== false}
+                  onCheckedChange={v => handleSystemToggle('hardware_acceleration', v)}
+                  aria-label={t('settings.system.hwAccel.title')}
+                  data-testid="settings-hwaccel-switch"
+                />
+              </div>
+            </section>
+          )}
+
+          {/* ② Prevent sleep — task-run blocker (default on) + always-on
+              wake lock (default off). Disabled with a note when the probe
+              reports no backend (Linux without systemd-inhibit). */}
+          <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+            <div className="flex items-center gap-md mb-xs">
+              <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>bedtime</span>
+              <h3 className="font-headline-md text-headline-md">{t('settings.system.keepAwake.title')}</h3>
+              <span className="flex-1" />
+              <EffectBadge kind="instant" />
+            </div>
+            <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.system.keepAwake.taskHelp')}</p>
+            {powerCaps && !powerCaps.keepAwakeSupported && (
+              <p
+                className="font-body-sm text-on-surface-variant mb-md px-xs py-sm rounded-lg bg-surface-container-low border border-outline-variant/30"
+                data-testid="settings-keepawake-unsupported"
+              >
+                {t('settings.system.keepAwake.unsupported')}
+              </p>
+            )}
+            <div className="space-y-sm">
+              <div className="flex justify-between items-center py-sm gap-md">
+                <span className="min-w-0">
+                  <span className="font-label-md text-on-surface block">{t('settings.system.keepAwake.taskToggle')}</span>
+                  <span className="font-label-sm text-on-surface-variant block">{t('settings.system.keepAwake.taskHelp')}</span>
+                </span>
+                <Switch
+                  checked={config?.power_block_sleep_during_tasks !== false}
+                  disabled={powerCaps != null && !powerCaps.keepAwakeSupported}
+                  onCheckedChange={v => handleSystemToggle('power.block_sleep_during_tasks', v)}
+                  aria-label={t('settings.system.keepAwake.taskToggle')}
+                  data-testid="settings-keepawake-task-switch"
+                />
+              </div>
+              <div className="flex justify-between items-center py-sm gap-md">
+                <span className="min-w-0">
+                  <span className="font-label-md text-on-surface block">{t('settings.system.keepAwake.alwaysToggle')}</span>
+                  <span className="font-label-sm text-on-surface-variant block">{t('settings.system.keepAwake.alwaysHelp')}</span>
+                </span>
+                <Switch
+                  checked={config?.power_keep_awake === true}
+                  disabled={powerCaps != null && !powerCaps.keepAwakeSupported}
+                  onCheckedChange={v => handleSystemToggle('power.keep_awake', v)}
+                  aria-label={t('settings.system.keepAwake.alwaysToggle')}
+                  data-testid="settings-keepawake-always-switch"
+                />
+              </div>
+            </div>
+          </section>
+        </div>
 
         {/* Re-run setup wizard */}
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">

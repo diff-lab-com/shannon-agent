@@ -630,6 +630,16 @@ export const handlers: Record<string, MockHandler> = {
       // B2: real sub-agent execution toggle (demo persists the flag; there
       // is no live registry behind it).
       demoConfig.agent_teams_enabled = String(value) === 'true'
+    } else if (key === 'hardware_acceleration') {
+      // Settings R3 T3: restart-app escape hatch — demo persists the flag.
+      demoConfig.hardware_acceleration = String(value) === 'true'
+    } else if (key === 'power.keep_awake') {
+      // Settings R3 T3: always-on wake lock (backend would start/stop the
+      // OS-level refcount; the demo just persists).
+      demoConfig.power_keep_awake = String(value) === 'true'
+    } else if (key === 'power.block_sleep_during_tasks') {
+      // Settings R3 T3: run-time sleep blocker.
+      demoConfig.power_block_sleep_during_tasks = String(value) === 'true'
     }
   },
 
@@ -2168,6 +2178,15 @@ export const handlers: Record<string, MockHandler> = {
   async get_shannon_home() {
     await delay(20)
     return '/home/ed/.shannon'
+  },
+
+  // ── Settings R3 T3 — hardware acceleration + prevent sleep ───────────
+  // The General settings' System cards key the hw-accel card's visibility
+  // and the keep-awake switches' enabled state off this probe; demo poses
+  // as a supported Linux host.
+  async get_power_capabilities() {
+    await delay(20)
+    return { platform: 'linux', keepAwakeSupported: true }
   },
 
   // --- Extensions Hub: Featured ---

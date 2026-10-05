@@ -248,6 +248,14 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   openReleasePage: vi.fn().mockResolvedValue(undefined),
   // Settings R3 (T1) — About section: read-only data directory.
   getShannonHome: vi.fn().mockResolvedValue('/home/tester/.shannon'),
+  // Settings R3 (T3) — General System cards: pretend to be a supported
+  // Linux host (hw-accel card visible, keep-awake switches enabled).
+  // Per-test `vi.mocked(...)` overrides cover the macos-hide and
+  // unsupported-disable branches.
+  getPowerCapabilities: vi.fn().mockResolvedValue({
+    platform: 'linux',
+    keepAwakeSupported: true,
+  }),
   // Remote targets (SSH hosts / Docker containers). Default: one saved
   // ssh target so the Remotes settings page renders its list.
   remoteListTargets: vi.fn().mockResolvedValue({

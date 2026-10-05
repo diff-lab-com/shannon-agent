@@ -37,6 +37,11 @@ export const MOCK_CONFIG: DesktopConfig = {
   act_tier: null,
   // B2: real sub-agent execution — off in the demo (no live bridge).
   agent_teams_enabled: false,
+  // Settings R3 T3: hardware acceleration on, always-on keep-awake off,
+  // run-time sleep blocker on — the backend defaults, verbatim.
+  hardware_acceleration: true,
+  power_keep_awake: false,
+  power_block_sleep_during_tasks: true,
 }
 
 // Managed-providers roster for the Models P2 UI (mirrors the Rust

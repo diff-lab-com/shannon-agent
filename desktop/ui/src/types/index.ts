@@ -626,6 +626,14 @@ export interface DesktopConfig {
    *  = unset — the sidebar shows the trailing 7-day cost and no threshold
    *  alerts fire. Written via `configure('monthly_budget_usd')`. */
   monthly_budget_usd?: number | null
+  /** Settings R3 T3: GPU-composited webview rendering. Default true;
+   *  false injects the per-platform disable-GPU env vars at next launch. */
+  hardware_acceleration?: boolean
+  /** Settings R3 T3: always-on wake lock (`power.keep_awake`). Default false. */
+  power_keep_awake?: boolean
+  /** Settings R3 T3: block idle sleep while agent runs stream
+   *  (`power.block_sleep_during_tasks`). Default true. */
+  power_block_sleep_during_tasks?: boolean
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
