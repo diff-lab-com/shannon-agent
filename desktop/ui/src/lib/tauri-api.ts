@@ -304,6 +304,13 @@ export async function openReleasePage(url: string): Promise<void> {
   return invoke('open_release_page', { url })
 }
 
+// ── Settings R3 — About section: read-only data directory ────────────
+
+/** Absolute path of the Shannon data directory ($SHANNON_HOME or ~/.shannon). */
+export async function getShannonHome(): Promise<string> {
+  return invoke('get_shannon_home')
+}
+
 // ── Batch-3 follow-up — export diagnostics bundle ────────────────────
 
 /** Summary of a written diagnostics zip (logs + crash reports + doctor). */

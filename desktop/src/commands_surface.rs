@@ -324,6 +324,15 @@ fn is_official_release_url(url: &str) -> bool {
     }
 }
 
+/// Settings R3 — the Shannon data directory, shown read-only in
+/// Settings → 关于. `shannon_core::data_meta::home()` honors `$SHANNON_HOME`
+/// and falls back to `~/.shannon`; the UI only displays it (moving the
+/// directory is a manual migration, no command mutates it here).
+#[tauri::command]
+pub async fn get_shannon_home() -> Result<String, String> {
+    Ok(shannon_core::data_meta::home().display().to_string())
+}
+
 /// C1①: open the release page in the system browser — same shell-open
 /// precedent as the OAuth flow in extensions_commands.rs.
 ///

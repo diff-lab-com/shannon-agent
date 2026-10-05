@@ -216,6 +216,8 @@ fn main() {
             // C1① — semi-automatic update check (GitHub latest → open page)
             commands_surface::check_app_update,
             commands_surface::open_release_page,
+            // Settings R3 — read-only data-directory line in Settings → About
+            commands_surface::get_shannon_home,
             // Batch-3 follow-up — export-diagnostics bundle (local logs +
             // crash reports + bundled `shannon doctor --json --deep` zip).
             commands_diagnostics::export_diagnostics,
