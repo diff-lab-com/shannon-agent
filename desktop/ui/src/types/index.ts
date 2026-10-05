@@ -325,13 +325,57 @@ export interface ModelInfo {
   /** Whether this entry comes from the dynamic models.dev overlay (vs the
    *  static catalog). Wire-only for now: the engine hardcodes `dynamic:
    *  None`, and the Settings badge that consumed it was removed (S1-3,
-   *  P-N3) — S2-1 reintroduces a real source badge when the engine sends
-   *  true provenance. */
+   *  P-N3) — superseded by `source` (S2-1). */
   dynamic?: boolean
   /** Vision (image input) capability from the catalog metadata. `undefined`
    *  / null = unknown — the UI renders no capability dot rather than
    *  guessing (R2-3, honest metadata). */
   vision?: boolean | null
+  /** S2-3: maximum output tokens per request (declared value wins over the
+   *  catalog's curated estimate). null = unknown — render "—". */
+  max_output?: number | null
+  /** S2-1 source badge (裁定③): `"catalog"` (curated static table),
+   *  `"overlay"` (models.dev-only row) or `"declared"` (synthesized from
+   *  the provider's curated vault with no catalog metadata behind it). */
+  source?: 'catalog' | 'overlay' | 'declared' | string | null
+  /** S2-4b (schema/wire only): native tool-calling support. `null` = the
+   *  source carries no explicit tool data (unknown — no badge). */
+  tools?: boolean | null
+}
+
+/// Mirrors `shannon_types::provider_config::ModelSpec` (S2-1 curated vault).
+/// Only `id` is required — users without metadata固化 id-only specs and the
+/// catalog keeps supplying pricing/context for ids it knows.
+export interface DeclaredModelSpec {
+  id: string
+  display_name?: string | null
+  context_window?: number | null
+  max_output?: number | null
+  cost_per_m_input?: number | null
+  cost_per_m_output?: number | null
+  capabilities?: ModelCapabilityName[]
+}
+
+/// Schema capability names (snake_case, mirrors `ModelCapability`).
+export type ModelCapabilityName =
+  | 'reasoning'
+  | 'coding'
+  | 'speed'
+  | 'cheap'
+  | 'vision'
+  | 'tool_use'
+  | (string & {})
+
+/// Wire input for `set_provider_models` (S2-1) — same shape as
+/// `DeclaredModelSpec`; capability names are validated server-side.
+export interface DeclaredModelInput {
+  id: string
+  display_name?: string | null
+  context_window?: number | null
+  max_output?: number | null
+  cost_per_m_input?: number | null
+  cost_per_m_output?: number | null
+  capabilities?: ModelCapabilityName[]
 }
 
 export interface ToolInfo {
@@ -497,6 +541,8 @@ export interface ProviderConnection {
   fallback_models?: string[]
   quirks?: ProviderQuirks
   tiers?: ProviderTiers
+  /** S2-1 curated model vault (`ModelSpec`s in providers.toml v2). */
+  models?: DeclaredModelSpec[]
 }
 
 /// Mirrors `shannon_types::provider_config::ProviderTiers`. Canonical

@@ -2459,6 +2459,15 @@
       }
     },
     {
+      "identifier": "allow-set-provider-models",
+      "description": "Enables the set_provider_models command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_provider_models"
+        ]
+      }
+    },
+    {
       "identifier": "allow-set-session-budget",
       "description": "Enables the set_session_budget command without any pre-configured scope.",
       "commands": {
@@ -2944,6 +2953,7 @@
         "allow-save-provider",
         "allow-set-active-provider",
         "allow-set-active-provider-profile",
+        "allow-set-provider-models",
         "allow-test-all-providers",
         "allow-test-provider-connection",
         "allow-test-provider-credentials"

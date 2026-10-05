@@ -298,11 +298,30 @@ export default function ModelsSettings() {
                           {t(`settings.models.tier${m.tier.charAt(0).toUpperCase()}${m.tier.slice(1)}` as 'settings.models.tierFast' | 'settings.models.tierStandard' | 'settings.models.tierPro')}
                         </span>
                       ) : null}
-                      {/* S1-3 (P-N3): the `dynamic` (models.dev overlay)
-                          badge is gone — the engine currently hardcodes
-                          `dynamic: None` on the ModelInfo wire, so the badge
-                          never lit. The wire field stays (S2-1 reuses it for
-                          a real source badge); no UI replacement here yet. */}
+                      {/* S2-1 (裁定③/S2-1 source badge): honest provenance —
+                          `overlay` rows come from the models.dev refresh,
+                          `declared` rows from the provider's curated vault
+                          (AddProviderModal fetch 固化). Catalog rows are the
+                          default and stay unbadged. (The old always-off
+                          `dynamic` badge was removed in S1-3; `source` is
+                          its replacement.) */}
+                      {m.source === 'overlay' ? (
+                        <span
+                          className="px-xs py-[2px] bg-secondary-container text-on-secondary-container rounded-sm text-label-2xs font-bold"
+                          title={t('settings.models.sourceBadge.overlay')}
+                        >
+                          {t('settings.models.sourceBadge.overlay')}
+                        </span>
+                      ) : null}
+                      {m.source === 'declared' ? (
+                        <span
+                          data-testid="source-badge-declared"
+                          className="px-xs py-[2px] bg-secondary-container text-on-secondary-container rounded-sm text-label-2xs font-bold"
+                          title={t('settings.models.sourceBadge.declared')}
+                        >
+                          {t('settings.models.sourceBadge.declared')}
+                        </span>
+                      ) : null}
                     </div>
                     <p className="text-label-sm text-on-surface-variant">
                       {m.provider}
@@ -318,6 +337,20 @@ export default function ModelsSettings() {
                       {intl.formatMessage(
                         { id: 'settings.models.priceOutput' },
                         { value: formatPrice(m.price_out) },
+                      )}
+                      {' · '}
+                      {/* S2-3: declared/catalog max output per request —
+                          unknown renders "—" (honest metadata). */}
+                      {intl.formatMessage(
+                        { id: 'settings.models.maxOutput' },
+                        {
+                          value:
+                            m.max_output != null && m.max_output > 0
+                              ? m.max_output >= 1000
+                                ? `${(m.max_output / 1000).toFixed(0)}k`
+                                : String(m.max_output)
+                              : '—',
+                        },
                       )}
                     </p>
                   </div>

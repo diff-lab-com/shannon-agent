@@ -56,6 +56,12 @@ pub async fn get_active_session_id(
 /// - `Some(slice)` → only return models whose provider slug is in the
 ///   slice. The engine env vars are ignored when the desktop has an
 ///   explicit override (P4.9 precedence).
+///
+/// S2-1 (裁定③): when the active provider slot carries a non-empty curated
+/// `models` vault in `providers.toml`, it acts as the picker's whitelist —
+/// catalog/overlay rows outside it are hidden here (they remain reachable
+/// via manual entry / other paths), rows inside keep their catalog
+/// metadata, and vault-only ids surface as synthesized rows.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn list_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
@@ -66,15 +72,53 @@ pub async fn list_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelI
         let dc = state.desktop_config.read().await;
         dc.enabled_providers.clone()
     };
+    let declared = declared_models_for_active_provider(&state, &provider_str).await;
     list_models_for(
         &provider_str,
         effective_provider_allowlist(allowlist.as_deref()),
+        declared.as_deref(),
     )
 }
 
+/// Read the active provider slot's curated `models` declarations (S2-1) from
+/// the engine store — snapshot read under the in-process mutex, no flock
+/// (read-only). `None` when there is no active slot, or the active slot's
+/// provider does not correspond to `provider_slug` (the vault only filters
+/// the provider it belongs to). Slot resolution mirrors
+/// `shannon_core::declared_models::replace_for_provider_in`: raw id match
+/// first, then canonical-provider equivalence (a `glm` slot resolving to the
+/// `openai` catalog).
+async fn declared_models_for_active_provider(
+    state: &tauri::State<'_, AppState>,
+    provider_slug: &str,
+) -> Option<Vec<shannon_types::provider_config::ModelSpec>> {
+    use shannon_core::provider_resolver::llm_provider_from_slug;
+
+    let store = state.provider_store.lock().await;
+    let cfg = store.config();
+    let mp = cfg.active_model_profile()?;
+    let slot_id = mp.active_target.provider_id.trim();
+    if slot_id.is_empty() {
+        return None;
+    }
+    let slot = mp.providers.iter().find(|p| p.id == slot_id)?;
+    let same_provider = slot.id == provider_slug
+        || matches!(
+            (
+                llm_provider_from_slug(provider_slug),
+                llm_provider_from_slug(&slot.id),
+            ),
+            (Some(a), Some(b)) if a == b
+        );
+    if !same_provider {
+        return None;
+    }
+    Some(slot.models.clone())
+}
+
 /// Pure helper backing [`list_models`] and (in tests) `get_provider_allowlist`.
-/// Given the active provider slug and the resolved allowlist, build the
-/// wire [`ModelInfo`] vec.
+/// Given the active provider slug, the resolved allowlist and the active
+/// slot's curated vault (S2-1), build the wire [`ModelInfo`] vec.
 ///
 /// `allowlist = Some(vec![])` means "user toggled every provider off" —
 /// we return an empty list. `allowlist = Some(non_empty)` filters by
@@ -82,12 +126,18 @@ pub async fn list_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelI
 /// (engine env-var allowlist already applied by
 /// [`effective_provider_allowlist`], so this case never reaches a
 /// restrictive filter).
+///
+/// `declared = Some(non-empty)` is the curated whitelist (裁定③): merged
+/// catalog rows outside the id set are dropped (keeping their catalog
+/// metadata — the vault is a filter predicate, not a metadata replacement),
+/// and vault-only ids are synthesized from their declarations. `None` or an
+/// empty vault = the historical unfiltered catalog.
 fn list_models_for(
     provider_str: &str,
     allowlist: Option<Vec<String>>,
+    declared: Option<&[shannon_types::provider_config::ModelSpec]>,
 ) -> Result<Vec<ModelInfo>, String> {
     use shannon_core::model_registry::merged_models_for_provider;
-    use shannon_core::query_engine::pricing_for_model_opt;
 
     let provider = llm_provider_from_slug(provider_str)
         .ok_or_else(|| format!("unknown provider slug `{provider_str}`; cannot list models"))?;
@@ -106,39 +156,145 @@ fn list_models_for(
         }
     }
 
-    let models = merged_models_for_provider(provider);
+    let merged = merged_models_for_provider(provider);
+    let whitelist: Option<std::collections::HashSet<&str>> = declared
+        .filter(|specs| !specs.is_empty())
+        .map(|specs| specs.iter().map(|s| s.id.as_str()).collect());
 
-    Ok(models
-        .into_iter()
-        .map(|m| {
-            let pricing = pricing_for_model_opt(m.id);
-            // R3-3: surface the catalog's tier classification on the wire so
-            // the plan/act tier controls (header switcher, Settings →
-            // Models) can show WHICH model each tier resolves to with the
-            // same data the picker lists. `Unknown` stays `None` — the UI
-            // renders no tier badge rather than guessing (honest metadata).
-            let tier_label = shannon_core::model_registry::tier_label_for_id(m.id);
-            ModelInfo {
-                id: m.id.to_string(),
-                name: m.display_name.to_string(),
-                provider: provider_str.to_string(),
-                context_window: m.context_window,
-                price_in: pricing.as_ref().map(|p| p.input_price_per_mtok),
-                price_out: pricing.as_ref().map(|p| p.output_price_per_mtok),
-                tier: (tier_label != shannon_core::model_registry::TierLabel::Unknown)
-                    .then(|| tier_label.as_str().to_string()),
-                dynamic: None,
-                // R2-3: the merged catalog carries real capability data for
-                // both static entries (curated table) and dynamic overlay
-                // entries (derived from models.dev input modalities), so
-                // the vision bit is always known once a model exists.
-                vision: Some(
-                    m.capabilities
-                        .has(shannon_core::model_registry::ModelCapabilities::vision()),
-                ),
+    let mut out: Vec<ModelInfo> = Vec::new();
+    for m in &merged {
+        if let Some(w) = &whitelist {
+            if !w.contains(m.id) {
+                // Curated filter (裁定③): outside the vault, hidden from the
+                // picker. Metadata stays available to other paths.
+                continue;
             }
-        })
-        .collect())
+        }
+        let declared_spec = declared.and_then(|specs| specs.iter().find(|s| s.id == m.id));
+        out.push(merged_row_to_wire(m, declared_spec, provider_str));
+    }
+    // Vault-only ids (no catalog/overlay row behind them): surface the
+    // declaration itself so curated endpoints show their proxy-specific
+    // models in the picker.
+    if let Some(specs) = declared.filter(|specs| !specs.is_empty()) {
+        for spec in specs {
+            if merged.iter().any(|m| m.id == spec.id) {
+                continue;
+            }
+            out.push(declared_spec_to_wire(spec, provider_str));
+        }
+    }
+    Ok(out)
+}
+
+/// Map one merged catalog row to the wire shape. `declared_spec` (the
+/// vault's declaration for this exact id, when any) is authoritative for
+/// `max_output` (S2-3); everything else keeps the catalog/overlay metadata
+/// (裁定③ merge-priority pin).
+fn merged_row_to_wire(
+    m: &shannon_core::model_registry::ModelInfo,
+    declared_spec: Option<&shannon_types::provider_config::ModelSpec>,
+    provider_str: &str,
+) -> ModelInfo {
+    use shannon_core::model_registry::{ModelCapabilities, ModelEntrySource};
+
+    let pricing = shannon_core::query_engine::pricing_for_model_opt(m.id);
+    // R3-3: surface the catalog's tier classification on the wire so
+    // the plan/act tier controls (header switcher, Settings →
+    // Models) can show WHICH model each tier resolves to with the
+    // same data the picker lists. `Unknown` stays `None` — the UI
+    // renders no tier badge rather than guessing (honest metadata).
+    let tier_label = shannon_core::model_registry::tier_label_for_id(m.id);
+    let tools = match m.source {
+        // models.dev carries explicit tool-calling data (S2-4b bit).
+        ModelEntrySource::Overlay => Some(m.capabilities.has(ModelCapabilities::tool_use())),
+        // The curated table doesn't carry tool bits yet — unknown, not
+        // false (same honest-metadata contract as `vision`).
+        ModelEntrySource::Catalog => None,
+        // Synthesized declared rows never take this arm (they have no
+        // merged row), but a future merge path could produce one.
+        ModelEntrySource::Declared => Some(m.capabilities.has(ModelCapabilities::tool_use())),
+    };
+    ModelInfo {
+        id: m.id.to_string(),
+        name: m.display_name.to_string(),
+        provider: provider_str.to_string(),
+        context_window: m.context_window,
+        price_in: pricing.as_ref().map(|p| p.input_price_per_mtok),
+        price_out: pricing.as_ref().map(|p| p.output_price_per_mtok),
+        tier: (tier_label != shannon_core::model_registry::TierLabel::Unknown)
+            .then(|| tier_label.as_str().to_string()),
+        dynamic: None,
+        // R2-3: the merged catalog carries real capability data for
+        // both static entries (curated table) and dynamic overlay
+        // entries (derived from models.dev input modalities), so
+        // the vision bit is always known once a model exists.
+        vision: Some(
+            m.capabilities
+                .has(shannon_core::model_registry::ModelCapabilities::vision()),
+        ),
+        // S2-3: declared cap wins; the catalog's curated value renders as
+        //-is when nonzero (0 = unknown → `None` → UI renders "—").
+        max_output: declared_spec
+            .and_then(|s| s.max_output)
+            .or_else(|| (m.max_output > 0).then_some(m.max_output as u32)),
+        // S2-1 source badge (裁定③).
+        source: Some(m.source.as_str().to_string()),
+        tools,
+    }
+}
+
+/// Synthesize a wire row for a vault-only id (no catalog/overlay entry).
+/// The declaration is the only metadata source: declared prices (both
+/// directions) render as-is, undeclared fields render unknown ("—"), and a
+/// declaration with **no** capability names reports unknown vision/tools
+/// rather than false.
+fn declared_spec_to_wire(
+    spec: &shannon_types::provider_config::ModelSpec,
+    provider_str: &str,
+) -> ModelInfo {
+    use shannon_core::model_registry::{ModelCapabilities, tier_label_for_caps};
+
+    let mut caps = ModelCapabilities::empty();
+    for cap in &spec.capabilities {
+        caps = caps.or(match cap {
+            shannon_types::provider_config::ModelCapability::Reasoning => {
+                ModelCapabilities::reasoning()
+            }
+            shannon_types::provider_config::ModelCapability::Coding => ModelCapabilities::coding(),
+            shannon_types::provider_config::ModelCapability::Speed => ModelCapabilities::speed(),
+            shannon_types::provider_config::ModelCapability::Cheap => ModelCapabilities::cheap(),
+            shannon_types::provider_config::ModelCapability::Vision => ModelCapabilities::vision(),
+            shannon_types::provider_config::ModelCapability::ToolUse => {
+                ModelCapabilities::tool_use()
+            }
+            // non_exhaustive: future flags contribute no bit yet.
+            _ => ModelCapabilities::empty(),
+        });
+    }
+    let capabilities_declared = !spec.capabilities.is_empty();
+    let tier_label = tier_label_for_caps(&spec.id, caps);
+    // Declared pricing only when BOTH directions are declared — a lone half
+    // never mixes with a guessed one (same rule as the billing path).
+    let (price_in, price_out) = match (spec.cost_per_m_input, spec.cost_per_m_output) {
+        (Some(i), Some(o)) => (Some(i), Some(o)),
+        _ => (None, None),
+    };
+    ModelInfo {
+        id: spec.id.clone(),
+        name: spec.display_name.clone().unwrap_or_else(|| spec.id.clone()),
+        provider: provider_str.to_string(),
+        context_window: spec.context_window.map(|v| v as usize).unwrap_or(0),
+        price_in,
+        price_out,
+        tier: (tier_label != shannon_core::model_registry::TierLabel::Unknown)
+            .then(|| tier_label.as_str().to_string()),
+        dynamic: None,
+        vision: capabilities_declared.then(|| caps.has(ModelCapabilities::vision())),
+        max_output: spec.max_output,
+        source: Some("declared".to_string()),
+        tools: capabilities_declared.then(|| caps.has(ModelCapabilities::tool_use())),
+    }
 }
 
 /// Return the currently-effective provider allowlist for the desktop UI
@@ -719,7 +875,7 @@ mod tests {
         // `Some(vec![])` is the user-set "hide every provider" state.
         // The picker should show the "no models" state rather than
         // falling back to the full catalog.
-        let out = list_models_for("anthropic", Some(vec![])).unwrap();
+        let out = list_models_for("anthropic", Some(vec![]), None).unwrap();
         assert!(out.is_empty());
     }
 
@@ -728,7 +884,7 @@ mod tests {
         // The desktop's active provider is `openai`, but the
         // allowlist only includes `anthropic`. The picker must
         // surface no models for the (filtered-out) active provider.
-        let out = list_models_for("openai", Some(vec!["anthropic".into()])).unwrap();
+        let out = list_models_for("openai", Some(vec!["anthropic".into()]), None).unwrap();
         assert!(out.is_empty());
     }
 
@@ -736,8 +892,12 @@ mod tests {
     fn list_models_for_returns_catalog_when_active_slug_in_allowlist() {
         // Allowlist matches the active provider → return the full
         // catalog for that provider.
-        let out =
-            list_models_for("anthropic", Some(vec!["anthropic".into(), "openai".into()])).unwrap();
+        let out = list_models_for(
+            "anthropic",
+            Some(vec!["anthropic".into(), "openai".into()]),
+            None,
+        )
+        .unwrap();
         assert!(!out.is_empty(), "anthropic has catalog entries");
         assert!(out.iter().all(|m| m.provider == "anthropic"));
     }
@@ -747,7 +907,7 @@ mod tests {
         // No restriction (engine env-var allowlist already applied
         // upstream, so this case is "no restriction" from this
         // function's view).
-        let out = list_models_for("anthropic", None).unwrap();
+        let out = list_models_for("anthropic", None, None).unwrap();
         assert!(!out.is_empty());
         assert!(out.iter().all(|m| m.provider == "anthropic"));
     }
@@ -756,8 +916,131 @@ mod tests {
     fn list_models_for_allowlist_match_is_case_insensitive() {
         // The catalog slugs are lowercase ("anthropic"); a user
         // typing "Anthropic" in the env var must still hit.
-        let out = list_models_for("anthropic", Some(vec!["ANTHROPIC".into()])).unwrap();
+        let out = list_models_for("anthropic", Some(vec!["ANTHROPIC".into()]), None).unwrap();
         assert!(!out.is_empty());
+    }
+
+    // === S2-1: curated vault = picker whitelist (裁定③) ===
+
+    fn spec(id: &str) -> shannon_types::provider_config::ModelSpec {
+        shannon_types::provider_config::ModelSpec {
+            id: id.to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: None,
+            cost_per_m_output: None,
+            capabilities: vec![],
+        }
+    }
+
+    /// 合并优先级钉 (S2-1): the vault is a **filter predicate** over the
+    /// merged catalog; catalog/overlay stay the **metadata supply**. A
+    /// whitelisted catalog row keeps its curated context window, pricing
+    /// and vision bit; vault-only ids surface as synthesized `declared`
+    /// rows; everything outside the vault is hidden from the picker.
+    #[test]
+    fn list_models_for_vault_filters_but_keeps_catalog_metadata() {
+        let declared = vec![
+            // Catalog id, curated with NO metadata — the catalog row's
+            // metadata must survive untouched.
+            spec("gpt-4o"),
+            // Proxy-only id with no catalog entry.
+            {
+                let mut s = spec("proxy-only-model");
+                s.context_window = Some(32_768);
+                s.max_output = Some(4_096);
+                s.cost_per_m_input = Some(0.5);
+                s.cost_per_m_output = Some(2.0);
+                s.capabilities = vec![
+                    shannon_types::provider_config::ModelCapability::Vision,
+                    shannon_types::provider_config::ModelCapability::ToolUse,
+                ];
+                s
+            },
+        ];
+        let out = list_models_for("openai", None, Some(&declared)).unwrap();
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert!(
+            !ids.contains(&"gpt-4o-mini") && !ids.contains(&"o3-mini"),
+            "non-whitelisted catalog rows must be filtered out: {ids:?}"
+        );
+
+        let gpt4o = out
+            .iter()
+            .find(|m| m.id == "gpt-4o")
+            .expect("whitelisted catalog row survives");
+        assert_eq!(gpt4o.context_window, 128_000, "curated context window kept");
+        assert_eq!(
+            gpt4o.price_in,
+            Some(2.5),
+            "curated pricing kept (metadata supply = catalog)"
+        );
+        assert_eq!(gpt4o.price_out, Some(10.0));
+        assert_eq!(gpt4o.vision, Some(true), "curated vision bit kept");
+        assert_eq!(gpt4o.source.as_deref(), Some("catalog"));
+        assert_eq!(
+            gpt4o.max_output,
+            Some(16_384),
+            "catalog max_output surfaces (S2-3)"
+        );
+
+        let proxy = out
+            .iter()
+            .find(|m| m.id == "proxy-only-model")
+            .expect("vault-only id synthesized");
+        assert_eq!(proxy.source.as_deref(), Some("declared"));
+        assert_eq!(proxy.context_window, 32_768);
+        assert_eq!(proxy.max_output, Some(4_096));
+        assert_eq!(proxy.price_in, Some(0.5));
+        assert_eq!(proxy.vision, Some(true));
+        assert_eq!(proxy.tools, Some(true));
+        assert_eq!(proxy.provider, "openai");
+    }
+
+    /// An empty (or absent) vault never filters — the historical
+    /// unfiltered catalog, so a cleared vault restores the full picker.
+    #[test]
+    fn list_models_for_empty_or_absent_vault_is_unfiltered() {
+        let unfiltered = list_models_for("openai", None, None).unwrap();
+        assert!(unfiltered.len() > 1);
+        let empty: Vec<shannon_types::provider_config::ModelSpec> = Vec::new();
+        let with_empty = list_models_for("openai", None, Some(&empty)).unwrap();
+        assert_eq!(unfiltered.len(), with_empty.len());
+        // Source is stamped on every row either way.
+        assert!(unfiltered.iter().all(|m| m.source.is_some()));
+    }
+
+    /// An id-only declaration (the common curation — user has no
+    /// metadata yet) surfaces honestly: unknown context/prices/vision
+    /// render as 0 / None so the UI shows "—", never fabricated values.
+    #[test]
+    fn list_models_for_id_only_declaration_renders_unknown() {
+        let declared = vec![spec("bare-proxy-model")];
+        let out = list_models_for("openai", None, Some(&declared)).unwrap();
+        assert_eq!(out.len(), 1);
+        let m = &out[0];
+        assert_eq!(m.id, "bare-proxy-model");
+        assert_eq!(m.context_window, 0);
+        assert_eq!(m.price_in, None);
+        assert_eq!(m.price_out, None);
+        assert_eq!(m.max_output, None);
+        assert_eq!(m.vision, None, "no capabilities declared → unknown");
+        assert_eq!(m.tools, None);
+        assert_eq!(m.source.as_deref(), Some("declared"));
+    }
+
+    /// A declared max_output overrides the catalog's curated value for a
+    /// whitelisted row (declared metadata is authoritative, S2-3).
+    #[test]
+    fn list_models_for_declared_max_output_beats_catalog() {
+        let mut declared_spec = spec("gpt-4o");
+        declared_spec.max_output = Some(1_024);
+        let out = list_models_for("openai", None, Some(&[declared_spec])).unwrap();
+        let gpt4o = out.iter().find(|m| m.id == "gpt-4o").unwrap();
+        assert_eq!(gpt4o.max_output, Some(1_024));
+        // The rest of the catalog metadata is still the catalog's.
+        assert_eq!(gpt4o.context_window, 128_000);
     }
 
     // === R2-1: session-level model override resolution ===

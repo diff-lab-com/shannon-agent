@@ -143,6 +143,18 @@ pub enum ModelCapability {
     Speed,
     Cheap,
     Vision,
+    // S2-4b: the model supports native tool calling. Schema/wire only in
+    // this batch — no gating behavior consumes the flag yet (a follow-up PR
+    // wires tool-path prechecks). Old `providers.toml` files without the
+    // variant keep parsing unchanged (a new enum variant is purely additive
+    // to the accepted name set).
+    //
+    // NOTE: keep this a plain `//` comment, not a `///` doc comment — a
+    // variant doc comment becomes a schemars `description`, which makes the
+    // regenerated schema split the enum into oneOf description groups and
+    // structurally drift from the comment-free build.rs redeclaration
+    // (schema_stability gate).
+    ToolUse,
 }
 
 /// R2-4: user-declared metadata for one model on a provider profile.
@@ -808,6 +820,56 @@ mod tier_name_tests {
         assert!(
             msg.contains("visionn") && msg.contains("unknown variant"),
             "error must name the bad capability and the accepted set: {msg}"
+        );
+    }
+
+    // ── S2-4b: the tool_use capability bit ──────────────────────────────
+
+    #[test]
+    fn tool_use_capability_round_trips_through_toml() {
+        let toml_str = r#"
+            id = "glm"
+            kind = "openai-compatible"
+            display_name = "GLM"
+            base_url = "https://open.bigmodel.cn/api/paas/v4"
+            credential = { backend = "env", var = "ZHIPU_API_KEY" }
+
+            [[models]]
+            id = "glm-5.3-flash"
+            capabilities = ["tool_use", "vision"]
+        "#;
+        let parsed: ProviderProfile = toml::from_str(toml_str).expect("tool_use parses");
+        assert_eq!(
+            parsed.models[0].capabilities,
+            vec![ModelCapability::ToolUse, ModelCapability::Vision]
+        );
+
+        // And the variant serializes back to the canonical snake_case name.
+        let out = toml::to_string(&parsed).expect("serialize");
+        assert!(out.contains("\"tool_use\""), "{out}");
+    }
+
+    #[test]
+    fn old_files_without_the_tool_use_bit_keep_parsing() {
+        // A pre-S2-4b declaration (no tool_use anywhere) must parse
+        // unchanged — the new variant is purely additive to the accepted
+        // capability name set.
+        let legacy = r#"
+            id = "glm"
+            kind = "openai-compatible"
+            display_name = "GLM"
+            base_url = "https://open.bigmodel.cn/api/paas/v4"
+            credential = { backend = "env", var = "ZHIPU_API_KEY" }
+
+            [[models]]
+            id = "glm-5.3-flash"
+            context_window = 198000
+            capabilities = ["vision", "reasoning"]
+        "#;
+        let parsed: ProviderProfile = toml::from_str(legacy).expect("legacy file parses");
+        assert_eq!(
+            parsed.models[0].capabilities,
+            vec![ModelCapability::Vision, ModelCapability::Reasoning]
         );
     }
 

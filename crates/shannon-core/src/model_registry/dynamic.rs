@@ -185,9 +185,13 @@ pub fn entry_to_model_info(entry: &ModelsDevEntry) -> Option<ModelInfo> {
     if entry.reasoning.unwrap_or(false) {
         caps = caps.or(ModelCapabilities::reasoning());
     }
-    // Tool-calling is the best available proxy for "coding-capable".
+    // Tool-calling is the best available proxy for "coding-capable"; S2-4b
+    // additionally feeds the catalog's TOOL_USE bit from the same explicit
+    // models.dev field (schema/wire only — no gating behavior consumes the
+    // bit yet, a follow-up PR wires tool-path prechecks off it).
     if entry.tool_call.unwrap_or(false) {
         caps = caps.or(ModelCapabilities::coding());
+        caps = caps.or(ModelCapabilities::tool_use());
     }
     let lower = model_id.to_lowercase();
     if ["flash", "mini", "nano", "haiku", "turbo", "lite", "air"]
@@ -216,6 +220,7 @@ pub fn entry_to_model_info(entry: &ModelsDevEntry) -> Option<ModelInfo> {
         cost_per_m_input: 0.0,
         cost_per_m_output: 0.0,
         capabilities: caps,
+        source: super::ModelEntrySource::Overlay,
     };
 
     // The picker filters models by tier (Fast/Standard/Pro); `Unknown`-tier

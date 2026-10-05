@@ -344,6 +344,11 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   saveProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
+  // S2-1 (模型仓固化): default no-op; the curation tests override per
+  // scenario.
+  setProviderModels: vi.fn().mockResolvedValue({
+    provider_id: '', model_profile: 'default', models: [],
+  }),
   deleteProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   setActiveProvider: vi.fn().mockResolvedValue(undefined),
   // ADR-0005 P4.12 — fan-out probe. Default: empty roster.

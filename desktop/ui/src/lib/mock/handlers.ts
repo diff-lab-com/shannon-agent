@@ -696,6 +696,18 @@ export const handlers: Record<string, MockHandler> = {
     }
     return providersFile()
   },
+  // S2-1 (模型仓固化): demo mode stores the curated vault on the demo
+  // connection so a fetch→curate→save round trip is observable in demos.
+  async set_provider_models(args: { providerId: string; models: { id: string }[] }) {
+    await delay(120)
+    const conn = state.providers.providers.find(p => p.id === args.providerId)
+    if (conn) (conn as { models?: { id: string }[] }).models = args.models
+    return {
+      provider_id: args.providerId,
+      model_profile: 'default',
+      models: args.models,
+    }
+  },
   async delete_provider(args: { id: string }) {
     await delay(100)
     state.providers.providers = state.providers.providers.filter(p => p.id !== args.id)

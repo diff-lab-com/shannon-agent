@@ -916,6 +916,7 @@ mod tests {
             cost_per_m_input: 3.0,
             cost_per_m_output: 15.0,
             capabilities: ModelCapabilities::empty(),
+            source: shannon_core::model_registry::ModelEntrySource::Catalog,
         };
         let label = model_cost_label(&paid);
         assert!(label.contains("$3.00"), "paid model shows rate: {label}");
@@ -936,6 +937,7 @@ mod tests {
             cost_per_m_input: 0.0,
             cost_per_m_output: 0.0,
             capabilities: ModelCapabilities::empty(),
+            source: shannon_core::model_registry::ModelEntrySource::Catalog,
         };
         let label = model_cost_label(&dynamic);
         assert!(
@@ -958,6 +960,7 @@ mod tests {
             cost_per_m_input: 0.0,
             cost_per_m_output: 0.0,
             capabilities: ModelCapabilities::empty(),
+            source: shannon_core::model_registry::ModelEntrySource::Catalog,
         };
         let label = model_cost_label(&local);
         assert!(
