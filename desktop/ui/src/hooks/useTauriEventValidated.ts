@@ -14,6 +14,8 @@ const EVENT_TO_PAYLOAD: Record<string, string> = {
   'query:failed': 'QueryFailedPayload',
   'query:cancelled': 'QueryCancelledPayload',
   'permission-request': 'PermissionRequest',
+  'ask-user-request': 'AskUserRequest',
+  'ask-user-resolved': 'AskUserResolved',
   'session-loaded': 'SessionLoaded',
   'config-updated': 'ConfigUpdatedPayload',
   'background-task-update': 'BackgroundTaskUpdate',

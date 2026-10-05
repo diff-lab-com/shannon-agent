@@ -282,6 +282,16 @@ pub struct DesktopConfig {
     /// `configure("session.auto_archive_days")`.
     #[serde(default = "default_session_auto_archive_days")]
     pub session_auto_archive_days: u32,
+    /// Settings R3 T8 — 提问自动继续. When true, a desktop `ask_user_question`
+    /// left unanswered for 5 minutes (`ask_user_handler::ASK_USER_TIMEOUT_SECS`)
+    /// is auto-answered with "continue on your best judgment" (plus an
+    /// `ask-user-resolved` timed-out event for the card); when false — the
+    /// default — the agent waits for the user indefinitely. Read live by
+    /// `DesktopQuestionHandler` before each question's wait, so a flip
+    /// applies to the NEXT question without a restart. Written via
+    /// `configure("chat.ask_user_auto_continue")`.
+    #[serde(default)]
+    pub chat_ask_user_auto_continue: bool,
 }
 
 /// Settings R3 T7 — the auto-archive retention default (7 days).
@@ -910,6 +920,7 @@ impl Default for DesktopConfig {
             context_auto_compact: true,
             session_auto_archive_enabled: false,
             session_auto_archive_days: default_session_auto_archive_days(),
+            chat_ask_user_auto_continue: false,
         }
     }
 }

@@ -1224,6 +1224,17 @@ export async function respondPermission(
   })
 }
 
+// --- Ask user (Settings R3 T8) ---
+
+/**
+ * Submit the user's answer(s) to a pending `ask-user-request`. Unknown or
+ * expired ids (the auto-continue timeout raced this click, a second submit,
+ * a stale window) are an idempotent backend no-op — always `Ok`.
+ */
+export async function respondAskUser(requestId: string, answers: string[]): Promise<void> {
+  await invoke('respond_ask_user', { requestId, answers })
+}
+
 // --- Files & Diffs ---
 
 export async function getFileDiff(path: string): Promise<FileDiff> {

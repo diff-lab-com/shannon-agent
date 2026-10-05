@@ -172,4 +172,46 @@ describe('SessionSettings (Settings R3 T6 — 会话分区)', () => {
       expect(api.configure).toHaveBeenCalledWith({ key: 'session.auto_archive_days', value: '90' })
     })
   })
+
+  // ④ Ask auto-continue card — Settings R3 T8 (chat.ask_user_auto_continue).
+
+  it('renders the ask auto-continue card with the instant badge and the 5-minute help copy', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-ask-auto-continue-card')
+    expect(within(card).getByText('Auto-continue unanswered questions')).toBeInTheDocument()
+    // Ruling help copy: 5 minutes → "best judgment"; off = wait forever.
+    const help = within(card).getByText(/auto-answered with/i).textContent ?? ''
+    expect(help).toMatch(/5 minutes/)
+    expect(help).toMatch(/best judgment/)
+    expect(help).toMatch(/waits for your answer indefinitely/)
+    // Reads live per question — instant, not new-session.
+    expect(within(card).getByText('Instant effect')).toBeInTheDocument()
+    expect(within(card).queryByText('Applies to new sessions')).not.toBeInTheDocument()
+  })
+
+  it('defaults the ask auto-continue switch to OFF when the config omits the field', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-ask-auto-continue-card')
+    const sw = within(card).getByRole('switch', { name: 'Auto-continue unanswered questions' })
+    await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'false'))
+  })
+
+  it('hydrates the ask auto-continue switch from the persisted config', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({ ...baseConfig, chat_ask_user_auto_continue: true })
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-ask-auto-continue-card')
+    const sw = within(card).getByRole('switch', { name: 'Auto-continue unanswered questions' })
+    await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'true'))
+  })
+
+  it('persists chat.ask_user_auto_continue through configure when toggled on', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-ask-auto-continue-card')
+    const sw = within(card).getByRole('switch', { name: 'Auto-continue unanswered questions' })
+    await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(sw)
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'chat.ask_user_auto_continue', value: 'true' })
+    })
+  })
 })

@@ -464,6 +464,10 @@ fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Resu
         // Read live at the top of every scan pass (6h cadence), so a flip
         // lands on the next pass — no restart.
         "session.auto_archive_enabled" => cfg.session_auto_archive_enabled = enabled,
+        // Settings R3 T8: auto-continue for unanswered agent questions
+        // (`ask_user_question`). Read live by the ask_user handler before
+        // each question's wait — a flip applies to the NEXT question.
+        "chat.ask_user_auto_continue" => cfg.chat_ask_user_auto_continue = enabled,
         other => return Err(format!("Unrecognized boolean key: {other}")),
     }
     Ok(())
@@ -2479,11 +2483,13 @@ mod tests {
             "context.auto_compact" => Some(cfg.context_auto_compact),
             // Settings R3 T7 — the auto-archive master switch.
             "session.auto_archive_enabled" => Some(cfg.session_auto_archive_enabled),
+            // Settings R3 T8 — 提问自动继续.
+            "chat.ask_user_auto_continue" => Some(cfg.chat_ask_user_auto_continue),
             _ => None,
         }
     }
 
-    const TOGGLE_KEYS: [&str; 13] = [
+    const TOGGLE_KEYS: [&str; 14] = [
         "memory_enabled",
         "telemetry",
         "encryption",
@@ -2497,6 +2503,7 @@ mod tests {
         "power.block_sleep_during_tasks",
         "context.auto_compact",
         "session.auto_archive_enabled",
+        "chat.ask_user_auto_continue",
     ];
 
     #[test]
@@ -2549,6 +2556,9 @@ mod tests {
             // Settings R3 T6: auto-compaction defaults true — pin false like
             // the rest so the round trip starts deterministic.
             cfg.context_auto_compact = false;
+            // Settings R3 T8: ask auto-continue defaults false; pinned like
+            // the rest so the round trip starts deterministic.
+            cfg.chat_ask_user_auto_continue = false;
         }
 
         let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());

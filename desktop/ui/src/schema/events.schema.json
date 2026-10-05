@@ -350,6 +350,74 @@
     "title": "PermissionRequest",
     "type": "object"
   },
+  "AskUserRequest": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "request_id": {
+        "type": "string"
+      },
+      "question": {
+        "type": "string"
+      },
+      "header": {
+        "type": "string"
+      },
+      "options": {
+        "type": "array",
+        "items": {
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "description"
+          ],
+          "type": "object"
+        }
+      },
+      "multi_select": {
+        "type": "boolean"
+      },
+      "timeout_ms": {
+        "description": "Settings R3 T8: present only when 提问自动继续 is on — the auto-continue countdown the card renders. Additive — must mirror desktop/src/events.rs exactly.",
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "request_id",
+      "question",
+      "header",
+      "options",
+      "multi_select"
+    ],
+    "title": "AskUserRequest",
+    "type": "object"
+  },
+  "AskUserResolved": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "request_id": {
+        "type": "string"
+      },
+      "timed_out": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "request_id",
+      "timed_out"
+    ],
+    "title": "AskUserResolved",
+    "type": "object"
+  },
   "QueryCancelledPayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {

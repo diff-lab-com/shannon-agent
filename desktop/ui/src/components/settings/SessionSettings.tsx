@@ -25,6 +25,8 @@ import EffectBadge from './EffectBadge'
  *    `session.auto_archive_enabled`) + retention gear
  *    (`session.auto_archive_days`, default 7, clamped 1..=365). Default off;
  *    both re-read live on every 6h scan pass.
+ * ④ 「提问自动继续」 (Settings R3 T8) — the `chat_ask_user_auto_continue`
+ *    switch: auto-answer an agent question left unanswered for 5 minutes.
  *
  * Later tasks in this batch append more cards to this page (see the anchor
  * comment at the end of the JSX).
@@ -69,6 +71,13 @@ export default function SessionSettings() {
   useEffect(() => {
     setAutoArchiveDays(config?.session_auto_archive_days ?? 7)
   }, [config?.session_auto_archive_days])
+
+  // ④ Ask auto-continue (T8): default OFF (backend serde default) — the
+  // agent waits for the user's answer indefinitely until opted in.
+  const [askAutoContinue, setAskAutoContinue] = useState(config?.chat_ask_user_auto_continue ?? false)
+  useEffect(() => {
+    setAskAutoContinue(config?.chat_ask_user_auto_continue ?? false)
+  }, [config?.chat_ask_user_auto_continue])
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
@@ -244,7 +253,34 @@ export default function SessionSettings() {
           </div>
         </section>
 
-        {/* 后续任务在此追加: 自动归档 / ask 自动继续 / 发送行为 / 分组 */}
+        {/* ④ 提问自动继续 — Settings R3 T8: auto-answer an agent question
+            left unanswered for 5 minutes ("continue on your best judgment").
+            The ask_user handler reads the switch live before each question's
+            wait, so a flip applies to the NEXT question — instant. */}
+        <section
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          data-testid="session-ask-auto-continue-card"
+        >
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">contact_support</span>
+            <h3 className="font-headline-md text-headline-md">{t('settings.session.askAutoContinue.title')}</h3>
+            <span className="flex-1" />
+            <EffectBadge kind="instant" />
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-md">{t('settings.session.askAutoContinue.help')}</p>
+          <div className="flex items-center justify-between gap-md">
+            <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.session.askAutoContinue.toggle')}</div>
+            <Switch
+              checked={askAutoContinue}
+              onCheckedChange={v => void handleToggle('chat.ask_user_auto_continue', v, setAskAutoContinue)}
+              className="shrink-0"
+              aria-label={t('settings.session.askAutoContinue.title')}
+              data-testid="session-ask-auto-continue-switch"
+            />
+          </div>
+        </section>
+
+        {/* 后续任务在此追加: 发送行为 / 分组 */}
       </div>
     </div>
   )
