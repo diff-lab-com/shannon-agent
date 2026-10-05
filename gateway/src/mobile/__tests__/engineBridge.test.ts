@@ -735,6 +735,31 @@ describe("shannon/session.list + session.history (§J)", () => {
     socket.close();
   });
 
+  it("session.history limit<1 passes through for the engine-side §J4 clamp (handover §5)", async () => {
+    // §J4: "<1 按 1 处理" is ENGINE semantics — the gateway must forward the
+    // value verbatim (the old >= 1 guard turned limit<1 into the default-50
+    // page, so the clamp never reached the wire). Non-number/non-finite still
+    // means "absent".
+    const engine = new SessionFakeEngine((message: any) => {
+      expect(message.limit).toBe(0);
+      return { type: "session.transcript", session_id: "sess-1", messages: [], has_more: false };
+    });
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    await rpc(socket, "shannon/session.history", { sessionId: "sess-1", limit: 0 });
+    await rpc(socket, "shannon/session.history", { sessionId: "sess-1", limit: -3 });
+    socket.close();
+
+    const nonFinite = new SessionFakeEngine((message: any) => {
+      expect(message.limit).toBeUndefined();
+      return { type: "session.transcript", session_id: "sess-1", messages: [], has_more: false };
+    });
+    const { port: port2 } = await start(sessionHandlers(nonFinite));
+    const socket2 = await connect(port2);
+    await rpc(socket2, "shannon/session.history", { sessionId: "sess-1", limit: "5" });
+    socket2.close();
+  });
+
   it("session.history missing/blank sessionId → INVALID_PARAMS (no engine call)", async () => {
     const engine = new SessionFakeEngine(() => {
       throw new Error("engine must not be called");
