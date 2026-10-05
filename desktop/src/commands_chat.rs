@@ -56,6 +56,12 @@ pub async fn get_active_session_id(
 /// - `Some(slice)` → only return models whose provider slug is in the
 ///   slice. The engine env vars are ignored when the desktop has an
 ///   explicit override (P4.9 precedence).
+///
+/// S2-1 (裁定③): when the active provider slot carries a non-empty curated
+/// `models` vault in `providers.toml`, it acts as the picker's whitelist —
+/// catalog/overlay rows outside it are hidden here (they remain reachable
+/// via manual entry / other paths), rows inside keep their catalog
+/// metadata, and vault-only ids surface as synthesized rows.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn list_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
@@ -66,15 +72,53 @@ pub async fn list_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelI
         let dc = state.desktop_config.read().await;
         dc.enabled_providers.clone()
     };
+    let declared = declared_models_for_active_provider(&state, &provider_str).await;
     list_models_for(
         &provider_str,
         effective_provider_allowlist(allowlist.as_deref()),
+        declared.as_deref(),
     )
 }
 
+/// Read the active provider slot's curated `models` declarations (S2-1) from
+/// the engine store — snapshot read under the in-process mutex, no flock
+/// (read-only). `None` when there is no active slot, or the active slot's
+/// provider does not correspond to `provider_slug` (the vault only filters
+/// the provider it belongs to). Slot resolution mirrors
+/// `shannon_core::declared_models::replace_for_provider_in`: raw id match
+/// first, then canonical-provider equivalence (a `glm` slot resolving to the
+/// `openai` catalog).
+async fn declared_models_for_active_provider(
+    state: &tauri::State<'_, AppState>,
+    provider_slug: &str,
+) -> Option<Vec<shannon_types::provider_config::ModelSpec>> {
+    use shannon_core::provider_resolver::llm_provider_from_slug;
+
+    let store = state.provider_store.lock().await;
+    let cfg = store.config();
+    let mp = cfg.active_model_profile()?;
+    let slot_id = mp.active_target.provider_id.trim();
+    if slot_id.is_empty() {
+        return None;
+    }
+    let slot = mp.providers.iter().find(|p| p.id == slot_id)?;
+    let same_provider = slot.id == provider_slug
+        || matches!(
+            (
+                llm_provider_from_slug(provider_slug),
+                llm_provider_from_slug(&slot.id),
+            ),
+            (Some(a), Some(b)) if a == b
+        );
+    if !same_provider {
+        return None;
+    }
+    Some(slot.models.clone())
+}
+
 /// Pure helper backing [`list_models`] and (in tests) `get_provider_allowlist`.
-/// Given the active provider slug and the resolved allowlist, build the
-/// wire [`ModelInfo`] vec.
+/// Given the active provider slug, the resolved allowlist and the active
+/// slot's curated vault (S2-1), build the wire [`ModelInfo`] vec.
 ///
 /// `allowlist = Some(vec![])` means "user toggled every provider off" —
 /// we return an empty list. `allowlist = Some(non_empty)` filters by
@@ -82,12 +126,18 @@ pub async fn list_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelI
 /// (engine env-var allowlist already applied by
 /// [`effective_provider_allowlist`], so this case never reaches a
 /// restrictive filter).
+///
+/// `declared = Some(non-empty)` is the curated whitelist (裁定③): merged
+/// catalog rows outside the id set are dropped (keeping their catalog
+/// metadata — the vault is a filter predicate, not a metadata replacement),
+/// and vault-only ids are synthesized from their declarations. `None` or an
+/// empty vault = the historical unfiltered catalog.
 fn list_models_for(
     provider_str: &str,
     allowlist: Option<Vec<String>>,
+    declared: Option<&[shannon_types::provider_config::ModelSpec]>,
 ) -> Result<Vec<ModelInfo>, String> {
     use shannon_core::model_registry::merged_models_for_provider;
-    use shannon_core::query_engine::pricing_for_model_opt;
 
     let provider = llm_provider_from_slug(provider_str)
         .ok_or_else(|| format!("unknown provider slug `{provider_str}`; cannot list models"))?;
@@ -106,39 +156,145 @@ fn list_models_for(
         }
     }
 
-    let models = merged_models_for_provider(provider);
+    let merged = merged_models_for_provider(provider);
+    let whitelist: Option<std::collections::HashSet<&str>> = declared
+        .filter(|specs| !specs.is_empty())
+        .map(|specs| specs.iter().map(|s| s.id.as_str()).collect());
 
-    Ok(models
-        .into_iter()
-        .map(|m| {
-            let pricing = pricing_for_model_opt(m.id);
-            // R3-3: surface the catalog's tier classification on the wire so
-            // the plan/act tier controls (header switcher, Settings →
-            // Models) can show WHICH model each tier resolves to with the
-            // same data the picker lists. `Unknown` stays `None` — the UI
-            // renders no tier badge rather than guessing (honest metadata).
-            let tier_label = shannon_core::model_registry::tier_label_for_id(m.id);
-            ModelInfo {
-                id: m.id.to_string(),
-                name: m.display_name.to_string(),
-                provider: provider_str.to_string(),
-                context_window: m.context_window,
-                price_in: pricing.as_ref().map(|p| p.input_price_per_mtok),
-                price_out: pricing.as_ref().map(|p| p.output_price_per_mtok),
-                tier: (tier_label != shannon_core::model_registry::TierLabel::Unknown)
-                    .then(|| tier_label.as_str().to_string()),
-                dynamic: None,
-                // R2-3: the merged catalog carries real capability data for
-                // both static entries (curated table) and dynamic overlay
-                // entries (derived from models.dev input modalities), so
-                // the vision bit is always known once a model exists.
-                vision: Some(
-                    m.capabilities
-                        .has(shannon_core::model_registry::ModelCapabilities::vision()),
-                ),
+    let mut out: Vec<ModelInfo> = Vec::new();
+    for m in &merged {
+        if let Some(w) = &whitelist {
+            if !w.contains(m.id) {
+                // Curated filter (裁定③): outside the vault, hidden from the
+                // picker. Metadata stays available to other paths.
+                continue;
             }
-        })
-        .collect())
+        }
+        let declared_spec = declared.and_then(|specs| specs.iter().find(|s| s.id == m.id));
+        out.push(merged_row_to_wire(m, declared_spec, provider_str));
+    }
+    // Vault-only ids (no catalog/overlay row behind them): surface the
+    // declaration itself so curated endpoints show their proxy-specific
+    // models in the picker.
+    if let Some(specs) = declared.filter(|specs| !specs.is_empty()) {
+        for spec in specs {
+            if merged.iter().any(|m| m.id == spec.id) {
+                continue;
+            }
+            out.push(declared_spec_to_wire(spec, provider_str));
+        }
+    }
+    Ok(out)
+}
+
+/// Map one merged catalog row to the wire shape. `declared_spec` (the
+/// vault's declaration for this exact id, when any) is authoritative for
+/// `max_output` (S2-3); everything else keeps the catalog/overlay metadata
+/// (裁定③ merge-priority pin).
+fn merged_row_to_wire(
+    m: &shannon_core::model_registry::ModelInfo,
+    declared_spec: Option<&shannon_types::provider_config::ModelSpec>,
+    provider_str: &str,
+) -> ModelInfo {
+    use shannon_core::model_registry::{ModelCapabilities, ModelEntrySource};
+
+    let pricing = shannon_core::query_engine::pricing_for_model_opt(m.id);
+    // R3-3: surface the catalog's tier classification on the wire so
+    // the plan/act tier controls (header switcher, Settings →
+    // Models) can show WHICH model each tier resolves to with the
+    // same data the picker lists. `Unknown` stays `None` — the UI
+    // renders no tier badge rather than guessing (honest metadata).
+    let tier_label = shannon_core::model_registry::tier_label_for_id(m.id);
+    let tools = match m.source {
+        // models.dev carries explicit tool-calling data (S2-4b bit).
+        ModelEntrySource::Overlay => Some(m.capabilities.has(ModelCapabilities::tool_use())),
+        // The curated table doesn't carry tool bits yet — unknown, not
+        // false (same honest-metadata contract as `vision`).
+        ModelEntrySource::Catalog => None,
+        // Synthesized declared rows never take this arm (they have no
+        // merged row), but a future merge path could produce one.
+        ModelEntrySource::Declared => Some(m.capabilities.has(ModelCapabilities::tool_use())),
+    };
+    ModelInfo {
+        id: m.id.to_string(),
+        name: m.display_name.to_string(),
+        provider: provider_str.to_string(),
+        context_window: m.context_window,
+        price_in: pricing.as_ref().map(|p| p.input_price_per_mtok),
+        price_out: pricing.as_ref().map(|p| p.output_price_per_mtok),
+        tier: (tier_label != shannon_core::model_registry::TierLabel::Unknown)
+            .then(|| tier_label.as_str().to_string()),
+        dynamic: None,
+        // R2-3: the merged catalog carries real capability data for
+        // both static entries (curated table) and dynamic overlay
+        // entries (derived from models.dev input modalities), so
+        // the vision bit is always known once a model exists.
+        vision: Some(
+            m.capabilities
+                .has(shannon_core::model_registry::ModelCapabilities::vision()),
+        ),
+        // S2-3: declared cap wins; the catalog's curated value renders as
+        //-is when nonzero (0 = unknown → `None` → UI renders "—").
+        max_output: declared_spec
+            .and_then(|s| s.max_output)
+            .or_else(|| (m.max_output > 0).then_some(m.max_output as u32)),
+        // S2-1 source badge (裁定③).
+        source: Some(m.source.as_str().to_string()),
+        tools,
+    }
+}
+
+/// Synthesize a wire row for a vault-only id (no catalog/overlay entry).
+/// The declaration is the only metadata source: declared prices (both
+/// directions) render as-is, undeclared fields render unknown ("—"), and a
+/// declaration with **no** capability names reports unknown vision/tools
+/// rather than false.
+fn declared_spec_to_wire(
+    spec: &shannon_types::provider_config::ModelSpec,
+    provider_str: &str,
+) -> ModelInfo {
+    use shannon_core::model_registry::{ModelCapabilities, tier_label_for_caps};
+
+    let mut caps = ModelCapabilities::empty();
+    for cap in &spec.capabilities {
+        caps = caps.or(match cap {
+            shannon_types::provider_config::ModelCapability::Reasoning => {
+                ModelCapabilities::reasoning()
+            }
+            shannon_types::provider_config::ModelCapability::Coding => ModelCapabilities::coding(),
+            shannon_types::provider_config::ModelCapability::Speed => ModelCapabilities::speed(),
+            shannon_types::provider_config::ModelCapability::Cheap => ModelCapabilities::cheap(),
+            shannon_types::provider_config::ModelCapability::Vision => ModelCapabilities::vision(),
+            shannon_types::provider_config::ModelCapability::ToolUse => {
+                ModelCapabilities::tool_use()
+            }
+            // non_exhaustive: future flags contribute no bit yet.
+            _ => ModelCapabilities::empty(),
+        });
+    }
+    let capabilities_declared = !spec.capabilities.is_empty();
+    let tier_label = tier_label_for_caps(&spec.id, caps);
+    // Declared pricing only when BOTH directions are declared — a lone half
+    // never mixes with a guessed one (same rule as the billing path).
+    let (price_in, price_out) = match (spec.cost_per_m_input, spec.cost_per_m_output) {
+        (Some(i), Some(o)) => (Some(i), Some(o)),
+        _ => (None, None),
+    };
+    ModelInfo {
+        id: spec.id.clone(),
+        name: spec.display_name.clone().unwrap_or_else(|| spec.id.clone()),
+        provider: provider_str.to_string(),
+        context_window: spec.context_window.map(|v| v as usize).unwrap_or(0),
+        price_in,
+        price_out,
+        tier: (tier_label != shannon_core::model_registry::TierLabel::Unknown)
+            .then(|| tier_label.as_str().to_string()),
+        dynamic: None,
+        vision: capabilities_declared.then(|| caps.has(ModelCapabilities::vision())),
+        max_output: spec.max_output,
+        source: Some("declared".to_string()),
+        tools: capabilities_declared.then(|| caps.has(ModelCapabilities::tool_use())),
+    }
 }
 
 /// Return the currently-effective provider allowlist for the desktop UI
@@ -188,6 +344,13 @@ fn llm_provider_from_slug(s: &str) -> Option<shannon_engine::api::LlmProvider> {
 }
 
 /// Get current application status.
+///
+/// S3-1 (P-N11): also carries the engine store's ACTIVE model profile name
+/// (`active_profile`) so the model pickers can render the "pinned by
+/// profile X" why-active label from the same snapshot they already poll —
+/// no second round trip. The engine normalizes an unset pointer to the
+/// `"default"` sentinel (`active_profile_key`), which the UI treats as
+/// "no explicit profile pin" for labeling purposes.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusResponse, String> {
@@ -195,6 +358,10 @@ pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusRespo
     let model = cc.model.clone();
     let provider = cc.provider.to_string();
     drop(cc);
+    let active_profile = {
+        let store = state.provider_store.lock().await;
+        store.config().active_profile_key().to_string()
+    };
     let session = state.registry.get_or_create_active();
     let querying = session.querying.lock().await;
     let messages = session.messages.lock().await;
@@ -208,6 +375,7 @@ pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusRespo
         querying: *querying,
         message_count: messages.len(),
         working_dir,
+        active_profile: Some(active_profile),
     })
 }
 
@@ -368,9 +536,10 @@ pub async fn list_tools(state: tauri::State<'_, AppState>) -> Result<Vec<ToolInf
 /// `apply_phase_tier_to_base` helper), and (c) the unattended constructors
 /// clone the `client_config` Arc without resolving through here. The
 /// `unattended_paths_pin_global_config` test in this file pins (a)+(b)+(c).
-pub(crate) async fn resolve_client_config_for_session(
+pub(crate) async fn resolve_client_config_for_session<R: tauri::Runtime>(
     state: &AppState,
     session: &crate::session_registry::SessionState,
+    ui: Option<&tauri::AppHandle<R>>,
 ) -> shannon_engine::api::LlmClientConfig {
     let base = state.client_config.read().await.clone();
     let Some(ov) = session.model_override_snapshot() else {
@@ -390,8 +559,57 @@ pub(crate) async fn resolve_client_config_for_session(
                 model = %ov.model,
                 "session model override no longer resolvable — falling back to global default"
             );
+            // S3-2 (P-N10): the silent fallback is now also a UI event. The
+            // chip's "· session" suffix keeps pointing at a model the engine
+            // can no longer reach (e.g. its provider vanished with a profile
+            // switch); one toast tells the user why the next answer does NOT
+            // come from the pinned model. Best-effort: a failed emit never
+            // blocks the send. Callers without an `AppHandle` (the read-only
+            // pre-check commands) pass `None` — the send itself follows and
+            // emits there.
+            if let Some(app) = ui {
+                notify_override_fallback(app, session.session_id, &ov.provider, &ov.model);
+            }
             base
         }
+    }
+}
+
+/// S3-2 (P-N10) — wire name of the stale-override fallback event. Desktop
+/// shell-local (not in the shared `shannon_types::events` table): the
+/// engine has no use for it, and keeping it here avoids widening the
+/// engine↔shell contract for a desktop-only UX cue.
+pub const MODEL_OVERRIDE_FALLBACK: &str = "model-override-fallback";
+
+/// Payload of [`MODEL_OVERRIDE_FALLBACK`]: the session whose pinned target
+/// failed to re-resolve, and the `(provider, model)` pin that was ignored
+/// for this query (the query itself went out on the global default).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ModelOverrideFallbackPayload {
+    pub session_id: String,
+    pub provider: String,
+    pub model: String,
+}
+
+/// Emit [`MODEL_OVERRIDE_FALLBACK`]. Fire-and-forget: a failed emit is
+/// logged at debug and swallowed — the tracing warn in the caller stays the
+/// authoritative engine-side record.
+fn notify_override_fallback<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    session_id: uuid::Uuid,
+    provider: &str,
+    model: &str,
+) {
+    use tauri::Emitter;
+    if let Err(e) = app.emit(
+        MODEL_OVERRIDE_FALLBACK,
+        ModelOverrideFallbackPayload {
+            session_id: session_id.to_string(),
+            provider: provider.to_string(),
+            model: model.to_string(),
+        },
+    ) {
+        tracing::debug!(error = %e, "model-override-fallback emit failed");
     }
 }
 
@@ -660,6 +878,353 @@ pub async fn get_session_model(
     Ok(session.model_override_snapshot())
 }
 
+/// S3-2 (P-N10): how many sessions currently carry a model override.
+///
+/// Counts the durable sidecar's entries (load-pruned against the L0 session
+/// log, write-reconciled on every set/clear) — i.e. the sessions that would
+/// KEEP their pinned model across a profile switch and fall back to the
+/// global default only where the pin no longer resolves. The Settings
+/// profile switch confirm renders this count; a failed lock surfaces as a
+/// command error (the caller degrades to no-confirm, never blocks).
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn count_session_model_overrides(
+    state: tauri::State<'_, AppState>,
+) -> Result<u32, String> {
+    let store = state
+        .session_overrides
+        .lock()
+        .map_err(|_| "session override sidecar lock poisoned".to_string())?;
+    Ok(store.len() as u32)
+}
+
+// ── S2-4a (P-N9): pre-send vision pre-check ─────────────────────────────
+
+/// Wire shape of [`check_vision_send`]: which model the NEXT send of this
+/// session would use, its three-state vision verdict, and (when one
+/// exists) the one-click switch candidate.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VisionSendCheck {
+    /// Effective model id — session override > phase tier > global
+    /// default, the exact resolution the actual send goes through.
+    pub model: String,
+    /// Provider slug of the effective target, in the composer chip's
+    /// `set_session_model` vocabulary (the canonical `LlmProvider` name,
+    /// e.g. `"zhipu"`).
+    pub provider: String,
+    /// Three-state verdict: `Some(true)` = vision-capable,
+    /// `Some(false)` = KNOWN to lack vision (the UI must ask before
+    /// sending), `None` = unknown — sends flow untouched, exactly like
+    /// the engine gate treats them.
+    pub vision: Option<bool>,
+    /// One-click switch candidate: the first vision-capable model in the
+    /// effective provider's merged roster (static catalog order first,
+    /// then the models.dev overlay), excluding the effective model.
+    /// `None` → the UI shows the notice without a switch action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<VisionSwitchSuggestion>,
+}
+
+/// Where "switch to Y" should land. `provider` is ready for
+/// [`set_session_model`]; `model` is the canonical catalog id (the same
+/// normalization contract the composer chip writes).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VisionSwitchSuggestion {
+    pub provider: String,
+    pub model: String,
+    pub name: String,
+}
+
+/// Three-state vision lookup mirroring the engine gate's stages
+/// (`agent_loop.rs::model_supports_vision`, which the desktop cannot call
+/// — the fn is engine-private): declared models (exact id, authoritative
+/// when capabilities are listed) > static catalog (exact, forward prefix,
+/// reverse prefix longest) > models.dev overlay (exact). Duplicated
+/// host-side ON PURPOSE: the pre-check must read the same data through
+/// the same strategy as the gate it previews, or it would second-guess
+/// the engine. The engine stays the final backstop either way.
+fn vision_support_for(model_id: &str) -> Option<bool> {
+    use shannon_core::model_registry::MODEL_CATALOG;
+    use shannon_types::provider_config::ModelCapability;
+
+    let has_vision = |info: &shannon_core::model_registry::ModelInfo| {
+        info.capabilities
+            .has(shannon_core::model_registry::ModelCapabilities::vision())
+    };
+    if let Some(meta) = shannon_core::declared_models::lookup(model_id) {
+        if !meta.capabilities.is_empty() {
+            return Some(
+                meta.capabilities
+                    .iter()
+                    .any(|c| matches!(c, ModelCapability::Vision)),
+            );
+        }
+    }
+    if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id == model_id) {
+        return Some(has_vision(info));
+    }
+    if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id.starts_with(model_id)) {
+        return Some(has_vision(info));
+    }
+    if let Some(info) = MODEL_CATALOG
+        .iter()
+        .filter(|m| model_id.starts_with(m.id))
+        .max_by_key(|m| m.id.len())
+    {
+        return Some(has_vision(info));
+    }
+    if let Some(info) = shannon_core::model_registry::dynamic::overlay_snapshot()
+        .iter()
+        .find(|m| m.id == model_id)
+    {
+        return Some(has_vision(info));
+    }
+    None
+}
+
+/// Pure pick for [`check_vision_send`]'s suggestion: the FIRST
+/// vision-capable model of the merged roster (static catalog order, then
+/// overlay) that is not the model being sent to. Catalog order is the
+/// documented "best" heuristic for S2-4a — the roster is already
+/// curated, and the user picks a different model in the menu anyway if
+/// the first suggestion does not suit.
+fn first_vision_candidate(
+    roster: &[shannon_core::model_registry::ModelInfo],
+    exclude: &str,
+) -> Option<(String, String)> {
+    roster
+        .iter()
+        .find(|m| {
+            m.id != exclude
+                && m.capabilities
+                    .has(shannon_core::model_registry::ModelCapabilities::vision())
+        })
+        .map(|m| (m.id.to_string(), m.display_name.to_string()))
+}
+
+/// S2-4a (P-N9): resolve what the next send of this session would use and
+/// whether that model is KNOWN to lack vision. Read-only; the UI calls it
+/// before sending a message that carries image attachments. `vision =
+/// Some(false)` is the only "ask" verdict — unknown models behave exactly
+/// as before (send, and let the engine gate answer if it must).
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn check_vision_send(
+    state: tauri::State<'_, AppState>,
+    session_id: Option<String>,
+) -> Result<VisionSendCheck, String> {
+    let (_, session) = state
+        .registry
+        .resolve_explicit_or_active(session_id.as_deref())?;
+    let cc =
+        resolve_client_config_for_session(&state, &session, None::<&tauri::AppHandle<tauri::Wry>>)
+            .await;
+    let provider_slug = cc.provider.to_string().to_lowercase();
+    let vision = vision_support_for(&cc.model);
+    let suggestion = if vision == Some(false) {
+        let roster = shannon_core::model_registry::merged_models_for_provider(cc.provider.clone());
+        first_vision_candidate(&roster, &cc.model).map(|(model, name)| VisionSwitchSuggestion {
+            provider: provider_slug.clone(),
+            model,
+            name,
+        })
+    } else {
+        None
+    };
+    Ok(VisionSendCheck {
+        model: cc.model.clone(),
+        provider: provider_slug,
+        vision,
+        suggestion,
+    })
+}
+
+// ── S2-4b (P-N9): pre-send tool-capability pre-check ────────────────────
+
+/// Wire shape of [`check_tools_send`]: which model the NEXT send of this
+/// session would use, whether that send carries tools at all, the
+/// three-state tool-calling verdict, and (when one exists) the one-click
+/// switch candidate. Mirrors [`VisionSendCheck`] so the frontend can drive
+/// both gates through one interaction pattern.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolsSendCheck {
+    /// Effective model id — session override > phase tier > global
+    /// default, the exact resolution the actual send goes through.
+    pub model: String,
+    /// Provider slug of the effective target, in the composer chip's
+    /// `set_session_model` vocabulary (the canonical `LlmProvider` name,
+    /// e.g. `"zhipu"`).
+    pub provider: String,
+    /// Whether the session's next send will carry tools at all. The
+    /// desktop send path (`send_message`, desktop/src/commands.rs) attaches
+    /// the shared tool registry UNCONDITIONALLY — the TUI/CLI's
+    /// `enable_tools` config (`SHANNON_ENABLE_TOOLS`,
+    /// `crates/shannon-core/src/unified_config.rs`) is not read anywhere on
+    /// this path — so "tools off" means exactly "the registry is empty and
+    /// the request carries no tools". `false` → the UI must not prompt.
+    pub applies: bool,
+    /// Three-state verdict: `Some(true)` = known tool-calling,
+    /// `Some(false)` = KNOWN to lack tool calling (the UI must ask before
+    /// sending into a tools-carrying request), `None` = unknown — sends
+    /// flow untouched (能力未知不拦, same contract as the vision gate).
+    pub tools: Option<bool>,
+    /// One-click switch candidate: the first tool-capable model in the
+    /// effective provider's merged roster (static catalog order first,
+    /// then the models.dev overlay), excluding the effective model.
+    /// `None` → the UI shows the notice without a switch action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<ToolsSwitchSuggestion>,
+}
+
+/// Where "switch to Y" should land. `provider` is ready for
+/// [`set_session_model`]; `model` is the canonical catalog id (the same
+/// normalization contract the composer chip writes).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolsSwitchSuggestion {
+    pub provider: String,
+    pub model: String,
+    pub name: String,
+}
+
+/// Source-aware tool bit of one merged-roster row — the SAME honesty rule
+/// `merged_row_to_wire` applies for the picker's `tools` field: overlay
+/// rows carry explicit models.dev `tool_call` data and declared rows carry
+/// the user's `providers.toml` capabilities, while the curated static
+/// table has no tool bits at all (unknown, never false).
+fn tool_bit_of(info: &shannon_core::model_registry::ModelInfo) -> Option<bool> {
+    use shannon_core::model_registry::{ModelCapabilities, ModelEntrySource};
+    match info.source {
+        ModelEntrySource::Overlay | ModelEntrySource::Declared => {
+            Some(info.capabilities.has(ModelCapabilities::tool_use()))
+        }
+        ModelEntrySource::Catalog => None,
+    }
+}
+
+/// Pure merge order backing [`tools_support_for`]: declared capabilities >
+/// static-catalog hit (which means UNKNOWN for tools — the curated table
+/// carries no tool bits, and the merged roster the picker serves is built
+/// from that row) > models.dev overlay bit > unknown. The catalog arm
+/// deliberately SHADOWS the overlay for ids present in both: the picker
+/// renders those rows from the catalog row (`source = "catalog"`,
+/// `tools = None`), so a pre-check that secretly knew better than the
+/// picker would contradict the metadata the user can see.
+fn tools_verdict(
+    declared: Option<bool>,
+    catalog_hit: bool,
+    overlay_hit: Option<bool>,
+) -> Option<bool> {
+    if let Some(declared) = declared {
+        return Some(declared);
+    }
+    if catalog_hit {
+        return None;
+    }
+    overlay_hit
+}
+
+/// Three-state tool-calling lookup over the same sources the vision
+/// pre-check walks (`vision_support_for`, which mirrors the engine gate's
+/// stages): declared models (exact id, authoritative when capabilities are
+/// listed) > static catalog (exact / forward prefix / reverse prefix — any
+/// hit means UNKNOWN here, see [`tools_verdict`]) > models.dev overlay
+/// (exact). Duplicated host-side ON PURPOSE, like the vision lookup: the
+/// pre-check must read the same data through the same strategy as the wire
+/// the picker serves, or it would second-guess the visible metadata.
+fn tools_support_for(model_id: &str) -> Option<bool> {
+    use shannon_core::model_registry::MODEL_CATALOG;
+    use shannon_types::provider_config::ModelCapability;
+
+    let declared = shannon_core::declared_models::lookup(model_id)
+        .filter(|meta| !meta.capabilities.is_empty())
+        .map(|meta| {
+            meta.capabilities
+                .iter()
+                .any(|c| matches!(c, ModelCapability::ToolUse))
+        });
+    let catalog_hit = MODEL_CATALOG
+        .iter()
+        .any(|m| m.id == model_id || m.id.starts_with(model_id) || model_id.starts_with(m.id));
+    let overlay_hit = shannon_core::model_registry::dynamic::overlay_snapshot()
+        .iter()
+        .find(|m| m.id == model_id)
+        .and_then(tool_bit_of);
+    tools_verdict(declared, catalog_hit, overlay_hit)
+}
+
+/// Pure pick for [`check_tools_send`]'s suggestion: the FIRST tool-capable
+/// model of the merged roster (static catalog order, then overlay) that is
+/// not the model being sent to. Same "first in roster order" heuristic as
+/// [`first_vision_candidate`] — catalog rows never carry the bit
+/// ([`tool_bit_of`]), so overlay entries are the natural candidate pool.
+fn first_tools_candidate(
+    roster: &[shannon_core::model_registry::ModelInfo],
+    exclude: &str,
+) -> Option<(String, String)> {
+    roster
+        .iter()
+        .find(|m| m.id != exclude && tool_bit_of(m) == Some(true))
+        .map(|m| (m.id.to_string(), m.display_name.to_string()))
+}
+
+/// Pure trigger predicate for [`check_tools_send`]: a send "will use
+/// tools" exactly when the tool registry it carries is non-empty. The
+/// desktop send path has no tools-off toggle today (see
+/// [`ToolsSendCheck::applies`]), so this is `true` for every real send —
+/// the `false` arm is the honest "not applicable" the frontend never
+/// prompts on, and stays correct if a desktop toggle ever lands.
+fn tools_gate_applies(tool_count: usize) -> bool {
+    tool_count > 0
+}
+
+/// S2-4b (P-N9): resolve what the next send of this session would use and
+/// whether that model is KNOWN to lack tool calling. Read-only; the UI
+/// calls it before EVERY send (tools ride every desktop request). `tools =
+/// Some(false)` is the only "ask" verdict — unknown models behave exactly
+/// as before (send; the engine has no tools gate to answer, so a wrong
+/// guess would degrade the run the same way it does today). Sessions whose
+/// send would carry no tools report `applies = false` and the UI skips the
+/// prompt entirely.
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn check_tools_send(
+    state: tauri::State<'_, AppState>,
+    session_id: Option<String>,
+) -> Result<ToolsSendCheck, String> {
+    let (_, session) = state
+        .registry
+        .resolve_explicit_or_active(session_id.as_deref())?;
+    let cc =
+        resolve_client_config_for_session(&state, &session, None::<&tauri::AppHandle<tauri::Wry>>)
+            .await;
+    let provider_slug = cc.provider.to_string().to_lowercase();
+    let applies = tools_gate_applies(state.tools.list().len());
+    let tools = if applies {
+        tools_support_for(&cc.model)
+    } else {
+        // Tools off → the capability is moot; report unknown rather than a
+        // verdict the send would never exercise.
+        None
+    };
+    let suggestion = if applies && tools == Some(false) {
+        let roster = shannon_core::model_registry::merged_models_for_provider(cc.provider.clone());
+        first_tools_candidate(&roster, &cc.model).map(|(model, name)| ToolsSwitchSuggestion {
+            provider: provider_slug.clone(),
+            model,
+            name,
+        })
+    } else {
+        None
+    };
+    Ok(ToolsSendCheck {
+        model: cc.model.clone(),
+        provider: provider_slug,
+        applies,
+        tools,
+        suggestion,
+    })
+}
+
 /// P2-5 — session-level "temporary chat" toggle: `disabled = true` builds
 /// this session's subsequent queries WITHOUT the memory layer (no injection
 /// of past memories into the prompt, no auto-extraction of new ones). Other
@@ -726,6 +1291,193 @@ fn persist_memory_bypass(
 mod tests {
     use super::*;
 
+    // === S2-4a (P-N9): pre-send vision pre-check ===
+
+    #[test]
+    fn vision_support_matches_engine_gate_verdicts() {
+        // The pre-check MUST agree with the engine gate on the catalog's
+        // well-known members (the gate pins the same ids in
+        // shannon-core's vision_gate_tests).
+        assert_eq!(vision_support_for("gpt-4o"), Some(true));
+        assert_eq!(vision_support_for("deepseek-v4-flash"), Some(false));
+        // Unknown id → None: the UI sends without asking, the engine gate
+        // (same three-state rule) also lets it through.
+        assert_eq!(vision_support_for("shannon-desktop-unknown-model"), None);
+    }
+
+    #[test]
+    fn vision_support_prefers_exact_entry_over_prefix_ancestors() {
+        // glm-5.1-flash is listed (speed/cheap, no vision): its own entry
+        // must win even though the prefix ancestor glm-5.1 exists too.
+        // Same collision shield the engine gate pins.
+        assert_eq!(vision_support_for("glm-5.1-flash"), Some(false));
+        assert_eq!(vision_support_for("glm-5.1-flash-x"), Some(false));
+        // Vision entry resolves through the forward prefix (short id).
+        assert_eq!(vision_support_for("glm-4v"), Some(true));
+    }
+
+    #[test]
+    fn first_vision_candidate_skips_current_and_picks_roster_order() {
+        let roster = shannon_core::model_registry::merged_models_for_provider(
+            shannon_engine::api::LlmProvider::Zhipu,
+        );
+        // The roster itself must carry vision data (the merged catalog is
+        // the same source `list_models` serves the picker).
+        assert!(
+            roster.iter().any(|m| m
+                .capabilities
+                .has(shannon_core::model_registry::ModelCapabilities::vision())),
+            "zhipu roster should contain a vision-capable model"
+        );
+        // Exclusion: sending to a vision-less model must never suggest it.
+        let pick = first_vision_candidate(&roster, "glm-4-plus");
+        assert!(pick.is_some(), "a candidate exists");
+        let (model, name) = pick.unwrap();
+        assert_ne!(model, "glm-4-plus");
+        let chosen = roster.iter().find(|m| m.id == model).unwrap();
+        assert_eq!(chosen.display_name, name);
+        assert!(
+            chosen
+                .capabilities
+                .has(shannon_core::model_registry::ModelCapabilities::vision())
+        );
+        // First-in-order contract: re-running the pick is deterministic
+        // and equals the first qualifying row.
+        let expected = roster
+            .iter()
+            .find(|m| {
+                m.id != "glm-4-plus"
+                    && m.capabilities
+                        .has(shannon_core::model_registry::ModelCapabilities::vision())
+            })
+            .map(|m| m.id.to_string());
+        assert_eq!(Some(model), expected);
+    }
+
+    #[test]
+    fn first_vision_candidate_none_when_roster_exhausted() {
+        // Excluding every vision model of a synthetic two-entry roster
+        // leaves nothing to suggest → the UI renders notice-only.
+        let roster: Vec<shannon_core::model_registry::ModelInfo> =
+            [("shannon-a", false), ("shannon-b", true)]
+                .into_iter()
+                .map(|(id, vision)| shannon_core::model_registry::ModelInfo {
+                    id,
+                    display_name: id,
+                    aliases: &[],
+                    provider: shannon_engine::api::LlmProvider::Ollama,
+                    context_window: 128_000,
+                    max_output: 4_096,
+                    cost_per_m_input: 0.0,
+                    cost_per_m_output: 0.0,
+                    capabilities: if vision {
+                        shannon_core::model_registry::ModelCapabilities::vision()
+                    } else {
+                        shannon_core::model_registry::ModelCapabilities::coding()
+                    },
+                    source: shannon_core::model_registry::ModelEntrySource::Overlay,
+                })
+                .collect();
+        assert_eq!(
+            first_vision_candidate(&roster, "shannon-b"),
+            None,
+            "the only vision model is excluded → no suggestion"
+        );
+        assert_eq!(
+            first_vision_candidate(&roster, "shannon-a").map(|(id, _)| id),
+            Some("shannon-b".to_string())
+        );
+    }
+
+    // === S2-4b (P-N9): pre-send tool-capability pre-check ===
+
+    #[test]
+    fn tools_support_is_unknown_for_catalog_rows() {
+        // The curated static table carries NO tool bits (the honest-
+        // metadata contract shared with the picker wire, see
+        // `merged_row_to_wire`), so every catalog-reachable verdict is
+        // None — including ids that resolve through the same prefix
+        // strategies the vision gate pins. `gpt-4o` HAS a vision verdict
+        // from the same row: the two gates must differ exactly where the
+        // metadata differs.
+        assert_eq!(vision_support_for("gpt-4o"), Some(true));
+        assert_eq!(tools_support_for("gpt-4o"), None);
+        assert_eq!(tools_support_for("gpt-4o-2024-08-06"), None);
+        assert_eq!(tools_support_for("shannon-desktop-unknown-model"), None);
+    }
+
+    #[test]
+    fn tools_verdict_precedence_declared_then_catalog_then_overlay() {
+        // Declared capabilities are authoritative even over a catalog hit.
+        assert_eq!(tools_verdict(Some(true), true, Some(false)), Some(true));
+        assert_eq!(tools_verdict(Some(false), false, Some(true)), Some(false));
+        // A catalog hit means UNKNOWN for tools and SHADOWS the overlay:
+        // the merged roster (what the picker serves) builds that id's row
+        // from the catalog row, whose tools field is None.
+        assert_eq!(tools_verdict(None, true, Some(true)), None);
+        // Overlay consulted only when the catalog never matched.
+        assert_eq!(tools_verdict(None, false, Some(true)), Some(true));
+        assert_eq!(tools_verdict(None, false, Some(false)), Some(false));
+        assert_eq!(tools_verdict(None, false, None), None);
+    }
+
+    #[test]
+    fn first_tools_candidate_picks_first_overlay_bit_and_skips_catalog_rows() {
+        let mk = |id: &'static str, bit: Option<bool>| {
+            let source = match bit {
+                // Catalog rows: no tool bits at all (unknown).
+                None => shannon_core::model_registry::ModelEntrySource::Catalog,
+                _ => shannon_core::model_registry::ModelEntrySource::Overlay,
+            };
+            shannon_core::model_registry::ModelInfo {
+                id,
+                display_name: id,
+                aliases: &[],
+                provider: shannon_engine::api::LlmProvider::Anthropic,
+                context_window: 200_000,
+                max_output: 4_096,
+                cost_per_m_input: 0.0,
+                cost_per_m_output: 0.0,
+                capabilities: match bit {
+                    Some(true) => shannon_core::model_registry::ModelCapabilities::tool_use(),
+                    Some(false) => shannon_core::model_registry::ModelCapabilities::coding(),
+                    None => shannon_core::model_registry::ModelCapabilities::vision(),
+                },
+                source,
+            }
+        };
+        // Roster shape mirrors the merged catalog: catalog rows first,
+        // overlay rows after. The pick must skip the catalog row (unknown),
+        // the known-no-tools overlay row, and the excluded current model.
+        let roster: Vec<_> = vec![
+            mk("curated-no-bits", None),
+            mk("overlay-blind", Some(false)),
+            mk("shannon-target", Some(false)),
+            mk("overlay-capable", Some(true)),
+        ];
+        let (id, name) = first_tools_candidate(&roster, "shannon-target").unwrap();
+        assert_eq!(id, "overlay-capable");
+        assert_eq!(name, "overlay-capable");
+        // Exclusion can exhaust the pool → notice-only.
+        assert_eq!(first_tools_candidate(&roster, "overlay-capable"), None);
+        // A tools-capable CURRENT model is never suggested against itself.
+        assert_eq!(
+            first_tools_candidate(&roster, "curated-no-bits").map(|(id, _)| id),
+            Some("overlay-capable".to_string())
+        );
+    }
+
+    #[test]
+    fn tools_gate_applies_tracks_registry_emptiness() {
+        // Empty registry = the request carries no tools = the capability
+        // gate is moot ("not applicable" — the frontend never prompts).
+        assert!(!tools_gate_applies(0));
+        // Any registered tool (the desktop registers built-ins at startup,
+        // plus MCP/skill tools per send) means the send rides tools.
+        assert!(tools_gate_applies(1));
+        assert!(tools_gate_applies(15));
+    }
+
     // === Provider allowlist filter (ADR-0005 P4.9) ===
 
     #[test]
@@ -733,7 +1485,7 @@ mod tests {
         // `Some(vec![])` is the user-set "hide every provider" state.
         // The picker should show the "no models" state rather than
         // falling back to the full catalog.
-        let out = list_models_for("anthropic", Some(vec![])).unwrap();
+        let out = list_models_for("anthropic", Some(vec![]), None).unwrap();
         assert!(out.is_empty());
     }
 
@@ -742,7 +1494,7 @@ mod tests {
         // The desktop's active provider is `openai`, but the
         // allowlist only includes `anthropic`. The picker must
         // surface no models for the (filtered-out) active provider.
-        let out = list_models_for("openai", Some(vec!["anthropic".into()])).unwrap();
+        let out = list_models_for("openai", Some(vec!["anthropic".into()]), None).unwrap();
         assert!(out.is_empty());
     }
 
@@ -750,8 +1502,12 @@ mod tests {
     fn list_models_for_returns_catalog_when_active_slug_in_allowlist() {
         // Allowlist matches the active provider → return the full
         // catalog for that provider.
-        let out =
-            list_models_for("anthropic", Some(vec!["anthropic".into(), "openai".into()])).unwrap();
+        let out = list_models_for(
+            "anthropic",
+            Some(vec!["anthropic".into(), "openai".into()]),
+            None,
+        )
+        .unwrap();
         assert!(!out.is_empty(), "anthropic has catalog entries");
         assert!(out.iter().all(|m| m.provider == "anthropic"));
     }
@@ -761,7 +1517,7 @@ mod tests {
         // No restriction (engine env-var allowlist already applied
         // upstream, so this case is "no restriction" from this
         // function's view).
-        let out = list_models_for("anthropic", None).unwrap();
+        let out = list_models_for("anthropic", None, None).unwrap();
         assert!(!out.is_empty());
         assert!(out.iter().all(|m| m.provider == "anthropic"));
     }
@@ -770,8 +1526,131 @@ mod tests {
     fn list_models_for_allowlist_match_is_case_insensitive() {
         // The catalog slugs are lowercase ("anthropic"); a user
         // typing "Anthropic" in the env var must still hit.
-        let out = list_models_for("anthropic", Some(vec!["ANTHROPIC".into()])).unwrap();
+        let out = list_models_for("anthropic", Some(vec!["ANTHROPIC".into()]), None).unwrap();
         assert!(!out.is_empty());
+    }
+
+    // === S2-1: curated vault = picker whitelist (裁定③) ===
+
+    fn spec(id: &str) -> shannon_types::provider_config::ModelSpec {
+        shannon_types::provider_config::ModelSpec {
+            id: id.to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: None,
+            cost_per_m_output: None,
+            capabilities: vec![],
+        }
+    }
+
+    /// 合并优先级钉 (S2-1): the vault is a **filter predicate** over the
+    /// merged catalog; catalog/overlay stay the **metadata supply**. A
+    /// whitelisted catalog row keeps its curated context window, pricing
+    /// and vision bit; vault-only ids surface as synthesized `declared`
+    /// rows; everything outside the vault is hidden from the picker.
+    #[test]
+    fn list_models_for_vault_filters_but_keeps_catalog_metadata() {
+        let declared = vec![
+            // Catalog id, curated with NO metadata — the catalog row's
+            // metadata must survive untouched.
+            spec("gpt-4o"),
+            // Proxy-only id with no catalog entry.
+            {
+                let mut s = spec("proxy-only-model");
+                s.context_window = Some(32_768);
+                s.max_output = Some(4_096);
+                s.cost_per_m_input = Some(0.5);
+                s.cost_per_m_output = Some(2.0);
+                s.capabilities = vec![
+                    shannon_types::provider_config::ModelCapability::Vision,
+                    shannon_types::provider_config::ModelCapability::ToolUse,
+                ];
+                s
+            },
+        ];
+        let out = list_models_for("openai", None, Some(&declared)).unwrap();
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert!(
+            !ids.contains(&"gpt-4o-mini") && !ids.contains(&"o3-mini"),
+            "non-whitelisted catalog rows must be filtered out: {ids:?}"
+        );
+
+        let gpt4o = out
+            .iter()
+            .find(|m| m.id == "gpt-4o")
+            .expect("whitelisted catalog row survives");
+        assert_eq!(gpt4o.context_window, 128_000, "curated context window kept");
+        assert_eq!(
+            gpt4o.price_in,
+            Some(2.5),
+            "curated pricing kept (metadata supply = catalog)"
+        );
+        assert_eq!(gpt4o.price_out, Some(10.0));
+        assert_eq!(gpt4o.vision, Some(true), "curated vision bit kept");
+        assert_eq!(gpt4o.source.as_deref(), Some("catalog"));
+        assert_eq!(
+            gpt4o.max_output,
+            Some(16_384),
+            "catalog max_output surfaces (S2-3)"
+        );
+
+        let proxy = out
+            .iter()
+            .find(|m| m.id == "proxy-only-model")
+            .expect("vault-only id synthesized");
+        assert_eq!(proxy.source.as_deref(), Some("declared"));
+        assert_eq!(proxy.context_window, 32_768);
+        assert_eq!(proxy.max_output, Some(4_096));
+        assert_eq!(proxy.price_in, Some(0.5));
+        assert_eq!(proxy.vision, Some(true));
+        assert_eq!(proxy.tools, Some(true));
+        assert_eq!(proxy.provider, "openai");
+    }
+
+    /// An empty (or absent) vault never filters — the historical
+    /// unfiltered catalog, so a cleared vault restores the full picker.
+    #[test]
+    fn list_models_for_empty_or_absent_vault_is_unfiltered() {
+        let unfiltered = list_models_for("openai", None, None).unwrap();
+        assert!(unfiltered.len() > 1);
+        let empty: Vec<shannon_types::provider_config::ModelSpec> = Vec::new();
+        let with_empty = list_models_for("openai", None, Some(&empty)).unwrap();
+        assert_eq!(unfiltered.len(), with_empty.len());
+        // Source is stamped on every row either way.
+        assert!(unfiltered.iter().all(|m| m.source.is_some()));
+    }
+
+    /// An id-only declaration (the common curation — user has no
+    /// metadata yet) surfaces honestly: unknown context/prices/vision
+    /// render as 0 / None so the UI shows "—", never fabricated values.
+    #[test]
+    fn list_models_for_id_only_declaration_renders_unknown() {
+        let declared = vec![spec("bare-proxy-model")];
+        let out = list_models_for("openai", None, Some(&declared)).unwrap();
+        assert_eq!(out.len(), 1);
+        let m = &out[0];
+        assert_eq!(m.id, "bare-proxy-model");
+        assert_eq!(m.context_window, 0);
+        assert_eq!(m.price_in, None);
+        assert_eq!(m.price_out, None);
+        assert_eq!(m.max_output, None);
+        assert_eq!(m.vision, None, "no capabilities declared → unknown");
+        assert_eq!(m.tools, None);
+        assert_eq!(m.source.as_deref(), Some("declared"));
+    }
+
+    /// A declared max_output overrides the catalog's curated value for a
+    /// whitelisted row (declared metadata is authoritative, S2-3).
+    #[test]
+    fn list_models_for_declared_max_output_beats_catalog() {
+        let mut declared_spec = spec("gpt-4o");
+        declared_spec.max_output = Some(1_024);
+        let out = list_models_for("openai", None, Some(&[declared_spec])).unwrap();
+        let gpt4o = out.iter().find(|m| m.id == "gpt-4o").unwrap();
+        assert_eq!(gpt4o.max_output, Some(1_024));
+        // The rest of the catalog metadata is still the catalog's.
+        assert_eq!(gpt4o.context_window, 128_000);
     }
 
     // === R2-1: session-level model override resolution ===
@@ -975,13 +1854,107 @@ mod tests {
                     model: "ghost-model".into(),
                 });
 
-            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
             let base = state.client_config.read().await.clone();
             assert_eq!(
                 resolved.model, base.model,
                 "stale override → global default"
             );
             assert_eq!(resolved.provider, base.provider);
+        }
+
+        /// S3-2 (P-N10) — the stale fallback also reaches the UI: with an
+        /// `AppHandle` present, the unresolvable-override path emits
+        /// `model-override-fallback` carrying the session id and the pin it
+        /// ignored. This is the replacement for the old tracing-only
+        /// silence; the send itself is unaffected (global default below).
+        #[tokio::test]
+        async fn stale_override_emits_fallback_event() {
+            use tauri::Listener;
+
+            let app = tauri::test::mock_app().handle().clone();
+            let state = AppState::new();
+            let key = state.registry.create();
+            let session = state.registry.get(key).unwrap();
+            *session.model_override.lock().unwrap() =
+                Some(crate::session_registry::SessionModelOverride {
+                    provider: "nonexistent".into(),
+                    model: "ghost-model".into(),
+                });
+
+            let seen = std::sync::Arc::new(tokio::sync::Mutex::new(
+                Option::<super::super::ModelOverrideFallbackPayload>::None,
+            ));
+            let sink = seen.clone();
+            let _unlisten = app.listen(
+                super::super::MODEL_OVERRIDE_FALLBACK,
+                move |event: tauri::Event| {
+                    let payload =
+                        serde_json::from_str::<super::super::ModelOverrideFallbackPayload>(
+                            event.payload(),
+                        )
+                        .expect("fallback payload parses");
+                    *sink.try_lock().unwrap() = Some(payload);
+                },
+            );
+
+            let resolved =
+                super::super::resolve_client_config_for_session(&state, &session, Some(&app)).await;
+            let base = state.client_config.read().await.clone();
+            assert_eq!(
+                resolved.model, base.model,
+                "send still rides the global default"
+            );
+
+            let payload = seen.lock().await.take().expect("fallback event emitted");
+            assert_eq!(payload.session_id, key.0.to_string());
+            assert_eq!(payload.provider, "nonexistent");
+            assert_eq!(payload.model, "ghost-model");
+        }
+
+        /// The `None`-handle path (read-only pre-check commands) emits
+        /// nothing — the event is owned by the send path.
+        #[tokio::test]
+        async fn stale_override_without_handle_emits_nothing() {
+            use tauri::Listener;
+
+            let app = tauri::test::mock_app().handle().clone();
+            let state = AppState::new();
+            let key = state.registry.create();
+            let session = state.registry.get(key).unwrap();
+            *session.model_override.lock().unwrap() =
+                Some(crate::session_registry::SessionModelOverride {
+                    provider: "nonexistent".into(),
+                    model: "ghost-model".into(),
+                });
+
+            let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = hits.clone();
+            let _unlisten = app.listen(
+                super::super::MODEL_OVERRIDE_FALLBACK,
+                move |_event: tauri::Event| {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                },
+            );
+
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
+            let base = state.client_config.read().await.clone();
+            assert_eq!(resolved.model, base.model);
+            assert_eq!(
+                hits.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "no AppHandle → no event"
+            );
         }
 
         /// Without an override and without any phase-tier preference the
@@ -1001,7 +1974,12 @@ mod tests {
                 cfg.act_tier = None;
             }
 
-            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
             let base = state.client_config.read().await.clone();
             assert_eq!(resolved.model, base.model);
             assert_eq!(resolved.provider, base.provider);
@@ -1043,7 +2021,12 @@ mod tests {
                 cfg.act_tier = Some("fast".into());
             }
 
-            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
             let base = state.client_config.read().await.clone();
             assert_eq!(resolved.provider, base.provider, "tier stays in-provider");
             assert_eq!(
@@ -1073,7 +2056,12 @@ mod tests {
                 cfg.act_tier = Some("fast".into());
             }
 
-            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
             let base = state.client_config.read().await.clone();
             assert_eq!(
                 Some(resolved.model.as_str()),
@@ -1111,7 +2099,12 @@ mod tests {
                 cfg.act_tier = Some("fast".into());
             }
 
-            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
             assert_eq!(
                 resolved.model, "claude-opus-4-7",
                 "session override wins over the phase tier"
@@ -1335,6 +2328,7 @@ mod tests {
             let resolved = super::super::resolve_client_config_for_session(
                 &state,
                 state.registry.get(key).unwrap().as_ref(),
+                None::<&tauri::AppHandle<tauri::Wry>>,
             )
             .await;
             assert_eq!(

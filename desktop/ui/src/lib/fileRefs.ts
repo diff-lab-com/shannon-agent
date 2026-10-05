@@ -78,6 +78,25 @@ export function basenameOf(path: string): string {
   return idx >= 0 ? path.slice(idx + 1) : path
 }
 
+// -- vision-image detection (S2-4a) -----------------------------------------
+
+/**
+ * Exactly the image formats the backend's multimodal whitelist turns into
+ * image blocks (png/jpeg/gif/webp; see `is_vision_image_mime` in
+ * commands.rs — jpg/jpeg both map to image/jpeg). bmp/svg et al are
+ * deliberately absent: the backend drops them from the image blocks, so a
+ * send carrying only those is NOT image-carrying.
+ */
+export const VISION_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp'])
+
+/** Does this attachment path ride the multimodal image pipeline? The same
+ *  verdict `is_vision_image_mime` will make backend-side for the same file,
+ *  derived from the extension the same way the attach filter names it. */
+export function isVisionImagePath(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase()
+  return ext != null && VISION_IMAGE_EXTENSIONS.has(ext)
+}
+
 // -- active working directory (module-level ref, synced from Chat.tsx) ------
 
 let activeWorkingDir: string | null = null

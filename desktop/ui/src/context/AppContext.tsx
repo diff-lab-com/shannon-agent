@@ -17,7 +17,7 @@ import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession
 import { invalidateNotificationPrefsCache, maybePlayTaskChime } from '@/lib/notificationChime'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
 import { clearDraft, tombstoneDraft } from '@/lib/composerDraft'
-import { basenameOf } from '@/lib/fileRefs'
+import { basenameOf, isVisionImagePath } from '@/lib/fileRefs'
 import {
   beginRun as runBegin,
   endRun as runEnd,
@@ -52,7 +52,7 @@ import {
 } from '@/types'
 import { ChatProvider, useChat, type ChatContextValue, type PromptQueueItem, type StreamNotice } from './ChatContext'
 import { SessionContext, useSessions, type SessionContextValue } from './SessionContext'
-import { CatalogContext, useCatalog, type CatalogContextValue } from './CatalogContext'
+import { CatalogContext, useCatalog, normalizeChatErrorKind, type CatalogContextValue, type ChatErrorKind } from './CatalogContext'
 
 export type AppContextValue = ChatContextValue & SessionContextValue & CatalogContextValue
 
@@ -94,6 +94,39 @@ const PROMPT_QUEUE_CAP = 3
 // it is a minutes-scale waiting area; a restart clears it by design, unlike
 // drafts (which do persist). Do not "fix" this inconsistency without a
 // product call on replay semantics (a restart would fire parked sends).
+
+/** S2-4a (P-N9): the full payload of a send held behind the vision
+ *  confirm bar. Lives in AppProvider state; only the render-facing subset
+ *  (model + suggestion) is published through the ChatContext slice. */
+interface HeldVisionSend {
+  text: string
+  filePaths: string[]
+  budgetBypass: boolean | undefined
+  /** The model the send would have used (named in the bar). */
+  model: string
+  /** One-click switch candidate, null = notice-only (no candidate). */
+  suggestion: { provider: string; model: string; name: string } | null
+}
+
+/** S2-4b (P-N9): the same payload shape, held behind the tools confirm
+ *  bar. Deliberately a separate interface (not an alias) so the two gates
+ *  stay independently refactorable; they hold the same payload because a
+ *  vision resolution re-enters `sendMessage`, where the tools gate runs
+ *  next. `visionAnswered` marks a payload whose vision verdict the user
+ *  already settled (the hold was created from a vision resolution) — the
+ *  tools resolution must then deliver with `visionConfirmed` too, or the
+ *  two bars would ping-pong the same send forever. */
+interface HeldToolsSend {
+  text: string
+  filePaths: string[]
+  budgetBypass: boolean | undefined
+  /** The model the send would have used (named in the bar). */
+  model: string
+  /** One-click switch candidate, null = notice-only (no candidate). */
+  suggestion: { provider: string; model: string; name: string } | null
+  /** The vision gate already got its answer for THIS payload. */
+  visionAnswered: boolean
+}
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -265,11 +298,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([])
   const [error, setError] = useState<string | null>(null)
-  // Review §2-3: machine-readable failure class for the chat error banner —
-  // `auth` (401/403, classified Rust-side on the QUERY_FAILED payload) gets
-  // the dedicated "update key" banner; `other` keeps the raw error line.
-  // Kept in lockstep with `error` via setChatError below.
-  const [errorKind, setErrorKind] = useState<'auth' | 'other' | null>(null)
+  // Review §2-3 + S1-1 (P-N1): machine-readable failure class for the chat
+  // error banner — classified Rust-side on the QUERY_FAILED payload from the
+  // engine's typed error (`error_kind`: auth/quota/rate_limit/authz/other);
+  // each kind gets its own recovery banner in MessageArea, `other` keeps the
+  // raw error line. Kept in lockstep with `error` via setChatError below.
+  const [errorKind, setErrorKind] = useState<ChatErrorKind | null>(null)
   // P0-2: sessions currently owned by a desktop goal run (running/paused).
   // Manual sends to these are blocked — goal and manual input are mutually
   // exclusive; the backend `send_message` guard is the backstop.
@@ -752,10 +786,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Single writer for the chat error surface so `errorKind` can never go
   // stale relative to `error` (a subsequent non-auth failure must clear the
   // auth classification, and a new send must clear both).
-  const setChatError = useCallback((message: string | null, kind: 'auth' | 'other' = 'other') => {
+  const setChatError = useCallback((message: string | null, kind: ChatErrorKind = 'other') => {
     setError(message)
     setErrorKind(message == null ? null : kind)
   }, [])
+
+  // S2-4a (P-N9): the send held behind the vision confirm bar (null =
+  // nothing held). Plain state — only one confirm can be pending per
+  // window; a newer held send replaces the older one. The full payload
+  // (text/attachments/budget flag) lives here; the ChatContext slice
+  // publishes only the render-facing subset.
+  const [visionConfirm, setVisionConfirm] = useState<HeldVisionSend | null>(null)
+  // S2-4b (P-N9): the send held behind the tools confirm bar. Same
+  // single-slot contract as `visionConfirm` — and the two bars never show
+  // at once: a vision resolution re-enters `sendMessage` (with
+  // `visionConfirmed`), where the tools gate runs next.
+  const [toolsConfirm, setToolsConfirm] = useState<HeldToolsSend | null>(null)
 
   const refreshStatus = useCallback(async () => {
     try { setStatus(await api.getStatus()) } catch (e) { logSoftFailure('refresh status', e) }
@@ -789,17 +835,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try { setBackgroundTasks(await api.getBackgroundTasks()) } catch (e) { logSoftFailure('refresh background tasks', e) }
   }, [])
 
-  const sendMessage = useCallback(async (
+  // The send body proper — no vision pre-check, no tools pre-check, no
+  // goal guard. Exposed only through `sendMessage` and the two confirm
+  // resolvers (their actions must deliver the held payload WITHOUT
+  // re-running their own gate, otherwise "send anyway" would bounce
+  // straight back into the bar; the OTHER gate still applies via the
+  // re-entry through `sendMessage`).
+  const sendNow = useCallback(async (
     message: string,
     filePaths?: string[],
-    options?: { budgetBypass?: boolean },
+    options?: { budgetBypass?: boolean; visionConfirmed?: boolean },
   ): Promise<boolean> => {
-    if (currentSessionId && goalOwnedSessionIds.includes(currentSessionId)) {
-      setChatError(messageFor('goal.composer.blocked'))
-      setSessionQuerying(windowSessionId ?? currentSessionId, false)
-      return false
-    }
-    setChatError(null)
     // §P2-18: a new turn resets its session's stream buckets, not just the
     // visible projection (a previous turn may have failed mid-stream).
     const targetSessionId = windowSessionId ?? currentSessionId
@@ -936,7 +982,163 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (prevRun) setRunProcess(prevRun)
       return false
     }
-  }, [currentSessionId, goalOwnedSessionIds, windowSessionId, setSessionQuerying, cancelStreamFlush, setChatError])
+  }, [currentSessionId, windowSessionId, setSessionQuerying, cancelStreamFlush, setChatError])
+
+  // S2-4a (review 2026-10-05 P-N9): the public send entry — an IMAGE-
+  // carrying message is pre-checked against the EFFECTIVE model (session
+  // override > phase tier > global default, resolved backend-side by
+  // `check_vision_send` from the same data the engine gate reads). A model
+  // KNOWN to lack vision holds the send behind an inline confirm bar
+  // instead of silently walking into a guaranteed refusal; unknown-
+  // capability models (and any command error — fail open) send exactly as
+  // before. The engine gate remains the final backstop behind "send
+  // anyway". Text-only attachments never trip the gate: the pipeline
+  // parses them into text blocks (`is_vision_image_mime` would drop them
+  // from the image blocks anyway), so a vision-less model + a .md file
+  // sends without the hold.
+  //
+  // S2-4b (review 2026-10-05 P-N9): AFTER the vision check, every send
+  // runs the tools pre-check (`check_tools_send`) — unlike images, tools
+  // ride EVERY desktop request (send_message attaches the shared tool
+  // registry unconditionally), so the gate is not attachment-gated. The
+  // two holds confirm SEQUENTIALLY: at most one bar is up at a time; when
+  // both gates fire, resolving the vision bar re-enters `sendMessage`
+  // with `visionConfirmed` (skipping only the vision arm), where the
+  // tools arm runs next on the same payload. `applies = false` ("tools
+  // off") and `tools = null` (unknown) never hold; a failed command is
+  // fail-open like the vision check.
+  const sendMessage = useCallback(async (
+    message: string,
+    filePaths?: string[],
+    options?: { budgetBypass?: boolean; visionConfirmed?: boolean; toolsConfirmed?: boolean },
+  ): Promise<boolean> => {
+    if (currentSessionId && goalOwnedSessionIds.includes(currentSessionId)) {
+      setChatError(messageFor('goal.composer.blocked'))
+      setSessionQuerying(windowSessionId ?? currentSessionId, false)
+      return false
+    }
+    setChatError(null)
+    const carriesImage = (filePaths ?? []).some(isVisionImagePath)
+    if (carriesImage && !options?.visionConfirmed) {
+      try {
+        const check = await api.checkVisionSend(windowSessionId ?? currentSessionId)
+        if (check.vision === false) {
+          setVisionConfirm({
+            text: message,
+            filePaths: filePaths ?? [],
+            budgetBypass: options?.budgetBypass,
+            model: check.model,
+            suggestion: check.suggestion ?? null,
+          })
+          return false
+        }
+      } catch (e) {
+        // The pre-check is a UX enhancement, never a send blocker: a
+        // failed command degrades to the historical behavior (send; the
+        // engine gate answers if the model truly cannot take images).
+        logSoftFailure('vision pre-check', e)
+      }
+    }
+    if (!options?.toolsConfirmed) {
+      try {
+        const check = await api.checkToolsSend(windowSessionId ?? currentSessionId)
+        if (check.applies && check.tools === false) {
+          setToolsConfirm({
+            text: message,
+            filePaths: filePaths ?? [],
+            budgetBypass: options?.budgetBypass,
+            model: check.model,
+            suggestion: check.suggestion ?? null,
+            // When this hold was reached from a vision resolution, the
+            // vision gate has been answered for this payload — remember
+            // that so the tools resolution delivers instead of bouncing
+            // the send back into the vision bar.
+            visionAnswered: !!options?.visionConfirmed,
+          })
+          return false
+        }
+      } catch (e) {
+        // Same fail-open contract as the vision check: the pre-check is
+        // UX-first. The engine has no tools gate today, so "send anyway"
+        // is exactly the historical behavior for a model that ends up
+        // mishandling tools.
+        logSoftFailure('tools pre-check', e)
+      }
+    }
+    return sendNow(message, filePaths, options)
+  }, [currentSessionId, goalOwnedSessionIds, windowSessionId, setChatError, setSessionQuerying, sendNow])
+
+  // S2-4a: the confirm bar's three outcomes. `switch` pins the suggested
+  // model on THIS session (same `set_session_model` contract the composer
+  // chip writes) before delivering; `send-anyway` delivers untouched (the
+  // engine gate is the final word); `dismiss` just drops the held payload.
+  // Delivery re-enters `sendMessage` with `visionConfirmed` — the vision
+  // arm is skipped, the tools arm (S2-4b) still runs: when both gates
+  // fired, the user confirms one bar at a time, and a switch re-resolves
+  // the tools verdict against the NEW model.
+  const resolveVisionConfirm = useCallback(async (
+    choice: 'switch' | 'send-anyway' | 'dismiss',
+  ): Promise<void> => {
+    const held = visionConfirm
+    if (!held) return
+    setVisionConfirm(null)
+    if (choice === 'dismiss') return
+    if (choice === 'switch' && held.suggestion) {
+      try {
+        await api.setSessionModel(
+          windowSessionId ?? currentSessionId ?? null,
+          held.suggestion.provider,
+          held.suggestion.model,
+        )
+      } catch (e) {
+        logSoftFailure('vision switch', e)
+        toast.error(messageFor('chat.vision.switchFailed'))
+        return
+      }
+    }
+    await sendMessage(held.text, held.filePaths.length > 0 ? held.filePaths : undefined, {
+      budgetBypass: held.budgetBypass,
+      visionConfirmed: true,
+    })
+  }, [visionConfirm, windowSessionId, currentSessionId, sendMessage])
+
+  const dismissVisionConfirm = useCallback(() => setVisionConfirm(null), [])
+
+  // S2-4b: the tools bar's three outcomes — same contract as the vision
+  // resolver, holding the tools slot instead. Delivery re-enters
+  // `sendMessage` with `toolsConfirmed` (skipping the tools arm); a
+  // payload whose vision verdict was already settled skips the vision arm
+  // too (`visionAnswered`), while a fresh payload gets a fresh vision
+  // verdict — one extra IPC on a rare path in exchange for never
+  // delivering stale capability verdicts.
+  const resolveToolsConfirm = useCallback(async (
+    choice: 'switch' | 'send-anyway' | 'dismiss',
+  ): Promise<void> => {
+    const held = toolsConfirm
+    if (!held) return
+    setToolsConfirm(null)
+    if (choice === 'dismiss') return
+    if (choice === 'switch' && held.suggestion) {
+      try {
+        await api.setSessionModel(
+          windowSessionId ?? currentSessionId ?? null,
+          held.suggestion.provider,
+          held.suggestion.model,
+        )
+      } catch (e) {
+        logSoftFailure('tools switch', e)
+        toast.error(messageFor('chat.tools.switchFailed'))
+        return
+      }
+    }
+    await sendMessage(held.text, held.filePaths.length > 0 ? held.filePaths : undefined, {
+      budgetBypass: held.budgetBypass,
+      toolsConfirmed: true,
+      visionConfirmed: held.visionAnswered || undefined,
+    })
+  }, [toolsConfirm, windowSessionId, currentSessionId, sendMessage])
+
+  const dismissToolsConfirm = useCallback(() => setToolsConfirm(null), [])
 
   // P1-1 fix: cancelQuery's targetSessionId mirrors sendMessage's — both
   // route explicitly instead of re-pointing the shared pointer.
@@ -1271,6 +1473,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const unlisteners: UnlistenFn[] = []
     let cancelled = false
 
+    // S3-2 (P-N10): the backend emitted model-override-fallback — a session's
+    // pinned (provider, model) no longer resolves (e.g. its provider vanished
+    // with a profile switch) and the query rode the global default instead.
+    // "一次性告知": the event fires per QUERY while the pin is stale, so the
+    // dedupe set below toasts only the FIRST occurrence of each distinct
+    // (session, provider, model) triple per app run.
+    const overrideFallbackAnnounced = new Set<string>()
+
     async function register() {
       const handlers = [
         listen(EVENT_NAMES.QUERY_TEXT, (e) => {
@@ -1497,10 +1707,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }),
         listen(EVENT_NAMES.QUERY_FAILED, (e) => {
-          // Desktop emits `error_kind` ("auth" | "other") on the payload —
-          // classified Rust-side from the engine's AuthenticationFailed
-          // text (events::classify_query_error_kind), so the JS side never
-          // string-matches provider errors.
+          // Desktop emits `error_kind` on the payload — the engine's
+          // structured classification (typed status → auth/quota/rate_limit/
+          // authz/other, single-sourced in shannon-engine), with a
+          // Rust-side text fallback for legacy paths (S1-1/P-N1). The JS
+          // side normalizes against the known set and never string-matches
+          // provider errors.
           const p = e.payload as { query_id?: string; error: string; error_kind?: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           const visibleKey = visibleSessionIdRef.current ?? ''
@@ -1555,7 +1767,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 ...(citations && citations.length > 0 ? { injected_memories: citations } : {}),
               }])
             }
-            setChatError(p.error, p.error_kind === 'auth' ? 'auth' : 'other')
+            setChatError(p.error, normalizeChatErrorKind(p.error_kind))
             setStreamingText('')
             setThinkingText('')
             // Review P2-4: completed tool cards must not linger under the
@@ -1651,6 +1863,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // refreshModels is the CatalogContext-exposed refresh; the event
           // is low-frequency so no debounce is needed.
           void refreshModels()
+        }),
+        // S3-2 (P-N10): a pinned session model silently fell back to the
+        // global default at query time (replaces the old tracing-only
+        // warn). One toast per distinct (session, provider, model) — the
+        // user learns why the answer didn't come from the pinned model
+        // without being re-notified on every turn of the same staleness.
+        listen(EVENT_NAMES.MODEL_OVERRIDE_FALLBACK, (e) => {
+          const p = e.payload as { session_id?: string; provider?: string; model?: string }
+          const provider = typeof p.provider === 'string' ? p.provider : ''
+          const model = typeof p.model === 'string' ? p.model : ''
+          if (!provider || !model) return
+          const key = `${typeof p.session_id === 'string' ? p.session_id : ''}:${provider}:${model}`
+          if (overrideFallbackAnnounced.has(key)) return
+          overrideFallbackAnnounced.add(key)
+          toast.warning(messageFor('chat.input.overrideFallback.toast', { provider, model }))
         }),
         // B3 P1-25: a background-task change can also mean a new/finished
         // agent run — refresh the agents inventory alongside the tasks so
@@ -1774,12 +2001,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const chatValue = useMemo<ChatContextValue>(() => ({
     messages, streamingText, thinkingText, isQuerying, isCancelInFlight, activeToolCalls, toolProgress, streamNotices, usage, runProcess,
     sendMessage, cancelQuery,
+    visionConfirm: visionConfirm == null
+      ? null
+      : { model: visionConfirm.model, suggestion: visionConfirm.suggestion },
+    resolveVisionConfirm, dismissVisionConfirm,
+    toolsConfirm: toolsConfirm == null
+      ? null
+      : { model: toolsConfirm.model, suggestion: toolsConfirm.suggestion },
+    resolveToolsConfirm, dismissToolsConfirm,
     promptQueue: promptQueues[visibleKey] ?? [],
     enqueuePrompt, dequeuePrompt, removeQueuedPrompt, moveQueuedPrompt,
     contextPanelOpen, toggleContextPanel, setContextPanelOpen: updateContextPanelOpen,
     checkpoints, rewindSession: rewindSessionAction, compactSession: compactSessionAction,
     feedback, recordFeedback: recordFeedbackAction,
   }), [messages, streamingText, thinkingText, isQuerying, isCancelInFlight, activeToolCalls, toolProgress, streamNotices, usage, runProcess, sendMessage, cancelQuery,
+    visionConfirm, resolveVisionConfirm, dismissVisionConfirm,
+    toolsConfirm, resolveToolsConfirm, dismissToolsConfirm,
     promptQueues, visibleKey, enqueuePrompt, dequeuePrompt, removeQueuedPrompt, moveQueuedPrompt,
     contextPanelOpen, toggleContextPanel, updateContextPanelOpen, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 

@@ -24,13 +24,26 @@ export interface QuickFill {
 // Quick-fill chips in the Add/Edit modal. The built-in providers map to their
 // kind; GLM / Kimi / MiniMax are OpenAI-compatible endpoints (kind =
 // `openai-compatible`), which the Rust layer tests with a Bearer token.
+//
+// Model ids are CURRENT entries of the static catalog
+// (crates/shannon-core/src/model_registry/catalog.rs `MODEL_CATALOG`) — the
+// 2026-10 review (P-N5) flagged the original list as a stale 2024 lineup.
+// Two cross-pins keep this list honest:
+//   - Rust: `quick_fill_model_ids_exist_in_static_catalog` in
+//     desktop/src/commands_config.rs asserts every catalog-pinned id below
+//     exists in MODEL_CATALOG.
+//   - TS: `addProviderQuickFill.test.ts` pins the exact list.
+// Exception: `ollama` keeps `llama3.2` — Ollama ids are detected at runtime
+// from the user's own daemon (`detect_local_models`), so the static catalog
+// has no Ollama entry to pin; Fetch models prefills the real list anyway
+// (S1-4c).
 export const QUICK_FILL: QuickFill[] = [
   { id: 'anthropic', label: 'Anthropic', icon: 'auto_awesome', kind: 'anthropic', model: 'claude-sonnet-4-6' },
-  { id: 'openai', label: 'OpenAI', icon: 'bolt', kind: 'openai', model: 'gpt-4.1-mini' },
+  { id: 'openai', label: 'OpenAI', icon: 'bolt', kind: 'openai', model: 'gpt-5-mini' },
   { id: 'deepseek', label: 'DeepSeek', icon: 'psychology', kind: 'deepseek', model: 'deepseek-chat' },
-  { id: 'glm', label: 'GLM (Zhipu)', icon: 'auto_awesome', kind: 'openai-compatible', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus' },
-  { id: 'kimi', label: 'Kimi (Moonshot)', icon: 'dark_mode', kind: 'openai-compatible', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
-  { id: 'minimax', label: 'MiniMax', icon: 'group', kind: 'openai-compatible', baseUrl: 'https://api.minimax.chat/v1', model: 'abab6.5s-chat' },
+  { id: 'glm', label: 'GLM (Zhipu)', icon: 'auto_awesome', kind: 'openai-compatible', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.1' },
+  { id: 'kimi', label: 'Kimi (Moonshot)', icon: 'dark_mode', kind: 'openai-compatible', baseUrl: 'https://api.moonshot.cn/v1', model: 'kimi-k2.6' },
+  { id: 'minimax', label: 'MiniMax', icon: 'group', kind: 'openai-compatible', baseUrl: 'https://api.minimax.chat/v1', model: 'MiniMax-M3' },
   { id: 'ollama', label: 'Ollama (local)', icon: 'dns', kind: 'ollama', baseUrl: 'http://localhost:11434', model: 'llama3.2' },
   { id: 'custom', label: 'settings.models.providers.customOpenAI', icon: 'hub', kind: 'openai-compatible' },
 ]

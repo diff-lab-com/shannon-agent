@@ -17,7 +17,8 @@ pub mod dynamic;
 pub mod catalog;
 pub mod tier;
 
-pub use catalog::{MODEL_CATALOG, ModelCapabilities, ModelInfo, TierLabel};
+pub use catalog::tier_label_for_caps;
+pub use catalog::{MODEL_CATALOG, ModelCapabilities, ModelEntrySource, ModelInfo, TierLabel};
 pub use tier::{
     EffortLevel, ModelRouter, TaskType, is_model_alias, model_aliases, resolve_auto_tier,
     resolve_model, resolve_model_alias, resolve_tier,
@@ -39,15 +40,21 @@ pub fn models_for_provider(provider: LlmProvider) -> Vec<&'static ModelInfo> {
 /// the Phase B beta-header mapping keyed by model id). Dynamic entries are
 /// appended only when their id is not already present, deduplicating by id so a
 /// models.dev refresh never doubles a known model.
+///
+/// S2-1 (redteam 发现#9): the merge tags provenance — static rows keep their
+/// `Catalog` source, overlay-only rows are retagged `Overlay` so the desktop's
+/// source badge reflects where a row's metadata actually came from.
 pub fn merge_static_and_dynamic(provider: LlmProvider, dynamic: &[ModelInfo]) -> Vec<ModelInfo> {
+    use catalog::ModelEntrySource;
     let mut out: Vec<ModelInfo> = Vec::new();
     for m in MODEL_CATALOG.iter().filter(|m| m.provider == provider) {
         out.push(m.clone());
     }
     let known: std::collections::HashSet<&str> = out.iter().map(|m| m.id).collect();
-    for m in dynamic.iter().filter(|m| m.provider == provider) {
+    for mut m in dynamic.iter().filter(|m| m.provider == provider).cloned() {
         if !known.contains(m.id) {
-            out.push(m.clone());
+            m.source = ModelEntrySource::Overlay;
+            out.push(m);
         }
     }
     out
@@ -319,6 +326,7 @@ pub fn detect_local_models() -> Vec<ModelInfo> {
             cost_per_m_input: 0.0,
             cost_per_m_output: 0.0,
             capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
+            source: catalog::ModelEntrySource::Catalog,
         });
     }
 
@@ -1706,6 +1714,7 @@ mod tests {
             cost_per_m_input: 15.0,
             cost_per_m_output: 60.0,
             capabilities: ModelCapabilities::reasoning(),
+            source: catalog::ModelEntrySource::Catalog,
         };
         match id {
             "claude-haiku-4-5" => MODEL_CATALOG

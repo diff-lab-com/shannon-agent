@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { ThemeProvider } from '@/context/ThemeContext'
 import { AppProvider } from '@/context/AppContext'
 import { MemoryRouter } from 'react-router-dom'
@@ -307,6 +307,63 @@ describe('AddProviderModal — fetch models + test connection', () => {
     expect(input.value).toBe('my-custom-model')
   })
 
+  // S2-1 (模型仓固化): fetch → curate → save persists the selection via
+  // setProviderModels. Default selection is ZERO (裁定⑥) — a save without
+  // any ticks never writes a vault for a new provider.
+  it('fetch → curate → save 固化s the selection for a new provider', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-a', 'model-b', 'model-c'])
+    vi.mocked(api.setProviderModels).mockResolvedValue({
+      provider_id: 'acme', model_profile: 'default', models: [{ id: 'model-b' }],
+    })
+    vi.mocked(api.saveProvider).mockResolvedValue({
+      active_provider_id: 'acme', providers: [],
+    })
+    const onSaved = vi.fn()
+    render(
+      wrap(<AddProviderModal editing={null} onClose={vi.fn()} onSaved={onSaved} />),
+    )
+    fillRequiredFields('Acme')
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('model-curation')).toBeInTheDocument())
+
+    // Zero selected by default.
+    expect(screen.getByTestId('model-curation').textContent).toContain('0')
+    // Tick model-b only.
+    const boxes = screen.getAllByTestId('curation-item') as HTMLInputElement[]
+    expect(boxes).toHaveLength(3)
+    fireEvent.click(boxes[1])
+    expect(boxes[1].checked).toBe(true)
+    expect((screen.getAllByTestId('curation-item')[0] as HTMLInputElement).checked).toBe(false)
+
+    // Save → vault written with exactly the ticked model, keyed by the
+    // active slot the backend echoed back.
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(vi.mocked(api.setProviderModels)).toHaveBeenCalledWith('acme', [{ id: 'model-b' }])
+  })
+
+  // 裁定⑥: select-all within the soft cap requires a second confirmation.
+  it('select-all asks for confirmation before curating everything', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-a', 'model-b'])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('model-curation')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('curation-select-all'))
+    // Nothing selected until the confirm dialog's confirm is clicked.
+    expect((screen.getAllByTestId('curation-item')[0] as HTMLInputElement).checked).toBe(false)
+    // The dialog's own confirm button (same label as the trigger) closes
+    // the loop.
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByText('Select all'),
+    )
+    expect((screen.getAllByTestId('curation-item')[0] as HTMLInputElement).checked).toBe(true)
+    expect((screen.getAllByTestId('curation-item')[1] as HTMLInputElement).checked).toBe(true)
+  })
+
   it('shows a categorized inline error when the fetch fails', async () => {
     vi.mocked(api.fetchProviderModels).mockRejectedValue('invalid_key')
     renderModal()
@@ -387,5 +444,65 @@ describe('AddProviderModal — fetch models + test connection', () => {
     expect(screen.queryByTestId('models-found')).not.toBeInTheDocument()
     const input = screen.getByTestId('provider-model-input') as HTMLInputElement
     expect(input.getAttribute('list')).toBeNull()
+  })
+})
+
+// === S1-4c (2026-10 review P-N5): a successful Fetch models pins the first
+// real id into the model field — but ONLY while the field still holds the
+// initial value / a quick-fill guess (no user edit). A user-typed id is
+// never overwritten. ===
+describe('AddProviderModal — fetch → model prefill linkage (S1-4c)', () => {
+  beforeEach(() => {
+    vi.mocked(api.fetchProviderModels).mockReset()
+    vi.mocked(api.fetchProviderModels).mockResolvedValue([])
+  })
+
+  it('prefills the first fetched id when the user has not typed a model', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-b', 'model-a'])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    const input = screen.getByTestId('provider-model-input') as HTMLInputElement
+    expect(input.value).toBe('')
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    expect(input.value).toBe('model-b')
+  })
+
+  it('never overwrites a model id the user typed', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-b', 'model-a'])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    const input = screen.getByTestId('provider-model-input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'my-custom-model' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    expect(input.value).toBe('my-custom-model')
+  })
+
+  it('replaces a quick-fill guess with the fetched first id (a chip prefill is not a user edit)', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['llama3.3:latest', 'qwen3:8b'])
+    renderModal()
+    // The Ollama chip needs no key, so the probe buttons arm immediately.
+    fireEvent.click(screen.getByRole('button', { name: /Ollama/ }))
+    const input = screen.getByTestId('provider-model-input') as HTMLInputElement
+    expect(input.value).toBe('llama3.2')
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    expect(vi.mocked(api.fetchProviderModels)).toHaveBeenCalledWith(
+      null, 'ollama', 'http://localhost:11434', null,
+    )
+    expect(input.value).toBe('llama3.3:latest')
+  })
+
+  it('leaves the field alone when the endpoint serves an empty list', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue([])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-empty')).toBeInTheDocument())
+    expect((screen.getByTestId('provider-model-input') as HTMLInputElement).value).toBe('')
   })
 })

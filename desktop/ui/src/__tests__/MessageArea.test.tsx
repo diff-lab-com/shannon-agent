@@ -6,6 +6,7 @@
 // chatRunStatus; this file pins what MessageArea itself decides.)
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { ChatErrorKind } from '@/context/CatalogContext'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import type { Virtualizer } from '@tanstack/react-virtual'
@@ -28,11 +29,17 @@ const ctx = vi.hoisted(() => ({
   currentSessionId: 'session-1' as string | null,
   windowSessionId: null as string | null,
   error: null as string | null,
-  errorKind: null as 'auth' | 'other' | null,
+  errorKind: null as ChatErrorKind | null,
   providerStatus: null as any,
   feedback: {} as Record<string, string>,
   sendMessage: vi.fn().mockResolvedValue(true),
   rewindSession: vi.fn(),
+  visionConfirm: null as any,
+  resolveVisionConfirm: vi.fn().mockResolvedValue(undefined),
+  dismissVisionConfirm: vi.fn().mockResolvedValue(undefined),
+  toolsConfirm: null as any,
+  resolveToolsConfirm: vi.fn().mockResolvedValue(undefined),
+  dismissToolsConfirm: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/context/ChatContext', () => ({
@@ -109,6 +116,12 @@ beforeEach(() => {
     env_provider: null,
   }
   ctx.sendMessage = vi.fn().mockResolvedValue(true)
+  ctx.visionConfirm = null
+  ctx.resolveVisionConfirm = vi.fn().mockResolvedValue(undefined)
+  ctx.dismissVisionConfirm = vi.fn().mockResolvedValue(undefined)
+  ctx.toolsConfirm = null
+  ctx.resolveToolsConfirm = vi.fn().mockResolvedValue(undefined)
+  ctx.dismissToolsConfirm = vi.fn().mockResolvedValue(undefined)
 })
 
 describe('MessageArea — welcome / streaming gating', () => {
@@ -173,6 +186,71 @@ describe('MessageArea — error banner routing (auth vs other)', () => {
     // arg carries its attachment paths — `undefined` when it has none.
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(ctx.sendMessage).toHaveBeenCalledWith('tell me a story', undefined)
+  })
+
+  it('routes quota (402) failures to the quota banner with update-key / view-usage actions and the model-switch hint', () => {
+    ctx.error = 'Provider error (deepseek): insufficient_balance — Insufficient Balance'
+    ctx.errorKind = 'quota'
+    ctx.messages = [{ role: 'user', content: 'hi', timestamp: 1 }]
+    renderArea()
+
+    const banner = screen.getByTestId('quota-error-banner')
+    expect(banner).toBeInTheDocument()
+    expect(banner).toHaveTextContent('Quota exhausted')
+    expect(banner).toHaveTextContent('switch to a cheaper model')
+    expect(screen.getByRole('button', { name: 'Update key' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'View usage' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    // The raw provider line stays out of the UI, like the auth banner.
+    expect(screen.queryByText(ctx.error)).toBeNull()
+  })
+
+  it('routes rate-limit (429) failures to the rate-limit banner with a wait hint, retry-in countdown, and Retry', () => {
+    ctx.error = 'Rate limit exceeded: Rate limit reached, try again in 20s'
+    ctx.errorKind = 'rate_limit'
+    ctx.messages = [{ role: 'user', content: 'hi', timestamp: 1 }]
+    renderArea()
+
+    const banner = screen.getByTestId('rate-limit-error-banner')
+    expect(banner).toBeInTheDocument()
+    expect(banner).toHaveTextContent('Requests are being rate limited')
+    expect(banner).toHaveTextContent('You can retry in 20s')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(screen.queryByText(ctx.error)).toBeNull()
+  })
+
+  it('omits the retry-in line when the rate-limit error text carries no parseable delay', () => {
+    ctx.error = 'Rate limit exceeded'
+    ctx.errorKind = 'rate_limit'
+    ctx.messages = [{ role: 'user', content: 'hi', timestamp: 1 }]
+    renderArea()
+
+    const banner = screen.getByTestId('rate-limit-error-banner')
+    expect(banner).toBeInTheDocument()
+    expect(banner).not.toHaveTextContent('You can retry in')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+  })
+
+  it('routes authz (403) failures to the access-denied banner with a Settings pointer', () => {
+    ctx.error = 'Provider error (openai): permission_error — your key cannot access this model'
+    ctx.errorKind = 'authz'
+    ctx.messages = [{ role: 'user', content: 'hi', timestamp: 1 }]
+    renderArea()
+
+    const banner = screen.getByTestId('authz-error-banner')
+    expect(banner).toBeInTheDocument()
+    expect(banner).toHaveTextContent('Access denied (403)')
+    expect(banner).toHaveTextContent('does not have access to the requested model or resource')
+    expect(screen.getByRole('button', { name: 'Check key' })).toBeInTheDocument()
+    expect(screen.queryByText(ctx.error)).toBeNull()
+  })
+
+  it('parseRetryAfterSeconds extracts provider-provided delays, nothing otherwise', async () => {
+    const { parseRetryAfterSeconds } = await import('@/pages/chat/MessageArea')
+    expect(parseRetryAfterSeconds('Rate limited. Retry-After: 42 seconds')).toBe(42)
+    expect(parseRetryAfterSeconds('please try again in 7s')).toBe(7)
+    expect(parseRetryAfterSeconds('rate limit exceeded')).toBeNull()
+    expect(parseRetryAfterSeconds('')).toBeNull()
   })
 
   it('hides Retry entirely when there is no user message to resend', () => {
@@ -305,5 +383,101 @@ describe('MessageArea — tool duration lookup refresh on run settle (A-8)', () 
     rerenderArea(view)
     await act(async () => {}) // drain microtasks — no fetch may follow
     expect(api.getTraceTimeline).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MessageArea — S2-4a vision confirm bar', () => {
+  it('renders nothing when no send is held', () => {
+    renderArea()
+    expect(screen.queryByTestId('vision-confirm-bar')).not.toBeInTheDocument()
+  })
+
+  it('offers the one-click switch when a candidate exists', async () => {
+    ctx.visionConfirm = {
+      model: 'deepseek-v4-flash',
+      suggestion: { provider: 'deepseek', model: 'deepseek-v4-vision', name: 'DeepSeek V4 Vision' },
+    }
+    renderArea()
+    const bar = screen.getByTestId('vision-confirm-bar')
+    expect(bar).toHaveTextContent('deepseek-v4-flash')
+    expect(bar).toHaveTextContent('DeepSeek V4 Vision')
+    fireEvent.click(screen.getByTestId('vision-confirm-switch'))
+    await act(async () => {}) // settle the resolver promise
+    expect(ctx.resolveVisionConfirm).toHaveBeenCalledWith('switch')
+  })
+
+  it('degrades to notice-only (no switch button) without a candidate', () => {
+    ctx.visionConfirm = { model: 'deepseek-v4-flash', suggestion: null }
+    renderArea()
+    expect(screen.getByTestId('vision-confirm-bar')).toHaveTextContent('model menu')
+    expect(screen.queryByTestId('vision-confirm-switch')).not.toBeInTheDocument()
+    expect(screen.getByTestId('vision-confirm-send-anyway')).toBeInTheDocument()
+  })
+
+  it("'send anyway' and 'cancel' resolve their choices and close the bar path", async () => {
+    ctx.visionConfirm = { model: 'deepseek-v4-flash', suggestion: null }
+    renderArea()
+    fireEvent.click(screen.getByTestId('vision-confirm-send-anyway'))
+    await act(async () => {}) // settle the resolver promise
+    expect(ctx.resolveVisionConfirm).toHaveBeenCalledWith('send-anyway')
+    fireEvent.click(screen.getByTestId('vision-confirm-cancel'))
+    await act(async () => {})
+    expect(ctx.dismissVisionConfirm).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MessageArea — S2-4b tools confirm bar', () => {
+  it('renders nothing when no send is held', () => {
+    renderArea()
+    expect(screen.queryByTestId('tool-confirm-bar')).not.toBeInTheDocument()
+  })
+
+  it('offers the one-click switch when a candidate exists (distinct tool-confirm testids)', async () => {
+    ctx.toolsConfirm = {
+      model: 'llama-4-70b',
+      suggestion: { provider: 'ollama', model: 'qwen3-coder-480b', name: 'Qwen3 Coder 480B' },
+    }
+    renderArea()
+    const bar = screen.getByTestId('tool-confirm-bar')
+    expect(bar).toHaveTextContent('llama-4-70b')
+    expect(bar).toHaveTextContent('Qwen3 Coder 480B')
+    // Distinct from the vision bar: no vision testids leak into the tools
+    // bar and vice versa.
+    expect(screen.queryByTestId('vision-confirm-bar')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('tool-confirm-switch'))
+    await act(async () => {}) // settle the resolver promise
+    expect(ctx.resolveToolsConfirm).toHaveBeenCalledWith('switch')
+    expect(ctx.resolveVisionConfirm).not.toHaveBeenCalled()
+  })
+
+  it('degrades to notice-only (no switch button) without a candidate', () => {
+    ctx.toolsConfirm = { model: 'llama-4-70b', suggestion: null }
+    renderArea()
+    expect(screen.getByTestId('tool-confirm-bar')).toHaveTextContent('model menu')
+    expect(screen.queryByTestId('tool-confirm-switch')).not.toBeInTheDocument()
+    expect(screen.getByTestId('tool-confirm-send-anyway')).toBeInTheDocument()
+  })
+
+  it("'send anyway' and 'cancel' resolve their choices on the tools slot", async () => {
+    ctx.toolsConfirm = { model: 'llama-4-70b', suggestion: null }
+    renderArea()
+    fireEvent.click(screen.getByTestId('tool-confirm-send-anyway'))
+    await act(async () => {}) // settle the resolver promise
+    expect(ctx.resolveToolsConfirm).toHaveBeenCalledWith('send-anyway')
+    fireEvent.click(screen.getByTestId('tool-confirm-cancel'))
+    await act(async () => {})
+    expect(ctx.dismissToolsConfirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the vision bar and the tools bar through the same shared body when both states are somehow set', () => {
+    // Defensive pin: the two bars are mutually exclusive by flow (the
+    // resolvers re-enter sendMessage), but the shared CapabilityConfirmBar
+    // body must render each independently if both states were ever set —
+    // and each keeps its own testid namespace.
+    ctx.visionConfirm = { model: 'deepseek-v4-flash', suggestion: null }
+    ctx.toolsConfirm = { model: 'llama-4-70b', suggestion: null }
+    renderArea()
+    expect(screen.getByTestId('vision-confirm-bar')).toBeInTheDocument()
+    expect(screen.getByTestId('tool-confirm-bar')).toBeInTheDocument()
   })
 })

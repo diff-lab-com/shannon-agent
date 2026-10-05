@@ -104,7 +104,7 @@ commands:
     available: "المزودون المتاحون:"
     legend: "* = الحالي | استخدم /provider <اسم> للتبديل"
     switched: "المزود: %{provider} | النموذج: %{model}"
-    switched_no_catalog: "تم تعيين المزود إلى %{provider}. لا يحتوي على قائمة نماذج مدمجة — استخدم `/model <provider>/<model-id>` لاختيار نموذج."
+    no_catalog_pick_required: "المزود %{provider} لا يحتوي على كتالوج نماذج، لذلك لن يتم الإبقاء على النموذج السابق. اختر نموذجًا من المنتقي الذي فُتح للتو (Esc للإلغاء) أو بدّل صراحةً: /provider %{provider} <model-id>"
     no_selection: "لا يوجد مزود محدد. شغّل /connect <المزود> <المفتاح> أولًا."
   disconnect:
     usage: "الاستخدام: /disconnect <المزود>\nيزيل الاتصال المحفوظ لمزود (إدخاله في providers.toml) فيصبح غير متصل. مفتاح API المخزن يبقى محفوظًا — أعد تشغيل /connect لإعادة الاتصال."

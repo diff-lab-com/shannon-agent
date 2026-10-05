@@ -21,6 +21,7 @@ fn main() {
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_memory;
     use shannon_desktop::commands_mobile_pairing;
+    use shannon_desktop::commands_models;
     use shannon_desktop::commands_notifications;
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
@@ -166,6 +167,21 @@ fn main() {
             commands_chat::set_session_model,
             commands_chat::clear_session_model,
             commands_chat::get_session_model,
+            // S3-2 (P-N10) — active session-override count for the Settings
+            // profile-switch confirm ("N sessions still use override
+            // models").
+            commands_chat::count_session_model_overrides,
+            // S2-4a (P-N9) — pre-send vision pre-check: the UI asks before
+            // pointing image attachments at a model KNOWN to lack vision,
+            // with a one-click switch candidate. The engine gate stays the
+            // final backstop.
+            commands_chat::check_vision_send,
+            // S2-4b (P-N9) — pre-send tool-capability pre-check: the UI
+            // asks before pointing a tools-carrying send (every desktop
+            // send) at a model KNOWN to lack tool calling, with a one-click
+            // switch candidate. Unknown capability never prompts; sessions
+            // whose send carries no tools report "not applicable".
+            commands_chat::check_tools_send,
             // P2-5 — session-level "temporary chat" (no-memory bypass).
             commands_chat::set_session_memory_bypass,
             commands_chat::get_session_memory_bypass,
@@ -195,6 +211,14 @@ fn main() {
             commands_profiles::set_active_provider_profile,
             commands_profiles::rename_provider_profile,
             commands_profiles::delete_provider_profile,
+            // S2-1 (模型仓固化) — persist the AddProviderModal fetch
+            // curation into the provider slot's `models` declarations.
+            commands_models::set_provider_models,
+            // S3-4 (推荐降级链) — one-click recommended fallback chain:
+            // candidates-only computation + the explicit-confirmation write
+            // into the provider slot's `fallback_models` (never automatic).
+            commands_models::recommend_fallback_chain,
+            commands_models::set_provider_fallback_models,
             // R4-3 (desktop slice) — per-provider multi-key management
             // (Settings → Models "API keys" panel; same credential store
             // the CLI's `providers keys` drives).

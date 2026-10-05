@@ -3,6 +3,9 @@
 //! Extracted from `commands.rs` as part of S2 P1.1 (commands.rs split).
 
 use serde::{Deserialize, Serialize};
+use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 
 use crate::commands::AppState;
@@ -1252,28 +1255,51 @@ pub async fn get_config(state: tauri::State<'_, AppState>) -> Result<DesktopConf
 /// The Welcome wizard uses this on mount to pre-select a provider + skip the
 /// API key entry step when the user already has `ANTHROPIC_API_KEY` etc. set
 /// in their shell.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetectedProvider {
     pub provider: String,
     pub has_api_key: bool,
 }
 
-/// Scan env vars for a known provider API key. First match wins — the order
-/// mirrors the Welcome wizard's recommended-provider ranking.
-///
-/// Returns `None` if no provider env var is set. Ollama is handled separately
-/// (no API key; detected via `OLLAMA_HOST` or default `localhost:11434`).
-///
-/// Shared by the `detect_provider_from_env` command (Welcome wizard) and
-/// `get_provider_status` (the chat/settings gating signal), so both surfaces
-/// agree on what counts as "configured via the environment".
-fn detect_env_provider() -> Option<DetectedProvider> {
-    let candidates: &[(&str, &str)] = &[
+/// TCP connect budget for the Ollama default-endpoint probe (S1-4a). Short
+/// on purpose: the probe runs on UI gating paths, and a dead endpoint must
+/// not stall them.
+const OLLAMA_PROBE_TIMEOUT: Duration = Duration::from_millis(150);
+
+/// How long a [`detect_env_provider`] result is memoized process-wide
+/// (S1-4a guardrail). The function sits on the `get_provider_status` gating
+/// hot path (ApiKeyBanner / Layout refresh), so without the cache every
+/// refresh would pay the [`OLLAMA_PROBE_TIMEOUT`] connect against a closed
+/// port.
+const ENV_PROVIDER_CACHE_TTL: Duration = Duration::from_secs(30);
+
+/// Ollama's out-of-the-box listen address. Only probed when `OLLAMA_HOST`
+/// is unset (review R2 P-N4: a bare `ollama serve` install must be detected
+/// with zero configuration).
+const OLLAMA_DEFAULT_ENDPOINT: SocketAddr =
+    SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 11434);
+
+/// One memoized [`detect_env_provider`] result: what was found, and when.
+#[derive(Debug, Clone)]
+struct CachedEnvProvider {
+    observed_at: Instant,
+    value: Option<DetectedProvider>,
+}
+
+static ENV_PROVIDER_CACHE: Mutex<Option<CachedEnvProvider>> = Mutex::new(None);
+
+/// Read the provider-relevant env vars only (no socket probing). First API
+/// key match wins — the order mirrors the Welcome wizard's
+/// recommended-provider ranking. An `OLLAMA_HOST` that is set at all (any
+/// value) counts as an Ollama configuration, matching the engine's own
+/// env handling.
+fn scan_env_provider() -> Option<DetectedProvider> {
+    const CANDIDATES: &[(&str, &str)] = &[
         ("ANTHROPIC_API_KEY", "anthropic"),
         ("OPENAI_API_KEY", "openai"),
         ("DEEPSEEK_API_KEY", "deepseek"),
     ];
-    for (env_var, provider) in candidates {
+    for (env_var, provider) in CANDIDATES {
         if let Ok(val) = std::env::var(env_var) {
             if !val.trim().is_empty() {
                 return Some(DetectedProvider {
@@ -1290,6 +1316,73 @@ fn detect_env_provider() -> Option<DetectedProvider> {
         });
     }
     None
+}
+
+/// Probe an Ollama endpoint with a short TCP connect. `true` = something is
+/// listening. Parameterized over the address so tests can pin the
+/// closed-port and open-port paths without touching 11434.
+fn probe_ollama_endpoint(addr: SocketAddr) -> bool {
+    // connect_timeout requires a resolved SocketAddr and returns raw IO
+    // errors; both Refused and TimedOut simply mean "not detected".
+    std::net::TcpStream::connect_timeout(&addr, OLLAMA_PROBE_TIMEOUT).is_ok()
+}
+
+/// TTL-memoized detection core. `scan` reads the env vars; `probe` is the
+/// socket fallback (both injected so tests can pin ordering and probe
+/// counts without touching real env or ports). The env path wins and never
+/// probes; a cache hit short-circuits both.
+fn cached_env_provider(
+    cache: &mut Option<CachedEnvProvider>,
+    now: Instant,
+    scan: impl FnOnce() -> Option<DetectedProvider>,
+    probe: impl FnOnce() -> bool,
+) -> Option<DetectedProvider> {
+    if let Some(hit) = cache {
+        if now.duration_since(hit.observed_at) < ENV_PROVIDER_CACHE_TTL {
+            return hit.value.clone();
+        }
+    }
+    let value = scan().or_else(|| {
+        probe().then_some(DetectedProvider {
+            provider: "ollama".into(),
+            has_api_key: false,
+        })
+    });
+    *cache = Some(CachedEnvProvider {
+        observed_at: now,
+        value: value.clone(),
+    });
+    value
+}
+
+/// Scan the process environment (plus Ollama's default endpoint) for a
+/// pre-configured provider.
+///
+/// Ollama needs no API key: an explicit `OLLAMA_HOST` (set, whatever the
+/// value) counts as configured; when it is unset we fall back to one short
+/// ([`OLLAMA_PROBE_TIMEOUT`]) TCP probe of the out-of-the-box
+/// `127.0.0.1:11434` endpoint so a bare `ollama serve` install is detected
+/// with zero configuration (review R2 P-N4, keeping the old doc promise
+/// "or default `localhost:11434`" now actually true). Returns `None` when
+/// neither path hits.
+///
+/// Guardrail (review R2 §6 S1-4): the result is memoized process-wide for
+/// [`ENV_PROVIDER_CACHE_TTL`]. This function is shared by the
+/// `detect_provider_from_env` command (Welcome wizard) and
+/// `get_provider_status` (the chat/settings gating signal), so both
+/// surfaces agree on what counts as "configured via the environment" AND
+/// neither can hammer the socket — the probe fires at most once per TTL
+/// window. The env path takes priority and never probes; env vars are only
+/// re-read when the cache expires, which is an acceptable staleness window
+/// for a detection hint.
+fn detect_env_provider() -> Option<DetectedProvider> {
+    let now = Instant::now();
+    let mut cache = ENV_PROVIDER_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    cached_env_provider(&mut cache, now, scan_env_provider, || {
+        probe_ollama_endpoint(OLLAMA_DEFAULT_ENDPOINT)
+    })
 }
 
 #[tauri::command]
@@ -1508,12 +1601,41 @@ pub async fn test_provider_connection(
     .await)
 }
 
+/// Provider kinds the in-modal **Test connection** cannot cover: selectable,
+/// fully usable providers whose "list models" route has no shared probeable
+/// endpoint, so the probe refuses them with the typed "not supported"
+/// verdict instead of a misleading connectivity failure (review P-N25 — an
+/// honest refusal, but until the S4 batch the form gives no advance notice).
+///
+/// This constant is the single source of truth for "which kinds are not
+/// probeable", promoted from the implicit complement of
+/// [`is_probeable_kind`]'s allowlist so the S4 pre-submit hint ("this
+/// provider type does not support connection testing — save and use it
+/// directly") can consume it without re-deriving the list. Why each kind is
+/// here:
+/// - `azure`: speaks the OpenAI wire format for chat, but its list-models
+///   route (`/openai/models?api-version=…`) is not the shared `/models` the
+///   openai-compatible probe hits.
+/// - `gemini`: bespoke Gemini list-models API (`WireFormat::Gemini`).
+///
+/// Kept consistent with [`is_probeable_kind`] by
+/// `non_probeable_kinds_are_never_probeable` and pinned against the full
+/// selectable-kind set by `selectable_kinds_partition_into_probeable_and_not`
+/// (both below).
+pub(crate) const NON_PROBEABLE_PROVIDER_KINDS: &[&str] = &["azure", "gemini"];
+
 /// Kinds the engine can generically probe / list models for. Mirrors the
-/// allowlist `test_all_providers` uses; `gemini` (and any future kind)
-/// has no shared list-models endpoint, so both commands reject it with a
-/// typed "not supported" verdict instead of a misleading connectivity
-/// failure.
+/// allowlist `test_all_providers` uses; anything outside it — including the
+/// kinds in [`NON_PROBEABLE_PROVIDER_KINDS`] — has no shared list-models
+/// endpoint, so both test commands reject it with a typed "not supported"
+/// verdict instead of a misleading connectivity failure.
 fn is_probeable_kind(kind: &str) -> bool {
+    // Named non-probeable kinds are checked out first so the constant stays
+    // the authoritative deny-list even if the allowlist below ever grows
+    // onto one of them (partition-pinned by the tests).
+    if NON_PROBEABLE_PROVIDER_KINDS.contains(&kind) {
+        return false;
+    }
     matches!(
         kind,
         "anthropic" | "openai" | "deepseek" | "openai-compatible" | "ollama"
@@ -2436,6 +2558,53 @@ pub(crate) fn llm_provider_for_active_mirror(s: &str) -> Option<shannon_engine::
 mod tests {
     use super::*;
     use tauri::Manager;
+
+    // === Probeability partition (S2-6 / review P-N25 single source of truth) ===
+    //
+    // `is_probeable_kind` is an allowlist; `NON_PROBEABLE_PROVIDER_KINDS`
+    // names the complement the S4 batch's pre-submit hint will consume.
+    // Both must stay consistent with the modal's selectable-kind set:
+    // every selectable kind is either probeable or explicitly listed as
+    // not — a kind in neither set would silently change the
+    // Test-connection contract.
+
+    #[test]
+    fn non_probeable_kinds_are_never_probeable() {
+        for kind in NON_PROBEABLE_PROVIDER_KINDS {
+            assert!(
+                !is_probeable_kind(kind),
+                "{kind} is listed non-probeable but the allowlist accepts it"
+            );
+        }
+    }
+
+    #[test]
+    fn selectable_kinds_partition_into_probeable_and_not() {
+        // The selectable-kind vocabulary: the modal's `KIND_INFO` set
+        // (anthropic / openai / deepseek / ollama / gemini /
+        // openai-compatible) plus `azure` — engine-supported (LlmProvider::
+        // Azure, S2-6 catalog + deployments wire) and explicitly named by
+        // review P-N25 even though the modal dropdown does not offer it yet.
+        const SELECTABLE_KINDS: &[&str] = &[
+            "anthropic",
+            "openai",
+            "deepseek",
+            "ollama",
+            "gemini",
+            "openai-compatible",
+            "azure",
+        ];
+        for kind in SELECTABLE_KINDS {
+            assert_eq!(
+                is_probeable_kind(kind),
+                !NON_PROBEABLE_PROVIDER_KINDS.contains(kind),
+                "{kind}: probeable must equal \"not in NON_PROBEABLE_PROVIDER_KINDS\""
+            );
+        }
+        // Exactly the two P-N25 kinds are non-probeable — adding a third
+        // requires updating this pin deliberately.
+        assert_eq!(NON_PROBEABLE_PROVIDER_KINDS.len(), 2);
+    }
 
     #[test]
     fn config_update_round_trips_through_serde() {
@@ -3799,5 +3968,198 @@ mod tests {
         // `quota_exhausted` or every test surface falls back to "Unknown".
         let json = serde_json::to_value(TestConnectionResult::QuotaExhausted).unwrap();
         assert_eq!(json, serde_json::json!({ "kind": "quota_exhausted" }));
+    }
+
+    // === S1-4a — Ollama default-port detection + TTL cache (review R2 P-N4) ===
+
+    #[test]
+    fn env_scan_detects_ollama_host_without_probing() {
+        // `OLLAMA_HOST` set at all counts as configured, regardless of value.
+        let prev = std::env::var("OLLAMA_HOST").ok();
+        // SAFETY: single-threaded mutation of an env var no other test in
+        // this binary reads (grep: OLLAMA_HOST only appears here and in the
+        // production scan this test pins).
+        unsafe { std::env::set_var("OLLAMA_HOST", "http://0.0.0.0:1135") };
+        let detected = scan_env_provider();
+        // Restore before asserts so a panic path still cleans up.
+        match prev {
+            Some(v) => unsafe { std::env::set_var("OLLAMA_HOST", v) },
+            None => unsafe { std::env::remove_var("OLLAMA_HOST") },
+        }
+        assert_eq!(
+            detected.map(|d| (d.provider, d.has_api_key)),
+            Some(("ollama".into(), false)),
+            "OLLAMA_HOST set → ollama, no API key"
+        );
+    }
+
+    #[test]
+    fn env_scan_prefers_api_keys_over_ollama() {
+        // First key candidate wins in the documented ranking order — the
+        // OLLAMA_HOST branch must never shadow a real key.
+        let prev_a = std::env::var("ANTHROPIC_API_KEY").ok();
+        let prev_o = std::env::var("OLLAMA_HOST").ok();
+        // SAFETY: see env_scan_detects_ollama_host_without_probing.
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "sk-test");
+            std::env::set_var("OLLAMA_HOST", "http://localhost:11434");
+        }
+        let detected = scan_env_provider();
+        unsafe {
+            match prev_a {
+                Some(v) => std::env::set_var("ANTHROPIC_API_KEY", v),
+                None => std::env::remove_var("ANTHROPIC_API_KEY"),
+            }
+            match prev_o {
+                Some(v) => std::env::set_var("OLLAMA_HOST", v),
+                None => std::env::remove_var("OLLAMA_HOST"),
+            }
+        }
+        assert_eq!(
+            detected.map(|d| (d.provider, d.has_api_key)),
+            Some(("anthropic".into(), true)),
+            "an API-key env must outrank the OLLAMA_HOST branch"
+        );
+    }
+
+    #[test]
+    fn env_hit_short_circuits_the_probe() {
+        // S1-4a guardrail: an env-detected provider must never pay a socket
+        // connect. `scan` is injected so the ambient environment cannot flip
+        // this test, and the probe closure asserts zero invocations.
+        let mut cache = None;
+        let mut probes = 0usize;
+        let detected = cached_env_provider(
+            &mut cache,
+            Instant::now(),
+            || {
+                Some(DetectedProvider {
+                    provider: "anthropic".into(),
+                    has_api_key: true,
+                })
+            },
+            || {
+                probes += 1;
+                false
+            },
+        );
+        assert_eq!(
+            detected.map(|d| (d.provider, d.has_api_key)),
+            Some(("anthropic".into(), true))
+        );
+        assert_eq!(probes, 0, "env hit must not probe the socket");
+    }
+
+    #[test]
+    fn cache_holds_within_ttl_and_expires_after_it() {
+        // S1-4a guardrail: the gating hot path (`get_provider_status`) must
+        // not re-probe on every call. Injected clock + counting probe pin
+        // the memoize-once / re-probe-after-TTL contract.
+        let t0 = Instant::now();
+        let mut cache = None;
+        let mut probes = 0usize;
+        // Non-capturing → Copy, so it can be re-passed by value per call.
+        let scan = || -> Option<DetectedProvider> { None };
+
+        let first = cached_env_provider(&mut cache, t0, scan, || {
+            probes += 1;
+            false
+        });
+        assert_eq!(first, None, "nothing set and port closed → None");
+        assert_eq!(probes, 1, "first call probes");
+
+        // Just inside the TTL: cached None comes back, zero new probes.
+        let within = cached_env_provider(
+            &mut cache,
+            t0 + ENV_PROVIDER_CACHE_TTL - Duration::from_millis(1),
+            scan,
+            || {
+                probes += 1;
+                false
+            },
+        );
+        assert_eq!(within, None);
+        assert_eq!(probes, 1, "cache hit must not re-probe");
+
+        // Past the TTL: the probe fires again (value refreshed).
+        let after = cached_env_provider(
+            &mut cache,
+            t0 + ENV_PROVIDER_CACHE_TTL + Duration::from_millis(1),
+            scan,
+            || {
+                probes += 1;
+                true
+            },
+        );
+        assert_eq!(
+            after.map(|d| (d.provider, d.has_api_key)),
+            Some(("ollama".into(), false)),
+            "probe hit → ollama detected, no API key"
+        );
+        assert_eq!(probes, 2, "expired entry re-probes exactly once");
+    }
+
+    #[test]
+    fn closed_port_probe_fails_fast() {
+        // S1-4a acceptance: env unset + closed port → None, quickly. Grab a
+        // port, release it, then probe it — deterministic "nothing listens".
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let addr = listener.local_addr().expect("local addr");
+        drop(listener);
+        let start = Instant::now();
+        let hit = probe_ollama_endpoint(addr);
+        let elapsed = start.elapsed();
+        assert!(!hit, "released port must not be detected as Ollama");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "closed-port probe must fail fast, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn open_port_probe_detects_a_listener() {
+        // The positive half of the probe contract, fully local: a live
+        // listener on an ephemeral port stands in for `ollama serve`.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let addr = listener.local_addr().expect("local addr");
+        assert!(
+            probe_ollama_endpoint(addr),
+            "live listener must be detected"
+        );
+    }
+
+    // === S1-4b — quick-fill ids are current static-catalog entries (review R2 P-N5) ===
+
+    #[test]
+    fn quick_fill_model_ids_exist_in_static_catalog() {
+        use shannon_core::model_registry::MODEL_CATALOG;
+
+        // Pin: the quick-fill chips the AddProviderModal prefills must be
+        // REAL ids in `MODEL_CATALOG` — the 2026-10 review (P-N5) flagged
+        // that users' first impression was a stale 2024 catalog. This list
+        // is the Rust half of the contract; the TS half lives in
+        // `desktop/ui/src/__tests__/addProviderQuickFill.test.ts`. Keep the
+        // two lists in sync with `QUICK_FILL` in
+        // `desktop/ui/src/components/settings/add-provider-modal/types.ts`.
+        let pinned: &[(&str, &str)] = &[
+            // (quick-fill chip id, prefilled model id)
+            ("anthropic", "claude-sonnet-4-6"),
+            ("openai", "gpt-5-mini"),
+            ("deepseek", "deepseek-chat"),
+            ("glm", "glm-5.1"),
+            ("kimi", "kimi-k2.6"),
+            ("minimax", "MiniMax-M3"),
+            // NOTE: the `ollama` chip (`llama3.2`) is deliberately absent —
+            // Ollama model ids are detected at runtime from the user's local
+            // daemon (`detect_local_models`), so the static catalog has no
+            // Ollama entries to pin against. The stale-id rule ("must exist
+            // in MODEL_CATALOG") cannot apply there.
+        ];
+        for (chip, model) in pinned {
+            assert!(
+                MODEL_CATALOG.iter().any(|m| m.id == *model),
+                "quick-fill chip `{chip}`: model `{model}` must exist in MODEL_CATALOG (it is what new users see prefilled)"
+            );
+        }
     }
 }

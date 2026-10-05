@@ -541,6 +541,7 @@ mod tests {
         let failed = query_event_to_session_body(&QueryEvent::Failed {
             query_id: query_id(),
             error: "boom".into(),
+            error_kind: None,
         })
         .unwrap();
         match failed {

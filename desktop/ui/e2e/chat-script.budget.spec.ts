@@ -150,10 +150,17 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     await expect(chat.bubbleAt(3).getByTestId('message-stopped-marker')).toBeVisible()
     await expect(page.getByRole('img', { name: 'Last run failed' })).toHaveCount(0)
     // Wire proof: the blocked turn went out WITH the draft-restored chip.
-    expect((await mockSnapshot(page)).sends[0]).toMatchObject({
-      turnIndex: 0,
-      attachments: [REPORT_PATH],
-    })
+    // S2-4a (vision pre-check): an attachment-bearing send resolves an async
+    // `check_vision_send` round-trip BEFORE `send_message` reaches the
+    // player, so the wire record lands one await after any UI settle — poll
+    // instead of racing (the same pattern the errors journey's Retry read
+    // already uses).
+    await expect
+      .poll(async () => (await mockSnapshot(page)).sends[0], { timeout: 5_000 })
+      .toMatchObject({
+        turnIndex: 0,
+        attachments: [REPORT_PATH],
+      })
 
     // ── Forensics (CHAT-TEST-1) — kept from the round-4 diagnostics. ──
     // Dumps the on-page state (alert bodies, dialog open/connect state,
@@ -253,22 +260,28 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     // bypass flag — the snapshot proves the wire args, the resend target,
     // and the forwarded attachment (A-2's preservation, upstream since
     // d3d40452).
+    // The banner unmounts SYNCHRONOUSLY with the click (BudgetBanner's
+    // clearExceeded runs before onContinueOnce), while the bypass send now
+    // lands one async check_vision_send round-trip later (S2-4a) — the wire
+    // record is polled, never read synchronously (root cause of the
+    // sends[1]===undefined CI reds).
     await actionButtons.filter({ hasText: en['budget.exceeded.continueLast'] }).click()
     await expect(banner).toHaveCount(0)
-    const snapshot = await mockSnapshot(page)
-    expect(snapshot.sends[1]).toMatchObject({
-      turnIndex: 1,
-      // The LAST recorded user turn (the just-cancelled send) — the R2 W2-4
-      // contract's "never replay an earlier turn" pin.
-      message: script.turns[0]!.user,
-      budgetBypass: true,
-      // A-2 positive pin (upstream forwarding): the last recorded turn is the
-      // just-cancelled draft-RESTORED send, so its attachment must ride the
-      // bypass resend. dev d3d40452 forwards it; the optimistic append
-      // carrying file_attachments (A-4) is what makes it forwardable.
-      attachments: [REPORT_PATH],
-      sessionId: 'script-sess-budget',
-    })
+    await expect
+      .poll(async () => (await mockSnapshot(page)).sends[1], { timeout: 5_000 })
+      .toMatchObject({
+        turnIndex: 1,
+        // The LAST recorded user turn (the just-cancelled send) — the R2 W2-4
+        // contract's "never replay an earlier turn" pin.
+        message: script.turns[0]!.user,
+        budgetBypass: true,
+        // A-2 positive pin (upstream forwarding): the last recorded turn is the
+        // just-cancelled draft-RESTORED send, so its attachment must ride the
+        // bypass resend. dev d3d40452 forwards it; the optimistic append
+        // carrying file_attachments (A-4) is what makes it forwardable.
+        attachments: [REPORT_PATH],
+        sessionId: 'script-sess-budget',
+      })
     // The bypass turn streams to completion (bubbles: seeded 2 + user +
     // the stopped partial + the full bypass reply).
     await expect(chat.bubbles()).toHaveCount(6, { timeout: 15_000 })

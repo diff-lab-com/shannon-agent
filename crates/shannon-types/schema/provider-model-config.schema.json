@@ -146,7 +146,8 @@
         "coding",
         "speed",
         "cheap",
-        "vision"
+        "vision",
+        "tool_use"
       ],
       "type": "string"
     },

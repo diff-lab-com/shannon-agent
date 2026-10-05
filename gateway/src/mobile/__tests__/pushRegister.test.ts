@@ -16,7 +16,7 @@ import { createSeqCounter } from "../seq.js";
 import { PushReplayBuffer } from "../pushReplay.js";
 import { MobileDispatchHub } from "../hub.js";
 import { createMobileHandlers, DeviceRegistry, PairTokenStore } from "../pairing.js";
-import type { PushBindingSink } from "../engineBridge.js";
+import type { PushBindingSink, PushUnbindSink } from "../engineBridge.js";
 import { MobileServer, type MethodContext, type MethodHandlers } from "../server.js";
 import {
   deviceIdFromPublicKey,
@@ -69,6 +69,7 @@ function handlers(opts: {
   tokens: PairTokenStore;
   registry: DeviceRegistry;
   pushBindingSink?: PushBindingSink;
+  pushUnbindSink?: PushUnbindSink;
 }): MethodHandlers {
   return createMobileHandlers({
     engine: {
@@ -77,6 +78,7 @@ function handlers(opts: {
       version: "test",
       logger,
       pushBindingSink: opts.pushBindingSink,
+      pushUnbindSink: opts.pushUnbindSink,
     },
     tokens: opts.tokens,
     registry: opts.registry,
@@ -138,6 +140,41 @@ describe("shannon/push.register (§O2)", () => {
     await pairDevice(socket, tokens, generateEd25519KeyPair());
     const res = await rpc(socket, "shannon/push.register", { enable: false });
     expect(res).toEqual({ ok: true });
+    socket.close();
+  });
+
+  // 修正1 (frame contract review 2026-10-05 §4 acceptance): the enable:false
+  // → relay-unbind WIRING assertion. The old local no-op violated §O2
+  // (「enable:false → 注销：desktop 指示 relay 摘除该 deviceId 绑定」).
+  it("unregister (enable:false) forwards push.unbind under the device session, still ok:true", async () => {
+    const tokens = new PairTokenStore();
+    const registry = new DeviceRegistry();
+    const seen: string[] = [];
+    const unbindSink: PushUnbindSink = async (deviceId) => {
+      seen.push(deviceId);
+    };
+    const { port } = await start(handlers({ tokens, registry, pushUnbindSink: unbindSink }));
+    const socket = await connect(port);
+    const deviceId = await pairDevice(socket, tokens, generateEd25519KeyPair());
+
+    const res = await rpc(socket, "shannon/push.register", { enable: false });
+    expect(res).toEqual({ ok: true }); // the phone's honest ok is unchanged
+    await vi.waitFor(() => expect(seen).toEqual([deviceId])); // best-effort forward, not awaited by the RPC
+    socket.close();
+  });
+
+  it("unregister stays honest ok even when the unbind forward fails (对账兜底)", async () => {
+    const tokens = new PairTokenStore();
+    const registry = new DeviceRegistry();
+    const unbindSink: PushUnbindSink = async () => {
+      throw new Error("relay link down");
+    };
+    const { port } = await start(handlers({ tokens, registry, pushUnbindSink: unbindSink }));
+    const socket = await connect(port);
+    await pairDevice(socket, tokens, generateEd25519KeyPair());
+    const res = await rpc(socket, "shannon/push.register", { enable: false });
+    expect(res).toEqual({ ok: true });
+    await new Promise((r) => setTimeout(r, 10)); // the rejection is logged, never surfaced
     socket.close();
   });
 

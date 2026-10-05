@@ -897,6 +897,33 @@ mod tests {
     }
 
     #[test]
+    fn picker_focus_provider_opens_target_tab() {
+        // S2-6 ruling ⑤: the forced picker must open pre-tabbed at the
+        // target provider, not at the current model's owner.
+        let mut picker = ModelPickerWidget::new(Some("claude-sonnet-4-20250514"));
+        assert_eq!(
+            picker.selected_model().map(|m| m.provider.clone()),
+            Some(LlmProvider::Anthropic),
+            "constructor opens the current model's owner tab"
+        );
+
+        picker.focus_provider(&LlmProvider::OpenAI);
+        assert_eq!(
+            picker.selected_model().map(|m| m.provider.clone()),
+            Some(LlmProvider::OpenAI),
+            "focus_provider retabs + reloads the model list"
+        );
+
+        // A second focus moves cleanly (idempotent retab, no stale list).
+        picker.focus_provider(&LlmProvider::Bedrock);
+        assert_eq!(
+            picker.selected_model().map(|m| m.provider.clone()),
+            Some(LlmProvider::Bedrock),
+            "re-focusing retabs again"
+        );
+    }
+
+    #[test]
     fn model_cost_label_honest_about_unknown() {
         use shannon_core::model_registry::{ModelCapabilities, ModelInfo};
         use shannon_engine::api::LlmProvider;
@@ -916,6 +943,7 @@ mod tests {
             cost_per_m_input: 3.0,
             cost_per_m_output: 15.0,
             capabilities: ModelCapabilities::empty(),
+            source: shannon_core::model_registry::ModelEntrySource::Catalog,
         };
         let label = model_cost_label(&paid);
         assert!(label.contains("$3.00"), "paid model shows rate: {label}");
@@ -936,6 +964,7 @@ mod tests {
             cost_per_m_input: 0.0,
             cost_per_m_output: 0.0,
             capabilities: ModelCapabilities::empty(),
+            source: shannon_core::model_registry::ModelEntrySource::Catalog,
         };
         let label = model_cost_label(&dynamic);
         assert!(
@@ -958,6 +987,7 @@ mod tests {
             cost_per_m_input: 0.0,
             cost_per_m_output: 0.0,
             capabilities: ModelCapabilities::empty(),
+            source: shannon_core::model_registry::ModelEntrySource::Catalog,
         };
         let label = model_cost_label(&local);
         assert!(
@@ -1240,6 +1270,22 @@ impl ModelPickerWidget {
             self.current_provider_idx = 0;
         }
         self.refresh_models();
+    }
+
+    /// Open the picker on `provider`'s tab (S2-6 ruling ⑤: a catalog-less
+    /// `/provider` switch forces the picker pre-tabbed at the target so the
+    /// user lands an explicit model instead of silently keeping the old one).
+    ///
+    /// No-op when the provider has no tab (filtered out by the
+    /// `SHANNON_*_PROVIDERS` allowlist/denylist) — the picker then stays on
+    /// the tab it was constructed on. A tab whose catalog is empty renders
+    /// as an empty list; the manual-entry hatch (`i`) and the Esc cancel are
+    /// always available.
+    pub fn focus_provider(&mut self, provider: &LlmProvider) {
+        if let Some(idx) = self.providers.iter().position(|p| p == provider) {
+            self.current_provider_idx = idx;
+            self.refresh_models();
+        }
     }
 
     /// Get the currently selected model info.

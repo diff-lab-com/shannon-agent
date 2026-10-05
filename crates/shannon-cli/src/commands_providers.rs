@@ -695,8 +695,9 @@ pub fn parse_capability(s: &str) -> Result<ModelCapability> {
         "speed" => Ok(ModelCapability::Speed),
         "cheap" => Ok(ModelCapability::Cheap),
         "vision" => Ok(ModelCapability::Vision),
+        "tool_use" | "tools" | "tool-use" => Ok(ModelCapability::ToolUse),
         other => Err(anyhow!(
-            "unknown --cap '{other}'; expected one of: reasoning, coding, speed, cheap, vision"
+            "unknown --cap '{other}'; expected one of: reasoning, coding, speed, cheap, vision, tool_use"
         )),
     }
 }
@@ -858,6 +859,7 @@ fn summarize_spec(spec: &ModelSpec) -> String {
                 ModelCapability::Speed => "speed",
                 ModelCapability::Cheap => "cheap",
                 ModelCapability::Vision => "vision",
+                ModelCapability::ToolUse => "tool_use",
                 _ => "other",
             })
             .collect();

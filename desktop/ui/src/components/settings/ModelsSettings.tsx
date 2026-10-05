@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
@@ -7,13 +7,25 @@ import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
-import type { ProvidersFile } from '@/types'
+import type { DeclaredModelInput, ProvidersFile } from '@/types'
 import { formatPrice } from './models-settings/types'
+import { ModelSourceBadge } from '@/components/shared/ModelPickerRow'
+import { writeGlobalModelDefault } from '@/lib/modelSwitch'
 import { ProvidersSection } from './models-settings/ProvidersSection'
 import { ProviderVisibilitySection } from './models-settings/ProviderVisibilitySection'
 import { PhaseTierSection } from './models-settings/PhaseTierSection'
 import { ProfilesSection } from './models-settings/ProfilesSection'
 import { ParameterSlider } from './models-settings/ParameterSlider'
+import ModelMetaEditor from './models-settings/ModelMetaEditor'
+import {
+  activeVaultOf,
+  isInVault,
+  specToVaultInput,
+  upsertVaultModel,
+} from './models-settings/modelMeta'
+import { MODEL_VAULT_SOFT_CAP } from './add-provider-modal/modelCuration'
+import { useTauriEvent } from '@/hooks/useTauriEvent'
+import { EVENT_NAMES } from '@/types'
 import { ComboboxSelect } from '@/components/ui/combobox-select'
 
 export default function ModelsSettings() {
@@ -38,6 +50,12 @@ export default function ModelsSettings() {
     providers: [],
   })
   const [loadingProviders, setLoadingProviders] = useState(true)
+
+  const reloadProviders = () => {
+    return api.listProviders()
+      .then((f) => setProvidersFile(f))
+      .catch((e) => console.warn('listProviders error:', e))
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -66,9 +84,15 @@ export default function ModelsSettings() {
 
   const handleModelSwitch = async (modelId: string) => {
     if (!status) return
+    // S3-1 (P-N23): resolve the catalog row and write the SAME
+    // model+provider pair the Header (and the chip's global branch) write —
+    // the old model-only write was the review's convention fork. Same
+    // semantics (the catalog comes from the active provider), one helper.
+    const model = models.find(m => m.id === modelId)
+    if (!model) return
     setSwitching(modelId)
     try {
-      await api.configure({ key: 'model', value: modelId })
+      await writeGlobalModelDefault(model)
       await Promise.all([refreshModels(), refreshStatus()])
       toast.success(intl.formatMessage({ id: 'settings.models.switched' }, { model: modelId }))
     } catch (e) { toastError(t('settings.models.switchFailed'), e) }
@@ -79,6 +103,87 @@ export default function ModelsSettings() {
   const providers = [...new Set(models.map(m => m.provider))]
   const [activeProvider, setActiveProvider] = useState<string | null>(null)
   const filteredModels = activeProvider ? models.filter(m => m.provider === activeProvider) : models
+
+  // S2-2 (per-model metadata editor): the active provider slot's curated
+  // vault. `null` when no managed slot is active (env-configured providers
+  // have no vault to write to) — the row affordances stay hidden then, an
+  // honest dead-end rather than a form that cannot save.
+  const vault = useMemo(() => activeVaultOf(providersFile), [providersFile])
+  const [expandedMeta, setExpandedMeta] = useState<string | null>(null)
+  const [addingToVault, setAddingToVault] = useState<string | null>(null)
+  const [savingMeta, setSavingMeta] = useState(false)
+
+  // The editor submits the WHOLE vault (overwrite semantics), so the
+  // snapshot must never go stale: a vault write from another window/CLI
+  // (`provider_models`) or a provider activation that changes the vault
+  // owner (`provider`) re-reads it. CONFIG_UPDATED is the same event the
+  // AppContext already answers with refreshModels — this only extends it
+  // to the providersFile slice this page owns.
+  useTauriEvent<{ key: string; value: string }>(EVENT_NAMES.CONFIG_UPDATED, (e) => {
+    if (e.payload.key === 'provider_models' || e.payload.key === 'provider') {
+      void reloadProviders()
+    }
+  })
+
+  // "Add to vault" on a catalog/overlay row: persist an id-only declaration
+  // (the curation editor's minimal shape), then drop the user straight into
+  // the metadata editor for it. `set_provider_models` replaces the vault
+  // wholesale, so the payload is the full vault + the new entry.
+  const handleAddToVault = async (modelId: string) => {
+    if (!vault) return
+    if (vault.models.length >= MODEL_VAULT_SOFT_CAP) {
+      toast.warning(intl.formatMessage(
+        { id: 'settings.models.vault.overCap' },
+        { cap: MODEL_VAULT_SOFT_CAP },
+      ))
+      return
+    }
+    setAddingToVault(modelId)
+    try {
+      await api.setProviderModels(vault.providerId, [
+        ...vault.models.map(specToVaultInput),
+        { id: modelId },
+      ])
+      // The command emitted CONFIG_UPDATED, which AppContext answers with
+      // refreshModels — drive both refreshes here too so the row/badge
+      // updates even if this window missed the event.
+      await Promise.all([refreshModels(), reloadProviders()])
+      toast.success(intl.formatMessage(
+        { id: 'settings.models.vault.addedToast' },
+        { model: modelId },
+      ))
+      setExpandedMeta(modelId)
+    } catch (e) {
+      toastError(intl.formatMessage(
+        { id: 'settings.models.vault.addFailed' },
+        { model: modelId },
+      ), e)
+    }
+    setAddingToVault(null)
+  }
+
+  // Editor save: merge the edited declaration into the vault client-side
+  // (the command has NO field-merge — overwrite semantics) and submit the
+  // complete vault. The editor stays open on failure so the input survives.
+  const handleSaveMeta = async (input: DeclaredModelInput) => {
+    if (!vault) return
+    setSavingMeta(true)
+    try {
+      await api.setProviderModels(vault.providerId, upsertVaultModel(vault.models, input))
+      await Promise.all([refreshModels(), reloadProviders()])
+      toast.success(intl.formatMessage(
+        { id: 'settings.models.vault.savedToast' },
+        { model: input.id },
+      ))
+      setExpandedMeta(null)
+    } catch (e) {
+      toastError(intl.formatMessage(
+        { id: 'settings.models.vault.saveFailed' },
+        { model: input.id },
+      ), e)
+    }
+    setSavingMeta(false)
+  }
 
   // R2-2: manual models.dev overlay refresh (same engine path as the CLI
   // `/model refresh`). Idle → busy (spinner) → done (model count) / failed
@@ -269,67 +374,137 @@ export default function ModelsSettings() {
               <p className="text-body-sm text-on-surface-variant py-lg text-center">{t('settings.models.noModelsFound')}</p>
             ) : (
               <div className="grid grid-cols-1 gap-md">
-                {filteredModels.map(m => (
-                  <Button
-                    key={m.id}
-                    variant="outline"
-                    onClick={() => handleModelSwitch(m.id)}
-                    disabled={switching !== null}
-                    className={cn(
-                      'h-auto p-md rounded-xl border flex items-center justify-between hover:border-primary/50 transition-all group cursor-pointer text-left w-full whitespace-normal',
-                      m.id === currentModel ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50',
-                    )}
-                  >
-                    <div className="flex items-center gap-md">
-                      <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center",
-                        m.id === currentModel ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant',
-                      )}>
-                        <span className="material-symbols-outlined">psychology</span>
+                {filteredModels.map(m => {
+                  const inVault = isInVault(vault?.models, m.id)
+                  const expanded = expandedMeta === m.id
+                  return (
+                <div
+                  key={m.id}
+                  data-testid="catalog-model-row"
+                  className={cn(
+                    'rounded-xl border transition-all overflow-hidden',
+                    m.id === currentModel ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50 hover:border-primary/50',
+                  )}
+                >
+                  <div className="flex items-stretch">
+                    <Button
+                      variant="ghost"
+                      onClick={() => handleModelSwitch(m.id)}
+                      disabled={switching !== null}
+                      className="h-auto p-md rounded-xl flex-1 min-w-0 flex items-center justify-between hover:bg-transparent group cursor-pointer text-left w-full whitespace-normal"
+                    >
+                      <div className="flex items-center gap-md">
+                        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center shrink-0",
+                          m.id === currentModel ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant',
+                        )}>
+                          <span className="material-symbols-outlined">psychology</span>
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-xs">
+                            <span className={cn("font-headline-md text-lg", m.id === currentModel ? 'text-link' : 'text-on-surface')}>{m.name}</span>
+                            {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold">{t('settings.models.defaultBadge')}</span> : null}
+                            {m.tier ? (
+                              <span
+                                className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold uppercase tracking-wider"
+                                title={t('settings.models.tier')}
+                              >
+                                {t(`settings.models.tier${m.tier.charAt(0).toUpperCase()}${m.tier.slice(1)}` as 'settings.models.tierFast' | 'settings.models.tierStandard' | 'settings.models.tierPro')}
+                              </span>
+                            ) : null}
+                            {/* S2-1 (裁定③/S2-1 source badge): honest provenance —
+                                `overlay` rows come from the models.dev refresh,
+                                `declared` rows from the provider's curated vault
+                                (AddProviderModal fetch 固化). Catalog rows are the
+                                default and stay unbadged. (The old always-off
+                                `dynamic` badge was removed in S1-3; `source` is
+                                its replacement.) S3-1: rendered through the
+                                SHARED badge component so the composer chip and
+                                the Header picker wear the identical styling. */}
+                            <ModelSourceBadge source={m.source} />
+                          </div>
+                          <p className="text-label-sm text-on-surface-variant">
+                            {m.provider}
+                            {m.context_window > 0
+                              ? ' ' + intl.formatMessage({ id: 'settings.models.contextWindow' }, { count: (m.context_window / 1000).toFixed(0) })
+                              : ''}
+                            {' · '}
+                            {intl.formatMessage(
+                              { id: 'settings.models.priceInput' },
+                              { value: formatPrice(m.price_in) },
+                            )}
+                            {' / '}
+                            {intl.formatMessage(
+                              { id: 'settings.models.priceOutput' },
+                              { value: formatPrice(m.price_out) },
+                            )}
+                            {' · '}
+                            {/* S2-3: declared/catalog max output per request —
+                                unknown renders "—" (honest metadata). */}
+                            {intl.formatMessage(
+                              { id: 'settings.models.maxOutput' },
+                              {
+                                value:
+                                  m.max_output != null && m.max_output > 0
+                                    ? m.max_output >= 1000
+                                      ? `${(m.max_output / 1000).toFixed(0)}k`
+                                      : String(m.max_output)
+                                    : '—',
+                              },
+                            )}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                    <div className="flex items-center gap-xs">
-                      <span className={cn("font-headline-md text-lg", m.id === currentModel ? 'text-link' : 'text-on-surface')}>{m.name}</span>
-                      {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold">{t('settings.models.defaultBadge')}</span> : null}
-                      {m.tier ? (
-                        <span
-                          className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold uppercase tracking-wider"
-                          title={t('settings.models.tier')}
-                        >
-                          {t(`settings.models.tier${m.tier.charAt(0).toUpperCase()}${m.tier.slice(1)}` as 'settings.models.tierFast' | 'settings.models.tierStandard' | 'settings.models.tierPro')}
-                        </span>
+                      {switching === m.id ? (
+                        <Spinner className="text-primary text-headline-sm" />
                       ) : null}
-                      {m.dynamic ? (
-                        <span
-                          className="px-xs py-[2px] bg-tertiary-container text-on-tertiary-container rounded-sm text-label-2xs font-bold uppercase tracking-wider"
-                          title={t('models.modelsDev.title')}
+                    </Button>
+                    {/* S2-2 vault affordance column. Rows already declared get
+                        the expand-to-edit toggle; catalog/overlay rows get the
+                        "add to vault" action (persists an id-only declaration,
+                        then opens the editor for metadata). Hidden entirely
+                        when no managed provider slot is active. */}
+                    {vault ? (
+                      inVault ? (
+                        <Button
+                          variant="ghost"
+                          data-testid={`edit-model-meta-${m.id}`}
+                          aria-label={intl.formatMessage({ id: 'settings.models.vault.editAria' }, { model: m.name })}
+                          aria-expanded={expanded}
+                          onClick={() => setExpandedMeta(expanded ? null : m.id)}
+                          className="shrink-0 self-center mr-sm px-sm py-xs rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface-container-high cursor-pointer"
                         >
-                          {t('settings.models.dynamicBadge')}
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="text-label-sm text-on-surface-variant">
-                      {m.provider}
-                      {m.context_window > 0
-                        ? ' ' + intl.formatMessage({ id: 'settings.models.contextWindow' }, { count: (m.context_window / 1000).toFixed(0) })
-                        : ''}
-                      {' · '}
-                      {intl.formatMessage(
-                        { id: 'settings.models.priceInput' },
-                        { value: formatPrice(m.price_in) },
-                      )}
-                      {' / '}
-                      {intl.formatMessage(
-                        { id: 'settings.models.priceOutput' },
-                        { value: formatPrice(m.price_out) },
-                      )}
-                    </p>
-                  </div>
-                    </div>
-                    {switching === m.id ? (
-                      <Spinner className="text-primary text-headline-sm" />
+                          <span className="material-symbols-outlined icon-sm" aria-hidden="true">tune</span>
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          data-testid={`add-model-to-vault-${m.id}`}
+                          aria-label={intl.formatMessage({ id: 'settings.models.vault.addToVaultAria' }, { model: m.name })}
+                          disabled={addingToVault !== null}
+                          onClick={() => { void handleAddToVault(m.id) }}
+                          className="shrink-0 self-center mr-sm px-sm py-xs rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface-container-high cursor-pointer disabled:opacity-50"
+                        >
+                          {addingToVault === m.id ? (
+                            <Spinner className="text-primary icon-sm" />
+                          ) : (
+                            <span className="material-symbols-outlined icon-sm" aria-hidden="true">add_circle</span>
+                          )}
+                        </Button>
+                      )
                     ) : null}
-                  </Button>
-                ))}
+                  </div>
+                  {vault && expanded ? (
+                    <ModelMetaEditor
+                      modelId={m.id}
+                      spec={vault.models.find(s => s.id === m.id)}
+                      saving={savingMeta}
+                      onSave={(input) => { void handleSaveMeta(input) }}
+                      onCancel={() => setExpandedMeta(null)}
+                    />
+                  ) : null}
+                </div>
+                  )
+                })}
               </div>
             )}
           </div>

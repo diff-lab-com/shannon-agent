@@ -1375,13 +1375,17 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                         completed = true;
                         break;
                     }
-                    QueryEvent::Failed { error, .. } => {
+                    QueryEvent::Failed {
+                        error, error_kind, ..
+                    } => {
                         let _ = self.app.emit(
                             event_names::QUERY_FAILED,
                             crate::events::query_failed_payload(
                                 &qid,
                                 &error,
                                 Some(self.session_id.to_string()),
+                                // S1-1: structured engine classification wins.
+                                error_kind.as_deref(),
                             ),
                         );
                         observation.failure = Some(error);
@@ -1393,10 +1397,13 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                     let err = e.to_string();
                     let _ = self.app.emit(
                         event_names::QUERY_FAILED,
+                        // Stream-level error: no typed ApiError — transitional
+                        // text fallback classifies (see events.rs).
                         crate::events::query_failed_payload(
                             &qid,
                             &err,
                             Some(self.session_id.to_string()),
+                            None,
                         ),
                     );
                     observation.failure = Some(err);

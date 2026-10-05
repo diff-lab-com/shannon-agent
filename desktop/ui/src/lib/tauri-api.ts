@@ -9,6 +9,7 @@ import type {
   ProviderConnection,
   ProvidersFile,
   ProviderInput,
+  DeclaredModelInput,
   ProviderProfileSummary,
   DeleteProfileOutcome,
   ProviderKeySummary,
@@ -596,6 +597,84 @@ export async function saveProvider(input: ProviderInput): Promise<ProvidersFile>
   return invoke('save_provider', { input })
 }
 
+/// S2-1 (模型仓固化): persist the curated model selection for one provider
+/// slot — replaces that slot's `models: Vec<ModelSpec>` in providers.toml
+/// v2 wholesale (overwrite semantics; an empty list clears the vault and
+/// the picker falls back to the unfiltered catalog). Emits
+/// `CONFIG_UPDATED { key: "provider_models" }`. `profile` names the target
+/// model profile; omit it to write the active one.
+export async function setProviderModels(
+  providerId: string,
+  models: DeclaredModelInput[],
+  profile?: string,
+): Promise<ProviderModelsOutcome> {
+  return invoke('set_provider_models', { providerId, models, profile: profile ?? null })
+}
+
+/// Echo of the committed vault from `set_provider_models`.
+export interface ProviderModelsOutcome {
+  provider_id: string
+  model_profile: string
+  models: DeclaredModelInput[]
+}
+
+// --- S3-4 (推荐降级链): one-click recommended fallback chain ---
+
+/** One hop of a recommended chain. `entry` is the literal `fallback_models`
+ *  string — bare id = stays on the provider (model swap), `provider/model` =
+ *  switches to that provider within the profile roster. Mirrors the Rust
+ *  `FallbackHop`. */
+export interface FallbackHop {
+  entry: string
+  model: string
+  provider_id: string
+  provider_label: string
+  same_provider: boolean
+  tier: 'pro' | 'standard' | 'fast' | string
+}
+
+/** A recommended chain from `recommend_fallback_chain` — candidates only;
+ *  nothing is persisted and no failover is enabled until the user applies
+ *  the chain through `setProviderFallbackModels`. */
+export interface RecommendedFallbackChain {
+  provider_id: string
+  model_profile: string
+  /** The slot's concrete current model when known (never recommended). */
+  current_model: string | null
+  hops: FallbackHop[]
+}
+
+/// Compute a recommended fallback chain for one provider slot (S3-4): same
+/// family first, tiers descending (pro → standard → fast, at most two);
+/// thin families are topped up from the same profile's other connected
+/// providers (one hop each, qualified `provider/model` entries). Read-only.
+export async function recommendFallbackChain(
+  providerId: string,
+  profile?: string,
+): Promise<RecommendedFallbackChain> {
+  return invoke('recommend_fallback_chain', { providerId, profile: profile ?? null })
+}
+
+/// Echo of the committed chain from `set_provider_fallback_models`.
+export interface ProviderFallbackOutcome {
+  provider_id: string
+  model_profile: string
+  fallback_models: string[]
+}
+
+/// Persist the user-confirmed fallback chain for one provider slot — the
+/// explicit-confirmation half of S3-4 (nothing writes `fallback_models`
+/// without this call). Sanitized (trim / drop-empty / dedupe) and capped at
+/// the engine's 3-target failover limit backend-side; an empty list clears
+/// the chain. Emits `CONFIG_UPDATED { key: "provider_fallback_models" }`.
+export async function setProviderFallbackModels(
+  providerId: string,
+  fallbackModels: string[],
+  profile?: string,
+): Promise<ProviderFallbackOutcome> {
+  return invoke('set_provider_fallback_models', { providerId, fallbackModels, profile: profile ?? null })
+}
+
 /// Delete a managed provider by id. Returns the updated (masked) file.
 export async function deleteProvider(id: string): Promise<ProvidersFile> {
   return invoke('delete_provider', { id })
@@ -612,6 +691,7 @@ export type {
   ProvidersFile,
   ProviderInput,
   ProviderStatus,
+  DeclaredModelInput,
 }
 export type { SurfaceInfo, CliInstallStatus, CliInstallResult, AppUpdateInfo }
 
@@ -681,6 +761,85 @@ export async function getSessionModel(
   sessionId: string | null | undefined,
 ): Promise<SessionModelOverride | null> {
   return invoke<SessionModelOverride | null>('get_session_model', { sessionId: sessionId ?? null })
+}
+
+/** S3-2 (P-N10): how many sessions currently carry a model override — the
+ *  durable sidecar's count, backing the Settings profile-switch confirm
+ *  ("N sessions still use override models"). */
+export async function countSessionModelOverrides(): Promise<number> {
+  return invoke<number>('count_session_model_overrides')
+}
+
+// --- S2-4a (review 2026-10-05 P-N9): pre-send vision pre-check ---
+
+/** One-click switch candidate: the first vision-capable model of the
+ *  effective provider's merged roster (static catalog order, then the
+ *  models.dev overlay), excluding the model that would otherwise serve
+ *  the send. `provider` is ready for `setSessionModel`. */
+export interface VisionSwitchSuggestion {
+  provider: string
+  model: string
+  name: string
+}
+
+/** Result of the desktop pre-send vision check. `vision === false` is the
+ *  ONLY "ask" verdict: the effective model (session override > phase tier
+ *  > global default) is KNOWN to lack image input. `null` = unknown —
+ *  sends flow untouched and the engine-side gate stays the final backstop
+ *  (same three-state rule as the engine). */
+export interface VisionSendCheck {
+  model: string
+  provider: string
+  vision: boolean | null
+  suggestion?: VisionSwitchSuggestion | null
+}
+
+/** Resolve what the NEXT send of this session would use and whether that
+ *  model can take image attachments. Read-only; the UI calls it before
+ *  sending a message that carries image attachments. */
+export async function checkVisionSend(
+  sessionId: string | null | undefined,
+): Promise<VisionSendCheck> {
+  return invoke<VisionSendCheck>('check_vision_send', { sessionId: sessionId ?? null })
+}
+
+// --- S2-4b (review 2026-10-05 P-N9): pre-send tool-capability pre-check ---
+
+/** One-click switch candidate: the first tool-capable model of the
+ *  effective provider's merged roster (static catalog order, then the
+ *  models.dev overlay), excluding the model that would otherwise serve
+ *  the send. `provider` is ready for `setSessionModel`. Same shape as
+ *  `VisionSwitchSuggestion`. */
+export interface ToolsSwitchSuggestion {
+  provider: string
+  model: string
+  name: string
+}
+
+/** Result of the desktop pre-send tools check. `applies === false` means
+ *  the session's send carries no tools at all — the gate is moot and the
+ *  UI must not prompt (desktop sends attach the shared tool registry
+ *  unconditionally, so today this only happens with an empty registry).
+ *  `tools === false` is the ONLY "ask" verdict: the effective model
+ *  (session override > phase tier > global default) is KNOWN to lack tool
+ *  calling. `null` = unknown — sends flow untouched (能力未知不拦; the
+ *  engine has no tools gate, so a wrong guess would only degrade the run
+ *  the way it already does without this pre-check). */
+export interface ToolsSendCheck {
+  model: string
+  provider: string
+  applies: boolean
+  tools: boolean | null
+  suggestion?: ToolsSwitchSuggestion | null
+}
+
+/** Resolve what the NEXT send of this session would use and whether that
+ *  model can take a tools-carrying request. Read-only; the UI calls it
+ *  before every send (tools ride every desktop request). */
+export async function checkToolsSend(
+  sessionId: string | null | undefined,
+): Promise<ToolsSendCheck> {
+  return invoke<ToolsSendCheck>('check_tools_send', { sessionId: sessionId ?? null })
 }
 
 // --- P2-5: session-level "temporary chat" (no-memory bypass) ---

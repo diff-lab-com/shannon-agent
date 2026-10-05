@@ -742,6 +742,52 @@ export const handlers: Record<string, MockHandler> = {
     }
     return providersFile()
   },
+  // S2-1 (模型仓固化): demo mode stores the curated vault on the demo
+  // connection so a fetch→curate→save round trip is observable in demos.
+  async set_provider_models(args: { providerId: string; models: { id: string }[] }) {
+    await delay(120)
+    const conn = state.providers.providers.find(p => p.id === args.providerId)
+    if (conn) (conn as { models?: { id: string }[] }).models = args.models
+    return {
+      provider_id: args.providerId,
+      model_profile: 'default',
+      models: args.models,
+    }
+  },
+  // S3-4 (推荐降级链): demo recommendation = the demo roster's other
+  // providers as qualified hops (candidates only — nothing persisted until
+  // set_provider_fallback_models below). set stores the chain on the demo
+  // connection so the apply round trip is observable in demos.
+  async recommend_fallback_chain(args: { providerId: string }) {
+    await delay(200)
+    const hops = state.providers.providers
+      .filter(p => p.id !== args.providerId)
+      .slice(0, 2)
+      .map(p => ({
+        entry: `${p.id}/model-${p.id}`,
+        model: `model-${p.id}`,
+        provider_id: p.id,
+        provider_label: p.display_name,
+        same_provider: false,
+        tier: 'pro',
+      }))
+    return {
+      provider_id: args.providerId,
+      model_profile: 'default',
+      current_model: null,
+      hops,
+    }
+  },
+  async set_provider_fallback_models(args: { providerId: string; fallbackModels: string[] }) {
+    await delay(120)
+    const conn = state.providers.providers.find(p => p.id === args.providerId)
+    if (conn) (conn as { fallback_models?: string[] }).fallback_models = args.fallbackModels
+    return {
+      provider_id: args.providerId,
+      model_profile: 'default',
+      fallback_models: args.fallbackModels,
+    }
+  },
   async delete_provider(args: { id: string }) {
     await delay(100)
     state.providers.providers = state.providers.providers.filter(p => p.id !== args.id)
@@ -938,6 +984,72 @@ export const handlers: Record<string, MockHandler> = {
     // demoSessionModels Map-miss already produces exactly that shape.
     return demoSessionModels.get(demoSessionKey(args.sessionId)) ?? null
   },
+  // S2-4a (P-N9): pre-send vision pre-check. Demo resolves the effective
+  // model the same way the composer chip renders it (session override →
+  // MOCK_STATUS fallback), then reads the vision bit off the seeded
+  // catalog. Demo models are vision-known entries, so the hold path is
+  // reachable by scripting a text-only override — a real handler, not an
+  // allowlist park, so e2e can drive the confirm bar.
+  async check_vision_send(args: { sessionId?: string | null }) {
+    await delay()
+    const override =
+      seededSessionModel(args.sessionId)
+      ?? demoSessionModels.get(demoSessionKey(args.sessionId))
+      ?? null
+    const model = override?.model ?? MOCK_STATUS.model
+    const entry = MOCK_MODELS.find(m => m.id === model)
+    const vision = entry == null ? null : entry.vision ?? null
+    const suggestion =
+      vision === false
+        ? (() => {
+            const candidate = MOCK_MODELS.find(m => m.id !== model && m.vision === true)
+            return candidate == null
+              ? null
+              : { provider: candidate.provider, model: candidate.id, name: candidate.name }
+          })()
+        : null
+    return {
+      model,
+      provider: override?.provider ?? MOCK_STATUS.provider,
+      vision,
+      suggestion,
+    }
+  },
+  // S2-4b (P-N9): pre-send tools pre-check — the mirror of check_vision_send
+  // above. The demo send path always rides tools (as the real desktop one
+  // does), so `applies` is constant true; the three-state verdict reads the
+  // `tools` bit off the seeded catalog (MOCK_STATUS.model is tools:true, so
+  // ordinary demo/e2e sends pass; scripting llama-4-70b reaches the hold).
+  // NO artificial delay() here, unlike the vision twin: this check rides
+  // EVERY send, so a simulated round-trip would tax every demo message and
+  // re-order the wire record against e2e assertions that read
+  // `mockSnapshot().sends[i]` right after the composer settles (the budget
+  // spec's poll was the vision-specific workaround; don't spread it).
+  async check_tools_send(args: { sessionId?: string | null }) {
+    const override =
+      seededSessionModel(args.sessionId)
+      ?? demoSessionModels.get(demoSessionKey(args.sessionId))
+      ?? null
+    const model = override?.model ?? MOCK_STATUS.model
+    const entry = MOCK_MODELS.find(m => m.id === model)
+    const tools = entry == null ? null : entry.tools ?? null
+    const suggestion =
+      tools === false
+        ? (() => {
+            const candidate = MOCK_MODELS.find(m => m.id !== model && m.tools === true)
+            return candidate == null
+              ? null
+              : { provider: candidate.provider, model: candidate.id, name: candidate.name }
+          })()
+        : null
+    return {
+      model,
+      provider: override?.provider ?? MOCK_STATUS.provider,
+      applies: true,
+      tools,
+      suggestion,
+    }
+  },
   // P2-5: session-level "temporary chat" — demo mirrors the backend's
   // durable sidecar with an in-memory set so the composer toggle persists
   // within a demo session.
@@ -967,7 +1079,18 @@ export const handlers: Record<string, MockHandler> = {
       ...clone(MOCK_STATUS),
       model: demoConfig.model ?? MOCK_STATUS.model,
       provider: demoConfig.provider ?? MOCK_STATUS.provider,
+      // S3-1 (P-N11): the ACTIVE profile name — the demo mirrors the
+      // backend's `active_profile_key` (the "default" sentinel when unset),
+      // feeding the pickers' "pinned by profile X" why-active label.
+      active_profile: demoProviderProfiles.find((p) => p.active)?.name ?? 'default',
     }
+  },
+  // S3-2 (P-N10): the demo mirror of the durable override sidecar — the
+  // per-session override map's size. Chat-surface switches (chip) write the
+  // same map, so arming an override then counting returns 1.
+  async count_session_model_overrides() {
+    await delay()
+    return demoSessionModels.size
   },
   async list_tools() { await delay(); return clone(MOCK_TOOLS) },
 

@@ -279,6 +279,11 @@ pub mod commands_profiles;
 pub mod commands_keys;
 
 #[cfg(feature = "tauri")]
+/// S2-1 (模型仓固化) — curated per-provider model vault (fetch 结果固化进
+/// providers.toml v2 的 `models` 列表). See the module docs.
+pub mod commands_models;
+
+#[cfg(feature = "tauri")]
 pub mod commands_notifications;
 
 #[cfg(feature = "tauri")]

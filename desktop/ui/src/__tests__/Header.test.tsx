@@ -132,6 +132,45 @@ describe('Header component', () => {
     expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument()
   })
 
+  // S3-1 (P-N11) — the Header menu reads at the SAME density as the
+  // composer chip: priority line, context·price meta, source badge and the
+  // why-active label all come from the shared row renderer.
+  it('model menu shows the priority line, price meta and source badge (chip parity)', async () => {
+    mockCtx.status = {
+      model: 'claude-sonnet-4-6', provider: 'anthropic', querying: false,
+      active_profile: 'default',
+    } as any
+    mockCtx.models = [
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet', provider: 'anthropic', context_window: 200000, price_in: 3, price_out: 15, vision: true },
+      { id: 'gpt-5-mini', name: 'GPT-5 Mini', provider: 'openai', context_window: 128000, price_in: 0.25, price_out: 2, source: 'overlay' },
+    ]
+    render(wrap(<Header />, { route: '/tasks' }))
+    fireEvent.click(screen.getByText('claude-sonnet-4-6'))
+    // The precedence line, stated in the picker (chat.input/header parity).
+    await waitFor(() => {
+      expect(screen.getByTestId('header-model-priority-line')).toBeInTheDocument()
+    })
+    // Price meta the old Header row never showed.
+    expect(screen.getByText('200k · $3.00/$15.00')).toBeInTheDocument()
+    // Shared provenance badge — same component as the Settings catalog.
+    expect(screen.getByTestId('source-badge-overlay')).toBeInTheDocument()
+    // The default row's why label: "default" is the unset sentinel → plain
+    // "Global default", never a fake profile attribution.
+    expect(screen.getByTestId('why-badge-global')).toBeInTheDocument()
+  })
+
+  it('attributes the default row to an explicitly active profile (why label)', async () => {
+    mockCtx.status = {
+      model: 'claude-sonnet-4-6', provider: 'anthropic', querying: false,
+      active_profile: 'lab',
+    } as any
+    render(wrap(<Header />, { route: '/tasks' }))
+    fireEvent.click(screen.getByText('claude-sonnet-4-6'))
+    await waitFor(() => {
+      expect(screen.getByTestId('why-badge-profile')).toHaveTextContent('lab')
+    })
+  })
+
   it('opens model dropdown with model names on click', async () => {
     render(wrap(<Header />, { route: '/tasks' }))
     fireEvent.click(screen.getByText('claude-sonnet-4-6'))
@@ -189,6 +228,30 @@ describe('Header component', () => {
       expect(screen.queryByRole('listbox', { name: 'Select model' })).toBeNull()
     }, { timeout: 5000 })
     expect(document.activeElement).toBe(trigger)
+  })
+
+  // S1-5 (P-N16①) — the old `models.length > 0` gate removed the whole
+  // Portal, so clicking the trigger on an empty catalog was a silent no-op.
+  // Now the menu always renders; with no models it carries one explanatory
+  // entry that deep-links to the model settings page.
+  it('empty catalog: the menu renders an explanatory entry deep-linking to /settings/models', async () => {
+    mockCtx.models = []
+    render(
+      wrap(
+        <>
+          <Header />
+          <LocationProbe />
+        </>,
+        { route: '/tasks' },
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Select model' }))
+    const entry = await screen.findByTestId('header-model-empty')
+    expect(entry).toHaveTextContent('No models available — add one in Settings')
+    fireEvent.click(entry)
+    await waitFor(() => {
+      expect(screen.getByTestId('header-location')).toHaveTextContent('/settings/models')
+    })
   })
 
   // 2026-09 dedup: on /chat the composer chip is the single model surface

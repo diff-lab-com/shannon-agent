@@ -41,11 +41,6 @@ fn error_suggestion(
     e.user_suggestion()
 }
 
-/// R3-4 capability gate — the refusal message for image blocks on a model
-/// KNOWN to lack vision. Worded to point at the switch paths (TUI `/model`,
-/// desktop composer picker); the ask-then-send UX lives in the hosts, the
-/// engine's job is to refuse clearly instead of surfacing a raw provider
-/// 400.
 /// R3-1/R4-3: render a [`shannon_engine::api::retry::RetryNotice`] as the
 /// user-visible progress line the query event stream carries.
 ///
@@ -83,11 +78,50 @@ fn format_retry_notice_message(notice: &shannon_engine::api::retry::RetryNotice)
     }
 }
 
+/// R3-4 capability gate — the refusal message for image blocks on a model
+/// KNOWN to lack vision. R2 S2-4a (P-N9): the wording is host-neutral — the
+/// old copy named the TUI's `/model` command, which does not exist on the
+/// desktop, so it now points at "the model menu" (every host has one: TUI
+/// `/model`, desktop composer chip / header picker). The ask-then-send UX
+/// lives in the hosts (the desktop pre-checks before sending and offers a
+/// one-click switch); the engine's job is to refuse clearly instead of
+/// surfacing a raw provider 400, and it stays the final backstop behind any
+/// host-side "send anyway" choice.
 fn vision_gate_message(model_id: &str) -> String {
     format!(
         "model `{model_id}` does not support image input — the attachment cannot be sent to it. \
-         Switch models first (/model in the TUI, or the composer's model picker) and re-attach."
+         Switch to a vision-capable model in the model menu, then re-attach."
     )
+}
+
+/// Static-catalog stages of the vision lookup: exact id, then forward
+/// prefix (catalog entry starts with the queried id — dated ids like
+/// `gpt-4o-2024-08-06` shorten to their base entry), then reverse prefix
+/// (queried id starts with a catalog entry, longest entry wins).
+///
+/// Parameterized over the catalog slice purely so the S2-4a prefix-
+/// collision pin test can run this EXACT matching strategy against a
+/// synthetic two-entry catalog; production passes [`MODEL_CATALOG`].
+/// Behavior is identical to the previous inlined form.
+fn vision_support_in_catalog(
+    catalog: &[crate::model_registry::ModelInfo],
+    model_id: &str,
+) -> Option<bool> {
+    let has_vision = |info: &crate::model_registry::ModelInfo| {
+        info.capabilities
+            .has(crate::model_registry::ModelCapabilities::vision())
+    };
+    if let Some(info) = catalog.iter().find(|m| m.id == model_id) {
+        return Some(has_vision(info));
+    }
+    if let Some(info) = catalog.iter().find(|m| m.id.starts_with(model_id)) {
+        return Some(has_vision(info));
+    }
+    let info = catalog
+        .iter()
+        .filter(|m| model_id.starts_with(m.id))
+        .max_by_key(|m| m.id.len())?;
+    Some(has_vision(info))
 }
 
 /// Three-state vision lookup for [`vision_gate_violation`]:
@@ -115,28 +149,9 @@ fn model_supports_vision(model_id: &str) -> Option<bool> {
             );
         }
     }
-    if let Some(info) = crate::model_registry::model_info_for(model_id) {
-        return Some(
-            info.capabilities
-                .has(crate::model_registry::ModelCapabilities::vision()),
-        );
-    }
-    let catalog = crate::model_registry::MODEL_CATALOG;
-    if let Some(info) = catalog.iter().find(|m| m.id.starts_with(model_id)) {
-        return Some(
-            info.capabilities
-                .has(crate::model_registry::ModelCapabilities::vision()),
-        );
-    }
-    if let Some(info) = catalog
-        .iter()
-        .filter(|m| model_id.starts_with(m.id))
-        .max_by_key(|m| m.id.len())
+    if let Some(vision) = vision_support_in_catalog(crate::model_registry::MODEL_CATALOG, model_id)
     {
-        return Some(
-            info.capabilities
-                .has(crate::model_registry::ModelCapabilities::vision()),
-        );
+        return Some(vision);
     }
     if let Some(info) = crate::model_registry::dynamic::overlay_snapshot()
         .iter()
@@ -846,6 +861,10 @@ impl QueryEngine {
                     QueryEvent::Failed {
                         query_id,
                         error: violation,
+                        // Pre-flight refusal, not a provider answer — no
+                        // typed status to classify; shells keep their
+                        // (transitional) text fallback.
+                        error_kind: None,
                     }
                 );
                 return;
@@ -4213,6 +4232,10 @@ impl QueryEngine {
                                                     error: format!(
                                                         "Provider stream error: {message}"
                                                     ),
+                                                    // In-stream parser message — the
+                                                    // typed error is gone by here; text
+                                                    // fallback applies (transitional).
+                                                    error_kind: None,
                                                 }
                                             );
                                             return;
@@ -4391,6 +4414,9 @@ impl QueryEngine {
                                                             send_event!(tx, QueryEvent::Failed {
                                                                 query_id,
                                                                 error: "This model cannot produce valid output — it may be too small or incompatible. Try /model to switch to a larger model.".to_string(),
+                                                                // Pre-rendered local-model
+                                                                // refusal — no typed status.
+                                                                error_kind: None,
                                                             });
                                                             return;
                                                         }
@@ -4480,6 +4506,12 @@ impl QueryEngine {
                                                     QueryEvent::Failed {
                                                         query_id,
                                                         error: error_msg,
+                                                        // retry_err is the typed ApiError
+                                                        // from the non-streaming retry —
+                                                        // classify from it.
+                                                        error_kind: Some(
+                                                            retry_err.error_kind().to_string()
+                                                        ),
                                                     }
                                                 );
                                                 return;
@@ -4491,6 +4523,8 @@ impl QueryEngine {
                                                 send_event!(tx, QueryEvent::Failed {
                                                     query_id,
                                                     error: "Local model error — retry timed out. The model may be loading, try again.".to_string(),
+                                                    // Local timeout, not a provider status.
+                                                    error_kind: None,
                                                 });
                                                 return;
                                             }
@@ -4516,6 +4550,10 @@ impl QueryEngine {
                                         QueryEvent::Failed {
                                             query_id,
                                             error: user_error,
+                                            // `e` is the typed ApiError that ended
+                                            // the LLM call — the single-source
+                                            // classification point (S1-1/P-N1).
+                                            error_kind: Some(e.error_kind().to_string()),
                                         }
                                     );
                                     return;
@@ -5096,6 +5134,12 @@ impl QueryEngine {
                                                             error: format!(
                                                                 "Auto-compact retry also failed: {retry_err}.{suggestion}"
                                                             ),
+                                                            // retry_err is the typed ApiError
+                                                            // that survived auto-compact —
+                                                            // classify from it (S1-1).
+                                                            error_kind: Some(
+                                                                retry_err.error_kind().to_string()
+                                                            ),
                                                         }
                                                     );
                                                     return;
@@ -5144,6 +5188,11 @@ impl QueryEngine {
                                                 query_id,
                                                 error: format!(
                                                     "Token overflow — auto-compact retry failed: {retry_err}.{suggestion}"
+                                                ),
+                                                // retry_err is the typed ApiError —
+                                                // classify from it (S1-1).
+                                                error_kind: Some(
+                                                    retry_err.error_kind().to_string()
                                                 ),
                                             }
                                         );
@@ -5207,6 +5256,9 @@ impl QueryEngine {
                                                 send_event!(tx, QueryEvent::Failed {
                                                     query_id,
                                                     error: "This model cannot produce valid output — it may be too small or incompatible. Try /model to switch to a larger model.".to_string(),
+                                                    // Pre-rendered local-model refusal —
+                                                    // no typed status.
+                                                    error_kind: None,
                                                 });
                                                 return;
                                             }
@@ -5284,6 +5336,10 @@ impl QueryEngine {
                                         QueryEvent::Failed {
                                             query_id,
                                             error: error_msg,
+                                            // retry_err is the typed ApiError from
+                                            // the non-streaming retry — classify
+                                            // from it.
+                                            error_kind: Some(retry_err.error_kind().to_string()),
                                         }
                                     );
                                     return;
@@ -5293,6 +5349,8 @@ impl QueryEngine {
                                     send_event!(tx, QueryEvent::Failed {
                                         query_id,
                                         error: "Local model error — retry timed out. The model may be loading, try again.".to_string(),
+                                        // Local timeout, not a provider status.
+                                        error_kind: None,
                                     });
                                     return;
                                 }
@@ -5318,6 +5376,10 @@ impl QueryEngine {
                             QueryEvent::Failed {
                                 query_id,
                                 error: user_error,
+                                // `e` is the typed ApiError that ended the LLM
+                                // call — the single-source classification point
+                                // (S1-1/P-N1).
+                                error_kind: Some(e.error_kind().to_string()),
                             }
                         );
                         return;
@@ -5493,8 +5555,9 @@ mod vision_gate_tests {
     //! pass-through for vision/unknown models) is covered by the
     //! integration tests in `engine/tests/agent_loop_tests.rs`.
 
-    use super::{model_supports_vision, vision_gate_violation};
-    use shannon_engine::api::{ContentBlock, ImageSource};
+    use super::{model_supports_vision, vision_gate_violation, vision_support_in_catalog};
+    use crate::model_registry::{ModelCapabilities, ModelEntrySource, ModelInfo};
+    use shannon_engine::api::{ContentBlock, ImageSource, LlmProvider};
     use shannon_types::provider_config::{ModelCapability, ModelSpec};
 
     fn image_block() -> ContentBlock {
@@ -5534,9 +5597,15 @@ mod vision_gate_tests {
             message.contains("deepseek-v4-flash"),
             "message must name the model: {message}"
         );
+        // S2-4a (P-N9): host-neutral copy — must point at the model menu,
+        // never at the TUI-only `/model` command.
         assert!(
-            message.contains("/model"),
-            "message must point at the switch paths: {message}"
+            message.contains("model menu"),
+            "message must point at the model menu: {message}"
+        );
+        assert!(
+            !message.contains("/model"),
+            "desktop users have no /model command: {message}"
         );
     }
 
@@ -5618,6 +5687,80 @@ mod vision_gate_tests {
     fn dated_catalog_ids_resolve_via_prefix_strategies() {
         // Reverse-prefix: the dated id starts with the catalog entry id.
         assert_eq!(model_supports_vision("gpt-4o-2024-08-06"), Some(true));
+    }
+
+    // ── S2-4a (P-N9): capability prefix-collision pins ─────────────────
+    //
+    // The catalog fallback matches bidirectionally on id prefixes. The
+    // intended direction is pinned above (dated ids resolve to the base
+    // entry). The tests below pin the COLLISION direction: a capability
+    // bit is inherited by any queried id that merely STARTS WITH a
+    // catalog entry's id. The review's example (glm-4.5 / glm-4.5-air) is
+    // constructed on a synthetic catalog because MODEL_CATALOG is fixed
+    // at compile time and carries no such pair today — the pin locks the
+    // MATCHING STRATEGY, so a future catalog addition that would make the
+    // collision real cannot slip in unnoticed.
+
+    /// One plain catalog row; only `id` and `capabilities` matter to the
+    /// lookup, the rest mirrors a typical static entry.
+    fn catalog_entry(id: &'static str, capabilities: ModelCapabilities) -> ModelInfo {
+        ModelInfo {
+            id,
+            display_name: id,
+            aliases: &[],
+            provider: LlmProvider::Zhipu,
+            context_window: 128_000,
+            max_output: 4_096,
+            cost_per_m_input: 0.0,
+            cost_per_m_output: 0.0,
+            capabilities,
+            source: ModelEntrySource::Catalog,
+        }
+    }
+
+    /// KNOWN ISSUE (P-N9, review 2026-10-05): the reverse-prefix stage
+    /// (`model_id.starts_with(entry.id)`, longest entry wins) cannot tell
+    /// "a dated/suffixed variant of the same model" from "a DIFFERENT,
+    /// smaller product whose id merely shares a prefix". Given a catalog
+    /// entry `glm-4.5` with vision, the query `glm-4.5-air` — a text-only
+    /// variant absent from the catalog — INHERITS the vision bit and the
+    /// gate lets its image attachments through to a provider 400. This
+    /// test pins that current behavior deliberately: the honest fix
+    /// (separator-aware matching, or exact-only capability lookups) is a
+    /// schema-semantics change that would re-classify existing models and
+    /// is explicitly out of scope for S2-4a. If this test starts failing,
+    /// the semantics moved — update this pin together with the review
+    /// issue, not silently.
+    #[test]
+    fn reverse_prefix_collision_inherits_vision_bit_known_issue() {
+        let synthetic = [catalog_entry("glm-4.5", ModelCapabilities::vision())];
+        assert_eq!(
+            vision_support_in_catalog(&synthetic, "glm-4.5-air"),
+            Some(true),
+            "current semantics: glm-4.5-air inherits glm-4.5's vision bit \
+             via reverse prefix — KNOWN ISSUE, see P-N9"
+        );
+        // The symmetric, INTENDED case for contrast: a dated/suffixed id
+        // of the SAME model is exactly what reverse-prefix exists for.
+        assert_eq!(
+            vision_support_in_catalog(&synthetic, "glm-4.5-20250715"),
+            Some(true),
+            "dated ids of the same model are the legitimate inheritors"
+        );
+    }
+
+    /// A real catalog entry for the QUERIED id always wins before any
+    /// prefix stage runs — the collision only bites ids the catalog does
+    /// not list. Pinned on the live catalog: glm-5.1-air is not listed,
+    /// but glm-5.1 is (coding/reasoning, no vision), so the hypothetical
+    /// id inherits the FALSE bit and would be gated; glm-5.1-flash's own
+    /// entry shields it from glm-5.1's bit.
+    #[test]
+    fn live_catalog_exact_entry_shields_from_prefix_collision() {
+        // Exact id → own capabilities, regardless of any prefix ancestor.
+        assert_eq!(model_supports_vision("glm-5.1-flash"), Some(false));
+        // No exact id → longest reverse-prefix ancestor's capabilities.
+        assert_eq!(model_supports_vision("glm-5.1-flash-x"), Some(false));
     }
 }
 

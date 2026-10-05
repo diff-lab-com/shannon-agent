@@ -605,6 +605,14 @@ pub struct StatusResponse {
     pub querying: bool,
     pub message_count: usize,
     pub working_dir: String,
+    /// S3-1 (P-N11 "why this model is active"): the engine store's ACTIVE
+    /// model profile name (`providers.toml` `active_profile`). The global
+    /// default model IS that profile's pinned active target, so the pickers
+    /// can label the default row "pinned by profile X" without a second
+    /// round trip. `None` when the store carries no profiles map (legacy
+    /// files); the UI falls back to the plain "global default" label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_profile: Option<String>,
 }
 
 /// Model info for the model selector. The optional fields are populated
@@ -629,7 +637,8 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
     /// Whether this entry comes from the dynamic models.dev overlay rather
-    /// than the static catalog. Surfaces a freshness indicator in the UI.
+    /// than the static catalog. Superseded by `source` (S2-1) — kept on the
+    /// wire for older readers; always `None` from the current writer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dynamic: Option<bool>,
     /// Vision (image input) capability from the merged catalog metadata
@@ -638,6 +647,23 @@ pub struct ModelInfo {
     /// dot rather than guessing (R2-3 honest metadata).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<bool>,
+    /// S2-3 (裁定⑩): declared/catalog maximum output tokens per request.
+    /// `None` = unknown — the UI renders "—" rather than a fabricated cap.
+    /// A declared value wins over the catalog's curated estimate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u32>,
+    /// S2-1 (裁定③/S2-1 source badge): where this row's metadata came from —
+    /// `"catalog"` (curated static table), `"overlay"` (models.dev-only row)
+    /// or `"declared"` (synthesized from the provider's curated vault in
+    /// `providers.toml` with no catalog metadata behind it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// S2-4b (schema/wire only — no gating behavior yet): native tool-calling
+    /// support. `Some` only where the source is explicit (models.dev
+    /// `tool_call`, user declaration); `None` = the catalog doesn't curate
+    /// tool bits, so unknown — same honest-metadata contract as `vision`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<bool>,
 }
 
 /// Tool info for the tools panel.
@@ -1654,8 +1680,12 @@ pub async fn send_message(
     // R2-1: session-level model override — a chip override on THIS session
     // re-resolves provider/model/base_url/credential against the engine
     // store; no override inherits the global `client_config` (the default).
-    let client_config =
-        crate::commands_chat::resolve_client_config_for_session(&state, &active_session).await;
+    let client_config = crate::commands_chat::resolve_client_config_for_session(
+        &state,
+        &active_session,
+        Some(&app_handle),
+    )
+    .await;
     let effective_model = client_config.model.clone();
     let effective_provider = client_config.provider.to_string();
     let client = LlmClient::new(client_config);
@@ -2348,7 +2378,11 @@ pub async fn send_message(
                             }
                         });
                     }
-                    QueryEvent::Failed { error, .. } => {
+                    QueryEvent::Failed {
+                        error,
+                        error_kind,
+                        ..
+                    } => {
                         // OBS1 (unify the failed half with D6): whatever the
                         // run already streamed stays. The engine tee finalizes
                         // the open step as
@@ -2381,6 +2415,9 @@ pub async fn send_message(
                                 &qid_str,
                                 &error,
                                 Some(session_id_str.clone()),
+                                // S1-1: structured engine classification wins;
+                                // None → events.rs's transitional text fallback.
+                                error_kind.as_deref(),
                             ),
                         );
                         // T5: the turn failed — surface it in the unified
@@ -2412,10 +2449,13 @@ pub async fn send_message(
                     let err_string = e.to_string();
                     let _ = app.emit(
                         event_names::QUERY_FAILED,
+                        // Stream-level error: no typed ApiError in scope —
+                        // transitional text fallback classifies (see events.rs).
                         events::query_failed_payload(
                             &qid_str,
                             &err_string,
                             Some(session_id_str.clone()),
+                            None,
                         ),
                     );
                     // T5: stream error — same needs-attention write as the
@@ -2458,7 +2498,13 @@ pub async fn send_message(
             );
             let _ = app.emit(
                 event_names::QUERY_FAILED,
-                events::query_failed_payload(&qid_str, &panic_msg, Some(session_id_str.clone())),
+                // Panic: no classification possible — plain banner via fallback.
+                events::query_failed_payload(
+                    &qid_str,
+                    &panic_msg,
+                    Some(session_id_str.clone()),
+                    None,
+                ),
             );
             crate::commands_notifications::fire_query_notification_logged(
                 &notifier_arc,
@@ -3085,6 +3131,7 @@ mod tests {
             querying: true,
             message_count: 42,
             working_dir: "/home/user".to_string(),
+            active_profile: Some("default".to_string()),
         };
         let json = serde_json::to_string(&resp).unwrap();
         let deserialized: StatusResponse = serde_json::from_str(&json).unwrap();
@@ -3105,11 +3152,24 @@ mod tests {
             tier: None,
             dynamic: None,
             vision: Some(false),
+            max_output: Some(16_384),
+            source: Some("catalog".to_string()),
+            tools: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: ModelInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id, "gpt-4");
         assert_eq!(deserialized.context_window, 128_000);
+        assert_eq!(deserialized.max_output, Some(16_384));
+        assert_eq!(deserialized.source.as_deref(), Some("catalog"));
+        // Old readers (and old payloads): the new fields are optional with
+        // serde defaults — a payload without them deserializes cleanly.
+        let legacy: ModelInfo =
+            serde_json::from_str(r#"{"id":"m","name":"m","provider":"p","context_window":0}"#)
+                .unwrap();
+        assert_eq!(legacy.max_output, None);
+        assert_eq!(legacy.source, None);
+        assert_eq!(legacy.tools, None);
     }
 
     #[test]

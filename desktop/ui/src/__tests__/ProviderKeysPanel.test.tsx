@@ -43,8 +43,11 @@ describe('ProviderKeysPanel (R4-3 desktop)', () => {
     // Active row has no activate button; the spare does.
     expect(screen.queryByTestId('provider-key-activate-0')).toBeNull()
     expect(screen.getByTestId('provider-key-activate-1')).toBeInTheDocument()
-    // The rotation note is always visible.
+    // The rotation note is always visible — together with the S1-2 (P-N2)
+    // pin clause: key rotation keeps working, a pinned session only opts
+    // out of model-level automatic failover.
     expect(screen.getByText(/automatically tries the next key/i)).toBeInTheDocument()
+    expect(screen.getByText(/pinned session/i)).toBeInTheDocument()
   })
 
   it('add: a pasted key calls the command and clears the field', async () => {

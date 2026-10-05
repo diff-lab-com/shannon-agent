@@ -531,6 +531,7 @@ mod tests {
         let event = QueryEvent::Failed {
             query_id: id,
             error: "timeout".to_string(),
+            error_kind: None,
         };
         match event {
             QueryEvent::Failed { error, .. } => assert_eq!(error, "timeout"),

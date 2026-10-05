@@ -1469,6 +1469,7 @@ mod tests {
             for input in crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Failed {
                 query_id: uuid::Uuid::new_v4(),
                 error: "upstream connection reset while streaming".into(),
+                error_kind: None,
             }) {
                 tee.record_bus_input(&input);
             }

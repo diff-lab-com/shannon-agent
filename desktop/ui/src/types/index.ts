@@ -340,6 +340,12 @@ export interface StatusResponse {
   querying: boolean
   message_count: number
   working_dir: string
+  /** S3-1 (P-N11): the engine store's ACTIVE model profile name — the
+   *  global default model IS that profile's pinned target, so the pickers
+   *  can label the default row "pinned by profile X". `null`/absent on
+   *  legacy payloads; the `"default"` sentinel means the pointer is unset
+   *  (rendered as the plain "global default" label). */
+  active_profile?: string | null
 }
 
 export interface ModelInfo {
@@ -356,12 +362,59 @@ export interface ModelInfo {
   /** Optional tier label (`fast` / `standard` / `pro`). */
   tier?: string | null
   /** Whether this entry comes from the dynamic models.dev overlay (vs the
-   *  static catalog). Surfaces a freshness indicator in the UI. */
+   *  static catalog). Wire-only for now: the engine hardcodes `dynamic:
+   *  None`, and the Settings badge that consumed it was removed (S1-3,
+   *  P-N3) — superseded by `source` (S2-1). */
   dynamic?: boolean
   /** Vision (image input) capability from the catalog metadata. `undefined`
    *  / null = unknown — the UI renders no capability dot rather than
    *  guessing (R2-3, honest metadata). */
   vision?: boolean | null
+  /** S2-3: maximum output tokens per request (declared value wins over the
+   *  catalog's curated estimate). null = unknown — render "—". */
+  max_output?: number | null
+  /** S2-1 source badge (裁定③): `"catalog"` (curated static table),
+   *  `"overlay"` (models.dev-only row) or `"declared"` (synthesized from
+   *  the provider's curated vault with no catalog metadata behind it). */
+  source?: 'catalog' | 'overlay' | 'declared' | string | null
+  /** S2-4b (schema/wire only): native tool-calling support. `null` = the
+   *  source carries no explicit tool data (unknown — no badge). */
+  tools?: boolean | null
+}
+
+/// Mirrors `shannon_types::provider_config::ModelSpec` (S2-1 curated vault).
+/// Only `id` is required — users without metadata固化 id-only specs and the
+/// catalog keeps supplying pricing/context for ids it knows.
+export interface DeclaredModelSpec {
+  id: string
+  display_name?: string | null
+  context_window?: number | null
+  max_output?: number | null
+  cost_per_m_input?: number | null
+  cost_per_m_output?: number | null
+  capabilities?: ModelCapabilityName[]
+}
+
+/// Schema capability names (snake_case, mirrors `ModelCapability`).
+export type ModelCapabilityName =
+  | 'reasoning'
+  | 'coding'
+  | 'speed'
+  | 'cheap'
+  | 'vision'
+  | 'tool_use'
+  | (string & {})
+
+/// Wire input for `set_provider_models` (S2-1) — same shape as
+/// `DeclaredModelSpec`; capability names are validated server-side.
+export interface DeclaredModelInput {
+  id: string
+  display_name?: string | null
+  context_window?: number | null
+  max_output?: number | null
+  cost_per_m_input?: number | null
+  cost_per_m_output?: number | null
+  capabilities?: ModelCapabilityName[]
 }
 
 export interface ToolInfo {
@@ -531,6 +584,8 @@ export interface ProviderConnection {
   fallback_models?: string[]
   quirks?: ProviderQuirks
   tiers?: ProviderTiers
+  /** S2-1 curated model vault (`ModelSpec`s in providers.toml v2). */
+  models?: DeclaredModelSpec[]
 }
 
 /// Mirrors `shannon_types::provider_config::ProviderTiers`. Canonical
@@ -1694,6 +1749,14 @@ export const EVENT_NAMES = {
   SESSION_AUTO_ARCHIVED: 'session-auto-archived',
   SESSION_LOADED: 'session-loaded',
   CONFIG_UPDATED: 'config-updated',
+  /**
+   * S3-2 (P-N10): a session's pinned model override no longer resolves
+   * (e.g. its provider vanished with a profile switch) and the query rode
+   * the global default. Payload: ModelOverrideFallbackPayload
+   * { session_id, provider, model } — rendered as a one-time toast per
+   * distinct triple, replacing the old tracing-only silence.
+   */
+  MODEL_OVERRIDE_FALLBACK: 'model-override-fallback',
   DIFF_REVIEW_AVAILABLE: 'diff-review-available',
   BACKGROUND_TASK_UPDATE: 'background-task-update',
   BACKGROUND_TASKS_UPDATED: 'background-tasks-updated',

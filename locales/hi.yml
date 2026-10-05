@@ -104,7 +104,7 @@ commands:
     available: "उपलब्ध प्रदाता:"
     legend: "* = वर्तमान | बदलने के लिए /provider <नाम> उपयोग करें"
     switched: "प्रदाता: %{provider} | मॉडल: %{model}"
-    switched_no_catalog: "प्रदाता %{provider} सेट हुआ। इसकी अंतर्निहित मॉडल सूची नहीं है — मॉडल चुनने के लिए `/model <provider>/<model-id>` उपयोग करें।"
+    no_catalog_pick_required: "प्रदाता %{provider} की कोई मॉडल सूची नहीं है, इसलिए पिछला मॉडल नहीं रखा जाएगा। अभी खुले चयनकर्ता में मॉडल चुनें (रद्द करने के लिए Esc) या स्पष्ट रूप से बदलें: /provider %{provider} <model-id>"
     no_selection: "कोई प्रदाता चयनित नहीं। पहले /connect <provider> <key> चलाएँ।"
   disconnect:
     usage: "उपयोग: /disconnect <provider>\nप्रदाता का सहेजा कनेक्शन (providers.toml में उसकी प्रविष्टि) हटाता है ताकि वह जुड़ा न रहे। आपकी सहेजी API कुंजी बनी रहती है — दोबारा जुड़ने के लिए /connect फिर से चलाएँ।"

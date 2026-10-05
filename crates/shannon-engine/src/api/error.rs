@@ -3,6 +3,41 @@
 use crate::api::types::LlmProvider;
 use thiserror::Error;
 
+/// Canonical `error_kind` values carried on structured failure payloads
+/// (S1-1, review 2026-10-05 §3 P-N1). The engine classifies failures HERE —
+/// where the typed error and its HTTP status are in scope — and shells
+/// consume the kind verbatim; nobody re-derives it from message text.
+///
+/// Classification maps **typed status only** (`ApiError::error_kind`);
+/// message sniffing is forbidden by contract. Values are stable wire
+/// strings: desktop UI routes each kind to a dedicated recovery banner.
+pub mod error_kind {
+    /// HTTP 401 — bad/revoked API key.
+    pub const AUTH: &str = "auth";
+    /// HTTP 402 — provider quota/credit exhausted.
+    pub const QUOTA: &str = "quota";
+    /// HTTP 429 — rate limited.
+    pub const RATE_LIMIT: &str = "rate_limit";
+    /// HTTP 403 — key valid but lacks permission for the model/resource.
+    pub const AUTHZ: &str = "authz";
+    /// Everything else (network, timeout, 5xx, engine bugs, …).
+    pub const OTHER: &str = "other";
+}
+
+/// Map an HTTP status to its canonical [`error_kind`]. Kept status-based on
+/// purpose: 401→auth, 402→quota, 403→authz, 429→rate_limit, rest→other
+/// (5xx/network/timeout intentionally land in `other` — they are transient,
+/// not user-fixable configurations).
+fn error_kind_for_status(status: u16) -> &'static str {
+    match status {
+        401 => error_kind::AUTH,
+        402 => error_kind::QUOTA,
+        403 => error_kind::AUTHZ,
+        429 => error_kind::RATE_LIMIT,
+        _ => error_kind::OTHER,
+    }
+}
+
 /// Errors that can occur during API communication
 #[derive(Error, Debug)]
 pub enum ApiError {
@@ -42,11 +77,22 @@ pub enum ApiError {
     #[error("Unsupported provider: {0}")]
     UnsupportedProvider(String),
 
+    /// Provider error with structured provider info. `status` (S1-1, P-N1)
+    /// preserves the HTTP status that `from_provider_response` consumed —
+    /// without it the status was dropped the moment a provider answered
+    /// 402/403 with a structured JSON body (e.g. DeepSeek's "Insufficient
+    /// Balance"), which is exactly the type information the desktop banner
+    /// routing needs. `None` for errors parsed outside an HTTP exchange
+    /// (in-stream Ollama error fields, adapter probes).
     #[error("Provider error ({provider}): {error_type} — {message}")]
     ProviderError {
         provider: String,
         error_type: String,
         message: String,
+        /// HTTP status the provider answered with, when this error came
+        /// from an HTTP exchange (`from_provider_response` fills it);
+        /// `None` for errors parsed outside an HTTP exchange.
+        status: Option<u16>,
     },
 }
 
@@ -124,6 +170,7 @@ impl ApiError {
                             provider: provider_name,
                             error_type,
                             message,
+                            status: Some(status),
                         };
                     }
                 }
@@ -164,6 +211,7 @@ impl ApiError {
                             provider: provider_name,
                             error_type,
                             message,
+                            status: Some(status),
                         };
                     }
                 }
@@ -175,6 +223,7 @@ impl ApiError {
                             provider: provider_name,
                             error_type: "ollama_error".to_string(),
                             message,
+                            status: Some(status),
                         };
                     }
                 }
@@ -195,6 +244,7 @@ impl ApiError {
                             provider: provider_name,
                             error_type,
                             message,
+                            status: Some(status),
                         };
                     }
                 }
@@ -210,6 +260,7 @@ impl ApiError {
                             provider: provider_name,
                             error_type,
                             message: msg.to_string(),
+                            status: Some(status),
                         };
                     }
                 }
@@ -221,6 +272,32 @@ impl ApiError {
             provider: provider_name,
             error_type: format!("http_{status}"),
             message: body.to_string(),
+            status: Some(status),
+        }
+    }
+
+    /// S1-1 (review 2026-10-05 §3 P-N1): classify this error into the
+    /// canonical [`error_kind`] wire value, **from typed data only** —
+    /// variant + status. No message sniffing: the engine is the single
+    /// classification source, and shells consume the kind verbatim instead
+    /// of re-parsing `Display` text (the fragile chain this replaces).
+    ///
+    /// 401→auth, 402→quota, 403→authz, 429→rate_limit; timeouts, network
+    /// failures, 5xx and everything else→other (transient classes the user
+    /// cannot fix by reconfiguring, so they keep the plain error banner).
+    pub fn error_kind(&self) -> &'static str {
+        match self {
+            ApiError::AuthenticationFailed => error_kind::AUTH,
+            ApiError::RateLimitExceeded { .. } => error_kind::RATE_LIMIT,
+            ApiError::ApiError { status, .. } => error_kind_for_status(*status),
+            // `status` is filled by `from_provider_response` for every
+            // HTTP-derived provider error — including 402/403 bodies that
+            // parse into provider-specific shapes (quota/authz must survive
+            // that parse). `None` = never saw an HTTP status → other.
+            ApiError::ProviderError { status, .. } => status
+                .map(error_kind_for_status)
+                .unwrap_or(error_kind::OTHER),
+            _ => error_kind::OTHER,
         }
     }
 
@@ -386,6 +463,7 @@ mod tests {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
             message: "Value looks like object, but can't find closing '}' symbol".to_string(),
+            status: None,
         };
         let display = format!("{err}");
         assert!(
@@ -412,6 +490,7 @@ mod tests {
             provider: "openai".to_string(),
             error_type: "invalid_request_error".to_string(),
             message: "max_tokens is required".to_string(),
+            status: None,
         };
         let display = format!("{err}");
         assert!(display.contains("Provider error (openai)"), "{display}");
@@ -475,6 +554,7 @@ mod tests {
                 provider,
                 error_type,
                 message,
+                ..
             } => {
                 assert_eq!(provider, "ollama");
                 assert_eq!(error_type, "ollama_error");
@@ -522,6 +602,7 @@ mod tests {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
             message: "context length exceeded".to_string(),
+            status: None,
         };
         assert!(err.is_token_overflow());
     }
@@ -532,6 +613,7 @@ mod tests {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
             message: "can't find closing '}' symbol".to_string(),
+            status: None,
         };
         assert!(
             !err.is_token_overflow(),
@@ -573,6 +655,7 @@ mod tests {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
             message: "Value looks like object, but can't find closing '}' symbol".to_string(),
+            status: None,
         };
         let suggestion = err.user_suggestion();
         assert!(
@@ -589,6 +672,7 @@ mod tests {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
             message: "model not found".to_string(),
+            status: None,
         };
         assert!(
             err.user_suggestion().is_none(),
@@ -670,6 +754,7 @@ mod tests {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
             message: "Value looks like object, but can't find closing '}' symbol".to_string(),
+            status: None,
         };
         let suggestion = err
             .user_suggestion()
@@ -712,6 +797,7 @@ mod tests {
                 provider: "ollama".to_string(),
                 error_type: "ollama_error".to_string(),
                 message: "can't find closing '}' symbol".to_string(),
+                status: None,
             },
         ];
         for err in cases {
@@ -722,6 +808,117 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── S1-1 / P-N1: structured error_kind classification ───────────────
+
+    /// The canonical mapping: typed variant/status → wire kind. This is the
+    /// single classification source the desktop consumes; there must be no
+    /// text matching anywhere in this path.
+    #[test]
+    fn test_error_kind_maps_typed_statuses() {
+        // Status-carrying variant: 401→auth, 402→quota, 403→authz,
+        // 429→rate_limit, everything else (incl. 5xx)→other.
+        let kind_of = |status: u16| {
+            ApiError::ApiError {
+                status,
+                message: "x".to_string(),
+            }
+            .error_kind()
+        };
+        assert_eq!(kind_of(401), error_kind::AUTH);
+        assert_eq!(kind_of(402), error_kind::QUOTA);
+        assert_eq!(kind_of(403), error_kind::AUTHZ);
+        assert_eq!(kind_of(429), error_kind::RATE_LIMIT);
+        assert_eq!(kind_of(500), error_kind::OTHER);
+        assert_eq!(kind_of(502), error_kind::OTHER);
+        assert_eq!(kind_of(529), error_kind::OTHER);
+        assert_eq!(kind_of(400), error_kind::OTHER);
+        assert_eq!(kind_of(404), error_kind::OTHER);
+
+        // Dedicated variants.
+        assert_eq!(
+            ApiError::AuthenticationFailed.error_kind(),
+            error_kind::AUTH
+        );
+        assert_eq!(
+            ApiError::RateLimitExceeded {
+                retry_after_secs: Some(30)
+            }
+            .error_kind(),
+            error_kind::RATE_LIMIT
+        );
+
+        // Transient / non-provider classes stay `other` — timeouts, network
+        // send failures (proxied here by I/O), parse errors.
+        assert_eq!(ApiError::Timeout.error_kind(), error_kind::OTHER);
+        assert_eq!(
+            ApiError::Io(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "net")).error_kind(),
+            error_kind::OTHER
+        );
+        assert_eq!(
+            ApiError::InvalidResponse("error sending request".to_string()).error_kind(),
+            error_kind::OTHER
+        );
+    }
+
+    /// The P-N1 root cause, pinned: a provider answering 402/403 with a
+    /// structured JSON body used to collapse into `ProviderError` and DROP
+    /// the status — the exact type information the quota/authz banners need
+    /// (e.g. DeepSeek's 402 `{"error":{"message":"Insufficient Balance"}}`).
+    /// `from_provider_response` must preserve the status so `error_kind()`
+    /// still sees 402/403.
+    #[test]
+    fn test_error_kind_survives_provider_body_parse_for_402_and_403() {
+        // DeepSeek-style OpenAI-compatible 402 body.
+        let err = ApiError::from_provider_response(
+            &LlmProvider::DeepSeek,
+            402,
+            r#"{"error":{"message":"Insufficient Balance","type":"insufficient_balance"}}"#,
+        );
+        assert_eq!(err.error_kind(), error_kind::QUOTA);
+        match &err {
+            ApiError::ProviderError {
+                status, message, ..
+            } => {
+                assert_eq!(*status, Some(402));
+                assert!(message.contains("Insufficient Balance"));
+            }
+            other => panic!("Expected ProviderError, got {other:?}"),
+        }
+
+        // Anthropic-style 403 body (permission-flavoured).
+        let err = ApiError::from_provider_response(
+            &LlmProvider::Anthropic,
+            403,
+            r#"{"type":"error","error":{"type":"permission_error","message":"your key cannot access this model"}}"#,
+        );
+        assert_eq!(err.error_kind(), error_kind::AUTHZ);
+
+        // Fallback (non-JSON body) keeps the status too.
+        let err = ApiError::from_provider_response(&LlmProvider::Custom, 402, "quota gone");
+        assert_eq!(err.error_kind(), error_kind::QUOTA);
+
+        // Non-special statuses stay `other` even with a parsed body.
+        let err = ApiError::from_provider_response(
+            &LlmProvider::OpenAI,
+            404,
+            r#"{"error":{"message":"model not found","type":"invalid_request_error"}}"#,
+        );
+        assert_eq!(err.error_kind(), error_kind::OTHER);
+    }
+
+    /// Provider errors parsed OUTSIDE an HTTP exchange (in-stream Ollama
+    /// error fields, adapter probes) carry no status → `other`.
+    #[test]
+    fn test_error_kind_provider_error_without_status_is_other() {
+        let err = ApiError::ProviderError {
+            provider: "ollama".to_string(),
+            error_type: "ollama_error".to_string(),
+            message: "model 'foo' not found".to_string(),
+            status: None,
+        };
+        assert_eq!(err.error_kind(), error_kind::OTHER);
     }
 
     // ── A8: timeout-class detection ─────────────────────────────────────
@@ -739,6 +936,7 @@ mod tests {
             provider: "zhipu-coding".to_string(),
             error_type: "timeout_error".to_string(),
             message: "upstream request timeout".to_string(),
+            status: None,
         };
         assert!(provider_timeout.is_timeout_class());
         // "timed out" — reqwest's TimedOut source surfaces as this wording.
@@ -771,6 +969,7 @@ mod tests {
                 provider: "ollama".to_string(),
                 error_type: "ollama_error".to_string(),
                 message: "Value looks like object, but can't find closing '}' symbol".to_string(),
+                status: None,
             }
             .is_timeout_class()
         );
@@ -798,6 +997,7 @@ mod tests {
                 provider: "zhipu-coding".to_string(),
                 error_type: "timeout_error".to_string(),
                 message: "upstream request timeout".to_string(),
+                status: None,
             }
             .is_stream_interrupted()
         );
@@ -810,6 +1010,7 @@ mod tests {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
             message: "Value looks like object, but can't find closing '}' symbol".to_string(),
+            status: None,
         };
         let display = format!("{err}");
         let suggestion = err.user_suggestion();

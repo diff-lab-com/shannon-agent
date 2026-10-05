@@ -184,6 +184,23 @@ class PointerEventMock extends MouseEvent {}
 vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/tauri-api')>()),
   sendMessage: vi.fn().mockResolvedValue({ message_id: '1', status: 'sent' }),
+  // S2-4a — vision pre-check default: the effective model HAS vision, so
+  // no send is ever held; the vision-confirm flow tests override per
+  // scenario (vision=false / rejection).
+  checkVisionSend: vi.fn().mockResolvedValue({
+    model: 'claude-sonnet-4-6',
+    provider: 'anthropic',
+    vision: true,
+  }),
+  // S2-4b — tools pre-check default: applies AND tool-capable, so no send
+  // is ever held; the tools-confirm flow tests override per scenario
+  // (tools=false / applies=false / rejection).
+  checkToolsSend: vi.fn().mockResolvedValue({
+    model: 'claude-sonnet-4-6',
+    provider: 'anthropic',
+    applies: true,
+    tools: true,
+  }),
   // P0-3 preflight — default: every path checks clean; chip-flagging tests
   // override per scenario.
   checkAttachmentPaths: vi.fn().mockResolvedValue([]),
@@ -357,6 +374,19 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   saveProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
+  // S2-1 (模型仓固化): default no-op; the curation tests override per
+  // scenario.
+  setProviderModels: vi.fn().mockResolvedValue({
+    provider_id: '', model_profile: 'default', models: [],
+  }),
+  // S3-4 (推荐降级链): default empty recommendation + committed-echo no-op;
+  // the fallback-panel tests override per scenario.
+  recommendFallbackChain: vi.fn().mockResolvedValue({
+    provider_id: '', model_profile: 'default', current_model: null, hops: [],
+  }),
+  setProviderFallbackModels: vi.fn().mockResolvedValue({
+    provider_id: '', model_profile: 'default', fallback_models: [],
+  }),
   deleteProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   setActiveProvider: vi.fn().mockResolvedValue(undefined),
   // ADR-0005 P4.12 — fan-out probe. Default: empty roster.
@@ -369,6 +399,10 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   setSessionModel: vi.fn().mockResolvedValue(undefined),
   clearSessionModel: vi.fn().mockResolvedValue(undefined),
   getSessionModel: vi.fn().mockResolvedValue(null),
+  // S3-2 (P-N10) — override count for the Settings profile-switch confirm.
+  // Default: no session carries an override, so every switch stays direct;
+  // the confirm tests override per scenario.
+  countSessionModelOverrides: vi.fn().mockResolvedValue(0),
   // R2-2 — Settings "Refresh model catalog". Default: no-op success.
   refreshModelCatalog: vi.fn().mockResolvedValue({ count: 0, generation: 1 }),
   // ADR-0005 P4.9 — provider allowlist. Default: no override (returns

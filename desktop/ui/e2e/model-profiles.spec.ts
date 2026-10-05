@@ -80,4 +80,61 @@ test.describe('Provider model profiles + phase tiers (R3-2/R3-3)', () => {
     await expect(section.getByTestId('profile-rename-research')).toBeVisible()
     await expect(section.getByTestId('profile-delete-research')).toBeEnabled()
   })
+
+  // ── S3-1/S3-2 (P-N10/P-N11/P-N23) — switch-surface convergence ─────────
+
+  // S3-1: the Header picker (non-chat routes) reads at the SAME density as
+  // the composer chip — priority line, context·price meta and the shared
+  // source badge all come from ModelPickerRowContent.
+  test('the Header model menu shows chip-density meta (priority line, price, source badge)', async ({ page }) => {
+    await page.goto('/settings/models')
+    const trigger = page.getByRole('button', { name: 'Select model' })
+    await expect(trigger).toBeVisible({ timeout: 15000 })
+    await trigger.click()
+    // The precedence line — the picker states its lookup order.
+    await expect(page.getByTestId('header-model-priority-line')).toBeVisible({ timeout: 10000 })
+    // The demo catalog carries real prices — the gpt-5-mini row is
+    // overlay-sourced, so the shared badge renders there too.
+    await expect(page.getByTestId('source-badge-overlay')).toBeVisible()
+    // The default row wears the plain "Global default" label (the demo's
+    // active profile is the "default" sentinel).
+    await expect(page.getByTestId('why-badge-global')).toBeVisible()
+  })
+
+  // S3-2: switching profiles while a session override is live warns with
+  // the durable override count before the switch; confirming proceeds.
+  test('profile switch warns when sessions still carry override models (S3-2)', async ({ page }) => {
+    test.setTimeout(60_000)
+    await page.goto('/settings/models')
+    const section = page.getByTestId('profiles-section')
+    await expect(section).toBeVisible({ timeout: 15000 })
+
+    // Arm ONE session override through the same IPC route the composer chip
+    // uses — the demo mirror writes the same map the count command reads.
+    await page.evaluate(async () => {
+      await (window as unknown as {
+        __TAURI_INTERNALS__: { invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> }
+      }).__TAURI_INTERNALS__.invoke('set_session_model', {
+        sessionId: 'sess-e2e-override',
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+      })
+    })
+
+    await section.getByTestId('profile-switch-research').click()
+    const dialog = page.getByRole('alertdialog')
+    // The notice names the count and the fallback contract.
+    await expect(dialog).toContainText('1', { timeout: 10000 })
+    await expect(dialog).toContainText(/override model/i)
+    // Cancel is a real no-op.
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await expect(dialog).not.toBeVisible()
+    await expect(section.locator('[data-profile="research"]')).not.toContainText('Active')
+
+    // Second pass: confirming proceeds with the switch.
+    await section.getByTestId('profile-switch-research').click()
+    await expect(page.getByRole('alertdialog')).toContainText(/override model/i, { timeout: 10000 })
+    await page.getByRole('button', { name: 'Switch anyway' }).click()
+    await expect(section.locator('[data-profile="research"]')).toContainText('Active', { timeout: 15000 })
+  })
 })

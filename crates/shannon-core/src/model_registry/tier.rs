@@ -147,7 +147,14 @@ fn resolve_model_id_alias(model_id: &'static str) -> &'static str {
 ///
 /// Resolution order:
 ///   1. User-configured `profile_tiers.<canonical>` override (from providers.toml)
-///   2. Catalog match using `ModelCapabilities` (Fast ⇒ SPEED|CHEAP, etc.)
+///   2. Catalog match using `ModelCapabilities` (Fast ⇒ SPEED|CHEAP, etc.),
+///      **merged with the declared-model scan** (S2-5): models declared on the
+///      active provider slot (`providers.toml` `ModelSpec` metadata, registered
+///      by client construction) join the same cost tie-break, so a
+///      fully-declared proxy-only model classifies into a tier even when the
+///      static catalog has no entry. Catalog candidates come first in the
+///      reduce order, so catalog entries win cost ties and the merged scan can
+///      only *add* candidates, never re-order curated ones at equal cost.
 ///   3. Internal `ModelTier` enum fallback (Opus/Sonnet/Haiku)
 ///   4. None (caller should display "tier not available for this provider")
 ///
@@ -174,40 +181,54 @@ pub fn resolve_tier(
         return Some(id.clone());
     }
 
-    // 2. Catalog-based inference using ModelCapabilities
+    // 2. Catalog-based inference merged with declared-model candidates
+    //    (S2-5). Candidates are `(id, capabilities, total cost/Mtok)`; the
+    //    catalog's rows come first so the cost tie-break below keeps a
+    //    curated entry over a declared one at equal cost.
     let wanted = match tier {
         TierName::Fast => ModelCapabilities::speed().or(ModelCapabilities::cheap()),
         TierName::Standard => ModelCapabilities::coding(),
         TierName::Pro => ModelCapabilities::reasoning(),
         TierName::Auto => return None,
     };
-    if let Some(model) = MODEL_CATALOG
+    let mut candidates: Vec<(String, ModelCapabilities, f64)> = MODEL_CATALOG
         .iter()
         .filter(|model| &model.provider == provider)
-        .filter(|model| model.capabilities.has(wanted))
-        .reduce(|selected, candidate| match tier {
-            TierName::Pro => {
-                let selected_cost = selected.cost_per_m_input + selected.cost_per_m_output;
-                let candidate_cost = candidate.cost_per_m_input + candidate.cost_per_m_output;
-                if candidate_cost > selected_cost {
-                    candidate
-                } else {
-                    selected
-                }
-            }
-            TierName::Fast | TierName::Standard => {
-                let selected_cost = selected.cost_per_m_input + selected.cost_per_m_output;
-                let candidate_cost = candidate.cost_per_m_input + candidate.cost_per_m_output;
-                if candidate_cost < selected_cost {
-                    candidate
-                } else {
-                    selected
-                }
-            }
-            TierName::Auto => selected,
+        .map(|model| {
+            (
+                model.id.to_string(),
+                model.capabilities,
+                model.cost_per_m_input + model.cost_per_m_output,
+            )
+        })
+        .collect();
+    candidates.extend(
+        crate::declared_models::tier_candidates(provider)
+            .into_iter()
+            .map(|c| (c.id, c.caps, c.total_cost)),
+    );
+    if let Some((id, _, _)) = candidates
+        .into_iter()
+        .filter(|(_, caps, _)| caps.has(wanted))
+        .reduce(|selected, candidate| {
+            let keep_candidate = match tier {
+                TierName::Pro => candidate.2 > selected.2,
+                TierName::Fast | TierName::Standard => candidate.2 < selected.2,
+                TierName::Auto => false,
+            };
+            if keep_candidate { candidate } else { selected }
         })
     {
-        return Some(resolve_model_id_alias(model.id).to_string());
+        // Catalog ids keep their legacy alias normalization (e.g.
+        // claude-haiku-4-5-20251001 → claude-haiku-4-5); declared ids are
+        // exact by contract and return verbatim.
+        return Some(
+            MODEL_CATALOG
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| resolve_model_id_alias(m.id).to_string())
+                .unwrap_or(id),
+        );
     }
 
     // 3. Internal ModelTier enum fallback
@@ -385,5 +406,136 @@ impl ModelRouter {
         } else {
             0.0
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod declared_scan_tests {
+    use super::*;
+    use shannon_types::provider_config::{ModelCapability, ModelSpec};
+
+    /// Serializes global-registry mutations across tests in one process
+    /// (plain `cargo test` shares the process; nextest isolates anyway).
+    fn with_registry<T>(provider: &LlmProvider, specs: &[ModelSpec], f: impl FnOnce() -> T) -> T {
+        crate::declared_models::replace_for_provider(provider, specs);
+        let out = f();
+        crate::declared_models::clear();
+        out
+    }
+
+    fn spec(id: &str) -> ModelSpec {
+        ModelSpec {
+            id: id.to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: None,
+            cost_per_m_output: None,
+            capabilities: vec![],
+        }
+    }
+
+    /// S2-5 pin: a proxy-only model with FULL declared metadata (context +
+    /// both prices + capabilities), absent from the static catalog, is
+    /// tier-classifiable. Explicit `tiers` pins still win (unchanged step 1).
+    #[test]
+    fn fully_declared_proxy_model_resolves_into_the_right_tier() {
+        let mut pro = spec("proxy-flagship");
+        pro.context_window = Some(200_000);
+        pro.max_output = Some(32_768);
+        pro.cost_per_m_input = Some(9.0);
+        pro.cost_per_m_output = Some(45.0);
+        pro.capabilities = vec![ModelCapability::Reasoning];
+        let mut fast = spec("proxy-mini");
+        fast.context_window = Some(32_768);
+        fast.cost_per_m_input = Some(0.05);
+        fast.cost_per_m_output = Some(0.20);
+        fast.capabilities = vec![ModelCapability::Speed, ModelCapability::Cheap];
+        let mut standard = spec("proxy-workhorse");
+        standard.capabilities = vec![ModelCapability::Coding];
+
+        // Ollama has no static catalog entries — every resolution below is
+        // declaration-driven.
+        with_registry(&LlmProvider::Ollama, &[pro, fast, standard], || {
+            let empty = ProviderTiers::default();
+            assert_eq!(
+                resolve_tier("pro", &LlmProvider::Ollama, &empty).as_deref(),
+                Some("proxy-flagship"),
+                "declared reasoning + priciest → pro"
+            );
+            assert_eq!(
+                resolve_tier("fast", &LlmProvider::Ollama, &empty).as_deref(),
+                Some("proxy-mini"),
+                "declared speed/cheap → fast"
+            );
+            assert_eq!(
+                resolve_tier("standard", &LlmProvider::Ollama, &empty).as_deref(),
+                Some("proxy-workhorse"),
+                "declared coding → standard"
+            );
+
+            // Explicit tiers pin still wins over the declared scan.
+            let pinned = ProviderTiers {
+                pro: Some("hand-pinned-pro".to_string()),
+                ..ProviderTiers::default()
+            };
+            assert_eq!(
+                resolve_tier("pro", &LlmProvider::Ollama, &pinned).as_deref(),
+                Some("hand-pinned-pro")
+            );
+        });
+    }
+
+    /// Provider attribution: a model declared on provider A never resolves
+    /// into provider B's tier scan (the binding `replace_for_provider`
+    /// records), and cost ties keep the catalog entry (catalog candidates
+    /// come first in the merge).
+    #[test]
+    fn declared_candidates_are_provider_bound_and_catalog_wins_ties() {
+        let mut openai_declared = spec("openai-only-declared");
+        openai_declared.capabilities = vec![ModelCapability::Reasoning];
+
+        with_registry(&LlmProvider::OpenAI, &[openai_declared], || {
+            let empty = ProviderTiers::default();
+            // Ollama (no catalog, no declarations) still resolves to None.
+            assert_eq!(resolve_tier("pro", &LlmProvider::Ollama, &empty), None);
+            // Anthropic (catalog, no matching declarations) resolves from
+            // its catalog — the OpenAI-bound declaration must not leak in.
+            let anthropic = resolve_tier("pro", &LlmProvider::Anthropic, &empty)
+                .expect("anthropic catalog resolves pro");
+            assert!(
+                !anthropic.contains("openai-only-declared"),
+                "cross-provider leak: {anthropic}"
+            );
+
+            // Catalog wins cost ties: pin the curated standard winner's
+            // exact total cost (gpt-5-mini, $2.25/M) on a declared
+            // candidate — the reduce keeps the first (catalog) candidate.
+            let mut tie = spec("declared-tie");
+            tie.cost_per_m_input = Some(0.25);
+            tie.cost_per_m_output = Some(2.0);
+            tie.capabilities = vec![ModelCapability::Coding];
+            crate::declared_models::replace_for_provider(&LlmProvider::OpenAI, &[tie]);
+            let standard = resolve_tier("standard", &LlmProvider::OpenAI, &empty)
+                .expect("openai catalog resolves standard");
+            assert_eq!(
+                standard, "gpt-5-mini",
+                "cost tie must keep the curated catalog entry"
+            );
+
+            // Strictly cheaper declared candidate DOES win (the scan can
+            // add candidates, not reorder curated ones at equal cost).
+            let mut cheaper = spec("declared-cheaper");
+            cheaper.cost_per_m_input = Some(0.10);
+            cheaper.cost_per_m_output = Some(1.0);
+            cheaper.capabilities = vec![ModelCapability::Coding];
+            crate::declared_models::replace_for_provider(&LlmProvider::OpenAI, &[cheaper]);
+            assert_eq!(
+                resolve_tier("standard", &LlmProvider::OpenAI, &empty).as_deref(),
+                Some("declared-cheaper"),
+                "cheaper declared candidate beats the catalog on cost"
+            );
+        });
     }
 }

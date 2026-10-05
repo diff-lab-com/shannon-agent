@@ -23,6 +23,28 @@ export interface PromptQueueItem {
   attachments: string[]
 }
 
+/** S2-4a (review 2026-10-05 P-N9): a send held back for the vision
+ *  confirm bar — the message carries image attachments and the effective
+ *  model is KNOWN to lack vision. Rendered above the message list until
+ *  the user picks an action (switch / send anyway / dismiss). */
+export interface VisionConfirmState {
+  /** The model the send would have used (named in the bar). */
+  model: string
+  /** One-click switch candidate, `null` = no candidate → notice-only. */
+  suggestion: { provider: string; model: string; name: string } | null
+}
+
+/** S2-4b (review 2026-10-05 P-N9): a send held back for the tools
+ *  confirm bar — the send rides tools (every desktop send does) and the
+ *  effective model is KNOWN to lack tool calling. Same three outcomes and
+ *  the same render-facing shape as the vision bar. */
+export interface ToolsConfirmState {
+  /** The model the send would have used (named in the bar). */
+  model: string
+  /** One-click switch candidate, `null` = no candidate → notice-only. */
+  suggestion: { provider: string; model: string; name: string } | null
+}
+
 /**
  * R5-2: an in-stream retry notice surfaced in the conversation as a subtle
  * system-style line — the engine failed over (R3-1) or rotated the
@@ -111,6 +133,28 @@ export interface ChatContextValue {
   /** GB P2-10a: move one queued item within the FIFO (chips' up/down);
    *  `delta` −1 = toward the head (sends sooner), +1 = toward the tail. */
   moveQueuedPrompt: (id: number, delta: -1 | 1) => void
+  /** S2-4a: the held send's confirm state, `null` when nothing is held. */
+  visionConfirm: VisionConfirmState | null
+  /** S2-4a: resolve the held send. `'switch'` pins the suggested model on
+   *  the target session first, then delivers; `'send-anyway'` delivers
+   *  untouched (the engine gate answers if it must); `'dismiss'` drops the
+   *  held payload. All three close the bar. */
+  resolveVisionConfirm: (choice: 'switch' | 'send-anyway' | 'dismiss') => Promise<void>
+  /** S2-4a: drop the held payload without sending; closes the bar. */
+  dismissVisionConfirm: () => void
+  /** S2-4b: the held send's tools confirm state, `null` when nothing is
+   *  held. Both bars can never show at once — a vision resolution
+   *  re-enters `sendMessage` (with `visionConfirmed`), where the tools
+   *  gate runs next if it also fires. */
+  toolsConfirm: ToolsConfirmState | null
+  /** S2-4b: resolve the held send. `'switch'` pins the suggested model on
+   *  the target session first, then delivers; `'send-anyway'` delivers
+   *  untouched (the engine stays the final word — it has no tools gate
+   *  today, so "anyway" is exactly the historical behavior); `'dismiss'`
+   *  drops the held payload. All three close the bar. */
+  resolveToolsConfirm: (choice: 'switch' | 'send-anyway' | 'dismiss') => Promise<void>
+  /** S2-4b: drop the held payload without sending; closes the bar. */
+  dismissToolsConfirm: () => void
   /** /rewind: completed checkpoints for the current session (turn indices). */
   checkpoints: CheckpointInfo[]
   /** Rewind to before `turnIndex`: drops that turn and everything after. */

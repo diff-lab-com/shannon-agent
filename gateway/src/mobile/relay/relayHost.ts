@@ -68,6 +68,14 @@ export interface RelayHostOptions {
    * register the connection so pushes can reach the phone over the relay.
    */
   onContext?: (ctx: MethodContext) => void;
+  /**
+   * 修正1 (frame contract review 2026-10-05): invoked on EVERY successful
+   * (re-)registration (`host_ready`) — the control link (re)establishment
+   * that reconciles the desktop's persisted push expected state
+   * (expected on → push.bind, expected off → push.unbind; 末态制胜).
+   * Fire-and-forget from the host's perspective; must not throw.
+   */
+  onRegistered?: () => void;
 }
 
 export interface RelayHostHandle {
@@ -82,6 +90,15 @@ export interface RelayHostHandle {
    * fire-and-forget, bind surfaces an unreachable error).
    */
   sendControl(frame: Record<string, unknown>): boolean;
+  /**
+   * v1.1 §6.1 version-skew capability gate: whether the CURRENT registration's
+   * `host_ready` advertised push.* support (`caps:["push"]`). False until such
+   * a host_ready arrives; re-evaluated at every (re-)registration. An old
+   * relay silently ignores push.* text frames, so callers must not attempt
+   * bind (degrade to not_configured per contract §6.1) — PushRelayBinding's
+   * `capable` option consumes this.
+   */
+  pushCapable(): boolean;
   /**
    * Subscribe to relay→desktop control frames whose `t` starts with `push.`
    * (the ack leg of the same contract). Returns the unsubscribe function.
@@ -131,6 +148,9 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
   let reconnectTimer: NodeJS.Timeout | null = null;
   // §O3/§T6: subscribers to the push.* control side channel (see RelayHostHandle).
   const controlHandlers: Array<(frame: Record<string, unknown>) => void> = [];
+  // v1.1 §6.1: whether the current registration advertised caps:["push"] —
+  // re-evaluated at every host_ready (reconnect to an upgraded relay flips it).
+  let pushCapableFlag = false;
   // v0.3 ECDH mode: channels stay null until the phone's `e2e_hello` arrives
   // (or a legacy sealed frame triggers the fallback). Once established, both
   // channels follow the §G-rev2/§G-rev3 re-pair rules (recv reset, send kept).
@@ -248,6 +268,21 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
         logger.info("relay host: registered, waiting for phone to join");
         // Registration (re)succeeded — the backoff did its job.
         reconnectAttempts = 0;
+        // v1.1 §6.1: capability advertisement — an old relay sends no caps,
+        // and the desktop degrades push to not_configured instead of timing
+        // out on a bind the relay would silently ignore.
+        pushCapableFlag =
+          Array.isArray(ctrl["caps"]) && (ctrl["caps"] as unknown[]).includes("push");
+        // 修正1: control link (re)established — re-assert the persisted push
+        // expected state (expected on → bind, off → unbind). A throw here must
+        // not break the join state machine, hence the guard.
+        if (opts.onRegistered) {
+          try {
+            opts.onRegistered();
+          } catch (err) {
+            logger.warn(`relay host: onRegistered reconcile hook failed: ${(err as Error).message}`);
+          }
+        }
         break;
 
       case "paired": {
@@ -426,6 +461,9 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
         const i = controlHandlers.indexOf(handler);
         if (i >= 0) controlHandlers.splice(i, 1);
       };
+    },
+    pushCapable(): boolean {
+      return pushCapableFlag;
     },
   };
 }

@@ -1946,6 +1946,33 @@
       }
     },
     {
+      "identifier": "allow-check-tools-send",
+      "description": "Enables the check_tools_send command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "check_tools_send"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-check-vision-send",
+      "description": "Enables the check_vision_send command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "check_vision_send"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-count-session-model-overrides",
+      "description": "Enables the count_session_model_overrides command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "count_session_model_overrides"
+        ]
+      }
+    },
+    {
       "identifier": "allow-read-data-source-config",
       "description": "Enables the read_data_source_config command without any pre-configured scope.",
       "commands": {
@@ -2023,6 +2050,15 @@
       "commands": {
         "allow": [
           "refine_skill_candidate"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-recommend-fallback-chain",
+      "description": "Enables the recommend_fallback_chain command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "recommend_fallback_chain"
         ]
       }
     },
@@ -2495,6 +2531,24 @@
       }
     },
     {
+      "identifier": "allow-set-provider-fallback-models",
+      "description": "Enables the set_provider_fallback_models command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_provider_fallback_models"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-provider-models",
+      "description": "Enables the set_provider_models command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_provider_models"
+        ]
+      }
+    },
+    {
       "identifier": "allow-set-session-budget",
       "description": "Enables the set_session_budget command without any pre-configured scope.",
       "commands": {
@@ -2943,7 +2997,10 @@
       "permissions": [
         "allow-cancel-background-task",
         "allow-cancel-query",
+        "allow-check-tools-send",
+        "allow-check-vision-send",
         "allow-clear-session-model",
+        "allow-count-session-model-overrides",
         "allow-get-active-session-id",
         "allow-get-background-tasks",
         "allow-get-conversation",
@@ -2977,9 +3034,12 @@
         "allow-refresh-model-catalog",
         "allow-remove-provider-key",
         "allow-rename-provider-profile",
+        "allow-recommend-fallback-chain",
         "allow-save-provider",
         "allow-set-active-provider",
         "allow-set-active-provider-profile",
+        "allow-set-provider-fallback-models",
+        "allow-set-provider-models",
         "allow-test-all-providers",
         "allow-test-provider-connection",
         "allow-test-provider-credentials"

@@ -2,9 +2,13 @@
 //!
 //! `/provider` lists providers (with key/connected status) and switches the
 //! active one; `/provider health` live-probes every allowed provider. The
-//! cross-group helpers (`apply_model_selection`, `connected_provider_slugs`,
-//! `connect_status`, `parse_provider_name`) and the `HEALTH_PROBE_TIMEOUT`
-//! constant live in the parent [`super`] module.
+//! switch is tightened per ruling ⑤ (review P-N14 / 09-30 roadmap B9):
+//! switching to a provider with no catalog entries no longer silently keeps
+//! the previous model — it forces the model picker, or the user gives an
+//! explicit `/provider <name> <model-id>`. The cross-group helpers
+//! (`apply_model_selection`, `connected_provider_slugs`, `connect_status`,
+//! `parse_provider_name`) and the `HEALTH_PROBE_TIMEOUT` constant live in
+//! the parent [`super`] module.
 
 use super::{
     HEALTH_PROBE_TIMEOUT, apply_model_selection, connect_status, connected_provider_slugs,
@@ -46,73 +50,120 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
         lines.push(t!("commands.provider.legend").to_string());
         repl.chat.add_message(ChatRole::System, lines.join("\n"));
     } else {
-        // Switch to specified provider.
-        let provider = parse_provider_name(args.trim())?;
+        // Switch to the specified provider. Grammar (ruling ⑤, review
+        // P-N14 / 09-30 roadmap B9): `/provider <name>` or, when the target
+        // needs an explicit model, `/provider <name> <model-id>`.
+        let (provider_token, explicit_model) = parse_provider_args(args);
+        let provider = parse_provider_name(provider_token)?;
         let models = model_registry::merged_models_for_provider(provider.clone());
-        let default_model = models.first().map(|m| m.id.to_string());
 
-        // Foreign-model warning (review P1-8): a catalog-less provider keeps
-        // the current model id, so compute the warning *before* the switch
-        // mutates `selected_provider`.
-        let foreign_warning = if default_model.is_none() {
-            foreign_model_warning(
-                repl.state.model.as_deref(),
-                repl.state.selected_provider.as_ref(),
-                &provider,
-            )
-        } else {
-            None
-        };
-
-        // Single switch path. `default_model = None` means "this provider has
-        // no built-in catalog (Ollama, Bedrock, Custom, …)" — the current
-        // model id is kept and the user picks via
-        // `/model <provider>/<model-id>`.
-        apply_model_selection(repl, provider.clone(), default_model.clone(), None, false)?;
-
-        match default_model {
-            Some(m) => {
+        match plan_switch(explicit_model.as_deref(), models.first().map(|m| m.id)) {
+            ProviderSwitchDecision::UseModel(model_id) => {
+                // Single switch path (ADR-0008 Decision 2). An explicit id is
+                // always honored — the user named the exact target (ruling ⑤:
+                // "explicit full id passes"); a bare switch lands on the
+                // provider's first catalog entry as before.
+                apply_model_selection(repl, provider.clone(), Some(model_id.clone()), None, false)?;
                 repl.chat.add_message(
                     ChatRole::System,
                     t!(
                         "commands.provider.switched",
                         provider = &provider.to_string(),
-                        model = &m
+                        model = &model_id
                     )
                     .to_string(),
                 );
+                // The foreign-model warning copy stays wired for the explicit
+                // path: an id the catalog attributes to another provider is
+                // allowed (it was explicit, not silent), but the cross-trip
+                // must stay visible (review P1-8 warning semantics).
+                if let Some(warning) = foreign_model_warning(Some(&model_id), None, &provider) {
+                    repl.chat.add_message(ChatRole::System, warning);
+                }
             }
-            None => {
+            ProviderSwitchDecision::ForcePicker => {
+                // Ruling ⑤: a provider with no catalog entry must not
+                // silently keep the previous provider's model — that ships a
+                // misconfiguration ("带着错误配置走"). The switch is refused
+                // here: nothing changes until the user picks a model, and a
+                // picker Enter completes provider+model together through the
+                // single switch path. Esc leaves the current setup intact.
+                let mut picker =
+                    crate::widgets::select::ModelPickerWidget::new(repl.state.model.as_deref());
+                picker.focus_provider(&provider);
+                repl.state.model_picker = Some(picker);
                 repl.chat.add_message(
                     ChatRole::System,
                     t!(
-                        "commands.provider.switched_no_catalog",
+                        "commands.provider.no_catalog_pick_required",
                         provider = &provider.to_string()
                     )
                     .to_string(),
                 );
             }
         }
-
-        // The switch still happens (kept — /provider is an explicit request);
-        // the warning only makes the kept model's cross-provider trip visible.
-        if let Some(warning) = foreign_warning {
-            repl.chat.add_message(ChatRole::System, warning);
-        }
     }
     Ok(())
 }
 
-/// Compose the foreign-model warning for a catalog-less `/provider` switch
-/// (review P1-8).
+/// Split `/provider` args into `(provider-slug, explicit-model-id)`.
 ///
-/// When the target provider has no catalog models, the switch keeps the
-/// current model id — silently pointing a model trained for one provider at
-/// another. Returns the warning text when that current model is attributable
-/// to a provider *other than* the target: ownership comes from the catalog
-/// first (`model_info_for_alias`, which also expands aliases), falling back to
-/// the currently selected provider for ids the catalog does not know. Pure —
-/// unit-tested below.
+/// The model id may itself contain `/` (OpenRouter-style `vendor/model`
+/// ids), so only the FIRST whitespace-delimited token is the provider slug
+/// and the rest is joined back verbatim. Pure — unit-tested below.
+fn parse_provider_args(args: &str) -> (&str, Option<String>) {
+    let args = args.trim();
+    match args.split_once(char::is_whitespace) {
+        Some((slug, rest)) => (slug, Some(rest.trim().to_string())),
+        None => (args, None),
+    }
+}
+
+/// The decision a `/provider` switch resolves to (ruling ⑤, review P-N14 /
+/// 09-30 roadmap B9). Pure — unit-tested below.
+pub(crate) enum ProviderSwitchDecision {
+    /// Switch and land on this model: the user's explicit id, or — for a
+    /// bare `/provider <name>` — the provider's first catalog entry.
+    UseModel(String),
+    /// Bare switch onto a provider with **no catalog entry**. This used to
+    /// silently keep the previous provider's model (a misconfiguration
+    /// carried forward); it is now refused — the caller forces the model
+    /// picker so the user lands an explicit id instead.
+    ForcePicker,
+}
+
+/// Resolve a `/provider` switch into a [`ProviderSwitchDecision`].
+///
+/// An explicit (non-empty) model id always wins — the user gave the full
+/// target, so the switch proceeds regardless of catalog coverage. Otherwise
+/// a catalog default (first merged entry) keeps the pre-tightening
+/// first-entry behavior, and a provider with no entries at all forces the
+/// picker. Pure — unit-tested below.
+fn plan_switch(
+    explicit_model: Option<&str>,
+    catalog_default: Option<&str>,
+) -> ProviderSwitchDecision {
+    if let Some(id) = explicit_model.map(str::trim).filter(|s| !s.is_empty()) {
+        return ProviderSwitchDecision::UseModel(id.to_string());
+    }
+    match catalog_default {
+        Some(id) => ProviderSwitchDecision::UseModel(id.to_string()),
+        None => ProviderSwitchDecision::ForcePicker,
+    }
+}
+
+/// Compose the foreign-model warning for an explicit `/provider <name>
+/// <model-id>` switch (review P1-8 copy, re-wired by S2-6 ruling ⑤).
+///
+/// The pre-tightening switch kept the current model on a catalog-less
+/// provider; ruling ⑤ replaced that with [`plan_switch`]'s force-picker
+/// refusal. The warning copy survives for the one path where a model id can
+/// still travel across providers: the user's **explicit** id. When the
+/// catalog attributes that id to a provider *other than* the target, the
+/// warning makes the cross-provider trip visible — the switch itself stays
+/// allowed because it was explicit. Ownership comes from the catalog first
+/// (`model_info_for_alias`, which also expands aliases); ids unknown to the
+/// catalog attribute to nothing and stay unwarned. Pure — unit-tested below.
 fn foreign_model_warning(
     current_model: Option<&str>,
     current_provider: Option<&LlmProvider>,
@@ -424,9 +475,9 @@ mod tests {
         assert!(health_skipped_lines(&providers, &probes).is_empty());
     }
 
-    // ── foreign_model_warning (review P1-8: /provider keeps the old model
-    //    when the target has no catalog — make the cross-provider trip
-    //    explicit instead of silent) ────────────────────────────────────────
+    // ── foreign_model_warning (review P1-8 copy; since ruling ⑤ wired to
+    //    the explicit `/provider <name> <model-id>` path — the only place a
+    //    model id can still cross providers) ─────────────────────────────────
 
     #[test]
     fn warning_fires_for_catalog_model_moving_to_a_different_provider() {
@@ -441,6 +492,17 @@ mod tests {
         assert!(out.contains("ollama"), "got {out}");
         // The exact fix command must be pasteable.
         assert!(out.contains("/model ollama/<model-id>"), "got {out}");
+    }
+
+    #[test]
+    fn warning_fires_for_explicit_foreign_id_without_current_provider() {
+        // Ruling ⑤ explicit path: `/provider ollama claude-sonnet-4-20250514`
+        // passes current_provider=None (the id is given, not inherited), so
+        // ownership must come from the catalog alone.
+        let out =
+            foreign_model_warning(Some("claude-sonnet-4-20250514"), None, &LlmProvider::Ollama)
+                .expect("warning expected: explicit id belongs to another provider");
+        assert!(out.contains("anthropic"), "got {out}");
     }
 
     #[test]
@@ -494,6 +556,84 @@ mod tests {
         assert_eq!(
             foreign_model_warning(Some("   "), None, &LlmProvider::Ollama),
             None
+        );
+    }
+
+    // ── Ruling ⑤ (review P-N14 / 09-30 roadmap B9): a bare switch onto a
+    //    provider with no catalog entry must never land as "old model kept".
+    //    The decision is pure, so the contract is pinned here. ────────────
+
+    #[test]
+    fn explicit_model_always_wins_even_without_catalog() {
+        // An explicit id is the user's full target — honored regardless of
+        // catalog coverage ("explicit full id passes").
+        assert!(matches!(
+            plan_switch(Some("my-azure-deployment"), None),
+            ProviderSwitchDecision::UseModel(id) if id == "my-azure-deployment"
+        ));
+        // An explicit id beats the catalog default too.
+        assert!(matches!(
+            plan_switch(Some("my-tune"), Some("gpt-4o-azure")),
+            ProviderSwitchDecision::UseModel(id) if id == "my-tune"
+        ));
+    }
+
+    #[test]
+    fn bare_switch_uses_first_catalog_entry() {
+        // With catalog coverage the pre-tightening behavior stands: first
+        // merged entry. (Azure itself ships ≥4 entries — pinned by
+        // `gap_providers_have_catalog_entries` in shannon-core — so the
+        // ForcePicker arm below is for the genuinely catalog-less.)
+        assert!(matches!(
+            plan_switch(None, Some("gpt-5-azure")),
+            ProviderSwitchDecision::UseModel(id) if id == "gpt-5-azure"
+        ));
+    }
+
+    #[test]
+    fn bare_switch_without_catalog_forces_picker_instead_of_silent_keep() {
+        assert_eq!(
+            std::mem::discriminant(&plan_switch(None, None)),
+            std::mem::discriminant(&ProviderSwitchDecision::ForcePicker),
+            "no catalog + nothing explicit must refuse the silent keep"
+        );
+        // A blank explicit id counts as "nothing explicit".
+        assert_eq!(
+            std::mem::discriminant(&plan_switch(Some("   "), None)),
+            std::mem::discriminant(&ProviderSwitchDecision::ForcePicker),
+        );
+    }
+
+    #[test]
+    fn azure_bare_switch_now_lands_on_catalog_default() {
+        // S2-6 end-to-end shape: after the catalog batch, `/provider azure`
+        // resolves through UseModel — the P-N14 vacuum is closed.
+        let models = model_registry::merged_models_for_provider(LlmProvider::Azure);
+        let decision = plan_switch(None, models.first().map(|m| m.id));
+        assert!(
+            matches!(decision, ProviderSwitchDecision::UseModel(_)),
+            "azure must have catalog defaults now"
+        );
+    }
+
+    // ── Grammar: `/provider <name> [model-id]` ──────────────────────────
+
+    #[test]
+    fn parse_provider_args_splits_first_token_only() {
+        assert_eq!(parse_provider_args("azure"), ("azure", None));
+        assert_eq!(
+            parse_provider_args("azure gpt-4o-azure"),
+            ("azure", Some("gpt-4o-azure".to_string()))
+        );
+        // Slash-qualified ids stay intact — only the first token is the slug.
+        assert_eq!(
+            parse_provider_args("openrouter anthropic/claude-sonnet-4"),
+            ("openrouter", Some("anthropic/claude-sonnet-4".to_string()))
+        );
+        // Whitespace-tolerant on both sides.
+        assert_eq!(
+            parse_provider_args("  ollama   llama3  "),
+            ("ollama", Some("llama3".to_string()))
         );
     }
 }

@@ -30,6 +30,10 @@ describe('ProfilesSection (R3-2)', () => {
     seed(DEFAULT_ROWS)
     vi.mocked(api.createProviderProfile).mockResolvedValue(DEFAULT_ROWS)
     vi.mocked(api.setActiveProviderProfile).mockResolvedValue(DEFAULT_ROWS)
+    // S3-2: reset the override count EVERY test — mockResolvedValue
+    // implementations survive clearAllMocks, and a leaked non-zero count
+    // would silently inject the override dialog into unrelated flows.
+    vi.mocked(api.countSessionModelOverrides).mockResolvedValue(0)
   })
 
   it('renders the roster with the active marker and provider counts', async () => {
@@ -58,6 +62,63 @@ describe('ProfilesSection (R3-2)', () => {
     await waitFor(() => expect(onSwitched).toHaveBeenCalledTimes(1))
     // Rows follow the command's fresh list — research is now the active one.
     await waitFor(() => expect(screen.queryByTestId('profile-switch-research')).toBeNull())
+  })
+
+  // ── S3-2 (P-N10): the profile × session-override notice ────────────────
+
+  it('warns with the override count before switching while sessions carry overrides', async () => {
+    vi.mocked(api.countSessionModelOverrides).mockResolvedValue(2)
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('profile-switch-research')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-switch-research'))
+    // The confirm names the count; nothing fired yet.
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toBeInTheDocument())
+    const text = screen.getByRole('alertdialog').textContent ?? ''
+    expect(text).toContain('2')
+    expect(text).toContain('override model')
+    expect(api.setActiveProviderProfile).not.toHaveBeenCalled()
+    // Confirming proceeds with the switch.
+    fireEvent.click(screen.getByRole('button', { name: 'Switch anyway' }))
+    await waitFor(() => expect(api.setActiveProviderProfile).toHaveBeenCalledWith('research'))
+  })
+
+  it('cancelling the override notice aborts the switch', async () => {
+    vi.mocked(api.countSessionModelOverrides).mockResolvedValue(1)
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('profile-switch-research')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-switch-research'))
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(api.setActiveProviderProfile).not.toHaveBeenCalled()
+  })
+
+  it('zero overrides switches directly (count failure degrades to no-confirm)', async () => {
+    vi.mocked(api.countSessionModelOverrides).mockRejectedValue(new Error('poisoned'))
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('profile-switch-research')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-switch-research'))
+    await waitFor(() => expect(api.setActiveProviderProfile).toHaveBeenCalledWith('research'))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('chains the override notice AFTER the empty-profile confirm', async () => {
+    seed([
+      { name: 'default', provider_count: 2, active: true, model: null },
+      { name: 'scratch', provider_count: 0, active: false, model: null },
+    ])
+    vi.mocked(api.countSessionModelOverrides).mockResolvedValue(1)
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('profile-switch-scratch')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-switch-scratch'))
+    // First dialog: the empty-profile warning.
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toBeInTheDocument())
+    expect(screen.getByRole('alertdialog').textContent).toContain('scratch')
+    fireEvent.click(screen.getByRole('button', { name: 'Switch anyway' }))
+    // Second dialog: the override notice, then the switch.
+    await waitFor(() => expect(screen.getByRole('alertdialog').textContent).toContain('override model'))
+    fireEvent.click(screen.getByRole('button', { name: 'Switch anyway' }))
+    await waitFor(() => expect(api.setActiveProviderProfile).toHaveBeenCalledWith('scratch'))
   })
 
   it('asks for confirmation before switching to an EMPTY profile; cancel is a no-op', async () => {

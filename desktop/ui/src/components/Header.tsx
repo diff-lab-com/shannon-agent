@@ -19,6 +19,9 @@ import { useSessionBudget } from '@/hooks/useSessionBudget';
 import { ExecutionModeSwitcher } from '@/components/chat/ExecutionModeSwitcher';
 import { PhaseTierSwitcher } from '@/components/chat/PhaseTierSwitcher';
 import AskUserCard from '@/components/chat/AskUserCard';
+import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow';
+import { modelWhyFor, type ModelWhyContext } from '@/lib/modelWhy';
+import { writeGlobalModelDefault } from '@/lib/modelSwitch';
 
 const TITLE_MAP: [string, string][] = [
   ['/opc/task', 'header.title.opcTask'],
@@ -54,21 +57,37 @@ function getTitleKey(pathname: string): string {
 function HeaderModelSelector() {
   const intl = useIntl();
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values);
-  const { status, models, refreshConfig, refreshStatus } = useCatalog();
+  const { status, config, models, refreshConfig, refreshStatus } = useCatalog();
   const [open, setOpen] = useState(false);
+  // S1-5: the empty-catalog entry deep-links to the model settings page.
+  const navigate = useNavigate();
 
   const handleModelSwitch = async (modelId: string) => {
     const model = models.find(m => m.id === modelId)
     if (!model) return
     try {
-      await api.configure({ key: 'model', value: model.id })
-      await api.configure({ key: 'provider', value: model.provider })
+      // S3-1 (P-N23): the shared model+provider double write — the same
+      // helper the Settings quick switcher and the chip's global branch use.
+      await writeGlobalModelDefault(model)
       await refreshConfig()
       await refreshStatus()
       setOpen(false)
       toast.success(t('header.model.toast.switched', { model: model.name }))
     } catch (e) { toastError(t('header.model.failed'), e) }
   }
+
+  // S3-1 (P-N11): the same why-active derivation the composer chip uses —
+  // minus the session dimension (no session context on non-chat routes; the
+  // R2-1 route-ownership convention keeps the override label chat-only).
+  const modelList = models ?? [];
+  const whyCtx: ModelWhyContext = {
+    override: null,
+    approvalMode: (config as Record<string, unknown> | undefined)?.approval_mode as string | undefined ?? null,
+    planTier: (config as Record<string, unknown> | undefined)?.plan_tier as string | undefined ?? null,
+    actTier: (config as Record<string, unknown> | undefined)?.act_tier as string | undefined ?? null,
+    globalModel: status?.model ?? null,
+    activeProfile: status?.active_profile ?? null,
+  };
 
   return (
     // highlightItemOnHover={false} keeps CSS :hover (bg-primary/5, the
@@ -88,41 +107,80 @@ function HeaderModelSelector() {
           </Button>
         }
       />
-      {models.length > 0 && (
+      {/* S1-5 (P-N16①): the menu renders even with an empty catalog — the
+          old `models.length > 0` gate made clicking the trigger a silent
+          no-op exactly when the user needs a pointer to Settings. */}
         <Menu.Portal>
           {/* z-modal rides the POSITIONER — same convention + token scale as
-              the two chat switchers (ui/select.tsx). */}
+              the two chat switchers (ui/select.tsx). S3-1: widened to fit
+              the shared row's meta (price/vision/badges) — the parity the
+              composer chip already had (P-N11). */}
           <Menu.Positioner align="end" sideOffset={8} className="isolate z-modal">
             <Menu.Popup
               role="listbox"
               aria-labelledby={undefined}
               aria-label={t('header.model.select')}
-              className="glass-overlay animate-panel-in w-[280px] rounded-xl py-sm outline-none"
+              className="glass-overlay animate-panel-in w-[360px] rounded-xl py-sm outline-none"
             >
-              {models.map(m => (
-                <Menu.Item
-                  key={m.id}
-                  role="option"
-                  aria-selected={m.id === status?.model}
-                  label={m.name}
-                  // A failed switch keeps the menu open for a retry — the
-                  // close happens in handleModelSwitch on success only.
-                  closeOnClick={false}
-                  className={cn(
-                    'flex w-full cursor-pointer items-center justify-between gap-sm px-md py-sm text-left outline-none transition-colors',
-                    m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5',
-                    'data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container',
-                  )}
-                  onClick={() => void handleModelSwitch(m.id)}
+              {/* S3-1 (P-N11): the precedence line, same wording family as
+                  the chip picker's — the chain is global, the surfaces say
+                  it once each. */}
+              {modelList.length > 0 && (
+                <div
+                  role="presentation"
+                  data-testid="header-model-priority-line"
+                  className="px-md pb-xs font-label-xs text-on-surface-variant"
                 >
-                  <span className="font-mono font-label-md truncate">{m.name}</span>
-                  <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>
+                  {t('header.model.priorityLine')}
+                </div>
+              )}
+              {models.length === 0 ? (
+                // Empty catalog: one explanatory entry that deep-links to the
+                // model settings page (same navigation the auth banner uses).
+                <Menu.Item
+                  role="option"
+                  aria-selected={false}
+                  label={t('header.model.emptyCatalog')}
+                  data-testid="header-model-empty"
+                  className="flex w-full cursor-pointer items-center gap-sm px-md py-sm text-left outline-none transition-colors text-on-surface-variant hover:bg-primary/5 data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container"
+                  onClick={() => navigate('/settings/models')}
+                >
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">add</span>
+                  <span className="font-label-md">{t('header.model.emptyCatalog')}</span>
                 </Menu.Item>
-              ))}
+              ) : (
+                models.map(m => (
+                  <Menu.Item
+                    key={m.id}
+                    role="option"
+                    aria-selected={m.id === status?.model}
+                    label={m.name}
+                    // A failed switch keeps the menu open for a retry — the
+                    // close happens in handleModelSwitch on success only.
+                    closeOnClick={false}
+                    className={cn(
+                      'flex w-full cursor-pointer items-center justify-between gap-sm px-md py-sm text-left outline-none transition-colors',
+                      m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5',
+                      'data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container',
+                    )}
+                    onClick={() => void handleModelSwitch(m.id)}
+                  >
+                    {/* S3-1 (P-N11): shared row renderer — the Header now
+                        reads at the same density as the composer chip
+                        (context · price, vision dot, source badge,
+                        why-active label). `compact` keeps the tools icon
+                        off the narrower Header menu. */}
+                    <ModelPickerRowContent
+                      model={m}
+                      why={modelWhyFor(m, whyCtx, modelList)}
+                      compact
+                    />
+                  </Menu.Item>
+                ))
+              )}
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>
-      )}
     </Menu.Root>
   );
 }

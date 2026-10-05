@@ -1189,7 +1189,22 @@ pub enum QueryEvent {
     },
 
     /// Query failed with error
-    Failed { query_id: Uuid, error: String },
+    Failed {
+        query_id: Uuid,
+        error: String,
+        /// S1-1 (review 2026-10-05 §3 P-N1): structured failure
+        /// classification, set engine-side where the typed error is in
+        /// scope — `shannon_engine::api::ApiError::error_kind()`, mapping
+        /// typed status (401→"auth", 402→"quota", 429→"rate_limit",
+        /// 403→"authz", rest→"other"). `None` when the emit site only had
+        /// a rendered string (pre-flight refusals, timeout ladders);
+        /// shells fall back to Display-text matching, which is
+        /// transitional and shrinks as sites adopt the field.
+        /// serde-defaulted so JSON/SSE producers written before the field
+        /// stay parseable.
+        #[serde(default)]
+        error_kind: Option<String>,
+    },
 
     /// Non-fatal warning — content was generated but a recoverable error occurred.
     /// The query continues and will emit Completed after this.

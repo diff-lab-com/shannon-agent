@@ -40,7 +40,11 @@ import {
 } from "./mobile/relay/e2e.js";
 import { startRelayHost, type RelayHostHandle } from "./mobile/relay/relayHost.js";
 import { PushRelayBinding } from "./mobile/relay/pushRelayBinding.js";
-import { ShannonError } from "./mobile/protocol.js";
+import {
+  createPushWiring,
+  pushExpectedStatePaths,
+  PushExpectedStateStore,
+} from "./mobile/relay/pushExpectedState.js";
 import { generateQrV2Payload, generateRelaySessionId } from "./mobile/relay/qrV2.js";
 import { evaluateTrigger, resolveTriggerConfig } from "./router/trigger.js";
 import { withTaskLifecycle } from "./router/lifecycle.js";
@@ -90,6 +94,12 @@ export interface BootstrapOptions {
    * never writes to the real HOME.
    */
   mobileDirectE2EDir?: string;
+  /**
+   * 修正1: override the directory holding the push expected-state store
+   * (default `~/.shannon/mobile-push-state/`). Tests inject a tmpdir so a
+   * test boot never writes to the real HOME.
+   */
+  mobilePushStateDir?: string;
   /**
    * Access-control seam (review §P0-7). Production defaults to an
    * `AllowlistGuard` over a persisted allowlist — any IM sender that has not
@@ -436,6 +446,20 @@ async function startMobileServer(
 
   const tokens = new PairTokenStore({ filePath: tokensFile });
   const registry = new DeviceRegistry({ filePath: devicesFile });
+  // 修正1 (frame contract review 2026-10-05): the push EXPECTED STATE lives
+  // outside the relay connection — bind/unbind intents persist (encrypted,
+  // 0600) so every control-link establishment reconciles them (expected on →
+  // push.bind, off → push.unbind; 末态制胜, no action queue). The sinks read
+  // the late-bound pushRelayRef cell, so relay host mode staying off simply
+  // defers the relay leg to the reconcile.
+  const pushWiring = createPushWiring({
+    pushRelayRef,
+    store: new PushExpectedStateStore({
+      logger,
+      ...pushExpectedStatePaths(opts.mobilePushStateDir),
+    }),
+    logger,
+  });
   // v0.12 LAN hardening: TLS with the persisted self-signed cert. Phones pin
   // the cert fingerprint carried in the QR (out-of-band trust, same model as
   // the pair token). Fail loud on cert trouble — silent plaintext fallback
@@ -479,19 +503,13 @@ async function startMobileServer(
       fetchImpl: opts.mobileFetchImpl,
       engineAuthToken,
       approvalRegistry: approvals,
-      // §O2/§O3: forward push bindings to the relay over its control side
-      // channel (late-bound — the relay host leg connects below). Relay host
-      // mode off → the honest NOT_IMPLEMENTED degradation (§O2 tri-state).
-      pushBindingSink: async (deviceId, binding) => {
-        const relay = pushRelayRef.current;
-        if (!relay) {
-          throw Object.assign(
-            new Error("push relay not connected (relay host mode disabled)"),
-            { code: ShannonError.NOT_IMPLEMENTED },
-          );
-        }
-        return relay.bind(deviceId, binding);
-      },
+      // §O2/§O3 + 修正1: forward push bindings to the relay over its control
+      // side channel (late-bound — the relay host leg connects below), with
+      // the expected-state store recording every intent for the link-reconnect
+      // reconciliation. Relay host mode off → the honest NOT_IMPLEMENTED
+      // degradation (§O2 tri-state); the intent still lands for the reconcile.
+      pushBindingSink: pushWiring.pushBindingSink,
+      pushUnbindSink: pushWiring.pushUnbindSink,
       // Shared in-flight query registry: shannon/cancel can interrupt a
       // dispatched task's lane turn (the router registers its clients on the
       // same instance for the duration of each turn).
@@ -514,9 +532,13 @@ async function startMobileServer(
     replayBuffer: pushReplay ?? undefined,
     // §M2: a successful revoke fans a `device.revoked` event out to every
     // OTHER online device (the revoked one is excluded — it learns from the
-    // PAIRING_REQUIRED on its next signed call).
-    onDeviceRevoked: (deviceId: string) =>
-      dispatchHub.broadcastEvent({ type: "device.revoked", device_id: deviceId }, deviceId),
+    // PAIRING_REQUIRED on its next signed call). 修正1 adds the push cascade:
+    // forget the revoked device's expected state and best-effort unbind its
+    // relay binding (the reconcile covers a link-down revoke).
+    onDeviceRevoked: (deviceId: string) => {
+      dispatchHub.broadcastEvent({ type: "device.revoked", device_id: deviceId }, deviceId);
+      pushWiring.onDeviceRevoked(deviceId);
+    },
     tasks: createTaskHandlers({
       hub: dispatchHub,
       // review §P1-13: revoked devices must not be able to dispatch tasks
@@ -597,6 +619,9 @@ async function startMobileServer(
       relayAuthTag,
       hostE2E: { privateKey: hostE2E.privateKey, pairToken: pairRecord.token },
       onContext: (ctx) => dispatchHub.registerConnection(ctx),
+      // 修正1: every control-link (re)establishment re-asserts the persisted
+      // push expected state (expected on → push.bind, off → push.unbind).
+      onRegistered: pushWiring.reconcile,
     });
     // Nobody awaits `paired` — without a handler here the 75s pair timeout
     // rejection would surface as an unhandled rejection and take the
@@ -610,14 +635,15 @@ async function startMobileServer(
     // §O3/§T6: the Push-to-Wake leg rides this same relay connection —
     // pushBindingSink forwards shannon/push.register over it, and the hub's
     // wake seam fires push.wake on approval asks / turn terminals. Frames per
-    // docs/protocol/relay-push-wake-frames.md; until the relay ships its half
-    // the ack timeout surfaces the honest structured error to the phone.
+    // docs/protocol/relay-push-wake-frames.md; a relay that advertised no
+    // caps:["push"] (v1.1 §6.1) degrades push to not_configured instead of
+    // burning a 5s ack timeout per bind.
     const pushRelay = new PushRelayBinding(
       {
         send: (frame) => relayHandle.sendControl(frame),
         onFrame: (handler) => relayHandle.onControl(handler),
       },
-      { logger },
+      { logger, capable: () => relayHandle.pushCapable() },
     );
     pushRelayRef.current = pushRelay;
     dispatchHub.setWake((deviceId, seq) => pushRelay.wake(deviceId, seq));
