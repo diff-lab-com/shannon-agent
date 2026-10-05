@@ -429,6 +429,27 @@ impl QueryEngine {
         permissions: PermissionManager,
         state: StateManager,
     ) -> Self {
+        Self::with_defaults_arc_and_config(client, tools, permissions, state, |_| {})
+    }
+
+    /// [`Self::with_defaults_arc`] plus caller tweaks to the engine
+    /// [`QueryEngineConfig`].
+    ///
+    /// Minimal construction seam for hosts (the desktop send / goal / batch
+    /// paths) that need to flip a few config fields — e.g. the Settings R3
+    /// T6 `auto_compact_enabled` switch — without reaching into the
+    /// `pub(crate)` `config` field. `customize` runs AFTER
+    /// [`Self::apply_env_overrides`], so an explicit host setting wins over
+    /// env-var defaults; every other field keeps its default. The engine is
+    /// rebuilt per turn/message by those hosts, so a changed setting takes
+    /// effect on the next message without a restart.
+    pub fn with_defaults_arc_and_config(
+        client: LlmClient,
+        tools: Arc<ToolRegistry>,
+        permissions: PermissionManager,
+        state: StateManager,
+        customize: impl FnOnce(&mut QueryEngineConfig),
+    ) -> Self {
         let model = client.model().to_string();
         let session_id = Uuid::new_v4();
         let effective_max_context_tokens = Self::resolve_max_context_tokens(
@@ -437,6 +458,7 @@ impl QueryEngine {
         );
         let mut defaults = QueryEngineConfig::default();
         Self::apply_env_overrides(&mut defaults);
+        customize(&mut defaults);
         // B2-2: repo-map root fallback chain — explicit override, then the
         // configured session working directory (None on the defaults path),
         // then the process cwd at injection time.

@@ -1106,6 +1106,10 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
         // P1-3: honour the persisted `sandbox.mode` on the unattended path
         // too — same assembly-time seam as AppState::new.
         let desktop_cfg = deps.desktop_config.read().await;
+        // Settings R3 T6: the goal run's engine honors the same
+        // auto-compaction switch as interactive turns (read under the same
+        // guard the sandbox mode uses).
+        let context_auto_compact = desktop_cfg.context_auto_compact;
         let sandboxed_providers = match crate::sandbox_assembly::effective_sandbox_providers(
             desktop_cfg.sandbox.as_ref().and_then(|s| s.mode.as_deref()),
             desktop_cfg.working_dir.as_deref(),
@@ -1146,11 +1150,13 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
         .map_err(|e| format!("registering goal tools failed: {e}"))?;
 
         let mut engine = crate::commands_memory::attach_shared_memory(
-            QueryEngine::with_defaults_arc(
+            QueryEngine::with_defaults_arc_and_config(
                 LlmClient::new(client_config),
                 Arc::new(tools),
                 permissions,
                 StateManager::new(),
+                // Settings R3 T6: goal runs honor the auto-compaction switch.
+                |config| config.auto_compact_enabled = context_auto_compact,
             ),
             &deps.memory_store,
             // B2-2: goal runs keep their pre-B2-2 directory behavior (the
