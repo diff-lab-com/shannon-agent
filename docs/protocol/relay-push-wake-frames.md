@@ -1,4 +1,4 @@
-# desktop↔relay Push-to-Wake 帧契约（**ACCEPTED v1**，2026-10-05 评审定稿）
+# desktop↔relay Push-to-Wake 帧契约（**ACCEPTED v1.1**，2026-10-05 评审定稿）
 
 > 状态：**ACCEPTED（v1 基线）**——v0.1 提案经 mobile 侧评审定稿
 > （mobile 仓 `docs/frame-contract-review-2026-10-05.md`：接受为 v1 基线，附六条
@@ -7,6 +7,14 @@
 > 信封对齐 = relay 接入首动作，见 §6.1）。修正 1 的 gateway 侧接线已落地
 > （`pushExpectedState.ts` + `engineBridge` unbind 腿 + §M2 级联 + `host_ready`
 > 对账挂点，见 §3）。
+>
+> **v1.1 修订（同日，relay 仓现网代码对照审查后；通知级变更——手机可见面不变，
+> §7 不动式，不重开评审）**：①修正 2 增补**跨 sid 属主转移**规则（§1）；
+> ②钉定**版本斜坡能力位**——`host_ready` 增加可选 `caps:["push"]`（§6.1）；
+> ③校准**数据期纪律**措辞——push.* 关闭/应答义务为数据期首例新纪律，wake 未绑定
+> **必须应答** `accepted:false`（§1/§4）；④措辞修正——转发族表述、`v1`/`v:1` 消歧、
+> wake 无 `id` 系有意、待发窗口内存态、bind 限频按连接（§1/§4/§6.5）；⑤**副本
+> 纪律**：本文为唯一事实源，mono 仓同名副本随分支同步、禁止本地演化。
 > 手机可见面不受本文影响——§O2（`shannon/push.register`）与 §O1（payload 锁死
 > `{handle, seq}`）已钉，本文只锁桌面与 relay 之间的事。
 
@@ -23,14 +31,25 @@
   绑定按 **`(sid, deviceId)` 记属主**；同 sid 的 host 重连（重 present authTag）不变
   属主；`push.wake` 对**非本 sid 名下**的 deviceId 应答 `accepted:false`。sid 的跨重启
   持久性（桌面侧持久化 sid + authTag）列 **relay 接入验证项**。
+  **（v1.1）跨 sid 重 bind = 属主转移**：不同 sid 对同一 deviceId 发 `push.bind`
+  （携带有效 token）→ 属主原子转移至新 `(sid, deviceId)`，token 覆盖，handle 保留
+  （同一 deviceId 全局仅一条绑定）；转移后旧 sid 对该 deviceId 的 wake 应答
+  `accepted:false`。桌面侧 sid 轮换（若上行验证项结论为不持久）后由 §3.2 末态制胜
+  对账自动收回属主。**数据期纪律注记**：join 连接发 `push.*` 的关闭义务虽「与未认证
+  同纪律」，但属**数据期首例新纪律**——现行 relay 数据期对一切文本帧静默忽略
+  （`wire-protocol.md` §Data phase "ignored in v0.2"），接入时须改写该节并实现关闭
+  路径。
 - **（修正 3）relay 终结义务（版本斜坡安全性质）**：relay **必须终结（consume）
   `push.*` 帧**，绝不论以何种形态转发入 E2E 内容管道；未知 `t` 的文本帧**不得进入
-  E2E 转发路径**（静默忽略）。既有先例：`register` 是终结族、`e2e_hello` 是转发族——
+  E2E 转发路径**（静默忽略）。既有先例：`register` 是终结族、binary 帧是转发族
+  （手机的首帧 `e2e_hello` 属后者，系 mobile 侧概念，relay 不感知帧名）——
   `push.*` 加入终结族。桌面侧「文本=控制、二进制=E2E」分路（`relayHost.ts`）是本义务
   的对偶；手机侧杂散帧免疫已实证（`relay_transport.dart::_onControl`），故本条为
   relay 单边义务。**接入验证项**：对照 relay 现网代码确认旧版本对未知文本帧的实际
   行为（列前置②接入清单首项）。
 - v1 帧版本字段 `v: 1`；relay 对未知 `t` 静默忽略（渐进契约，§J–§M 同哲学）。
+  **（v1.1）消歧注记**：relay `wire-protocol.md` 标题的 "protocol v1" 与本帧版本字段
+  `v:1` 无关（协议文档版本 vs 帧版本字段），帧定义搬入时须消歧。
 
 ## 2. `push.bind`（注册/轮换二合一，承载 `shannon/push.register` 的转发）
 
@@ -125,6 +144,13 @@
 - **fire-and-forget**：桌面不等厂商出站结果（§O3「厂商通道自身重试语义之外不做应用层
   重试风暴」），也不等 ack；`accepted: false` = 该 deviceId 未绑定（正常态，桌面侧
   静默）；
+- **（v1.1）`accepted: false` 为强制应答**：对未绑定 / 非本 sid 名下的 deviceId，relay
+  **必须应答** `push.wake.ack accepted:false`，不得静默忽略——这是 relay 数据期首个
+  「必须回话」的文本帧行为（现行数据期纪律为静默忽略，见 §1 修正 2 数据期纪律注记）；
+- **（v1.1）wake / ack 无 `id` 字段系有意不对称**（fire-and-forget，按
+  `deviceId`+`seq` 对应），实现不得「修正」为 id 关联；
+- **（v1.1）待发合并窗口为纯内存态**，relay 重启即丢——与下方 seq 回退注记同性质
+  （手机游标是真相，拉取自愈），不得当 bug 修；
 - relay 合并：同 handle 的多个待发 seq 取**最大值**，**10s 频控窗口**内只更新游标不
   重发；窗口到期出站一次厂商推送，体**锁死 `{handle, seq}` 两字段**（§O1，评审后不得
   增字段）；
@@ -156,7 +182,12 @@
 
 1. **帧外壳对齐**：自描述 JSON 帧沿用；若 relay 控制面另有统一信封，以外壳包裹、帧体
    不变——**钉定为 relay 接入首动作**（对照 `wire-protocol.md` 现状：`register` 终结
-   族 / `e2e_hello` 转发族即既有惯例，大概率直接沿用）。
+   族 / binary 帧转发族即既有惯例，大概率直接沿用）。
+   **（v1.1）版本斜坡能力位一并钉定**：relay → 桌面的 `host_ready` 增加可选字段
+   `caps: ["push"]`（旧 relay 缺省）。桌面在 `host_ready` 无 `caps` 时**不发送
+   bind**，直接按 `not_configured` 语义降级（手机渲染「推送不可用」）；有 `caps`
+   才进入 bind。旧桌面忽略未知字段，双向向后兼容——杜绝「新桌面 + 旧 relay =
+   bind 5s 超时 → `ENGINE_ERROR` 误导渲染」的斜坡态。
 2. **token 落盘密钥来源**：relay 配置注入（`SHANNON_RELAY_TOKEN_KEY`，32 字节 base64；
    缺省时首启自动生成并 0600 落盘）。补注：密钥丢失 = 绑定不可读，修正 1 的对账自愈
    路径兜底（手机下次开推送重注册）；v1 单实例假设——多实例部署需外置同源密钥。
@@ -165,7 +196,8 @@
    GC**（修正 4）。
 4. **handle 稳定性规则**：轮换保留 handle；unbind 后再 bind 换新（换新附带防厂商长期
    关联的隐私红利，与 §O1 一致）。
-5. **限频数值**：bind ≤ 10 次/分钟/会话；wake 合并窗口 10s（§O3 钉定值）；单 handle
+5. **限频数值**（v1.1：bind 限频口径由「会话」改「**连接**」，重连自然重置，实现最简）：
+   bind ≤ 10 次/分钟/连接；wake 合并窗口 10s（§O3 钉定值）；单 handle
    待发合并深度 1（只留最大 seq）。
 
 ## 7. 手机可见性（不变式）
