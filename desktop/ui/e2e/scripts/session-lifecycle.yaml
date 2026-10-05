@@ -3,7 +3,7 @@
 # 侧栏会话生命周期旅程：62 条 seed 会话（55 条 cap-NN 撑过 50 条渲染上限 +
 # 7 条交互会话）。断言在 spec（chat-script.session-lifecycle.spec.ts）：
 #   - 内联重命名（⋯菜单 → Rename，armed rename 投影进 list_sessions）；
-#   - pin → shannon-sessions-pinned 持久化 → reload 后仍置顶带 pin 标记；
+#   - pin → 后端 curation sidecar 持久化（mock 经 shannon.demo.pinnedSessions 模拟）→ reload 后仍置顶带 pin 标记；
 #   - 分组切换持久化（shannon-sessions-grouping 裸字符串）→ reload 断言；
 #   - 归档 → 已归档 section → restore 回轨（archived-row/restore testid）；
 #   - DeleteSessionModal：普通删除成功关闭；deleteFails 固定装置拒绝 →

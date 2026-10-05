@@ -2,7 +2,8 @@
 // tool_calls sequences fold into Explore / Terminal / Changes ToolGroupCards
 // (collapsed by default), mixed runs split into multiple groups, switch-off
 // kinds pass through as individual cards, and the existing special cards
-// (retry-chain errors, subagent spawns) never group.
+// (retry-chain errors, subagent spawns, artifact-FileCard carriers) never
+// group.
 //
 // Streaming keeps per-card rendering by ruling R10 — covered by the absence
 // of grouping changes in StreamingResponse (untouched here).
@@ -107,11 +108,11 @@ describe('MessageBubble — Explore/Terminal/Changes grouping (T11)', () => {
     expect(screen.getAllByTestId('tool-group-card')).toHaveLength(1)
   })
 
+  // Card-less mutating calls (no path in the input → no artifact FileCard)
+  // still fold into a Changes group; path-carrying completed writes carry an
+  // interactive FileCard and are exempt (case below).
   it('folds consecutive writes into one Changes group', () => {
-    bubbleWith([
-      call('write_file', 'w1', { tool_input: { path: '/proj/a.ts' } }),
-      call('edit_file', 'w2', { tool_input: { path: '/proj/b.ts' } }),
-    ])
+    bubbleWith([call('write_file', 'w1'), call('edit_file', 'w2')])
     const group = screen.getByTestId('tool-group-card')
     expect(group).toHaveAttribute('data-group-kind', 'changes')
     expect(screen.getByTestId('tool-group-count')).toHaveTextContent('2 calls')
@@ -125,8 +126,8 @@ describe('MessageBubble — Explore/Terminal/Changes grouping (T11)', () => {
       call('search', 'b'),
       call('bash', 'c'),
       call('bash', 'c2'),
-      call('write_file', 'd', { tool_input: { path: '/proj/x.ts' } }),
-      call('edit_file', 'd2', { tool_input: { path: '/proj/y.ts' } }),
+      call('write_file', 'd'),
+      call('edit_file', 'd2'),
       call('read_file', 'e'),
     ])
     const groups = screen.getAllByTestId('tool-group-card')
@@ -206,5 +207,48 @@ describe('MessageBubble — Explore/Terminal/Changes grouping (T11)', () => {
     expect(screen.queryByTestId('tool-group-card')).toBeNull()
     expect(screen.getByTestId('subagent-block')).toBeInTheDocument()
     expect(cardTexts('read_file')).toHaveLength(2)
+  })
+
+  // CI fix round: a COMPLETED file-mutating call with a path input renders an
+  // interactive artifact FileCard (preview / batch run / diff) under its tool
+  // block (office Wave 1 A5). T11 folding hid those cards behind the
+  // collapsed Changes group — the artifact carriers are exempt, same class as
+  // retry-chain members and subagent spawns.
+  it('a run of artifact-card writes never folds — every FileCard stays visible', () => {
+    // Each call renders as its own plain card with the FileCard attached.
+    const view1 = bubbleWith([
+      call('write_file', 'f1', { tool_input: { path: '/proj/report.pdf' } }),
+      call('write_file', 'f2', { tool_input: { file_path: '/proj/data.csv' } }),
+      call('write_file', 'f3', { tool_input: { path: '/proj/notes.md' } }),
+    ])
+    expect(screen.queryByTestId('tool-group-card')).toBeNull()
+    expect(screen.getAllByTestId('file-card')).toHaveLength(3)
+    expect(cardTexts('write_file')).toHaveLength(3)
+    view1.unmount()
+
+    // The card-carrying run does not block a neighbouring read run from folding.
+    bubbleWith([
+      call('read_file', 'a'),
+      call('search', 'b'),
+      call('write_file', 'f1', { tool_input: { path: '/proj/report.pdf' } }),
+      call('write_file', 'f2', { tool_input: { file_path: '/proj/data.csv' } }),
+    ])
+    expect(screen.getAllByTestId('tool-group-card')).toHaveLength(1)
+    expect(screen.getByTestId('tool-group-card')).toHaveAttribute('data-group-kind', 'explore')
+    expect(screen.getAllByTestId('file-card')).toHaveLength(2)
+  })
+
+  it('a failed path-carrying write renders no card and still groups (no artifact to hide)', () => {
+    bubbleWith([
+      call('edit_file', 'fail1', {
+        status: 'error',
+        is_error: true,
+        result: 'permission denied',
+        tool_input: { path: '/proj/a.ts' },
+      }),
+      call('write_file', 'ok2'),
+    ])
+    expect(screen.getByTestId('tool-group-card')).toHaveAttribute('data-group-kind', 'changes')
+    expect(screen.queryByTestId('file-card')).toBeNull()
   })
 })

@@ -51,7 +51,26 @@ const archivedSessions = new Set<string>()
 // Settings R3 T7: demo twin of the curation sidecar's pinned flags — the
 // list/search reads project them so the rail's pin sort survives a mock-mode
 // remount, exactly like the real backend reading curation.json back.
-const pinnedSessions = new Set<string>()
+// Persisted under `shannon.demo.pinnedSessions` (JSON array) so a reload
+// keeps the pin, mirroring the backend's curation.json durability.
+const DEMO_PINNED_KEY = 'shannon.demo.pinnedSessions'
+const pinnedSessions = new Set<string>(loadDemoPinned())
+function loadDemoPinned(): string[] {
+  try {
+    const raw = window.localStorage.getItem(DEMO_PINNED_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+function persistDemoPinned(): void {
+  try {
+    window.localStorage.setItem(DEMO_PINNED_KEY, JSON.stringify([...pinnedSessions]))
+  } catch {
+    // Storage unavailable — the in-memory set still covers the live session.
+  }
+}
 
 // P1-3: mutable desktop config so execution-mode / sandbox switches in the
 // demo feel live (get_config hands out a fresh clone of this).
@@ -1118,7 +1137,7 @@ export const handlers: Record<string, MockHandler> = {
     // R1 scripted-backend: a loaded script's seeded sessions replace the
     // demo roster wholesale (deletions/renames apply to the demo list only).
     const seeded = seededSessions()
-    if (seeded) return clone(seeded)
+    if (seeded) return clone(seeded).map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
     return clone(MOCK_SESSIONS)
       .filter(s => !deletedSessions.has(s.id) && !archivedSessions.has(s.id))
       .map(s => renamedSessions.get(s.id) ?? s)
@@ -1130,7 +1149,7 @@ export const handlers: Record<string, MockHandler> = {
     // seeded roster (title-first, the backend's contract) — previously a
     // scripted rail's search leaked the demo roster into the filtered list.
     const seeded = seededSearchSessions(args.query ?? '')
-    if (seeded) return clone(seeded)
+    if (seeded) return clone(seeded).map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
     const q = (args.query ?? '').toLowerCase()
     return clone(MOCK_SESSIONS)
       .filter(s => !deletedSessions.has(s.id))
@@ -1230,11 +1249,14 @@ export const handlers: Record<string, MockHandler> = {
   },
   // Settings R3 T7: the pin twin — same in-memory-set contract as the
   // archive handlers, so a demo pin survives remounts through the
-  // list_sessions/search_sessions projections above.
+  // list_sessions/search_sessions projections above; the localStorage
+  // mirror (`shannon.demo.pinnedSessions`) makes it survive a full reload,
+  // standing in for the backend curation sidecar's curation.json.
   async set_session_pinned(args: { id: string; pinned: boolean }) {
     await delay(60)
     if (args.pinned) pinnedSessions.add(args.id)
     else pinnedSessions.delete(args.id)
+    persistDemoPinned()
     return true
   },
   async duplicate_session(args: { id: string }) {

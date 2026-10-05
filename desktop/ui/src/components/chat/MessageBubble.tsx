@@ -556,7 +556,8 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                 // node list early piled every banner at the top of the tool
                 // area, breaking the failure→retry narrative); its chain
                 // members stay non-groupable, and everything else is a
-                // grouping candidate except subagent spawns.
+                // grouping candidate except subagent spawns and calls that
+                // carry an artifact FileCard (folding would hide the card).
                 const units: ToolGroupUnit<ToolCall, React.ReactNode>[] = []
                 let i = 0
                 while (i < tcs.length) {
@@ -592,7 +593,11 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                       continue
                     }
                   }
-                  units.push({ type: 'tool', tc, groupable: tc.tool_name !== 'agent_spawn' })
+                  units.push({
+                    type: 'tool',
+                    tc,
+                    groupable: tc.tool_name !== 'agent_spawn' && !carriesArtifactCard(tc),
+                  })
                   i++
                 }
                 // Pass 2 — ordered emission: adjacent same-kind merge, gated
@@ -800,6 +805,16 @@ function extractFilePath(toolName: string, input: unknown): string | null {
   const raw = extractToolInputPath(input)
   if (!raw) return null
   return FILE_MUTATING_TOOLS.has(toolName) ? raw : null
+}
+
+/** A COMPLETED file-mutating call with a path input renders an interactive
+ *  artifact FileCard under its tool block (office Wave 1 A5 — the exact
+ *  `canDiff` signal ToolCallDisplay gates its card on). The card is the
+ *  user's interaction surface (preview / batch run / diff), so such a call
+ *  must stay a plain card: folding it into a ToolGroupCard hid the artifact
+ *  behind the collapsed group (T11 grouping regression). */
+function carriesArtifactCard(tc: ToolCall): boolean {
+  return extractFilePath(tc.tool_name, tc.tool_input) != null && tc.status === 'completed' && !tc.is_error
 }
 
 /** P2-⑨: banner preceding a run of consecutive same-tool failures — links
