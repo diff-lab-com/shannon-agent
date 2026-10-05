@@ -2549,6 +2549,24 @@
       }
     },
     {
+      "identifier": "allow-get-utility-slots",
+      "description": "Enables the get_utility_slots command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_utility_slots"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-utility-slot",
+      "description": "Enables the set_utility_slot command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_utility_slot"
+        ]
+      }
+    },
+    {
       "identifier": "allow-skill-loop-approve",
       "description": "Enables the skill_loop_approve command without any pre-configured scope.",
       "commands": {
@@ -3003,6 +3021,8 @@
         "allow-set-active-provider",
         "allow-set-active-provider-profile",
         "allow-set-provider-fallback-models",
+        "allow-get-utility-slots",
+        "allow-set-utility-slot",
         "allow-set-provider-models",
         "allow-test-all-providers",
         "allow-test-provider-connection",

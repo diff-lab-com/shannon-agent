@@ -1695,8 +1695,20 @@ pub async fn send_message(
     // env block, bash default cwd, repo map, memory project key) to the
     // session's directory instead of the process cwd.
     let memory_disabled = active_session.memory_disabled_snapshot();
+    // S3-3 utility tier slot: the compaction slot (providers.toml v2
+    // `auxiliary.compression`) resolves through the ORTHOGONAL resolver in
+    // `utility_tier` — it reads only the auxiliary map and its roster, never
+    // this session's override or the phase tiers (裁定⑦). `None` (slot
+    // unconfigured, the default) keeps the historical behavior byte-identical:
+    // the background compaction request rides the session's own client.
+    let auxiliary_compaction_client = crate::utility_tier::resolve_auxiliary_client(
+        &state,
+        shannon_types::provider_config::AuxRole::Compression,
+    )
+    .await;
     let mut engine = crate::commands_memory::attach_shared_memory_if(
-        QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+        QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new())
+            .with_auxiliary_compaction_client(auxiliary_compaction_client),
         &state.memory_store,
         memory_disabled,
         session_working_dir.as_deref(),

@@ -3288,3 +3288,61 @@ export async function archiveProject(path: string): Promise<ProjectRecord> {
 export async function unarchiveProject(path: string): Promise<ProjectRecord> {
   return invoke('unarchive_project', { path })
 }
+
+// --- S3-3 (utility tier slots): compaction + session-summary auxiliary
+// slots (providers.toml v2 `auxiliary`). Strictly a background-task channel:
+// the interactive precedence chain (session override > phase tier > global
+// default) never reads these, and the write path never moves `active_target`.
+
+/** One slot row of `get_utility_slots`. `provider`/`model` null = the slot
+ *  follows the global default; `resolves` false = configured but the named
+ *  provider slot no longer exists in the active profile (falls back with a
+ *  backend warn). */
+export interface UtilitySlotStatus {
+  role: 'compression' | 'title_generation' | string
+  provider: string | null
+  model: string | null
+  resolves: boolean
+}
+
+/** One roster row offered as a slot target: a provider slot of the active
+ *  profile plus its candidate models (curated vault first, then tier
+ *  resolutions, then the slot's active-target model). */
+export interface UtilityRosterEntry {
+  provider_id: string
+  display_name: string
+  models: string[]
+}
+
+/** Read shape of `get_utility_slots`: both slot rows + the candidate roster
+ *  in one snapshot. */
+export interface UtilitySlotsView {
+  slots: UtilitySlotStatus[]
+  roster: UtilityRosterEntry[]
+  profile: string
+}
+
+/** Read the two utility slots + the candidate roster (Settings → Models). */
+export async function getUtilitySlots(): Promise<UtilitySlotsView> {
+  return invoke('get_utility_slots')
+}
+
+/** Echo of a committed slot write from `set_utility_slot`. */
+export interface UtilitySlotOutcome {
+  role: string
+  /** Null = the slot was cleared (follows the global default again). */
+  provider: string | null
+  model: string | null
+}
+
+/** Write (or clear) one utility slot. `provider` + `model` both null clear
+ *  the slot; both set assign it. The provider must exist in the active
+ *  profile's roster (write-time validation). Emits
+ *  `CONFIG_UPDATED { key: "utility_slots" }`. */
+export async function setUtilitySlot(
+  role: string,
+  provider: string | null,
+  model: string | null,
+): Promise<UtilitySlotOutcome> {
+  return invoke('set_utility_slot', { role, provider, model })
+}

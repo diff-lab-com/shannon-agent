@@ -80,6 +80,12 @@ const state = {
   background: clone(MOCK_BACKGROUND_TASKS),
   providers: clone(MOCK_PROVIDERS),
   inbox: clone(MOCK_INBOX_ITEMS) as InboxItem[],
+  // S3-3: utility tier slots — the demo mirror of providers.toml v2's
+  // `auxiliary` map. Both slots start unset (follow the global default).
+  utilitySlots: {
+    compression: null as { provider: string; model: string } | null,
+    title_generation: null as { provider: string; model: string } | null,
+  },
 }
 
 // ids for inbox items created at runtime (rerun simulation).
@@ -339,6 +345,20 @@ const goalRuns = [
 // Snapshot the managed-providers roster as a cloned ProvidersFile.
 function providersFile() {
   return clone(state.providers)
+}
+
+// S3-3: one utility slot row (role + provider/model or the unset nulls).
+function utilitySlotValue(v: { provider: string; model: string } | null) {
+  return v ? { provider: v.provider, model: v.model, resolves: true } : { provider: null, model: null, resolves: false }
+}
+
+// S3-3: candidate models of one demo roster provider — the curated vault
+// (`models` declarations) when present, else the active model as a minimal
+// honest candidate list.
+function demoRosterModels(p: { id: string; models?: { id: string }[] }) {
+  const declared = (p.models ?? []).map((m) => m.id).filter(Boolean)
+  if (declared.length > 0) return declared
+  return [MOCK_CONFIG.model].filter((m): m is string => typeof m === 'string' && m.length > 0)
 }
 
 function findTask(id: string) {
@@ -749,6 +769,47 @@ export const handlers: Record<string, MockHandler> = {
       state.providers.active_provider_id = null
     }
     return providersFile()
+  },
+  // --- S3-3: utility tier slots (compaction + session summary) ---
+  // Demo mirror of the providers.toml v2 `auxiliary` map: both slots start
+  // unset (follow the global default); set stores the target on the demo
+  // roster so the selection round trip is observable in demos. Write-time
+  // validation mirrors the backend: the provider must be in the roster.
+  async get_utility_slots() {
+    await delay()
+    return {
+      slots: [
+        { role: 'compression', ...utilitySlotValue(state.utilitySlots.compression) },
+        { role: 'title_generation', ...utilitySlotValue(state.utilitySlots.title_generation) },
+      ],
+      roster: state.providers.providers.map((p) => ({
+        provider_id: p.id,
+        display_name: p.display_name,
+        models: demoRosterModels(p),
+      })),
+      profile: 'default',
+    }
+  },
+  async set_utility_slot(args: { role: string; provider: string | null; model: string | null }) {
+    await delay(120)
+    const key =
+      args.role === 'compression'
+        ? 'compression'
+        : args.role === 'title_generation'
+          ? 'title_generation'
+          : null
+    if (!key) throw new Error(`set_utility_slot: unknown utility role \`${args.role}\``)
+    if (args.provider == null || args.model == null) {
+      state.utilitySlots[key] = null
+    } else {
+      if (!state.providers.providers.some((p) => p.id === args.provider)) {
+        throw new Error(
+          `no provider slot with id '${args.provider}' in the active profile of providers.toml`,
+        )
+      }
+      state.utilitySlots[key] = { provider: args.provider, model: args.model }
+    }
+    return { role: key, provider: args.provider, model: args.model }
   },
   async set_active_provider(args: { id: string }) {
     await delay(150)

@@ -501,6 +501,26 @@ fn generate_diff_preview(path: &str, old: &str, new: &str) -> String {
     diff
 }
 
+/// S3-3 utility tier slot — which client the background compaction
+/// summarizer uses. `auxiliary` is the host-resolved
+/// providers.toml v2 `auxiliary.compression` target (see
+/// [`QueryEngine::with_auxiliary_compaction_client`]); `None` keeps the
+/// historical behavior byte-identical: the session's own client, cloned.
+///
+/// This function is the entire engine-side decision — a pure pick with no
+/// access to session overrides, phase tiers, or unattended pinning (裁定⑦:
+/// the utility slot is orthogonal to the interactive precedence chain, and
+/// no code path can leak those layers in).
+pub(crate) fn compaction_summarizer_client(
+    auxiliary: Option<&LlmClient>,
+    session: &LlmClient,
+) -> LlmClient {
+    match auxiliary {
+        Some(aux) => aux.clone(),
+        None => session.clone(),
+    }
+}
+
 impl QueryEngine {
     /// Process a query with streaming events
     ///
@@ -600,6 +620,12 @@ impl QueryEngine {
         let context_injector = self.context_injector.clone();
         let plan_mode_active = self.plan_mode_active.clone();
         let effective_max_context_tokens = self.effective_max_context_tokens;
+        // S3-3 utility tier slot: the host-resolved background-compaction
+        // client (providers.toml v2 `auxiliary.compression`), or `None` for
+        // the historical behavior (compaction rides the session client). The
+        // resolution happened host-side and is orthogonal to this query's
+        // override/tier state — the loop only consumes the finished client.
+        let auxiliary_compaction_client = self.auxiliary_compaction_client.clone();
 
         // Scoped injection (ADR-0010 D2): load ALL of the active project's
         // memories into the prompt rather than search-then-inject-matches.
@@ -1578,8 +1604,47 @@ impl QueryEngine {
                                 // compaction silently dropped).
                             }
 
+                            // S3-3 utility tier slot: when the host pinned an
+                            // auxiliary compaction client (providers.toml v2
+                            // `auxiliary.compression`), the background
+                            // summarization request goes THERE — provider,
+                            // base URL, credential and model all come from the
+                            // auxiliary target, not from this session's
+                            // interactive chain. Unset (the default) keeps the
+                            // historical byte-identical path: `client.clone()`
+                            // with its request capture.
+                            let summarizer_client = match &auxiliary_compaction_client {
+                                Some(aux) => {
+                                    tracing::info!(
+                                        model = aux.model(),
+                                        provider = %aux.provider(),
+                                        "utility slot: compaction summarizer routed to the auxiliary target"
+                                    );
+                                    // Keep L0-log parity with the main client:
+                                    // tee the wire body, attributed to the
+                                    // AUXILIARY target (never the main model —
+                                    // that would falsify the log).
+                                    compaction_summarizer_client(Some(aux), &client)
+                                        .with_request_capture({
+                                            let tee = tee.clone();
+                                            let header_model = aux.model().to_string();
+                                            let header_provider = aux.provider().to_string();
+                                            let snapshot = header_config_snapshot.clone();
+                                            std::sync::Arc::new(move |wire: &serde_json::Value| {
+                                                crate::secret_guard::audit_wire_and_log(wire);
+                                                tee.record_request_header(
+                                                    wire,
+                                                    &header_model,
+                                                    Some(&header_provider),
+                                                    snapshot.clone(),
+                                                );
+                                            })
+                                        })
+                                }
+                                None => compaction_summarizer_client(None, &client),
+                            };
                             match shannon_engine::compact::CompactEngine::with_llm_summarizer(
-                                client.clone(),
+                                summarizer_client,
                             ) {
                                 Ok(mut compact_engine) => {
                                     // Sync compact engine's context limit with our effective limit

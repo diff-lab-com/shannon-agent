@@ -277,6 +277,17 @@ pub struct QueryEngine {
     /// short-lived state (todo checklist, skill activations, etc.) alive
     /// across the in-place context compaction boundary.
     reinjection_providers: Arc<std::sync::Mutex<Vec<Arc<ReinjectionProvider>>>>,
+    /// S3-3 utility tier slot: an independently resolved client for the
+    /// background compaction/summarization request (providers.toml v2
+    /// `auxiliary.compression`). `None` (the default) keeps the historical
+    /// behavior — compaction rides the session's own client.
+    ///
+    /// Orthogonality contract (review裁定⑦): this client is resolved by the
+    /// host straight from the profile's `auxiliary` map — it never passes
+    /// through the interactive precedence chain (session override > phase
+    /// tier > global default) and is unaffected by unattended pinning. The
+    /// engine itself just prefers it for the background summarizer when set.
+    pub(crate) auxiliary_compaction_client: Option<LlmClient>,
 }
 
 impl QueryEngine {
@@ -406,6 +417,7 @@ impl QueryEngine {
             )),
             session_start_emitted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reinjection_providers: Arc::new(std::sync::Mutex::new(Vec::new())),
+            auxiliary_compaction_client: None,
         }
     }
 
@@ -471,6 +483,7 @@ impl QueryEngine {
             )),
             session_start_emitted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reinjection_providers: Arc::new(std::sync::Mutex::new(Vec::new())),
+            auxiliary_compaction_client: None,
         }
     }
 
@@ -569,6 +582,7 @@ impl QueryEngine {
             )),
             session_start_emitted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reinjection_providers: Arc::new(std::sync::Mutex::new(Vec::new())),
+            auxiliary_compaction_client: None,
         }
     }
 
@@ -771,6 +785,28 @@ impl QueryEngine {
             .lock()
             .expect("reinjection_providers lock")
             .push(Arc::new(provider));
+    }
+
+    /// S3-3 utility tier slot — pin the client the background compaction /
+    /// summarization request uses (providers.toml v2 `auxiliary.compression`,
+    /// resolved by the host). `None` (every constructor's default) keeps the
+    /// historical behavior: compaction rides the session's own client, so
+    /// hosts that never call this see byte-identical behavior.
+    ///
+    /// The host owns ALL resolution semantics here — which profile roster the
+    /// target came from, whether a stale target falls back, and the
+    /// orthogonality to the interactive precedence chain (session override >
+    /// phase tier > global default; review裁定⑦). The engine only prefers
+    /// this client for the background summarizer when set.
+    pub fn with_auxiliary_compaction_client(mut self, client: Option<LlmClient>) -> Self {
+        self.auxiliary_compaction_client = client;
+        self
+    }
+
+    /// The pinned compaction client, if one was configured
+    /// ([`Self::with_auxiliary_compaction_client`]). Test/wire seam.
+    pub fn auxiliary_compaction_client(&self) -> Option<&LlmClient> {
+        self.auxiliary_compaction_client.as_ref()
     }
 
     /// Access the triggered routines registry.
