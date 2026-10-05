@@ -290,6 +290,10 @@ pub mod commands_onboarding;
 pub mod commands_feedback;
 #[cfg(feature = "tauri")]
 pub mod commands_permissions;
+// Settings R3 T8 — desktop ask_user question round-trip (the GUI replacement
+// for the terminal stdin QuestionHandler) + the `respond_ask_user` command.
+#[cfg(feature = "tauri")]
+pub mod ask_user_handler;
 pub mod commands_rewind;
 pub mod commands_slash;
 

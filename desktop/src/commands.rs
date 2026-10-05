@@ -16,6 +16,7 @@ use shannon_engine::state::StateManager;
 use shannon_mcp::McpProcessPool;
 use shannon_skills::SkillRegistry;
 use shannon_tools::register_default_tools_with_providers;
+use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -143,6 +144,13 @@ pub struct AppState {
     /// Pending permission requests (request_id -> sender + tool name, so
     /// "always allow" can persist a rule for the tool).
     pub(crate) pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
+    /// Settings R3 T8 — pending ask_user questions (request_id → oneshot
+    /// back to `DesktopQuestionHandler::ask_question`). The frontend's
+    /// `respond_ask_user` removes + sends; the auto-continue timeout path
+    /// removes + emits `ask-user-resolved`. `DashMap` (sync): the critical
+    /// sections are pure map edits, never held across an await.
+    pub(crate) pending_questions:
+        Arc<DashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>>,
     /// Session metadata for session list. (P0-4: kept on AppState for
     /// now; this is the *display* list (titles, message counts), not the
     /// per-session query state. Migrating this into the registry is
@@ -895,6 +903,7 @@ impl AppState {
             )),
             desktop_config: Arc::new(RwLock::new(desktop_config)),
             pending_permissions: Arc::new(Mutex::new(HashMap::new())),
+            pending_questions: Arc::new(DashMap::new()),
             sessions: Arc::new(Mutex::new(Vec::new())),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
             skill_registry: Arc::new(SkillRegistry::new()),

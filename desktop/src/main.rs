@@ -6,6 +6,7 @@
 
 #[cfg(feature = "tauri")]
 fn main() {
+    use shannon_desktop::ask_user_handler;
     use shannon_desktop::commands;
     use shannon_desktop::commands_agents;
     use shannon_desktop::commands_artifact;
@@ -323,6 +324,8 @@ fn main() {
             commands_dream::discard_dream_proposal,
             commands_permissions::request_permission,
             commands_permissions::respond_permission,
+            // Settings R3 T8 — answer a pending ask-user question card.
+            ask_user_handler::respond_ask_user,
             commands_slash::get_session_context_stats,
             commands_slash::get_session_git_diff,
             commands_slash::compact_session,
@@ -642,6 +645,12 @@ fn main() {
             // Log-and-skip inside; never fatal.
             let skill_tools = shannon_desktop::skill_tools::register_for_state(&state);
             tracing::info!(count = skill_tools, "startup skill tool registration complete");
+            // Settings R3 T8 — the GUI has no stdin: swap the terminal
+            // `ask_user_question` handler for the desktop event round-trip
+            // (AskUserCard + `respond_ask_user`). Fatal on failure, same as
+            // the default-tool registration above.
+            ask_user_handler::register_for_state(&state, app.handle().clone())
+                .expect("Failed to register desktop ask_user handler");
             app.manage(state);
 
             // P1-1 — reopen the session windows that were open at last

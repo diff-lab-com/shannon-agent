@@ -263,6 +263,16 @@ pub struct DesktopConfig {
     /// message, so a change applies to the NEXT message without a restart.
     #[serde(default = "default_true")]
     pub context_auto_compact: bool,
+    /// Settings R3 T8 — 提问自动继续. When true, a desktop `ask_user_question`
+    /// left unanswered for 5 minutes (`ask_user_handler::ASK_USER_TIMEOUT_SECS`)
+    /// is auto-answered with "continue on your best judgment" (plus an
+    /// `ask-user-resolved` timed-out event for the card); when false — the
+    /// default — the agent waits for the user indefinitely. Read live by
+    /// `DesktopQuestionHandler` before each question's wait, so a flip
+    /// applies to the NEXT question without a restart. Written via
+    /// `configure("chat.ask_user_auto_continue")`.
+    #[serde(default)]
+    pub chat_ask_user_auto_continue: bool,
 }
 
 fn default_power_block_sleep_during_tasks() -> bool {
@@ -884,6 +894,7 @@ impl Default for DesktopConfig {
             network_no_proxy: None,
             network_ca_cert_path: None,
             context_auto_compact: true,
+            chat_ask_user_auto_continue: false,
         }
     }
 }

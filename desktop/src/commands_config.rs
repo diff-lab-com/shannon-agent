@@ -447,6 +447,10 @@ fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Resu
         // compaction. Read when each message's engine is built — the engine
         // is rebuilt per message, so a flip applies to the NEXT message.
         "context.auto_compact" => cfg.context_auto_compact = enabled,
+        // Settings R3 T8: auto-continue for unanswered agent questions
+        // (`ask_user_question`). Read live by the ask_user handler before
+        // each question's wait — a flip applies to the NEXT question.
+        "chat.ask_user_auto_continue" => cfg.chat_ask_user_auto_continue = enabled,
         other => return Err(format!("Unrecognized boolean key: {other}")),
     }
     Ok(())
@@ -2437,11 +2441,13 @@ mod tests {
             "hardware_acceleration" => Some(cfg.hardware_acceleration),
             "power.block_sleep_during_tasks" => Some(cfg.power_block_sleep_during_tasks),
             "context.auto_compact" => Some(cfg.context_auto_compact),
+            // Settings R3 T8 — 提问自动继续.
+            "chat.ask_user_auto_continue" => Some(cfg.chat_ask_user_auto_continue),
             _ => None,
         }
     }
 
-    const TOGGLE_KEYS: [&str; 12] = [
+    const TOGGLE_KEYS: [&str; 13] = [
         "memory_enabled",
         "telemetry",
         "encryption",
@@ -2454,6 +2460,7 @@ mod tests {
         "hardware_acceleration",
         "power.block_sleep_during_tasks",
         "context.auto_compact",
+        "chat.ask_user_auto_continue",
     ];
 
     #[test]
@@ -2506,6 +2513,9 @@ mod tests {
             // Settings R3 T6: auto-compaction defaults true — pin false like
             // the rest so the round trip starts deterministic.
             cfg.context_auto_compact = false;
+            // Settings R3 T8: ask auto-continue defaults false; pinned like
+            // the rest so the round trip starts deterministic.
+            cfg.chat_ask_user_auto_continue = false;
         }
 
         let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());

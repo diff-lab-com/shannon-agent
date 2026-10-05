@@ -449,6 +449,20 @@ pub mod event_names {
     /// parsed. Emitted right after the final output flush; explicit
     /// `terminal_kill` does not emit it (the killing client already knows).
     pub const TERMINAL_EXIT: &str = "terminal:exit";
+    /// Settings R3 T8 — the desktop `ask_user_question` tool surfaced one
+    /// question to the frontend (the GUI replacement for the terminal stdin
+    /// handler, which EOFs/hangs under a GUI). Payload: `AskUserRequest`
+    /// (`desktop/src/events.rs` — desktop-only wire type, same pattern as
+    /// `query:notice`). Frontend: the AskUserCard dialog; the answer travels
+    /// back through the `respond_ask_user` command keyed by `request_id`.
+    pub const ASK_USER_REQUEST: &str = "ask-user-request";
+    /// Settings R3 T8 — a pending ask_user question settled without an
+    /// answer: the 提问自动继续 timeout fired, the pending entry was dropped
+    /// and the tool auto-continued with a best-judgment answer. Payload:
+    /// `AskUserResolved` (`desktop/src/events.rs`); emitted on the timeout
+    /// path only — an answered question cleans up silently through
+    /// `respond_ask_user`'s remove semantics.
+    pub const ASK_USER_RESOLVED: &str = "ask-user-resolved";
 }
 
 #[cfg(test)]
