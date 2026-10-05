@@ -14,6 +14,7 @@ import { writeGlobalModelDefault } from '@/lib/modelSwitch'
 import { ProvidersSection } from './models-settings/ProvidersSection'
 import { ProviderVisibilitySection } from './models-settings/ProviderVisibilitySection'
 import { PhaseTierSection } from './models-settings/PhaseTierSection'
+import { UtilitySection } from './models-settings/UtilitySection'
 import { ProfilesSection } from './models-settings/ProfilesSection'
 import { ParameterSlider } from './models-settings/ParameterSlider'
 import ModelMetaEditor from './models-settings/ModelMetaEditor'
@@ -278,6 +279,11 @@ export default function ModelsSettings() {
         {/* R3-3: plan/act model tiers (global preference; the chat header's
             compact pair writes the same config keys). */}
         <PhaseTierSection />
+
+        {/* S3-3: utility tier slots (compaction + session summary) — the
+            background-task channel, orthogonal to the interactive
+            precedence chain above. */}
+        <UtilitySection />
 
         {/* R3-2: named provider model profiles (list / switch / create —
             rename & delete deferred). A switch refreshes provider status +

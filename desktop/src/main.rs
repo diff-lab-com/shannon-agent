@@ -53,6 +53,7 @@ fn main() {
     use shannon_desktop::skill_pattern_detection;
     use shannon_desktop::terminal_commands;
     use shannon_desktop::usage_governance;
+    use shannon_desktop::utility_tier;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
@@ -210,6 +211,14 @@ fn main() {
             // into the provider slot's `fallback_models` (never automatic).
             commands_models::recommend_fallback_chain,
             commands_models::set_provider_fallback_models,
+            // S3-3 (utility tier 槽位化) — compaction + session-summary
+            // auxiliary slots (providers.toml v2 `auxiliary`). The write
+            // path never touches `active_target`; the compaction slot feeds
+            // the background summarizer through the orthogonal resolver in
+            // `utility_tier` (裁定⑦ — the interactive precedence chain is
+            // untouched).
+            utility_tier::get_utility_slots,
+            utility_tier::set_utility_slot,
             // R4-3 (desktop slice) — per-provider multi-key management
             // (Settings → Models "API keys" panel; same credential store
             // the CLI's `providers keys` drives).
