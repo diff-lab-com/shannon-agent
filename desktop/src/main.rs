@@ -153,6 +153,11 @@ fn main() {
             commands_chat::set_session_model,
             commands_chat::clear_session_model,
             commands_chat::get_session_model,
+            // S2-4a (P-N9) — pre-send vision pre-check: the UI asks before
+            // pointing image attachments at a model KNOWN to lack vision,
+            // with a one-click switch candidate. The engine gate stays the
+            // final backstop.
+            commands_chat::check_vision_send,
             // P2-5 — session-level "temporary chat" (no-memory bypass).
             commands_chat::set_session_memory_bypass,
             commands_chat::get_session_memory_bypass,

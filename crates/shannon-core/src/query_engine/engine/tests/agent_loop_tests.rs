@@ -2677,7 +2677,9 @@ async fn run_gate_query(
 
 /// A model the catalog KNOWS lacks vision must have its image attachment
 /// refused before any request leaves the process — with a message naming
-/// the model and the switch paths, not a raw provider 400.
+/// the model and a host-neutral switch hint, not a raw provider 400.
+/// S2-4a (P-N9): the copy must NOT name the TUI's `/model` command (which
+/// does not exist on the desktop); it points at "the model menu" instead.
 #[tokio::test]
 async fn vision_gate_blocks_known_non_vision_model_before_any_request() {
     let (completed, failed, bodies) =
@@ -2688,7 +2690,9 @@ async fn vision_gate_blocks_known_non_vision_model_before_any_request() {
         "typed gate message expected, got: {failed}"
     );
     assert!(failed.contains("deepseek-v4-flash"), "got: {failed}");
-    assert!(failed.contains("/model"), "got: {failed}");
+    assert!(failed.contains("model menu"), "got: {failed}");
+    // Desktop-safe copy: the TUI-only command name must never reappear.
+    assert!(!failed.contains("/model"), "got: {failed}");
     assert!(
         bodies.is_empty(),
         "the gate must fire BEFORE any network traffic, got {} requests",

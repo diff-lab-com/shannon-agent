@@ -184,6 +184,14 @@ class PointerEventMock extends MouseEvent {}
 vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/tauri-api')>()),
   sendMessage: vi.fn().mockResolvedValue({ message_id: '1', status: 'sent' }),
+  // S2-4a — vision pre-check default: the effective model HAS vision, so
+  // no send is ever held; the vision-confirm flow tests override per
+  // scenario (vision=false / rejection).
+  checkVisionSend: vi.fn().mockResolvedValue({
+    model: 'claude-sonnet-4-6',
+    provider: 'anthropic',
+    vision: true,
+  }),
   // P0-3 preflight — default: every path checks clean; chip-flagging tests
   // override per scenario.
   checkAttachmentPaths: vi.fn().mockResolvedValue([]),

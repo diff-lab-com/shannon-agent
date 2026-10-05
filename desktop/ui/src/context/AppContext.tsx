@@ -94,6 +94,19 @@ const PROMPT_QUEUE_CAP = 3
 // drafts (which do persist). Do not "fix" this inconsistency without a
 // product call on replay semantics (a restart would fire parked sends).
 
+/** S2-4a (P-N9): the full payload of a send held behind the vision
+ *  confirm bar. Lives in AppProvider state; only the render-facing subset
+ *  (model + suggestion) is published through the ChatContext slice. */
+interface HeldVisionSend {
+  text: string
+  filePaths: string[]
+  budgetBypass: boolean | undefined
+  /** The model the send would have used (named in the bar). */
+  model: string
+  /** One-click switch candidate, null = notice-only (no candidate). */
+  suggestion: { provider: string; model: string; name: string } | null
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streamingText, setStreamingText] = useState('')
@@ -757,6 +770,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setErrorKind(message == null ? null : kind)
   }, [])
 
+  // S2-4a (P-N9): the send held behind the vision confirm bar (null =
+  // nothing held). Plain state — only one confirm can be pending per
+  // window; a newer held send replaces the older one. The full payload
+  // (text/attachments/budget flag) lives here; the ChatContext slice
+  // publishes only the render-facing subset.
+  const [visionConfirm, setVisionConfirm] = useState<HeldVisionSend | null>(null)
+
   const refreshStatus = useCallback(async () => {
     try { setStatus(await api.getStatus()) } catch (e) { logSoftFailure('refresh status', e) }
   }, [])
@@ -789,17 +809,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try { setBackgroundTasks(await api.getBackgroundTasks()) } catch (e) { logSoftFailure('refresh background tasks', e) }
   }, [])
 
-  const sendMessage = useCallback(async (
+  // The send body proper — no vision pre-check, no goal guard. Exposed
+  // only through `sendMessage` and `resolveVisionConfirm` (the confirm
+  // actions must deliver the held payload WITHOUT re-running the gate,
+  // otherwise "send anyway" would bounce straight back into the bar).
+  const sendNow = useCallback(async (
     message: string,
     filePaths?: string[],
-    options?: { budgetBypass?: boolean },
+    options?: { budgetBypass?: boolean; visionConfirmed?: boolean },
   ): Promise<boolean> => {
-    if (currentSessionId && goalOwnedSessionIds.includes(currentSessionId)) {
-      setChatError(messageFor('goal.composer.blocked'))
-      setSessionQuerying(windowSessionId ?? currentSessionId, false)
-      return false
-    }
-    setChatError(null)
     // §P2-18: a new turn resets its session's stream buckets, not just the
     // visible projection (a previous turn may have failed mid-stream).
     const targetSessionId = windowSessionId ?? currentSessionId
@@ -936,7 +954,82 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (prevRun) setRunProcess(prevRun)
       return false
     }
-  }, [currentSessionId, goalOwnedSessionIds, windowSessionId, setSessionQuerying, cancelStreamFlush, setChatError])
+  }, [currentSessionId, windowSessionId, setSessionQuerying, cancelStreamFlush, setChatError])
+
+  // S2-4a (review 2026-10-05 P-N9): the public send entry — an image-
+  // carrying message is pre-checked against the EFFECTIVE model (session
+  // override > phase tier > global default, resolved backend-side by
+  // `check_vision_send` from the same data the engine gate reads). A model
+  // KNOWN to lack vision holds the send behind an inline confirm bar
+  // instead of silently walking into a guaranteed refusal; unknown-
+  // capability models (and any command error — fail open) send exactly as
+  // before. The engine gate remains the final backstop behind "send
+  // anyway".
+  const sendMessage = useCallback(async (
+    message: string,
+    filePaths?: string[],
+    options?: { budgetBypass?: boolean; visionConfirmed?: boolean },
+  ): Promise<boolean> => {
+    if (currentSessionId && goalOwnedSessionIds.includes(currentSessionId)) {
+      setChatError(messageFor('goal.composer.blocked'))
+      setSessionQuerying(windowSessionId ?? currentSessionId, false)
+      return false
+    }
+    setChatError(null)
+    if (filePaths && filePaths.length > 0 && !options?.visionConfirmed) {
+      try {
+        const check = await api.checkVisionSend(windowSessionId ?? currentSessionId)
+        if (check.vision === false) {
+          setVisionConfirm({
+            text: message,
+            filePaths: filePaths ?? [],
+            budgetBypass: options?.budgetBypass,
+            model: check.model,
+            suggestion: check.suggestion ?? null,
+          })
+          return false
+        }
+      } catch (e) {
+        // The pre-check is a UX enhancement, never a send blocker: a
+        // failed command degrades to the historical behavior (send; the
+        // engine gate answers if the model truly cannot take images).
+        logSoftFailure('vision pre-check', e)
+      }
+    }
+    return sendNow(message, filePaths, options)
+  }, [currentSessionId, goalOwnedSessionIds, windowSessionId, setChatError, setSessionQuerying, sendNow])
+
+  // S2-4a: the confirm bar's three outcomes. `switch` pins the suggested
+  // model on THIS session (same `set_session_model` contract the composer
+  // chip writes) before delivering; `send-anyway` delivers untouched (the
+  // engine gate is the final word); `dismiss` just drops the held payload.
+  const resolveVisionConfirm = useCallback(async (
+    choice: 'switch' | 'send-anyway' | 'dismiss',
+  ): Promise<void> => {
+    const held = visionConfirm
+    if (!held) return
+    setVisionConfirm(null)
+    if (choice === 'dismiss') return
+    if (choice === 'switch' && held.suggestion) {
+      try {
+        await api.setSessionModel(
+          windowSessionId ?? currentSessionId ?? null,
+          held.suggestion.provider,
+          held.suggestion.model,
+        )
+      } catch (e) {
+        logSoftFailure('vision switch', e)
+        toast.error(messageFor('chat.vision.switchFailed'))
+        return
+      }
+    }
+    await sendNow(held.text, held.filePaths.length > 0 ? held.filePaths : undefined, {
+      budgetBypass: held.budgetBypass,
+      visionConfirmed: true,
+    })
+  }, [visionConfirm, windowSessionId, currentSessionId, sendNow])
+
+  const dismissVisionConfirm = useCallback(() => setVisionConfirm(null), [])
 
   // P1-1 fix: cancelQuery's targetSessionId mirrors sendMessage's — both
   // route explicitly instead of re-pointing the shared pointer.
@@ -1745,12 +1838,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const chatValue = useMemo<ChatContextValue>(() => ({
     messages, streamingText, thinkingText, isQuerying, isCancelInFlight, activeToolCalls, toolProgress, streamNotices, usage, runProcess,
     sendMessage, cancelQuery,
+    visionConfirm: visionConfirm == null
+      ? null
+      : { model: visionConfirm.model, suggestion: visionConfirm.suggestion },
+    resolveVisionConfirm, dismissVisionConfirm,
     promptQueue: promptQueues[visibleKey] ?? [],
     enqueuePrompt, dequeuePrompt, removeQueuedPrompt, moveQueuedPrompt,
     contextPanelOpen, toggleContextPanel, setContextPanelOpen: updateContextPanelOpen,
     checkpoints, rewindSession: rewindSessionAction, compactSession: compactSessionAction,
     feedback, recordFeedback: recordFeedbackAction,
   }), [messages, streamingText, thinkingText, isQuerying, isCancelInFlight, activeToolCalls, toolProgress, streamNotices, usage, runProcess, sendMessage, cancelQuery,
+    visionConfirm, resolveVisionConfirm, dismissVisionConfirm,
     promptQueues, visibleKey, enqueuePrompt, dequeuePrompt, removeQueuedPrompt, moveQueuedPrompt,
     contextPanelOpen, toggleContextPanel, updateContextPanelOpen, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 

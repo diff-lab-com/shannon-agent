@@ -34,6 +34,9 @@ const ctx = vi.hoisted(() => ({
   feedback: {} as Record<string, string>,
   sendMessage: vi.fn().mockResolvedValue(true),
   rewindSession: vi.fn(),
+  visionConfirm: null as any,
+  resolveVisionConfirm: vi.fn().mockResolvedValue(undefined),
+  dismissVisionConfirm: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/context/ChatContext', () => ({
@@ -110,6 +113,9 @@ beforeEach(() => {
     env_provider: null,
   }
   ctx.sendMessage = vi.fn().mockResolvedValue(true)
+  ctx.visionConfirm = null
+  ctx.resolveVisionConfirm = vi.fn().mockResolvedValue(undefined)
+  ctx.dismissVisionConfirm = vi.fn().mockResolvedValue(undefined)
 })
 
 describe('MessageArea — welcome / streaming gating', () => {
@@ -371,5 +377,45 @@ describe('MessageArea — tool duration lookup refresh on run settle (A-8)', () 
     rerenderArea(view)
     await act(async () => {}) // drain microtasks — no fetch may follow
     expect(api.getTraceTimeline).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MessageArea — S2-4a vision confirm bar', () => {
+  it('renders nothing when no send is held', () => {
+    renderArea()
+    expect(screen.queryByTestId('vision-confirm-bar')).not.toBeInTheDocument()
+  })
+
+  it('offers the one-click switch when a candidate exists', async () => {
+    ctx.visionConfirm = {
+      model: 'deepseek-v4-flash',
+      suggestion: { provider: 'deepseek', model: 'deepseek-v4-vision', name: 'DeepSeek V4 Vision' },
+    }
+    renderArea()
+    const bar = screen.getByTestId('vision-confirm-bar')
+    expect(bar).toHaveTextContent('deepseek-v4-flash')
+    expect(bar).toHaveTextContent('DeepSeek V4 Vision')
+    fireEvent.click(screen.getByTestId('vision-confirm-switch'))
+    await act(async () => {}) // settle the resolver promise
+    expect(ctx.resolveVisionConfirm).toHaveBeenCalledWith('switch')
+  })
+
+  it('degrades to notice-only (no switch button) without a candidate', () => {
+    ctx.visionConfirm = { model: 'deepseek-v4-flash', suggestion: null }
+    renderArea()
+    expect(screen.getByTestId('vision-confirm-bar')).toHaveTextContent('model menu')
+    expect(screen.queryByTestId('vision-confirm-switch')).not.toBeInTheDocument()
+    expect(screen.getByTestId('vision-confirm-send-anyway')).toBeInTheDocument()
+  })
+
+  it("'send anyway' and 'cancel' resolve their choices and close the bar path", async () => {
+    ctx.visionConfirm = { model: 'deepseek-v4-flash', suggestion: null }
+    renderArea()
+    fireEvent.click(screen.getByTestId('vision-confirm-send-anyway'))
+    await act(async () => {}) // settle the resolver promise
+    expect(ctx.resolveVisionConfirm).toHaveBeenCalledWith('send-anyway')
+    fireEvent.click(screen.getByTestId('vision-confirm-cancel'))
+    await act(async () => {})
+    expect(ctx.dismissVisionConfirm).toHaveBeenCalledTimes(1)
   })
 })
