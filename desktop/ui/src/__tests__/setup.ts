@@ -378,6 +378,10 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   setSessionModel: vi.fn().mockResolvedValue(undefined),
   clearSessionModel: vi.fn().mockResolvedValue(undefined),
   getSessionModel: vi.fn().mockResolvedValue(null),
+  // S3-2 (P-N10) — override count for the Settings profile-switch confirm.
+  // Default: no session carries an override, so every switch stays direct;
+  // the confirm tests override per scenario.
+  countSessionModelOverrides: vi.fn().mockResolvedValue(0),
   // R2-2 — Settings "Refresh model catalog". Default: no-op success.
   refreshModelCatalog: vi.fn().mockResolvedValue({ count: 0, generation: 1 }),
   // ADR-0005 P4.9 — provider allowlist. Default: no override (returns

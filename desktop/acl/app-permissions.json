@@ -1937,6 +1937,15 @@
       }
     },
     {
+      "identifier": "allow-count-session-model-overrides",
+      "description": "Enables the count_session_model_overrides command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "count_session_model_overrides"
+        ]
+      }
+    },
+    {
       "identifier": "allow-read-data-source-config",
       "description": "Enables the read_data_source_config command without any pre-configured scope.",
       "commands": {
@@ -2937,6 +2946,7 @@
         "allow-check-tools-send",
         "allow-check-vision-send",
         "allow-clear-session-model",
+        "allow-count-session-model-overrides",
         "allow-get-active-session-id",
         "allow-get-background-tasks",
         "allow-get-conversation",

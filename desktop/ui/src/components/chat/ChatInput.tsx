@@ -30,7 +30,9 @@ import * as api from '@/lib/tauri-api'
 import type { RejectedAttachmentReason, AttachmentExtractionReport } from '@/types'
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
-import { modelPickerMeta } from '@/components/settings/models-settings/types'
+import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow'
+import { modelWhyFor, type ModelWhyContext } from '@/lib/modelWhy'
+import { writeGlobalModelDefault } from '@/lib/modelSwitch'
 import { APPROVAL_MODES, approvalModeOption } from '@/lib/approvalModes'
 import { VISION_IMAGE_EXTENSIONS as IMAGE_EXTENSIONS } from '@/lib/fileRefs'
 
@@ -409,6 +411,20 @@ export default function ChatInput({
       ? modelList.find(m => m.id === sessionOverride.model || m.name === sessionOverride.model)
       : undefined) ??
     modelList.find(m => m.name === status?.model || m.id === status?.model)
+
+  // S3-1 (P-N11 "why is this model active"): one derivation feeds every
+  // row's why-label — session override > phase tier > profile-pinned/global
+  // default, the same chain `resolve_client_config_for_session` walks at
+  // query time. `config` carries the tier prefs + approval mode; the
+  // session override arrives from `getSessionModel` above.
+  const whyCtx: ModelWhyContext = {
+    override: sessionOverride,
+    approvalMode: (config as Record<string, unknown> | undefined)?.approval_mode as string | undefined ?? null,
+    planTier: (config as Record<string, unknown> | undefined)?.plan_tier as string | undefined ?? null,
+    actTier: (config as Record<string, unknown> | undefined)?.act_tier as string | undefined ?? null,
+    globalModel: status?.model ?? null,
+    activeProfile: status?.active_profile ?? null,
+  }
   const handleModelSwitch = async (modelId: string | null) => {
     const model = modelList.find(m => m.id === modelId)
     if (!model) return
@@ -420,9 +436,10 @@ export default function ChatInput({
         await api.setSessionModel(sessionId ?? null, model.provider, model.id)
         setSessionOverride({ provider: model.provider, model: model.id })
       } else {
-        // No session context (tests / degraded catalogs) — legacy global write.
-        await api.configure({ key: 'model', value: model.id })
-        await api.configure({ key: 'provider', value: model.provider })
+        // No session context (tests / degraded catalogs) — legacy global
+        // write, funneled through the shared model+provider pair helper
+        // (S3-1 P-N23: one write convention on every surface).
+        await writeGlobalModelDefault(model)
         await refreshConfig()
         await refreshStatus()
       }
@@ -1452,25 +1469,25 @@ export default function ChatInput({
                 </SelectValue>
               </SelectTrigger>
               {/* R2-3: widened past the chip's anchor width so the context/
-                  price meta fits on the model rows. */}
-              <SelectContent className="w-[320px]">
+                  price meta fits on the model rows; S3-1 widens further —
+                  the rows now also carry the source badge + why-active
+                  label (shared ModelPickerRowContent). */}
+              <SelectContent className="w-[380px]">
+                {/* S3-1 (P-N11): the priority chain, stated where the labels
+                    below are worn — Claude Code's picker states its lookup
+                    order instead of leaving it implicit. */}
+                {modelList.length > 0 && (
+                  <div
+                    role="presentation"
+                    data-testid="model-picker-priority-line"
+                    className="px-sm pt-0 pb-xs font-label-xs text-on-surface-variant"
+                  >
+                    {t('chat.input.model.priorityLine')}
+                  </div>
+                )}
                 {modelList.map(m => (
                   <SelectItem key={m.id} value={m.id} data-testid={`model-option-${m.id}`}>
-                    <span className="flex w-full min-w-0 items-center gap-xs">
-                      <span className="font-mono truncate">{m.name}</span>
-                      {/* R2-3: vision dot — rendered only from real catalog
-                          metadata; unknown renders nothing (never guessed). */}
-                      {m.vision === true && (
-                        <span
-                          aria-label={t('chat.input.model.vision')}
-                          title={t('chat.input.model.vision')}
-                          className="inline-block size-1.5 shrink-0 rounded-full bg-primary"
-                        />
-                      )}
-                      <span className="ml-auto shrink-0 whitespace-nowrap font-label-xs text-on-surface-variant tabular-nums">
-                        {modelPickerMeta(m)}
-                      </span>
-                    </span>
+                    <ModelPickerRowContent model={m} why={modelWhyFor(m, whyCtx, modelList)} />
                   </SelectItem>
                 ))}
                 {modelList.length > 0 && (

@@ -57,6 +57,32 @@ describe('ModelsSettings', () => {
   // These tests drive the rendering path so the v2 schema doesn't
   // silently drop in production.
 
+  // S3-1 (P-N23) — the quick switcher / catalog rows write the SAME
+  // model+provider pair the Header writes (shared writeGlobalModelDefault).
+  // The old model-only write was the review's convention fork.
+  it('model switch writes the model+provider pair, not model only', async () => {
+    vi.mocked(api.listModels).mockResolvedValue([
+      {
+        id: 'gpt-5',
+        name: 'GPT-5',
+        provider: 'openai',
+        context_window: 256_000,
+        price_in: 1.25,
+        price_out: 10,
+        tier: 'pro',
+      },
+    ])
+    render(wrap(<ModelsSettings />))
+    const row = await screen.findByTestId('catalog-model-row')
+    // The row's first button IS the switch target (the vault affordance
+    // column only mounts when a managed slot is active).
+    fireEvent.click(row.querySelector('button')!)
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'gpt-5' })
+      expect(api.configure).toHaveBeenCalledWith({ key: 'provider', value: 'openai' })
+    })
+  })
+
   it('renders price_in and price_out for a model with pricing', async () => {
     vi.mocked(api.listModels).mockResolvedValueOnce([
       {

@@ -9,6 +9,8 @@ import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
 import type { DeclaredModelInput, ProvidersFile } from '@/types'
 import { formatPrice } from './models-settings/types'
+import { ModelSourceBadge } from '@/components/shared/ModelPickerRow'
+import { writeGlobalModelDefault } from '@/lib/modelSwitch'
 import { ProvidersSection } from './models-settings/ProvidersSection'
 import { ProviderVisibilitySection } from './models-settings/ProviderVisibilitySection'
 import { PhaseTierSection } from './models-settings/PhaseTierSection'
@@ -82,9 +84,15 @@ export default function ModelsSettings() {
 
   const handleModelSwitch = async (modelId: string) => {
     if (!status) return
+    // S3-1 (P-N23): resolve the catalog row and write the SAME
+    // model+provider pair the Header (and the chip's global branch) write —
+    // the old model-only write was the review's convention fork. Same
+    // semantics (the catalog comes from the active provider), one helper.
+    const model = models.find(m => m.id === modelId)
+    if (!model) return
     setSwitching(modelId)
     try {
-      await api.configure({ key: 'model', value: modelId })
+      await writeGlobalModelDefault(model)
       await Promise.all([refreshModels(), refreshStatus()])
       toast.success(intl.formatMessage({ id: 'settings.models.switched' }, { model: modelId }))
     } catch (e) { toastError(t('settings.models.switchFailed'), e) }
@@ -409,24 +417,10 @@ export default function ModelsSettings() {
                                 (AddProviderModal fetch 固化). Catalog rows are the
                                 default and stay unbadged. (The old always-off
                                 `dynamic` badge was removed in S1-3; `source` is
-                                its replacement.) */}
-                            {m.source === 'overlay' ? (
-                              <span
-                                className="px-xs py-[2px] bg-secondary-container text-on-secondary-container rounded-sm text-label-2xs font-bold"
-                                title={t('settings.models.sourceBadge.overlay')}
-                              >
-                                {t('settings.models.sourceBadge.overlay')}
-                              </span>
-                            ) : null}
-                            {m.source === 'declared' ? (
-                              <span
-                                data-testid="source-badge-declared"
-                                className="px-xs py-[2px] bg-secondary-container text-on-secondary-container rounded-sm text-label-2xs font-bold"
-                                title={t('settings.models.sourceBadge.declared')}
-                              >
-                                {t('settings.models.sourceBadge.declared')}
-                              </span>
-                            ) : null}
+                                its replacement.) S3-1: rendered through the
+                                SHARED badge component so the composer chip and
+                                the Header picker wear the identical styling. */}
+                            <ModelSourceBadge source={m.source} />
                           </div>
                           <p className="text-label-sm text-on-surface-variant">
                             {m.provider}

@@ -671,6 +671,13 @@ export async function getSessionModel(
   return invoke<SessionModelOverride | null>('get_session_model', { sessionId: sessionId ?? null })
 }
 
+/** S3-2 (P-N10): how many sessions currently carry a model override — the
+ *  durable sidecar's count, backing the Settings profile-switch confirm
+ *  ("N sessions still use override models"). */
+export async function countSessionModelOverrides(): Promise<number> {
+  return invoke<number>('count_session_model_overrides')
+}
+
 // --- S2-4a (review 2026-10-05 P-N9): pre-send vision pre-check ---
 
 /** One-click switch candidate: the first vision-capable model of the

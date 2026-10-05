@@ -62,6 +62,12 @@ export function ProfilesSection({ onSwitched }: ProfilesSectionProps) {
   // gets providers).
   const [pendingEmpty, setPendingEmpty] = useState<ProviderProfileSummary | null>(null)
   const [confirmBusy, setConfirmBusy] = useState(false)
+  // S3-2 (P-N10): pending switch while sessions carry model overrides —
+  // the count command runs at click time (fresh, not mount-stale) and a
+  // non-zero count inserts this confirm BEFORE the switch: overrides keep
+  // pinning their sessions across the switch and fall back to the global
+  // default only where the pin no longer resolves.
+  const [pendingOverride, setPendingOverride] = useState<{ row: ProviderProfileSummary; count: number } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -72,14 +78,8 @@ export function ProfilesSection({ onSwitched }: ProfilesSectionProps) {
     return () => { cancelled = true }
   }, [])
 
-  const handleSwitch = async (row: ProviderProfileSummary) => {
-    if (row.active || switching != null) return
-    // Empty target → confirm first; the switch itself degrades the global
-    // default to "no active model" until the profile gains providers.
-    if (needsEmptyConfirm(row)) {
-      setPendingEmpty(row)
-      return
-    }
+  /** The actual switch — every confirm path funnels here. */
+  const doSwitch = async (row: ProviderProfileSummary) => {
     setSwitching(row.name)
     try {
       const fresh = await api.setActiveProviderProfile(row.name)
@@ -93,18 +93,66 @@ export function ProfilesSection({ onSwitched }: ProfilesSectionProps) {
     }
   }
 
+  // S3-2 (P-N10): the switch entry point asks the backend how many sessions
+  // still carry model overrides. A failed count degrades to 0 (no confirm)
+  // — the pre-existing flow must never be blocked by the new advisory.
+  const countOverrides = async (): Promise<number> =>
+    api.countSessionModelOverrides().then((n) => Number(n) || 0).catch(() => 0)
+
+  const handleSwitch = async (row: ProviderProfileSummary) => {
+    if (row.active || switching != null) return
+    // Empty target → confirm first; the switch itself degrades the global
+    // default to "no active model" until the profile gains providers.
+    if (needsEmptyConfirm(row)) {
+      setPendingEmpty(row)
+      return
+    }
+    // Active session overrides → the profile-switch × override notice
+    // (S3-2): the overrides SURVIVE the switch as pins; where the pinned
+    // provider is absent from the new profile they fall back to the global
+    // default at the next query (the backend also emits a per-query
+    // fallback event when that actually happens).
+    const overrideCount = await countOverrides()
+    if (overrideCount > 0) {
+      setPendingOverride({ row, count: overrideCount })
+      return
+    }
+    await doSwitch(row)
+  }
+
   const confirmEmptySwitch = async () => {
     const row = pendingEmpty
     if (!row) return
     setConfirmBusy(true)
     try {
+      // S3-2: an empty-profile switch can ALSO strand session overrides —
+      // chain the override notice after the empty confirm instead of
+      // stacking two dialogs.
+      const overrideCount = await countOverrides()
+      setPendingEmpty(null)
+      if (overrideCount > 0) {
+        setPendingOverride({ row, count: overrideCount })
+        return
+      }
       const fresh = await api.setActiveProviderProfile(row.name)
       setRows(fresh)
-      setPendingEmpty(null)
       await onSwitched?.()
       toast.success(t('settings.models.profiles.switched', { name: row.name }))
     } catch (e) {
       toastError(t('settings.models.profiles.switchFailed'), e)
+    } finally {
+      setConfirmBusy(false)
+    }
+  }
+
+  // S3-2: confirmed through the override dialog — proceed with the switch.
+  const confirmOverrideSwitch = async () => {
+    const pending = pendingOverride
+    if (!pending) return
+    setConfirmBusy(true)
+    try {
+      await doSwitch(pending.row)
+      setPendingOverride(null)
     } finally {
       setConfirmBusy(false)
     }
@@ -415,6 +463,23 @@ export function ProfilesSection({ onSwitched }: ProfilesSectionProps) {
         busyLabel={t('settings.models.profiles.switching')}
         onConfirm={() => { void confirmEmptySwitch() }}
         onCancel={() => { if (!confirmBusy) setPendingEmpty(null) }}
+      />
+
+      {/* S3-2 (P-N10): the profile × session-override notice. Rendered when
+          the switch target was confirmed but sessions still carry model
+          overrides — the count comes straight from the backend's sidecar
+          (count_session_model_overrides), so the number is the durable
+          truth, not this window's guess. */}
+      <ConfirmDialog
+        open={pendingOverride != null}
+        title={t('settings.models.profiles.overrideConfirmTitle')}
+        message={t('settings.models.profiles.overrideConfirmMessage', { count: pendingOverride?.count ?? 0 })}
+        confirmLabel={t('settings.models.profiles.overrideConfirmYes')}
+        cancelLabel={t('settings.models.profiles.cancel')}
+        busy={confirmBusy}
+        busyLabel={t('settings.models.profiles.switching')}
+        onConfirm={() => { void confirmOverrideSwitch() }}
+        onCancel={() => { if (!confirmBusy) setPendingOverride(null) }}
       />
 
       {/* R5: delete confirmation. Deleting the ACTIVE profile moves the
