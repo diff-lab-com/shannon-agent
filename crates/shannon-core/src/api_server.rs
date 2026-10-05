@@ -90,7 +90,6 @@ fn approval_decision_to_choice(d: ApprovalDecision) -> PermissionChoice {
         ApprovalDecision::AllowOnce => PermissionChoice::AllowOnce,
         ApprovalDecision::AlwaysAllow => PermissionChoice::AlwaysAllow,
         ApprovalDecision::AlwaysAllowSession => PermissionChoice::AlwaysAllowSession,
-        ApprovalDecision::AlwaysAllowSession => PermissionChoice::AlwaysAllowSession,
         ApprovalDecision::Deny => PermissionChoice::Deny,
     }
 }
