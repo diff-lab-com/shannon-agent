@@ -368,6 +368,10 @@ export interface ToolInfo {
   name: string
   description: string
   enabled: boolean
+  /** Settings R3 T11 — backend `Tool::is_read_only()`. Drives the
+   *  Explore/Terminal/Changes call grouping (lib/toolGrouping); the wire
+   *  serde-defaults missing fields to `true`. */
+  read_only: boolean
 }
 
 export interface ConfigUpdate {

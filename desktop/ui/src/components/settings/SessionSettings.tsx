@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { readSendBehavior, setSendBehavior, type SendBehavior } from '@/lib/sendBehaviorPref'
 import { Switch } from '@/components/ui/switch'
 import EffectBadge from './EffectBadge'
+import { readGroupingPrefs, writeGroupingPref, type ToolGroupKind } from '@/lib/toolGrouping'
 
 /**
  * Settings → 会话 (Settings R3, T6): session lifecycle settings.
@@ -33,6 +34,9 @@ import EffectBadge from './EffectBadge'
  *    button) does while a run streams: steer (interrupt now) or queue.
  *    Pure front-end localStorage pref; the bolt / Ctrl+Enter stays an
  *    explicit steer in both modes.
+ * ⑥ 「消息流分组」 (Settings R3 T11) — the Explore/Terminal/Changes tool-call
+ *    grouping switches (localStorage `shannon.chat.grouping.*`, default ON;
+ *    display-only prefs, no engine config surface).
  *
  * Later tasks in this batch append more cards to this page (see the anchor
  * comment at the end of the JSX).
@@ -94,6 +98,19 @@ export default function SessionSettings() {
   const handleSendBehaviorChange = (next: SendBehavior) => {
     setSendBehaviorState(next)
     setSendBehavior(next)
+  }
+
+  // ⑥ 消息流分组 (Settings R3 T11): display-only localStorage prefs (no
+  // engine/config surface) — three per-kind switches, all default ON, read
+  // live by MessageBubble's grouping pass. Mirrors the T9 thinkingPref
+  // persistence pattern.
+  const [grouping, setGrouping] = useState(readGroupingPrefs)
+  useEffect(() => {
+    setGrouping(readGroupingPrefs())
+  }, [])
+  const handleGroupingToggle = (kind: ToolGroupKind, value: boolean) => {
+    setGrouping(prev => ({ ...prev, [kind]: value }))
+    writeGroupingPref(kind, value)
   }
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
@@ -343,7 +360,47 @@ export default function SessionSettings() {
           </div>
         </section>
 
-        {/* 后续任务在此追加: 分组 */}
+        {/* ⑥ 消息流分组 — Settings R3 T11 (C6): fold runs of consecutive
+            same-kind tool calls into Explore/Terminal/Changes groups.
+            localStorage-backed display prefs (lib/toolGrouping), all default
+            ON, applied live on the next render — hence the instant badge. */}
+        <section
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          data-testid="session-grouping-card"
+        >
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">workspaces</span>
+            <h3 className="font-headline-md text-headline-md">{t('settings.session.grouping.title')}</h3>
+            <span className="flex-1" />
+            <EffectBadge kind="instant" />
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-md">{t('settings.session.grouping.help')}</p>
+          <div className="space-y-md">
+            {([
+              { kind: 'explore' as ToolGroupKind, testid: 'session-grouping-explore' },
+              { kind: 'terminal' as ToolGroupKind, testid: 'session-grouping-terminal' },
+              { kind: 'changes' as ToolGroupKind, testid: 'session-grouping-changes' },
+            ]).map(({ kind, testid }) => (
+              <div key={kind} className="flex items-center justify-between gap-md">
+                <div>
+                  <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
+                    {t(`settings.session.grouping.${kind}`)}
+                  </div>
+                  <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
+                    {t(`settings.session.grouping.${kind}Help`)}
+                  </div>
+                </div>
+                <Switch
+                  checked={grouping[kind]}
+                  onCheckedChange={v => handleGroupingToggle(kind, v)}
+                  className="shrink-0"
+                  aria-label={t(`settings.session.grouping.${kind}`)}
+                  data-testid={testid}
+                />
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   )

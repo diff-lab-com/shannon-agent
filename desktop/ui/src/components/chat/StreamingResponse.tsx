@@ -80,6 +80,12 @@ export default function StreamingResponse({
               <p className="whitespace-pre-wrap">{thinkingText}</p>
             </Reasoning>
           )}
+          {/* Settings R3 T11 (C6) — controller ruling R10: streaming stays
+              PER-CARD on purpose. Grouping the live tail re-folds the last
+              group on every ~50ms flush (cards streaming in change the run's
+              kind mid-flight), which reads as layout jitter; the Explore/
+              Terminal/Changes folds render once the message commits to
+              history (MessageBubble). */}
           {activeToolCalls.map(tc => (
             tc.tool_name === 'agent_spawn' ? (
               // P1-⑥: sub-agent spawns render as first-class blocks in the
