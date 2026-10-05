@@ -1115,6 +1115,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::reasoning())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "gpt-4o-azure",
@@ -1129,6 +1130,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::reasoning())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "gpt-4o-mini-azure",
@@ -1141,6 +1143,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.15,
         cost_per_m_output: 0.60,
         capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "gpt-5-mini-azure",
@@ -1153,6 +1156,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.25,
         cost_per_m_output: 2.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     // ── GLM / Zhipu Coding & Coding Plan ─────────────────────
     // Both Zhipu coding providers serve the same GLM lineup as the Zhipu
