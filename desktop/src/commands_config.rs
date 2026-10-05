@@ -1368,6 +1368,18 @@ fn resolve_base_url(raw: &Option<String>) -> Result<Option<String>, String> {
     }
 }
 
+/// Normalize an optional `models_url` from frontend input: trim, blank →
+/// `None`. Mirrors the modal's client-side normalization
+/// (`modelsUrl.trim() || undefined`) so a hand-rolled payload can never
+/// land an empty-string override. Unlike `resolve_base_url` this is
+/// infallible and scheme-agnostic — the engine consumes the URL verbatim
+/// as the models-list endpoint (S4-c).
+fn normalize_models_url(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 /// Run the engine's list-models probe against a provider and map the
 /// outcome to the categorized [`TestConnectionResult`]. Shared by
 /// `test_provider_connection` (saved-connection test) and
@@ -1959,13 +1971,13 @@ fn engine_kind_str(k: &shannon_types::provider_config::ProviderKind) -> String {
 /// server generates one. An `api_key` of `"***"` or empty means "keep the
 /// existing key", so editing the label never blanks the stored secret.
 ///
-/// Phase 2 task 3: the desktop Add Provider modal authors three of the
-/// v2 ProviderProfile fields. `extra_headers`, `default_max_tokens`, and
-/// `tiers` are mirrored into the connection and passed through to the
-/// engine's `ProviderConfigStore` (see `connection_to_profile`). The
-/// remaining two v2 fields (`models_url`, `quirks`) are read-only on the
-/// wire today — the modal doesn't edit them yet — so they stay out of
-/// this input shape.
+/// Phase 2 task 3: the desktop Add Provider modal authors the v2
+/// ProviderProfile fields. `extra_headers`, `default_max_tokens`,
+/// `tiers`, and — since S4-c — `models_url` are mirrored into the
+/// connection and passed through to the engine's `ProviderConfigStore`
+/// (see `connection_to_profile`). The one remaining read-only v2 field
+/// is `quirks`: the modal doesn't edit it yet, so it stays out of this
+/// input shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderInput {
     #[serde(default)]
@@ -1976,6 +1988,14 @@ pub struct ProviderInput {
     pub api_key: Option<String>,
     #[serde(default)]
     pub base_url: Option<String>,
+    /// Optional override of the models-list endpoint (v2 ProviderProfile
+    /// field, S4-c). Same wire shape as `base_url`, but on edit `None`
+    /// means "don't change": the modal only ever sends a trimmed
+    /// non-empty URL or omits the field, so a stored override can never
+    /// be blanked by re-saving. The engine expands an unset value to
+    /// `{base_url}/models`.
+    #[serde(default)]
+    pub models_url: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     /// Per-request HTTP headers. The desktop modal collects key/value
@@ -1999,10 +2019,16 @@ pub struct ProviderInput {
     pub fallback_models: Option<Vec<String>>,
 }
 
+/// Kinds the `save_provider` gate accepts. Mirrors the Add Provider
+/// modal's `KIND_INFO` vocabulary exactly (S4-c: `gemini` joined the
+/// set) so anything the dropdown offers can actually be saved, and
+/// nothing the dropdown doesn't offer (`azure`, `bedrock`, ...) sneaks
+/// in ahead of a UI for it. Probing is governed separately by
+/// [`is_probeable_kind`] / [`NON_PROBEABLE_PROVIDER_KINDS`].
 fn is_known_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "anthropic" | "openai" | "deepseek" | "ollama" | "openai-compatible"
+        "anthropic" | "openai" | "deepseek" | "ollama" | "gemini" | "openai-compatible"
     )
 }
 
@@ -2090,7 +2116,9 @@ fn apply_provider_update(
     // `extra_headers` and `default_max_tokens` use `None` for "leave
     // alone" and the inner Option for the value-or-clear signal.
     // `tiers` is plain — replace-on-send matches how the engine store
-    // upserts the whole field.
+    // upserts the whole field. `models_url` (S4-c) is the same
+    // leave-alone-on-`None` shape as the modal sends: a trimmed URL or
+    // an omitted field, never a blank.
     if let Some(h) = input.extra_headers.as_ref() {
         conn.extra_headers = h.clone();
     }
@@ -2102,6 +2130,9 @@ fn apply_provider_update(
     }
     if let Some(fm) = input.fallback_models.as_ref() {
         conn.fallback_models = fm.clone();
+    }
+    if let Some(mu) = normalize_models_url(input.models_url.as_deref()) {
+        conn.models_url = Some(mu);
     }
 }
 
@@ -2230,6 +2261,9 @@ pub async fn save_provider(
             kind: input.kind.clone(),
             has_api_key: false,
             base_url,
+            // S4-c — models-list endpoint override; blank/omitted → None
+            // (engine default `{base_url}/models`).
+            models_url: normalize_models_url(input.models_url.as_deref()),
             // Phase 2 task 3 — v2 ProviderProfile fields authored by
             // the Add Provider modal. On insert the client sends the
             // explicit value (or `None` for "unset") for all three;
@@ -2433,6 +2467,67 @@ mod tests {
         // Exactly the two P-N25 kinds are non-probeable — adding a third
         // requires updating this pin deliberately.
         assert_eq!(NON_PROBEABLE_PROVIDER_KINDS.len(), 2);
+    }
+
+    // === Save gate (S4-c: is_known_kind aligned with the modal's KIND_INFO) ===
+
+    /// The save gate admits exactly the modal's `KIND_INFO` vocabulary.
+    /// `gemini` used to be selectable in the dropdown yet rejected here
+    /// ("unknown provider kind"); `azure` stays out until the modal's
+    /// KIND_INFO offers it — probeability (`is_probeable_kind`) is a
+    /// deliberately different set.
+    #[test]
+    fn is_known_kind_matches_modal_kind_vocabulary() {
+        for kind in [
+            "anthropic",
+            "openai",
+            "deepseek",
+            "ollama",
+            "gemini",
+            "openai-compatible",
+        ] {
+            assert!(is_known_kind(kind), "{kind} must pass the save gate");
+        }
+        for kind in ["azure", "bedrock", "anthropicc", ""] {
+            assert!(
+                !is_known_kind(kind),
+                "{kind} must be refused by the save gate"
+            );
+        }
+    }
+
+    /// A `kind=gemini` save passes the gate and lands in the engine
+    /// store as `ProviderKind::Gemini` with the canonical
+    /// generativelanguage base URL when the user leaves `base_url`
+    /// blank — the same default the engine's `LlmProvider::Gemini`
+    /// uses. Probe behavior is untouched: gemini stays non-probeable,
+    /// so fetch-models / test keep their typed "not supported" verdict.
+    #[test]
+    fn gemini_input_passes_gate_and_lands_engine_profile() {
+        assert!(is_known_kind("gemini"));
+        assert_eq!(
+            default_base_url_for_kind("gemini"),
+            Some("https://generativelanguage.googleapis.com")
+        );
+
+        let conn = ProviderConnection {
+            id: "gemini".into(),
+            display_name: "Gemini".into(),
+            kind: "gemini".into(),
+            ..Default::default()
+        };
+        let profile = connection_to_profile(&conn);
+        assert_eq!(
+            profile.kind,
+            shannon_types::provider_config::ProviderKind::Gemini
+        );
+        assert_eq!(
+            profile.base_url,
+            "https://generativelanguage.googleapis.com"
+        );
+
+        assert!(!is_probeable_kind("gemini"));
+        assert!(NON_PROBEABLE_PROVIDER_KINDS.contains(&"gemini"));
     }
 
     #[test]
@@ -2798,6 +2893,7 @@ mod tests {
             kind: kind.into(),
             api_key: key.map(str::to_string),
             base_url: None,
+            models_url: None,
             model: None,
             // Phase 2 task 3 — default to `None` so the helper doesn't
             // touch the v2 fields; individual tests pass the field
@@ -2842,6 +2938,7 @@ mod tests {
             kind: "openai-compatible".into(),
             api_key: Some("***".into()),
             base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
+            models_url: None,
             model: Some("".into()), // empty => cleared
             extra_headers: None,
             default_max_tokens: None,
@@ -2876,6 +2973,7 @@ mod tests {
             kind: "anthropic".into(),
             api_key: Some("***".into()),
             base_url: None,
+            models_url: None,
             model: None,
             extra_headers: Some(headers.clone()),
             default_max_tokens: Some(Some(8192)),
@@ -2911,6 +3009,7 @@ mod tests {
             kind: "anthropic".into(),
             api_key: Some("***".into()),
             base_url: None,
+            models_url: None,
             model: None,
             extra_headers: None,
             default_max_tokens: None,
@@ -2943,6 +3042,7 @@ mod tests {
             kind: "anthropic".into(),
             api_key: Some("***".into()),
             base_url: None,
+            models_url: None,
             model: None,
             extra_headers: None,
             default_max_tokens: Some(None),
@@ -2951,6 +3051,65 @@ mod tests {
         };
         apply_provider_update(&mut conn, &input, None);
         assert!(conn.default_max_tokens.is_none());
+    }
+
+    // === models_url wire line (S4-c) ===
+
+    /// The `models_url` full wire line: input → connection → engine
+    /// profile (what `providers.toml` persists) → read-side fan-out
+    /// (what the UI list shows). The modal sends a trimmed URL or
+    /// omits the field; the server-side normalization matches.
+    #[test]
+    fn models_url_round_trips_input_to_profile_and_back() {
+        const URL: &str = "https://open.bigmodel.cn/api/paas/v4/models";
+        let mut conn = sample_conn("glm", "openai-compatible", Some("k"));
+        assert!(conn.models_url.is_none());
+
+        let mut input = provider_input(Some("glm"), "GLM", "openai-compatible", Some("***"));
+        input.models_url = Some(format!("  {URL}  "));
+        apply_provider_update(&mut conn, &input, None);
+        assert_eq!(conn.models_url.as_deref(), Some(URL));
+
+        // Landing in the engine store: the override survives
+        // `to_provider_profile` verbatim.
+        let profile = conn.to_provider_profile("https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(profile.models_url.as_deref(), Some(URL));
+
+        // Read-side fan-out (`list_providers`) shows it back to the UI.
+        let back = config::from_provider_profile(&conn.id, &profile);
+        assert_eq!(back.models_url.as_deref(), Some(URL));
+    }
+
+    /// Edit semantics: `None` (field omitted) and blank (normalized to
+    /// `None`) must both leave a stored `models_url` override untouched —
+    /// re-saving a label never blanks the models endpoint.
+    #[test]
+    fn models_url_none_and_blank_leave_stored_override_untouched() {
+        const URL: &str = "https://gateway.example.com/v1/models";
+        let mut conn = sample_conn("glm", "openai-compatible", Some("k"));
+        conn.models_url = Some(URL.into());
+
+        let omitted = provider_input(Some("glm"), "Renamed", "openai-compatible", Some("***"));
+        apply_provider_update(&mut conn, &omitted, None);
+        assert_eq!(conn.models_url.as_deref(), Some(URL));
+
+        let mut blank = provider_input(Some("glm"), "Renamed", "openai-compatible", Some("***"));
+        blank.models_url = Some("   ".into());
+        apply_provider_update(&mut conn, &blank, None);
+        assert_eq!(conn.models_url.as_deref(), Some(URL));
+    }
+
+    /// Insert-branch normalization (new connections go through
+    /// `normalize_models_url` in `save_provider`): trim, blank → `None`.
+    #[test]
+    fn normalize_models_url_trims_and_refuses_blank() {
+        assert_eq!(normalize_models_url(None), None);
+        assert_eq!(normalize_models_url(Some("")), None);
+        assert_eq!(normalize_models_url(Some("   ")), None);
+        assert_eq!(
+            normalize_models_url(Some("  https://x.example/v1/models ")),
+            Some("https://x.example/v1/models".to_string())
+        );
     }
 
     #[test]
@@ -3016,6 +3175,10 @@ mod tests {
         assert_eq!(
             default_base_url_for_kind("deepseek"),
             Some("https://api.deepseek.com")
+        );
+        assert_eq!(
+            default_base_url_for_kind("gemini"),
+            Some("https://generativelanguage.googleapis.com")
         );
     }
 

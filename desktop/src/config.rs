@@ -399,7 +399,8 @@ pub struct ProviderConnection {
     /// Human-readable display name shown in the list (e.g. "My GLM key").
     pub display_name: String,
     /// Provider kind slug: `anthropic` | `openai` | `deepseek` | `ollama` |
-    /// `openai-compatible`. Determines the auth scheme + default base_url.
+    /// `gemini` | `openai-compatible`. Determines the auth scheme + default
+    /// base_url.
     pub kind: String,
     /// True when the credential store has a key for this id. Replaces the
     /// dead `api_key: Option<String>` (which was always `None` +
