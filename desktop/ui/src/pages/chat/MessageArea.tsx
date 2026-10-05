@@ -354,6 +354,7 @@ export default function MessageArea({
       className="relative flex-1 overflow-y-auto px-xl pt-lg pb-md"
     >
       <StreamStatusRegion active={streamActive} />
+      <VisionConfirmBar />
       {messages.length === 0 && !streamingText && <ComposerWelcome />}
 
       {messages.length > 0 && shouldVirtualize && (
@@ -660,6 +661,79 @@ function formatWorked(ms: number): string {
   const min = Math.floor(sec / 60)
   if (min < 60) return `${min}m${String(sec % 60).padStart(2, '0')}s`
   return `${Math.floor(min / 60)}h${min % 60}m`
+}
+
+/**
+ * S2-4a (review 2026-10-05 P-N9): inline confirm bar for a send held back
+ * because the effective model is KNOWN to lack vision. Three outcomes —
+ * one-click switch (pins the suggested model on this session, then
+ * delivers), send anyway (the engine gate answers if it truly cannot),
+ * dismiss (drops the held payload; the draft is already back in the
+ * composer because `sendMessage` resolved false). Rendered at the top of
+ * the message area, never blocking the composer.
+ */
+export function VisionConfirmBar() {
+  const t = useT()
+  const { visionConfirm, resolveVisionConfirm, dismissVisionConfirm } = useChat()
+  if (!visionConfirm) return null
+  const { model, suggestion } = visionConfirm
+  return (
+    <div
+      role="alertdialog"
+      aria-live="polite"
+      aria-label={t('chat.vision.bar.aria')}
+      data-testid="vision-confirm-bar"
+      className="mx-auto mb-lg max-w-md flex flex-col gap-sm rounded-lg border border-warning/30 bg-warning-container/60 px-md py-md text-on-warning-container"
+    >
+      <div className="flex items-start gap-sm font-body-sm">
+        <span className="material-symbols-outlined icon-md text-warning mt-xxs">image_off</span>
+        <span>
+          {t('chat.vision.blocked', { model })}
+          {suggestion ? (
+            <>
+              {' '}
+              {t('chat.vision.switchQuestion', { model: suggestion.name })}
+            </>
+          ) : (
+            <span className="block text-on-surface-variant">
+              {t('chat.vision.noCandidate')}
+            </span>
+          )}
+        </span>
+      </div>
+      <div className="flex flex-wrap justify-end gap-sm">
+        <Button
+          type="button"
+          variant="ghost"
+          className="text-label-md cursor-pointer"
+          data-testid="vision-confirm-cancel"
+          onClick={() => void dismissVisionConfirm()}
+        >
+          {t('chat.vision.cancel')}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="text-label-md cursor-pointer"
+          data-testid="vision-confirm-send-anyway"
+          onClick={() => void resolveVisionConfirm('send-anyway')}
+        >
+          {t('chat.vision.sendAnyway')}
+        </Button>
+        {suggestion && (
+          <Button
+            type="button"
+            variant="default"
+            className="text-label-md cursor-pointer"
+            data-testid="vision-confirm-switch"
+            onClick={() => void resolveVisionConfirm('switch')}
+          >
+            {t('chat.vision.switchAndSend', { model: suggestion.name })}
+          </Button>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // B0 P1-3: the composer is cleared on send, so a retry gated on composer

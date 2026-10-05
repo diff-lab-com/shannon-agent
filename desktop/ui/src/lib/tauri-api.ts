@@ -648,6 +648,39 @@ export async function getSessionModel(
   return invoke<SessionModelOverride | null>('get_session_model', { sessionId: sessionId ?? null })
 }
 
+// --- S2-4a (review 2026-10-05 P-N9): pre-send vision pre-check ---
+
+/** One-click switch candidate: the first vision-capable model of the
+ *  effective provider's merged roster (static catalog order, then the
+ *  models.dev overlay), excluding the model that would otherwise serve
+ *  the send. `provider` is ready for `setSessionModel`. */
+export interface VisionSwitchSuggestion {
+  provider: string
+  model: string
+  name: string
+}
+
+/** Result of the desktop pre-send vision check. `vision === false` is the
+ *  ONLY "ask" verdict: the effective model (session override > phase tier
+ *  > global default) is KNOWN to lack image input. `null` = unknown —
+ *  sends flow untouched and the engine-side gate stays the final backstop
+ *  (same three-state rule as the engine). */
+export interface VisionSendCheck {
+  model: string
+  provider: string
+  vision: boolean | null
+  suggestion?: VisionSwitchSuggestion | null
+}
+
+/** Resolve what the NEXT send of this session would use and whether that
+ *  model can take image attachments. Read-only; the UI calls it before
+ *  sending a message that carries image attachments. */
+export async function checkVisionSend(
+  sessionId: string | null | undefined,
+): Promise<VisionSendCheck> {
+  return invoke<VisionSendCheck>('check_vision_send', { sessionId: sessionId ?? null })
+}
+
 // --- P2-5: session-level "temporary chat" (no-memory bypass) ---
 
 /** Pin the CURRENT session's memory bypass: `disabled = true` builds this

@@ -1919,6 +1919,15 @@
       }
     },
     {
+      "identifier": "allow-check-vision-send",
+      "description": "Enables the check_vision_send command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "check_vision_send"
+        ]
+      }
+    },
+    {
       "identifier": "allow-read-data-source-config",
       "description": "Enables the read_data_source_config command without any pre-configured scope.",
       "commands": {
@@ -2907,6 +2916,7 @@
       "permissions": [
         "allow-cancel-background-task",
         "allow-cancel-query",
+        "allow-check-vision-send",
         "allow-clear-session-model",
         "allow-get-active-session-id",
         "allow-get-background-tasks",

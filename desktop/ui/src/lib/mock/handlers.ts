@@ -892,6 +892,37 @@ export const handlers: Record<string, MockHandler> = {
     // demoSessionModels Map-miss already produces exactly that shape.
     return demoSessionModels.get(demoSessionKey(args.sessionId)) ?? null
   },
+  // S2-4a (P-N9): pre-send vision pre-check. Demo resolves the effective
+  // model the same way the composer chip renders it (session override →
+  // MOCK_STATUS fallback), then reads the vision bit off the seeded
+  // catalog. Demo models are vision-known entries, so the hold path is
+  // reachable by scripting a text-only override — a real handler, not an
+  // allowlist park, so e2e can drive the confirm bar.
+  async check_vision_send(args: { sessionId?: string | null }) {
+    await delay()
+    const override =
+      seededSessionModel(args.sessionId)
+      ?? demoSessionModels.get(demoSessionKey(args.sessionId))
+      ?? null
+    const model = override?.model ?? MOCK_STATUS.model
+    const entry = MOCK_MODELS.find(m => m.id === model)
+    const vision = entry == null ? null : entry.vision ?? null
+    const suggestion =
+      vision === false
+        ? (() => {
+            const candidate = MOCK_MODELS.find(m => m.id !== model && m.vision === true)
+            return candidate == null
+              ? null
+              : { provider: candidate.provider, model: candidate.id, name: candidate.name }
+          })()
+        : null
+    return {
+      model,
+      provider: override?.provider ?? MOCK_STATUS.provider,
+      vision,
+      suggestion,
+    }
+  },
   // P2-5: session-level "temporary chat" — demo mirrors the backend's
   // durable sidecar with an in-memory set so the composer toggle persists
   // within a demo session.

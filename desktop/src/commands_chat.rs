@@ -646,6 +646,145 @@ pub async fn get_session_model(
     Ok(session.model_override_snapshot())
 }
 
+// ── S2-4a (P-N9): pre-send vision pre-check ─────────────────────────────
+
+/// Wire shape of [`check_vision_send`]: which model the NEXT send of this
+/// session would use, its three-state vision verdict, and (when one
+/// exists) the one-click switch candidate.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VisionSendCheck {
+    /// Effective model id — session override > phase tier > global
+    /// default, the exact resolution the actual send goes through.
+    pub model: String,
+    /// Provider slug of the effective target, in the composer chip's
+    /// `set_session_model` vocabulary (the canonical `LlmProvider` name,
+    /// e.g. `"zhipu"`).
+    pub provider: String,
+    /// Three-state verdict: `Some(true)` = vision-capable,
+    /// `Some(false)` = KNOWN to lack vision (the UI must ask before
+    /// sending), `None` = unknown — sends flow untouched, exactly like
+    /// the engine gate treats them.
+    pub vision: Option<bool>,
+    /// One-click switch candidate: the first vision-capable model in the
+    /// effective provider's merged roster (static catalog order first,
+    /// then the models.dev overlay), excluding the effective model.
+    /// `None` → the UI shows the notice without a switch action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<VisionSwitchSuggestion>,
+}
+
+/// Where "switch to Y" should land. `provider` is ready for
+/// [`set_session_model`]; `model` is the canonical catalog id (the same
+/// normalization contract the composer chip writes).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VisionSwitchSuggestion {
+    pub provider: String,
+    pub model: String,
+    pub name: String,
+}
+
+/// Three-state vision lookup mirroring the engine gate's stages
+/// (`agent_loop.rs::model_supports_vision`, which the desktop cannot call
+/// — the fn is engine-private): declared models (exact id, authoritative
+/// when capabilities are listed) > static catalog (exact, forward prefix,
+/// reverse prefix longest) > models.dev overlay (exact). Duplicated
+/// host-side ON PURPOSE: the pre-check must read the same data through
+/// the same strategy as the gate it previews, or it would second-guess
+/// the engine. The engine stays the final backstop either way.
+fn vision_support_for(model_id: &str) -> Option<bool> {
+    use shannon_core::model_registry::MODEL_CATALOG;
+    use shannon_types::provider_config::ModelCapability;
+
+    let has_vision = |info: &shannon_core::model_registry::ModelInfo| {
+        info.capabilities
+            .has(shannon_core::model_registry::ModelCapabilities::vision())
+    };
+    if let Some(meta) = shannon_core::declared_models::lookup(model_id) {
+        if !meta.capabilities.is_empty() {
+            return Some(
+                meta.capabilities
+                    .iter()
+                    .any(|c| matches!(c, ModelCapability::Vision)),
+            );
+        }
+    }
+    if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id == model_id) {
+        return Some(has_vision(info));
+    }
+    if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id.starts_with(model_id)) {
+        return Some(has_vision(info));
+    }
+    if let Some(info) = MODEL_CATALOG
+        .iter()
+        .filter(|m| model_id.starts_with(m.id))
+        .max_by_key(|m| m.id.len())
+    {
+        return Some(has_vision(info));
+    }
+    if let Some(info) = shannon_core::model_registry::dynamic::overlay_snapshot()
+        .iter()
+        .find(|m| m.id == model_id)
+    {
+        return Some(has_vision(info));
+    }
+    None
+}
+
+/// Pure pick for [`check_vision_send`]'s suggestion: the FIRST
+/// vision-capable model of the merged roster (static catalog order, then
+/// overlay) that is not the model being sent to. Catalog order is the
+/// documented "best" heuristic for S2-4a — the roster is already
+/// curated, and the user picks a different model in the menu anyway if
+/// the first suggestion does not suit.
+fn first_vision_candidate(
+    roster: &[shannon_core::model_registry::ModelInfo],
+    exclude: &str,
+) -> Option<(String, String)> {
+    roster
+        .iter()
+        .find(|m| {
+            m.id != exclude
+                && m.capabilities
+                    .has(shannon_core::model_registry::ModelCapabilities::vision())
+        })
+        .map(|m| (m.id.to_string(), m.display_name.to_string()))
+}
+
+/// S2-4a (P-N9): resolve what the next send of this session would use and
+/// whether that model is KNOWN to lack vision. Read-only; the UI calls it
+/// before sending a message that carries image attachments. `vision =
+/// Some(false)` is the only "ask" verdict — unknown models behave exactly
+/// as before (send, and let the engine gate answer if it must).
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn check_vision_send(
+    state: tauri::State<'_, AppState>,
+    session_id: Option<String>,
+) -> Result<VisionSendCheck, String> {
+    let (_, session) = state
+        .registry
+        .resolve_explicit_or_active(session_id.as_deref())?;
+    let cc = resolve_client_config_for_session(&state, &session).await;
+    let provider_slug = cc.provider.to_string().to_lowercase();
+    let vision = vision_support_for(&cc.model);
+    let suggestion = if vision == Some(false) {
+        let roster = shannon_core::model_registry::merged_models_for_provider(cc.provider.clone());
+        first_vision_candidate(&roster, &cc.model).map(|(model, name)| VisionSwitchSuggestion {
+            provider: provider_slug.clone(),
+            model,
+            name,
+        })
+    } else {
+        None
+    };
+    Ok(VisionSendCheck {
+        model: cc.model.clone(),
+        provider: provider_slug,
+        vision,
+        suggestion,
+    })
+}
+
 /// P2-5 — session-level "temporary chat" toggle: `disabled = true` builds
 /// this session's subsequent queries WITHOUT the memory layer (no injection
 /// of past memories into the prompt, no auto-extraction of new ones). Other
@@ -711,6 +850,103 @@ fn persist_memory_bypass(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // === S2-4a (P-N9): pre-send vision pre-check ===
+
+    #[test]
+    fn vision_support_matches_engine_gate_verdicts() {
+        // The pre-check MUST agree with the engine gate on the catalog's
+        // well-known members (the gate pins the same ids in
+        // shannon-core's vision_gate_tests).
+        assert_eq!(vision_support_for("gpt-4o"), Some(true));
+        assert_eq!(vision_support_for("deepseek-v4-flash"), Some(false));
+        // Unknown id → None: the UI sends without asking, the engine gate
+        // (same three-state rule) also lets it through.
+        assert_eq!(vision_support_for("shannon-desktop-unknown-model"), None);
+    }
+
+    #[test]
+    fn vision_support_prefers_exact_entry_over_prefix_ancestors() {
+        // glm-5.1-flash is listed (speed/cheap, no vision): its own entry
+        // must win even though the prefix ancestor glm-5.1 exists too.
+        // Same collision shield the engine gate pins.
+        assert_eq!(vision_support_for("glm-5.1-flash"), Some(false));
+        assert_eq!(vision_support_for("glm-5.1-flash-x"), Some(false));
+        // Vision entry resolves through the forward prefix (short id).
+        assert_eq!(vision_support_for("glm-4v"), Some(true));
+    }
+
+    #[test]
+    fn first_vision_candidate_skips_current_and_picks_roster_order() {
+        let roster = shannon_core::model_registry::merged_models_for_provider(
+            shannon_engine::api::LlmProvider::Zhipu,
+        );
+        // The roster itself must carry vision data (the merged catalog is
+        // the same source `list_models` serves the picker).
+        assert!(
+            roster.iter().any(|m| m
+                .capabilities
+                .has(shannon_core::model_registry::ModelCapabilities::vision())),
+            "zhipu roster should contain a vision-capable model"
+        );
+        // Exclusion: sending to a vision-less model must never suggest it.
+        let pick = first_vision_candidate(&roster, "glm-4-plus");
+        assert!(pick.is_some(), "a candidate exists");
+        let (model, name) = pick.unwrap();
+        assert_ne!(model, "glm-4-plus");
+        let chosen = roster.iter().find(|m| m.id == model).unwrap();
+        assert_eq!(chosen.display_name, name);
+        assert!(
+            chosen
+                .capabilities
+                .has(shannon_core::model_registry::ModelCapabilities::vision())
+        );
+        // First-in-order contract: re-running the pick is deterministic
+        // and equals the first qualifying row.
+        let expected = roster
+            .iter()
+            .find(|m| {
+                m.id != "glm-4-plus"
+                    && m.capabilities
+                        .has(shannon_core::model_registry::ModelCapabilities::vision())
+            })
+            .map(|m| m.id.to_string());
+        assert_eq!(Some(model), expected);
+    }
+
+    #[test]
+    fn first_vision_candidate_none_when_roster_exhausted() {
+        // Excluding every vision model of a synthetic two-entry roster
+        // leaves nothing to suggest → the UI renders notice-only.
+        let roster: Vec<shannon_core::model_registry::ModelInfo> =
+            [("shannon-a", false), ("shannon-b", true)]
+                .into_iter()
+                .map(|(id, vision)| shannon_core::model_registry::ModelInfo {
+                    id,
+                    display_name: id,
+                    aliases: &[],
+                    provider: shannon_engine::api::LlmProvider::Ollama,
+                    context_window: 128_000,
+                    max_output: 4_096,
+                    cost_per_m_input: 0.0,
+                    cost_per_m_output: 0.0,
+                    capabilities: if vision {
+                        shannon_core::model_registry::ModelCapabilities::vision()
+                    } else {
+                        shannon_core::model_registry::ModelCapabilities::coding()
+                    },
+                })
+                .collect();
+        assert_eq!(
+            first_vision_candidate(&roster, "shannon-b"),
+            None,
+            "the only vision model is excluded → no suggestion"
+        );
+        assert_eq!(
+            first_vision_candidate(&roster, "shannon-a").map(|(id, _)| id),
+            Some("shannon-b".to_string())
+        );
+    }
 
     // === Provider allowlist filter (ADR-0005 P4.9) ===
 
