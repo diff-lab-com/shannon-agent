@@ -635,14 +635,15 @@ async function startMobileServer(
     // §O3/§T6: the Push-to-Wake leg rides this same relay connection —
     // pushBindingSink forwards shannon/push.register over it, and the hub's
     // wake seam fires push.wake on approval asks / turn terminals. Frames per
-    // docs/protocol/relay-push-wake-frames.md; until the relay ships its half
-    // the ack timeout surfaces the honest structured error to the phone.
+    // docs/protocol/relay-push-wake-frames.md; a relay that advertised no
+    // caps:["push"] (v1.1 §6.1) degrades push to not_configured instead of
+    // burning a 5s ack timeout per bind.
     const pushRelay = new PushRelayBinding(
       {
         send: (frame) => relayHandle.sendControl(frame),
         onFrame: (handler) => relayHandle.onControl(handler),
       },
-      { logger },
+      { logger, capable: () => relayHandle.pushCapable() },
     );
     pushRelayRef.current = pushRelay;
     dispatchHub.setWake((deviceId, seq) => pushRelay.wake(deviceId, seq));
