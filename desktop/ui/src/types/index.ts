@@ -544,17 +544,22 @@ export interface AppUpdateInfo {
 
 /// A managed provider connection kind. `openai-compatible` covers any
 /// OpenAI-style endpoint (GLM/Zhipu, Moonshot/Kimi, MiniMax, Together, Groq…).
+/// P2-23 残留 (S4): `gemini` joined the union — it has been a first-class
+/// `LlmProvider::Gemini` + KIND_INFO row on the desktop since R5, and the
+/// old `| string` muffler only silenced the drift. This union now mirrors
+/// the modal's actual option set (KIND_INFO's keys) exactly.
 export type ProviderKind =
   | 'anthropic'
   | 'openai'
   | 'deepseek'
   | 'ollama'
+  | 'gemini'
   | 'openai-compatible'
 
 export interface ProviderConnection {
   id: string
   display_name: string
-  kind: ProviderKind | string
+  kind: ProviderKind
   /// True when the credential store has a key for this id. Replaces the
   /// dead `api_key` field (TD-4).
   has_api_key: boolean
@@ -633,9 +638,13 @@ export interface ProviderStatus {
 export interface ProviderInput {
   id?: string
   display_name: string
-  kind: ProviderKind | string
+  kind: ProviderKind
   api_key?: string
   base_url?: string
+  /// v2 ProviderProfile models-list override (S4 / P2-23 残留 — the wire
+  /// field existed on `ProviderConnection` but the modal had no input).
+  /// Empty/undefined = "unset, engine default list applies".
+  models_url?: string
   model?: string
   extra_headers?: Record<string, string>
   default_max_tokens?: number | null

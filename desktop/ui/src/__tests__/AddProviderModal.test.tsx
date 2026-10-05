@@ -5,7 +5,7 @@ import { AppProvider } from '@/context/AppContext'
 import { MemoryRouter } from 'react-router-dom'
 import AddProviderModal from '@/components/settings/AddProviderModal'
 import * as api from '@/lib/tauri-api'
-import type { ProvidersFile } from '@/types'
+import type { ProviderConnection, ProvidersFile } from '@/types'
 
 function wrap(ui: React.ReactElement) {
   return (
@@ -504,5 +504,93 @@ describe('AddProviderModal — fetch → model prefill linkage (S1-4c)', () => {
     fireEvent.click(screen.getByTestId('fetch-models'))
     await waitFor(() => expect(screen.getByTestId('models-empty')).toBeInTheDocument())
     expect((screen.getByTestId('provider-model-input') as HTMLInputElement).value).toBe('')
+  })
+})
+// === S4 hygiene batch — models_url input (P2-23 残留) + the non-probeable
+// pre-submit hint (P-N25). ===
+describe('AddProviderModal — models_url input (S4 / P2-23 残留)', () => {
+  it('hides the field until the Advanced disclosure opens', () => {
+    renderModal()
+    expect(screen.queryByLabelText('Models URL (optional)')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('add-provider-advanced-toggle'))
+    expect(screen.getByLabelText('Models URL (optional)')).toBeInTheDocument()
+  })
+
+  it('carries a filled models_url into the saved payload', async () => {
+    const { onSaved } = renderModal()
+    fillRequiredFields()
+    fireEvent.click(screen.getByTestId('add-provider-advanced-toggle'))
+    fireEvent.change(screen.getByTestId('provider-models-url-input'), {
+      target: { value: 'https://api.example.com/v1/models' },
+    })
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    const [input] = vi.mocked(api.saveProvider).mock.calls[0]
+    expect(input.models_url).toBe('https://api.example.com/v1/models')
+  })
+
+  it('omits models_url when the input stays blank (A1: no empty-string overrides)', async () => {
+    const { onSaved } = renderModal()
+    fillRequiredFields()
+    fireEvent.click(screen.getByTestId('add-provider-advanced-toggle'))
+    fireEvent.change(screen.getByTestId('provider-models-url-input'), { target: { value: '  ' } })
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    const [input] = vi.mocked(api.saveProvider).mock.calls[0]
+    expect(input.models_url).toBeUndefined()
+  })
+
+  it('prefills from the edited connection and keeps the value on save', async () => {
+    const editing: ProviderConnection = {
+      id: 'prov-glm',
+      display_name: 'GLM (Zhipu)',
+      kind: 'openai-compatible',
+      has_api_key: true,
+      base_url: 'https://open.bigmodel.cn/api/paas/v4',
+      models_url: 'https://open.bigmodel.cn/api/paas/v4/models',
+    }
+    const onSaved = vi.fn()
+    render(
+      wrap(
+        <AddProviderModal
+          editing={editing}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+        />,
+      ),
+    )
+    fireEvent.click(screen.getByTestId('add-provider-advanced-toggle'))
+    const field = screen.getByTestId('provider-models-url-input') as HTMLInputElement
+    expect(field.value).toBe('https://open.bigmodel.cn/api/paas/v4/models')
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    const [input] = vi.mocked(api.saveProvider).mock.calls[0]
+    expect(input.id).toBe('prov-glm')
+    expect(input.models_url).toBe('https://open.bigmodel.cn/api/paas/v4/models')
+  })
+})
+
+describe('AddProviderModal — non-probeable kinds (S4 / P-N25)', () => {
+  it('shows no hint for probeable kinds', () => {
+    renderModal()
+    expect(screen.queryByTestId('probe-unsupported-hint')).not.toBeInTheDocument()
+  })
+
+  it('pre-warns on gemini (no connection probing, Fetch models may be unavailable)', () => {
+    renderModal()
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'gemini' } })
+    const hint = screen.getByTestId('probe-unsupported-hint')
+    expect(hint).toBeInTheDocument()
+    expect(hint).toHaveTextContent(/does not support connection probing/)
+    expect(hint).toHaveTextContent(/Fetch model list may be unavailable/)
+  })
+
+  it('retires the hint when the kind switches back to a probeable one', () => {
+    renderModal()
+    const select = screen.getByLabelText('Type')
+    fireEvent.change(select, { target: { value: 'gemini' } })
+    expect(screen.getByTestId('probe-unsupported-hint')).toBeInTheDocument()
+    fireEvent.change(select, { target: { value: 'anthropic' } })
+    expect(screen.queryByTestId('probe-unsupported-hint')).not.toBeInTheDocument()
   })
 })

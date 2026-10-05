@@ -4046,5 +4046,8 @@
   "chat.input.effort.notApplicable": "このモデルは推論をサポートしません — 推論の強さは思考モデルにのみ作用します",
   "chat.input.cost.aria": "送信コストの見積り（参考値、制限ではありません）",
   "chat.input.cost.range": "≈ {tokens} トークン · {low}–{high}",
-  "chat.input.cost.budget": "セッション予算の ≈{percent}%"
+  "chat.input.cost.budget": "セッション予算の ≈{percent}%",
+  "settings.models.providerTabs.aria": "プロバイダーでモデルカタログを絞り込む",
+  "settings.models.providers.modelsUrlField": "モデル一覧 URL（任意）",
+  "settings.models.providers.probeUnsupportedHint": "このプロバイダータイプは接続テストに対応していません — 保存してそのまま利用できます。「モデル一覧を取得」も利用できない場合があります。"
 }
