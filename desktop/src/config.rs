@@ -219,6 +219,28 @@ pub struct DesktopConfig {
     /// dozes off is the surprising outcome).
     #[serde(default = "default_power_block_sleep_during_tasks")]
     pub power_block_sleep_during_tasks: bool,
+    /// Settings R3 T4 (B1) — explicit HTTP(S) proxy URL. When set, injected
+    /// at startup as `HTTPS_PROXY` + `HTTP_PROXY` + `ALL_PROXY` so every
+    /// outbound path (LLM clients, MCP stdio, gateway sidecar, command-tool
+    /// subprocesses) inherits it — reqwest reads the standard proxy env vars
+    /// by default. Empty/None keeps the implicit env fallback (R1: never
+    /// force direct connections). Empty at configure time → stored as None.
+    #[serde(default)]
+    pub network_proxy_url: Option<String>,
+    /// Settings R3 T4 (B1) — NO_PROXY companion: comma-separated hosts that
+    /// bypass the proxy (`localhost,127.0.0.1,::1,.example.com`). Injected
+    /// as `NO_PROXY` when set; empty/None leaves the env untouched.
+    #[serde(default)]
+    pub network_no_proxy: Option<String>,
+    /// Settings R3 T4 (B1) — custom CA certificate (PEM) path, `~`-expanded
+    /// at configure time and existence-checked. Injected as
+    /// `SHANNON_CA_BUNDLE` (read by the engine/desktop HTTP builders — the
+    /// workspace reqwest trusts webpki-roots only, so a corporate MITM CA
+    /// must be added explicitly) plus `NODE_EXTRA_CA_CERTS` /
+    /// `SSL_CERT_FILE` for subprocesses. Empty/None leaves the env
+    /// untouched.
+    #[serde(default)]
+    pub network_ca_cert_path: Option<String>,
 }
 
 fn default_power_block_sleep_during_tasks() -> bool {
@@ -252,20 +274,84 @@ pub fn apply_hardware_acceleration_env(config: &DesktopConfig) {
             std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
-        tracing::info!("hardware acceleration disabled: WebKitGTK compositing + DMABUF renderer off (takes effect after restart)");
+        tracing::info!(
+            "hardware acceleration disabled: WebKitGTK compositing + DMABUF renderer off (takes effect after restart)"
+        );
     }
     #[cfg(target_os = "windows")]
     {
         unsafe {
             std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu");
         }
-        tracing::info!("hardware acceleration disabled: WebView2 --disable-gpu (takes effect after restart)");
+        tracing::info!(
+            "hardware acceleration disabled: WebView2 --disable-gpu (takes effect after restart)"
+        );
     }
     // macOS / other targets: no supported escape hatch — leave untouched.
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = config;
         tracing::debug!("hardware acceleration toggle has no effect on this platform");
+    }
+}
+
+/// Settings R3 T4 (B1) — the effective value of one optional text config
+/// field: trimmed, empty/whitespace = unset. Shared by [`network_env`] and
+/// the configure arms so a blank UI field always means "clear".
+fn effective_network_value(raw: Option<&str>) -> Option<&str> {
+    raw.map(str::trim).filter(|v| !v.is_empty())
+}
+
+/// Settings R3 T4 (B1) — compute the process environment to inject for the
+/// corporate-network trio, as `(name, value)` pairs.
+///
+/// Pure on purpose: tests assert the returned set without mutating global
+/// process state; [`apply_network_env`] is the thin (unsafe) applier.
+///
+/// Rules (控制器裁决 R1 + 覆盖语义):
+/// - `network_proxy_url` set → `HTTPS_PROXY` = `HTTP_PROXY` = `ALL_PROXY` =
+///   the URL, so every reqwest-based client (which reads the standard proxy
+///   env vars by default) and every env-inheriting subprocess (gateway
+///   sidecar, MCP stdio, command tools) routes through the proxy.
+/// - `network_no_proxy` set → `NO_PROXY` = the list.
+/// - `network_ca_cert_path` set → `SHANNON_CA_BUNDLE` (read by the
+///   engine/desktop reqwest builders, which trust webpki-roots only) +
+///   `NODE_EXTRA_CA_CERTS` + `SSL_CERT_FILE` for Node-based subprocesses.
+/// - Unset values inject NOTHING — the implicit env keeps working (R1:
+///   leaving the UI blank never forces direct connections).
+/// - Set values WIN over pre-existing same-named env: an explicit setting is
+///   the user's intent, a stale shell export must not clobber it.
+pub fn network_env(config: &DesktopConfig) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    if let Some(proxy) = effective_network_value(config.network_proxy_url.as_deref()) {
+        for name in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
+            env.push((name.to_string(), proxy.to_string()));
+        }
+    }
+    if let Some(no_proxy) = effective_network_value(config.network_no_proxy.as_deref()) {
+        env.push(("NO_PROXY".to_string(), no_proxy.to_string()));
+    }
+    if let Some(ca) = effective_network_value(config.network_ca_cert_path.as_deref()) {
+        for name in ["SHANNON_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"] {
+            env.push((name.to_string(), ca.to_string()));
+        }
+    }
+    env
+}
+
+/// Settings R3 T4 (B1) — apply [`network_env`] to the process environment.
+///
+/// MUST run before `tauri::Builder` starts (same early block as
+/// [`apply_hardware_acceleration_env`]): the gateway sidecar and MCP stdio
+/// children are spawned from this process later during startup and inherit
+/// its environment wholesale, and the engine's HTTP clients are built once
+/// at first use.
+pub fn apply_network_env(config: &DesktopConfig) {
+    for (name, value) in network_env(config) {
+        // Edition 2024: set_var is unsafe (env is process-global) — same
+        // precedent as apply_hardware_acceleration_env above.
+        unsafe { std::env::set_var(&name, &value) };
+        tracing::info!("network env injected: {name} (from persisted config, restart-applied)");
     }
 }
 
@@ -770,6 +856,9 @@ impl Default for DesktopConfig {
             hardware_acceleration: default_true(),
             power_keep_awake: false,
             power_block_sleep_during_tasks: default_power_block_sleep_during_tasks(),
+            network_proxy_url: None,
+            network_no_proxy: None,
+            network_ca_cert_path: None,
         }
     }
 }
@@ -801,7 +890,10 @@ pub(crate) fn user_settings_path() -> PathBuf {
     home.join(".shannon").join("settings.json")
 }
 
-fn dirs_home() -> Option<PathBuf> {
+/// Settings R3 T4 (B1): `pub(crate)` so the configure arms can `~`-expand a
+/// user-typed CA certificate path with the same home resolution every other
+/// path in this module uses (`$HOME`, falling back to `$USERPROFILE`).
+pub(crate) fn dirs_home() -> Option<PathBuf> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()
@@ -1733,6 +1825,142 @@ mod tests {
         assert!(!back.hardware_acceleration);
         assert!(back.power_keep_awake);
         assert!(!back.power_block_sleep_during_tasks);
+    }
+
+    /// Settings R3 T4 (B1): the three network keys must default to None on a
+    /// pre-R3 config.json and round-trip once written.
+    #[test]
+    fn test_network_keys_default_compat_and_round_trip() {
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(legacy.network_proxy_url.is_none(), "proxy defaults unset");
+        assert!(legacy.network_no_proxy.is_none(), "no_proxy defaults unset");
+        assert!(
+            legacy.network_ca_cert_path.is_none(),
+            "ca path defaults unset"
+        );
+
+        let config = DesktopConfig {
+            network_proxy_url: Some("http://127.0.0.1:7890".into()),
+            network_no_proxy: Some("localhost,127.0.0.1".into()),
+            network_ca_cert_path: Some("/etc/shannon/root-ca.pem".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("\"network_proxy_url\":\"http://127.0.0.1:7890\""),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"network_no_proxy\":\"localhost,127.0.0.1\""),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"network_ca_cert_path\":\"/etc/shannon/root-ca.pem\""),
+            "{json}"
+        );
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.network_proxy_url.as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+        assert_eq!(
+            back.network_no_proxy.as_deref(),
+            Some("localhost,127.0.0.1")
+        );
+        assert_eq!(
+            back.network_ca_cert_path.as_deref(),
+            Some("/etc/shannon/root-ca.pem")
+        );
+    }
+
+    /// Settings R3 T4 (B1): `network_env` is a pure function — given a
+    /// config, exactly the expected `(name, value)` pairs come back. Empty
+    /// / whitespace values inject NOTHING (R1: keep the implicit env
+    /// fallback, never force direct), set values produce the full trio and
+    /// override any same-named env by construction of the applier.
+    #[test]
+    fn network_env_empty_config_injects_nothing() {
+        let cfg = DesktopConfig::default();
+        assert!(
+            network_env(&cfg).is_empty(),
+            "unset network settings must not inject any env var"
+        );
+        // Whitespace-only / empty-string values (hand-edited config) count
+        // as unset too.
+        let cfg = DesktopConfig {
+            network_proxy_url: Some("   ".into()),
+            network_no_proxy: Some(String::new()),
+            network_ca_cert_path: None,
+            ..Default::default()
+        };
+        assert!(network_env(&cfg).is_empty(), "blank values = unset (R1)");
+    }
+
+    #[test]
+    fn network_env_proxy_value_yields_the_standard_proxy_vars() {
+        let cfg = DesktopConfig {
+            network_proxy_url: Some("http://127.0.0.1:7890".into()),
+            ..Default::default()
+        };
+        let env = network_env(&cfg);
+        let expected = vec![
+            (
+                "HTTPS_PROXY".to_string(),
+                "http://127.0.0.1:7890".to_string(),
+            ),
+            (
+                "HTTP_PROXY".to_string(),
+                "http://127.0.0.1:7890".to_string(),
+            ),
+            ("ALL_PROXY".to_string(), "http://127.0.0.1:7890".to_string()),
+        ];
+        assert_eq!(env, expected, "proxy set → exactly the three standard vars");
+    }
+
+    #[test]
+    fn network_env_no_proxy_and_ca_yield_their_own_vars() {
+        let cfg = DesktopConfig {
+            network_no_proxy: Some("localhost,127.0.0.1,::1,.example.com".into()),
+            network_ca_cert_path: Some("/home/u/certs/root-ca.pem".into()),
+            ..Default::default()
+        };
+        let env = network_env(&cfg);
+        assert!(
+            env.contains(&(
+                "NO_PROXY".to_string(),
+                "localhost,127.0.0.1,::1,.example.com".to_string()
+            )),
+            "no_proxy → NO_PROXY, got {env:?}"
+        );
+        for name in ["SHANNON_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"] {
+            assert!(
+                env.iter()
+                    .any(|(n, v)| n == name && v == "/home/u/certs/root-ca.pem"),
+                "{name} must carry the CA path, got {env:?}"
+            );
+        }
+        assert!(
+            !env.iter()
+                .any(|(n, _)| matches!(n.as_str(), "HTTP_PROXY" | "HTTPS_PROXY" | "ALL_PROXY")),
+            "proxy vars untouched when only ca/no_proxy set: {env:?}"
+        );
+    }
+
+    #[test]
+    fn network_env_values_are_trimmed_and_explicit() {
+        let cfg = DesktopConfig {
+            network_proxy_url: Some("  http://corp-proxy.internal:3128  ".into()),
+            ..Default::default()
+        };
+        let env = network_env(&cfg);
+        assert!(
+            env.iter()
+                .all(|(_, v)| v == "http://corp-proxy.internal:3128"),
+            "values are stored pre-trimmed (configure trims); env passthrough is verbatim: {env:?}"
+        );
     }
 
     #[test]
