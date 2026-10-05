@@ -289,6 +289,7 @@ mod tests {
             request_id: "req-123".into(),
             session_id: Some("s1".into()),
             reason: None,
+            risk_reason: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: serde_json::Value = serde_json::from_str(&json).unwrap();

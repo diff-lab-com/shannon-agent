@@ -795,6 +795,19 @@ pub fn render_permission_dialog(
         ]));
     }
 
+    // P3-1: the deciding rule / classifier verdict, when one exists —
+    // "why was this raised" at rule granularity on top of the free-text
+    // risk reason above.
+    if let Some(why) = dialog.reason.explain() {
+        content_lines.push(Line::from(vec![
+            Span::styled(
+                format!("{}: ", t!("ui.perm_rule")),
+                Style::default().fg(theme.muted),
+            ),
+            Span::styled(why, Style::default().fg(theme.text_dim)),
+        ]));
+    }
+
     // Add options
     content_lines.push(Line::from(""));
     content_lines.push(Line::from(vec![

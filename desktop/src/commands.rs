@@ -1819,6 +1819,7 @@ pub async fn send_message(
                 300,
                 Some(session_id_for_permissions.clone()),
                 Some(wire_reason(&prompt.reason)),
+                Some(prompt.risk_reason.clone()),
             )
             .await;
             let choice = match decision {

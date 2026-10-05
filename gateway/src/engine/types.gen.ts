@@ -71,6 +71,7 @@ export interface ApprovalRespondRequest {
 export type ApprovalDecision =
   | "allow_once"
   | "always_allow"
+  | "always_allow_session"
   | "deny";
 
 export type SseEventName =

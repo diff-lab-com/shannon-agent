@@ -2917,6 +2917,29 @@ impl QueryEngine {
                                                                         );
                                                                     }
                                                                     Ok(
+                                                                        shannon_engine::permissions::PermissionChoice::AlwaysAllowSession,
+                                                                    ) => {
+                                                                        // P3-3: session-scoped
+                                                                        // always-allow (mobile
+                                                                        // scope) — remembered
+                                                                        // in-session, never
+                                                                        // persisted.
+                                                                        let _ = recover_lock(permissions.write())
+                                                                            .process_permission_choice(
+                                                                                session_id_for_permissions,
+                                                                                &prompt_for_choice,
+                                                                                shannon_engine::permissions::PermissionChoice::AlwaysAllowSession,
+                                                                            );
+                                                                        crate::query_engine::guard_nodes::emit_decision(
+                                                                            &session_bus,
+                                                                            &tool_name,
+                                                                            "allow",
+                                                                            Some("user chose session allow"),
+                                                                            "USER",
+                                                                            0,
+                                                                        );
+                                                                    }
+                                                                    Ok(
                                                                         shannon_engine::permissions::PermissionChoice::EditAndRun,
                                                                     ) => {
                                                                         // User edited the command; treat as allow-once

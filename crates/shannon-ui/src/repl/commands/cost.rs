@@ -540,6 +540,60 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
 
     // Subcommand dispatch
     match parts.first().copied().unwrap_or("") {
+        // P3-1: the transparency view — the session's permission/decision
+        // audit rows (tool, decision, mode, reason), newest last.
+        "history" => {
+            let Some(ref engine) = repl.query_engine else {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Error: Query engine not available.".into(),
+                );
+                return Ok(());
+            };
+            let session_id = engine.session_id();
+            let events = match repl.l0_store().read_events(&session_id) {
+                Ok(Some(events)) => events,
+                Ok(None) => {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        "No session log yet — run a query first.".into(),
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    repl.chat
+                        .add_message(ChatRole::System, format!("Failed to read session log: {e}"));
+                    return Ok(());
+                }
+            };
+            let rows = shannon_core::session_log::project_permission_decisions(&events);
+            if rows.is_empty() {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No permission decisions recorded in this session yet.".into(),
+                );
+                return Ok(());
+            }
+            let shown = rows.len().saturating_sub(15);
+            let mut msg = format!(
+                "Permission decisions ({} total, showing last {}):
+",
+                rows.len(),
+                rows.len() - shown
+            );
+            for row in rows.iter().skip(shown) {
+                let tool = row.tool_name.as_deref().unwrap_or("?");
+                let mode = row.mode.as_deref().unwrap_or("-");
+                let reason = row.reason.as_deref().unwrap_or("-");
+                msg.push_str(&format!(
+                    "  [{mode}] {tool} — {} — {reason}
+",
+                    row.decision
+                ));
+            }
+            repl.chat.add_message(ChatRole::System, msg);
+            return Ok(());
+        }
         "" | "status" => {
             let mut report = String::from("Permission Status:\n");
 

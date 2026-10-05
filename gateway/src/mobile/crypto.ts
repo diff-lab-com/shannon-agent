@@ -100,9 +100,17 @@ export function resumeMessage(deviceId: string, timestampMs: number, nonce?: str
   return nonce === undefined ? `${deviceId}:${timestampMs}` : `${deviceId}:${timestampMs}:${nonce}`;
 }
 
-/** `shannon/approval/decide`: mandatory per-decision device signature (v1). */
-export function approvalMessage(requestId: string, choice: "allow" | "deny"): string {
-  return `${requestId}:${choice}`;
+/** `shannon/approval/decide`: mandatory per-decision device signature (v1).
+ *  P3-3: a `session` scope is bound into the signed bytes (suffix `:session`)
+ *  so a captured once-decision cannot be replayed as a session grant; the
+ *  no-scope shape is byte-identical to the pre-P3-3 contract. */
+export function approvalMessage(
+  requestId: string,
+  choice: "allow" | "deny",
+  scope?: "once" | "session",
+): string {
+  const suffix = scope === "session" ? ":session" : "";
+  return `${requestId}:${choice}${suffix}`;
 }
 
 /**
@@ -124,6 +132,8 @@ export function approvalMessageV2(
   requestId: string,
   choice: "allow" | "deny",
   timestampMs: number,
+  scope?: "once" | "session",
 ): string {
-  return `${requestId}:${choice}:${timestampMs}`;
+  const suffix = scope === "session" ? ":session" : "";
+  return `${requestId}:${choice}:${timestampMs}${suffix}`;
 }

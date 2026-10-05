@@ -3,6 +3,15 @@
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
+## [Unreleased] — Approval transparency + mobile approval scope (2026-10-05 follow-up)
+
+Follow-up to the permission-mode convergence (#278), implementing plan items P3-1 and P3-3.
+
+### Added
+
+- **P3-1 approval transparency**: the deciding rule / classifier verdict now shows on every approval surface — TUI permission dialog and the `tool_approval` overlay render `DecisionReason::explain()` ("matched rule \`Bash(git *)\`" / "LLM safety classifier (87% confidence)"), the desktop `PERMISSION_REQUEST` payload carries the engine's free-text `riskReason` (additive field) under the rule line, and a new `/permissions history` subcommand lists the session's permission-decision audit rows (tool — decision — mode — reason) read from the session log.
+- **P3-3 mobile approval scope**: `shannon/approval/decide` accepts `scope: "session"` — the engine maps it to a new `always_allow_session` wire choice that is remembered in the per-session memory and **never persisted**; a session scope is bound into the decision signature (`...:session` suffix in v1/v2 messages) so a captured once-decision cannot be replayed as a session grant. New RPCs `shannon/approval.state` (read the session's current approval token) and `shannon/approval.set` (tighten-only — the gateway forwards nothing but `readonly`; the engine route rejects escalation and upserts the clamp so it survives to the session's next turn). Protocol schema regenerated.
+
 ## [Unreleased] — Permission-mode convergence (2026-10-05)
 
 Permission modes converge to a 4+3 model ([design](docs/plans/2026-10-04-permission-mode-naming-design.md), [plan](docs/plans/2026-10-04-permission-modes-improvement-plan.md)). **Read the breaking notes before upgrading.**

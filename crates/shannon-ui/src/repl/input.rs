@@ -1143,7 +1143,7 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         // R1-6 (decision ② step 1): /permissions manages permission profiles
         // (the /profile command); the tool allow/deny view keeps /perms and
         // /perm.
-        "permissions" => &["list", "show", "set", "create"],
+        "permissions" => &["history", "list", "show", "set", "create"],
         "perm" | "perms" => &["allow", "deny", "reset", "status"],
         // R3-2: the provider/model profile manager (plural). /profile
         // (singular) stays reserved for the permission-profile transition.
@@ -3090,6 +3090,7 @@ mod tests {
         assert_eq!(
             complete_command_args("permissions", ""),
             vec![
+                "history".to_string(),
                 "list".to_string(),
                 "show".to_string(),
                 "set".to_string(),

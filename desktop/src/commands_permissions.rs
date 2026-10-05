@@ -47,6 +47,9 @@ pub(crate) async fn prompt_user(
     // P1-3: why this prompt was raised (rule hit / LLM verdict / default),
     // for the approval dialog's explanation line. `None` when unknown.
     reason: Option<shannon_types::events::PermissionReason>,
+    // P3-1: the engine's free-text risk explanation, shown under the rule
+    // line. `None` when unknown.
+    risk_reason: Option<String>,
 ) -> PermissionDecision {
     let request_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel();
@@ -73,6 +76,7 @@ pub(crate) async fn prompt_user(
             request_id: request_id.clone(),
             session_id: session_id.clone(),
             reason,
+            risk_reason,
         },
     );
 
@@ -128,7 +132,7 @@ pub async fn request_permission(
     input: serde_json::Value,
     risk: String,
 ) -> Result<bool, String> {
-    let decision = prompt_user(&state, &app_handle, tool, input, risk, 30, None, None).await;
+    let decision = prompt_user(&state, &app_handle, tool, input, risk, 30, None, None, None).await;
     Ok(decision != PermissionDecision::Deny)
 }
 

@@ -101,6 +101,8 @@ export interface PermissionRequest {
   session_id?: string
   /** P1-3: why this prompt was raised. Absent on payloads from older engines. */
   reason?: PermissionReason
+  /** P3-1: the engine's free-text risk explanation. Absent on legacy payloads. */
+  riskReason?: string
 }
 
 // --- Core Types ---

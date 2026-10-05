@@ -457,6 +457,14 @@ export function Header() {
                 </span>
               </div>
             )}
+            {/* P3-1: the engine's free-text risk explanation (policy-table
+                basis, budget notice, …) — additive, absent on legacy
+                payloads. */}
+            {permissionRequest.riskReason && (
+              <div className="text-label-sm text-on-surface-variant mb-lg px-md">
+                {permissionRequest.riskReason}
+              </div>
+            )}
             {/* U3 follow-up: "Always allow" persists an allow rule for the
                 tool (respond_permission scope="always_tool" → user
                 settings.json permissions.allow). The engine's rule checker

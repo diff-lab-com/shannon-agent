@@ -325,6 +325,7 @@ ui:
   perm_tool: "Tool"
   perm_description: "Description"
   perm_why: "Why"
+  perm_rule: "Rule"
   approval_edit: "EDIT"
   approval_ask: "ASK"
   approval_plan: "PLAN"

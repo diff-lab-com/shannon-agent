@@ -207,6 +207,11 @@ pub struct PermissionRequest {
     /// when no reason is available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<PermissionReason>,
+    /// P3-1: free-text risk explanation from the engine's policy table
+    /// ("Medium risk based on tool policy and approval mode", the
+    /// budget-exhausted notice, …). Additive like `reason`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_reason: Option<String>,
 }
 
 /// Session information for session list.
@@ -540,6 +545,7 @@ mod tests {
                 rule_name: None,
                 confidence: Some(0.74),
             }),
+            risk_reason: Some("Medium risk based on tool policy".into()),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"reason\""), "{json}");

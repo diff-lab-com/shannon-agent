@@ -1665,6 +1665,7 @@ impl Repl {
                             risk_level: risk,
                             detail: None,
                             domain,
+                            why: permission_req.prompt.reason.explain(),
                         },
                         permission_req.prompt.diff_preview.clone(),
                     );

@@ -318,6 +318,7 @@ ui:
   perm_tool: "টুল"
   perm_description: "বর্ণনা"
   perm_why: "কেন"
+  perm_rule: "নিয়ম"
   approval_edit: "সম্পাদনা"
   approval_ask: "জিজ্ঞাসা"
   approval_plan: "পরিকল্পনা"

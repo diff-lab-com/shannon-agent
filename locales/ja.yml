@@ -318,6 +318,7 @@ ui:
   perm_tool: "ツール"
   perm_description: "説明"
   perm_why: "理由"
+  perm_rule: "ルール"
   approval_edit: "編集"
   approval_ask: "確認"
   approval_plan: "計画"
