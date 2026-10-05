@@ -323,7 +323,10 @@ export interface ModelInfo {
   /** Optional tier label (`fast` / `standard` / `pro`). */
   tier?: string | null
   /** Whether this entry comes from the dynamic models.dev overlay (vs the
-   *  static catalog). Surfaces a freshness indicator in the UI. */
+   *  static catalog). Wire-only for now: the engine hardcodes `dynamic:
+   *  None`, and the Settings badge that consumed it was removed (S1-3,
+   *  P-N3) — S2-1 reintroduces a real source badge when the engine sends
+   *  true provenance. */
   dynamic?: boolean
   /** Vision (image input) capability from the catalog metadata. `undefined`
    *  / null = unknown — the UI renders no capability dot rather than

@@ -153,10 +153,15 @@ export function ProviderKeysPanel({ conn, onClose, onKeysChanged }: ProviderKeys
       </div>
 
       {/* Rotation note — the one-line contract: the engine walks down this
-          list on auth failures / rate limits before any failover. */}
+          list on auth failures / rate limits before any failover. S1-2
+          (P-N2): spell out the pin interaction — key rotation keeps running
+          for pinned sessions; only model-level automatic failover is
+          suppressed by a session pin. */}
       <p className="text-label-sm text-on-surface-variant flex items-center gap-xs mb-md">
         <span className="material-symbols-outlined icon-sm" aria-hidden="true">autorenew</span>
-        {t('settings.models.keys.rotationNote')}
+        <span>
+          {t('settings.models.keys.rotationNote')} {t('settings.models.keys.pinNote')}
+        </span>
       </p>
 
       {loading ? (

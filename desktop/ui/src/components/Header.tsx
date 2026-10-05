@@ -55,6 +55,8 @@ function HeaderModelSelector() {
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values);
   const { status, models, refreshConfig, refreshStatus } = useCatalog();
   const [open, setOpen] = useState(false);
+  // S1-5: the empty-catalog entry deep-links to the model settings page.
+  const navigate = useNavigate();
 
   const handleModelSwitch = async (modelId: string) => {
     const model = models.find(m => m.id === modelId)
@@ -87,18 +89,35 @@ function HeaderModelSelector() {
           </Button>
         }
       />
-      {models.length > 0 && (
-        <Menu.Portal>
-          {/* z-modal rides the POSITIONER — same convention + token scale as
-              the two chat switchers (ui/select.tsx). */}
-          <Menu.Positioner align="end" sideOffset={8} className="isolate z-modal">
-            <Menu.Popup
-              role="listbox"
-              aria-labelledby={undefined}
-              aria-label={t('header.model.select')}
-              className="glass-overlay animate-panel-in w-[280px] rounded-xl py-sm outline-none"
-            >
-              {models.map(m => (
+      {/* S1-5 (P-N16①): the menu renders even with an empty catalog — the
+          old `models.length > 0` gate made clicking the trigger a silent
+          no-op exactly when the user needs a pointer to Settings. */}
+      <Menu.Portal>
+        {/* z-modal rides the POSITIONER — same convention + token scale as
+            the two chat switchers (ui/select.tsx). */}
+        <Menu.Positioner align="end" sideOffset={8} className="isolate z-modal">
+          <Menu.Popup
+            role="listbox"
+            aria-labelledby={undefined}
+            aria-label={t('header.model.select')}
+            className="glass-overlay animate-panel-in w-[280px] rounded-xl py-sm outline-none"
+          >
+            {models.length === 0 ? (
+              // Empty catalog: one explanatory entry that deep-links to the
+              // model settings page (same navigation the auth banner uses).
+              <Menu.Item
+                role="option"
+                aria-selected={false}
+                label={t('header.model.emptyCatalog')}
+                data-testid="header-model-empty"
+                className="flex w-full cursor-pointer items-center gap-sm px-md py-sm text-left outline-none transition-colors text-on-surface-variant hover:bg-primary/5 data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container"
+                onClick={() => navigate('/settings/models')}
+              >
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">add</span>
+                <span className="font-label-md">{t('header.model.emptyCatalog')}</span>
+              </Menu.Item>
+            ) : (
+              models.map(m => (
                 <Menu.Item
                   key={m.id}
                   role="option"
@@ -117,11 +136,11 @@ function HeaderModelSelector() {
                   <span className="font-mono font-label-md truncate">{m.name}</span>
                   <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>
                 </Menu.Item>
-              ))}
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      )}
+              ))
+            )}
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
     </Menu.Root>
   );
 }

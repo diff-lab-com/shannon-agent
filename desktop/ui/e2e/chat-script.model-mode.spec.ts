@@ -96,6 +96,9 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
 
     // Chip switch → session-scoped write, suffix stays.
     await chip.click()
+    // S1-2 (P-N2): the session section spells out the pin contract — a
+    // pinned session does not get model-level automatic failover.
+    await expect(page.getByText(/do not fail over automatically/i)).toBeVisible()
     await page.getByTestId(`model-option-${SWITCH_MODEL}`).click()
     await expect(chip).toContainText('GPT-5')
     await expect(chip).toContainText('session')

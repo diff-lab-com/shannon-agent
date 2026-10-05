@@ -49,8 +49,8 @@ describe('ModelsSettings', () => {
     expect(speedBtn).toBeInTheDocument()
   })
 
-  // === Phase 2 task 4 — surface price_in / price_out / tier / dynamic
-  //     in the model list. ===
+  // === Phase 2 task 4 — surface price_in / price_out / tier in the model
+  //     list (the `dynamic` badge was removed in S1-3, P-N3 — dead UI). ===
   //
   // The list_models Tauri command now returns these fields. The
   // settings page renders them as badges + a per-row pricing line.
@@ -115,7 +115,11 @@ describe('ModelsSettings', () => {
     expect(await screen.findByText('fast')).toBeInTheDocument()
   })
 
-  it('renders dynamic badge for models.dev overlay entries', async () => {
+  // S1-3 (P-N3): the engine hardcodes `dynamic: None` on the ModelInfo
+  // wire, so the "Live" badge could never light — the badge (and its
+  // i18n key) is deleted. This pins the removal: even a `dynamic: true`
+  // row must not render a badge (the wire field stays for S2-1).
+  it('does not render the dynamic badge (S1-3: dead UI removed)', async () => {
     vi.mocked(api.listModels).mockResolvedValueOnce([
       {
         id: 'live-1',
@@ -129,9 +133,8 @@ describe('ModelsSettings', () => {
       },
     ])
     render(wrap(<ModelsSettings />))
-    // The dynamic badge surfaces freshness — the engine marks
-    // models.dev entries as dynamic so the UI can flag them.
-    expect(await screen.findByText('Live')).toBeInTheDocument()
+    expect(await screen.findByText('Some Live Model')).toBeInTheDocument()
+    expect(screen.queryByText('Live')).not.toBeInTheDocument()
   })
 
   it('does not crash when pricing and tier are absent', async () => {

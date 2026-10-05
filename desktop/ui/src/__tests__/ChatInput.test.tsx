@@ -877,6 +877,12 @@ describe('ChatInput — session model override (R2-1) + picker meta (R2-3)', () 
       'title',
       expect.stringContaining('Session override active'),
     )
+    // S1-2 (P-N2): the hover title also states the pin/failover contract —
+    // a pinned session opts this chat out of model-level automatic failover.
+    expect(screen.getByLabelText('Model')).toHaveAttribute(
+      'title',
+      expect.stringContaining('Pinned sessions do not fail over automatically'),
+    )
     // Menu presence of "Reset to default" / "Set as default" is covered by the
     // real-Chromium e2e suite — opening the Base UI popup in jsdom is the
     // known-slow/fragile path this suite avoids where it can.
