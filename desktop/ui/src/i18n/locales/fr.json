@@ -320,7 +320,7 @@
   "settings.effect.newSession": "S’applique aux nouvelles sessions",
   "settings.effect.restartApp": "Redémarrage requis",
   "settings.effect.restartGateway": "Redémarrage de la passerelle requis",
-  "settings.network.title": "Réseau",
+  "settings.network.title": "Proxy, liste de contournement et CA personnalisé pour les réseaux d'entreprise — appliqué au client LLM, aux serveurs MCP, aux outils de commande et au sous-processus de la passerelle. Prend effet après redémarrage.",
   "settings.network.proxy": "Proxy HTTP",
   "settings.network.proxyHelp": "S'applique au client LLM, aux serveurs MCP, aux outils de commande et au sous-processus de la passerelle via les variables d'environnement de proxy standard. Laissez vide pour conserver le proxy déjà défini dans votre environnement — aucune connexion directe n'est imposée.",
   "settings.network.noProxy": "Ne pas utiliser le proxy pour",

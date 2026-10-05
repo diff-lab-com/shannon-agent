@@ -320,7 +320,7 @@
   "settings.effect.newSession": "Gilt für neue Sitzungen",
   "settings.effect.restartApp": "Neustart erforderlich",
   "settings.effect.restartGateway": "Gateway-Neustart erforderlich",
-  "settings.network.title": "Netzwerk",
+  "settings.network.title": "Proxy, Umgehungsliste und eigenes CA-Zertifikat für Firmennetzwerke — für den LLM-Client, MCP-Server, Befehlswerkzeuge und den Gateway-Subprozess. Wird nach einem Neustart wirksam.",
   "settings.network.proxy": "HTTP-Proxy",
   "settings.network.proxyHelp": "Gilt über die Standard-Proxy-Umgebungsvariablen für den LLM-Client, MCP-Server, Befehlswerkzeuge und den Gateway-Subprozess. Bleibt das Feld leer, behält Shannon den in der Umgebung gesetzten Proxy bei — direkte Verbindungen werden nicht erzwungen.",
   "settings.network.noProxy": "Proxy umgehen für",

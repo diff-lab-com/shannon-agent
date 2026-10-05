@@ -320,7 +320,7 @@
   "settings.effect.newSession": "새 세션에 적용",
   "settings.effect.restartApp": "앱 재시작 필요",
   "settings.effect.restartGateway": "게이트웨이 재시작 필요",
-  "settings.network.title": "네트워크",
+  "settings.network.title": "기업 네트워크를 위한 프록시, 우회 목록, 사용자 지정 CA입니다. LLM 클라이언트, MCP 서버, 명령 도구, 게이트웨이 하위 프로세스에 적용되며 앱 재시작 후 적용됩니다.",
   "settings.network.proxy": "HTTP 프록시",
   "settings.network.proxyHelp": "표준 프록시 환경 변수를 통해 LLM 클라이언트, MCP 서버, 명령 도구, 게이트웨이 하위 프로세스에 적용됩니다. 비워 두면 환경에 이미 설정된 프록시를 그대로 사용하며 직접 연결을 강제하지 않습니다.",
   "settings.network.noProxy": "프록시를 사용하지 않을 주소",

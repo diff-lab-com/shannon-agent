@@ -322,7 +322,7 @@
   "settings.effect.newSession": "新会话生效",
   "settings.effect.restartApp": "需重启应用",
   "settings.effect.restartGateway": "需重启网关",
-  "settings.network.title": "网络",
+  "settings.network.title": "企业网络的代理、免代理地址与自定义 CA,对 LLM 客户端、MCP 服务器、命令工具与网关子进程生效,重启应用后生效。",
   "settings.network.proxy": "HTTP 代理",
   "settings.network.proxyHelp": "通过标准代理环境变量对 LLM 客户端、MCP 服务器、命令工具与网关子进程生效。留空时保留环境中已有的代理设置兜底,不强制直连。",
   "settings.network.noProxy": "不使用代理的地址",

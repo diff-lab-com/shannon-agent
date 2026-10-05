@@ -59,7 +59,10 @@ export default function NetworkSettings() {
   }, [config])
 
   const proxyInvalid = !validateProxyUrl(proxyUrl)
-  const showProxyError = proxyError || (proxyUrl.trim() !== '' && proxyInvalid)
+  // Blur/save-gated (review fix 2): the inline error never pops while the
+  // user is typing — it is armed by a failed blur check or a failed save
+  // attempt, and clears as soon as the value becomes valid again.
+  const showProxyError = proxyError && proxyInvalid
 
   const handleSave = async () => {
     if (proxyInvalid) {
@@ -68,12 +71,13 @@ export default function NetworkSettings() {
     }
     setSaving(true)
     try {
-      // Three keys, three writes — the backend validates each (proxy
-      // scheme, CA `~`-expansion + file existence) and persists + emits
-      // CONFIG_UPDATED per key, mirroring every other configure arm.
+      // CA first (review fix 5): it is the only key with a backend-side
+      // existence gate, so a bad path must fail before proxy/no_proxy land
+      // — otherwise the two would be persisted while the save as a whole
+      // reports an error. Then proxy, then its bypass list.
+      await api.configure({ key: 'network.ca_cert_path', value: caPath.trim() })
       await api.configure({ key: 'network.proxy_url', value: proxyUrl.trim() })
       await api.configure({ key: 'network.no_proxy', value: noProxy.trim() })
-      await api.configure({ key: 'network.ca_cert_path', value: caPath.trim() })
       await refreshConfig()
       toast.success(t('settings.network.saved'))
     } catch (e) {
@@ -83,7 +87,11 @@ export default function NetworkSettings() {
   }
 
   return (
-    <div className="pb-xl space-y-lg">
+    <div className="pb-xl">
+      {/* settings.network.title — the section lead-in (style aligned with
+          GeneralSettings' subheader line). */}
+      <p className="font-body-md text-on-surface-variant mb-md">{t('settings.network.title')}</p>
+      <div className="space-y-lg">
       {/* ① HTTP proxy */}
       <section
         className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
@@ -187,6 +195,7 @@ export default function NetworkSettings() {
         >
           {t('settings.network.save')}
         </Button>
+      </div>
       </div>
     </div>
   )

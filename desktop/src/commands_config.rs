@@ -2678,8 +2678,14 @@ mod tests {
     fn validate_ca_cert_path_round_trip_and_missing_file_error() {
         let home = std::path::Path::new("/home/demo");
         // Empty / whitespace clears.
-        assert_eq!(validate_ca_cert_path("", Some(home)).unwrap(), None);
-        assert_eq!(validate_ca_cert_path("   ", Some(home)).unwrap(), None);
+        assert_eq!(
+            validate_ca_cert_path("", Some(home)).expect("empty value clears"),
+            None
+        );
+        assert_eq!(
+            validate_ca_cert_path("   ", Some(home)).expect("whitespace clears"),
+            None
+        );
         // An existing file passes and comes back `~`-expanded.
         let dir = tempfile::tempdir().expect("tempdir");
         let ca = dir.path().join("root-ca.pem");
@@ -2687,15 +2693,17 @@ mod tests {
             &ca,
             "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----",
         )
-        .unwrap();
-        let ok = validate_ca_cert_path(&ca.to_string_lossy(), Some(home)).unwrap();
+        .expect("write temp CA bundle");
+        let ok = validate_ca_cert_path(&ca.to_string_lossy(), Some(home))
+            .expect("existing bundle accepted");
         assert_eq!(
             ok.as_deref(),
             Some(ca.to_string_lossy().as_ref()),
             "existing bundle accepted verbatim"
         );
         // A missing file is a write-time error naming the path.
-        let err = validate_ca_cert_path("~/missing/ca.pem", Some(home)).unwrap_err();
+        let err = validate_ca_cert_path("~/missing/ca.pem", Some(home))
+            .expect_err("missing bundle must be refused");
         assert!(err.contains("/home/demo/missing/ca.pem"), "{err}");
         assert!(err.contains("not found"), "{err}");
     }
@@ -2720,7 +2728,7 @@ mod tests {
         assert_eq!(cfg.network_proxy_url.as_deref(), Some("HTTPS://corp:3128"));
         // No scheme → refused, previous value kept.
         let err = apply_network_config_arm(&mut cfg, "network.proxy_url", "127.0.0.1:7890", None)
-            .unwrap_err();
+            .expect_err("missing scheme must be refused");
         assert!(err.contains("http://"), "{err}");
         assert_eq!(cfg.network_proxy_url.as_deref(), Some("HTTPS://corp:3128"));
         // socks:// is not supported by the env-injection path either.
@@ -2754,7 +2762,8 @@ mod tests {
     #[test]
     fn network_arm_unknown_key_is_an_error() {
         let mut cfg = DesktopConfig::default();
-        let err = apply_network_config_arm(&mut cfg, "network.bogus", "x", None).unwrap_err();
+        let err = apply_network_config_arm(&mut cfg, "network.bogus", "x", None)
+            .expect_err("unknown network key must be refused");
         assert!(err.contains("network.bogus"), "{err}");
     }
 

@@ -42,7 +42,7 @@ describe('NetworkSettings (Settings R3 T4 — corporate network trio)', () => {
     vi.mocked(api.getConfig).mockResolvedValue({ ...baseConfig })
   })
 
-  it('renders the three cards and hydrates the persisted values', async () => {
+  it('renders the section lead-in, three cards and hydrates the persisted values', async () => {
     vi.mocked(api.getConfig).mockResolvedValue({
       ...baseConfig,
       network_proxy_url: 'http://127.0.0.1:7890',
@@ -50,6 +50,8 @@ describe('NetworkSettings (Settings R3 T4 — corporate network trio)', () => {
       network_ca_cert_path: '/home/u/certs/root-ca.pem',
     })
     render(wrap(<NetworkSettings />))
+    // Review fix 3: settings.network.title doubles as the page lead-in.
+    expect(screen.getByText(/Proxy, bypass list and custom CA for corporate networks/)).toBeInTheDocument()
     const proxy = await screen.findByTestId('network-proxy-input') as HTMLInputElement
     await waitFor(() => {
       expect((screen.getByTestId('network-no-proxy-input') as HTMLInputElement).value).toBe('localhost,127.0.0.1')
@@ -104,6 +106,37 @@ describe('NetworkSettings (Settings R3 T4 — corporate network trio)', () => {
     expect(api.configure).toHaveBeenCalledWith({ key: 'network.proxy_url', value: 'http://127.0.0.1:7890' })
     expect(api.configure).toHaveBeenCalledWith({ key: 'network.no_proxy', value: 'localhost,127.0.0.1' })
     expect(api.configure).toHaveBeenCalledWith({ key: 'network.ca_cert_path', value: '~/certs/root-ca.pem' })
+  })
+
+  it('sends the CA key FIRST so its existence gate fails before proxy/no_proxy land (review fix 5)', async () => {
+    render(wrap(<NetworkSettings />))
+    const proxy = await screen.findByTestId('network-proxy-input')
+    fireEvent.change(proxy, { target: { value: 'http://127.0.0.1:7890' } })
+    fireEvent.change(screen.getByTestId('network-ca-input'), { target: { value: '~/certs/root-ca.pem' } })
+    fireEvent.click(screen.getByTestId('network-save'))
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledTimes(3)
+    })
+    const calls = vi.mocked(api.configure).mock.calls
+    expect(calls[0]).toEqual([{ key: 'network.ca_cert_path', value: '~/certs/root-ca.pem' }])
+    expect(calls[1]).toEqual([{ key: 'network.proxy_url', value: 'http://127.0.0.1:7890' }])
+    expect(calls[2]).toEqual([{ key: 'network.no_proxy', value: '' }])
+  })
+
+  // Review fix 2: the inline error is blur/save-gated — typing a half-typed
+  // proxy like "h" or "http:" must NOT pop the error mid-edit.
+  it('does not show the inline error while typing an invalid value (before blur or save)', async () => {
+    render(wrap(<NetworkSettings />))
+    const proxy = await screen.findByTestId('network-proxy-input')
+    fireEvent.change(proxy, { target: { value: 'h' } })
+    expect(screen.queryByTestId('network-proxy-error')).not.toBeInTheDocument()
+    fireEvent.change(proxy, { target: { value: 'http://corp:3128' } })
+    expect(screen.queryByTestId('network-proxy-error')).not.toBeInTheDocument()
+    fireEvent.change(proxy, { target: { value: 'socks5://corp:1080' } })
+    // Still nothing while typing — only blur/save arms the message.
+    expect(screen.queryByTestId('network-proxy-error')).not.toBeInTheDocument()
+    fireEvent.blur(proxy)
+    expect(screen.getByTestId('network-proxy-error')).toBeInTheDocument()
   })
 
   it('trims values before sending them to configure', async () => {

@@ -320,7 +320,7 @@
   "settings.effect.newSession": "新しいセッションから有効",
   "settings.effect.restartApp": "アプリの再起動が必要",
   "settings.effect.restartGateway": "ゲートウェイの再起動が必要",
-  "settings.network.title": "ネットワーク",
+  "settings.network.title": "企業ネットワーク向けのプロキシ・バイパスリスト・カスタム CA。LLM クライアント、MCP サーバー、コマンドツール、ゲートウェイ子プロセスに適用され、反映には再起動が必要です。",
   "settings.network.proxy": "HTTP プロキシ",
   "settings.network.proxyHelp": "標準のプロキシ環境変数を通じて、LLM クライアント・MCP サーバー・コマンドツール・ゲートウェイ子プロセスに適用されます。空欄の場合、環境に設定済みのプロキシがそのまま使われ、直接接続を強制しません。",
   "settings.network.noProxy": "プロキシを使わないアドレス",

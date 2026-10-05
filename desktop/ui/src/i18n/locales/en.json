@@ -322,7 +322,7 @@
   "settings.effect.newSession": "Applies to new sessions",
   "settings.effect.restartApp": "Restart required",
   "settings.effect.restartGateway": "Gateway restart required",
-  "settings.network.title": "Network",
+  "settings.network.title": "Proxy, bypass list and custom CA for corporate networks — applied to the LLM client, MCP servers, command tools and the gateway subprocess. Takes effect after restart.",
   "settings.network.proxy": "HTTP proxy",
   "settings.network.proxyHelp": "Applies to the LLM client, MCP servers, command tools and the gateway subprocess via the standard proxy environment variables. Left empty, Shannon keeps the proxy already set in your environment — it does not force direct connections.",
   "settings.network.noProxy": "Do not use the proxy for",

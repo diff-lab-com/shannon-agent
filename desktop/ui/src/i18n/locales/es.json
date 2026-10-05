@@ -320,7 +320,7 @@
   "settings.effect.newSession": "Se aplica a sesiones nuevas",
   "settings.effect.restartApp": "Requiere reiniciar la app",
   "settings.effect.restartGateway": "Requiere reiniciar la gateway",
-  "settings.network.title": "Red",
+  "settings.network.title": "Proxy, lista de omisión y CA personalizado para redes corporativas: se aplica al cliente LLM, a los servidores MCP, a las herramientas de comandos y al subproceso de la pasarela. Surte efecto tras reiniciar.",
   "settings.network.proxy": "Proxy HTTP",
   "settings.network.proxyHelp": "Se aplica al cliente LLM, a los servidores MCP, a las herramientas de comandos y al subproceso de la pasarela mediante las variables de entorno de proxy estándar. Si se deja vacío, Shannon conserva el proxy ya definido en tu entorno — no fuerza conexiones directas.",
   "settings.network.noProxy": "No usar proxy para",

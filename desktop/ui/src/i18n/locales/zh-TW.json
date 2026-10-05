@@ -320,7 +320,7 @@
   "settings.effect.newSession": "新會話生效",
   "settings.effect.restartApp": "需重新啟動應用",
   "settings.effect.restartGateway": "需重新啟動閘道",
-  "settings.network.title": "網路",
+  "settings.network.title": "企業網路的代理、免代理位址與自訂 CA,對 LLM 用戶端、MCP 伺服器、命令工具與閘道子程序生效,重新啟動應用程式後生效。",
   "settings.network.proxy": "HTTP 代理伺服器",
   "settings.network.proxyHelp": "透過標準代理環境變數對 LLM 用戶端、MCP 伺服器、命令工具與閘道子程序生效。留空時保留環境中既有的代理設定作為後備,不強制直連。",
   "settings.network.noProxy": "不使用代理的位址",
