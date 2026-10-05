@@ -389,3 +389,63 @@ describe('AddProviderModal — fetch models + test connection', () => {
     expect(input.getAttribute('list')).toBeNull()
   })
 })
+
+// === S1-4c (2026-10 review P-N5): a successful Fetch models pins the first
+// real id into the model field — but ONLY while the field still holds the
+// initial value / a quick-fill guess (no user edit). A user-typed id is
+// never overwritten. ===
+describe('AddProviderModal — fetch → model prefill linkage (S1-4c)', () => {
+  beforeEach(() => {
+    vi.mocked(api.fetchProviderModels).mockReset()
+    vi.mocked(api.fetchProviderModels).mockResolvedValue([])
+  })
+
+  it('prefills the first fetched id when the user has not typed a model', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-b', 'model-a'])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    const input = screen.getByTestId('provider-model-input') as HTMLInputElement
+    expect(input.value).toBe('')
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    expect(input.value).toBe('model-b')
+  })
+
+  it('never overwrites a model id the user typed', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-b', 'model-a'])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    const input = screen.getByTestId('provider-model-input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'my-custom-model' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    expect(input.value).toBe('my-custom-model')
+  })
+
+  it('replaces a quick-fill guess with the fetched first id (a chip prefill is not a user edit)', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['llama3.3:latest', 'qwen3:8b'])
+    renderModal()
+    // The Ollama chip needs no key, so the probe buttons arm immediately.
+    fireEvent.click(screen.getByRole('button', { name: /Ollama/ }))
+    const input = screen.getByTestId('provider-model-input') as HTMLInputElement
+    expect(input.value).toBe('llama3.2')
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    expect(vi.mocked(api.fetchProviderModels)).toHaveBeenCalledWith(
+      null, 'ollama', 'http://localhost:11434', null,
+    )
+    expect(input.value).toBe('llama3.3:latest')
+  })
+
+  it('leaves the field alone when the endpoint serves an empty list', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue([])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-empty')).toBeInTheDocument())
+    expect((screen.getByTestId('provider-model-input') as HTMLInputElement).value).toBe('')
+  })
+})

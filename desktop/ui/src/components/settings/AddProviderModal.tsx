@@ -67,6 +67,11 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   const [baseUrl, setBaseUrl] = useState(editing?.base_url ?? '')
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState('')
+  // S1-4c (P-N5 fetch linkage): true once the user has TYPED in the model
+  // field. A chip prefill resets it (a guess is not a choice), so a later
+  // successful Fetch models may replace it — but a user-typed id is never
+  // overwritten.
+  const [modelDirty, setModelDirty] = useState(false)
   const [advanced, setAdvanced] = useState<AdvancedState>(() => advancedFromEditing(editing))
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -119,7 +124,13 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   const applyQuickFill = (qf: (typeof QUICK_FILL)[number]) => {
     setKind(qf.kind)
     if (qf.baseUrl) setBaseUrl(qf.baseUrl)
-    if (qf.model) setModel(qf.model)
+    if (qf.model) {
+      setModel(qf.model)
+      // The chip's id is a guess, not a user choice — a later Fetch models
+      // is allowed to replace it with a real id (S1-4c). The `custom` chip
+      // carries no model and must not clear a previously typed one.
+      setModelDirty(false)
+    }
     if (!label) setLabel(qf.id === 'custom' ? '' : qf.label)
     clearProbeState()
   }
@@ -136,6 +147,12 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
         apiKey.trim() || null,
       )
       setSuggestions(models)
+      // S1-4c (P-N5): a successful fetch makes the endpoint's real catalog
+      // the best guess — prefill the first id while the field still holds
+      // the initial/chip value. A user-typed id is never overwritten.
+      if (models.length > 0 && !modelDirty) {
+        setModel(models[0])
+      }
     } catch (e) {
       setSuggestions(null)
       setFetchFailure(api.parseFetchModelsError(String(e)))
@@ -326,7 +343,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
               <Input
                 className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
                 value={model}
-                onChange={(e) => setModel(e.target.value)}
+                onChange={(e) => { setModel(e.target.value); setModelDirty(true) }}
                 placeholder="claude-sonnet-4-6"
                 // Conditional: an input with a `list` attribute is exposed
                 // to assistive tech as a combobox, which would mislabel the
