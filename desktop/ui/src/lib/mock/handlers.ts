@@ -1261,6 +1261,10 @@ export const handlers: Record<string, MockHandler> = {
   // --- Permissions ---
   async respond_permission() { await delay(20) },
 
+  // --- Ask user (Settings R3 T8) — demo ask-user-request events come from
+  // the scripted player; answers are accepted and discarded. ---
+  async respond_ask_user() { await delay(20) },
+
   // --- Files ---
   async get_file_diff(args: { path: string }) {
     await delay()

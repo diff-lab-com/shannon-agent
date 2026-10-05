@@ -105,6 +105,36 @@ export interface PermissionRequest {
   riskReason?: string
 }
 
+// --- Settings R3 T8: desktop ask_user question round-trip ---
+
+/** One selectable option of an AskUserRequest (mirrors `QuestionOption`). */
+export interface AskUserOption {
+  label: string
+  description: string
+}
+
+/**
+ * `ask-user-request` payload — one question from the engine's
+ * `ask_user_question` tool, flattened from `Question` plus the correlation
+ * id the answer travels back through (`respondAskUser(requestId, answers)`).
+ * `timeout_ms` is present only when 提问自动继续 is on (drives the card's
+ * pure-display countdown); `None` = wait forever.
+ */
+export interface AskUserRequest {
+  request_id: string
+  question: string
+  header: string
+  options: AskUserOption[]
+  multi_select: boolean
+  timeout_ms?: number
+}
+
+/** `ask-user-resolved` payload — the auto-continue timeout fired. */
+export interface AskUserResolved {
+  request_id: string
+  timed_out: boolean
+}
+
 // --- Core Types ---
 
 export interface ChatMessage {
@@ -651,6 +681,11 @@ export interface DesktopConfig {
    *  verbatim; the engine is rebuilt per message, so a change applies to
    *  the next message. Written via `configure('context.auto_compact')`. */
   context_auto_compact?: boolean
+  /** Settings R3 T8: 提问自动继续 — auto-answer an agent question left
+   *  unanswered for 5 minutes with "continue on your best judgment".
+   *  Default false (wait forever). Written via
+   *  `configure('chat.ask_user_auto_continue')`; read live per question. */
+  chat_ask_user_auto_continue?: boolean
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
@@ -1630,6 +1665,10 @@ export const EVENT_NAMES = {
   QUERY_FAILED: 'query:failed',
   QUERY_CANCELLED: 'query:cancelled',
   PERMISSION_REQUEST: 'permission-request',
+  /** Settings R3 T8: the ask_user tool surfaced a question (payload: AskUserRequest). */
+  ASK_USER_REQUEST: 'ask-user-request',
+  /** Settings R3 T8: an ask_user question's auto-continue timeout fired (payload: AskUserResolved). */
+  ASK_USER_RESOLVED: 'ask-user-resolved',
   SESSIONS_UPDATED: 'sessions-updated',
   /** 卡A: switch_session auto-unarchived an archived session (toast cue). */
   SESSION_AUTO_UNARCHIVED: 'session-auto-unarchived',

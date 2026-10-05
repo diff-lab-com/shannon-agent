@@ -206,6 +206,9 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
     approval_mode: 'normal',
   }),
   configure: vi.fn().mockResolvedValue(undefined),
+  // Settings R3 T8 — answering an ask-user question card. Default: resolves;
+  // card tests assert against this spy.
+  respondAskUser: vi.fn().mockResolvedValue(undefined),
   // R3-2: model-profile roster (Settings → Models "Profiles") — one active
   // "default" row by default; flows override per test.
   listProviderProfiles: vi.fn().mockResolvedValue([
