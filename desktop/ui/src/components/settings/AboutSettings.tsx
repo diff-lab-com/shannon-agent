@@ -60,7 +60,7 @@ export default function AboutSettings() {
 
       <div className="grid grid-cols-1 gap-gutter">
         {/* About — version, update check, release page */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="about-card">
+        <div className="bg-surface-container-lowest p-xl rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="about-card">
           <div className="flex items-center gap-md mb-md">
             <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">info</span>
@@ -129,7 +129,7 @@ export default function AboutSettings() {
 
         {/* Data directory — read-only; $SHANNON_HOME overrides it, moving it
             is a manual migration. The log-directory entry stays in Advanced. */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="about-datadir-card">
+        <div className="bg-surface-container-lowest p-xl rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="about-datadir-card">
           <div className="flex items-center gap-md mb-md">
             <div className="p-sm bg-secondary-container rounded-lg text-on-secondary-container flex items-center justify-center">
               <span className="material-symbols-outlined">folder_open</span>

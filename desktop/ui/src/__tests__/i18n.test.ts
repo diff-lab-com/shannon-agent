@@ -52,6 +52,14 @@ describe('resolveLocale — follow system (navigator probe)', () => {
     expect(resolveLocale('not-a-locale')).toBe('es')
   })
 
+  it("an Object.prototype key ('constructor') is not a locale — falls to probe/en", () => {
+    // `pref in MESSAGES` walks Object.prototype, so a tampered localStorage
+    // value like 'constructor' used to masquerade as a supported locale.
+    stubNavigatorLanguages(['de-DE'])
+    expect(resolveLocale('constructor')).toBe('de')
+    expect(resolveLocale('toString', [])).toBe('en')
+  })
+
   it('is not cached: a later probe picks up an OS language change', () => {
     stubNavigatorLanguages(['en-US'])
     expect(resolveLocale('system')).toBe('en')

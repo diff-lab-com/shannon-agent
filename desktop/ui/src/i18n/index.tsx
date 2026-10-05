@@ -81,7 +81,10 @@ function getStoredLocalePref(): LocalePref {
   if (typeof window === 'undefined') return 'system'
   const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY)
   if (stored === 'system') return 'system'
-  if (stored && stored in MESSAGES) return stored as Locale
+  // hasOwnProperty, not `in`: MESSAGES is a plain object, so `in` walks
+  // Object.prototype and a tampered localStorage value like 'constructor'
+  // or 'toString' would masquerade as a locale.
+  if (stored && Object.prototype.hasOwnProperty.call(MESSAGES, stored)) return stored as Locale
   return 'system'
 }
 
@@ -104,7 +107,9 @@ export function resolveLocale(
     ? navigator.languages
     : undefined,
 ): Locale {
-  if (pref && pref !== 'system' && pref in MESSAGES) return pref as Locale
+  if (pref && pref !== 'system' && Object.prototype.hasOwnProperty.call(MESSAGES, pref)) {
+    return pref as Locale
+  }
   for (const tag of languages ?? []) {
     const hit = matchNavigatorLanguage(tag)
     if (hit) return hit

@@ -2161,6 +2161,15 @@ export const handlers: Record<string, MockHandler> = {
     return { success: true, status: 200, detail: 'HTTP 200', ...args }
   },
 
+  // ── Settings R3 — About section: read-only data directory ────────────
+  // The AboutSettings card displays the path verbatim (no fs access), so a
+  // plausible absolute path is the whole contract — same default the Rust
+  // command resolves to when $SHANNON_HOME is unset (~/.shannon).
+  async get_shannon_home() {
+    await delay(20)
+    return '/home/ed/.shannon'
+  },
+
   // --- Extensions Hub: Featured ---
   async list_featured_vendors() { await delay(); return clone(MOCK_FEATURED_VENDORS) },
 
