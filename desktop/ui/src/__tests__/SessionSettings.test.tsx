@@ -215,3 +215,64 @@ describe('SessionSettings (Settings R3 T6 — 会话分区)', () => {
     })
   })
 })
+
+// ⑤ Send-while-running card — Settings R3 T10. Purely front-end
+// localStorage ('shannon.chat.sendBehavior'); no configure() round-trip.
+describe('SessionSettings ⑤ running-send behavior (Settings R3 T10)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.getConfig).mockResolvedValue({ ...baseConfig })
+    window.localStorage.clear()
+  })
+
+  it('renders the card with the two-tier segmented control, the ruling help copy, and the instant badge', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-send-behavior-card')
+    expect(within(card).getByText('Send while running')).toBeInTheDocument()
+    // The help copy explains both tiers and the always-on bolt escape hatch.
+    const help = within(card).getByText(/while a run is still streaming/i).textContent ?? ''
+    expect(help).toMatch(/interrupted right away/)
+    expect(help).toMatch(/jumps the queue/)
+    expect(help).toMatch(/waits in line/)
+    expect(help).toMatch(/Ctrl\+Enter always interrupts immediately/)
+    // Read live per send — instant, not new-session.
+    expect(within(card).getByText('Instant effect')).toBeInTheDocument()
+    // The two tiers, as a radiogroup.
+    expect(within(card).getByRole('radiogroup', { name: 'Send while running' })).toBeInTheDocument()
+    expect(within(card).getByRole('radio', { name: 'Steer (interrupt)' })).toBeInTheDocument()
+    expect(within(card).getByRole('radio', { name: 'Add to queue' })).toBeInTheDocument()
+  })
+
+  it('defaults to queue — the status quo — when nothing is stored', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-send-behavior-card')
+    const queue = within(card).getByRole('radio', { name: 'Add to queue' })
+    const steer = within(card).getByRole('radio', { name: 'Steer (interrupt)' })
+    expect(queue).toHaveAttribute('aria-checked', 'true')
+    expect(steer).toHaveAttribute('aria-checked', 'false')
+    expect(window.localStorage.getItem('shannon.chat.sendBehavior')).toBeNull()
+  })
+
+  it('writes steer to localStorage when Steer is picked (no configure round-trip)', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-send-behavior-card')
+    const steer = within(card).getByRole('radio', { name: 'Steer (interrupt)' })
+    fireEvent.click(steer)
+    expect(steer).toHaveAttribute('aria-checked', 'true')
+    expect(within(card).getByRole('radio', { name: 'Add to queue' })).toHaveAttribute('aria-checked', 'false')
+    expect(window.localStorage.getItem('shannon.chat.sendBehavior')).toBe('steer')
+    expect(api.configure).not.toHaveBeenCalled()
+  })
+
+  it('writes queue back to localStorage when Queue is re-picked', async () => {
+    window.localStorage.setItem('shannon.chat.sendBehavior', 'steer')
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-send-behavior-card')
+    // hydrates from the persisted value first
+    await waitFor(() => expect(within(card).getByRole('radio', { name: 'Steer (interrupt)' })).toHaveAttribute('aria-checked', 'true'))
+    const queue = within(card).getByRole('radio', { name: 'Add to queue' })
+    fireEvent.click(queue)
+    expect(queue).toHaveAttribute('aria-checked', 'true')
+    expect(window.localStorage.getItem('shannon.chat.sendBehavior')).toBe('queue')
+  })
+})
