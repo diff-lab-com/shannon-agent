@@ -2888,14 +2888,15 @@ fn a6_saw_ladder_progress(progress: &[String]) -> bool {
 #[tokio::test]
 async fn a6_auto_compact_disabled_skips_the_whole_compaction_ladder() {
     let server = TurnRetryMockServer::start(std::sync::Arc::new(|_i| a8_tool_call_sse()));
-    let (completed, _failed, progress, _warnings, _history) = a8_run_query_custom(&server, 4, |cfg| {
-        // Tiny window + huge default system prompt ⇒ the estimated ratio is
-        // far above any threshold from the first evaluation.
-        cfg.max_context_tokens = Some(64);
-        cfg.compression_threshold = 0.1;
-        cfg.auto_compact_enabled = false;
-    })
-    .await;
+    let (completed, _failed, progress, _warnings, _history) =
+        a8_run_query_custom(&server, 4, |cfg| {
+            // Tiny window + huge default system prompt ⇒ the estimated ratio is
+            // far above any threshold from the first evaluation.
+            cfg.max_context_tokens = Some(64);
+            cfg.compression_threshold = 0.1;
+            cfg.auto_compact_enabled = false;
+        })
+        .await;
     let _ = completed; // turn budget ends the run either way — not the point
     assert!(
         !a6_saw_ladder_progress(&progress),
@@ -2914,13 +2915,14 @@ async fn a6_auto_compact_disabled_skips_the_whole_compaction_ladder() {
 #[tokio::test]
 async fn a6_auto_compact_enabled_keeps_the_compaction_ladder_running() {
     let server = TurnRetryMockServer::start(std::sync::Arc::new(|_i| a8_tool_call_sse()));
-    let (completed, _failed, progress, _warnings, _history) = a8_run_query_custom(&server, 4, |cfg| {
-        cfg.max_context_tokens = Some(64);
-        cfg.compression_threshold = 0.1;
-        // auto_compact_enabled defaults to true — pin it for readability.
-        cfg.auto_compact_enabled = true;
-    })
-    .await;
+    let (completed, _failed, progress, _warnings, _history) =
+        a8_run_query_custom(&server, 4, |cfg| {
+            cfg.max_context_tokens = Some(64);
+            cfg.compression_threshold = 0.1;
+            // auto_compact_enabled defaults to true — pin it for readability.
+            cfg.auto_compact_enabled = true;
+        })
+        .await;
     let _ = completed;
     assert!(
         a6_saw_ladder_progress(&progress),
@@ -2933,5 +2935,8 @@ async fn a6_auto_compact_enabled_keeps_the_compaction_ladder_running() {
 #[test]
 fn a6_auto_compact_enabled_defaults_to_true() {
     let cfg = QueryEngineConfig::default();
-    assert!(cfg.auto_compact_enabled, "default must keep auto-compaction on");
+    assert!(
+        cfg.auto_compact_enabled,
+        "default must keep auto-compaction on"
+    );
 }
