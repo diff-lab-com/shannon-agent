@@ -325,6 +325,7 @@ ui:
   perm_tool: "工具"
   perm_description: "描述"
   perm_why: "原因"
+  perm_rule: "规则"
   approval_edit: "编辑"
   approval_ask: "询问"
   approval_plan: "计划"

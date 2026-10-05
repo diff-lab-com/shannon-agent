@@ -39,7 +39,9 @@ use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use futures::{SinkExt, StreamExt};
-use shannon_api_protocol::{SessionSummary, TranscriptMessage};
+use shannon_api_protocol::{
+    ApprovalModeRequest, ApprovalModeState, SessionSummary, TranscriptMessage,
+};
 use shannon_engine::api::{ContentBlock, LlmClient, LlmClientConfig, Message, MessageContent};
 use shannon_engine::permissions::PermissionChoice;
 use shannon_engine::state::StateManager;
@@ -87,6 +89,8 @@ fn approval_decision_to_choice(d: ApprovalDecision) -> PermissionChoice {
     match d {
         ApprovalDecision::AllowOnce => PermissionChoice::AllowOnce,
         ApprovalDecision::AlwaysAllow => PermissionChoice::AlwaysAllow,
+        ApprovalDecision::AlwaysAllowSession => PermissionChoice::AlwaysAllowSession,
+        ApprovalDecision::AlwaysAllowSession => PermissionChoice::AlwaysAllowSession,
         ApprovalDecision::Deny => PermissionChoice::Deny,
     }
 }
@@ -298,7 +302,11 @@ impl ShannonApiServer {
                 "/api/ws",
                 get(ws_handler).layer(axum::middleware::from_fn(ws_origin_guard)),
             )
-            .route("/api/approval/respond", post(approval_respond_handler));
+            .route("/api/approval/respond", post(approval_respond_handler))
+            .route(
+                "/api/approval/mode",
+                get(approval_mode_get_handler).post(approval_mode_post_handler),
+            );
         for extra in &self.extra_routes {
             // `with_state(())` re-types an already state-applied router so it
             // can merge with the (not yet state-applied) core router.
@@ -1042,6 +1050,69 @@ async fn approval_respond_handler(
 // shannon-mobile docs/cross-repo-adaptation-spec.md §G (G4); reference
 // behavior + test: relayHost.test.ts "re-pairs after phone reconnects
 // (recv counter resets)".
+/// P3-3: `GET /api/approval/mode?session_id=<uuid>` — the approval token
+/// currently in effect for a WS-backed session (server default when the
+/// session has none stored).
+async fn approval_mode_get_handler(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<axum::Json<ApprovalModeState>, ApiError> {
+    let session_id = params
+        .get("session_id")
+        .ok_or_else(|| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "missing session_id query parameter".into(),
+        })?
+        .clone();
+    let stored = {
+        let sessions = state.ws_sessions.read().await;
+        match sessions.get(&session_id) {
+            Some(s) => s.lock().await.approval_mode.clone(),
+            None => None,
+        }
+    };
+    // The stored token was validated on write; fall back to the engine
+    // default token when the session is unknown/has none.
+    let mode = match stored {
+        Some(m) => m,
+        None => "auto-edit".to_string(),
+    };
+    Ok(axum::Json(ApprovalModeState { mode }))
+}
+
+/// P3-3: `POST /api/approval/mode` — the mobile TIGHTEN route. Only
+/// `readonly` is accepted: a phone may clamp a session down, never loosen
+/// or escalate it.
+async fn approval_mode_post_handler(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<ApprovalModeRequest>,
+) -> Result<axum::Json<ApprovalModeState>, ApiError> {
+    if body.mode != "readonly" {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "mobile approval-mode changes may only tighten to 'readonly'".into(),
+        });
+    }
+    let session_id = body.session_id.clone();
+    let mut sessions = state.ws_sessions.write().await;
+    // Upsert: between queries the WS session entry may not exist yet, but
+    // the tighten must survive — the WS query path reads the stored mode on
+    // every engine build, so a pre-registered clamp applies to the session's
+    // next turn.
+    let session = sessions.entry(session_id.clone()).or_insert_with(|| {
+        std::sync::Arc::new(tokio::sync::Mutex::new(WsSession {
+            messages: Vec::new(),
+            model: None,
+            approval_mode: None,
+        }))
+    });
+    session.lock().await.approval_mode = Some("readonly".to_string());
+    tracing::info!(session = %session_id, "mobile tighten: approval mode -> readonly");
+    Ok(axum::Json(ApprovalModeState {
+        mode: "readonly".to_string(),
+    }))
+}
+
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws_socket(socket, state))
 }
@@ -3903,6 +3974,83 @@ mod tests {
         assert_eq!(parsed["tool_name"], "bash");
         assert_eq!(parsed["is_destructive"], true);
         assert_eq!(parsed["diff_preview"], "--- old\n+++ new");
+    }
+
+    #[tokio::test]
+    async fn test_approval_mode_get_defaults_and_post_tightens() {
+        let state = AppState {
+            client_config: test_config(),
+            tools: Arc::new(ToolRegistry::new()),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+        };
+        let sid = uuid::Uuid::new_v4().to_string();
+
+        // GET on an unknown session answers the engine default token.
+        let res = approval_mode_get_handler(
+            State(state.clone()),
+            axum::extract::Query(std::collections::HashMap::from([(
+                "session_id".to_string(),
+                sid.clone(),
+            )])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.mode, "auto-edit");
+
+        // POST readonly UPSERTS the session entry and stores the tighten.
+        let res = approval_mode_post_handler(
+            State(state.clone()),
+            axum::Json(ApprovalModeRequest {
+                session_id: sid.clone(),
+                mode: "readonly".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.mode, "readonly");
+        {
+            let sessions = state.ws_sessions.read().await;
+            let stored = sessions.get(&sid).expect("upserted").lock().await;
+            assert_eq!(stored.approval_mode.as_deref(), Some("readonly"));
+        }
+
+        // GET now reflects the stored tighten.
+        let res = approval_mode_get_handler(
+            State(state.clone()),
+            axum::extract::Query(std::collections::HashMap::from([(
+                "session_id".to_string(),
+                sid.clone(),
+            )])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.mode, "readonly");
+    }
+
+    #[tokio::test]
+    async fn test_approval_mode_post_rejects_non_readonly() {
+        let state = AppState {
+            client_config: test_config(),
+            tools: Arc::new(ToolRegistry::new()),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+        };
+        let err = approval_mode_post_handler(
+            State(state),
+            axum::Json(ApprovalModeRequest {
+                session_id: uuid::Uuid::new_v4().to_string(),
+                mode: "full-auto".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("readonly"));
     }
 
     #[tokio::test]

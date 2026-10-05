@@ -86,6 +86,10 @@ pub enum PermissionChoice {
     AllowOnce,
     /// Always allow this tool
     AlwaysAllow,
+    /// Always allow this tool FOR THIS SESSION only — remembered in the
+    /// in-session [`PermissionMemory`] but never persisted to settings
+    /// (P3-3: the mobile "allow for session" scope).
+    AlwaysAllowSession,
     /// Open in editor to modify before running
     EditAndRun,
 }
@@ -657,6 +661,29 @@ impl Default for DecisionReason {
     }
 }
 
+impl DecisionReason {
+    /// P3-1: one-line human explanation of WHY this prompt was raised —
+    /// `matched rule \`Bash(git *)\`` or `LLM safety classifier (87%
+    /// confidence)`. `None` when nothing specific decided (the plain
+    /// approval-mode default); callers fall back to the prompt's
+    /// `risk_reason` free text in that case.
+    pub fn explain(&self) -> Option<String> {
+        match self.source {
+            ReasonSource::Rule => self
+                .rule_name
+                .as_ref()
+                .map(|r| format!("matched rule `{r}`")),
+            ReasonSource::Llm => Some(format!(
+                "LLM safety classifier{}",
+                self.confidence
+                    .map(|c| format!(" ({:.0}% confidence)", c * 100.0))
+                    .unwrap_or_default()
+            )),
+            ReasonSource::Default => None,
+        }
+    }
+}
+
 /// A prompt requesting user permission for a tool operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionPrompt {
@@ -921,7 +948,7 @@ impl PermissionMemory {
         choice: PermissionChoice,
     ) {
         match choice {
-            PermissionChoice::AlwaysAllow => {
+            PermissionChoice::AlwaysAllow | PermissionChoice::AlwaysAllowSession => {
                 self.session_choices
                     .entry(session_id)
                     .or_default()
@@ -1793,6 +1820,17 @@ impl PermissionManager {
                     // every session). Project-scoped: `.shannon/settings.local.json`.
                     Self::persist_allow_rule(&prompt.tool_name, &prompt.tool_input);
                 }
+                Ok(())
+            }
+            PermissionChoice::AlwaysAllowSession => {
+                // P3-3: session-scoped always-allow — remembered in the
+                // per-session memory (so the tool stops prompting until the
+                // session ends) but NEVER persisted to settings.local.json.
+                self.memory.remember_choice(
+                    session_id,
+                    prompt.tool_name.clone(),
+                    PermissionChoice::AlwaysAllow,
+                );
                 Ok(())
             }
             PermissionChoice::EditAndRun => {
@@ -3820,6 +3858,34 @@ mod tests {
 
     fn sid_of() -> uuid::Uuid {
         uuid::Uuid::nil()
+    }
+
+    #[test]
+    fn test_session_scoped_always_allow_never_persists() {
+        // P3-3: AlwaysAllowSession is remembered in the per-session memory
+        // (the tool stops prompting for the session) but must NEVER write a
+        // persisted allow rule — the mobile grant dies with the session.
+        let mut mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let prompt = mgr
+            .classify_and_check(sid, "FileWrite", &serde_json::json!({"path": "/tmp/probe"}))
+            .unwrap()
+            .expect("ask expected");
+        // Point persist_allow_rule at an isolated cwd so the probe never
+        // writes to a real .shannon/settings.local.json.
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let result =
+            mgr.process_permission_choice(sid, &prompt, PermissionChoice::AlwaysAllowSession);
+        let _ = std::env::set_current_dir(prev);
+        result.unwrap();
+
+        // Session memory grants it…
+        assert!(mgr.memory().is_always_allowed(sid, "FileWrite"));
+        // …but no rule landed on disk.
+        let local = tmp.path().join(".shannon").join("settings.local.json");
+        assert!(!local.exists(), "session scope must not persist: {local:?}");
     }
 
     #[test]

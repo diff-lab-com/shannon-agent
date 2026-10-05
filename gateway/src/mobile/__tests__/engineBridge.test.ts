@@ -407,6 +407,114 @@ describe("createEngineHandlers (P1.1b)", () => {
     socket.close();
   });
 
+  it("approval/decide scope=session POSTs always_allow_session and binds the signature", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => mockResponse(200, ""));
+    const handlers = createEngineHandlers({
+      engineWsUrl: "ws://127.0.0.1:9",
+      engineHttpBaseUrl: "http://engine:33420",
+      version: "test",
+      logger,
+      engineClientFactory: fakeFactory({ current: null }, { script: [] }),
+      fetchImpl: fetchMock,
+    });
+    const { port } = await start(handlers);
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r2",
+      choice: "allow",
+      scope: "session",
+      signature: "sig",
+    });
+    expect(res.result).toEqual({ ok: true });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe("http://engine:33420/api/approval/respond");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      request_id: "r2",
+      choice: "always_allow_session",
+    });
+    socket.close();
+  });
+
+  it("approval/decide rejects a session scope on deny and an unknown scope", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => mockResponse(200, ""));
+    const handlers = createEngineHandlers({
+      engineWsUrl: "ws://127.0.0.1:9",
+      engineHttpBaseUrl: "http://engine:33420",
+      version: "test",
+      logger,
+      engineClientFactory: fakeFactory({ current: null }, { script: [] }),
+      fetchImpl: fetchMock,
+    });
+    const { port } = await start(handlers);
+    const socket = await connect(port);
+    const denyScoped = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r3",
+      choice: "deny",
+      scope: "session",
+      signature: "sig",
+    });
+    expect(denyScoped.error?.code).toBe(ShannonError.BAD_PARAMS);
+    const badScope = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r4",
+      choice: "allow",
+      scope: "forever",
+      signature: "sig",
+    });
+    expect(badScope.error?.code).toBe(ShannonError.BAD_PARAMS);
+    expect(fetchMock).not.toHaveBeenCalled();
+    socket.close();
+  });
+
+  it("approval.state reads the session mode and approval.set tightens to readonly", async () => {
+    const jsonResponse = (status: number, body: unknown): Response =>
+      ({
+        status,
+        ok: status >= 200 && status < 300,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response;
+    const fetchMock = vi.fn<typeof fetch>(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/approval/mode") && (init as RequestInit | undefined)?.method === "POST") {
+        return jsonResponse(200, { mode: "readonly" });
+      }
+      return jsonResponse(200, { mode: "auto-edit" });
+    });
+    const handlers = createEngineHandlers({
+      engineWsUrl: "ws://127.0.0.1:9",
+      engineHttpBaseUrl: "http://engine:33420",
+      version: "test",
+      logger,
+      engineClientFactory: fakeFactory({ current: null }, { script: [] }),
+      fetchImpl: fetchMock,
+    });
+    const { port } = await start(handlers);
+    const socket = await connect(port);
+    const stateRes = await rpc(socket, "shannon/approval.state", {});
+    expect(stateRes.error).toBeUndefined();
+    expect(stateRes.result).toEqual({ mode: "auto-edit" });
+
+    const setRes = await rpc(socket, "shannon/approval.set", { mode: "readonly" });
+    expect(setRes.result).toEqual({ mode: "readonly" });
+    const post = fetchMock.mock.calls.find(
+      ([u, i]) => String(u).includes("/api/approval/mode") && (i as RequestInit).method === "POST",
+    );
+    expect(post).toBeTruthy();
+    // Open-mode harness has no bound session (session_id: null) — the live
+    // gateway always carries the paired device's engine session id.
+    expect(JSON.parse((post![1] as RequestInit).body as string)).toMatchObject({
+      mode: "readonly",
+    });
+
+    // Escalation attempts never leave the gateway.
+    const escalate = await rpc(socket, "shannon/approval.set", { mode: "full-auto" });
+    expect(escalate.error?.code).toBe(ShannonError.BAD_PARAMS);
+    expect(
+      fetchMock.mock.calls.filter(([u, i]) => String(u).includes("/api/approval/mode") && (i as RequestInit).method === "POST"),
+    ).toHaveLength(1);
+    socket.close();
+  });
+
   it("health reports engine up on 2xx and down on connection failure", async () => {
     const up = vi.fn<typeof fetch>(async () => mockResponse(200, ""));
     const handlers = createEngineHandlers({

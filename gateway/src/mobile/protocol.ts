@@ -45,6 +45,8 @@ export type ShannonMethod =
   | "shannon/device.list"
   | "shannon/device.revoke"
   | "shannon/approval.list"
+  | "shannon/approval.state"
+  | "shannon/approval.set"
   | "shannon/session.list"
   | "shannon/session.history"
   | "shannon/push.register";
@@ -74,6 +76,8 @@ export const SHANNON_METHODS = [
   "shannon/device.list",
   "shannon/device.revoke",
   "shannon/approval.list",
+  "shannon/approval.state",
+  "shannon/approval.set",
   "shannon/session.list",
   "shannon/session.history",
   "shannon/push.register",
@@ -109,6 +113,14 @@ export interface ApprovalDecideParams {
   request_id: string;
   /** `"allow" | "deny"` (maps to the engine `approval/respond` choice). */
   choice: "allow" | "deny";
+  /**
+   * P3-3: with `choice: "allow"` — how far the grant reaches. `"once"`
+   * (default) maps to the engine `allow_once`; `"session"` maps to
+   * `always_allow_session` (in-session always-allow, never persisted). A
+   * `session` scope is bound into the decision signature; `deny` rejects any
+   * scope.
+   */
+  scope?: "once" | "session";
   /**
    * Ed25519 signature over the decision message — v2 also binds `timestamp`
    * (see below). Required at runtime whenever the gateway runs with
@@ -427,6 +439,19 @@ export interface MobileApprovalItem {
 }
 
 /** `shannon/approval.list` success — verbatim envelope key per the contract. */
+/** P3-3: result of `shannon/approval.state` — the approval token currently
+ *  in effect for the device's attached session. */
+export interface ApprovalStateResult {
+  mode: string;
+}
+
+/** P3-3: params for `shannon/approval.set` — the mobile TIGHTEN route; the
+ *  gateway only forwards `readonly` (a phone may clamp a session, never
+ *  loosen or escalate it). */
+export interface ApprovalSetParams {
+  mode: "readonly";
+}
+
 export interface ApprovalListResult {
   pendingApprovals: MobileApprovalItem[];
 }

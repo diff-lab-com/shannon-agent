@@ -30,7 +30,7 @@
  * probes the bare device session id first, then that lane-key alias.
  */
 
-import { respondToApproval, type GatewayApprovalChoice } from "../engine/httpClient.js";
+import { getApprovalMode, respondToApproval, setApprovalMode } from "../engine/httpClient.js";
 import { EngineWsClient, type EngineWsClientOptions } from "../engine/wsClient.js";
 import { type EngineEvent } from "../engine/runtime.js";
 import { type Logger } from "../adapters/types.js";
@@ -49,6 +49,8 @@ import {
   type AgentListResult,
   type ApprovalDecideParams,
   type ApprovalListResult,
+  type ApprovalSetParams,
+  type ApprovalStateResult,
   type CancelParams,
   type HealthResult,
   type ModelListResult,
@@ -169,7 +171,7 @@ export interface EngineBridgeOptions {
    * (the Y/N-text settle left the RPC face with §K — this is the only path
    * besides the 300s timeout).
    */
-  approvalDecisionSink?: (requestId: string, choice: GatewayApprovalChoice) => void;
+  approvalDecisionSink?: (requestId: string, choice: "allow" | "deny") => void;
   /**
    * r2-w2d: deny-settle every approval the device still has parked in the
    * dispatch hub — wired to `MobileDispatchHub.cancelPendingApprovals`.
@@ -445,6 +447,23 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           message: 'params.choice must be "allow" or "deny"',
         };
       }
+      // P3-3: scope only rides on an allow — a deny settles regardless of
+      // scope, so an explicit scope on deny is a caller bug, not a no-op.
+      const scope = params.scope ?? "once";
+      if (scope !== "once" && scope !== "session") {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: 'params.scope must be "once" or "session"',
+        };
+      }
+      if (params.choice === "deny" && params.scope != null && params.scope !== "once") {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: 'params.scope is only valid with choice "allow"',
+        };
+      }
       // P1.2: every approval decision MUST be signed by the bound device.
       // Unsigned or invalid signatures are rejected before the engine is
       // touched, so a stolen/ungated connection can't auto-approve a
@@ -465,9 +484,15 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         const deviceId = ctx.sessionId as string;
         let ok = false;
         if (sig.length > 0 && params.timestamp === undefined) {
-          // v1 (legacy, no freshness binding) — byte-for-byte the pre-v2 path.
+          // v1 (legacy, no freshness binding) — byte-for-byte the pre-v2 path
+          // for once-decisions; a session scope is bound into the bytes
+          // (P3-3) so it cannot be forged from a captured once-decision.
           ok =
-            opts.verifyDeviceSignature?.(deviceId, approvalMessage(params.request_id, params.choice), sig) ?? false;
+            opts.verifyDeviceSignature?.(
+              deviceId,
+              approvalMessage(params.request_id, params.choice, scope),
+              sig,
+            ) ?? false;
         } else if (sig.length > 0) {
           // typeof doubles as the TS narrowing guard; Number.isInteger then
           // rejects NaN, ±Infinity and fractions at runtime.
@@ -494,7 +519,7 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           ok =
             opts.verifyDeviceSignature?.(
               deviceId,
-              approvalMessageV2(params.request_id, params.choice, ts),
+              approvalMessageV2(params.request_id, params.choice, ts, scope),
               sig,
             ) ?? false;
         }
@@ -513,7 +538,12 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         await respondToApproval({
           engineBaseUrl: opts.engineHttpBaseUrl,
           requestId: params.request_id,
-          choice: params.choice as GatewayApprovalChoice,
+          choice:
+            params.choice === "deny"
+              ? "deny"
+              : scope === "session"
+                ? "allow_session"
+                : "allow",
           authToken: engineAuthToken,
           fetchImpl,
         });
@@ -529,7 +559,9 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       // a decided approval listed as pending). §K: the same signal also
       // unblocks a dispatched task's parked approval lane.
       opts.approvalRegistry?.resolve(params.request_id);
-      opts.approvalDecisionSink?.(params.request_id, params.choice);
+      // The parked-lane settle only speaks allow/deny — a session grant
+      // settles as allow (the scope lives at the engine, not in the lane).
+      opts.approvalDecisionSink?.(params.request_id, params.choice === "deny" ? "deny" : "allow");
       return { kind: "result", result: { ok: true } satisfies OkResult };
     },
 
@@ -542,6 +574,62 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       if (gate) return gate;
       const pendingApprovals = (opts.approvalRegistry?.listPending() ?? []).map(approvalWireItem);
       return { kind: "result", result: { pendingApprovals } satisfies ApprovalListResult };
+    },
+
+    // ── P3-3: approval-mode transparency + tighten ────────────────────────
+    // The phone may READ the session's current approval token and may
+    // TIGHTEN it to readonly — never loosen or escalate (the engine route
+    // rejects everything else; the gateway parameterizes nothing).
+    "shannon/approval.state": async (_raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
+      try {
+        const { mode } = await getApprovalMode({
+          engineBaseUrl: opts.engineHttpBaseUrl,
+          sessionId: ctx.sessionId as string,
+          authToken: engineAuthToken,
+          fetchImpl,
+        });
+        return { kind: "result", result: { mode } satisfies ApprovalStateResult };
+      } catch (err) {
+        return {
+          kind: "error",
+          code: ShannonError.ENGINE_ERROR,
+          message: (err as Error).message,
+        };
+      }
+    },
+
+    "shannon/approval.set": async (raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
+      const params = (raw ?? {}) as Partial<ApprovalSetParams>;
+      if (params.mode !== "readonly") {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: 'params.mode must be "readonly" (mobile may only tighten)',
+        };
+      }
+      try {
+        const { mode } = await setApprovalMode({
+          engineBaseUrl: opts.engineHttpBaseUrl,
+          sessionId: ctx.sessionId as string,
+          mode: params.mode,
+          authToken: engineAuthToken,
+          fetchImpl,
+        });
+        opts.logger.info(
+          `shannon/approval.set: session ${ctx.sessionId} tightened to ${mode}`,
+        );
+        return { kind: "result", result: { mode } satisfies ApprovalStateResult };
+      } catch (err) {
+        return {
+          kind: "error",
+          code: ShannonError.ENGINE_ERROR,
+          message: (err as Error).message,
+        };
+      }
     },
 
     // ── health ────────────────────────────────────────────────────────────

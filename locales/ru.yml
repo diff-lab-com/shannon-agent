@@ -318,6 +318,7 @@ ui:
   perm_tool: "Инструмент"
   perm_description: "Описание"
   perm_why: "Причина"
+  perm_rule: "Правило"
   approval_edit: "ПРАВКА"
   approval_ask: "СПРОС"
   approval_plan: "ПЛАН"

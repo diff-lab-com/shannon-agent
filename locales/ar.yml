@@ -318,6 +318,7 @@ ui:
   perm_tool: "الأداة"
   perm_description: "الوصف"
   perm_why: "السبب"
+  perm_rule: "قاعدة"
   approval_edit: "تحرير"
   approval_ask: "سؤال"
   approval_plan: "خطة"

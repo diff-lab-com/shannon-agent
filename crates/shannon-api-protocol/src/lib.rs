@@ -160,6 +160,10 @@ pub enum ApprovalDecision {
     AllowOnce,
     #[serde(rename = "always_allow")]
     AlwaysAllow,
+    /// P3-3: in-session always-allow (never persisted). The mobile client's
+    /// "allow for this session" scope maps here.
+    #[serde(rename = "always_allow_session")]
+    AlwaysAllowSession,
     #[serde(rename = "deny")]
     Deny,
 }
@@ -169,6 +173,26 @@ pub enum ApprovalDecision {
 pub struct ApprovalRespondRequest {
     pub request_id: String,
     pub choice: ApprovalDecision,
+}
+
+/// P3-3: response for `GET /api/approval/mode` — the approval token
+/// currently in effect for the session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct ApprovalModeState {
+    /// One of the seven approval tokens (`ask`, `plan`, `auto-edit`,
+    /// `full-auto`, `readonly`, `dontAsk`, `bypassPermissions`).
+    pub mode: String,
+}
+
+/// P3-3: body for `POST /api/approval/mode`. The mobile gateway may only
+/// TIGHTEN — the route rejects everything except `readonly`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct ApprovalModeRequest {
+    /// Target session. Unknown ids are rejected (the gateway only ever
+    /// tightens a session it is attached to).
+    pub session_id: String,
+    /// Must be `readonly` (the mobile one-tap tighten).
+    pub mode: String,
 }
 
 // ── SSE event-name contract ─────────────────────────────────────────────

@@ -8,9 +8,11 @@
  *
  * Uses the global `fetch` (Node 20+) — no extra dependency.
  *
- * Choice mapping: the gateway adapter exposes `allow | deny`; the engine's
- * wire enum is `allow_once | always_allow | deny`. We map `allow → allow_once`
- * (the safe one-shot). "always_allow" is a future platform-UX option.
+ * Choice mapping: the gateway adapter exposes `allow | deny | allow_session`;
+ * the engine's wire enum is `allow_once | always_allow | always_allow_session |
+ * deny`. We map `allow → allow_once` (the safe one-shot) and
+ * `allow_session → always_allow_session` (P3-3: in-session grant, never
+ * persisted). "always_allow" (persisted) stays a non-gateway option.
  */
 
 import { ENGINE_HTTP_TIMEOUT_MS } from "../lib/netTimeouts.js";
@@ -18,7 +20,7 @@ import { ENGINE_HTTP_TIMEOUT_MS } from "../lib/netTimeouts.js";
 // Re-exported for callers/tests that pin the approval POST budget.
 export { ENGINE_HTTP_TIMEOUT_MS };
 
-export type GatewayApprovalChoice = "allow" | "deny";
+export type GatewayApprovalChoice = "allow" | "deny" | "allow_session";
 
 export interface RespondToApprovalOptions {
   /** Engine HTTP base URL, e.g. `http://127.0.0.1:33420`. */
@@ -40,7 +42,12 @@ export async function respondToApproval(
   opts: RespondToApprovalOptions,
 ): Promise<void> {
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const wireChoice = opts.choice === "allow" ? "allow_once" : "deny";
+  const wireChoice =
+    opts.choice === "allow"
+      ? "allow_once"
+      : opts.choice === "allow_session"
+        ? "always_allow_session"
+        : "deny";
   const url = `${opts.engineBaseUrl.replace(/\/+$/, "")}/api/approval/respond`;
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (opts.authToken) headers.authorization = `Bearer ${opts.authToken}`;
@@ -56,4 +63,56 @@ export async function respondToApproval(
       `approval respond failed: HTTP ${res.status} from ${url}: ${body}`,
     );
   }
+}
+
+/** P3-3: options for the approval-mode read/tighten helpers. */
+export interface ApprovalModeOptions {
+  engineBaseUrl: string;
+  /** The device's attached engine session (the mobile ctx.sessionId). */
+  sessionId: string;
+  authToken?: string | null;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}
+
+/** P3-3: `GET /api/approval/mode` — the token currently in effect. */
+export async function getApprovalMode(
+  opts: ApprovalModeOptions,
+): Promise<{ mode: string }> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const url = `${opts.engineBaseUrl.replace(/\/+$/, "")}/api/approval/mode?session_id=${encodeURIComponent(opts.sessionId)}`;
+  const headers: Record<string, string> = {};
+  if (opts.authToken) headers.authorization = `Bearer ${opts.authToken}`;
+  const res = await fetchImpl(url, {
+    method: "GET",
+    headers,
+    signal: AbortSignal.timeout(opts.timeoutMs ?? ENGINE_HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "<no body>");
+    throw new Error(`approval mode read failed: HTTP ${res.status} from ${url}: ${body}`);
+  }
+  return (await res.json()) as { mode: string };
+}
+
+/** P3-3: `POST /api/approval/mode` — the mobile TIGHTEN route; the engine
+ *  rejects everything except `readonly`. */
+export async function setApprovalMode(
+  opts: ApprovalModeOptions & { mode: "readonly" },
+): Promise<{ mode: string }> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const url = `${opts.engineBaseUrl.replace(/\/+$/, "")}/api/approval/mode`;
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (opts.authToken) headers.authorization = `Bearer ${opts.authToken}`;
+  const res = await fetchImpl(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ session_id: opts.sessionId, mode: opts.mode }),
+    signal: AbortSignal.timeout(opts.timeoutMs ?? ENGINE_HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "<no body>");
+    throw new Error(`approval mode set failed: HTTP ${res.status} from ${url}: ${body}`);
+  }
+  return (await res.json()) as { mode: string };
 }

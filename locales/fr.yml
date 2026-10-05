@@ -318,6 +318,7 @@ ui:
   perm_tool: "Outil"
   perm_description: "Description"
   perm_why: "Pourquoi"
+  perm_rule: "Règle"
   approval_edit: "ÉDITION"
   approval_ask: "DEMANDE"
   approval_plan: "PLAN"
