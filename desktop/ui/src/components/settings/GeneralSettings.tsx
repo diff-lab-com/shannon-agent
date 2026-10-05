@@ -10,6 +10,7 @@ import { useI18n, SUPPORTED_LOCALES, type LocalePref } from '@/i18n'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { readDensityPref, setDensityPref, type DensityPref } from '@/lib/density'
+import { readShowThinkingPref, setShowThinkingPref, type ShowThinkingPref } from '@/lib/thinkingPref'
 import { getLinkTarget, setLinkTarget as setLinkTargetPref, type LinkTarget } from '@/lib/openLink'
 import { Switch } from '@/components/ui/switch'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
@@ -44,6 +45,15 @@ export default function GeneralSettings() {
     setDensityPref(d)
     // Re-apply immediately: resolve against the current sidebar mode.
     import('@/lib/density').then(m => m.initDensity())
+  }
+  // Settings R3 T9 — 显示思考过程 three-tier display pref. Purely
+  // front-end localStorage ('shannon.chat.showThinking'): ChatMessage /
+  // StreamingResponse read it on every render, so a pick here applies to
+  // the message flow instantly with no backend round-trip.
+  const [showThinking, setShowThinkingState] = useState<ShowThinkingPref>(readShowThinkingPref)
+  const handleShowThinkingChange = (next: ShowThinkingPref) => {
+    setShowThinkingState(next)
+    setShowThinkingPref(next)
   }
   const intl = useIntl()
   const navigate = useNavigate()
@@ -277,6 +287,47 @@ export default function GeneralSettings() {
                 {intl.formatMessage({ id: opt.labelKey })}
               </Button>
             ))}
+          </div>
+        </section>
+
+        {/* Settings R3 T9 — show thinking: three-tier display pref for the
+            model's reasoning blocks (history bubbles + live stream). Placed
+            next to the other display cards (language / density); segmented
+            control mirrors the approval-mode one. */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>psychology</span>
+            <h3 className="font-headline-md text-headline-md">{t('settings.general.showThinking.title')}</h3>
+            <span className="flex-1" />
+            <EffectBadge kind="instant" />
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.general.showThinking.help')}</p>
+          <div role="radiogroup" aria-label={t('settings.general.showThinking.title')} data-testid="settings-show-thinking-group">
+            <div className="flex rounded-xl bg-surface-container-low p-xs gap-xs border border-outline-variant/30">
+              {([
+                { id: 'all' as const, labelKey: 'settings.general.showThinking.all' },
+                { id: 'first' as const, labelKey: 'settings.general.showThinking.first' },
+                { id: 'none' as const, labelKey: 'settings.general.showThinking.none' },
+              ]).map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={showThinking === opt.id}
+                  data-testid={`settings-show-thinking-${opt.id}`}
+                  onClick={() => handleShowThinkingChange(opt.id)}
+                  className={cn(
+                    'flex-1 min-w-0 px-xs py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
+                    'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
+                    showThinking === opt.id
+                      ? 'bg-primary text-on-primary font-bold shadow-e1'
+                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-high',
+                  )}
+                >
+                  <span className="block truncate">{t(opt.labelKey)}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </section>
 

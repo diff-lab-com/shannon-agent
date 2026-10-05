@@ -14,6 +14,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import { useComposer } from './ComposerContext'
 import * as api from '@/lib/tauri-api'
+import { firstAssistantOfTurnFlags } from '@/lib/thinkingPref'
 // Virtualization only kicks in past the threshold. Below it, the overhead
 // of measuring/positioning outweighs the win from fewer DOM nodes — and
 // jsdom can't provide real dimensions, so tests would render zero items.
@@ -243,6 +244,11 @@ export default function MessageArea({
     () => (lastAssistantIndex >= 0 ? regenerateInfoFor(messages, lastAssistantIndex, checkpointTurns) : null),
     [messages, lastAssistantIndex, checkpointTurns],
   )
+  // Settings R3 T9: which assistant messages are "first of their turn" (the
+  // first assistant after the most recent user message) — computed once over
+  // the whole list here, so MessageBubble just receives the boolean for the
+  // 'first' thinking-display tier. See lib/thinkingPref for the turn math.
+  const thinkingFlags = useMemo(() => firstAssistantOfTurnFlags(messages), [messages])
   const { error, errorKind, providerStatus } = useCatalog()
   const navigate = useNavigate()
   const t = useT()
@@ -292,6 +298,7 @@ export default function MessageArea({
     onEditMessage,
     searchFlash: searchFlashIndex === index,
     regenerate: index === lastAssistantIndex ? regenerateInfo : undefined,
+    isFirstAssistantOfTurn: thinkingFlags[index] ?? false,
   })
 
   // Stable ref identity: an inline arrow here would be a NEW function every
