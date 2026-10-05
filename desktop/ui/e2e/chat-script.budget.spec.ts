@@ -253,8 +253,15 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     // bypass flag — the snapshot proves the wire args, the resend target,
     // and the forwarded attachment (A-2's preservation, upstream since
     // d3d40452).
+    //
+    // S2-4a: the resend now rides the pre-send vision pre-check
+    // (`check_vision_send` roundtrip) before it reaches the wire, so
+    // sends[1] lands a beat AFTER the banner clears. toMatchObject on a
+    // non-object received fails instantly (no auto-retry), so poll the
+    // snapshot until the bypass turn is recorded, then pin it.
     await actionButtons.filter({ hasText: en['budget.exceeded.continueLast'] }).click()
     await expect(banner).toHaveCount(0)
+    await expect.poll(async () => (await mockSnapshot(page)).sends.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(2)
     const snapshot = await mockSnapshot(page)
     expect(snapshot.sends[1]).toMatchObject({
       turnIndex: 1,

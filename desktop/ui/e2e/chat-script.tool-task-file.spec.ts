@@ -91,8 +91,13 @@ test.describe('scripted chat backend — tool-task-file (journey #3)', () => {
   test('FileCard action surface: pdf preview fails honest, csv builds a draft, save-as cancel is silent, reveal/open toast', async ({ page }) => {
     test.setTimeout(90_000)
     await loadChatScript(page, 'tool-task-file', test.info())
-    await page.getByTestId('desktop-session-row-script-sess-files').click()
-    await expect(page.getByRole('heading', { name: 'Generated files' })).toBeVisible({ timeout: 10_000 })
+    // Same mount/swallow race the budget spec documents: a row click landing
+    // during hydration switches nothing, and CI runners regularly lose this
+    // race with a bare click + single expect. Retry the pair.
+    await expect(async () => {
+      await page.getByTestId('desktop-session-row-script-sess-files').click()
+      await expect(page.getByRole('heading', { name: 'Generated files' })).toBeVisible()
+    }).toPass({ timeout: 15_000 })
 
     // Three generated files render as FileCards under their tool blocks.
     const pdfCard = page.getByTestId('file-card').filter({ hasText: 'report.pdf' })
