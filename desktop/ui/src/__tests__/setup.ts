@@ -366,6 +366,14 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   setProviderModels: vi.fn().mockResolvedValue({
     provider_id: '', model_profile: 'default', models: [],
   }),
+  // S3-4 (推荐降级链): default empty recommendation + committed-echo no-op;
+  // the fallback-panel tests override per scenario.
+  recommendFallbackChain: vi.fn().mockResolvedValue({
+    provider_id: '', model_profile: 'default', current_model: null, hops: [],
+  }),
+  setProviderFallbackModels: vi.fn().mockResolvedValue({
+    provider_id: '', model_profile: 'default', fallback_models: [],
+  }),
   deleteProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   setActiveProvider: vi.fn().mockResolvedValue(undefined),
   // ADR-0005 P4.12 — fan-out probe. Default: empty roster.

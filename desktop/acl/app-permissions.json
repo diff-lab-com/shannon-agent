@@ -2027,6 +2027,15 @@
       }
     },
     {
+      "identifier": "allow-recommend-fallback-chain",
+      "description": "Enables the recommend_fallback_chain command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "recommend_fallback_chain"
+        ]
+      }
+    },
+    {
       "identifier": "allow-refresh-model-catalog",
       "description": "Enables the refresh_model_catalog command without any pre-configured scope.",
       "commands": {
@@ -2482,6 +2491,15 @@
       "commands": {
         "allow": [
           "set_project_appearance"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-provider-fallback-models",
+      "description": "Enables the set_provider_fallback_models command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_provider_fallback_models"
         ]
       }
     },
@@ -2980,9 +2998,11 @@
         "allow-refresh-model-catalog",
         "allow-remove-provider-key",
         "allow-rename-provider-profile",
+        "allow-recommend-fallback-chain",
         "allow-save-provider",
         "allow-set-active-provider",
         "allow-set-active-provider-profile",
+        "allow-set-provider-fallback-models",
         "allow-set-provider-models",
         "allow-test-all-providers",
         "allow-test-provider-connection",

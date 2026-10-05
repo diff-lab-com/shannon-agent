@@ -583,6 +583,63 @@ export interface ProviderModelsOutcome {
   models: DeclaredModelInput[]
 }
 
+// --- S3-4 (推荐降级链): one-click recommended fallback chain ---
+
+/** One hop of a recommended chain. `entry` is the literal `fallback_models`
+ *  string — bare id = stays on the provider (model swap), `provider/model` =
+ *  switches to that provider within the profile roster. Mirrors the Rust
+ *  `FallbackHop`. */
+export interface FallbackHop {
+  entry: string
+  model: string
+  provider_id: string
+  provider_label: string
+  same_provider: boolean
+  tier: 'pro' | 'standard' | 'fast' | string
+}
+
+/** A recommended chain from `recommend_fallback_chain` — candidates only;
+ *  nothing is persisted and no failover is enabled until the user applies
+ *  the chain through `setProviderFallbackModels`. */
+export interface RecommendedFallbackChain {
+  provider_id: string
+  model_profile: string
+  /** The slot's concrete current model when known (never recommended). */
+  current_model: string | null
+  hops: FallbackHop[]
+}
+
+/// Compute a recommended fallback chain for one provider slot (S3-4): same
+/// family first, tiers descending (pro → standard → fast, at most two);
+/// thin families are topped up from the same profile's other connected
+/// providers (one hop each, qualified `provider/model` entries). Read-only.
+export async function recommendFallbackChain(
+  providerId: string,
+  profile?: string,
+): Promise<RecommendedFallbackChain> {
+  return invoke('recommend_fallback_chain', { providerId, profile: profile ?? null })
+}
+
+/// Echo of the committed chain from `set_provider_fallback_models`.
+export interface ProviderFallbackOutcome {
+  provider_id: string
+  model_profile: string
+  fallback_models: string[]
+}
+
+/// Persist the user-confirmed fallback chain for one provider slot — the
+/// explicit-confirmation half of S3-4 (nothing writes `fallback_models`
+/// without this call). Sanitized (trim / drop-empty / dedupe) and capped at
+/// the engine's 3-target failover limit backend-side; an empty list clears
+/// the chain. Emits `CONFIG_UPDATED { key: "provider_fallback_models" }`.
+export async function setProviderFallbackModels(
+  providerId: string,
+  fallbackModels: string[],
+  profile?: string,
+): Promise<ProviderFallbackOutcome> {
+  return invoke('set_provider_fallback_models', { providerId, fallbackModels, profile: profile ?? null })
+}
+
 /// Delete a managed provider by id. Returns the updated (masked) file.
 export async function deleteProvider(id: string): Promise<ProvidersFile> {
   return invoke('delete_provider', { id })
