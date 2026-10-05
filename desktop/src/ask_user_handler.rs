@@ -1,17 +1,17 @@
 //! Desktop ask_user question handler — the GUI replacement for the terminal
-//! stdin [`QuestionHandler`](shannon_tools::ask_user::QuestionHandler)
+//! stdin `QuestionHandler` (`shannon_tools::ask_user::QuestionHandler`)
 //! (Settings R3 T8, C3 + R8).
 //!
 //! `register_default_tools_with_providers` registers `ask_user_question`
 //! backed by `TerminalQuestionHandler`, which blocks on stdin — unusable
 //! under a GUI (EOF → `AskUserError::NoInput`, or a hung read). This module
-//! swaps the same-named tool for one backed by [`DesktopQuestionHandler`]:
+//! swaps the same-named tool for one backed by `DesktopQuestionHandler`:
 //!
 //! 1. `ask_question` mints a `request_id`, parks a oneshot sender in
 //!    `AppState::pending_questions` and emits `ask-user-request`.
 //! 2. The frontend's AskUserCard renders the question; the answer travels
 //!    back through the [`respond_ask_user`] command (remove + send —
-//!    repeating [`commands_permissions::respond_permission`]'s contract,
+//!    repeating `commands_permissions::respond_permission`'s contract,
 //!    but idempotent: an unknown/expired id is a logged `Ok`).
 //! 3. With 提问自动继续 (`chat_ask_user_auto_continue`, default off) the
 //!    wait is bounded by [`ASK_USER_TIMEOUT_SECS`]; on timeout the pending

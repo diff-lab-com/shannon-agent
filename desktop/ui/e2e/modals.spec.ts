@@ -12,6 +12,11 @@ import { test, expect } from '@playwright/test'
  * It's reachable purely from mock-mode routes (no Tauri command beyond
  * configure('clear_cache')).
  *
+ * Requires dev sidebar mode: /settings/advanced sits behind the
+ * RequireDevMode route guard (Settings R3, T1), which bounces simple-mode
+ * sessions to /settings/general. Each test seeds
+ * `localStorage['shannon-sidebar-mode'] = 'dev'` before navigation.
+ *
  * Backdrop-click close was initially omitted: it was flaky in headless
  * Chromium against the pre-R1b hand-rolled overlay's
  * e.target === e.currentTarget idiom. R1b moved outside-press detection
@@ -21,6 +26,7 @@ import { test, expect } from '@playwright/test'
  */
 test.describe('Modal interactions (R5 regression net)', () => {
   test('Escape closes a Modal opened from AdvancedSettings', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('shannon-sidebar-mode', 'dev'))
     await page.goto('/settings/advanced')
     await page.waitForLoadState('networkidle')
 
@@ -37,6 +43,7 @@ test.describe('Modal interactions (R5 regression net)', () => {
   })
 
   test('triggering button regains focus after Modal closes', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('shannon-sidebar-mode', 'dev'))
     await page.goto('/settings/advanced')
     await page.waitForLoadState('networkidle')
 
@@ -57,6 +64,7 @@ test.describe('Modal interactions (R5 regression net)', () => {
   })
 
   test('clicking the backdrop closes the Modal', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('shannon-sidebar-mode', 'dev'))
     await page.goto('/settings/advanced')
     await page.waitForLoadState('networkidle')
 

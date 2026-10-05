@@ -326,7 +326,7 @@ pub struct TerminalSettings {
     /// argv) so it sources the profile chain (`/etc/profile`, `~/.profile`,
     /// `~/.zprofile`, …) — inheriting login-time env, proxies and kube
     /// config. Default off. Only injected for bash/zsh/fish/ksh (see
-    /// [`apply_login_shell`]); never on Windows.
+    /// `apply_login_shell`); never on Windows.
     pub login_shell: bool,
     /// Task 12 (R3): xterm.js `fontFamily` override for terminals opened
     /// afterwards. Blank / missing = the frontend's built-in monospace
@@ -846,7 +846,7 @@ impl TerminalManager {
     /// argument > `configured_shell` (persisted `[terminal].shell`) >
     /// `$SHELL` (PowerShell on Windows). When `login_shell` is on (Task 12)
     /// a login-capable program gets `-l` prepended — see
-    /// [`apply_login_shell`].
+    /// `apply_login_shell`.
     ///
     /// `spawned_by_window` is the calling webview window's label (P3-2) —
     /// `None` only in tests / non-window callers. It rides on
