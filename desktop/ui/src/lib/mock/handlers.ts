@@ -708,6 +708,40 @@ export const handlers: Record<string, MockHandler> = {
       models: args.models,
     }
   },
+  // S3-4 (推荐降级链): demo recommendation = the demo roster's other
+  // providers as qualified hops (candidates only — nothing persisted until
+  // set_provider_fallback_models below). set stores the chain on the demo
+  // connection so the apply round trip is observable in demos.
+  async recommend_fallback_chain(args: { providerId: string }) {
+    await delay(200)
+    const hops = state.providers.providers
+      .filter(p => p.id !== args.providerId)
+      .slice(0, 2)
+      .map(p => ({
+        entry: `${p.id}/model-${p.id}`,
+        model: `model-${p.id}`,
+        provider_id: p.id,
+        provider_label: p.display_name,
+        same_provider: false,
+        tier: 'pro',
+      }))
+    return {
+      provider_id: args.providerId,
+      model_profile: 'default',
+      current_model: null,
+      hops,
+    }
+  },
+  async set_provider_fallback_models(args: { providerId: string; fallbackModels: string[] }) {
+    await delay(120)
+    const conn = state.providers.providers.find(p => p.id === args.providerId)
+    if (conn) (conn as { fallback_models?: string[] }).fallback_models = args.fallbackModels
+    return {
+      provider_id: args.providerId,
+      model_profile: 'default',
+      fallback_models: args.fallbackModels,
+    }
+  },
   async delete_provider(args: { id: string }) {
     await delay(100)
     state.providers.providers = state.providers.providers.filter(p => p.id !== args.id)

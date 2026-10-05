@@ -197,6 +197,11 @@ fn main() {
             // S2-1 (模型仓固化) — persist the AddProviderModal fetch
             // curation into the provider slot's `models` declarations.
             commands_models::set_provider_models,
+            // S3-4 (推荐降级链) — one-click recommended fallback chain:
+            // candidates-only computation + the explicit-confirmation write
+            // into the provider slot's `fallback_models` (never automatic).
+            commands_models::recommend_fallback_chain,
+            commands_models::set_provider_fallback_models,
             // R4-3 (desktop slice) — per-provider multi-key management
             // (Settings → Models "API keys" panel; same credential store
             // the CLI's `providers keys` drives).

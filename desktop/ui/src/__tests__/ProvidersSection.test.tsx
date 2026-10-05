@@ -13,7 +13,6 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { ProvidersSection } from '@/components/settings/models-settings/ProvidersSection'
 import * as api from '@/lib/tauri-api'
 import type { ProviderConnection, ProvidersFile } from '@/types'
-
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
@@ -127,5 +126,143 @@ describe('ProvidersSection — card-level Test connection (P0-7)', () => {
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Quota exhausted')),
     )
+  })
+})
+
+// ---- S3-4 (推荐降级链): card → recommended-fallback-chain panel → apply ----
+//
+// The behavioral red line pinned here: the recommendation is candidates-only
+// until the user presses "Save this chain" INSIDE the panel — the card
+// toggle must never write `fallback_models` by itself, and apply must go
+// through setProviderFallbackModels (the surgical field write), then refresh
+// the roster via listProviders (the same refresh path key mutations use).
+
+describe('ProvidersSection — recommended fallback chain (S3-4)', () => {
+  const recommendChain = vi.mocked(api.recommendFallbackChain)
+  const setFallbackModels = vi.mocked(api.setProviderFallbackModels)
+  const listProviders = vi.mocked(api.listProviders)
+
+  const CHAIN = {
+    provider_id: 'prov-anthropic',
+    model_profile: 'default',
+    current_model: 'claude-sonnet-4-6',
+    hops: [
+      {
+        entry: 'claude-haiku-4-5',
+        model: 'claude-haiku-4-5',
+        provider_id: 'prov-anthropic',
+        provider_label: 'Anthropic',
+        same_provider: true,
+        tier: 'fast',
+      },
+      {
+        entry: 'prov-deepseek/deepseek-chat',
+        model: 'deepseek-chat',
+        provider_id: 'prov-deepseek',
+        provider_label: 'DeepSeek',
+        same_provider: false,
+        tier: 'standard',
+      },
+    ],
+  }
+
+  beforeEach(() => {
+    recommendChain.mockResolvedValue(CHAIN)
+    setFallbackModels.mockResolvedValue({
+      provider_id: 'prov-anthropic',
+      model_profile: 'default',
+      fallback_models: CHAIN.hops.map((h) => h.entry),
+    })
+    listProviders.mockResolvedValue({
+      active_provider_id: 'prov-anthropic',
+      providers: [
+        { ...KEYED, fallback_models: CHAIN.hops.map((h) => h.entry) },
+      ],
+    })
+  })
+
+  it('opens the panel from the card, renders the hops, and APPLIES only on explicit confirmation', async () => {
+    const { toast } = await import('sonner')
+    const onChange = vi.fn()
+    const file: ProvidersFile = { active_provider_id: null, providers: [KEYED] }
+    render(
+      <ProvidersSection providersFile={file} loading={false} onChange={onChange} onActivated={async () => {}} />,
+    )
+
+    // Panel closed → no recommendation has been computed, nothing written.
+    expect(screen.queryByTestId('recommend-fallback-panel')).not.toBeInTheDocument()
+    expect(recommendChain).not.toHaveBeenCalled()
+    expect(setFallbackModels).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('provider-fallback-toggle-prov-anthropic'))
+    await waitFor(() => expect(recommendChain).toHaveBeenCalledWith('prov-anthropic'))
+
+    // Candidates render with per-hop semantics; still nothing written.
+    await waitFor(() => expect(screen.getAllByTestId('recommend-fallback-hop')).toHaveLength(2))
+    expect(setFallbackModels).not.toHaveBeenCalled()
+
+    // Explicit confirmation → write + roster refresh + success toast.
+    fireEvent.click(screen.getByTestId('recommend-fallback-apply'))
+    await waitFor(() =>
+      expect(setFallbackModels).toHaveBeenCalledWith(
+        'prov-anthropic',
+        CHAIN.hops.map((h) => h.entry),
+      ),
+    )
+    await waitFor(() => expect(listProviders).toHaveBeenCalled())
+    await waitFor(() => expect(onChange).toHaveBeenCalled())
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    // The panel closes after a committed apply (fallback target cleared).
+    await waitFor(() =>
+      expect(screen.queryByTestId('recommend-fallback-panel')).not.toBeInTheDocument(),
+    )
+  })
+
+  it('an empty recommendation renders the empty state with no apply button', async () => {
+    recommendChain.mockResolvedValue({
+      provider_id: 'prov-anthropic',
+      model_profile: 'default',
+      current_model: null,
+      hops: [],
+    })
+    renderRoster([KEYED])
+    fireEvent.click(screen.getByTestId('provider-fallback-toggle-prov-anthropic'))
+    await waitFor(() => expect(recommendChain).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByTestId('recommend-fallback-empty')).toBeInTheDocument())
+    expect(screen.queryByTestId('recommend-fallback-apply')).not.toBeInTheDocument()
+    expect(setFallbackModels).not.toHaveBeenCalled()
+  })
+
+  it('a recommendation failure surfaces the inline failed state, not a write', async () => {
+    recommendChain.mockRejectedValue(new Error('boom'))
+    renderRoster([KEYED])
+    fireEvent.click(screen.getByTestId('provider-fallback-toggle-prov-anthropic'))
+    await waitFor(() => expect(screen.getByTestId('recommend-fallback-failed')).toBeInTheDocument())
+    expect(setFallbackModels).not.toHaveBeenCalled()
+  })
+
+  it('the Test-all panel opens the same panel for a rate-limited row', async () => {
+    const testAll = vi.mocked(api.testAllProviders)
+    testAll.mockResolvedValue([
+      {
+        id: 'prov-anthropic',
+        label: 'Anthropic',
+        provider_kind: 'anthropic',
+        result: { kind: 'rate_limited' },
+        latency_ms: 42,
+      },
+    ])
+    renderRoster([KEYED])
+    fireEvent.click(screen.getByRole('button', { name: 'Test all' }))
+    await waitFor(() => expect(testAll).toHaveBeenCalled())
+    // Failed row carries the affordance (this IS the moment a chain pays off).
+    await waitFor(() =>
+      expect(screen.getByTestId('test-all-fallback-prov-anthropic')).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('test-all-fallback-prov-anthropic'))
+    await waitFor(() => expect(screen.getByTestId('recommend-fallback-panel')).toBeInTheDocument())
+    await waitFor(() => expect(recommendChain).toHaveBeenCalledWith('prov-anthropic'))
+    // Still candidates-only until the user confirms inside the panel.
+    expect(setFallbackModels).not.toHaveBeenCalled()
   })
 })

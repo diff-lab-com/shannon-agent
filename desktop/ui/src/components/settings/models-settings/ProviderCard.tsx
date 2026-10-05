@@ -19,6 +19,8 @@ export function ProviderCard({
   onDelete,
   onKeys,
   keysOpen = false,
+  onFallback,
+  fallbackOpen = false,
 }: {
   conn: ProviderConnection
   isActive: boolean
@@ -33,6 +35,9 @@ export function ProviderCard({
   /** R4-3: open/close the inline API-keys management panel. */
   onKeys: () => void
   keysOpen?: boolean
+  /** S3-4: open/close the inline recommended-fallback-chain panel. */
+  onFallback: () => void
+  fallbackOpen?: boolean
 }) {
   const hasKey = conn.has_api_key
   const info = KIND_INFO[conn.kind]
@@ -92,6 +97,21 @@ export function ProviderCard({
           aria-expanded={keysOpen}
         >
           <span className="material-symbols-outlined icon-md">vpn_key</span>
+        </Button>
+        {/* S3-4: one-click recommended fallback chain. Same affordance
+            convention as the keys toggle (open state = color + aria). */}
+        <Button
+          variant="ghost"
+          className={cn(
+            'px-sm py-xs cursor-pointer',
+            fallbackOpen ? 'text-primary font-bold' : 'text-on-surface-variant hover:text-primary',
+          )}
+          onClick={onFallback}
+          aria-label={t('settings.models.providers.recommendFallback')}
+          data-testid={`provider-fallback-toggle-${conn.id}`}
+          aria-expanded={fallbackOpen}
+        >
+          <span className="material-symbols-outlined icon-md">alt_route</span>
         </Button>
         {!isActive ? (
           <Button

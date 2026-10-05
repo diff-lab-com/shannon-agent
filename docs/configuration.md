@@ -289,6 +289,15 @@ A provider's credential-store entry can hold several API keys. The **active key 
 
   `add` accepts only a **reference** (`env:VAR_NAME` or `store:SERVICE`) — never a raw key (the CLI never accepts plaintext secrets). Raw keys are entered via `/connect` (REPL) or the desktop Settings, which write the same credential store; re-connecting replaces the active key and keeps the rest of the list. Rotation state is read at request time: `activate` takes effect on the next request, while an already-running session keeps the keys it resolved at start.
 
+### Model failover (`fallback_models`)
+
+A provider slot in `providers.toml` can carry a `fallback_models` list — the degradation ladder the engine climbs when the provider itself is struggling (ordered after key rotation: **all keys of the primary provider are exhausted first**, then the chain).
+
+- **Syntax** — each entry is either a bare model id (`"glm-5-flash"`: same provider, model swap) or a qualified `provider/model` id (`"deepseek/deepseek-chat"`: switch to that provider **within the same named profile** — the named provider must be in the profile's roster, otherwise the entry is skipped with a warning at resolve time). The chain never exceeds 3 targets; the active target itself and empty ids are skipped.
+- **Trigger** — only rate-limit (429) and server errors (5xx), and only **before a stream starts**: the primary model uses its full retry budget first, then each hop gets one. Every hop emits a `Model fallback` notice into the session event stream.
+- **Degradation semantics** — the chain covers **pre-stream failures only**: a drop mid-stream reconnects on the same provider and never fails over across providers. And a session pinned to a model (the composer's pin) never fails over — the pin opts the session out of model-level automatic failover (key rotation still applies, see above).
+- **Desktop one-click** — Settings → Models: each provider card (and the Test-all panel's rate-limited / quota-exhausted rows) offers a **Suggested fallback chain** computed from the profile roster and the tier catalog (same family first, tiers descending pro → standard → fast; thin families topped up from the roster's other providers). The recommendation is candidates-only — nothing is written and no failover is enabled until you press **Save this chain**.
+
 ## Configuration files & precedence
 
 `config.toml` / `.shannon.toml` accept these flat keys (project overrides global):

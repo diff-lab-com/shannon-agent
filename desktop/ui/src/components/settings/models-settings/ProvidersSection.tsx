@@ -14,6 +14,7 @@ import { toastTestResult } from './utils'
 import { TestAllResultsPanel } from './TestAllResultsPanel'
 import { ProviderCard } from './ProviderCard'
 import { ProviderKeysPanel } from './ProviderKeysPanel'
+import { RecommendedFallbackPanel } from './RecommendedFallbackPanel'
 
 export function ProvidersSection({
   providersFile,
@@ -38,6 +39,10 @@ export function ProvidersSection({
   // R4-3 (desktop slice): the provider whose "API keys" panel is open —
   // rendered INLINE below the roster (no popup primitives).
   const [keysTarget, setKeysTarget] = useState<ProviderConnection | null>(null)
+  // S3-4: the provider whose "recommended fallback chain" panel is open —
+  // same inline pattern. The panel is candidates-only until the user
+  // confirms the apply inside it (failover is never enabled automatically).
+  const [fallbackTarget, setFallbackTarget] = useState<ProviderConnection | null>(null)
   // P0-4: pending activation gated behind the prompt-cache bust warning
   // (only shown when the current chat session already has usage).
   const { currentSessionId } = useSessions()
@@ -138,6 +143,19 @@ export function ProvidersSection({
     await onActivated()
   }
 
+  // S3-4: a fallback chain was committed backend-side — refresh the roster
+  // (the connection's `fallback_models` changed) the same way key
+  // mutations do. No status/catalog refresh needed: the chain only affects
+  // failover resolution (rebuild happens backend-side).
+  const handleFallbackApplied = async () => {
+    try {
+      onChange(await api.listProviders())
+    } catch (e) {
+      console.warn('listProviders after fallback write failed:', e)
+    }
+    setFallbackTarget(null)
+  }
+
   const handleTestAll = async () => {
     if (testAllRunning) return
     setTestAllRunning(true)
@@ -209,6 +227,8 @@ export function ProvidersSection({
               onDelete={() => setDeleteTarget(conn)}
               onKeys={() => setKeysTarget(keysTarget?.id === conn.id ? null : conn)}
               keysOpen={keysTarget?.id === conn.id}
+              onFallback={() => setFallbackTarget(fallbackTarget?.id === conn.id ? null : conn)}
+              fallbackOpen={fallbackTarget?.id === conn.id}
             />
           ))}
         </div>
@@ -224,11 +244,31 @@ export function ProvidersSection({
         />
       ) : null}
 
+      {/* S3-4: inline recommended-fallback-chain panel — candidates only
+          until the user confirms the apply inside it. Also reachable from
+          the Test-all panel's failed (rate-limited / quota-exhausted) rows,
+          where a fallback chain is exactly the cure. */}
+      {fallbackTarget ? (
+        <RecommendedFallbackPanel
+          conn={fallbackTarget}
+          onClose={() => setFallbackTarget(null)}
+          onApplied={handleFallbackApplied}
+        />
+      ) : null}
+
       {testAllRows !== null ? (
         testAllRows.length === 0 ? (
           <p className="text-body-sm text-on-surface-variant py-md text-center">{t('settings.models.providers.testAllEmpty')}</p>
         ) : (
-          <TestAllResultsPanel rows={testAllRows} intl={intl} t={t} />
+          <TestAllResultsPanel
+            rows={testAllRows}
+            intl={intl}
+            t={t}
+            onSuggestFallback={(providerId) => {
+              const conn = providersFile.providers.find((p) => p.id === providerId)
+              if (conn) setFallbackTarget(conn)
+            }}
+          />
         )
       ) : null}
 
