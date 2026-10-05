@@ -1,11 +1,13 @@
 //! Unified configuration system with priority-based merging.
 //!
-//! Configuration sources (highest to lowest priority):
-//! 1. CLI arguments (explicit overrides)
-//! 2. Environment variables (`SHANNON_*`)
-//! 3. Project-local config (`.shannon.toml`)
-//! 4. Global config (`~/.shannon/config.toml`)
-//! 5. Default values
+//! Configuration layers (highest to lowest priority; the six-source merge
+//! [`ConfigBuilder::build`] performs and `config_dump` prints per-layer):
+//! 1. CLI arguments (the per-invocation overlay)
+//! 2. Connected profile (`~/.shannon/providers.toml`, written by `/connect`)
+//! 3. Environment variables (`SHANNON_*`)
+//! 4. Project-local config (`.shannon.toml`)
+//! 5. Global config (`~/.shannon/config.toml`)
+//! 6. Built-in default values
 //!
 //! ## v2-native (N1 / C-fields)
 //! As of N1, [`ShannonConfig`] carries only the multi-provider/model

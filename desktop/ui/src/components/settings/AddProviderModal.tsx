@@ -27,6 +27,7 @@ import { fetchFailureMessage, testResultMessage } from './models-settings/utils'
 import type {
   ProviderConnection,
   ProviderInput,
+  ProviderKind,
   ProvidersFile,
 } from '@/types'
 import { DefaultMaxTokensField } from './add-provider-modal/DefaultMaxTokensField'
@@ -45,6 +46,7 @@ import {
   parseDefaultMaxTokens,
   type AdvancedState,
 } from './add-provider-modal/types'
+import { NON_PROBEABLE_PROVIDER_KINDS } from './models-settings/types'
 
 /// In-modal probe state for the "Test connection" button (review §2-12 /
 /// §3-B item 11): spinner while the probe runs, then the categorized
@@ -65,8 +67,15 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const [label, setLabel] = useState(editing?.display_name ?? '')
-  const [kind, setKind] = useState<string>(editing?.kind ?? 'openai-compatible')
+  // S4 (P2-23 残留): the union closed over `gemini` and lost its `| string`
+  // muffler, so the kind state is a real ProviderKind now (the select's
+  // options are exactly the KIND_INFO keys).
+  const [kind, setKind] = useState<ProviderKind>(editing?.kind ?? 'openai-compatible')
   const [baseUrl, setBaseUrl] = useState(editing?.base_url ?? '')
+  // S4 (P2-23 残留): the v2 `models_url` field finally has an input — the
+  // wire carried it on ProviderConnection but the modal had no way to author
+  // it. Advanced-tier (the 90% path never needs it); empty = unset.
+  const [modelsUrl, setModelsUrl] = useState(editing?.models_url ?? '')
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState('')
   // S1-4c (P-N5 fetch linkage): true once the user has TYPED in the model
@@ -96,6 +105,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
     label.trim() !== (editing?.display_name ?? '') ||
     kind !== (editing?.kind ?? 'openai-compatible') ||
     baseUrl.trim() !== (editing?.base_url ?? '') ||
+    modelsUrl.trim() !== (editing?.models_url ?? '') ||
     apiKey.trim() !== '' ||
     model.trim() !== '' ||
     !selectionEquals(curated, new Set(declaredIds))
@@ -132,6 +142,13 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   const keyAvailable = apiKey.trim() !== '' || !!editing?.has_api_key
   const canProbe = baseUrl.trim() !== '' && (!info.needsKey || keyAvailable)
   const providerLabel = kindLabel(intl, kind)
+  // S4 (P-N25): gemini/azure have no shared list-models endpoint — the
+  // backend's `is_probeable_kind` refuses them, so in-modal Test would
+  // always end in an "Unknown" verdict and Fetch models in
+  // `unsupported_kind`. Surface that BEFORE the user walks into the
+  // silent dead-end (the buttons stay enabled — the honest refusal is
+  // the backend's to give, and the hint must not change that behavior).
+  const probeUnsupported = NON_PROBEABLE_PROVIDER_KINDS.includes(kind)
 
   const applyQuickFill = (qf: (typeof QUICK_FILL)[number]) => {
     setKind(qf.kind)
@@ -214,6 +231,10 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
       // an empty value tells the backend to keep the existing key.
       api_key: apiKey.trim() || undefined,
       base_url: baseUrl.trim() || undefined,
+      // S4 (P2-23 残留): the v2 models-list override. Empty collapses to
+      // omitted so the engine applies its own default (A1 — never send
+      // empty strings as overrides).
+      models_url: modelsUrl.trim() || undefined,
       model: model.trim() || undefined,
       // Phase 2 task 3: surface the v2 ProviderProfile fields. Empty rows /
       // empty inputs collapse to `null` or omitted so the engine applies
@@ -301,7 +322,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
             <select
               className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm cursor-pointer"
               value={kind}
-              onChange={(e) => { setKind(e.target.value); clearProbeState() }}
+              onChange={(e) => { setKind(e.target.value as ProviderKind); clearProbeState() }}
             >
               {Object.keys(KIND_INFO).map(k => (
                 <option key={k} value={k}>{kindLabel(intl, k)}</option>
@@ -336,6 +357,19 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
               credential (api_key null + provider id → backend reads the
               credential store). */}
           <div className="flex items-center gap-md flex-wrap">
+            {/* S4 (P-N25): pre-submit honest hint — this kind cannot be
+                probed at all, so the user can skip straight to Save. Full
+                width (wraps above the button row) so it reads as a note,
+                not a verdict. */}
+            {probeUnsupported ? (
+              <p
+                data-testid="probe-unsupported-hint"
+                className="basis-full font-label-sm text-on-surface-variant flex items-center gap-xs"
+              >
+                <span className="material-symbols-outlined icon-sm text-warning" aria-hidden="true">info</span>
+                {t('settings.models.providers.probeUnsupportedHint')}
+              </p>
+            ) : null}
             <Button
               type="button"
               variant="outline"
@@ -446,6 +480,18 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
             </Button>
             {advancedOpen ? (
               <div className="mt-sm space-y-md p-md rounded-lg border border-outline-variant/30 bg-surface-container-low/40">
+                {/* S4 (P2-23 残留): the v2 models-list override — where the
+                    engine looks up the provider's model catalog when it
+                    differs from the base URL. Omitted = engine default. */}
+                <Field label={t('settings.models.providers.modelsUrlField')}>
+                  <Input
+                    className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
+                    value={modelsUrl}
+                    onChange={(e) => { setModelsUrl(e.target.value); setError(null); setErrorField(null) }}
+                    placeholder="https://api.example.com/v1/models"
+                    data-testid="provider-models-url-input"
+                  />
+                </Field>
                 <HeaderRowsEditor
                   rows={advanced.headers}
                   onChange={(rows) => setAdvanced((s) => ({ ...s, headers: rows }))}

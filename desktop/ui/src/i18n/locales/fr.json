@@ -1827,8 +1827,8 @@
   "chat.error.backend.noWorkingDir": "Aucun répertoire de travail n'est défini — choisissez-en un dans les paramètres avant de joindre des fichiers (les pièces jointes sont limitées au répertoire de travail)",
   "chat.error.backend.queryInProgress": "Une requête est déjà en cours — attendez qu'elle se termine ou arrêtez-la avant de renvoyer",
   "chat.error.backend.goalRunActive": "Une exécution d'objectif est active sur cette session — mettez-la en pause ou arrêtez-la depuis la page Tâches avant d'envoyer des messages",
-  "chat.notice.failover": "Model fallback",
-  "chat.notice.keyRotation": "API key rotation",
+  "chat.notice.failover": "Repli de modèle",
+  "chat.notice.keyRotation": "Rotation de clé API",
   "chat.session.switching": "Switching session…",
   "chat.search.placeholder": "Search in conversation",
   "chat.search.aria": "Search in conversation",
@@ -3914,7 +3914,7 @@
   "settings.models.phaseTier.failed": "Impossible d'enregistrer le palier de modèle",
   "settings.models.utility.title": "Emplacements de modèles pour tâches de fond",
   "settings.models.utility.subtitle": "Attribuez un modèle aux tâches de fond qui n'ont pas besoin du modèle principal. Chaque emplacement suit le défaut global tant que vous ne le modifiez pas.",
-  "settings.models.utility.compaction": "Compaction",
+  "settings.models.utility.compaction": "Compactage",
   "settings.models.utility.summary": "Résumé de session",
   "settings.models.utility.followDefault": "Suivre le défaut global",
   "settings.models.utility.followHint": "Cette tâche de fond utilise le modèle par défaut global",
@@ -4144,5 +4144,8 @@
   "chat.input.effort.notApplicable": "Ce modèle n’annonce pas de raisonnement — l’effort de raisonnement ne concerne que les modèles avec réflexion",
   "chat.input.cost.aria": "Estimation du coût d’envoi (indicative, pas une limite)",
   "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
-  "chat.input.cost.budget": "≈{percent} % du budget de session"
+  "chat.input.cost.budget": "≈{percent} % du budget de session",
+  "settings.models.providerTabs.aria": "Filtrer le catalogue de modèles par fournisseur",
+  "settings.models.providers.modelsUrlField": "URL des modèles (facultatif)",
+  "settings.models.providers.probeUnsupportedHint": "Ce type de fournisseur ne prend pas en charge le test de connexion — enregistre-le et utilise-le directement. « Récupérer la liste des modèles » peut aussi être indisponible."
 }

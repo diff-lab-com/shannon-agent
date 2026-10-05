@@ -4144,5 +4144,8 @@
   "chat.input.effort.notApplicable": "该模型未声明推理能力——推理力度仅对思考型模型生效",
   "chat.input.cost.aria": "发送成本预估（仅供参考，不设限制）",
   "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
-  "chat.input.cost.budget": "≈会话预算的 {percent}%"
+  "chat.input.cost.budget": "≈会话预算的 {percent}%",
+  "settings.models.providerTabs.aria": "按服务商筛选模型目录",
+  "settings.models.providers.modelsUrlField": "模型列表 URL（可选）",
+  "settings.models.providers.probeUnsupportedHint": "该 provider 类型不支持连接探测——直接保存即可使用，「获取模型列表」亦可能不可用。"
 }

@@ -265,10 +265,10 @@ pub fn resolve_credential(cred: &CredentialRef) -> String {
 /// walks: position 0 is the key that would be used without rotation, and the
 /// engine tries positions 1..n in exactly this order. Blank and duplicate
 /// values are dropped (a blank or repeated key is never a useful rotation
-/// target). Single-key credentials (and every non-Store backend) yield at
-/// most one entry.
+/// target; duplicates keep their first occurrence). Single-key credentials
+/// (and every non-Store backend) yield at most one entry.
 pub fn resolve_credential_keys(cred: &CredentialRef) -> Vec<String> {
-    let mut keys: Vec<String> = match cred {
+    let keys: Vec<String> = match cred {
         CredentialRef::Store { service } => {
             crate::credential_manager::read_credential_keys_default(service).unwrap_or_default()
         }
@@ -276,9 +276,27 @@ pub fn resolve_credential_keys(cred: &CredentialRef) -> Vec<String> {
         CredentialRef::InlineLegacy { masked } => vec![masked.clone()],
         CredentialRef::Keyring { .. } | CredentialRef::Ephemeral => Vec::new(),
     };
-    keys.retain(|k| !k.is_empty());
-    keys.dedup();
-    keys
+    dedup_rotation_keys(keys)
+}
+
+/// Drop blank entries and duplicate values from a resolved rotation list,
+/// keeping the **first** occurrence of each value in store order.
+///
+/// P-N24: this used to be `Vec::dedup`, which only removes *consecutive*
+/// duplicates — a hand-edited (or pre-dedup-writer) store file shaped
+/// `[a, b, a]` kept the trailing `a`, and the engine burned a full retry
+/// budget re-walking a key it had already tried. The active key (position 0)
+/// is never displaced: dedup keeps first occurrences.
+fn dedup_rotation_keys(keys: Vec<String>) -> Vec<String> {
+    let mut seen: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(keys.len());
+    let mut out = Vec::with_capacity(keys.len());
+    for k in keys.into_iter().filter(|k| !k.is_empty()) {
+        if seen.insert(k.clone()) {
+            out.push(k);
+        }
+    }
+    out
 }
 
 /// A resolved [`ModelRef`]: the concrete engine provider plus the (possibly
@@ -1141,6 +1159,30 @@ mod tests {
                 service: "shannon-definitely-not-a-real-service-9f3a".to_string()
             })
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn rotation_key_dedup_removes_non_adjacent_duplicates_first_occurrence_wins() {
+        // P-N24: `Vec::dedup` only collapsed *consecutive* duplicates, so a
+        // `[a, b, a]` list kept the trailing `a` and rotation re-walked a key
+        // it had already burned a retry budget on. Full dedup, store order,
+        // first occurrence wins (the active key at position 0 never moves).
+        assert_eq!(
+            dedup_rotation_keys(vec!["a".to_string(), "b".to_string(), "a".to_string()]),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        // Blanks are still dropped, and an all-duplicate list collapses to
+        // its first entry.
+        assert_eq!(
+            dedup_rotation_keys(vec![
+                "a".to_string(),
+                String::new(),
+                "a".to_string(),
+                "b".to_string(),
+                "b".to_string(),
+            ]),
+            vec!["a".to_string(), "b".to_string()]
         );
     }
 

@@ -80,6 +80,22 @@ pub(super) use custom_commands::{
 };
 pub(crate) use custom_commands::{CustomCommandWatcher, SettingsWatcher};
 
+/// P1-18 residue: the CLI's provider-touching commands warn on stderr when
+/// `~/.shannon/providers.toml` exists but cannot be parsed as a provider
+/// config (the schema is `deny_unknown_fields` — one misspelled field in a
+/// hand edit rejects the WHOLE file). The REPL reads through the same store
+/// and degrades just as silently (every read shows "nothing connected",
+/// writes are refused), so startup emits the same one-line warning — the
+/// exact wording of the CLI's read-side hint. `None` when the file is
+/// absent, empty, or parses cleanly.
+fn providers_toml_corruption_warning() -> Option<String> {
+    let err = shannon_core::provider_config_store::parse_error(None)?;
+    Some(format!(
+        "warning: ~/.shannon/providers.toml exists but is not a valid provider config; \
+         it is being ignored until fixed (writes to it are refused):\n  {err}"
+    ))
+}
+
 /// Main REPL application struct
 pub struct Repl {
     /// Event handler for user input
@@ -412,6 +428,16 @@ impl Repl {
         // The DockerSandbox::is_available() and MCP discovery are also skipped.
         if cfg!(test) {
             return Self::new_minimal(runtime);
+        }
+
+        // P1-18 residue — corruption-warning parity with the CLI command
+        // surfaces: when `~/.shannon/providers.toml` exists but fails the
+        // provider-config schema, every read silently degrades to "nothing
+        // connected" and writes are refused. The REPL prints the same
+        // one-line warning at startup, before the inline viewport takes over
+        // the terminal (see [`providers_toml_corruption_warning`]).
+        if let Some(warning) = providers_toml_corruption_warning() {
+            eprintln!("{warning}");
         }
 
         // Create tool registry and register all tools (sandboxed to project

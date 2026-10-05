@@ -222,6 +222,9 @@ export default function ModelsSettings() {
                 key={s}
                 variant="ghost"
                 onClick={() => setStrategy(s)}
+                // P-N22: the pills are a mode choice — expose the pressed
+                // state instead of carrying it in styling alone.
+                aria-pressed={strategy === s}
                 className={cn(
                   'flex-1 py-sm font-label-md rounded-lg transition-all cursor-pointer',
                   strategy === s
@@ -306,10 +309,17 @@ export default function ModelsSettings() {
         {/* Provider Tabs */}
         <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl shadow-e1 overflow-hidden">
           <div className="border-b border-outline-variant/30 bg-surface-container-low/30 px-lg pt-md">
-            <div className="flex gap-lg overflow-x-auto">
+            {/* P-N22: real tab semantics — the per-provider filter tabs used
+                to be plain buttons whose selected state lived only in
+                styling. Visuals unchanged; role/aria-selected/name added. */}
+            <div role="tablist" aria-label={t('settings.models.providerTabs.aria')} className="flex gap-lg overflow-x-auto">
               <Button
                 variant="ghost"
                 onClick={() => setActiveProvider(null)}
+                role="tab"
+                id="provider-tab-all"
+                aria-selected={!activeProvider}
+                aria-controls="provider-catalog-panel"
                 className={cn(
                   'h-auto pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors rounded-none',
                   !activeProvider ? 'border-primary text-link font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
@@ -320,6 +330,10 @@ export default function ModelsSettings() {
                   key={p}
                   variant="ghost"
                   onClick={() => setActiveProvider(activeProvider === p ? null : p)}
+                  role="tab"
+                  id={`provider-tab-${p}`}
+                  aria-selected={activeProvider === p}
+                  aria-controls="provider-catalog-panel"
                   className={cn(
                     'h-auto pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors rounded-none',
                     activeProvider === p ? 'border-primary text-link font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
@@ -330,7 +344,7 @@ export default function ModelsSettings() {
             </div>
           </div>
 
-          <div className="p-lg">
+          <div className="p-lg" role="tabpanel" id="provider-catalog-panel" aria-labelledby={activeProvider ? `provider-tab-${activeProvider}` : 'provider-tab-all'}>
             <div className="flex justify-between items-center mb-lg">
               <div>
                 <h3 className="font-headline-md text-on-surface">{t('settings.models.availableModels')}</h3>

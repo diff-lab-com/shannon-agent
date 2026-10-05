@@ -1827,8 +1827,8 @@
   "chat.error.backend.noWorkingDir": "Рабочий каталог не задан — выберите его в настройках, прежде чем прикреплять файлы (вложения ограничены рабочим каталогом)",
   "chat.error.backend.queryInProgress": "Запрос уже выполняется — дождитесь завершения или остановите его, прежде чем отправлять снова",
   "chat.error.backend.goalRunActive": "В этой сессии выполняется цель — приостановите или остановите её на странице задач, прежде чем отправлять сообщения",
-  "chat.notice.failover": "Model fallback",
-  "chat.notice.keyRotation": "API key rotation",
+  "chat.notice.failover": "Резервное переключение модели",
+  "chat.notice.keyRotation": "Ротация API-ключей",
   "chat.session.switching": "Switching session…",
   "chat.search.placeholder": "Search in conversation",
   "chat.search.aria": "Search in conversation",
@@ -4144,5 +4144,8 @@
   "chat.input.effort.notApplicable": "Эта модель не заявляет рассуждения — уровни усилия действуют только на думающие модели",
   "chat.input.cost.aria": "Оценка стоимости отправки (справочно, не лимит)",
   "chat.input.cost.range": "≈ {tokens} токенов · {low}–{high}",
-  "chat.input.cost.budget": "≈{percent}% бюджета сессии"
+  "chat.input.cost.budget": "≈{percent}% бюджета сессии",
+  "settings.models.providerTabs.aria": "Фильтровать каталог моделей по провайдеру",
+  "settings.models.providers.modelsUrlField": "URL списка моделей (необязательно)",
+  "settings.models.providers.probeUnsupportedHint": "Этот тип провайдера не поддерживает проверку соединения — сохраните его и используйте сразу. «Получить список моделей» тоже может быть недоступен."
 }

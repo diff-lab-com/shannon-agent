@@ -43,6 +43,9 @@ export function ProviderCard({
   const info = KIND_INFO[conn.kind]
   return (
     <div
+      // S4 (P-N20): roster-card anchor for the journey specs — the id is
+      // generated at save time, so tests locate the card by label text.
+      data-testid="provider-card"
       className={cn(
         "p-md rounded-xl border flex items-center justify-between transition-colors",
         isActive ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50',
