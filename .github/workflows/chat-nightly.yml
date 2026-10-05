@@ -1,0 +1,85 @@
+# Chat Nightly E2E (R5 chat-testing plan §E) — the "find unknown problems"
+# suite: scripted-backend event fuzz, chat visual state matrix (light×dark),
+# dynamic a11y scan, long-session performance guard, plus the full scripted
+# journey family. Runs OFF the PR gate on purpose: PRs keep the fast
+# playwright.config.ts set (ci.yml desktop-e2e, untouched by this file).
+#
+# Failure protocol: upload traces + failure screenshots + the HTML report as
+# artifacts so a red nightly is diagnosable without a rerun.
+name: Chat Nightly E2E
+
+on:
+  schedule:
+    # 04:30 UTC daily — cron is ALWAYS UTC (no DST semantics in cron): that
+    # is 12:30 Asia/Shanghai / 21:30 (previous day) America/Los_Angeles.
+    # Deliberately ahead of the 05:00 UTC Nightly Coverage so the two
+    # nightlies don't contend for the same runner window.
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+
+# Same scheme as coverage.yml: a nightly never preempts another run of
+# itself, so cancel-in-progress stays off.
+concurrency:
+  group: Chat Nightly E2E-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  chat-nightly:
+    name: Desktop chat nightly (fuzz / visual / a11y / perf + journeys)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # Schedule/dispatch can only fire from the DEFAULT branch, where this
+      # file must live to be triggerable (mirrored onto main) — but the suite
+      # audits the dev integration line (main is a stale release line). Pin
+      # the checkout so the nightly always runs against dev no matter which
+      # branch's copy fired. Keep this copy byte-identical with main's.
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: dev
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: "24"
+      # pnpm/action-setup v6.0.10, pinned by commit SHA (same pin as ci.yml).
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+      - name: Install UI deps
+        working-directory: desktop/ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright browsers
+        working-directory: desktop/ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Typecheck + production build
+        # `tsc && vite build` — the nightly pays for a full compile once so a
+        # type regression surfaces here with a clear error instead of as N
+        # mysterious spec failures.
+        working-directory: desktop/ui
+        run: pnpm build
+      - name: Generate fuzz mutants (fixed seed, byte-deterministic)
+        # Regenerated BEFORE every run; the committed mutants under
+        # e2e/scripts/fuzz/mutants/ make this a no-op diff (the generator is
+        # deterministic — see scripts/fuzz-mutate.mjs).
+        working-directory: desktop/ui
+        run: pnpm fuzz:gen
+      - name: Run chat nightly suite
+        # playwright.chat-nightly.config.ts: fuzz / visual-matrix / a11y /
+        # perf + all scripted journeys (+ sidebar-sessions, the R3/G6
+        # load-flake family — a nightly is where a flake should surface).
+        # CI=1 keeps Playwright from reusing a local dev server.
+        working-directory: desktop/ui
+        env:
+          CI: "1"
+        run: pnpm exec playwright test --config playwright.chat-nightly.config.ts --workers=2
+      - name: Upload traces, failure screenshots and HTML report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: chat-nightly-artifacts
+          path: |
+            desktop/ui/test-results/
+            desktop/ui/playwright-report/
+          retention-days: 14
