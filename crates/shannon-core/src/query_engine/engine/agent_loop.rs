@@ -5542,7 +5542,7 @@ mod vision_gate_tests {
     //! integration tests in `engine/tests/agent_loop_tests.rs`.
 
     use super::{model_supports_vision, vision_gate_violation, vision_support_in_catalog};
-    use crate::model_registry::{ModelCapabilities, ModelInfo};
+    use crate::model_registry::{ModelCapabilities, ModelEntrySource, ModelInfo};
     use shannon_engine::api::{ContentBlock, ImageSource, LlmProvider};
     use shannon_types::provider_config::{ModelCapability, ModelSpec};
 
@@ -5700,6 +5700,7 @@ mod vision_gate_tests {
             cost_per_m_input: 0.0,
             cost_per_m_output: 0.0,
             capabilities,
+            source: ModelEntrySource::Catalog,
         }
     }
 
