@@ -47,6 +47,8 @@ export const MOCK_CONFIG: DesktopConfig = {
   network_proxy_url: null,
   network_no_proxy: null,
   network_ca_cert_path: null,
+  // Settings R3 T6: auto-compaction on — the backend default, verbatim.
+  context_auto_compact: true,
 }
 
 // Managed-providers roster for the Models P2 UI (mirrors the Rust

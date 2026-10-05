@@ -125,24 +125,14 @@ export default function AdvancedSettings() {
     setSkillDetectionEnabled(config?.skill_detection_enabled ?? true)
   }, [config?.skill_detection_enabled])
 
-  // 卡A GC — session storage management: auto-clean switch (default off)
-  // + retention gear (永不 0 / 30 / 90 days). Both follow the persisted
-  // config on refresh, like the dream switches above.
-  const [sessionGcEnabled, setSessionGcEnabled] = useState(config?.session_gc_enabled ?? false)
-  const [sessionRetentionDays, setSessionRetentionDays] = useState<number>(config?.session_retention_days ?? 0)
+  // 卡A GC — session storage management moved to Settings → 会话 (Settings
+  // R3 T6); this page keeps only the cross-link below. The toggle states and
+  // the retention handler went with the card.
 
   // P2-4 (R9-④): the remote-image allow switch lives in the frontend-local
   // store — the hook both reads and (through the store) persists, so the
   // switch can't lie the way a config-backed toggle can after a failed write.
   const remoteImagesAllowed = useRemoteImagesAllowed()
-
-  useEffect(() => {
-    setSessionGcEnabled(config?.session_gc_enabled ?? false)
-  }, [config?.session_gc_enabled])
-
-  useEffect(() => {
-    setSessionRetentionDays(config?.session_retention_days ?? 0)
-  }, [config?.session_retention_days])
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
@@ -244,22 +234,6 @@ export default function AdvancedSettings() {
     setExportingDiagnostics(false)
   }
 
-  // 卡A GC: persist the retention gear. `0` (永不) is written literally —
-  // the backend maps it to "never auto-delete" — so the value the user
-  // picked is exactly the value stored.
-  const handleRetentionChange = async (next: string) => {
-    const days = Number(next)
-    if (!Number.isInteger(days) || days < 0) return
-    setSessionRetentionDays(days)
-    try {
-      await api.configure({ key: 'session_retention_days', value: String(days) })
-      await refreshConfig()
-      toast.success(t('settings.advanced.sessionGc.saved'))
-    } catch (e) {
-      toastError(t('settings.advanced.updateFailed'), e)
-    }
-  }
-
   // P2-5: persist `offpeak.model_override` (frozen config key). An empty
   // value disables the override — routines then use the active model.
   const handleSaveOffpeakModel = async () => {
@@ -273,6 +247,9 @@ export default function AdvancedSettings() {
     }
     setSavingOffpeak(false)
   }
+
+  // Settings R3 T6: the GC retention gear moved to 会话 with its card —
+  // handleRetentionChange went with it.
 
   return (
     <div className="pb-xl">
@@ -345,44 +322,20 @@ export default function AdvancedSettings() {
           </div>
         </div>
 
-        {/* 卡A GC — 会话存储管理: auto-clean for **archived** sessions only,
-            parked next to the Dream/Skill cards. The description carries the
-            informed-consent copy the review required: 仅清理已归档会话；按
-            最后活跃时间计时；默认永不自动删除. */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="session-gc-card">
-          <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
-              <span className="material-symbols-outlined">auto_delete</span>
-            </div>
-            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.sessionGc.title')}</h3>
-          </div>
-          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.sessionGc.desc')}</p>
-          <div className="flex items-center justify-between gap-md">
-            <div>
-              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.sessionGc.enabled')}</div>
-              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.sessionGc.enabledDesc')}</div>
-            </div>
-            <Switch checked={sessionGcEnabled} onCheckedChange={v => handleToggle('session_gc_enabled', v, setSessionGcEnabled)} className="shrink-0" aria-label={t('settings.advanced.sessionGc.enabled')} />
-          </div>
-          <div className="mt-md">
-            <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs" htmlFor="session-retention-select">
-              {t('settings.advanced.sessionGc.retention')}
-            </label>
-            {/* Native select (the settings modals' pattern) — the wire value
-                is the plain day count, `0` = 永不 (never auto-delete). */}
-            <select
-              id="session-retention-select"
-              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm cursor-pointer"
-              value={String(sessionRetentionDays)}
-              onChange={e => void handleRetentionChange(e.target.value)}
-              aria-label={t('settings.advanced.sessionGc.retention')}
-            >
-              <option value="0">{t('settings.advanced.sessionGc.retention.never')}</option>
-              <option value="30">{t('settings.advanced.sessionGc.retention.30')}</option>
-              <option value="90">{t('settings.advanced.sessionGc.retention.90')}</option>
-            </select>
-            <p className="font-label-sm text-label-xs text-on-surface-variant mt-xs">{t('settings.advanced.sessionGc.retentionDesc')}</p>
-          </div>
+        {/* 卡A GC — 会话存储管理 moved to Settings → 会话 (Settings R3 T6):
+            leave a cross-link where the card used to be so muscle memory
+            from the old placement still lands (same pattern as the
+            updates-moved row). */}
+        <div className="lg:col-span-2 flex flex-col md:flex-row md:items-center gap-sm px-lg py-md rounded-xl border border-outline-variant/20 bg-surface-container-low" data-testid="session-moved-link">
+          <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">auto_delete</span>
+          <p className="flex-1 text-on-surface-variant text-body-sm">{t('settings.advanced.movedToSession')}</p>
+          <NavLink
+            to="/settings/session"
+            className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer whitespace-nowrap"
+          >
+            {t('nav.session')}
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">arrow_forward</span>
+          </NavLink>
         </div>
 
         {/* B2 — Agent teams (real sub-agent execution) */}

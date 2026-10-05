@@ -646,6 +646,11 @@ export interface DesktopConfig {
    *  SHANNON_CA_BUNDLE / NODE_EXTRA_CA_CERTS / SSL_CERT_FILE. Restart to
    *  apply. */
   network_ca_cert_path?: string | null
+  /** Settings R3 T6: master switch for the engine's automatic context
+   *  compaction (Default true). Off preserves model requests/responses
+   *  verbatim; the engine is rebuilt per message, so a change applies to
+   *  the next message. Written via `configure('context.auto_compact')`. */
+  context_auto_compact?: boolean
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */

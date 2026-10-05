@@ -443,6 +443,10 @@ fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Resu
         // Settings R3 T3: block idle sleep while agent runs stream. Read
         // live at the start of every run — no restart, no side effect here.
         "power.block_sleep_during_tasks" => cfg.power_block_sleep_during_tasks = enabled,
+        // Settings R3 T6: master switch for the engine's automatic context
+        // compaction. Read when each message's engine is built — the engine
+        // is rebuilt per message, so a flip applies to the NEXT message.
+        "context.auto_compact" => cfg.context_auto_compact = enabled,
         other => return Err(format!("Unrecognized boolean key: {other}")),
     }
     Ok(())
@@ -2432,11 +2436,12 @@ mod tests {
             // grouped applier.
             "hardware_acceleration" => Some(cfg.hardware_acceleration),
             "power.block_sleep_during_tasks" => Some(cfg.power_block_sleep_during_tasks),
+            "context.auto_compact" => Some(cfg.context_auto_compact),
             _ => None,
         }
     }
 
-    const TOGGLE_KEYS: [&str; 11] = [
+    const TOGGLE_KEYS: [&str; 12] = [
         "memory_enabled",
         "telemetry",
         "encryption",
@@ -2448,6 +2453,7 @@ mod tests {
         "session_gc_enabled",
         "hardware_acceleration",
         "power.block_sleep_during_tasks",
+        "context.auto_compact",
     ];
 
     #[test]
@@ -2497,6 +2503,9 @@ mod tests {
             // pin them false like the rest for a deterministic start.
             cfg.hardware_acceleration = false;
             cfg.power_block_sleep_during_tasks = false;
+            // Settings R3 T6: auto-compaction defaults true — pin false like
+            // the rest so the round trip starts deterministic.
+            cfg.context_auto_compact = false;
         }
 
         let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());

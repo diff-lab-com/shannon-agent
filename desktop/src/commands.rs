@@ -1708,8 +1708,18 @@ pub async fn send_message(
     // env block, bash default cwd, repo map, memory project key) to the
     // session's directory instead of the process cwd.
     let memory_disabled = active_session.memory_disabled_snapshot();
+    // Settings R3 T6: the 「会话 → 自动压缩上下文」 switch rides into the
+    // per-message engine config. The engine is rebuilt every message, so a
+    // flip in Settings applies to the NEXT message without a restart.
+    let context_auto_compact = desktop_cfg.context_auto_compact;
     let mut engine = crate::commands_memory::attach_shared_memory_if(
-        QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+        QueryEngine::with_defaults_arc_and_config(
+            client,
+            tools,
+            permissions,
+            StateManager::new(),
+            |config| config.auto_compact_enabled = context_auto_compact,
+        ),
         &state.memory_store,
         memory_disabled,
         session_working_dir.as_deref(),
@@ -2628,6 +2638,9 @@ pub async fn start_background_task(
     // Settings R3 T3 — block idle sleep for the duration of this
     // background task (same switch the interactive turn reads).
     let block_sleep = state.desktop_config.read().await.power_block_sleep_during_tasks;
+    // Settings R3 T6 — same auto-compaction switch the interactive turn
+    // reads; applies to this task's engine at spawn time.
+    let context_auto_compact = state.desktop_config.read().await.context_auto_compact;
     // P2-4b: hand the shared memory handle to the spawned task — the runner
     // attaches it to its engine instead of leaving memory: None.
     let memory_store = state.memory_store.clone();
@@ -2668,7 +2681,15 @@ pub async fn start_background_task(
         }
 
         let engine = crate::commands_memory::attach_shared_memory(
-            QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+            QueryEngine::with_defaults_arc_and_config(
+                client,
+                tools,
+                permissions,
+                StateManager::new(),
+                // Settings R3 T6: background tasks honor the same
+                // auto-compaction switch as interactive turns.
+                |config| config.auto_compact_enabled = context_auto_compact,
+            ),
             &memory_store,
             // B2-2: background tasks have no session directory of their
             // own — keep the process-cwd freeze (pre-B2-2 behavior).

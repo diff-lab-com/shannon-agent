@@ -580,6 +580,9 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
             block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
         let client_config = self.deps.client_config.read().await.clone();
         let approval_mode_str = self.deps.desktop_config.read().await.approval_mode.clone();
+        // Settings R3 T6: batch branches honor the same auto-compaction
+        // switch as interactive turns.
+        let context_auto_compact = self.deps.desktop_config.read().await.context_auto_compact;
         let model = client_config.model.clone();
         let model_for_usage = model.clone();
         let provider = client_config.provider.to_string();
@@ -601,11 +604,13 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
         }
 
         let engine = crate::commands_memory::attach_shared_memory(
-            QueryEngine::with_defaults_arc(
+            QueryEngine::with_defaults_arc_and_config(
                 LlmClient::new(client_config),
                 self.deps.tools.clone(),
                 permissions,
                 StateManager::new(),
+                // Settings R3 T6: batch branches honor the switch.
+                |config| config.auto_compact_enabled = context_auto_compact,
             ),
             &memory_store,
             // B2-2: best-of-N batches have no session directory — keep the

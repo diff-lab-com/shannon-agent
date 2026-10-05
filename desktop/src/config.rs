@@ -252,6 +252,17 @@ pub struct DesktopConfig {
     /// untouched.
     #[serde(default)]
     pub network_ca_cert_path: Option<String>,
+    /// Settings R3 T6 — master switch for the query engine's automatic
+    /// context compaction (the 60%/80% warning injections, micro-compaction
+    /// and the compact/truncate ladder). Default `true`: existing behavior.
+    /// When `false` the engine preserves model requests and responses
+    /// verbatim — nothing is auto-compacted or truncated, and a turn fails
+    /// only when the context window is genuinely exhausted (`/compact`
+    /// stays available as the manual path). Written via
+    /// `configure("context.auto_compact")`; the engine is rebuilt per
+    /// message, so a change applies to the NEXT message without a restart.
+    #[serde(default = "default_true")]
+    pub context_auto_compact: bool,
 }
 
 fn default_power_block_sleep_during_tasks() -> bool {
@@ -872,6 +883,7 @@ impl Default for DesktopConfig {
             network_proxy_url: None,
             network_no_proxy: None,
             network_ca_cert_path: None,
+            context_auto_compact: true,
         }
     }
 }
@@ -1887,6 +1899,33 @@ mod tests {
             back.network_ca_cert_path.as_deref(),
             Some("/etc/shannon/root-ca.pem")
         );
+    }
+
+    /// Settings R3 T6: `context_auto_compact` defaults to `true` — a legacy
+    /// config.json without the key keeps auto-compaction ON (exact pre-T6
+    /// behavior), and an explicit `false` survives a save/load round trip.
+    #[test]
+    fn test_context_auto_compact_default_compat_and_round_trip() {
+        // Legacy JSON: no `context_auto_compact` key at all → default true.
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(
+            legacy.context_auto_compact,
+            "missing key must default to auto-compaction ON"
+        );
+        assert!(DesktopConfig::default().context_auto_compact);
+
+        // Explicit off persists and reloads as off.
+        let config = DesktopConfig {
+            context_auto_compact: false,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"context_auto_compact\":false"), "{json}");
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert!(!back.context_auto_compact, "false must round-trip");
     }
 
     /// Settings R3 T4 (B1): `network_env` is a pure function — given a
