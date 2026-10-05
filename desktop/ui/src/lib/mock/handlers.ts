@@ -640,6 +640,18 @@ export const handlers: Record<string, MockHandler> = {
     } else if (key === 'power.block_sleep_during_tasks') {
       // Settings R3 T3: run-time sleep blocker.
       demoConfig.power_block_sleep_during_tasks = String(value) === 'true'
+    } else if (key === 'network.proxy_url' || key === 'network.no_proxy' || key === 'network.ca_cert_path') {
+      // Settings R3 T4 (B1): corporate-network trio — empty clears (R1:
+      // the implicit env fallback stays). The demo does not re-check the
+      // CA file existence; that gate lives in the backend configure arm.
+      const trimmed = String(value ?? '').trim()
+      const field =
+        key === 'network.proxy_url'
+          ? 'network_proxy_url'
+          : key === 'network.no_proxy'
+            ? 'network_no_proxy'
+            : 'network_ca_cert_path'
+      ;(demoConfig as Record<string, unknown>)[field] = trimmed ? trimmed : null
     }
   },
 
