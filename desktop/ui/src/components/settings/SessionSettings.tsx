@@ -4,6 +4,8 @@ import { toast } from 'sonner'
 import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { cn } from '@/lib/utils'
+import { readSendBehavior, setSendBehavior, type SendBehavior } from '@/lib/sendBehaviorPref'
 import { Switch } from '@/components/ui/switch'
 import EffectBadge from './EffectBadge'
 
@@ -27,6 +29,10 @@ import EffectBadge from './EffectBadge'
  *    both re-read live on every 6h scan pass.
  * ④ 「提问自动继续」 (Settings R3 T8) — the `chat_ask_user_auto_continue`
  *    switch: auto-answer an agent question left unanswered for 5 minutes.
+ * ⑤ 「运行中发送消息」 (Settings R3 T10) — what a plain send (Enter / send
+ *    button) does while a run streams: steer (interrupt now) or queue.
+ *    Pure front-end localStorage pref; the bolt / Ctrl+Enter stays an
+ *    explicit steer in both modes.
  *
  * Later tasks in this batch append more cards to this page (see the anchor
  * comment at the end of the JSX).
@@ -78,6 +84,17 @@ export default function SessionSettings() {
   useEffect(() => {
     setAskAutoContinue(config?.chat_ask_user_auto_continue ?? false)
   }, [config?.chat_ask_user_auto_continue])
+
+  // ⑤ Send-while-running (T10): default 'queue' — the status quo (a plain
+  // send while this session streams joins its FIFO queue; the bolt /
+  // Ctrl+Enter stays the explicit interrupt). Purely front-end localStorage
+  // ('shannon.chat.sendBehavior'): Chat.handleSend reads it live at each
+  // running send, so a pick here applies to the very next send — instant.
+  const [sendBehavior, setSendBehaviorState] = useState<SendBehavior>(readSendBehavior)
+  const handleSendBehaviorChange = (next: SendBehavior) => {
+    setSendBehaviorState(next)
+    setSendBehavior(next)
+  }
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
@@ -280,7 +297,53 @@ export default function SessionSettings() {
           </div>
         </section>
 
-        {/* 后续任务在此追加: 发送行为 / 分组 */}
+        {/* ⑤ 运行中发送消息 — Settings R3 T10: what a plain send (Enter /
+            send button) does while a run streams. Two-tier segmented control
+            mirroring the T9 show-thinking one. 'queue' (default) keeps the
+            B1 §4-9 FIFO join; 'steer' re-routes the send through the
+            interrupt path (cancel + park, flushed at the settle). The bolt /
+            Ctrl+Enter stays an explicit steer in both modes — spelled out in
+            the help copy. Read live per send → instant. */}
+        <section
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          data-testid="session-send-behavior-card"
+        >
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }}>bolt</span>
+            <h3 className="font-headline-md text-headline-md">{t('settings.session.sendBehavior.title')}</h3>
+            <span className="flex-1" />
+            <EffectBadge kind="instant" />
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-md">{t('settings.session.sendBehavior.help')}</p>
+          <div role="radiogroup" aria-label={t('settings.session.sendBehavior.title')} data-testid="session-send-behavior-group">
+            <div className="flex rounded-xl bg-surface-container-low p-xs gap-xs border border-outline-variant/30">
+              {([
+                { id: 'steer' as const, labelKey: 'settings.session.sendBehavior.steer' },
+                { id: 'queue' as const, labelKey: 'settings.session.sendBehavior.queue' },
+              ]).map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={sendBehavior === opt.id}
+                  data-testid={`session-send-behavior-${opt.id}`}
+                  onClick={() => handleSendBehaviorChange(opt.id)}
+                  className={cn(
+                    'flex-1 min-w-0 px-xs py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
+                    'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
+                    sendBehavior === opt.id
+                      ? 'bg-primary text-on-primary font-bold shadow-e1'
+                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-high',
+                  )}
+                >
+                  <span className="block truncate">{t(opt.labelKey)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* 后续任务在此追加: 分组 */}
       </div>
     </div>
   )
