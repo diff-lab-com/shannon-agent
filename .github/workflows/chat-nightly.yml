@@ -32,7 +32,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      # Schedule/dispatch can only fire from the DEFAULT branch, where this
+      # file must live to be triggerable (mirrored onto main) — but the suite
+      # audits the dev integration line (main is a stale release line). Pin
+      # the checkout so the nightly always runs against dev no matter which
+      # branch's copy fired. Keep this copy byte-identical with main's.
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: dev
       - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
         with:
           node-version: "24"
