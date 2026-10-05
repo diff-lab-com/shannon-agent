@@ -274,7 +274,9 @@ fn is_login_capable_shell(program: &str) -> bool {
         .and_then(|s| s.to_str())
         .unwrap_or(program);
     let stem = basename.strip_suffix(".exe").unwrap_or(basename);
-    LOGIN_CAPABLE_SHELLS.iter().any(|s| s.eq_ignore_ascii_case(stem))
+    LOGIN_CAPABLE_SHELLS
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(stem))
 }
 
 // ── Terminal settings (P3-1, `[terminal]` in ~/.shannon/config.toml) ─────
@@ -2196,7 +2198,13 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, false, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         // 1.5 MiB in one batch: under the 2 MiB pending cap it drains
         // whole, and the ring must retain exactly the newest 1 MiB.
@@ -2229,7 +2237,13 @@ mod tests {
         let requested = link.display().to_string();
 
         let info = manager
-            .spawn(&link, Some("/bin/sh -c 'sleep 30'".into()), None, false, None)
+            .spawn(
+                &link,
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         // The stored dir is the canonicalized form (unchanged behavior)…
         assert_eq!(
@@ -2259,7 +2273,13 @@ mod tests {
         // `-c 'sleep 30'` prints nothing: every byte below is test-pushed,
         // so the chunk/seq accounting is exact.
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, false, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         let id = info.terminal_id.clone();
         // Two drains of 2 chunks + a remainder each → 2+2 chunks.
@@ -2302,7 +2322,13 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, false, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         let id = info.terminal_id.clone();
 
@@ -2449,7 +2475,13 @@ mod tests {
         // group must take both down.
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, false, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         let pid = pid_of(&manager, &info.terminal_id).expect("pid");
         let killed = manager.kill(&info.terminal_id).expect("kill");
@@ -2568,13 +2600,25 @@ mod tests {
         let mut ids = Vec::new();
         for _ in 0..MAX_TERMINALS {
             let info = manager
-                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, false, None)
+                .spawn(
+                    dir.path(),
+                    Some("/bin/sh -c 'sleep 30'".into()),
+                    None,
+                    false,
+                    None,
+                )
                 .expect("spawn");
             ids.push(info.terminal_id);
         }
         assert_eq!(manager.list().len(), MAX_TERMINALS);
         let err = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, false, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .unwrap_err();
         assert!(err.contains("terminal limit reached (4)"), "{err}");
         manager.kill_all();
@@ -2596,7 +2640,13 @@ mod tests {
         let mut pids = Vec::new();
         for _ in 0..2 {
             let info = manager
-                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, false, None)
+                .spawn(
+                    dir.path(),
+                    Some("/bin/sh -c 'sleep 30'".into()),
+                    None,
+                    false,
+                    None,
+                )
                 .expect("spawn");
             pids.push(pid_of(&manager, &info.terminal_id).expect("pid"));
         }
@@ -2614,7 +2664,13 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, false, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         let pid = pid_of(&manager, &info.terminal_id).expect("pid");
         assert_eq!(manager.live_pumps(), 1, "exactly one pump thread");
@@ -2731,7 +2787,13 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, false, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         // 3 MiB in a single push: the 2 MiB cap drops the oldest 1 MiB and
         // the pump must ship the retained 2 MiB as ≤256 KiB events.

@@ -24,8 +24,8 @@
 //! only uses its `Win32_System_Power` + `Win32_System_Threading` features —
 //! no new crate.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A kernel `HANDLE` that may be moved between threads.
 ///
@@ -63,7 +63,7 @@ fn power_request_slot() -> std::sync::MutexGuard<'static, Option<SendHandle>> {
 /// for the OS: the request type is counted per handle, and our refcounting
 /// in `mod.rs` guarantees a matching [`release`] when the count hits zero.
 pub(super) fn acquire() {
-    use windows::Win32::System::Power::{PowerSetRequest, PowerRequestSystemRequired};
+    use windows::Win32::System::Power::{PowerRequestSystemRequired, PowerSetRequest};
 
     let mut slot = power_request_slot();
     if slot.is_none() {
@@ -73,7 +73,9 @@ pub(super) fn acquire() {
             None => return,
         }
     }
-    let Some(SendHandle(handle)) = *slot else { return };
+    let Some(SendHandle(handle)) = *slot else {
+        return;
+    };
 
     // SAFETY: `handle` came from `PowerCreateRequest` and is kept alive for
     // the process lifetime; the request-type constant is a plain i32 newtype.
@@ -90,7 +92,9 @@ pub(super) fn release() {
     use windows::Win32::System::Power::{PowerClearRequest, PowerRequestSystemRequired};
 
     let slot = power_request_slot();
-    let Some(SendHandle(handle)) = *slot else { return };
+    let Some(SendHandle(handle)) = *slot else {
+        return;
+    };
 
     // SAFETY: same handle provenance as in `acquire`.
     if let Err(e) = unsafe { PowerClearRequest(handle, PowerRequestSystemRequired) } {
@@ -102,7 +106,7 @@ pub(super) fn release() {
 fn create_request() -> Option<windows::Win32::Foundation::HANDLE> {
     use windows::Win32::System::Power::PowerCreateRequest;
     use windows::Win32::System::Threading::{
-        REASON_CONTEXT, REASON_CONTEXT_0, POWER_REQUEST_CONTEXT_SIMPLE_STRING,
+        POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT, REASON_CONTEXT_0,
     };
 
     // The simple reason string must stay valid for as long as the request
@@ -111,8 +115,7 @@ fn create_request() -> Option<windows::Win32::Foundation::HANDLE> {
     // string per attempt is the worst case.
     let mut wide: Vec<u16> = "Shannon long-running operation".encode_utf16().collect();
     wide.push(0); // null terminator required by POWER_REQUEST_CONTEXT_SIMPLE_STRING
-    let reason_string =
-        windows::core::PWSTR(Box::leak(wide.into_boxed_slice()).as_mut_ptr());
+    let reason_string = windows::core::PWSTR(Box::leak(wide.into_boxed_slice()).as_mut_ptr());
 
     let context = REASON_CONTEXT {
         // POWER_REQUEST_CONTEXT_VERSION (windows crate gates the constant
@@ -130,7 +133,9 @@ fn create_request() -> Option<windows::Win32::Foundation::HANDLE> {
         Ok(handle) => Some(handle),
         Err(e) => {
             if !WARNED_CREATE_FAIL.swap(true, Ordering::SeqCst) {
-                tracing::warn!("PowerCreateRequest failed — sleep prevention is unavailable (no-op): {e}");
+                tracing::warn!(
+                    "PowerCreateRequest failed — sleep prevention is unavailable (no-op): {e}"
+                );
             }
             None
         }

@@ -3,6 +3,7 @@
 //! Each command is exposed via `#[tauri::command]` and invoked from
 //! JavaScript as `invoke("command_name", { args })`.
 
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use shannon_core::query_engine::{
     PermissionRequest as EnginePermissionRequest, QueryContext, QueryEngine, QueryEvent,
@@ -16,7 +17,6 @@ use shannon_engine::state::StateManager;
 use shannon_mcp::McpProcessPool;
 use shannon_skills::SkillRegistry;
 use shannon_tools::register_default_tools_with_providers;
-use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -149,8 +149,7 @@ pub struct AppState {
     /// `respond_ask_user` removes + sends; the auto-continue timeout path
     /// removes + emits `ask-user-resolved`. `DashMap` (sync): the critical
     /// sections are pure map edits, never held across an await.
-    pub(crate) pending_questions:
-        Arc<DashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>>,
+    pub(crate) pending_questions: Arc<DashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>>,
     /// Session metadata for session list. (P0-4: kept on AppState for
     /// now; this is the *display* list (titles, message counts), not the
     /// per-session query state. Migrating this into the registry is
@@ -2705,7 +2704,11 @@ pub async fn start_background_task(
     let approval_mode_str = state.desktop_config.read().await.approval_mode.clone();
     // Settings R3 T3 — block idle sleep for the duration of this
     // background task (same switch the interactive turn reads).
-    let block_sleep = state.desktop_config.read().await.power_block_sleep_during_tasks;
+    let block_sleep = state
+        .desktop_config
+        .read()
+        .await
+        .power_block_sleep_during_tasks;
     // Settings R3 T6 — same auto-compaction switch the interactive turn
     // reads; applies to this task's engine at spawn time.
     let context_auto_compact = state.desktop_config.read().await.context_auto_compact;
@@ -3093,8 +3096,7 @@ mod tests {
             "enabled": true,
             "read_only": false,
         });
-        let info: ToolInfo =
-            serde_json::from_value(fresh).expect("fresh payload must deserialize");
+        let info: ToolInfo = serde_json::from_value(fresh).expect("fresh payload must deserialize");
         assert!(!info.read_only, "explicit read_only must round-trip");
 
         // And the serializer always emits the field for new consumers.

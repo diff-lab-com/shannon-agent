@@ -1276,7 +1276,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("kind {wire} must deserialize: {e}"));
             assert_eq!(n.kind, expected);
             let json = serde_json::to_string(&n).unwrap();
-            assert!(json.contains(&format!("\"kind\":{}", wire)), "{json}");
+            assert!(json.contains(&format!("\"kind\":{wire}")), "{json}");
         }
     }
 

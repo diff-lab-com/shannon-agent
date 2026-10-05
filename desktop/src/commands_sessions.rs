@@ -2753,10 +2753,11 @@ mod pin_and_auto_archive_tests {
     }
 
     fn config_lock(enabled: bool, days: u32) -> tokio::sync::RwLock<config::DesktopConfig> {
-        let mut cfg = config::DesktopConfig::default();
-        cfg.session_auto_archive_enabled = enabled;
-        cfg.session_auto_archive_days = days;
-        tokio::sync::RwLock::new(cfg)
+        tokio::sync::RwLock::new(config::DesktopConfig {
+            session_auto_archive_enabled: enabled,
+            session_auto_archive_days: days,
+            ..config::DesktopConfig::default()
+        })
     }
 
     fn inbox_at(tmp: &tempfile::TempDir) -> InboxStore {
@@ -3061,9 +3062,11 @@ mod pin_and_auto_archive_tests {
             effective_auto_archive_days(&cfg)
         };
         assert_eq!(days, Some(7));
-        let mut big = config::DesktopConfig::default();
-        big.session_auto_archive_enabled = true;
-        big.session_auto_archive_days = u32::MAX;
+        let big = config::DesktopConfig {
+            session_auto_archive_enabled: true,
+            session_auto_archive_days: u32::MAX,
+            ..config::DesktopConfig::default()
+        };
         assert_eq!(effective_auto_archive_days(&big), Some(365));
     }
 }

@@ -34,15 +34,13 @@ use windows as platform;
 /// Inert fallback so other targets (e.g. freebsd) keep compiling with the
 /// same public API.
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-mod other;
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-use other as platform;
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod other {
     pub(super) fn acquire() {}
     pub(super) fn release() {}
 }
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+use other as platform;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -185,7 +183,10 @@ mod tests {
             let _raii = PreventSleepGuard::new();
             assert!(is_preventing_sleep());
         }
-        assert!(is_preventing_sleep(), "outer refcount must survive the guard drop");
+        assert!(
+            is_preventing_sleep(),
+            "outer refcount must survive the guard drop"
+        );
         stop_prevent_sleep();
         assert!(!is_preventing_sleep());
     }

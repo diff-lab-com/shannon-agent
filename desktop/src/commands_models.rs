@@ -1071,7 +1071,7 @@ mod tests {
             assert_eq!(target.model, hop.model);
             let expected_provider = if hop.same_provider {
                 slot_llm_provider(
-                    &cfg.profiles["default"]
+                    cfg.profiles["default"]
                         .providers
                         .iter()
                         .find(|p| p.id == "anthropic")

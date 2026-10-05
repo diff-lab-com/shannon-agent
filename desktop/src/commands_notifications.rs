@@ -849,8 +849,8 @@ mod tests {
         };
         let json = serde_json::to_value(&dto).expect("serialize");
         let back: NotificationPrefsDto = serde_json::from_value(json).expect("deserialize");
-        assert_eq!(back.on_needs_attention, false);
-        assert_eq!(back.sound_enabled, true);
+        assert!(!back.on_needs_attention);
+        assert!(back.sound_enabled);
         assert_eq!(back.dnd_start.as_deref(), Some("22:00"));
     }
 

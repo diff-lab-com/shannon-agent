@@ -249,7 +249,9 @@ mod tests {
         let mut notifier = Notifier::new().with_cooldown(Cooldown::new());
         notifier.add_handler(Box::new(CallbackNotifier::with_name(
             move |n: &Notification| {
-                rec.lock().unwrap_or_else(|p| p.into_inner()).push(n.clone());
+                rec.lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(n.clone());
                 Ok(())
             },
             "capture",

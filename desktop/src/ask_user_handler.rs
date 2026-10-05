@@ -72,10 +72,12 @@ impl<R: tauri::Runtime> QuestionHandler for DesktopQuestionHandler<R> {
         // the await below.
         let timeout_ms = {
             let state = self.app.state::<AppState>();
-            let auto_continue = state.desktop_config.read().await.chat_ask_user_auto_continue;
-            state
-                .pending_questions
-                .insert(request_id.clone(), tx);
+            let auto_continue = state
+                .desktop_config
+                .read()
+                .await
+                .chat_ask_user_auto_continue;
+            state.pending_questions.insert(request_id.clone(), tx);
             if auto_continue {
                 Some(self.timeout_secs.saturating_mul(1000))
             } else {
@@ -255,7 +257,11 @@ mod tests {
 
     async fn set_auto_continue<R: tauri::Runtime>(app: &tauri::AppHandle<R>, on: bool) {
         let state = app.state::<AppState>();
-        state.desktop_config.write().await.chat_ask_user_auto_continue = on;
+        state
+            .desktop_config
+            .write()
+            .await
+            .chat_ask_user_auto_continue = on;
     }
 
     #[tokio::test]
@@ -300,9 +306,13 @@ mod tests {
             .await
             .unwrap();
         // Fully unknown id: same idempotent Ok.
-        respond_ask_user(handle.state(), "ghost-id".to_string(), vec!["x".to_string()])
-            .await
-            .unwrap();
+        respond_ask_user(
+            handle.state(),
+            "ghost-id".to_string(),
+            vec!["x".to_string()],
+        )
+        .await
+        .unwrap();
 
         // The FIRST answer won (the entry was removed before the replay).
         assert_eq!(ask.await.unwrap().unwrap(), vec!["No".to_string()]);
@@ -378,9 +388,13 @@ mod tests {
         let request_id = wait_pending(&handle).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(1400)).await;
-        respond_ask_user(handle.state(), request_id.clone(), vec!["finally".to_string()])
-            .await
-            .unwrap();
+        respond_ask_user(
+            handle.state(),
+            request_id.clone(),
+            vec!["finally".to_string()],
+        )
+        .await
+        .unwrap();
 
         let answers = tokio::time::timeout(std::time::Duration::from_secs(5), ask)
             .await
@@ -404,7 +418,10 @@ mod tests {
         let request_id = wait_pending(&handle).await;
 
         // Simulate the app tearing down the pending map without an answer.
-        handle.state::<AppState>().pending_questions.remove(&request_id);
+        handle
+            .state::<AppState>()
+            .pending_questions
+            .remove(&request_id);
 
         let result = ask.await.unwrap();
         assert!(matches!(result, Err(AskUserError::NoInput)));
@@ -423,7 +440,10 @@ mod tests {
 
         // Still exactly one ask_user_question tool…
         let infos = registry.list_tools_info();
-        let matches = infos.iter().filter(|t| t.name == ASK_USER_TOOL_NAME).count();
+        let matches = infos
+            .iter()
+            .filter(|t| t.name == ASK_USER_TOOL_NAME)
+            .count();
         assert_eq!(matches, 1, "override must replace, not duplicate");
 
         // …and executing it goes through the DESKTOP handler (the question

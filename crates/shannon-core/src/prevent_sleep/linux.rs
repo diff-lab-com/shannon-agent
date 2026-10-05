@@ -22,8 +22,8 @@
 //!
 //! Only compiled on `target_os = "linux"`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The stored inhibitor child (None = not holding / degraded no-op).
 static INHIBIT_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
@@ -235,7 +235,11 @@ mod tests {
 
     /// Test-visible pid of the stored inhibitor child.
     fn stored_child_pid() -> Option<u32> {
-        INHIBIT_CHILD.lock().unwrap().as_ref().map(std::process::Child::id)
+        INHIBIT_CHILD
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(std::process::Child::id)
     }
 
     fn process_alive(pid: u32) -> bool {
@@ -295,7 +299,10 @@ mod tests {
         // binary: refcounting proceeds, spawn degrades to a no-op.
         super::super::start_prevent_sleep();
         assert!(super::super::is_preventing_sleep());
-        assert!(stored_child_pid().is_none(), "missing binary must not store a child");
+        assert!(
+            stored_child_pid().is_none(),
+            "missing binary must not store a child"
+        );
         super::super::stop_prevent_sleep();
         assert!(!super::super::is_preventing_sleep());
 
@@ -322,7 +329,9 @@ mod tests {
         assert!(systemd_inhibit_in_path(&joined));
 
         // Missing file → not available.
-        assert!(!systemd_inhibit_in_path(&dir.path().join("nope").display().to_string()));
+        assert!(!systemd_inhibit_in_path(
+            &dir.path().join("nope").display().to_string()
+        ));
         // Empty entries and an empty PATH string are tolerated.
         assert!(!systemd_inhibit_in_path(""));
         assert!(!systemd_inhibit_in_path("::"));
