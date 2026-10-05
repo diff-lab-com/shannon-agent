@@ -181,4 +181,46 @@ describe('S2-4a — desktop pre-send vision check', () => {
     expect(api.checkVisionSend).not.toHaveBeenCalled()
     expect(api.sendMessage).toHaveBeenCalledTimes(1)
   })
+
+  it('a text-FILE attachment skips the pre-check even when the model is KNOWN to lack vision', async () => {
+    // The multimodal whitelist (`is_vision_image_mime`) drops non-image
+    // files from the image blocks, so a vision-less model + a .md is a
+    // perfectly deliverable send — the gate must not fire on it.
+    vi.mocked(api.checkVisionSend).mockResolvedValue({
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek',
+      vision: false,
+      suggestion: null,
+    })
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await act(async () => { await result.current.createSession() })
+
+    let send!: Promise<boolean>
+    await act(async () => {
+      send = result.current.sendMessage('总结这份报告', ['/tmp/report.md'], { budgetBypass: true })
+    })
+    expect(await send).toBe(true)
+    expect(api.checkVisionSend).not.toHaveBeenCalled()
+    expect(result.current.visionConfirm).toBeNull()
+    expect(api.sendMessage).toHaveBeenCalledTimes(1)
+    expect(api.sendMessage).toHaveBeenCalledWith('总结这份报告', ['/tmp/report.md'], true, SESSION_A)
+  })
+
+  it('a text+image mix still holds (any vision image trips the gate)', async () => {
+    vi.mocked(api.checkVisionSend).mockResolvedValue({
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek',
+      vision: false,
+      suggestion: null,
+    })
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    let send!: Promise<boolean>
+    await act(async () => { send = result.current.sendMessage('look', ['/tmp/report.md', '/tmp/pic.png']) })
+    expect(await send).toBe(false)
+    expect(api.checkVisionSend).toHaveBeenCalledTimes(1)
+    expect(api.sendMessage).not.toHaveBeenCalled()
+  })
 })

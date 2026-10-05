@@ -32,6 +32,7 @@ import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
 import { modelPickerMeta } from '@/components/settings/models-settings/types'
 import { APPROVAL_MODES, approvalModeOption } from '@/lib/approvalModes'
+import { VISION_IMAGE_EXTENSIONS as IMAGE_EXTENSIONS } from '@/lib/fileRefs'
 
 /**
  * R2-P1-2 attachment honesty — exactly the image formats the backend's
@@ -41,8 +42,12 @@ import { APPROVAL_MODES, approvalModeOption } from '@/lib/approvalModes'
  * the backend dropped it from the image blocks with no rejected receipt.
  * The drag-drop and paste paths bypass this filter by design — the backend
  * gate + preflight badge (`unsupported_type`) catch those.
+ *
+ * The set lives in `@/lib/fileRefs` as the single source of truth (the
+ * S2-4a vision pre-check's image filter reads the same table); re-exported
+ * here for the picker's file-dialog filter.
  */
-export const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp'])
+export { IMAGE_EXTENSIONS }
 
 /**
  * Office Wave 1 A1a, narrowed by G3 P1-5 — extensions whose content the
