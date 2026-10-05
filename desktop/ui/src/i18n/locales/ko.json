@@ -4031,5 +4031,10 @@
   "chat.error.rateLimit.retryAfter": "{seconds}초 후 다시 시도할 수 있습니다",
   "chat.error.authz.title": "액세스가 거부되었습니다(403)",
   "chat.error.authz.body": "이 API 키에는 요청한 모델이나 리소스에 대한 권한이 없습니다. 설정 → 모델에서 키와 권한을 확인하세요.",
-  "chat.error.authz.checkKey": "키 확인"
+  "chat.error.authz.checkKey": "키 확인",
+  "chat.input.effort.standard": "표준",
+  "chat.input.effort.notApplicable": "이 모델은 추론 기능이 없습니다 — 추론 강도는 사고형(추론) 모델에만 작동합니다",
+  "chat.input.cost.aria": "전송 비용 예상 (참고용, 제한 아님)",
+  "chat.input.cost.range": "≈ {tokens} 토큰 · {low}–{high}",
+  "chat.input.cost.budget": "세션 예산의 ≈{percent}%"
 }

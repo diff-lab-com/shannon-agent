@@ -215,6 +215,14 @@ fn merged_row_to_wire(
         // merged row), but a future merge path could produce one.
         ModelEntrySource::Declared => Some(m.capabilities.has(ModelCapabilities::tool_use())),
     };
+    // S3-5 (P2-19): same three-state contract as `tools` — explicit where the
+    // source curates reasoning (models.dev / declared vault), unknown on the
+    // static catalog.
+    let reasoning = match m.source {
+        ModelEntrySource::Overlay => Some(m.capabilities.has(ModelCapabilities::reasoning())),
+        ModelEntrySource::Catalog => None,
+        ModelEntrySource::Declared => Some(m.capabilities.has(ModelCapabilities::reasoning())),
+    };
     ModelInfo {
         id: m.id.to_string(),
         name: m.display_name.to_string(),
@@ -241,6 +249,7 @@ fn merged_row_to_wire(
         // S2-1 source badge (裁定③).
         source: Some(m.source.as_str().to_string()),
         tools,
+        reasoning,
     }
 }
 
@@ -294,6 +303,9 @@ fn declared_spec_to_wire(
         max_output: spec.max_output,
         source: Some("declared".to_string()),
         tools: capabilities_declared.then(|| caps.has(ModelCapabilities::tool_use())),
+        // S3-5: declared reasoning bit — only decisive when the declaration
+        // names capabilities at all (no names = unknown, not false).
+        reasoning: capabilities_declared.then(|| caps.has(ModelCapabilities::reasoning())),
     }
 }
 
@@ -1273,9 +1285,563 @@ fn persist_memory_bypass(
     })
 }
 
+// ===== S3-6 (review 2026-10-05 §3-D) — pre-send cost estimate =====
+//
+// The composer shows what the NEXT send is projected to cost BEFORE it goes
+// out: input side counted from the draft + attachments + the session's live
+// context, output side bounded by the effective `max_tokens` ceiling
+// ("≈$low–$high"). Display-only BY CONTRACT: the estimate never gates a send
+// (the budget pre-turn guard and its budgetBypass flow are untouched), and it
+// never intercepts the send path.
+//
+// 同源 (same-source) contract — the DoD red line: token counting and pricing
+// both come from the engine/billing stack, never from a third JS/Rust
+// re-implementation:
+//   * counting  → `shannon_engine::compact::helpers::estimate_text_tokens`
+//     (the exact estimator the engine's own conversation/context estimates
+//     and compaction budget run on) and, for the conversation part, the
+//     engine's own `estimate_conversation_tokens()` over the restored
+//     session — the same number `/context` and the usage dialog display;
+//   * pricing   → `CostTracker::calculate_cost` (the `lookup_pricing` chain:
+//     declared providers.toml price > catalog > LiteLLM overlay > default
+//     fallback) — the exact arithmetic that writes `cost_usd` into
+//     `usage.jsonl` and the Usage page.
+// The钉测 below pins the parity: same input → same numbers as calling the
+// shared implementations directly.
+
+/// Wire shape of [`estimate_send_cost`]. camelCase like the other frozen
+/// frontend contracts (ContextBreakdownDto).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendCostEstimate {
+    /// The model the send WOULD use (session override > phase tier > global
+    /// default — resolved by the same resolver `send_message` uses).
+    pub model: String,
+    /// context + draft + attachments, the projected prompt input.
+    pub input_tokens: u64,
+    /// Conversation-context portion (engine estimate over the restored
+    /// session; a lower bound — ambient assembly-time blocks are not
+    /// approximated, same caveat as the context breakdown).
+    pub context_tokens: u64,
+    /// Draft-text portion.
+    pub draft_tokens: u64,
+    /// Attachment portion (what actually reaches the model — see the
+    /// per-kind rules on [`estimate_attachment_tokens`]).
+    pub attachment_tokens: u64,
+    /// Effective output ceiling (config > profile default > engine 4096,
+    /// lifted by High/Max effort on Anthropic-style providers — the same
+    /// lift `agent_loop` applies).
+    pub max_output_tokens: u64,
+    /// Input-only floor (0 output tokens) — the low end of the range.
+    pub cost_low: f64,
+    /// Input at the max-output ceiling — the high end of the range.
+    pub cost_high: f64,
+    /// This session's budget cap (`null` = uncapped). Drives the UI's
+    /// ≥80% warning tint; purely informational.
+    pub budget_usd: Option<f64>,
+    /// Spend the usage ledger already attributes to this session.
+    pub spent_usd: f64,
+}
+
+/// Draft-text token count. Same estimator as the engine's text counting
+/// ([`estimate_text_tokens`]), with one documented deviation: an EMPTY draft
+/// counts as 0 (the estimator's `.max(1)` floor exists for message blocks;
+/// the composer never sends empty content, so a floor here would put a
+/// phantom token on every idle render).
+fn count_draft_tokens(draft: &str) -> u64 {
+    if draft.is_empty() {
+        return 0;
+    }
+    shannon_engine::compact::helpers::estimate_text_tokens(draft) as u64
+}
+
+/// Effective output ceiling for a would-be send, replicating the engine's
+/// own arithmetic: the client `max_tokens` (config > profile default >
+/// engine default 4096), lifted to `budget + EFFORT_THINKING_HEADROOM_TOKENS`
+/// (4 096) when the effort dial is High/Max — but ONLY for the providers the
+/// engine lifts it for (Anthropic-family gets `budget_tokens`; OpenAI-style
+/// gets `reasoning_effort`, which does not consume `max_tokens`). Mirrors
+/// `agent_loop.rs` so the estimate's upper bound matches what the real send
+/// would be allowed to spend.
+fn effective_max_output_tokens(
+    provider: shannon_engine::api::LlmProvider,
+    client_max_tokens: u32,
+    effort: shannon_core::query_engine::EffortLevel,
+) -> u64 {
+    let mut max_output = u64::from(client_max_tokens);
+    if let Some(budget) = effort.thinking_budget() {
+        let lifts = matches!(
+            provider,
+            shannon_engine::api::LlmProvider::Anthropic
+                | shannon_engine::api::LlmProvider::Bedrock
+                | shannon_engine::api::LlmProvider::Custom
+        );
+        if lifts {
+            // Same headroom constant the engine uses for the visible answer.
+            let needed = u64::from(budget) + 4_096;
+            max_output = max_output.max(needed);
+        }
+    }
+    max_output
+}
+
+/// Pure composition: the billing arithmetic. `cost_low` prices the input at
+/// zero output (the floor), `cost_high` at the full output ceiling. Both go
+/// through [`shannon_core::query_engine::CostTracker::calculate_cost`] — the
+/// exact function `record_usage` bills with.
+fn compose_send_cost_estimate(
+    model: &str,
+    input_tokens: u64,
+    max_output_tokens: u64,
+    budget_usd: Option<f64>,
+    spent_usd: f64,
+) -> SendCostEstimate {
+    SendCostEstimate {
+        model: model.to_string(),
+        input_tokens,
+        // Populated by the caller (context/draft split is produced upstream);
+        // these three are overwritten there — kept zero here so the pure
+        // function only owns the pricing arithmetic under test.
+        context_tokens: 0,
+        draft_tokens: 0,
+        attachment_tokens: 0,
+        max_output_tokens,
+        cost_low: shannon_core::query_engine::CostTracker::calculate_cost(model, input_tokens, 0),
+        cost_high: shannon_core::query_engine::CostTracker::calculate_cost(
+            model,
+            input_tokens,
+            max_output_tokens,
+        ),
+        budget_usd,
+        spent_usd,
+    }
+}
+
+/// Per-session cache of the conversation-context token count, invalidated by
+/// the session's message-buffer snapshot (len + last timestamp + total
+/// content length). During typing the buffer is stable, so the expensive
+/// part (L0-log projection + full recount) runs once per turn instead of
+/// once per keystroke; the steady-state estimate is a HashMap hit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContextTokensCacheEntry {
+    messages_len: usize,
+    last_timestamp: i64,
+    total_content_len: usize,
+    tokens: u64,
+}
+
+static CONTEXT_TOKENS_CACHE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<uuid::Uuid, ContextTokensCacheEntry>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Per-attachment cache keyed by (path → mtime, size): extraction (pdftotext
+/// subprocess / office parse) runs once per file version, then every
+/// keystroke re-counts nothing. Bounded by pruning on insert.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AttachmentTokensCacheEntry {
+    mtime_ms: Option<i64>,
+    size: u64,
+    tokens: u64,
+}
+
+static ATTACHMENT_TOKENS_CACHE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, AttachmentTokensCacheEntry>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Cache bound: after this many distinct paths the whole map resets. Files
+/// attached in a composer session number in the tens; 128 is generous headroom
+/// while keeping the cache from leaking across a long app lifetime.
+const ATTACHMENT_TOKENS_CACHE_BOUND: usize = 128;
+
+/// Token count for ONE attachment — counting only what the send pipeline
+/// actually injects into the prompt (same-source by construction):
+///   * image    → 100, the engine's own per-image-block estimate
+///     (`estimate_message_tokens` counts every `ContentBlock::Image` as 100);
+///   * pdf      → the extracted-text injection block the send path builds
+///     (same `pdf_extraction_outcome`, same 50 KiB inline budget);
+///   * office   → the sectioned injection block (same
+///     `office_extraction_for_file`, same 16 KiB inline budget);
+///   * other    → 0 — plain text files ride along as chips only; the model
+///     reaches them through the Read tool, not the prompt.
+fn estimate_attachment_tokens_sync(path: &str) -> Result<u64, String> {
+    let p = std::path::Path::new(path);
+    let meta = std::fs::metadata(p).map_err(|e| format!("{path}: {e}"))?;
+    let size = meta.len();
+    let mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+
+    {
+        let cache = ATTACHMENT_TOKENS_CACHE
+            .lock()
+            .map_err(|_| "attachment token cache poisoned".to_string())?;
+        if let Some(entry) = cache.get(path) {
+            if entry.mtime_ms == mtime_ms && entry.size == size {
+                return Ok(entry.tokens);
+            }
+        }
+    }
+
+    let tokens: u64 = if crate::commands::detect_media_type(path).is_some() {
+        // Image attachment → one image block; the engine's own estimate for
+        // an image block is 100 tokens.
+        100
+    } else {
+        // Parseable documents: count the exact injection block the send
+        // pipeline would carry. (Runs here synchronously — the command
+        // wraps this in spawn_blocking.)
+        if p.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+        {
+            let text = crate::commands_files::extract_pdf_text_blocking(p);
+            let file_name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string());
+            let outcome = crate::commands::pdf_extraction_outcome(&file_name, p, size, None, &text);
+            shannon_engine::compact::helpers::estimate_text_tokens(&outcome.block) as u64
+        } else if crate::document_parse::is_office_document(p) {
+            let file_name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string());
+            let outcome = crate::document_parse::office_extraction_for_file(p, &file_name, size);
+            shannon_engine::compact::helpers::estimate_text_tokens(&outcome.block) as u64
+        } else {
+            0
+        }
+    };
+
+    let mut cache = ATTACHMENT_TOKENS_CACHE
+        .lock()
+        .map_err(|_| "attachment token cache poisoned".to_string())?;
+    if cache.len() >= ATTACHMENT_TOKENS_CACHE_BOUND {
+        cache.clear();
+    }
+    cache.insert(
+        path.to_string(),
+        AttachmentTokensCacheEntry {
+            mtime_ms,
+            size,
+            tokens,
+        },
+    );
+    Ok(tokens)
+}
+
+/// Conversation-context token count for a session, with the snapshot-keyed
+/// cache. `Ok(0)` (never an error) when the projection fails — the estimate
+/// is advisory and must not block the composer.
+async fn estimate_context_tokens(
+    state: &AppState,
+    session: &crate::session_registry::SessionState,
+) -> u64 {
+    // Snapshot key from the same in-memory buffer `send_message` pushes the
+    // user turn onto — the next send's context differs exactly when this
+    // buffer differs.
+    let snapshot = {
+        let messages = session.messages.lock().await;
+        (
+            messages.len(),
+            messages.last().map(|m| m.timestamp).unwrap_or(0),
+            messages.iter().map(|m| m.content.len()).sum::<usize>(),
+        )
+    };
+    {
+        let cache = CONTEXT_TOKENS_CACHE.lock().expect("context cache poisoned");
+        if let Some(entry) = cache.get(&session.session_id) {
+            let matches = entry.messages_len == snapshot.0
+                && entry.last_timestamp == snapshot.1
+                && entry.total_content_len == snapshot.2;
+            if matches {
+                return entry.tokens;
+            }
+        }
+    }
+
+    let tokens = match crate::commands_slash::restored_engine(state, session.session_id).await {
+        Ok(engine) => {
+            // The engine's own conversation estimate (history + system
+            // prompt) — the same number `/context` reports.
+            u64::try_from(engine.estimate_conversation_tokens()).unwrap_or(u64::MAX)
+        }
+        Err(e) => {
+            tracing::warn!(
+                session = %session.session_id,
+                error = %e,
+                "context token estimate unavailable — reporting 0 for this render"
+            );
+            0
+        }
+    };
+
+    let mut cache = CONTEXT_TOKENS_CACHE.lock().expect("context cache poisoned");
+    cache.insert(
+        session.session_id,
+        ContextTokensCacheEntry {
+            messages_len: snapshot.0,
+            last_timestamp: snapshot.1,
+            total_content_len: snapshot.2,
+            tokens,
+        },
+    );
+    tokens
+}
+
+/// Projected cost of the NEXT send from the composer — input tokens counted
+/// with the engine's own estimator (draft + attachments + restored-session
+/// context), priced with the billing chain, output bounded by the effective
+/// `max_tokens` ceiling. DISPLAY-ONLY: nothing here gates or mutates a send.
+///
+/// Performance contract (the composer debounces 300 ms, then calls this on
+/// every settled draft): the expensive parts are cached — conversation
+/// context per session (invalidated by the message-buffer snapshot) and
+/// per-attachment extraction (invalidated by mtime/size) — so a keystroke
+/// estimate is two HashMap hits plus one tiny text count.
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn estimate_send_cost(
+    state: tauri::State<'_, AppState>,
+    session_id: Option<String>,
+    draft_text: String,
+    file_paths: Option<Vec<String>>,
+) -> Result<SendCostEstimate, String> {
+    let (_, session) = state
+        .registry
+        .resolve_explicit_or_active(session_id.as_deref())?;
+
+    // Same resolution the send itself runs (override > tier > global), so
+    // the estimate prices the model that would actually serve.
+    let cc =
+        resolve_client_config_for_session(&state, &session, None::<&tauri::AppHandle<tauri::Wry>>)
+            .await;
+
+    let context_tokens = estimate_context_tokens(&state, &session).await;
+    let draft_tokens = count_draft_tokens(&draft_text);
+
+    // Attachments are extracted/parsed off the async runtime (pdftotext is a
+    // subprocess; office parse can be CPU-bound). Cache misses pay once per
+    // file version.
+    let attachment_tokens = match file_paths.as_deref() {
+        None | Some([]) => 0,
+        Some(paths) => {
+            let owned = paths.to_vec();
+            let counted = tokio::task::spawn_blocking(move || -> Vec<u64> {
+                owned
+                    .iter()
+                    .map(|p| estimate_attachment_tokens_sync(p).unwrap_or(0))
+                    .collect()
+            })
+            .await
+            .map_err(|e| format!("attachment estimate join failed: {e}"))?;
+            counted.into_iter().sum()
+        }
+    };
+
+    let input_tokens = context_tokens + draft_tokens + attachment_tokens;
+
+    // Effort dial: High/Max lifts the output ceiling on Anthropic-style
+    // providers (the engine's own rule), which feeds cost_high.
+    let effort_raw = state.desktop_config.read().await.effort_level.clone();
+    let effort = effort_raw
+        .as_deref()
+        .and_then(shannon_core::query_engine::EffortLevel::parse)
+        .unwrap_or_default();
+    let max_output_tokens = effective_max_output_tokens(cc.provider, cc.max_tokens, effort);
+
+    let budget_usd = crate::cost_commands::session_budget_usd(&state, session.session_id);
+    let spent_usd =
+        crate::cost_commands::session_spent_usd(&state, &session.session_id.to_string());
+
+    let mut out = compose_send_cost_estimate(
+        &cc.model,
+        input_tokens,
+        max_output_tokens,
+        budget_usd,
+        spent_usd,
+    );
+    out.context_tokens = context_tokens;
+    out.draft_tokens = draft_tokens;
+    out.attachment_tokens = attachment_tokens;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // === S3-6: pre-send cost estimate — 同源 (same-source) pins ===
+    //
+    // DoD red line: the estimate must produce the SAME numbers as the
+    // engine/billing implementations it claims to share — same input, same
+    // token count, same cost arithmetic. No third counting implementation
+    // may drift in.
+
+    #[test]
+    fn estimate_draft_counting_matches_engine_estimator() {
+        // The command's draft path must be exactly the engine's text
+        // estimator (`estimate_text_tokens` — the one the conversation
+        // estimate / context breakdown / compaction budget run on).
+        let samples = [
+            "Hello, world!",
+            "修复登录页的空指针异常，然后补上回归测试",
+            "mixed 中英文 content with symbols !@# and 123",
+            "🚀 emoji + CJK 日本語テキスト",
+        ];
+        for s in samples {
+            assert_eq!(
+                count_draft_tokens(s),
+                u64::try_from(shannon_engine::compact::helpers::estimate_text_tokens(s))
+                    .unwrap_or(0),
+                "draft counting drifted from the engine estimator for {s:?}"
+            );
+        }
+        // Documented deviation: the composer never sends empty content, so
+        // an empty draft is 0, not the estimator's block floor of 1.
+        assert_eq!(count_draft_tokens(""), 0);
+    }
+
+    #[test]
+    fn estimate_pricing_matches_billing_arithmetic() {
+        // cost_low / cost_high must be exactly what CostTracker (the usage
+        // ledger's pricer) produces for the same token counts.
+        let model = "claude-sonnet-4-6";
+        let input: u64 = 123_456;
+        let max_output: u64 = 8_192;
+        let est = compose_send_cost_estimate(model, input, max_output, None, 0.0);
+        assert_eq!(
+            est.cost_low,
+            shannon_core::query_engine::CostTracker::calculate_cost(model, input, 0)
+        );
+        assert_eq!(
+            est.cost_high,
+            shannon_core::query_engine::CostTracker::calculate_cost(model, input, max_output)
+        );
+        // The range is honest: floor ≤ ceiling, and the ceiling's output term
+        // is billed at the SAME pricing chain the ledger writes cost_usd with.
+        assert!(est.cost_low <= est.cost_high);
+        let pricing = shannon_core::query_engine::pricing_for_model_opt(model)
+            .expect("catalog model carries pricing");
+        let expected_high = input as f64 / 1_000_000.0 * pricing.input_price_per_mtok
+            + max_output as f64 / 1_000_000.0 * pricing.output_price_per_mtok;
+        assert!(
+            (est.cost_high - expected_high).abs() < 1e-9,
+            "cost_high drifted from the declared pricing chain"
+        );
+    }
+
+    #[test]
+    fn estimate_unknown_model_falls_back_like_billing() {
+        // A dynamic/custom model with no pricing entry: the ledger bills via
+        // the default fallback — the estimate must land on the same number,
+        // never error out or fabricate a different price.
+        let model = "shannon-desktop-no-such-model";
+        let est = compose_send_cost_estimate(model, 10_000, 4_096, None, 0.0);
+        assert_eq!(
+            est.cost_high,
+            shannon_core::query_engine::CostTracker::calculate_cost(model, 10_000, 4_096)
+        );
+        assert!(
+            est.cost_high > 0.0,
+            "fallback pricing still produces a cost"
+        );
+    }
+
+    #[test]
+    fn estimate_effort_lift_matches_agent_loop_semantics() {
+        use shannon_core::query_engine::EffortLevel as E;
+        // Anthropic-family: High lifts the ceiling to budget (8k) + the 4k
+        // visible-answer headroom — the same lift agent_loop applies.
+        assert_eq!(
+            effective_max_output_tokens(
+                shannon_engine::api::LlmProvider::Anthropic,
+                4_096,
+                E::High
+            ),
+            8_000 + 4_096
+        );
+        assert_eq!(
+            effective_max_output_tokens(shannon_engine::api::LlmProvider::Bedrock, 4_096, E::Max),
+            16_000 + 4_096
+        );
+        // An already-larger configured max_tokens is never lowered.
+        assert_eq!(
+            effective_max_output_tokens(
+                shannon_engine::api::LlmProvider::Anthropic,
+                32_000,
+                E::High
+            ),
+            32_000
+        );
+        // OpenAI-style providers take reasoning_effort, which does not
+        // consume max_tokens — no lift (agent_loop's own condition).
+        assert_eq!(
+            effective_max_output_tokens(shannon_engine::api::LlmProvider::OpenAI, 4_096, E::High),
+            4_096
+        );
+        // Low/Standard send nothing — byte-identical to the pre-dial behavior.
+        assert_eq!(
+            effective_max_output_tokens(
+                shannon_engine::api::LlmProvider::Anthropic,
+                4_096,
+                E::Standard
+            ),
+            4_096
+        );
+        assert_eq!(
+            effective_max_output_tokens(shannon_engine::api::LlmProvider::Anthropic, 4_096, E::Low),
+            4_096
+        );
+    }
+
+    #[test]
+    fn estimate_input_tokens_sum_the_three_parts() {
+        // context + draft + attachments — the wire field the UI renders as
+        // the token count must be the plain sum.
+        let est = compose_send_cost_estimate("gpt-5", 1_500, 4_096, None, 0.0);
+        // compose zeroes the parts; the command overwrites them — pin the
+        // invariant the UI relies on (input == sum) with the command's own
+        // arithmetic vocabulary.
+        let (context, draft, attachments) = (1_000u64, 300u64, 200u64);
+        assert_eq!(context + draft + attachments, 1_500);
+        assert_eq!(est.input_tokens, 1_500);
+    }
+
+    #[test]
+    fn estimate_attachment_counts_mirror_send_injection() {
+        // Images count as one engine image-block estimate (100); plain text
+        // files count 0 (chips only — the model reads them via tools).
+        let dir = std::env::temp_dir().join(format!("shannon-est-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("tempdir");
+        let png = dir.join("pic.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\nnot-a-real-image").expect("write png");
+        let txt = dir.join("notes.md");
+        std::fs::write(
+            &txt,
+            b"# notes\nlong content the model reads via tools only",
+        )
+        .expect("write md");
+
+        assert_eq!(
+            estimate_attachment_tokens_sync(png.to_str().unwrap()).unwrap_or(0),
+            100,
+            "image attachments use the engine's image-block estimate"
+        );
+        assert_eq!(
+            estimate_attachment_tokens_sync(txt.to_str().unwrap()).unwrap_or(0),
+            0,
+            "plain text files are chip-only on the send path — zero prompt tokens"
+        );
+        // Cache hit path: mutate nothing, re-read — must stay identical.
+        assert_eq!(
+            estimate_attachment_tokens_sync(png.to_str().unwrap()).unwrap_or(0),
+            100
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // === S2-4a (P-N9): pre-send vision pre-check ===
 

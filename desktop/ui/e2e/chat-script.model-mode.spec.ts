@@ -109,11 +109,15 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await expect(chip).toContainText('session')
     await expect.poll(async () => (await getConfig(page)).approval_mode).toBe('bypass_permissions')
 
-    // Effort pick — the chip label grows the "· Deep" tier suffix (effort
-    // commits via the effort: menu value; it never becomes the Select value).
+    // Effort pick — S3-5: the effort sub-tier expands under the EFFECTIVE
+    // model's row (the just-pinned GPT-5); picking one commits via the
+    // effort: menu value and wears the effort BADGE beside the chip — the
+    // `name · Deep` label glue is gone (P2-19). The chip keeps only its
+    // `· session` suffix.
     await chip.click()
     await page.getByRole('option', { name: 'Deep' }).click()
-    await expect(chip).toContainText('Deep')
+    await expect(page.getByTestId('effort-badge')).toContainText('Deep')
+    await expect(chip).not.toContainText('Deep')
 
     // "Set as default" promotes the session pick to the engine-global
     // default (configure('model')) and toasts it.
@@ -145,13 +149,15 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
 
     // Reset to default: the override is dropped — the chip re-inherits the
     // PROMOTED global default (GPT-5, from "Set as default" above) and keeps
-    // the global effort tier: the exact inherited-state label "GPT-5 · Deep".
+    // the global effort tier: the model name comes back bare on the chip
+    // while the effort badge (S3-5) carries the "Deep" state.
     // The bare not.toContainText('session') would also pass on a wrong-model
     // or placeholder chip, so pin the positive label too (next send observes
     // the inheritance as model: null).
     await chip.click()
     await page.getByTestId('model-action-clear-override').click()
-    await expect(chip).toContainText('GPT-5 · Deep', { timeout: 5_000 })
+    await expect(chip).toContainText('GPT-5', { timeout: 5_000 })
+    await expect(page.getByTestId('effort-badge')).toContainText('Deep', { timeout: 5_000 })
     await expect(chip).not.toContainText('session', { timeout: 5_000 })
 
     await chat.send(script.turns[2]!.user)

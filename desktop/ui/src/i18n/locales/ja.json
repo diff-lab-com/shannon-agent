@@ -4031,5 +4031,10 @@
   "chat.error.rateLimit.retryAfter": "{seconds}秒後に再試行できます",
   "chat.error.authz.title": "アクセスが拒否されました（403）",
   "chat.error.authz.body": "この API キーには、要求されたモデルやリソースへのアクセス権がありません。設定 → モデル でキーと権限を確認してください。",
-  "chat.error.authz.checkKey": "キーを確認"
+  "chat.error.authz.checkKey": "キーを確認",
+  "chat.input.effort.standard": "標準",
+  "chat.input.effort.notApplicable": "このモデルは推論をサポートしません — 推論の強さは思考モデルにのみ作用します",
+  "chat.input.cost.aria": "送信コストの見積り（参考値、制限ではありません）",
+  "chat.input.cost.range": "≈ {tokens} トークン · {low}–{high}",
+  "chat.input.cost.budget": "セッション予算の ≈{percent}%"
 }

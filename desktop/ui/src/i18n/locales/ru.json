@@ -4031,5 +4031,10 @@
   "chat.error.rateLimit.retryAfter": "Повторная попытка через {seconds} с",
   "chat.error.authz.title": "Доступ запрещён (403)",
   "chat.error.authz.body": "У этого API-ключа нет доступа к запрошенной модели или ресурсу. Проверьте ключ и его права в разделе Настройки → Модели.",
-  "chat.error.authz.checkKey": "Проверить ключ"
+  "chat.error.authz.checkKey": "Проверить ключ",
+  "chat.input.effort.standard": "Стандарт",
+  "chat.input.effort.notApplicable": "Эта модель не заявляет рассуждения — уровни усилия действуют только на думающие модели",
+  "chat.input.cost.aria": "Оценка стоимости отправки (справочно, не лимит)",
+  "chat.input.cost.range": "≈ {tokens} токенов · {low}–{high}",
+  "chat.input.cost.budget": "≈{percent}% бюджета сессии"
 }

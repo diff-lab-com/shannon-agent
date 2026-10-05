@@ -347,6 +347,29 @@ export interface ModelInfo {
   /** S2-4b (schema/wire only): native tool-calling support. `null` = the
    *  source carries no explicit tool data (unknown — no badge). */
   tools?: boolean | null
+  /** S3-5 (P2-19): reasoning/thinking support. `false` is the ONLY decisive
+   *  verdict — the effort sub-tier shows its "steers thinking models" note
+   *  on it. `true` from an explicit source; `null` = unknown (sub-tier
+   *  renders normally — the engine passes effort params through and the
+   *  provider arbitrates). */
+  reasoning?: boolean | null
+}
+
+/** S3-6: projected cost of the NEXT send — produced by the backend's
+ *  `estimate_send_cost` (billing-grade counting + pricing; the frontend only
+ *  renders). `costLow` prices the input at zero output, `costHigh` at the
+ *  `maxOutputTokens` ceiling ("≈$low–$high" range). */
+export interface SendCostEstimate {
+  model: string
+  inputTokens: number
+  contextTokens: number
+  draftTokens: number
+  attachmentTokens: number
+  maxOutputTokens: number
+  costLow: number
+  costHigh: number
+  budgetUsd?: number | null
+  spentUsd: number
 }
 
 /// Mirrors `shannon_types::provider_config::ModelSpec` (S2-1 curated vault).
@@ -681,6 +704,11 @@ export interface DesktopConfig {
    *  = unset — the sidebar shows the trailing 7-day cost and no threshold
    *  alerts fire. Written via `configure('monthly_budget_usd')`. */
   monthly_budget_usd?: number | null
+  /** S3-5 (P2-19): effort dial — canonical `low` | `standard` | `high` |
+   *  `max`. null/undefined = the engine default (`standard`, which sends no
+   *  thinking parameters). Written via `configure('effort_level')`; the
+   *  engine applies it per turn (`set_effort`). */
+  effort_level?: string | null
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */

@@ -4031,5 +4031,10 @@
   "chat.error.rateLimit.retryAfter": "{seconds} 秒后可重试",
   "chat.error.authz.title": "访问被拒绝（403）",
   "chat.error.authz.body": "当前 API 密钥无权访问该模型或资源。请在 设置 → 模型 中检查密钥及其权限。",
-  "chat.error.authz.checkKey": "检查密钥"
+  "chat.error.authz.checkKey": "检查密钥",
+  "chat.input.effort.standard": "标准",
+  "chat.input.effort.notApplicable": "该模型未声明推理能力——推理力度仅对思考型模型生效",
+  "chat.input.cost.aria": "发送成本预估（仅供参考，不设限制）",
+  "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
+  "chat.input.cost.budget": "≈会话预算的 {percent}%"
 }

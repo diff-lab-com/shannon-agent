@@ -4031,5 +4031,10 @@
   "chat.error.rateLimit.retryAfter": "Nouvelle tentative possible dans {seconds} s",
   "chat.error.authz.title": "Accès refusé (403)",
   "chat.error.authz.body": "Cette clé d'API n'a pas accès au modèle ou à la ressource demandé(e). Vérifie la clé et ses autorisations dans les paramètres → Modèles.",
-  "chat.error.authz.checkKey": "Vérifier la clé"
+  "chat.error.authz.checkKey": "Vérifier la clé",
+  "chat.input.effort.standard": "Standard",
+  "chat.input.effort.notApplicable": "Ce modèle n’annonce pas de raisonnement — l’effort de raisonnement ne concerne que les modèles avec réflexion",
+  "chat.input.cost.aria": "Estimation du coût d’envoi (indicative, pas une limite)",
+  "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
+  "chat.input.cost.budget": "≈{percent} % du budget de session"
 }

@@ -58,6 +58,7 @@ import type {
   ProjectRecord,
   ProviderStatus,
   FileIndexEntry,
+  SendCostEstimate,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -733,6 +734,25 @@ export async function getSessionModel(
  *  ("N sessions still use override models"). */
 export async function countSessionModelOverrides(): Promise<number> {
   return invoke<number>('count_session_model_overrides')
+}
+
+// --- S3-6 (review 2026-10-05 §3-D): pre-send cost estimate ---
+
+/** Projected cost of the NEXT send, counted and priced by the backend with
+ *  the SAME estimator/pricer the engine and usage ledger run (同源) — the
+ *  frontend only renders. `costLow` = input-only floor, `costHigh` = input
+ *  at the `maxOutputTokens` ceiling. DISPLAY-ONLY by contract: never gates
+ *  a send; a failed call just hides the estimate row. */
+export async function estimateSendCost(
+  sessionId: string | null | undefined,
+  draftText: string,
+  filePaths: string[],
+): Promise<SendCostEstimate> {
+  return invoke<SendCostEstimate>('estimate_send_cost', {
+    sessionId: sessionId ?? null,
+    draftText,
+    filePaths,
+  })
 }
 
 // --- S2-4a (review 2026-10-05 P-N9): pre-send vision pre-check ---

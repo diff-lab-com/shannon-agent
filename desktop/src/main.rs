@@ -172,6 +172,10 @@ fn main() {
             // P2-5 — session-level "temporary chat" (no-memory bypass).
             commands_chat::set_session_memory_bypass,
             commands_chat::get_session_memory_bypass,
+            // S3-6 — pre-send cost estimate for the composer: billing-grade
+            // token counting + pricing (the same estimator/pricer the engine
+            // and the usage ledger run), display-only.
+            commands_chat::estimate_send_cost,
             commands_config::configure,
             commands_config::get_config,
             commands_config::detect_provider_from_env,

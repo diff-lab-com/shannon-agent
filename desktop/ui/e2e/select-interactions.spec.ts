@@ -9,8 +9,9 @@
 // UI notes (模型名去重 / audit D8 / GB round-1 R3):
 //  - the composer placeholder is context-aware, so waits target the
 //    textarea's stable aria-label ("Message") instead of placeholder text;
-//  - reasoning effort is FOLDED into the model chip's dropdown as a
-//    namespaced section — there is no separate Reasoning combobox;
+//  - reasoning effort is the SELECTED model row's expanded sub-tier inside
+//    the model chip's dropdown (S3-5, 裁定⑪) — no separate Reasoning
+//    combobox, no bottom section;
 //  - the permission dropdown offers the FOUR shared tiers
 //    (Ask/Auto Edit/Full) — `plan` is owned by the composer's
 //    plan toggle and `confirm` is an out-of-table engine value, so neither
@@ -40,13 +41,22 @@ test.describe('Select interactions', () => {
     await page.getByRole('textbox', { name: 'Message' }).waitFor({ timeout: 15000 })
     await page.waitForTimeout(800)
 
-    // Effort entries live in the model chip's dropdown under the
-    // "Reasoning effort" section; picking one re-renders the chip as
-    // "<model> · <effort label>".
+    // S3-5 (裁定⑪): the effort entries are the SELECTED model row's
+    // expanded sub-tier — picking one re-renders the effort BADGE beside
+    // the chip; the chip label itself stays the bare model name (the old
+    // `name · Deep` glue is gone, P2-19).
     const trigger = page.getByRole('combobox', { name: 'Model' })
     await trigger.click()
+    await expect(page.getByTestId('effort-subtier-header')).toBeVisible()
     await page.getByRole('option', { name: 'Deep' }).click()
-    await expect(trigger).toContainText(/·\s*Deep/i, { timeout: 10000 })
+    await expect(page.getByTestId('effort-badge')).toContainText(/Deep/i, { timeout: 10000 })
+    await expect(trigger).not.toContainText(/Deep/i, { timeout: 10000 })
+
+    // Re-opening the picker shows the sub-tier again (expanded under the
+    // same effective model row).
+    await trigger.click()
+    await expect(page.getByTestId('effort-option-high')).toBeVisible()
+    await page.keyboard.press('Escape')
   })
 
   test('model chip switch is session-scoped; the global default stays untouched (R2-1)', async ({ page }) => {
