@@ -116,6 +116,14 @@ class MockRelay {
     }
   }
 
+  /** Test seam (修正1): push an extra host_ready (the re-register path). */
+  reissueHostReady(sid: string): void {
+    const host = this.hosts.get(sid);
+    if (host && host.readyState === WebSocket.OPEN) {
+      host.send(JSON.stringify({ t: "host_ready", sid }));
+    }
+  }
+
   private forwardBinary(sender: WebSocket, data: Buffer): void {
     for (const [sid, host] of this.hosts) {
       if (host === sender) {
@@ -602,6 +610,49 @@ function phoneShared(phonePriv: ReturnType<typeof generateKeyPairSync>["privateK
     publicKey: createPublicKey({ key: { kty: "OKP", crv: "X25519", x: hostPubB64 }, format: "jwk" }),
   });
 }
+
+describe("startRelayHost onRegistered (修正1 reconcile hook)", () => {
+  it("fires on every host_ready — the control-link (re)establishment reconcile point", async () => {
+    const relay = new MockRelay();
+    const relayPort = await relay.start(0);
+    const registered = vi.fn();
+    hostHandle = startRelayHost({
+      relayUrl: `ws://127.0.0.1:${relayPort}`,
+      sid: "sid-reconcile",
+      sessionKey: deriveSessionKey("reconcile-token"),
+      handlers: healthHandlers(),
+      logger,
+      pairTimeout: 5000,
+      onRegistered: registered,
+    });
+
+    await vi.waitFor(() => expect(registered).toHaveBeenCalledTimes(1));
+    // A re-register (relay restart / reconnect) fires it again — this is what
+    // re-asserts the persisted push expected state after a link drop.
+    relay.reissueHostReady("sid-reconcile");
+    await vi.waitFor(() => expect(registered).toHaveBeenCalledTimes(2));
+
+    // A throwing hook must not break the join state machine (relayHost guards).
+    const throwing = startRelayHost({
+      relayUrl: `ws://127.0.0.1:${relayPort}`,
+      sid: "sid-reconcile-throws",
+      sessionKey: deriveSessionKey("reconcile-token"),
+      handlers: healthHandlers(),
+      logger,
+      pairTimeout: 5000,
+      onRegistered: () => {
+        throw new Error("reconcile exploded");
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(relay.lastRegister!["sid"]).toBe("sid-reconcile-throws"));
+      // The throwing host's own state machine survived — control channel open.
+      expect(throwing.sendControl({ t: "push.wake", deviceId: "d", seq: 1 })).toBe(true);
+    } finally {
+      await throwing.stop().catch(() => {});
+    }
+  });
+});
 
 describe("startRelayHost v0.3 handshake", () => {
   it("sends the register frame with the relay auth tag", async () => {
