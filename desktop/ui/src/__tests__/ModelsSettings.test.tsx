@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
 import { ThemeProvider } from '@/context/ThemeContext'
 import { MemoryRouter } from 'react-router-dom'
@@ -358,5 +358,218 @@ describe('ModelsSettings — refresh model catalog (R2-2)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Refresh the model catalog from models.dev/i }))
     const line = await screen.findByTestId('refresh-model-catalog-result')
     expect(line).toHaveTextContent('network down')
+  })
+})
+
+// === S2-2 — per-model metadata editor over the curated vault (P-N6) ===
+//
+// The catalog rows carry two vault affordances when a managed provider slot
+// is active:
+//   - a declaration already in the vault → expand-to-edit (ModelMetaEditor),
+//   - a catalog/overlay row outside the vault → "add to vault" (persists an
+//     id-only declaration via set_provider_models, then opens the editor).
+// These tests pin the click → command-payload → refresh loop; the payload
+// must be the COMPLETE vault (set_provider_models has overwrite semantics,
+// no field merge).
+describe('ModelsSettings — vault metadata editor (S2-2)', () => {
+  const vaultSpec = {
+    id: 'glm-5.3-flash',
+    display_name: null,
+    context_window: null,
+    max_output: 32768,
+    cost_per_m_input: null,
+    cost_per_m_output: null,
+    capabilities: ['tool_use'],
+  }
+
+  function mockProviders(models: unknown[] | null) {
+    vi.mocked(api.listProviders).mockResolvedValue({
+      active_provider_id: 'prov-glm',
+      providers: [
+        {
+          id: 'prov-glm',
+          display_name: 'GLM',
+          kind: 'openai-compatible',
+          has_api_key: true,
+          models: models ?? undefined,
+        },
+      ],
+    } as Awaited<ReturnType<typeof api.listProviders>>)
+  }
+
+  function mockCatalog() {
+    vi.mocked(api.listModels).mockResolvedValue([
+      {
+        id: 'glm-5.3-flash',
+        name: 'GLM 5.3 Flash',
+        provider: 'openai-compatible',
+        context_window: 198000,
+        price_in: 0.5,
+        price_out: 2,
+        tier: null,
+        dynamic: false,
+        source: 'catalog',
+      },
+      {
+        id: 'glm-4-air',
+        name: 'GLM 4 Air',
+        provider: 'openai-compatible',
+        context_window: 128000,
+        price_in: null,
+        price_out: null,
+        tier: null,
+        dynamic: false,
+        source: 'catalog',
+      },
+    ] as Awaited<ReturnType<typeof api.listModels>>)
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.setProviderModels).mockReset()
+    vi.mocked(api.setProviderModels).mockResolvedValue({
+      provider_id: 'prov-glm',
+      model_profile: 'default',
+      models: [],
+    })
+  })
+
+  it('hides the vault affordances when no managed provider slot is active', async () => {
+    mockCatalog()
+    render(wrap(<ModelsSettings />))
+    expect(await screen.findByText('GLM 5.3 Flash')).toBeInTheDocument()
+    expect(screen.queryByTestId('add-model-to-vault-glm-5.3-flash')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('edit-model-meta-glm-5.3-flash')).not.toBeInTheDocument()
+  })
+
+  it('offers "add to vault" on a row outside the vault and submits vault + id-only spec', async () => {
+    mockCatalog()
+    // First read (mount): the vault already curates glm-5.3-flash.
+    // Second read (post-save reload): the command's write landed — pins the
+    // refresh loop end to end.
+    vi.mocked(api.listProviders)
+      .mockResolvedValueOnce({
+        active_provider_id: 'prov-glm',
+        providers: [
+          {
+            id: 'prov-glm',
+            display_name: 'GLM',
+            kind: 'openai-compatible',
+            has_api_key: true,
+            models: [vaultSpec],
+          },
+        ],
+      } as Awaited<ReturnType<typeof api.listProviders>>)
+    mockProviders([
+      vaultSpec,
+      { ...vaultSpec, id: 'glm-4-air', max_output: null, capabilities: [] },
+    ])
+    vi.mocked(api.setProviderModels).mockResolvedValue({
+      provider_id: 'prov-glm',
+      model_profile: 'default',
+      models: [{ ...vaultSpec, id: 'glm-4-air', max_output: null, capabilities: [] }],
+    })
+
+    render(wrap(<ModelsSettings />))
+    const addBtn = await screen.findByTestId('add-model-to-vault-glm-4-air')
+    fireEvent.click(addBtn)
+
+    await screen.findByTestId('model-meta-editor')
+    expect(api.setProviderModels).toHaveBeenCalledTimes(1)
+    expect(api.setProviderModels).toHaveBeenCalledWith('prov-glm', [
+      // Overwrite semantics: the WHOLE vault travels — the existing
+      // declaration re-serialized untouched…
+      {
+        id: 'glm-5.3-flash',
+        display_name: null,
+        context_window: null,
+        max_output: 32768,
+        cost_per_m_input: null,
+        cost_per_m_output: null,
+        capabilities: ['tool_use'],
+      },
+      // …plus the fresh id-only declaration.
+      { id: 'glm-4-air' },
+    ])
+    // The editor opened straight onto the fresh declaration and the row
+    // flipped to the in-vault (edit) affordance after the reload.
+    expect(screen.getByTestId('edit-model-meta-glm-4-air')).toBeInTheDocument()
+  })
+
+  it('expands a declared row into the editor and saves the merged vault', async () => {
+    mockCatalog()
+    mockProviders([vaultSpec])
+    render(wrap(<ModelsSettings />))
+
+    const editBtn = await screen.findByTestId('edit-model-meta-glm-5.3-flash')
+    expect(editBtn).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(editBtn)
+
+    const editor = await screen.findByTestId('model-meta-editor')
+    expect(editor).toBeInTheDocument()
+    expect(editBtn).toHaveAttribute('aria-expanded', 'true')
+    // Draft pre-filled from the stored declaration.
+    expect((screen.getByTestId('meta-editor-max-output') as HTMLInputElement).value).toBe('32768')
+
+    // Correct the input price and save.
+    fireEvent.change(screen.getByTestId('meta-editor-price-in'), { target: { value: '0.75' } })
+    fireEvent.click(screen.getByTestId('meta-editor-save'))
+
+    await waitFor(() => expect(api.setProviderModels).toHaveBeenCalledTimes(1))
+    expect(api.setProviderModels).toHaveBeenCalledWith('prov-glm', [
+      {
+        id: 'glm-5.3-flash',
+        display_name: null,
+        context_window: null,
+        max_output: 32768,
+        cost_per_m_input: 0.75,
+        cost_per_m_output: null,
+        capabilities: ['tool_use'],
+      },
+    ])
+    // Refresh verification: the save path re-pulls the catalog (in the real
+    // backend CONFIG_UPDATED drives the same refreshModels via AppContext —
+    // the editor drives it explicitly so the row/badge updates even if this
+    // window missed the event).
+    await waitFor(() => {
+      expect(vi.mocked(api.listModels).mock.calls.length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  it('keeps the editor open when the command rejects (input survives)', async () => {
+    mockCatalog()
+    mockProviders([vaultSpec])
+    vi.mocked(api.setProviderModels).mockRejectedValueOnce(new Error('disk full'))
+
+    render(wrap(<ModelsSettings />))
+    fireEvent.click(await screen.findByTestId('edit-model-meta-glm-5.3-flash'))
+    await screen.findByTestId('model-meta-editor')
+    fireEvent.change(screen.getByTestId('meta-editor-price-in'), { target: { value: '0.75' } })
+    fireEvent.click(screen.getByTestId('meta-editor-save'))
+
+    await waitFor(() => expect(api.setProviderModels).toHaveBeenCalledTimes(1))
+    // Editor still up for correction after the failure.
+    expect(screen.getByTestId('model-meta-editor')).toBeInTheDocument()
+  })
+
+  it('refuses to grow the vault beyond the soft cap (裁定⑥, UI-side guard)', async () => {
+    mockCatalog()
+    const fifty = Array.from({ length: 50 }, (_, i) => ({
+      id: `m-${i}`,
+      display_name: null,
+      context_window: null,
+      max_output: null,
+      cost_per_m_input: null,
+      cost_per_m_output: null,
+      capabilities: [],
+    }))
+    mockProviders(fifty)
+    render(wrap(<ModelsSettings />))
+
+    fireEvent.click(await screen.findByTestId('add-model-to-vault-glm-4-air'))
+    // The command must NOT fire at the cap.
+    await waitFor(() => {
+      expect(screen.queryByTestId('model-meta-editor')).not.toBeInTheDocument()
+    })
+    expect(api.setProviderModels).not.toHaveBeenCalled()
   })
 })

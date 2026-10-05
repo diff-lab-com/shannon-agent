@@ -265,6 +265,134 @@ mod tests {
         );
     }
 
+    // ---- S2-2 (per-model metadata editor): partial-field update behavior ----
+    //
+    // The desktop editor edits ONE declaration but `set_provider_models`
+    // replaces a provider's vault wholesale. Two contracts make that safe:
+    //   1. a wire input carrying only some fields projects to a spec with
+    //      the unset fields `None`/empty (no field-merge anywhere in the
+    //      projection), and
+    //   2. writing that partial spec REPLACES the stored declaration the
+    //      same way — so clients MUST merge against the current vault
+    //      client-side (the editor's `upsertVaultModel`) before submitting.
+    // Pinned here so a "convenient" field-merge can never silently appear:
+    // it would resurrect stale catalog metadata the user explicitly cleared
+    // (blank field = clear the declaration).
+
+    #[test]
+    fn partial_metadata_input_projects_unset_fields_to_none() {
+        let mut partial = input("proxy-model-x");
+        partial.cost_per_m_input = Some(0.5);
+        partial.cost_per_m_output = Some(2.0);
+        partial.capabilities = Some(vec!["vision".into()]);
+        let spec = partial.into_spec(0).unwrap();
+        assert_eq!(spec.cost_per_m_input, Some(0.5));
+        assert_eq!(spec.cost_per_m_output, Some(2.0));
+        assert_eq!(spec.capabilities, vec![ModelCapability::Vision]);
+        // Untouched fields are cleared, not inherited from anywhere.
+        assert_eq!(spec.display_name, None);
+        assert_eq!(spec.context_window, None);
+        assert_eq!(spec.max_output, None);
+    }
+
+    #[tokio::test]
+    async fn partial_spec_write_replaces_the_declaration_wholesale() {
+        use crate::commands::AppState;
+        use shannon_core::provider_config_store::ProviderConfigStore;
+        use shannon_types::provider_config::{
+            CredentialRef, ProviderKind, ProviderProfile, ProviderTiers,
+        };
+        use std::collections::HashMap;
+
+        let state = AppState::new();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("providers.toml");
+        let slot = ProviderProfile {
+            id: "glm".to_string(),
+            kind: ProviderKind::OpenAiCompatible,
+            display_name: "GLM".to_string(),
+            base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
+            models_url: None,
+            credential: CredentialRef::Env {
+                var: "K".to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+            models: Vec::new(),
+        };
+        {
+            let mut store = state.provider_store.lock().await;
+            let mut cfg = ProviderConfigStore::load_or_default_at(&path);
+            cfg.insert_model_profile("default").unwrap();
+            cfg.upsert_profile(slot, "proxy-model-x");
+            cfg.save().unwrap();
+            *store = cfg;
+        }
+
+        // Seed a full declaration (every field set).
+        {
+            let mut store = state.provider_store.lock().await;
+            store
+                .set_provider_models(
+                    "glm",
+                    vec![ModelSpec {
+                        id: "proxy-model-x".to_string(),
+                        display_name: Some("Proxy".to_string()),
+                        context_window: Some(198_000),
+                        max_output: Some(32_768),
+                        cost_per_m_input: Some(0.5),
+                        cost_per_m_output: Some(2.0),
+                        capabilities: vec![ModelCapability::Vision],
+                    }],
+                    None,
+                )
+                .unwrap();
+        }
+
+        // The editor's edit of ONE field (a pricing correction) submits the
+        // merged spec; the write replaces the stored declaration wholesale.
+        // A partial spec (only prices set) must NOT preserve the previous
+        // context/capabilities behind the scenes.
+        {
+            let mut store = state.provider_store.lock().await;
+            store
+                .set_provider_models(
+                    "glm",
+                    vec![ModelSpec {
+                        id: "proxy-model-x".to_string(),
+                        display_name: None,
+                        context_window: None,
+                        max_output: None,
+                        cost_per_m_input: Some(0.75),
+                        cost_per_m_output: Some(3.0),
+                        capabilities: Vec::new(),
+                    }],
+                    None,
+                )
+                .unwrap();
+        }
+        let spec = {
+            let store = state.provider_store.lock().await;
+            let glm = store.config().profiles["default"]
+                .providers
+                .iter()
+                .find(|p| p.id == "glm")
+                .unwrap();
+            assert_eq!(glm.models.len(), 1);
+            glm.models[0].clone()
+        };
+        assert_eq!(spec.cost_per_m_input, Some(0.75));
+        assert_eq!(spec.cost_per_m_output, Some(3.0));
+        // Overwrite semantics: nothing resurrects.
+        assert_eq!(spec.display_name, None);
+        assert_eq!(spec.context_window, None);
+        assert_eq!(spec.max_output, None);
+        assert!(spec.capabilities.is_empty());
+    }
+
     #[tokio::test]
     async fn set_provider_models_persists_and_reloads_from_disk() {
         use crate::commands::AppState;
