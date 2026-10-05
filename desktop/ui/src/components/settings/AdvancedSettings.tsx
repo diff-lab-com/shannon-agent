@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, NavLink } from 'react-router-dom'
 import { getVersion } from '@tauri-apps/api/app'
 import { homeDir, join } from '@tauri-apps/api/path'
 import { Spinner } from '@/components/ui/loading-state'
@@ -18,7 +18,7 @@ import { setRemoteImagesAllowed } from '@/lib/remoteImages'
 import { useRemoteImagesAllowed } from '@/hooks/useRemoteImagesAllowed'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
-import type { SkillCandidate, CliInstallStatus, AppUpdateInfo } from '@/lib/tauri-api'
+import type { SkillCandidate, CliInstallStatus } from '@/lib/tauri-api'
 import { cn } from '@/lib/utils'
 
 export default function AdvancedSettings() {
@@ -64,10 +64,6 @@ export default function AdvancedSettings() {
   // ADR-0011 B3 — bundled `shannon` CLI exposure (non-shadowing install).
   const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null)
   const [installingCli, setInstallingCli] = useState(false)
-
-  // C1① — semi-automatic update check (GitHub latest → open download page).
-  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null)
-  const [checkingUpdate, setCheckingUpdate] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -129,24 +125,14 @@ export default function AdvancedSettings() {
     setSkillDetectionEnabled(config?.skill_detection_enabled ?? true)
   }, [config?.skill_detection_enabled])
 
-  // 卡A GC — session storage management: auto-clean switch (default off)
-  // + retention gear (永不 0 / 30 / 90 days). Both follow the persisted
-  // config on refresh, like the dream switches above.
-  const [sessionGcEnabled, setSessionGcEnabled] = useState(config?.session_gc_enabled ?? false)
-  const [sessionRetentionDays, setSessionRetentionDays] = useState<number>(config?.session_retention_days ?? 0)
+  // 卡A GC — session storage management moved to Settings → 会话 (Settings
+  // R3 T6); this page keeps only the cross-link below. The toggle states and
+  // the retention handler went with the card.
 
   // P2-4 (R9-④): the remote-image allow switch lives in the frontend-local
   // store — the hook both reads and (through the store) persists, so the
   // switch can't lie the way a config-backed toggle can after a failed write.
   const remoteImagesAllowed = useRemoteImagesAllowed()
-
-  useEffect(() => {
-    setSessionGcEnabled(config?.session_gc_enabled ?? false)
-  }, [config?.session_gc_enabled])
-
-  useEffect(() => {
-    setSessionRetentionDays(config?.session_retention_days ?? 0)
-  }, [config?.session_retention_days])
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
@@ -199,28 +185,10 @@ export default function AdvancedSettings() {
     setInstallingCli(false)
   }
 
-  const handleCheckUpdate = async () => {
-    setCheckingUpdate(true)
-    try {
-      const info = await api.checkAppUpdate()
-      setUpdateInfo(info)
-      if (info.updateAvailable && info.latestVersion) {
-        toast.success(intl.formatMessage({ id: 'settings.advanced.updateAvailableBadge' }, { version: info.latestVersion }))
-      }
-    } catch (e) {
-      toastError(t('settings.advanced.updateCheckFailed'), e)
-    }
-    setCheckingUpdate(false)
-  }
-
-  const handleOpenReleasePage = async () => {
-    if (!updateInfo) return
-    try {
-      await api.openReleasePage(updateInfo.releaseUrl)
-    } catch (e) {
-      toastError(t('settings.advanced.updateOpenFailed'), e)
-    }
-  }
+  // Settings R3 (T1): the「版本与更新」card moved to Settings → 关于 (the
+  // non-dev-gated section) — only the check-update / release-page handlers
+  // went with it. This page keeps the developer options (logs / diagnostics
+  // / API keys / factory reset).
 
   // P2: replace the fake "System Logs" modal (a hardcoded one-liner with a
   // made-up version) with an honest entry point: the Shannon state directory
@@ -266,22 +234,6 @@ export default function AdvancedSettings() {
     setExportingDiagnostics(false)
   }
 
-  // 卡A GC: persist the retention gear. `0` (永不) is written literally —
-  // the backend maps it to "never auto-delete" — so the value the user
-  // picked is exactly the value stored.
-  const handleRetentionChange = async (next: string) => {
-    const days = Number(next)
-    if (!Number.isInteger(days) || days < 0) return
-    setSessionRetentionDays(days)
-    try {
-      await api.configure({ key: 'session_retention_days', value: String(days) })
-      await refreshConfig()
-      toast.success(t('settings.advanced.sessionGc.saved'))
-    } catch (e) {
-      toastError(t('settings.advanced.updateFailed'), e)
-    }
-  }
-
   // P2-5: persist `offpeak.model_override` (frozen config key). An empty
   // value disables the override — routines then use the active model.
   const handleSaveOffpeakModel = async () => {
@@ -295,6 +247,9 @@ export default function AdvancedSettings() {
     }
     setSavingOffpeak(false)
   }
+
+  // Settings R3 T6: the GC retention gear moved to 会话 with its card —
+  // handleRetentionChange went with it.
 
   return (
     <div className="pb-xl">
@@ -367,44 +322,20 @@ export default function AdvancedSettings() {
           </div>
         </div>
 
-        {/* 卡A GC — 会话存储管理: auto-clean for **archived** sessions only,
-            parked next to the Dream/Skill cards. The description carries the
-            informed-consent copy the review required: 仅清理已归档会话；按
-            最后活跃时间计时；默认永不自动删除. */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="session-gc-card">
-          <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
-              <span className="material-symbols-outlined">auto_delete</span>
-            </div>
-            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.sessionGc.title')}</h3>
-          </div>
-          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.sessionGc.desc')}</p>
-          <div className="flex items-center justify-between gap-md">
-            <div>
-              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.sessionGc.enabled')}</div>
-              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.sessionGc.enabledDesc')}</div>
-            </div>
-            <Switch checked={sessionGcEnabled} onCheckedChange={v => handleToggle('session_gc_enabled', v, setSessionGcEnabled)} className="shrink-0" aria-label={t('settings.advanced.sessionGc.enabled')} />
-          </div>
-          <div className="mt-md">
-            <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs" htmlFor="session-retention-select">
-              {t('settings.advanced.sessionGc.retention')}
-            </label>
-            {/* Native select (the settings modals' pattern) — the wire value
-                is the plain day count, `0` = 永不 (never auto-delete). */}
-            <select
-              id="session-retention-select"
-              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm cursor-pointer"
-              value={String(sessionRetentionDays)}
-              onChange={e => void handleRetentionChange(e.target.value)}
-              aria-label={t('settings.advanced.sessionGc.retention')}
-            >
-              <option value="0">{t('settings.advanced.sessionGc.retention.never')}</option>
-              <option value="30">{t('settings.advanced.sessionGc.retention.30')}</option>
-              <option value="90">{t('settings.advanced.sessionGc.retention.90')}</option>
-            </select>
-            <p className="font-label-sm text-label-xs text-on-surface-variant mt-xs">{t('settings.advanced.sessionGc.retentionDesc')}</p>
-          </div>
+        {/* 卡A GC — 会话存储管理 moved to Settings → 会话 (Settings R3 T6):
+            leave a cross-link where the card used to be so muscle memory
+            from the old placement still lands (same pattern as the
+            updates-moved row). */}
+        <div className="lg:col-span-2 flex flex-col md:flex-row md:items-center gap-sm px-lg py-md rounded-xl border border-outline-variant/20 bg-surface-container-low" data-testid="session-moved-link">
+          <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">auto_delete</span>
+          <p className="flex-1 text-on-surface-variant text-body-sm">{t('settings.advanced.movedToSession')}</p>
+          <NavLink
+            to="/settings/session"
+            className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer whitespace-nowrap"
+          >
+            {t('nav.session')}
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">arrow_forward</span>
+          </NavLink>
         </div>
 
         {/* B2 — Agent teams (real sub-agent execution) */}
@@ -585,62 +516,18 @@ export default function AdvancedSettings() {
           </div>
         </div>
 
-        {/* Version & updates — semi-automatic update check (C1①) */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 lg:col-span-2 group hover:shadow-e2 transition-shadow">
-          <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
-              <span className="material-symbols-outlined">system_update_alt</span>
-            </div>
-            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.updateTitle')}</h3>
-            {updateInfo && (
-              <span
-                className={cn(
-                  "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap",
-                  updateInfo.updateAvailable
-                    ? 'bg-tertiary-container text-on-tertiary-container'
-                    : 'bg-surface-container-high text-on-surface-variant',
-                )}
-              >
-                {updateInfo.error
-                  ? t('settings.advanced.updateCheckFailed')
-                  : updateInfo.updateAvailable && updateInfo.latestVersion
-                    ? intl.formatMessage({ id: 'settings.advanced.updateAvailableBadge' }, { version: updateInfo.latestVersion })
-                    : t('settings.advanced.updateUpToDate')}
-              </span>
-            )}
-          </div>
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-lg">
-            <div className="flex-1">
-              <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.updateDesc')}</p>
-              {updateInfo && (
-                <p className="text-on-surface-variant text-label-sm">
-                  {intl.formatMessage({ id: 'settings.advanced.updateCurrent' }, { version: updateInfo.currentVersion })}
-                </p>
-              )}
-              {updateInfo?.error && (
-                <p className="text-error text-label-sm mt-xs">{updateInfo.error}</p>
-              )}
-            </div>
-            <div className="flex items-center gap-md shrink-0">
-              {updateInfo && !updateInfo.error && (
-                <Button
-                  variant="ghost"
-                  className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer"
-                  onClick={handleOpenReleasePage}
-                >
-                  <span className="material-symbols-outlined icon-sm">open_in_new</span>
-                  {t('settings.advanced.updateOpenPage')}
-                </Button>
-              )}
-              <Button
-                className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-body-sm font-bold hover:bg-primary/90 shadow-e2 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
-                onClick={handleCheckUpdate}
-                disabled={checkingUpdate}
-              >
-                {checkingUpdate ? t('settings.advanced.updateChecking') : t('settings.advanced.updateCheckButton')}
-              </Button>
-            </div>
-          </div>
+        {/* Settings R3 (T1): the「版本与更新」card moved to 关于 — leave a
+            cross-link so muscle memory from the old placement still lands. */}
+        <div className="lg:col-span-2 flex flex-col md:flex-row md:items-center gap-sm px-lg py-md rounded-xl border border-outline-variant/20 bg-surface-container-low" data-testid="updates-moved-link">
+          <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">system_update_alt</span>
+          <p className="flex-1 text-on-surface-variant text-body-sm">{t('settings.advanced.movedToAbout')}</p>
+          <NavLink
+            to="/settings/about"
+            className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer whitespace-nowrap"
+          >
+            {t('nav.about')}
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">arrow_forward</span>
+          </NavLink>
         </div>
 
         {/* Developer Options */}

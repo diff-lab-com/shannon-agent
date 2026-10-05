@@ -105,6 +105,36 @@ export interface PermissionRequest {
   riskReason?: string
 }
 
+// --- Settings R3 T8: desktop ask_user question round-trip ---
+
+/** One selectable option of an AskUserRequest (mirrors `QuestionOption`). */
+export interface AskUserOption {
+  label: string
+  description: string
+}
+
+/**
+ * `ask-user-request` payload — one question from the engine's
+ * `ask_user_question` tool, flattened from `Question` plus the correlation
+ * id the answer travels back through (`respondAskUser(requestId, answers)`).
+ * `timeout_ms` is present only when 提问自动继续 is on (drives the card's
+ * pure-display countdown); `None` = wait forever.
+ */
+export interface AskUserRequest {
+  request_id: string
+  question: string
+  header: string
+  options: AskUserOption[]
+  multi_select: boolean
+  timeout_ms?: number
+}
+
+/** `ask-user-resolved` payload — the auto-continue timeout fired. */
+export interface AskUserResolved {
+  request_id: string
+  timed_out: boolean
+}
+
 // --- Core Types ---
 
 export interface ChatMessage {
@@ -254,6 +284,9 @@ export interface SessionInfo {
   /** P0 sidebar telemetry: epoch **ms** of the session's last activity
    *  (L0 log mtime). Absent on older engines / brand-new sessions. */
   updated_at?: number
+  /** Settings R3 T7: user-pinned flag, joined from the curation sidecar.
+   *  Absent on older engines — treat as false (unpinned). */
+  pinned?: boolean
 }
 
 /** Session archive (卡A): one archived session as the sidebar's 已归档
@@ -411,6 +444,10 @@ export interface ToolInfo {
   name: string
   description: string
   enabled: boolean
+  /** Settings R3 T11 — backend `Tool::is_read_only()`. Drives the
+   *  Explore/Terminal/Changes call grouping (lib/toolGrouping); the wire
+   *  serde-defaults missing fields to `true`. */
+  read_only: boolean
 }
 
 export interface ConfigUpdate {
@@ -718,6 +755,44 @@ export interface DesktopConfig {
    *  thinking parameters). Written via `configure('effort_level')`; the
    *  engine applies it per turn (`set_effort`). */
   effort_level?: string | null
+  /** Settings R3 T3: GPU-composited webview rendering. Default true;
+   *  false injects the per-platform disable-GPU env vars at next launch. */
+  hardware_acceleration?: boolean
+  /** Settings R3 T3: always-on wake lock (`power.keep_awake`). Default false. */
+  power_keep_awake?: boolean
+  /** Settings R3 T3: block idle sleep while agent runs stream
+   *  (`power.block_sleep_during_tasks`). Default true. */
+  power_block_sleep_during_tasks?: boolean
+  /** Settings R3 T4 (B1): explicit HTTP(S) proxy URL. Injected at startup
+   *  as HTTPS_PROXY/HTTP_PROXY/ALL_PROXY; null/empty keeps the implicit
+   *  env fallback (never forces direct connections). Restart to apply. */
+  network_proxy_url?: string | null
+  /** Settings R3 T4 (B1): comma-separated hosts that bypass the proxy —
+   *  injected as NO_PROXY. null/empty leaves the env untouched. */
+  network_no_proxy?: string | null
+  /** Settings R3 T4 (B1): custom CA certificate (PEM) path, `~`-expanded
+   *  server-side and existence-checked at configure time. Injected as
+   *  SHANNON_CA_BUNDLE / NODE_EXTRA_CA_CERTS / SSL_CERT_FILE. Restart to
+   *  apply. */
+  network_ca_cert_path?: string | null
+  /** Settings R3 T6: master switch for the engine's automatic context
+   *  compaction (Default true). Off preserves model requests/responses
+   *  verbatim; the engine is rebuilt per message, so a change applies to
+   *  the next message. Written via `configure('context.auto_compact')`. */
+  context_auto_compact?: boolean
+  /** Settings R3 T7: master switch for the timed auto-archive scan. Default
+   *  false — the scan archives nothing until opted in. Written via
+   *  `configure('session.auto_archive_enabled')`; re-read every pass. */
+  session_auto_archive_enabled?: boolean
+  /** Settings R3 T7: auto-archive retention window in days. Default 7;
+   *  the backend clamps into 1..=365. Written via
+   *  `configure('session.auto_archive_days')`. */
+  session_auto_archive_days?: number
+  /** Settings R3 T8: 提问自动继续 — auto-answer an agent question left
+   *  unanswered for 5 minutes with "continue on your best judgment".
+   *  Default false (wait forever). Written via
+   *  `configure('chat.ask_user_auto_continue')`; read live per question. */
+  chat_ask_user_auto_continue?: boolean
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
@@ -1697,9 +1772,18 @@ export const EVENT_NAMES = {
   QUERY_FAILED: 'query:failed',
   QUERY_CANCELLED: 'query:cancelled',
   PERMISSION_REQUEST: 'permission-request',
+  /** Settings R3 T8: the ask_user tool surfaced a question (payload: AskUserRequest). */
+  ASK_USER_REQUEST: 'ask-user-request',
+  /** Settings R3 T8: an ask_user question's auto-continue timeout fired (payload: AskUserResolved). */
+  ASK_USER_RESOLVED: 'ask-user-resolved',
   SESSIONS_UPDATED: 'sessions-updated',
   /** 卡A: switch_session auto-unarchived an archived session (toast cue). */
   SESSION_AUTO_UNARCHIVED: 'session-auto-unarchived',
+  /** Settings R3 T7: a session's pinned flag changed — refresh the list so
+   *  the rail's pin sort/glyph re-derives from the curation sidecar. */
+  SESSION_PINS_CHANGED: 'session-pins-changed',
+  /** Settings R3 T7: the auto-archive scan archived a session (toast cue). */
+  SESSION_AUTO_ARCHIVED: 'session-auto-archived',
   SESSION_LOADED: 'session-loaded',
   CONFIG_UPDATED: 'config-updated',
   /**
@@ -1783,9 +1867,9 @@ export interface TerminalExitPayload {
  * P3-1: persisted terminal preferences (`[terminal]` in
  * `~/.shannon/config.toml`; camelCase over the wire, frozen shape).
  * The backend clamps `fontSize` (8–32), `scrollback` (0–100000) and
- * `drawerHeight` (120–1200) and blanks the shell on read AND write —
- * after a set, render the values the response carries, not the ones the
- * caller sent.
+ * `drawerHeight` (120–1200), blanks the shell and the font family, and
+ * clamps the font stack to 200 chars — after a set, render the values
+ * the response carries, not the ones the caller sent.
  */
 export interface TerminalSettings {
   shell: string | null
@@ -1793,6 +1877,17 @@ export interface TerminalSettings {
   scrollback: number
   drawerHeight: number
   screenReaderMode: boolean
+  /**
+   * Task 12 (R3): spawn a login-capable shell (`bash`/`zsh`/`fish`/`ksh`,
+   * never on Windows) with `-l` so it inherits the login environment
+   * (profile chain — proxies, kube config). Opt-in, default off.
+   */
+  loginShell: boolean
+  /**
+   * Task 12 (R3): xterm.js `fontFamily` override for terminals opened
+   * afterwards. `null` (blank on disk) = the built-in monospace stack.
+   */
+  fontFamily: string | null
 }
 
 // --- Inter-agent message history (Phase D C3) ---

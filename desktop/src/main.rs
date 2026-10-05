@@ -6,6 +6,7 @@
 
 #[cfg(feature = "tauri")]
 fn main() {
+    use shannon_desktop::ask_user_handler;
     use shannon_desktop::commands;
     use shannon_desktop::commands_agents;
     use shannon_desktop::commands_artifact;
@@ -130,7 +131,19 @@ fn main() {
     }
     shannon_core::data_meta::record_current_version();
 
-    tauri::Builder::default()
+    // Settings R3 T3 — hardware-acceleration escape hatch (B3). Must run
+    // BEFORE the tauri::Builder: the webview backend reads these env vars
+    // exactly once, when the first window's webview is created. Reads the
+    // persisted config straight from disk (free function, no AppState yet).
+    let startup_config = shannon_desktop::config::load_config();
+    shannon_desktop::config::apply_hardware_acceleration_env(&startup_config);
+    // Settings R3 T4 (B1) — corporate-network trio (proxy / NO_PROXY /
+    // custom CA). Same early window: the gateway sidecar + MCP stdio
+    // children inherit this process env wholesale, and the engine/desktop
+    // reqwest builders read SHANNON_CA_BUNDLE when first built.
+    shannon_desktop::config::apply_network_env(&startup_config);
+
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -253,6 +266,11 @@ fn main() {
             // C1① — semi-automatic update check (GitHub latest → open page)
             commands_surface::check_app_update,
             commands_surface::open_release_page,
+            // Settings R3 — read-only data-directory line in Settings → About
+            commands_surface::get_shannon_home,
+            // Settings R3 T3 — platform + keep-awake capability probe for
+            // the General settings' System cards.
+            commands_surface::get_power_capabilities,
             // Batch-3 follow-up — export-diagnostics bundle (local logs +
             // crash reports + bundled `shannon doctor --json --deep` zip).
             commands_diagnostics::export_diagnostics,
@@ -313,6 +331,8 @@ fn main() {
             commands_sessions::archive_session,
             commands_sessions::unarchive_session,
             commands_sessions::list_archived_sessions,
+            // Settings R3 T7 — session pin (curation sidecar flag)
+            commands_sessions::set_session_pinned,
             // §4.14 — Turn Timeline panel data source
             commands_sessions::trace_timeline,
             // P-E3 — project registry (adopt-not-migrate)
@@ -343,6 +363,8 @@ fn main() {
             commands_dream::discard_dream_proposal,
             commands_permissions::request_permission,
             commands_permissions::respond_permission,
+            // Settings R3 T8 — answer a pending ask-user question card.
+            ask_user_handler::respond_ask_user,
             commands_slash::get_session_context_stats,
             commands_slash::get_session_git_diff,
             commands_slash::compact_session,
@@ -662,6 +684,12 @@ fn main() {
             // Log-and-skip inside; never fatal.
             let skill_tools = shannon_desktop::skill_tools::register_for_state(&state);
             tracing::info!(count = skill_tools, "startup skill tool registration complete");
+            // Settings R3 T8 — the GUI has no stdin: swap the terminal
+            // `ask_user_question` handler for the desktop event round-trip
+            // (AskUserCard + `respond_ask_user`). Fatal on failure, same as
+            // the default-tool registration above.
+            ask_user_handler::register_for_state(&state, app.handle().clone())
+                .expect("Failed to register desktop ask_user handler");
             app.manage(state);
 
             // P1-1 — reopen the session windows that were open at last
@@ -883,6 +911,13 @@ fn main() {
                 commands_sessions::spawn_session_gc(gc_state.inner());
             }
 
+            // Settings R3 T7 — auto-archive: 6h scan that archives 已完成
+            // (`!running && 无未读 inbox`), unpinned sessions past the
+            // retention window. Inert unless the user enables it in config
+            // (`session.auto_archive_enabled`, default false); per-session
+            // `session-auto-archived` events let the UI toast each archive.
+            commands_sessions::spawn_auto_archive(app.handle().clone());
+
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and
             // Windows the OS already focuses the app automatically (native
@@ -1062,8 +1097,24 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        // Settings R3 T3 — build + run separately (instead of the
+        // `Builder::run(context)` shorthand) so the RunEvent hook below can
+        // release the prevent-sleep wake lock on exit.
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    // Settings R3 T3 — App::run takes the RunEvent callback (unlike the
+    // `Builder::run(context)` shorthand used before, which registered an
+    // empty one) so the hook below can release the prevent-sleep wake lock
+    // on exit: the always-on keep-awake refcount plus any count an
+    // in-flight run still holds. The global force-stop drops every counter
+    // to zero and releases the platform backend (caffeinate / systemd-inhibit
+    // child killed, Windows PowerRequest cleared). Runs on the main thread
+    // after the loop returns; `App::run` never returns Ok/Err — it exits.
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            shannon_core::prevent_sleep::force_stop_prevent_sleep();
+        }
+    });
 }
 
 #[cfg(not(feature = "tauri"))]

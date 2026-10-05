@@ -306,6 +306,33 @@ export async function openReleasePage(url: string): Promise<void> {
   return invoke('open_release_page', { url })
 }
 
+// ── Settings R3 — About section: read-only data directory ────────────
+
+/** Absolute path of the Shannon data directory ($SHANNON_HOME or ~/.shannon). */
+export async function getShannonHome(): Promise<string> {
+  return invoke('get_shannon_home')
+}
+
+// ── Settings R3 T3 — hardware acceleration + prevent sleep ───────────
+
+/** Result of `get_power_capabilities` (serde camelCase). */
+export interface PowerCapabilities {
+  /** `std::env::consts::OS`: 'macos' | 'windows' | 'linux' | … */
+  platform: string
+  /** Whether the prevent-sleep backend is usable on this machine. */
+  keepAwakeSupported: boolean
+}
+
+/**
+ * Platform + keep-awake capability probe. The General settings' System
+ * cards use `platform` to hide the hardware-acceleration card on macOS and
+ * `keepAwakeSupported` to disable the prevent-sleep switches where no
+ * backend exists (Linux without systemd-inhibit).
+ */
+export async function getPowerCapabilities(): Promise<PowerCapabilities> {
+  return invoke('get_power_capabilities')
+}
+
 // ── Batch-3 follow-up — export diagnostics bundle ────────────────────
 
 /** Summary of a written diagnostics zip (logs + crash reports + doctor). */
@@ -392,7 +419,8 @@ export async function sendNotification(payload: NotificationPayload): Promise<vo
 }
 
 /** Desktop-notification preferences — master enable, quiet-hours (DND) window,
- *  and per-event-type toggles (completions vs failures). */
+ *  and per-event-type toggles (completions vs failures vs needs-attention)
+ *  plus the frontend task-chime opt-in. */
 export interface NotificationPrefs {
   master_enabled: boolean
   dnd_enabled: boolean
@@ -403,6 +431,13 @@ export interface NotificationPrefs {
   on_completed: boolean
   /** Surface OS notifications for error events (query/task failure). */
   on_failed: boolean
+  /** Surface OS notifications for attention requests (approval waits, budget
+   *  alerts). Backend defaults this to true for older payloads. */
+  on_needs_attention: boolean
+  /** Play the frontend-composited task chime (Web Audio) on completed /
+   *  failed / needs-attention events. Independent of the OS notification
+   *  sound. Defaults to false. */
+  sound_enabled: boolean
 }
 
 export async function getNotificationPrefs(): Promise<NotificationPrefs> {
@@ -1142,6 +1177,14 @@ export async function listArchivedSessions(): Promise<ArchivedSessionRow[]> {
   return invoke('list_archived_sessions')
 }
 
+/** Session pin (Settings R3 T7): flip the curation sidecar's `pinned` flag
+ *  (the single source of truth — the auto-archive scan exempts pinned
+ *  sessions and the rail re-derives its pin sort from the list DTO). Emits
+ *  `session-pins-changed`; `true` when this call flipped the flag. */
+export async function setSessionPinned(id: string, pinned: boolean): Promise<boolean> {
+  return invoke('set_session_pinned', { id, pinned })
+}
+
 export async function renameSession(id: string, title: string): Promise<boolean> {
   return invoke('rename_session', { id, title })
 }
@@ -1358,6 +1401,17 @@ export async function respondPermission(
     note: options?.note ?? null,
     scope: options?.scope ?? null,
   })
+}
+
+// --- Ask user (Settings R3 T8) ---
+
+/**
+ * Submit the user's answer(s) to a pending `ask-user-request`. Unknown or
+ * expired ids (the auto-continue timeout raced this click, a second submit,
+ * a stale window) are an idempotent backend no-op — always `Ok`.
+ */
+export async function respondAskUser(requestId: string, answers: string[]): Promise<void> {
+  await invoke('respond_ask_user', { requestId, answers })
 }
 
 // --- Files & Diffs ---

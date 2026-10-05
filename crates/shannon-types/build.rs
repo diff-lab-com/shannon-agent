@@ -347,6 +347,9 @@ pub struct SessionInfo {
     /// P0 sidebar telemetry mirror — must mirror src/events.rs exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<i64>,
+    /// Settings R3 T7 mirror — must mirror src/events.rs exactly.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

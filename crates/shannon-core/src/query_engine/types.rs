@@ -911,6 +911,16 @@ pub struct QueryEngineConfig {
     pub max_context_tokens: Option<usize>,
     /// Percentage threshold to trigger compression (0.0-1.0, default: 0.8)
     pub compression_threshold: f32,
+    /// Settings R3 T6: master switch for the automatic compaction ladder in
+    /// the agent loop — the 60%/80% synthetic warning injections,
+    /// micro-compaction and the `context_policy::evaluate` → compact/truncate
+    /// branch are ALL gated behind it. Default `true` (behavior identical to
+    /// before the switch existed). When `false`, model requests and responses
+    /// are preserved verbatim: nothing is auto-compacted or truncated by the
+    /// ladder, and a turn only fails once the context window is genuinely
+    /// exhausted (the host can still run `/compact` manually). The
+    /// independent pre-send overflow guard is NOT part of this switch.
+    pub auto_compact_enabled: bool,
     /// Number of recent messages to keep in full during compression
     pub keep_recent_messages: usize,
     /// Strategy to use when compressing conversation history
@@ -1022,6 +1032,7 @@ impl Default for QueryEngineConfig {
             enable_thinking: false,
             max_context_tokens: None, // None = use model registry / Ollama num_ctx
             compression_threshold: 0.8,
+            auto_compact_enabled: true,
             keep_recent_messages: 10,
             compression_strategy: CompressionStrategy::default(),
             system_prompt: Some(

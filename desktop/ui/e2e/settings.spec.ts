@@ -7,18 +7,24 @@ test.describe('Settings pages', () => {
   // `await page.goto` races against the async mount. Each route here
   // waits for the main content area to render before asserting on the
   // heading.
-  const ROUTES: Array<{ path: string; heading: RegExp | string }> = [
+  const ROUTES: Array<{ path: string; heading: RegExp | string; devMode?: boolean }> = [
     // Panes no longer render page-level headings ("System Settings" etc.) —
     // the banner carries the shared "Settings" h2 and each pane opens with a
     // stable section h3, which is what we assert on.
     { path: '/settings/general', heading: /Approval Mode/i },
     { path: '/settings/theme', heading: /^Theme$/ },
     { path: '/settings/models', heading: /Performance Strategy/i },
-    { path: '/settings/advanced', heading: /Skill Extraction/i },
+    // /settings/advanced sits behind the RequireDevMode route guard
+    // (Settings R3, T1), which bounces simple-mode sessions to
+    // /settings/general — seed dev sidebar mode before navigation.
+    { path: '/settings/advanced', heading: /Skill Extraction/i, devMode: true },
   ]
 
-  for (const { path, heading } of ROUTES) {
+  for (const { path, heading, devMode } of ROUTES) {
     test(`navigates to ${path}`, async ({ page }) => {
+      if (devMode) {
+        await page.addInitScript(() => localStorage.setItem('shannon-sidebar-mode', 'dev'))
+      }
       await page.goto(path)
       await page.locator('main').first().waitFor({ timeout: 15000 })
       await expect(page.getByRole('heading', { name: heading })).toBeVisible({ timeout: 15000 })

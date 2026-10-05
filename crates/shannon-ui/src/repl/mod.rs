@@ -1661,6 +1661,7 @@ impl Repl {
                             timestamp: chrono::Utc::now(),
                             source: Some(format!("permission:request:{tool_name}")),
                             action_id: None,
+                            kind: shannon_core::notifier::NotificationKind::NeedsAttention,
                         };
                         let _ = self.notifier.notify_dedup(&notification, 10_000);
                     }

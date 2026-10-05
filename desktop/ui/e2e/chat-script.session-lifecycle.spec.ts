@@ -43,11 +43,17 @@ test.describe('scripted chat backend — session-lifecycle (journey #19)', () =>
     await renameInput.press('Enter')
     await expect(row(page, 'script-sess-life-rename')).toContainText('Renamed by journey', { timeout: 10_000 })
 
-    // Pin: the rail writes shannon-sessions-pinned…
+    // Pin: pins are backend-persisted now (the curation sidecar's
+    // set_session_pinned) — the demo mock simulates that sidecar's
+    // durability through the `shannon.demo.pinnedSessions` localStorage key
+    // (JSON array), which its list/search projections merge back in.
     await openRowMenu(page, 'script-sess-life-pin', 'Pin me')
     await page.getByRole('menuitem', { name: 'Pin', exact: true }).click()
-    const pinned = await page.evaluate(() => localStorage.getItem('shannon-sessions-pinned'))
-    expect(pinned).toContain('script-sess-life-pin')
+    // The pin commits through the backend command (mock delay ~60-100ms) —
+    // poll, don't race, the write.
+    await expect
+      .poll(async () => page.evaluate(() => localStorage.getItem('shannon.demo.pinnedSessions')), { timeout: 5_000 })
+      .toContain('script-sess-life-pin')
 
     // Grouping switch → shannon-sessions-grouping (raw string, not JSON).
     await page.getByRole('button', { name: 'Flat by session' }).click()

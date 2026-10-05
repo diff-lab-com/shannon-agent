@@ -1306,8 +1306,22 @@ impl QueryEngine {
                     None
                 };
 
-                // Auto-compress conversation if it exceeds the threshold
-                {
+                // Auto-compress conversation if it exceeds the threshold.
+                //
+                // Settings R3 T6: the WHOLE ladder below — the 60%/80%
+                // synthetic warning injections, micro-compaction and the
+                // `context_policy::evaluate` → compact/truncate branch — is
+                // gated on `auto_compact_enabled`. Off (desktop 设置 → 会话
+                // 「自动压缩上下文」) means model requests and responses are
+                // preserved verbatim: nothing is auto-compacted or truncated
+                // here, and a turn fails only when the context window is
+                // genuinely exhausted (the independent pre-send overflow
+                // guard below still applies; `/compact` stays manual). Token
+                // statistics and every other part of the loop are untouched.
+                // Relation to context_policy: the policy still owns the
+                // threshold ladder — this switch only decides whether the
+                // ladder runs at all.
+                if config.auto_compact_enabled {
                     let estimated_tokens =
                         shannon_engine::compact::helpers::estimate_tokens(&messages)
                             + config

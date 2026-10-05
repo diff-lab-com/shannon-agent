@@ -51,6 +51,11 @@ const NotificationsSettings = lazy(() => import('./components/settings/Notificat
 const ConnectionsSettings = lazy(() => import('./components/settings/ConnectionsSettings'));
 const RemotesSettings = lazy(() => import('./components/settings/RemotesSettings'));
 const PermissionsSettings = lazy(() => import('./components/settings/PermissionsSettings'));
+// Settings R3 (T1) — 网络/会话/关于 sections + the advanced dev-mode guard.
+const NetworkSettings = lazy(() => import('./components/settings/NetworkSettings'));
+const SessionSettings = lazy(() => import('./components/settings/SessionSettings'));
+const AboutSettings = lazy(() => import('./components/settings/AboutSettings'));
+const RequireDevMode = lazy(() => import('./components/settings/RequireDevMode'));
 
 // P2-5a spike: dev-only test page for the assistant-ui runtime adapter.
 // Loaded here so `Chat.tsx` (production) and its component tree stay untouched.
@@ -203,10 +208,24 @@ export default function App() {
                   <Route path="theme" element={<ThemeSettings />} />
                   <Route path="models" element={<ModelsSettings />} />
                   <Route path="permissions" element={<PermissionsSettings />} />
-                  <Route path="advanced" element={<AdvancedSettings />} />
+                  {/* Settings R3 (T1) — 网络/会话 skeletons + 关于 (absorbs
+                      the update check from the dev-gated 高级). */}
+                  <Route path="network" element={<NetworkSettings />} />
+                  <Route path="session" element={<SessionSettings />} />
                   <Route path="notifications" element={<NotificationsSettings />} />
                   <Route path="connections" element={<ConnectionsSettings />} />
                   <Route path="remotes" element={<RemotesSettings />} />
+                  <Route path="about" element={<AboutSettings />} />
+                  {/* 高级 stays dev-only — deep links from a simple-mode
+                      session redirect to General (RequireDevMode). */}
+                  <Route
+                    path="advanced"
+                    element={
+                      <RequireDevMode>
+                        <AdvancedSettings />
+                      </RequireDevMode>
+                    }
+                  />
                 </Route>
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Route>

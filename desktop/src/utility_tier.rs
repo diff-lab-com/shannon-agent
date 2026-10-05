@@ -34,7 +34,7 @@
 //! the R5-5 interactive precedence chain
 //! (`session override > phase tier > global default`):
 //!
-//! - [`lookup_auxiliary_target`] reads exactly one thing: the active model
+//! - `lookup_auxiliary_target` reads exactly one thing: the active model
 //!   profile's `auxiliary` entry for the role. It takes no session state, no
 //!   approval mode, no phase-tier preference, and no `DesktopConfig` — there
 //!   is no code path through which a session pin or a phase tier could reach

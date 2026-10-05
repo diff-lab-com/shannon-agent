@@ -1,8 +1,9 @@
 // SessionsSection — the single session rail for the whole app (U1, D1=A).
 // Lives in the app sidebar (desktop docked + mobile drawer share this
 // component). Owns: search (client title filter + debounced backend
-// full-text), drag-to-reorder + pin (both persisted to localStorage),
-// inline rename, export/print, and delete-with-confirm. The former Chat-page
+// full-text), drag-to-reorder (persisted to localStorage) + pin (Settings
+// R3 T7: persisted backend-side in the curation sidecar), inline rename,
+// export/print, and delete-with-confirm. The former Chat-page
 // session sidebar was removed (U1); this list is its replacement.
 //
 // P0 (ZCode delta ②/④): the rail is also a run monitor — every row carries
@@ -13,7 +14,10 @@
 //
 // Persisted keys:
 //   shannon-sessions-order    — Record<sessionId, index> written on drag reorder
-//   shannon-sessions-pinned   — string[] of pinned session ids
+//   shannon-sessions-pinned   — LEGACY string[] of pinned ids; read ONCE on
+//                               mount and migrated into the backend's
+//                               curation sidecar (set_session_pinned), then
+//                               removed (Settings R3 T7). Never written.
 //   shannon-sessions-grouping — 'project' | 'time'
 //   shannon-sessions-folded   — string[] of folded project keys (full paths)
 //
@@ -46,7 +50,10 @@ import DeleteSessionModal from '@/pages/chat/DeleteSessionModal'
 import HighlightText from './HighlightText'
 
 const SESSIONS_ORDER_KEY = 'shannon-sessions-order'
-const SESSIONS_PINNED_KEY = 'shannon-sessions-pinned'
+// Settings R3 T7: LEGACY pin storage. The backend's curation sidecar is the
+// single source of pinned truth now; this key is read once on mount and
+// migrated through set_session_pinned, then removed. Never written again.
+const LEGACY_SESSIONS_PINNED_KEY = 'shannon-sessions-pinned'
 const SESSIONS_GROUPING_KEY = 'shannon-sessions-grouping'
 const SESSIONS_FOLDED_KEY = 'shannon-sessions-folded'
 // B4 P2-4: per-list render cap — the rail used to map every session into
@@ -117,14 +124,6 @@ function readOrderOverride(): Record<string, number> {
     const raw = window.localStorage.getItem(SESSIONS_ORDER_KEY)
     return raw ? JSON.parse(raw) : {}
   } catch { return {} }
-}
-
-function readPinned(): ReadonlySet<string> {
-  if (typeof window === 'undefined') return new Set()
-  try {
-    const raw = window.localStorage.getItem(SESSIONS_PINNED_KEY)
-    return new Set(raw ? JSON.parse(raw) : [])
-  } catch { return new Set() }
 }
 
 function readGrouping(): GroupingMode {
@@ -293,7 +292,11 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   // ('flat' | group key | 'archived').
   const [expandedLists, setExpandedLists] = useState<ReadonlySet<string>>(new Set())
   const [orderOverride, setOrderOverride] = useState<Record<string, number>>(readOrderOverride)
-  const [pinnedIds, setPinnedIds] = useState<ReadonlySet<string>>(readPinned)
+  // Settings R3 T7: pins live in the backend's curation sidecar and arrive
+  // on the session DTO (`pinned`). Local state carries only *optimistic*
+  // overrides for in-flight mutations — the next list refresh (the backend
+  // emits session-pins-changed on every flip) reconciles them away.
+  const [pinOverrides, setPinOverrides] = useState<Record<string, boolean>>({})
   const [grouping, setGrouping] = useState<GroupingMode>(readGrouping)
   // ZCode 项目 tree: folded project folders persist; the active session's
   // project always auto-expands so the current conversation stays visible.
@@ -534,6 +537,52 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     return () => { cancelled = true }
   }, [sessions])
 
+  // Settings R3 T7: one-time migration of the legacy localStorage pin list
+  // (`shannon-sessions-pinned`: string[] of ids) into the backend's curation
+  // sidecar — each id is committed via set_session_pinned(true), and the
+  // localStorage key is removed ONLY when every entry landed (a failed call
+  // keeps the key so the next mount retries). Mirrors the P-U2 projects
+  // migration's read-once/retire semantics. Overrides keep the migrated ids
+  // visible immediately, before the pins-changed refresh lands.
+  const migratedPinsRef = useRef(false)
+  useEffect(() => {
+    if (migratedPinsRef.current) return
+    migratedPinsRef.current = true
+    let raw: string | null = null
+    try { raw = window.localStorage.getItem(LEGACY_SESSIONS_PINNED_KEY) } catch { raw = null }
+    if (raw === null) return
+    let legacy: unknown = []
+    try { legacy = raw ? JSON.parse(raw) : [] } catch { legacy = [] }
+    const ids = Array.isArray(legacy) ? legacy.filter((x): x is string => typeof x === 'string' && x.length > 0) : []
+    void (async () => {
+      let allOk = true
+      for (const id of ids) {
+        try {
+          await callSafe(() => api.setSessionPinned(id, true))
+          setPinOverrides(prev => ({ ...prev, [id]: true }))
+        } catch { allOk = false }
+      }
+      // The key retires only on full success — a partial migration must
+      // retry on the next mount rather than silently drop pins.
+      if (allOk) {
+        try { window.localStorage.removeItem(LEGACY_SESSIONS_PINNED_KEY) } catch { /* noop */ }
+      } else {
+        migratedPinsRef.current = false
+      }
+    })()
+  }, [])
+
+  // The effective pinned set: the DTO's flags plus in-flight/migrated
+  // overrides. Every pin consumer (sort, menu label, row glyph) reads this.
+  const pinnedIds = useMemo(() => {
+    const set = new Set<string>(sessions.filter(s => s.pinned === true).map(s => s.id))
+    for (const [id, pinned] of Object.entries(pinOverrides)) {
+      if (pinned) set.add(id)
+      else set.delete(id)
+    }
+    return set
+  }, [sessions, pinOverrides])
+
   // Sort: pinned sessions first (U4 priority rule), then explicit drag-order
   // override (ascending), then created_at desc.
   const sorted = useMemo(() => {
@@ -771,14 +820,20 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     }
   }, [moveRow, query, grouping])
 
+  // Settings R3 T7: pin/unpin through the backend — the curation sidecar is
+  // the source of truth (and what the auto-archive scan exempts). Optimistic
+  // override first; a failed call reverts instead of leaving the rail lying.
   const togglePin = useCallback((id: string) => {
-    setPinnedIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
-      persist(SESSIONS_PINNED_KEY, [...next])
-      return next
+    const next = !pinnedIds.has(id)
+    setPinOverrides(prev => ({ ...prev, [id]: next }))
+    callSafe(() => api.setSessionPinned(id, next)).catch(() => {
+      setPinOverrides(prev => {
+        const reverted = { ...prev }
+        delete reverted[id]
+        return reverted
+      })
     })
-  }, [])
+  }, [pinnedIds])
 
   // Apply a registry record returned by a mutation (rename/appearance/
   // archive/unarchive) to local state so the UI reflects it instantly; the
@@ -794,12 +849,14 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     })
   }, [])
 
-  // B4 P2-7: drop a session's entries from the persisted order/pinned maps
-  // when it is really deleted — deleted ids used to sit there forever. On
-  // archive nothing is pruned: archive is reversible, archived ids are
-  // inert in both maps (archived rows never render in the main rail), and
-  // pruning would silently destroy the user's pin/drag-order across an
-  // archive→unarchive round-trip.
+  // B4 P2-7: drop a session's entries from the persisted order map and the
+  // optimistic pin overrides when it is really deleted — deleted ids used to
+  // sit there forever. On archive nothing is pruned: archive is reversible,
+  // archived ids are inert in both maps (archived rows never render in the
+  // main rail), and pruning would silently destroy the user's pin/drag-order
+  // across an archive→unarchive round-trip. (Settings R3 T7: the durable pin
+  // flag itself lives in the backend's curation sidecar; the backend delete
+  // removes the whole session directory with it.)
   const pruneSessionMeta = useCallback((id: string) => {
     setOrderOverride(prev => {
       if (!(id in prev)) return prev
@@ -808,11 +865,10 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       persist(SESSIONS_ORDER_KEY, next)
       return next
     })
-    setPinnedIds(prev => {
-      if (!prev.has(id)) return prev
-      const next = new Set(prev)
-      next.delete(id)
-      persist(SESSIONS_PINNED_KEY, [...next])
+    setPinOverrides(prev => {
+      if (!(id in prev)) return prev
+      const next = { ...prev }
+      delete next[id]
       return next
     })
   }, [])

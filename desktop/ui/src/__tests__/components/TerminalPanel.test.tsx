@@ -152,7 +152,7 @@ vi.mock('@/lib/tauri-api', () => ({
   terminalHistory: vi.fn(),
 }))
 
-const DEFAULT_SETTINGS = { shell: null, fontSize: 12, scrollback: 5000, drawerHeight: 320, screenReaderMode: false }
+const DEFAULT_SETTINGS = { shell: null, fontSize: 12, scrollback: 5000, drawerHeight: 320, screenReaderMode: false, loginShell: false, fontFamily: null }
 
 vi.mock('@/lib/runtime/terminalEvents', async () => {
   const actual = await import('@/lib/runtime/terminalEvents')
@@ -1114,7 +1114,8 @@ describe('TerminalPanel (P2-4: resize IPC, cleanup, list merge, settings)', () =
     // first xterm of the session must carry fontSize/scrollback/
     // screenReaderMode, and the drawer height follows drawerHeight.
     vi.mocked(api.terminalGetSettings).mockResolvedValue({
-      shell: null, fontSize: 15, scrollback: 1234, drawerHeight: 480, screenReaderMode: true,
+      ...DEFAULT_SETTINGS,
+      fontSize: 15, scrollback: 1234, drawerHeight: 480, screenReaderMode: true,
     })
     await openPanel()
     await waitFor(() => expect(h.terminals.length).toBe(1))
@@ -1123,5 +1124,23 @@ describe('TerminalPanel (P2-4: resize IPC, cleanup, list merge, settings)', () =
     expect(h.terminals[0].options.screenReaderMode).toBe(true)
     const region = screen.getByRole('region', { name: 'Integrated terminal' })
     expect(region.getAttribute('style')).toContain('height: 480px')
+  })
+
+  it('applies the configured font family to newly created xterm instances', async () => {
+    // Task 12: a persisted fontFamily rides to xterm at CREATION time.
+    vi.mocked(api.terminalGetSettings).mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      fontFamily: "'Fira Code', monospace",
+    })
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    expect(h.terminals[0].options.fontFamily).toBe("'Fira Code', monospace")
+  })
+
+  it('falls back to the built-in monospace stack when fontFamily is unset', async () => {
+    vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULT_SETTINGS, fontFamily: null })
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    expect(h.terminals[0].options.fontFamily).toContain('monospace')
   })
 })

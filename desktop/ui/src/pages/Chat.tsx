@@ -16,6 +16,7 @@ import { useDiskArtifacts } from '@/hooks/useDiskArtifacts'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
 import { useBudgetGuard } from '@/hooks/useBudgetGuard'
 import { useSteerSend } from '@/hooks/useSteerSend'
+import { readSendBehavior } from '@/lib/sendBehaviorPref'
 import { toast } from 'sonner'
 import BudgetBanner from '@/components/chat/BudgetBanner'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -546,6 +547,17 @@ export default function Chat() {
     // too (R2 W2-4): the queue already renders an attachments-only chip, so
     // the old text-only gate was a silent no-op, not a policy.
     if (isQuerying) {
+      // Settings R3 T10: the running-send dispatch reads the user pref.
+      // 'queue' (the default — the status quo) keeps the FIFO join below;
+      // 'steer' re-routes the same send through the interrupt path — the
+      // exact primitives the bolt button uses (cancel + park, flushed at
+      // the settle, ahead of any queued prompts). The bolt / Ctrl+Enter
+      // stays a steer in BOTH modes: the explicit escape hatch the pref
+      // never takes away.
+      if (readSendBehavior() === 'steer') {
+        handleSteer()
+        return
+      }
       const accepted = enqueuePrompt(trimmed, hasAttachments ? attachedFiles : [])
       if (accepted) {
         // A-22: an accepted queue join is "sent" in the user's mental model

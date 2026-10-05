@@ -223,6 +223,9 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
     approval_mode: 'normal',
   }),
   configure: vi.fn().mockResolvedValue(undefined),
+  // Settings R3 T8 — answering an ask-user question card. Default: resolves;
+  // card tests assert against this spy.
+  respondAskUser: vi.fn().mockResolvedValue(undefined),
   // R3-2: model-profile roster (Settings → Models "Profiles") — one active
   // "default" row by default; flows override per test.
   listProviderProfiles: vi.fn().mockResolvedValue([
@@ -263,6 +266,16 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
     error: null,
   }),
   openReleasePage: vi.fn().mockResolvedValue(undefined),
+  // Settings R3 (T1) — About section: read-only data directory.
+  getShannonHome: vi.fn().mockResolvedValue('/home/tester/.shannon'),
+  // Settings R3 (T3) — General System cards: pretend to be a supported
+  // Linux host (hw-accel card visible, keep-awake switches enabled).
+  // Per-test `vi.mocked(...)` overrides cover the macos-hide and
+  // unsupported-disable branches.
+  getPowerCapabilities: vi.fn().mockResolvedValue({
+    platform: 'linux',
+    keepAwakeSupported: true,
+  }),
   // Remote targets (SSH hosts / Docker containers). Default: one saved
   // ssh target so the Remotes settings page renders its list.
   remoteListTargets: vi.fn().mockResolvedValue({
@@ -408,6 +421,8 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   listArchivedSessions: vi.fn().mockResolvedValue([]),
   archiveSession: vi.fn().mockResolvedValue(true),
   unarchiveSession: vi.fn().mockResolvedValue(true),
+  // Settings R3 T7: the rail's pin flips (curation sidecar backend-side).
+  setSessionPinned: vi.fn().mockResolvedValue(true),
   // P-E3/P-U3 project registry — default empty so pages degrade to path-tail
   // labels without per-test mocking (the rail tree and the deep-link chips).
   listProjects: vi.fn().mockResolvedValue([]),
@@ -504,7 +519,7 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   requestPermission: vi.fn().mockResolvedValue(true),
   featuredVendorToEntry: vi.fn().mockResolvedValue({ id: 'test', kind: 'mcp', name: 'Test', description: '', trust: 'community', homepage_url: null, source: null, metadata: {}, tags: [] }),
   sendNotification: vi.fn().mockResolvedValue(undefined),
-  getNotificationPrefs: vi.fn().mockResolvedValue({ master_enabled: true, dnd_enabled: false, dnd_start: null, dnd_end: null, on_completed: true, on_failed: true }),
+  getNotificationPrefs: vi.fn().mockResolvedValue({ master_enabled: true, dnd_enabled: false, dnd_start: null, dnd_end: null, on_completed: true, on_failed: true, on_needs_attention: true, sound_enabled: false }),
   setNotificationPrefs: vi.fn().mockResolvedValue(undefined),
   getWebhookConfig: vi.fn().mockResolvedValue(null),
   saveWebhookConfig: vi.fn().mockResolvedValue(undefined),
@@ -685,6 +700,7 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   // response; history stays an empty replay payload.
   terminalGetSettings: vi.fn().mockResolvedValue({
     shell: null, fontSize: 12, scrollback: 5000, drawerHeight: 320, screenReaderMode: false,
+    loginShell: false, fontFamily: null,
   }),
   terminalSetSettings: vi.fn().mockImplementation((settings: unknown) => Promise.resolve(settings)),
   terminalHistory: vi.fn().mockResolvedValue({ data: '' }),

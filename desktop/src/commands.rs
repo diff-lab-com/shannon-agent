@@ -3,6 +3,7 @@
 //! Each command is exposed via `#[tauri::command]` and invoked from
 //! JavaScript as `invoke("command_name", { args })`.
 
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use shannon_core::query_engine::{
     PermissionRequest as EnginePermissionRequest, QueryContext, QueryEngine, QueryEvent,
@@ -143,6 +144,12 @@ pub struct AppState {
     /// Pending permission requests (request_id -> sender + tool name, so
     /// "always allow" can persist a rule for the tool).
     pub(crate) pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
+    /// Settings R3 T8 — pending ask_user questions (request_id → oneshot
+    /// back to `DesktopQuestionHandler::ask_question`). The frontend's
+    /// `respond_ask_user` removes + sends; the auto-continue timeout path
+    /// removes + emits `ask-user-resolved`. `DashMap` (sync): the critical
+    /// sections are pure map edits, never held across an await.
+    pub(crate) pending_questions: Arc<DashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>>,
     /// Session metadata for session list. (P0-4: kept on AppState for
     /// now; this is the *display* list (titles, message counts), not the
     /// per-session query state. Migrating this into the registry is
@@ -219,6 +226,13 @@ pub struct AppState {
     /// loopback server is spawned; `Some(External)` when another engine
     /// was already serving on 33420.
     pub engine_mode: Arc<std::sync::RwLock<Option<crate::engine_discovery::EngineMode>>>,
+    /// Settings R3 T3 — whether THIS AppState currently holds the
+    /// always-on prevent-sleep refcount (`power_keep_awake`). The global
+    /// refcount itself is invisible to us (other runs hold their own
+    /// counts), so this flag is the only way to keep the always-on
+    /// start/stop pairs balanced (a blind `start` on every enable would
+    /// double-count and one `stop` would never release).
+    pub(crate) keep_awake_active: std::sync::atomic::AtomicBool,
 }
 
 /// Session metadata for session list.
@@ -666,6 +680,19 @@ pub struct ToolInfo {
     pub name: String,
     pub description: String,
     pub enabled: bool,
+    /// Settings R3 T11 — whether the tool only performs read-only operations
+    /// (`Tool::is_read_only()` from the tool-interface trait). The UI's
+    /// Explore/Terminal/Changes call-grouping looks this up by name before
+    /// falling back to name heuristics. `serde(default)` keeps older wire
+    /// payloads (mock data, caches) deserializing as `true`, the conservative
+    /// grouping (a defaulted tool lands in the read-only Explore bucket).
+    #[serde(default = "default_true")]
+    pub read_only: bool,
+}
+
+/// `serde(default = ...)` helper for [`ToolInfo::read_only`].
+fn default_true() -> bool {
+    true
 }
 
 /// P0-3 — why an attachment path was refused by the send pipeline. The
@@ -903,7 +930,12 @@ impl AppState {
             memory_bypass_sidecar.apply_to_registry(&registry);
         }
 
-        Self {
+        // Settings R3 T3 — honor the persisted always-on keep-awake switch
+        // (`power_keep_awake`, default false, so unit tests that build an
+        // AppState never spawn a wake lock). Read before the local config
+        // moves into the Arc below.
+        let power_keep_awake_startup = desktop_config.power_keep_awake;
+        let state = Self {
             registry,
             session_overrides: std::sync::Mutex::new(override_sidecar),
             session_memory_bypass: std::sync::Mutex::new(memory_bypass_sidecar),
@@ -918,6 +950,7 @@ impl AppState {
             )),
             desktop_config: Arc::new(RwLock::new(desktop_config)),
             pending_permissions: Arc::new(Mutex::new(HashMap::new())),
+            pending_questions: Arc::new(DashMap::new()),
             sessions: Arc::new(Mutex::new(Vec::new())),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
             skill_registry: Arc::new(SkillRegistry::new()),
@@ -949,6 +982,37 @@ impl AppState {
             notifier: Arc::new(shannon_core::notifier::Notifier::new()),
             gateway_supervisor: Arc::new(tokio::sync::Mutex::new(None)),
             engine_mode: Arc::new(std::sync::RwLock::new(None)),
+            keep_awake_active: std::sync::atomic::AtomicBool::new(false),
+        };
+        // Settings R3 T3 — honor the persisted always-on keep-awake switch
+        // (`power_keep_awake`, default false, so unit tests that build an
+        // AppState never spawn a wake lock).
+        state.apply_keep_awake(power_keep_awake_startup);
+        state
+    }
+
+    /// Settings R3 T3 — apply the always-on keep-awake switch. Idempotent:
+    /// the [`AppState::keep_awake_active`] flag tracks whether WE hold a
+    /// refcount on the process-global prevent-sleep counter, so repeated
+    /// enables/disables stay balanced (a blind start/start would
+    /// double-count and one stop would never release). Called from
+    /// `AppState::new` (persisted `power_keep_awake`) and from
+    /// `configure('power.keep_awake')`.
+    pub(crate) fn apply_keep_awake(&self, enabled: bool) {
+        let was = self
+            .keep_awake_active
+            .swap(enabled, std::sync::atomic::Ordering::SeqCst);
+        match (enabled, was) {
+            (true, false) => {
+                shannon_core::prevent_sleep::start_prevent_sleep();
+                tracing::info!("keep-awake enabled — holding wake lock");
+            }
+            (false, true) => {
+                shannon_core::prevent_sleep::stop_prevent_sleep();
+                tracing::info!("keep-awake disabled — wake lock released");
+            }
+            // No state change — keep the refcount untouched.
+            _ => {}
         }
     }
 
@@ -1704,6 +1768,10 @@ pub async fn send_message(
     // env block, bash default cwd, repo map, memory project key) to the
     // session's directory instead of the process cwd.
     let memory_disabled = active_session.memory_disabled_snapshot();
+    // Settings R3 T6: the 「会话 → 自动压缩上下文」 switch rides into the
+    // per-message engine config. The engine is rebuilt every message, so a
+    // flip in Settings applies to the NEXT message without a restart.
+    let context_auto_compact = desktop_cfg.context_auto_compact;
     // S3-3 utility tier slot: the compaction slot (providers.toml v2
     // `auxiliary.compression`) resolves through the ORTHOGONAL resolver in
     // `utility_tier` — it reads only the auxiliary map and its roster, never
@@ -1716,8 +1784,14 @@ pub async fn send_message(
     )
     .await;
     let mut engine = crate::commands_memory::attach_shared_memory_if(
-        QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new())
-            .with_auxiliary_compaction_client(auxiliary_compaction_client),
+        QueryEngine::with_defaults_arc_and_config(
+            client,
+            tools,
+            permissions,
+            StateManager::new(),
+            |config| config.auto_compact_enabled = context_auto_compact,
+        )
+        .with_auxiliary_compaction_client(auxiliary_compaction_client),
         &state.memory_store,
         memory_disabled,
         session_working_dir.as_deref(),
@@ -1840,6 +1914,11 @@ pub async fn send_message(
     // the only event surface; a future SessionsPanel revival rebuilds the
     // channel bounded-with-consumer per chat-upgrade P2-5b.
     let return_qid = qid_str.clone();
+    // Settings R3 T3 — block idle sleep while this turn streams
+    // (`power.block_sleep_during_tasks`, default on). Read before the
+    // spawn; the guard lives inside the task so every exit path (ok /
+    // error / cancel / caught panic) drops it exactly once.
+    let block_sleep = desktop_cfg.power_block_sleep_during_tasks;
     // Engine→UI permission bridge: each prompt from the query pipeline
     // becomes a pending Tauri permission; the scoped user decision maps back
     // onto the engine's choice enum (AlwaysAllow also lands in the engine's
@@ -1900,6 +1979,12 @@ pub async fn send_message(
     });
     tokio::spawn(async move {
         use futures::FutureExt;
+        // Settings R3 T3 — hold the prevent-sleep refcount for the whole
+        // turn (only when `power.block_sleep_during_tasks` is on). RAII:
+        // the Option<Guard> drops — and releases the count — on every task
+        // exit, including a caught-panic unwind.
+        let _prevent_sleep_guard =
+            block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
         // P3 (streaming-panic hardening): a panic anywhere in the loop below
         // used to unwind straight out of this task and skip the per-session
         // flag reset at the bottom — the session stayed latched `querying`
@@ -2651,6 +2736,16 @@ pub async fn start_background_task(
     let provider = client_config.provider.to_string();
     let usage_store = state.usage_store.clone();
     let approval_mode_str = state.desktop_config.read().await.approval_mode.clone();
+    // Settings R3 T3 — block idle sleep for the duration of this
+    // background task (same switch the interactive turn reads).
+    let block_sleep = state
+        .desktop_config
+        .read()
+        .await
+        .power_block_sleep_during_tasks;
+    // Settings R3 T6 — same auto-compaction switch the interactive turn
+    // reads; applies to this task's engine at spawn time.
+    let context_auto_compact = state.desktop_config.read().await.context_auto_compact;
     // P2-4b: hand the shared memory handle to the spawned task — the runner
     // attaches it to its engine instead of leaving memory: None.
     let memory_store = state.memory_store.clone();
@@ -2659,6 +2754,10 @@ pub async fn start_background_task(
     let inbox_store = state.inbox_store();
 
     tokio::spawn(async move {
+        // Settings R3 T3 — hold the prevent-sleep refcount for the whole
+        // background task (RAII: released on every exit, incl. cancel).
+        let _prevent_sleep_guard =
+            block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
         // Build query engine for this task
         let client = LlmClient::new(client_config);
 
@@ -2687,7 +2786,15 @@ pub async fn start_background_task(
         }
 
         let engine = crate::commands_memory::attach_shared_memory(
-            QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+            QueryEngine::with_defaults_arc_and_config(
+                client,
+                tools,
+                permissions,
+                StateManager::new(),
+                // Settings R3 T6: background tasks honor the same
+                // auto-compaction switch as interactive turns.
+                |config| config.auto_compact_enabled = context_auto_compact,
+            ),
             &memory_store,
             // B2-2: background tasks have no session directory of their
             // own — keep the process-cwd freeze (pre-B2-2 behavior).
@@ -3003,6 +3110,40 @@ mod tests {
         assert_eq!(deserialized.timestamp, 1700000000);
     }
 
+    /// Settings R3 T11 — `read_only` is the UI grouping's lookup field.
+    /// Older wire payloads (mock data, caches) predate the field, so
+    /// `serde(default)` must deserialize them as `true` (the conservative
+    /// Explore bucket) while fresh payloads round-trip the real value.
+    #[test]
+    fn test_tool_info_read_only_defaults_true_for_older_payloads() {
+        let old = serde_json::json!({
+            "name": "Read",
+            "description": "Read a file",
+            "enabled": true,
+        });
+        let info: ToolInfo = serde_json::from_value(old).expect("old payload must deserialize");
+        assert!(info.read_only, "missing read_only must default to true");
+
+        let fresh = serde_json::json!({
+            "name": "Write",
+            "description": "Write a file",
+            "enabled": true,
+            "read_only": false,
+        });
+        let info: ToolInfo = serde_json::from_value(fresh).expect("fresh payload must deserialize");
+        assert!(!info.read_only, "explicit read_only must round-trip");
+
+        // And the serializer always emits the field for new consumers.
+        let json = serde_json::to_string(&ToolInfo {
+            name: "Bash".into(),
+            description: "run".into(),
+            enabled: true,
+            read_only: false,
+        })
+        .expect("ToolInfo serializes");
+        assert!(json.contains("\"read_only\":false"));
+    }
+
     #[test]
     fn test_chat_message_roles() {
         for role in &["user", "assistant", "system"] {
@@ -3074,11 +3215,13 @@ mod tests {
             name: "bash".to_string(),
             description: "Execute shell commands".to_string(),
             enabled: true,
+            read_only: false,
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: ToolInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.name, "bash");
         assert!(deserialized.enabled);
+        assert!(!deserialized.read_only);
     }
 
     #[test]

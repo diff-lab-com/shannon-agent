@@ -1,4 +1,4 @@
-import { useState, memo, useEffect, useMemo } from 'react'
+import { useState, memo, useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -19,11 +19,22 @@ import {
   MessageAvatar,
   MessageContent,
   ResponseStream,
+  Reasoning,
   ActionToolbar,
   Tool,
   ToolHeader,
   ToolContent,
 } from '@/components/ai-elements'
+import { readShowThinkingPref, shouldShowThinking } from '@/lib/thinkingPref'
+import {
+  ensureToolReadOnlyMap,
+  getToolReadOnlyMapVersion,
+  groupToolSegments,
+  readGroupingPrefs,
+  subscribeToolReadOnlyMap,
+  type ToolGroupUnit,
+} from '@/lib/toolGrouping'
+import { ToolGroupCard } from '@/components/chat/ToolGroupCard'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
 import { ArtifactChipList } from '@/components/artifact/ArtifactChip'
@@ -65,6 +76,11 @@ interface MessageBubbleProps {
   onEditMessage?: (index: number) => void
   /** B1 §4-12: transient highlight ring while a search jump lands here. */
   searchFlash?: boolean
+  /** Settings R3 T9: computed by the list parent (firstAssistantOfTurnFlags
+   *  over the whole message array) — true on the first assistant message
+   *  after the most recent user message. Gates the collapsed thinking block
+   *  under the 'first' display tier ('all' ignores it, 'none' hides both). */
+  isFirstAssistantOfTurn?: boolean
 }
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
@@ -245,7 +261,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   )
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup, regenerate, onEditMessage, searchFlash }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup, regenerate, onEditMessage, searchFlash, isFirstAssistantOfTurn }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const [isBranching, setIsBranching] = useState(false)
   const [pendingBranch, setPendingBranch] = useState(false)
@@ -257,6 +273,19 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const { currentSessionId, switchSession, refreshSessions } = useSessions()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+
+  // Settings R3 T11: the Explore/Terminal/Changes grouping classifies calls
+  // via the read-only map seeded from `list_tools`; that seed is a one-time
+  // async IPC, so subscribe to its arrival and re-group when it lands
+  // (until then classifyTool's name heuristics carry the decision).
+  // The snapshot value itself is unused — subscribing is what re-renders
+  // this bubble on map mutation.
+  useSyncExternalStore(subscribeToolReadOnlyMap, getToolReadOnlyMapVersion)
+  useEffect(() => {
+    void ensureToolReadOnlyMap()
+    // fire-once latch inside ensureToolReadOnlyMap; the version subscription
+    // above re-renders this bubble when the seed lands (map mutation).
+  }, [])
 
   // PM-12: the rating lives in the persisted per-session store, not in a
   // local useState that died with the component tree.
@@ -441,6 +470,18 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
    * report buttons (those actions only make sense for assistant text). */
   const isTool = message.role === 'tool'
 
+  // Settings R3 T9: a committed assistant message's `thinking` field renders
+  // as the same collapsed Reasoning block the live stream uses, gated by the
+  // three-tier display pref (lib/thinkingPref). Hydration note: the engine's
+  // session projection does not persist thinking yet, so reloaded history
+  // carries none today — this renders whenever the field IS present
+  // (hydration data or future persistence) and stays silent otherwise.
+  const showThinking = !isTool && shouldShowThinking(
+    readShowThinkingPref(),
+    !!message.thinking,
+    isFirstAssistantOfTurn === true,
+  )
+
   return (
     <Message from={isTool ? 'system' : 'assistant'} className={cn('flex gap-md max-w-4xl group', searchFlash && 'search-flash rounded-2xl')}>
       <MessageAvatar from="assistant" icon={isTool ? 'build' : 'smart_toy'} />
@@ -449,6 +490,14 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
         {/* W3-4: citation chips for the memories this turn's prompt carried —
             hidden entirely for a bypass / zero-injection turn (empty list). */}
         {!isTool && <MemoryCitationChips memories={message.injected_memories} />}
+        {/* Settings R3 T9: collapsed thinking above the answer, matching the
+            live stream's placement (StreamingResponse renders it as the
+            first block of the content column). */}
+        {showThinking && (
+          <Reasoning header={t('chat.streaming.thinking')} defaultOpen={false}>
+            <p className="whitespace-pre-wrap">{message.thinking}</p>
+          </Reasoning>
+        )}
         <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-e1 min-w-0 overflow-x-auto">
           <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-xs prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
             <Markdown>{message.content}</Markdown>
@@ -480,9 +529,16 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                   prefaced by a retry-chain banner linking to the turn timeline
                   — the long-horizon "failed → retried → recovered" narrative
                   stays readable without expanding every card. */}
+              {/* Settings R3 T11 (C6): committed history folds runs of
+                  consecutive same-kind calls (Explore / Terminal / Changes)
+                  into ToolGroupCards — see lib/toolGrouping. Streaming keeps
+                  per-card rendering (controller ruling R10: grouping a live
+                  stream re-folds the tail every flush). The existing special
+                  cards — retry chains, subagent blocks — keep their bespoke
+                  rendering and break any adjacent group. */}
               {(() => {
                 const tcs = message.tool_calls
-                const out: React.ReactNode[] = []
+                const nodes: React.ReactNode[] = []
                 const renderTool = (tc: ToolCall, key: string) =>
                   tc.tool_name === 'agent_spawn' ? (
                     <SubagentBlock key={key} toolCall={tc} />
@@ -494,6 +550,15 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                       durationMs={durationLookup?.get(tc.tool_use_id)}
                     />
                   )
+                // Pass 1 — the P2-⑨ retry-chain walk, now emitting units:
+                // the banner is an ORDERED MARKER (emitted at its sequence
+                // position in pass 2 — fix round 1: hoisting it into the
+                // node list early piled every banner at the top of the tool
+                // area, breaking the failure→retry narrative); its chain
+                // members stay non-groupable, and everything else is a
+                // grouping candidate except subagent spawns and calls that
+                // carry an artifact FileCard (folding would hide the card).
+                const units: ToolGroupUnit<ToolCall, React.ReactNode>[] = []
                 let i = 0
                 while (i < tcs.length) {
                   const tc = tcs[i]
@@ -513,22 +578,60 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                         const line = (tc.result ?? '').split('\n').find(l => l.trim()) ?? ''
                         return line.trim().slice(0, 120)
                       })
-                      out.push(
-                        <RetryChainBanner
-                          key={`chain-${tc.tool_use_id}`}
-                          count={chainLen}
-                          reasons={reasons}
-                        />,
-                      )
-                      for (let k = i; k <= j; k++) out.push(renderTool(tcs[k], tcs[k].tool_use_id))
+                      units.push({
+                        type: 'marker',
+                        marker: (
+                          <RetryChainBanner
+                            key={`chain-${tc.tool_use_id}`}
+                            count={chainLen}
+                            reasons={reasons}
+                          />
+                        ),
+                      })
+                      for (let k = i; k <= j; k++) units.push({ type: 'tool', tc: tcs[k], groupable: false })
                       i = j + 1
                       continue
                     }
                   }
-                  out.push(renderTool(tc, tc.tool_use_id))
+                  units.push({
+                    type: 'tool',
+                    tc,
+                    groupable: tc.tool_name !== 'agent_spawn' && !carriesArtifactCard(tc),
+                  })
                   i++
                 }
-                return out
+                // Pass 2 — ordered emission: adjacent same-kind merge, gated
+                // on the per-kind switches (lib/toolGrouping
+                // readGroupingPrefs, default ON); markers pass through at
+                // their sequence position and reopen the segmentation.
+                for (const seg of groupToolSegments(units, readGroupingPrefs())) {
+                  if (seg.type === 'group') {
+                    const items = seg.items
+                    nodes.push(
+                      <ToolGroupCard
+                        key={`group-${seg.kind}-${items[0].tool_use_id}`}
+                        kind={seg.kind}
+                        count={items.length}
+                        firstToolName={items[0].tool_name}
+                        lastToolName={items[items.length - 1].tool_name}
+                      >
+                        {items.map(tc => (
+                          <ToolCallDisplay
+                            key={tc.tool_use_id}
+                            toolCall={tc}
+                            onViewDiff={onViewDiff}
+                            durationMs={durationLookup?.get(tc.tool_use_id)}
+                          />
+                        ))}
+                      </ToolGroupCard>,
+                    )
+                  } else if (seg.type === 'marker') {
+                    nodes.push(seg.marker)
+                  } else {
+                    nodes.push(renderTool(seg.tc, seg.tc.tool_use_id))
+                  }
+                }
+                return nodes
               })()}
             </div>
           )}
@@ -702,6 +805,16 @@ function extractFilePath(toolName: string, input: unknown): string | null {
   const raw = extractToolInputPath(input)
   if (!raw) return null
   return FILE_MUTATING_TOOLS.has(toolName) ? raw : null
+}
+
+/** A COMPLETED file-mutating call with a path input renders an interactive
+ *  artifact FileCard under its tool block (office Wave 1 A5 — the exact
+ *  `canDiff` signal ToolCallDisplay gates its card on). The card is the
+ *  user's interaction surface (preview / batch run / diff), so such a call
+ *  must stay a plain card: folding it into a ToolGroupCard hid the artifact
+ *  behind the collapsed group (T11 grouping regression). */
+function carriesArtifactCard(tc: ToolCall): boolean {
+  return extractFilePath(tc.tool_name, tc.tool_input) != null && tc.status === 'completed' && !tc.is_error
 }
 
 /** P2-⑨: banner preceding a run of consecutive same-tool failures — links

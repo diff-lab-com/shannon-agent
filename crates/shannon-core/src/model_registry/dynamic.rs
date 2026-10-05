@@ -300,7 +300,13 @@ fn load_cached_payload() -> Option<String> {
 /// (e.g. `repl.runtime.block_on(...)`); the module never constructs its own
 /// tokio runtime, so it cannot trigger the "runtime within runtime" panic.
 pub async fn fetch_models_dev(timeout: Duration) -> Result<String, DynamicCatalogError> {
-    let client = reqwest::Client::builder()
+    // Settings R3 T4 (B1): honor SHANNON_CA_BUNDLE the same way the LLM
+    // client does — reqwest here is rustls + webpki-roots only, so behind a
+    // corporate MITM CA the catalog refresh would fail its TLS handshake
+    // without the explicitly added root.
+    let builder =
+        shannon_engine::api::client::apply_custom_root_certificates(reqwest::Client::builder());
+    let client = builder
         .timeout(timeout)
         .build()
         .map_err(|e| DynamicCatalogError::Network(e.to_string()))?;

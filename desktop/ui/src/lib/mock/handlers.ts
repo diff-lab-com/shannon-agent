@@ -48,6 +48,29 @@ const deletedSessions = new Set<string>()
 const renamedSessions = new Map<string, SessionInfo>()
 // W2 journey #19: demo twin of the backend's archived-session registry.
 const archivedSessions = new Set<string>()
+// Settings R3 T7: demo twin of the curation sidecar's pinned flags — the
+// list/search reads project them so the rail's pin sort survives a mock-mode
+// remount, exactly like the real backend reading curation.json back.
+// Persisted under `shannon.demo.pinnedSessions` (JSON array) so a reload
+// keeps the pin, mirroring the backend's curation.json durability.
+const DEMO_PINNED_KEY = 'shannon.demo.pinnedSessions'
+const pinnedSessions = new Set<string>(loadDemoPinned())
+function loadDemoPinned(): string[] {
+  try {
+    const raw = window.localStorage.getItem(DEMO_PINNED_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+function persistDemoPinned(): void {
+  try {
+    window.localStorage.setItem(DEMO_PINNED_KEY, JSON.stringify([...pinnedSessions]))
+  } catch {
+    // Storage unavailable — the in-memory set still covers the live session.
+  }
+}
 
 // P1-3: mutable desktop config so execution-mode / sandbox switches in the
 // demo feel live (get_config hands out a fresh clone of this).
@@ -200,6 +223,9 @@ const demoTerminalSettings: TerminalSettings = {
   scrollback: 5000,
   drawerHeight: 320,
   screenReaderMode: false,
+  // Task 12: login-shell inheritance off, built-in font stack (null).
+  loginShell: false,
+  fontFamily: null,
 }
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.floor(v)))
 
@@ -754,6 +780,45 @@ export const handlers: Record<string, MockHandler> = {
       // B2: real sub-agent execution toggle (demo persists the flag; there
       // is no live registry behind it).
       demoConfig.agent_teams_enabled = String(value) === 'true'
+    } else if (key === 'hardware_acceleration') {
+      // Settings R3 T3: restart-app escape hatch — demo persists the flag.
+      demoConfig.hardware_acceleration = String(value) === 'true'
+    } else if (key === 'power.keep_awake') {
+      // Settings R3 T3: always-on wake lock (backend would start/stop the
+      // OS-level refcount; the demo just persists).
+      demoConfig.power_keep_awake = String(value) === 'true'
+    } else if (key === 'power.block_sleep_during_tasks') {
+      // Settings R3 T3: run-time sleep blocker.
+      demoConfig.power_block_sleep_during_tasks = String(value) === 'true'
+    } else if (key === 'context.auto_compact') {
+      // Settings R3 T6: engine-level auto-compaction switch (a flip lands on
+      // the next message).
+      demoConfig.context_auto_compact = String(value) === 'true'
+    } else if (key === 'session.auto_archive_enabled') {
+      // Settings R3 T7: timed auto-archive scan switch.
+      demoConfig.session_auto_archive_enabled = String(value) === 'true'
+    } else if (key === 'session.auto_archive_days') {
+      // Settings R3 T7: archive retention gear — stored as a number, clamped
+      // 1..=365 like the backend configure arm (options are inside the clamp).
+      const days = Math.round(Number(value))
+      if (Number.isFinite(days) && days >= 1) {
+        demoConfig.session_auto_archive_days = Math.min(365, days)
+      }
+    } else if (key === 'chat.ask_user_auto_continue') {
+      // Settings R3 T8: auto-answer an agent question left unanswered 5 min.
+      demoConfig.chat_ask_user_auto_continue = String(value) === 'true'
+    } else if (key === 'network.proxy_url' || key === 'network.no_proxy' || key === 'network.ca_cert_path') {
+      // Settings R3 T4 (B1): corporate-network trio — empty clears (R1:
+      // the implicit env fallback stays). The demo does not re-check the
+      // CA file existence; that gate lives in the backend configure arm.
+      const trimmed = String(value ?? '').trim()
+      const field =
+        key === 'network.proxy_url'
+          ? 'network_proxy_url'
+          : key === 'network.no_proxy'
+            ? 'network_no_proxy'
+            : 'network_ca_cert_path'
+      ;(demoConfig as Record<string, unknown>)[field] = trimmed ? trimmed : null
     }
   },
 
@@ -1300,10 +1365,11 @@ export const handlers: Record<string, MockHandler> = {
     // R1 scripted-backend: a loaded script's seeded sessions replace the
     // demo roster wholesale (deletions/renames apply to the demo list only).
     const seeded = seededSessions()
-    if (seeded) return clone(seeded)
+    if (seeded) return clone(seeded).map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
     return clone(MOCK_SESSIONS)
       .filter(s => !deletedSessions.has(s.id) && !archivedSessions.has(s.id))
       .map(s => renamedSessions.get(s.id) ?? s)
+      .map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
   },
   async search_sessions(args: { query: string }) {
     await delay()
@@ -1311,12 +1377,13 @@ export const handlers: Record<string, MockHandler> = {
     // seeded roster (title-first, the backend's contract) — previously a
     // scripted rail's search leaked the demo roster into the filtered list.
     const seeded = seededSearchSessions(args.query ?? '')
-    if (seeded) return clone(seeded)
+    if (seeded) return clone(seeded).map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
     const q = (args.query ?? '').toLowerCase()
     return clone(MOCK_SESSIONS)
       .filter(s => !deletedSessions.has(s.id))
       .map(s => renamedSessions.get(s.id) ?? s)
       .filter(s => s.title.toLowerCase().includes(q))
+      .map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
   },
   // P0 plan dock: a demo plan so the dock's 计划 tab has content in mock mode.
   async get_session_plan(args: { workingDir?: string }) {
@@ -1406,6 +1473,18 @@ export const handlers: Record<string, MockHandler> = {
     recordSeedSessionUnarchived(args.id)
     notifySeededSessionsUpdated()
     archivedSessions.delete(args.id)
+    return true
+  },
+  // Settings R3 T7: the pin twin — same in-memory-set contract as the
+  // archive handlers, so a demo pin survives remounts through the
+  // list_sessions/search_sessions projections above; the localStorage
+  // mirror (`shannon.demo.pinnedSessions`) makes it survive a full reload,
+  // standing in for the backend curation sidecar's curation.json.
+  async set_session_pinned(args: { id: string; pinned: boolean }) {
+    await delay(60)
+    if (args.pinned) pinnedSessions.add(args.id)
+    else pinnedSessions.delete(args.id)
+    persistDemoPinned()
     return true
   },
   async duplicate_session(args: { id: string }) {
@@ -1586,6 +1665,10 @@ export const handlers: Record<string, MockHandler> = {
 
   // --- Permissions ---
   async respond_permission() { await delay(20) },
+
+  // --- Ask user (Settings R3 T8) — demo ask-user-request events come from
+  // the scripted player; answers are accepted and discarded. ---
+  async respond_ask_user() { await delay(20) },
 
   // --- Files ---
   async get_file_diff(args: { path: string }) {
@@ -2512,6 +2595,24 @@ export const handlers: Record<string, MockHandler> = {
     return { success: true, status: 200, detail: 'HTTP 200', ...args }
   },
 
+  // ── Settings R3 — About section: read-only data directory ────────────
+  // The AboutSettings card displays the path verbatim (no fs access), so a
+  // plausible absolute path is the whole contract — same default the Rust
+  // command resolves to when $SHANNON_HOME is unset (~/.shannon).
+  async get_shannon_home() {
+    await delay(20)
+    return '/home/ed/.shannon'
+  },
+
+  // ── Settings R3 T3 — hardware acceleration + prevent sleep ───────────
+  // The General settings' System cards key the hw-accel card's visibility
+  // and the keep-awake switches' enabled state off this probe; demo poses
+  // as a supported Linux host.
+  async get_power_capabilities() {
+    await delay(20)
+    return { platform: 'linux', keepAwakeSupported: true }
+  },
+
   // --- Extensions Hub: Featured ---
   async list_featured_vendors() { await delay(); return clone(MOCK_FEATURED_VENDORS) },
 
@@ -2680,12 +2781,16 @@ export const handlers: Record<string, MockHandler> = {
     const s = args?.settings
     if (!s || typeof s !== 'object') throw new Error('invalid terminal settings')
     const shell = (s.shell ?? '').trim()
+    // Task 12: same sanitize discipline as the backend for the new knobs.
+    const fontFamily = (s.fontFamily ?? '').trim()
     Object.assign(demoTerminalSettings, {
       shell: shell === '' ? null : shell,
       fontSize: clamp(Number(s.fontSize) || 0, 8, 32),
       scrollback: clamp(Number(s.scrollback) || 0, 0, 100000),
       drawerHeight: clamp(Number(s.drawerHeight) || 0, 120, 1200),
       screenReaderMode: s.screenReaderMode === true,
+      loginShell: s.loginShell === true,
+      fontFamily: fontFamily === '' ? null : fontFamily.slice(0, 200),
     })
     return clone(demoTerminalSettings)
   },

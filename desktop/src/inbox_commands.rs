@@ -946,6 +946,7 @@ fn notify_budget_abort(port: &dyn RunNotifyPort, task_name: &str, cap: f64, spen
         timestamp: chrono::Utc::now(),
         source: Some("routine_budget_abort".to_string()),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::NeedsAttention,
     };
     port.notify(&notification);
     tracing::info!(
@@ -1288,6 +1289,17 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     let usage_store = deps.usage_store.clone();
     let tools = deps.tools.clone();
     let memory_store = deps.memory_store.clone();
+    // Settings R3 T3 — routine runs are agent runs too: read the sleep
+    // blocker here; the spawned task below holds the RAII guard so every
+    // exit path (attempt retries, aborts, panics) stays balanced.
+    let block_sleep = deps
+        .desktop_config
+        .read()
+        .await
+        .power_block_sleep_during_tasks;
+    // Settings R3 T6: routine runs honor the same auto-compaction switch as
+    // interactive turns; cloned into the per-attempt engine factory below.
+    let context_auto_compact = deps.desktop_config.read().await.context_auto_compact;
 
     // W2-3 mid-run budget guard. `policy_budget` is `None` when no budget is
     // configured — the whole guard (tracker polling, abort signal, abort
@@ -1384,7 +1396,14 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
                         StateManager::new()
                     });
             let engine = crate::commands_memory::attach_shared_memory(
-                QueryEngine::with_defaults_arc(client, tools, permissions, state_manager),
+                QueryEngine::with_defaults_arc_and_config(
+                    client,
+                    tools,
+                    permissions,
+                    state_manager,
+                    // Settings R3 T6: routine runs honor the switch.
+                    |config| config.auto_compact_enabled = context_auto_compact,
+                ),
                 &memory_store,
                 // B2-2: the routine's directory (if any) is pinned right
                 // below — pass None here so the freeze below stays the only
@@ -1534,6 +1553,10 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     let ctx_task_id = ctx.task_id.clone();
     let ctx_task_name = ctx.task_name.clone();
     tokio::spawn(async move {
+        // Settings R3 T3 — hold the prevent-sleep refcount for the whole
+        // routine run (RAII, released on every task exit).
+        let _prevent_sleep_guard =
+            block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
         // W2-3: poll month aggregate + this run's last-known in-flight spend
         // against the cap while the engine runs; a trip sends the abort
         // signal the attempt race is parked on.
@@ -1960,6 +1983,7 @@ fn notify_run_failed(port: &dyn RunNotifyPort, task_name: &str, error: Option<&s
         timestamp: chrono::Utc::now(),
         source: Some("routine_run_failed".to_string()),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::Failed,
     };
     port.notify(&notification);
     tracing::debug!(task_name, "routine failure notification dispatched");
@@ -1985,6 +2009,7 @@ fn notify_auto_paused(notify: &dyn RunNotifyPort, task_name: &str) {
         timestamp: chrono::Utc::now(),
         source: Some("routine_auto_pause".to_string()),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::NeedsAttention,
     };
     notify.notify(&notification);
     tracing::info!(task_name, "routine auto-pause notification dispatched");
@@ -2048,6 +2073,11 @@ fn deliver_routine_webhook(
         timestamp: chrono::Utc::now(),
         source: Some("routine_finish".to_string()),
         action_id: None,
+        kind: if outcome.failed {
+            shannon_core::notifier::NotificationKind::Failed
+        } else {
+            shannon_core::notifier::NotificationKind::Completed
+        },
     };
     deps.webhook.deliver(&notification);
     tracing::debug!(run_id = %ctx.run_id, "routine finish: webhook notification dispatched");

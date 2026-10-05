@@ -101,6 +101,15 @@
       }
     },
     {
+      "identifier": "allow-set-session-pinned",
+      "description": "Enables the set_session_pinned command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_session_pinned"
+        ]
+      }
+    },
+    {
       "identifier": "allow-archive-triage-item",
       "description": "Enables the archive_triage_item command without any pre-configured scope.",
       "commands": {
@@ -767,6 +776,15 @@
       }
     },
     {
+      "identifier": "allow-get-power-capabilities",
+      "description": "Enables the get_power_capabilities command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_power_capabilities"
+        ]
+      }
+    },
+    {
       "identifier": "allow-get-provider-allowlist",
       "description": "Enables the get_provider_allowlist command without any pre-configured scope.",
       "commands": {
@@ -871,6 +889,15 @@
       "commands": {
         "allow": [
           "get_session_usage"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-shannon-home",
+      "description": "Enables the get_shannon_home command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_shannon_home"
         ]
       }
     },
@@ -2225,6 +2252,15 @@
       }
     },
     {
+      "identifier": "allow-respond-ask-user",
+      "description": "Enables the respond_ask_user command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "respond_ask_user"
+        ]
+      }
+    },
+    {
       "identifier": "allow-respond-permission",
       "description": "Enables the respond_permission command without any pre-configured scope.",
       "commands": {
@@ -3071,6 +3107,8 @@
         "allow-check-app-update",
         "allow-engine-discovery-get-mode",
         "allow-get-cli-install-status",
+        "allow-get-power-capabilities",
+        "allow-get-shannon-home",
         "allow-get-surface-info",
         "allow-install-cli-to-path",
         "allow-mobile-generate-pair-token",
@@ -3141,10 +3179,12 @@
         "allow-rename-project",
         "allow-rename-session",
         "allow-request-permission",
+        "allow-respond-ask-user",
         "allow-respond-permission",
         "allow-rewind-session",
         "allow-search-sessions",
         "allow-set-project-appearance",
+        "allow-set-session-pinned",
         "allow-set-session-working-dir",
         "allow-skill-loop-approve",
         "allow-skill-loop-evaluate",

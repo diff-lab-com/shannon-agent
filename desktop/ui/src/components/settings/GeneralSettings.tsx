@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Spinner } from '@/components/ui/loading-state'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -6,10 +6,11 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useCatalog } from '@/context/CatalogContext'
-import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
+import { useI18n, SUPPORTED_LOCALES, type LocalePref } from '@/i18n'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { readDensityPref, setDensityPref, type DensityPref } from '@/lib/density'
+import { readShowThinkingPref, setShowThinkingPref, type ShowThinkingPref } from '@/lib/thinkingPref'
 import { getLinkTarget, setLinkTarget as setLinkTargetPref, type LinkTarget } from '@/lib/openLink'
 import { Switch } from '@/components/ui/switch'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
@@ -18,6 +19,7 @@ import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import MigrationWizard from '@/components/migration/MigrationWizard'
 import PersonaPackSettings from './PersonaPackSettings'
 import { FeedbackSummaryCard } from './FeedbackSummaryCard'
+import EffectBadge from './EffectBadge'
 
 // GB P2-4: the tiers come from the SHARED table (lib/approvalModes) — the
 // same values, labels and descriptions the composer's quick switcher
@@ -44,6 +46,15 @@ export default function GeneralSettings() {
     // Re-apply immediately: resolve against the current sidebar mode.
     import('@/lib/density').then(m => m.initDensity())
   }
+  // Settings R3 T9 — 显示思考过程 three-tier display pref. Purely
+  // front-end localStorage ('shannon.chat.showThinking'): ChatMessage /
+  // StreamingResponse read it on every render, so a pick here applies to
+  // the message flow instantly with no backend round-trip.
+  const [showThinking, setShowThinkingState] = useState<ShowThinkingPref>(readShowThinkingPref)
+  const handleShowThinkingChange = (next: ShowThinkingPref) => {
+    setShowThinkingState(next)
+    setShowThinkingPref(next)
+  }
   const intl = useIntl()
   const navigate = useNavigate()
   const t = (id: string) => intl.formatMessage({ id })
@@ -56,17 +67,35 @@ export default function GeneralSettings() {
     setLinkTargetState(next)
     setLinkTargetPref(next)
   }
-  const { locale, setLocale } = useI18n()
+  const { localePref, setLocale } = useI18n()
   const [saving, setSaving] = useState(false)
   // P1-6 — migration wizard (import from Claude Code / ZCode).
   const [migrationOpen, setMigrationOpen] = useState(false)
+  // Settings R3 T3 — platform + keep-awake capability probe. null = the
+  // probe hasn't answered yet (or failed): the hw-accel card stays hidden
+  // until the platform is known (so macOS never sees a flash) and the
+  // prevent-sleep switches stay enabled (the backend defaults are safe).
+  const [powerCaps, setPowerCaps] = useState<api.PowerCapabilities | null>(null)
+
+  // Settings R3 T3 — probe once on mount.
+  useEffect(() => {
+    let cancelled = false
+    api.getPowerCapabilities()
+      .then(caps => { if (!cancelled) setPowerCaps(caps) })
+      .catch(() => {
+        // Backend missing (web build / old binary): assume supported so the
+        // switches stay usable; the backend defaults are safe.
+        if (!cancelled) setPowerCaps({ platform: 'unknown', keepAwakeSupported: true })
+      })
+    return () => { cancelled = true }
+  }, [])
 
   const handleRerunWizard = () => {
     window.localStorage.removeItem(WELCOME_SEEN_KEY)
     navigate('/welcome')
   }
 
-  const handleLocaleChange = (next: Locale) => {
+  const handleLocaleChange = (next: LocalePref) => {
     setLocale(next)
     toast.success(intl.formatMessage({ id: 'settings.language.label' }))
   }
@@ -95,6 +124,19 @@ export default function GeneralSettings() {
       toast.success(intl.formatMessage({ id: 'settings.general.approvalMode.updated' }, { label: t(option.labelKey) }))
     } catch (e) { toastError(t('settings.general.approvalMode.updateFailed'), e) }
     setSaving(false)
+  }
+
+  // Settings R3 T3 — write one of the System-group switches. All three are
+  // plain configure writes: `hardware_acceleration` takes effect on the
+  // next launch (the backend injects the disable-GPU env vars before the
+  // webview exists), the two power switches apply immediately on the
+  // backend (keep-awake starts/stops the wake lock; the run-time blocker
+  // is re-read at the start of every run).
+  const handleSystemToggle = async (key: string, value: boolean) => {
+    try {
+      await api.configure({ key, value: String(value) })
+      await refreshConfig()
+    } catch (e) { toastError(t('settings.system.updateFailed'), e) }
   }
 
   return (
@@ -197,24 +239,24 @@ export default function GeneralSettings() {
             <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.language.label' })}</h3>
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.language.help' })}</p>
-          <div className="flex flex-wrap gap-sm">
+          {/* Task 2 (settings-parity R3): the 10-button wall became a select
+              styled after the link-target picker below. First option is the
+              explicit "follow system" pref — persisted verbatim as 'system'
+              so the choice survives restarts; the provider re-probes the OS
+              language live whenever it resolves. Language applies instantly,
+              so no EffectBadge (brief T2). */}
+          <select
+            data-testid="settings-language-select"
+            value={localePref}
+            onChange={e => handleLocaleChange(e.target.value as LocalePref)}
+            aria-label={intl.formatMessage({ id: 'settings.language.label' })}
+            className="font-label-md text-on-surface bg-surface-container rounded-lg px-sm py-xs border border-outline-variant/30 cursor-pointer"
+          >
+            <option value="system">{intl.formatMessage({ id: 'settings.language.system' })}</option>
             {SUPPORTED_LOCALES.map(opt => (
-              <Button
-                key={opt.id}
-                variant={locale === opt.id ? 'default' : 'outline'}
-                onClick={() => handleLocaleChange(opt.id)}
-                aria-pressed={locale === opt.id}
-                className={cn(
-                  'px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
-                  locale === opt.id
-                    ? 'bg-primary text-on-primary'
-                    : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50',
-                )}
-              >
-                {intl.formatMessage({ id: opt.labelKey })}
-              </Button>
+              <option key={opt.id} value={opt.id}>{intl.formatMessage({ id: opt.labelKey })}</option>
             ))}
-          </div>
+          </select>
         </section>
 
         {/* P2-⑧ Display density */}
@@ -245,6 +287,47 @@ export default function GeneralSettings() {
                 {intl.formatMessage({ id: opt.labelKey })}
               </Button>
             ))}
+          </div>
+        </section>
+
+        {/* Settings R3 T9 — show thinking: three-tier display pref for the
+            model's reasoning blocks (history bubbles + live stream). Placed
+            next to the other display cards (language / density); segmented
+            control mirrors the approval-mode one. */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>psychology</span>
+            <h3 className="font-headline-md text-headline-md">{t('settings.general.showThinking.title')}</h3>
+            <span className="flex-1" />
+            <EffectBadge kind="instant" />
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.general.showThinking.help')}</p>
+          <div role="radiogroup" aria-label={t('settings.general.showThinking.title')} data-testid="settings-show-thinking-group">
+            <div className="flex rounded-xl bg-surface-container-low p-xs gap-xs border border-outline-variant/30">
+              {([
+                { id: 'all' as const, labelKey: 'settings.general.showThinking.all' },
+                { id: 'first' as const, labelKey: 'settings.general.showThinking.first' },
+                { id: 'none' as const, labelKey: 'settings.general.showThinking.none' },
+              ]).map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={showThinking === opt.id}
+                  data-testid={`settings-show-thinking-${opt.id}`}
+                  onClick={() => handleShowThinkingChange(opt.id)}
+                  className={cn(
+                    'flex-1 min-w-0 px-xs py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
+                    'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
+                    showThinking === opt.id
+                      ? 'bg-primary text-on-primary font-bold shadow-e1'
+                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-high',
+                  )}
+                >
+                  <span className="block truncate">{t(opt.labelKey)}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </section>
 
@@ -323,6 +406,89 @@ export default function GeneralSettings() {
 
         {/* P2-2 — persona/profile pack (one-file export & import) */}
         <PersonaPackSettings />
+
+        {/* Settings R3 T3 — System group: hardware acceleration + prevent
+            sleep. Rendered before the re-run wizard card so the power
+            switches (a daily concern) stay above the recovery affordance. */}
+        <div className="space-y-xs" data-testid="settings-system-group">
+          <h2 className="font-label-md text-on-surface-variant px-xs pt-sm">
+            {t('settings.system.title')}
+          </h2>
+
+          {/* ① Hardware acceleration — hidden on macOS (WKWebView has no
+              supported escape hatch). `platform` comes from the backend
+              probe; while it is pending the card stays hidden so macOS
+              users never see a flash of a useless card. */}
+          {powerCaps && powerCaps.platform !== 'macos' && (
+            <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+              <div className="flex items-center gap-md mb-xs">
+                <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>developer_board</span>
+                <h3 className="font-headline-md text-headline-md">{t('settings.system.hwAccel.title')}</h3>
+                <span className="flex-1" />
+                <EffectBadge kind="restart-app" />
+              </div>
+              <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.system.hwAccel.help')}</p>
+              <div className="flex justify-between items-center py-sm gap-md">
+                <span className="font-label-md text-on-surface">{t('settings.system.hwAccel.toggle')}</span>
+                <Switch
+                  checked={config?.hardware_acceleration !== false}
+                  onCheckedChange={v => handleSystemToggle('hardware_acceleration', v)}
+                  aria-label={t('settings.system.hwAccel.title')}
+                  data-testid="settings-hwaccel-switch"
+                />
+              </div>
+            </section>
+          )}
+
+          {/* ② Prevent sleep — task-run blocker (default on) + always-on
+              wake lock (default off). Disabled with a note when the probe
+              reports no backend (Linux without systemd-inhibit). */}
+          <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+            <div className="flex items-center gap-md mb-xs">
+              <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>bedtime</span>
+              <h3 className="font-headline-md text-headline-md">{t('settings.system.keepAwake.title')}</h3>
+              <span className="flex-1" />
+              <EffectBadge kind="instant" />
+            </div>
+            <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.system.keepAwake.taskHelp')}</p>
+            {powerCaps && !powerCaps.keepAwakeSupported && (
+              <p
+                className="font-body-sm text-on-surface-variant mb-md px-xs py-sm rounded-lg bg-surface-container-low border border-outline-variant/30"
+                data-testid="settings-keepawake-unsupported"
+              >
+                {t('settings.system.keepAwake.unsupported')}
+              </p>
+            )}
+            <div className="space-y-sm">
+              <div className="flex justify-between items-center py-sm gap-md">
+                <span className="min-w-0">
+                  <span className="font-label-md text-on-surface block">{t('settings.system.keepAwake.taskToggle')}</span>
+                  <span className="font-label-sm text-on-surface-variant block">{t('settings.system.keepAwake.taskHelp')}</span>
+                </span>
+                <Switch
+                  checked={config?.power_block_sleep_during_tasks !== false}
+                  disabled={powerCaps != null && !powerCaps.keepAwakeSupported}
+                  onCheckedChange={v => handleSystemToggle('power.block_sleep_during_tasks', v)}
+                  aria-label={t('settings.system.keepAwake.taskToggle')}
+                  data-testid="settings-keepawake-task-switch"
+                />
+              </div>
+              <div className="flex justify-between items-center py-sm gap-md">
+                <span className="min-w-0">
+                  <span className="font-label-md text-on-surface block">{t('settings.system.keepAwake.alwaysToggle')}</span>
+                  <span className="font-label-sm text-on-surface-variant block">{t('settings.system.keepAwake.alwaysHelp')}</span>
+                </span>
+                <Switch
+                  checked={config?.power_keep_awake === true}
+                  disabled={powerCaps != null && !powerCaps.keepAwakeSupported}
+                  onCheckedChange={v => handleSystemToggle('power.keep_awake', v)}
+                  aria-label={t('settings.system.keepAwake.alwaysToggle')}
+                  data-testid="settings-keepawake-always-switch"
+                />
+              </div>
+            </div>
+          </section>
+        </div>
 
         {/* Re-run setup wizard */}
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">

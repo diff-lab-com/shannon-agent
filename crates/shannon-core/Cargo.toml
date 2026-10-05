@@ -127,12 +127,17 @@ opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
 
 # Windows Job Object baseline sandbox (`sandbox::windows_job`). Compiled on
 # every Windows build — Job Objects are always available, no external binary.
+# `Win32_System_Power` (Settings R3 T3): process-domain PowerRequest wake
+# lock for prevent_sleep (fix round 1 — `SetThreadExecutionState` is
+# per-thread and leaked the lock on cross-thread release) — a feature flip
+# on the existing dependency, no new crate.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+    "Win32_System_Power",
 ] }
 
 [features]

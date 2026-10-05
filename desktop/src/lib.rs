@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 
 pub mod agent_teams;
 pub mod config;
+/// Settings R3 T4 (B1) — shared outbound reqwest builder (custom CA via
+/// `SHANNON_CA_BUNDLE`) for the desktop's own HTTP clients.
+pub mod desktop_http;
 /// Local file logging, log retention, and the panic hook (audit batch 3, B).
 pub mod desktop_logging;
 pub mod events;
@@ -299,6 +302,10 @@ pub mod commands_onboarding;
 pub mod commands_feedback;
 #[cfg(feature = "tauri")]
 pub mod commands_permissions;
+// Settings R3 T8 — desktop ask_user question round-trip (the GUI replacement
+// for the terminal stdin QuestionHandler) + the `respond_ask_user` command.
+#[cfg(feature = "tauri")]
+pub mod ask_user_handler;
 pub mod commands_rewind;
 pub mod commands_slash;
 

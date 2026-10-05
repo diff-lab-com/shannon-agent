@@ -239,6 +239,46 @@ fn tokenize_shell(shell: &str) -> Result<Vec<String>, String> {
     Ok(tokens)
 }
 
+/// Shells whose `-l` flag actually starts a login shell (sources the
+/// profile chain). Deliberately narrow: `sh`'s `-l` is not universal and
+/// PowerShell has no login-shell concept, so both stay untouched.
+const LOGIN_CAPABLE_SHELLS: [&str; 4] = ["bash", "zsh", "fish", "ksh"];
+
+/// Task 12 (R3), pure: build the effective spawn argv for the
+/// 「继承登录 shell 环境」preference. When `login_shell` is on and the
+/// program is a login-capable shell ([`LOGIN_CAPABLE_SHELLS`], matched on
+/// the basename with `.exe` stripped), `-l` is prepended so the shell
+/// sources its profile chain (login env, proxies, kube config). Anything
+/// else — the switch off, non-login-capable shells (sh, PowerShell, …) —
+/// comes back unchanged.
+///
+/// Windows never gets the flag: MSYS shells' `-l` semantics outside a
+/// login environment are a mis-feature and PowerShell has none, so the
+/// preference is a no-op there (the compile-time `cfg!(windows)` gate
+/// below; on Windows builds every input returns verbatim).
+fn apply_login_shell(program: &str, args: Vec<String>, login_shell: bool) -> (String, Vec<String>) {
+    if !login_shell || cfg!(windows) || !is_login_capable_shell(program) {
+        return (program.to_string(), args);
+    }
+    let mut args = args;
+    args.insert(0, "-l".to_string());
+    (program.to_string(), args)
+}
+
+/// Login-capable check for [`apply_login_shell`] (basename, `.exe`
+/// stripped, case-insensitive). Split from the argv mutation so the
+/// basename rules are unit-testable in isolation.
+fn is_login_capable_shell(program: &str) -> bool {
+    let basename = std::path::Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program);
+    let stem = basename.strip_suffix(".exe").unwrap_or(basename);
+    LOGIN_CAPABLE_SHELLS
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(stem))
+}
+
 // ── Terminal settings (P3-1, `[terminal]` in ~/.shannon/config.toml) ─────
 
 /// Lowest / highest accepted `font_size` (clamped, not rejected — a junk
@@ -250,6 +290,9 @@ const MAX_SCROLLBACK: u32 = 100_000;
 /// Accepted `drawer_height` px range (clamped).
 const MIN_DRAWER_HEIGHT: u32 = 120;
 const MAX_DRAWER_HEIGHT: u32 = 1200;
+/// Highest accepted `font_family` length, in chars (clamped, not rejected —
+/// a CSS font stack past this is junk, but truncation beats a wedged card).
+const MAX_FONT_FAMILY_LEN: usize = 200;
 
 /// Persisted terminal preferences (P3-1). Lives under the `[terminal]`
 /// table of `~/.shannon/config.toml` — the *global* Shannon config the
@@ -279,6 +322,17 @@ pub struct TerminalSettings {
     pub drawer_height: u32,
     /// xterm.js screen-reader mode (Task 2.2 accessibility). Default off.
     pub screen_reader_mode: bool,
+    /// Task 12 (R3): spawn the shell as a LOGIN shell (`-l` prepended to
+    /// argv) so it sources the profile chain (`/etc/profile`, `~/.profile`,
+    /// `~/.zprofile`, …) — inheriting login-time env, proxies and kube
+    /// config. Default off. Only injected for bash/zsh/fish/ksh (see
+    /// `apply_login_shell`); never on Windows.
+    pub login_shell: bool,
+    /// Task 12 (R3): xterm.js `fontFamily` override for terminals opened
+    /// afterwards. Blank / missing = the frontend's built-in monospace
+    /// stack. Skipped when unset because TOML has no null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
 }
 
 impl Default for TerminalSettings {
@@ -289,6 +343,8 @@ impl Default for TerminalSettings {
             scrollback: 5000,
             drawer_height: 320,
             screen_reader_mode: false,
+            login_shell: false,
+            font_family: None,
         }
     }
 }
@@ -309,13 +365,24 @@ impl TerminalSettings {
         self.drawer_height = self
             .drawer_height
             .clamp(MIN_DRAWER_HEIGHT, MAX_DRAWER_HEIGHT);
+        // Same blank→unset discipline as `shell`; anything past
+        // [`MAX_FONT_FAMILY_LEN`] chars is truncated (a font stack that
+        // long is junk — clamp, don't wedge).
+        self.font_family = self
+            .font_family
+            .take()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.chars().take(MAX_FONT_FAMILY_LEN).collect());
+        // `login_shell` is a bool — no junk shape exists; passes through.
         self
     }
 }
 
 /// Wire DTO for `terminal_get_settings` / `terminal_set_settings`
 /// (camelCase, frozen):
-/// `{ shell: string|null, fontSize, scrollback, drawerHeight, screenReaderMode }`.
+/// `{ shell: string|null, fontSize, scrollback, drawerHeight,
+/// screenReaderMode, loginShell, fontFamily: string|null }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalSettingsDto {
@@ -324,6 +391,12 @@ pub struct TerminalSettingsDto {
     pub scrollback: u32,
     pub drawer_height: u32,
     pub screen_reader_mode: bool,
+    /// Additive (Task 12): default keeps pre-Task-12 payloads parseable.
+    #[serde(default)]
+    pub login_shell: bool,
+    /// Additive (Task 12): default keeps pre-Task-12 payloads parseable.
+    #[serde(default)]
+    pub font_family: Option<String>,
 }
 
 impl From<TerminalSettings> for TerminalSettingsDto {
@@ -334,6 +407,8 @@ impl From<TerminalSettings> for TerminalSettingsDto {
             scrollback: s.scrollback,
             drawer_height: s.drawer_height,
             screen_reader_mode: s.screen_reader_mode,
+            login_shell: s.login_shell,
+            font_family: s.font_family,
         }
     }
 }
@@ -346,6 +421,8 @@ impl From<TerminalSettingsDto> for TerminalSettings {
             scrollback: dto.scrollback,
             drawer_height: dto.drawer_height,
             screen_reader_mode: dto.screen_reader_mode,
+            login_shell: dto.login_shell,
+            font_family: dto.font_family,
         }
     }
 }
@@ -767,7 +844,9 @@ impl TerminalManager {
     /// `TerminalInfo::project_dir_raw` — review fix); the shell is picked
     /// by the P3-1 precedence: explicit `shell`
     /// argument > `configured_shell` (persisted `[terminal].shell`) >
-    /// `$SHELL` (PowerShell on Windows).
+    /// `$SHELL` (PowerShell on Windows). When `login_shell` is on (Task 12)
+    /// a login-capable program gets `-l` prepended — see
+    /// `apply_login_shell`.
     ///
     /// `spawned_by_window` is the calling webview window's label (P3-2) —
     /// `None` only in tests / non-window callers. It rides on
@@ -778,6 +857,7 @@ impl TerminalManager {
         project_dir: &Path,
         shell: Option<String>,
         configured_shell: Option<String>,
+        login_shell: bool,
         spawned_by_window: Option<String>,
     ) -> Result<TerminalInfo, String> {
         // Capture the REQUESTED form before canonicalization: the
@@ -797,6 +877,9 @@ impl TerminalManager {
         });
         let tokens = tokenize_shell(&shell_line)?;
         let (program, args) = tokens.split_first().expect("tokenize_shell rejects empty");
+        // Task 12: `-l` injection for login-capable shells when the user
+        // asked for login-env inheritance. Pure — see `apply_login_shell`.
+        let (program, args) = apply_login_shell(program, args.to_vec(), login_shell);
 
         let mut sessions = self
             .inner
@@ -1224,12 +1307,14 @@ pub async fn terminal_spawn(
     // P3-1 shell precedence: the explicit `shell` argument (if any) wins;
     // otherwise the persisted `[terminal].shell` (if set); `$SHELL` /
     // platform default are resolved inside `spawn`. One small config read
-    // per spawn — spawns are user-initiated and rare.
-    let configured_shell = load_terminal_settings().shell;
+    // per spawn — spawns are user-initiated and rare. Task 12: the same
+    // read carries the login-shell preference.
+    let settings = load_terminal_settings();
     let info = state.terminals.spawn(
         &dir,
         shell,
-        configured_shell,
+        settings.shell,
+        settings.login_shell,
         Some(window.label().to_string()),
     )?;
     Ok(TerminalSpawnResponse {
@@ -1662,6 +1747,9 @@ mod tests {
         assert_eq!(s.scrollback, 5000);
         assert_eq!(s.drawer_height, 320);
         assert!(!s.screen_reader_mode);
+        // Task 12: both new knobs default off / unset.
+        assert!(!s.login_shell, "login shell inheritance is opt-in");
+        assert_eq!(s.font_family, None, "font_family None → built-in stack");
         // Missing keys / missing table fall back to the same defaults.
         assert_eq!(
             load_terminal_settings_from(Path::new("/nonexistent/config.toml")),
@@ -1677,11 +1765,13 @@ mod tests {
             scrollback: 5000,
             drawer_height: 320,
             screen_reader_mode: false,
+            login_shell: false,
+            font_family: None,
         };
         let json = serde_json::to_string(&dto).unwrap();
         assert_eq!(
             json,
-            r#"{"shell":null,"fontSize":12,"scrollback":5000,"drawerHeight":320,"screenReaderMode":false}"#
+            r#"{"shell":null,"fontSize":12,"scrollback":5000,"drawerHeight":320,"screenReaderMode":false,"loginShell":false,"fontFamily":null}"#
         );
         let back: TerminalSettingsDto = serde_json::from_str(&json).unwrap();
         assert_eq!(back, dto);
@@ -1695,6 +1785,18 @@ mod tests {
             json.contains(r#""shell":"/usr/bin/fish""#),
             "shell stays on the wire when set: {json}"
         );
+        // Task 12: the new fields ride the wire camelCase when set.
+        let with_new = TerminalSettingsDto {
+            login_shell: true,
+            font_family: Some("'Fira Code', monospace".into()),
+            ..with_shell
+        };
+        let json = serde_json::to_string(&with_new).unwrap();
+        assert!(json.contains(r#""loginShell":true"#), "{json}");
+        assert!(
+            json.contains(r#""fontFamily":"'Fira Code', monospace""#),
+            "{json}"
+        );
     }
 
     #[test]
@@ -1705,12 +1807,16 @@ mod tests {
             scrollback: 424_242,
             drawer_height: 5,
             screen_reader_mode: true,
+            login_shell: true,
+            font_family: Some("   ".into()),
         }
         .sanitized();
         assert_eq!(clamped.shell, None, "blank shell = unset");
         assert_eq!(clamped.font_size, MAX_FONT_SIZE);
         assert_eq!(clamped.scrollback, MAX_SCROLLBACK);
         assert_eq!(clamped.drawer_height, MIN_DRAWER_HEIGHT);
+        assert!(clamped.login_shell, "login_shell passes through");
+        assert_eq!(clamped.font_family, None, "blank font_family = unset");
         // …and the low side.
         let low = TerminalSettings {
             shell: None,
@@ -1718,6 +1824,7 @@ mod tests {
             scrollback: 0,
             drawer_height: 1,
             screen_reader_mode: false,
+            ..TerminalSettings::default()
         }
         .sanitized();
         assert_eq!(low.font_size, MIN_FONT_SIZE);
@@ -1730,6 +1837,40 @@ mod tests {
         }
         .sanitized();
         assert_eq!(padded.shell.as_deref(), Some("/usr/bin/fish"));
+    }
+
+    #[test]
+    fn terminal_settings_font_family_sanitize_and_login_shell_passthrough() {
+        // Task 12: whitespace-trimmed, blank → None, overlong → clamped to
+        // MAX_FONT_FAMILY_LEN chars.
+        let padded = TerminalSettings {
+            font_family: Some("  'Fira Code', monospace  ".into()),
+            login_shell: true,
+            ..TerminalSettings::default()
+        }
+        .sanitized();
+        assert_eq!(
+            padded.font_family.as_deref(),
+            Some("'Fira Code', monospace")
+        );
+        assert!(padded.login_shell, "bool has no junk shape — direct pass");
+
+        let long: String = "'Long Font'".repeat(30); // 330 chars
+        let clamped_family = TerminalSettings {
+            font_family: Some(long.clone()),
+            ..TerminalSettings::default()
+        }
+        .sanitized()
+        .font_family
+        .expect("non-empty stays set");
+        let clamped_len = clamped_family.chars().count();
+        assert_eq!(clamped_len, MAX_FONT_FAMILY_LEN);
+        assert!(
+            clamped_len < long.chars().count(),
+            "over-long stack is truncated, not kept"
+        );
+        // Character (not byte) boundary: the truncation must not split one.
+        assert!(clamped_family.is_char_boundary(0));
     }
 
     #[test]
@@ -1747,6 +1888,9 @@ mod tests {
             scrollback: 10_000,
             drawer_height: 400,
             screen_reader_mode: true,
+            // Task 12: the new knobs persist through the same table.
+            login_shell: true,
+            font_family: Some("'Fira Code', monospace".into()),
         };
         save_terminal_settings_to(&path, &settings).expect("save");
         // Read-back equals what was written (sanitized is a no-op here).
@@ -1760,6 +1904,11 @@ mod tests {
             text.contains("shell = \"/usr/bin/fish\""),
             "set shell lands on disk: {text}"
         );
+        assert!(text.contains("login_shell = true"), "{text}");
+        assert!(
+            text.contains("font_family = \"'Fira Code', monospace\""),
+            "{text}"
+        );
 
         // Overwrite: new values replace, nothing duplicates, and an unset
         // shell stays off disk entirely (TOML has no null — the key is
@@ -1767,8 +1916,16 @@ mod tests {
         save_terminal_settings_to(&path, &TerminalSettings::default()).expect("save 2");
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(
-            !text.contains("shell"),
+            !text.lines().any(|l| l.starts_with("shell =")),
             "unset shell must be skipped: {text}"
+        );
+        assert!(
+            !text.lines().any(|l| l.starts_with("font_family")),
+            "unset font_family must be skipped: {text}"
+        );
+        assert!(
+            text.contains("login_shell = false"),
+            "bools always land on disk: {text}"
         );
         let reloaded = load_terminal_settings_from(&path);
         assert_eq!(reloaded, TerminalSettings::default());
@@ -1800,7 +1957,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         std::fs::write(
             &path,
-            "[terminal]\nshell = \"   \"\nfont_size = 9999\nscrollback = 424242\ndrawer_height = 5\nunknown_key = true\n",
+            "[terminal]\nshell = \"   \"\nfont_size = 9999\nscrollback = 424242\ndrawer_height = 5\nfont_family = \"  \"\nlogin_shell = true\nunknown_key = true\n",
         )
         .unwrap();
         let loaded = load_terminal_settings_from(&path);
@@ -1808,7 +1965,28 @@ mod tests {
         assert_eq!(loaded.font_size, MAX_FONT_SIZE);
         assert_eq!(loaded.scrollback, MAX_SCROLLBACK);
         assert_eq!(loaded.drawer_height, MIN_DRAWER_HEIGHT);
-        assert!(!loaded.screen_reader_mode, "missing key → default");
+        assert_eq!(loaded.font_family, None, "blank font_family → unset");
+        assert!(loaded.login_shell, "hand-edited login_shell is honored");
+    }
+
+    #[test]
+    fn terminal_settings_store_without_new_keys_still_loads() {
+        // Task 12 backward compat: a pre-Task-12 `[terminal]` table (none
+        // of the new keys) loads with login-shell off / built-in font.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[terminal]\nfont_size = 14\n").unwrap();
+        let loaded = load_terminal_settings_from(&path);
+        assert!(!loaded.login_shell);
+        assert_eq!(loaded.font_family, None);
+        assert_eq!(loaded.font_size, 14);
+        // Same for a legacy wire payload (serde defaults on the DTO).
+        let legacy: TerminalSettingsDto = serde_json::from_str(
+            r#"{"shell":null,"fontSize":12,"scrollback":5000,"drawerHeight":320,"screenReaderMode":false}"#,
+        )
+        .expect("pre-Task-12 DTO payload must deserialize");
+        assert!(!legacy.login_shell);
+        assert_eq!(legacy.font_family, None);
     }
 
     #[cfg(unix)]
@@ -1822,6 +2000,7 @@ mod tests {
                 dir.path(),
                 Some("/bin/sh".into()),
                 Some("/bin/false".into()),
+                false,
                 None,
             )
             .expect("spawn explicit");
@@ -1829,10 +2008,59 @@ mod tests {
         // No argument → configured shell is used verbatim (recorded in
         // TerminalInfo, so the test never depends on $SHELL).
         let configured = manager
-            .spawn(dir.path(), None, Some("/bin/sh".into()), None)
+            .spawn(dir.path(), None, Some("/bin/sh".into()), false, None)
             .expect("spawn configured");
         assert_eq!(configured.shell, "/bin/sh");
         manager.kill_all();
+    }
+
+    // ── Login-shell argv injection (Task 12, pure) ───────────────────────
+
+    #[test]
+    fn login_capable_shell_matches_basename_exe_and_case() {
+        // Full paths resolve to the basename.
+        assert!(is_login_capable_shell("/usr/bin/bash"));
+        assert!(is_login_capable_shell("/usr/local/bin/zsh"));
+        assert!(is_login_capable_shell("fish"));
+        assert!(is_login_capable_shell("/bin/ksh"));
+        // .exe suffix stripped (Windows-style invocation of a login shell).
+        assert!(is_login_capable_shell("/usr/bin/bash.exe"));
+        // Case-folded.
+        assert!(is_login_capable_shell("/usr/bin/ZSH"));
+        // Not in the set: POSIX sh and PowerShell never get `-l`.
+        assert!(!is_login_capable_shell("/bin/sh"));
+        assert!(!is_login_capable_shell("powershell.exe"));
+        assert!(!is_login_capable_shell("pwsh"));
+        assert!(!is_login_capable_shell("cmd"));
+        // Embedded ".exe" is not a suffix — no strip, no match.
+        assert!(!is_login_capable_shell("bash.exe.exe.exe.ln"));
+    }
+
+    #[test]
+    fn apply_login_shell_prepends_flag_only_when_enabled_and_capable() {
+        let argv: Vec<String> = vec!["-c".into(), "echo hi".into()];
+        // Switch on + bash → `-l` first.
+        let (prog, args) = apply_login_shell("/usr/bin/bash", argv.clone(), true);
+        assert_eq!(prog, "/usr/bin/bash");
+        assert_eq!(args, ["-l", "-c", "echo hi"]);
+        // fish gets the flag too.
+        let (prog, args) = apply_login_shell("fish", Vec::new(), true);
+        assert_eq!(prog, "fish");
+        assert_eq!(args, ["-l"]);
+        // Switch on + non-capable shell → untouched.
+        let (prog, args) = apply_login_shell("/bin/sh", argv.clone(), true);
+        assert_eq!(prog, "/bin/sh");
+        assert_eq!(args, argv, "sh never gets `-l`");
+        let (prog, args) = apply_login_shell("powershell.exe", argv.clone(), true);
+        assert_eq!(prog, "powershell.exe");
+        assert_eq!(args, argv, "PowerShell never gets `-l`");
+        // Switch off → untouched even for a capable shell.
+        let (prog, args) = apply_login_shell("/usr/bin/zsh", argv, false);
+        assert_eq!(prog, "/usr/bin/zsh");
+        assert_eq!(args, ["-c", "echo hi"], "switch off → no `-l`");
+        // Windows semantics are compile-time (`cfg!(windows)` inside the
+        // function), so this unix build exercises the unix branch only —
+        // on Windows every input returns verbatim by construction.
     }
 
     // ── Replay history ring (US6) ────────────────────────────────────────
@@ -1941,7 +2169,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()), None, None)
+            .spawn(dir.path(), Some("/bin/sh".into()), None, false, None)
             .expect("spawn");
         manager.test_push_pending(&info.terminal_id, b"echo replay-marker-99\n");
         manager.pump_once_for_test();
@@ -1970,7 +2198,13 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         // 1.5 MiB in one batch: under the 2 MiB pending cap it drains
         // whole, and the ring must retain exactly the newest 1 MiB.
@@ -2003,7 +2237,13 @@ mod tests {
         let requested = link.display().to_string();
 
         let info = manager
-            .spawn(&link, Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .spawn(
+                &link,
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         // The stored dir is the canonicalized form (unchanged behavior)…
         assert_eq!(
@@ -2033,7 +2273,13 @@ mod tests {
         // `-c 'sleep 30'` prints nothing: every byte below is test-pushed,
         // so the chunk/seq accounting is exact.
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         let id = info.terminal_id.clone();
         // Two drains of 2 chunks + a remainder each → 2+2 chunks.
@@ -2076,7 +2322,13 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         let id = info.terminal_id.clone();
 
@@ -2129,7 +2381,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()), None, None)
+            .spawn(dir.path(), Some("/bin/sh".into()), None, false, None)
             .expect("spawn");
         assert_eq!(
             info.project_dir,
@@ -2166,7 +2418,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()), None, None)
+            .spawn(dir.path(), Some("/bin/sh".into()), None, false, None)
             .expect("spawn");
         // Direct pending seeding (reader equivalent) + a synchronous pump
         // pass: five bursts within one tick must leave as ONE emission.
@@ -2196,7 +2448,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()), None, None)
+            .spawn(dir.path(), Some("/bin/sh".into()), None, false, None)
             .expect("spawn");
         manager.resize(&info.terminal_id, 100, 30).expect("resize");
         // `stty size` reports "<rows> <cols>" from the pty winsize.
@@ -2223,7 +2475,13 @@ mod tests {
         // group must take both down.
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         let pid = pid_of(&manager, &info.terminal_id).expect("pid");
         let killed = manager.kill(&info.terminal_id).expect("kill");
@@ -2252,6 +2510,7 @@ mod tests {
                 dir.path(),
                 Some("/bin/sh -c 'sleep 30'".into()),
                 None,
+                false,
                 Some("session-aaaa".into()),
             )
             .expect("spawn a");
@@ -2260,6 +2519,7 @@ mod tests {
                 dir.path(),
                 Some("/bin/sh -c 'sleep 30'".into()),
                 None,
+                false,
                 Some("session-bbbb".into()),
             )
             .expect("spawn b");
@@ -2310,6 +2570,7 @@ mod tests {
                 dir.path(),
                 Some("/bin/sh -c 'echo bye-now'".into()),
                 None,
+                false,
                 None,
             )
             .expect("spawn");
@@ -2339,13 +2600,25 @@ mod tests {
         let mut ids = Vec::new();
         for _ in 0..MAX_TERMINALS {
             let info = manager
-                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+                .spawn(
+                    dir.path(),
+                    Some("/bin/sh -c 'sleep 30'".into()),
+                    None,
+                    false,
+                    None,
+                )
                 .expect("spawn");
             ids.push(info.terminal_id);
         }
         assert_eq!(manager.list().len(), MAX_TERMINALS);
         let err = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .unwrap_err();
         assert!(err.contains("terminal limit reached (4)"), "{err}");
         manager.kill_all();
@@ -2367,7 +2640,13 @@ mod tests {
         let mut pids = Vec::new();
         for _ in 0..2 {
             let info = manager
-                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+                .spawn(
+                    dir.path(),
+                    Some("/bin/sh -c 'sleep 30'".into()),
+                    None,
+                    false,
+                    None,
+                )
                 .expect("spawn");
             pids.push(pid_of(&manager, &info.terminal_id).expect("pid"));
         }
@@ -2385,7 +2664,13 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         let pid = pid_of(&manager, &info.terminal_id).expect("pid");
         assert_eq!(manager.live_pumps(), 1, "exactly one pump thread");
@@ -2408,7 +2693,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()), None, None)
+            .spawn(dir.path(), Some("/bin/sh".into()), None, false, None)
             .expect("spawn");
         // Five rapid writes inside one tick window — however the pump
         // coalesces them, every byte must arrive exactly once in order.
@@ -2447,6 +2732,7 @@ mod tests {
                 &PathBuf::from("/nonexistent/dir/for/terminal"),
                 None,
                 None,
+                false,
                 None,
             )
             .unwrap_err();
@@ -2501,7 +2787,13 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                None,
+                false,
+                None,
+            )
             .expect("spawn");
         // 3 MiB in a single push: the 2 MiB cap drops the oldest 1 MiB and
         // the pump must ship the retained 2 MiB as ≤256 KiB events.

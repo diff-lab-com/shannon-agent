@@ -95,38 +95,14 @@ describe('AdvancedSettings', () => {
     expect(screen.getByText('not on PATH')).toBeInTheDocument()
   })
 
-  // C1① — version & updates card
-  it('renders version & updates section with a check button', () => {
+  // Settings R3 (T1): the「版本与更新」card moved to Settings → 关于 — this
+  // page keeps only a cross-link into the About section. The update-check
+  // behaviour itself is covered by AboutSettings.test.tsx.
+  it('links to the About section where the update check now lives', () => {
     render(wrap(<AdvancedSettings />))
-    expect(screen.getByText('Version & updates')).toBeInTheDocument()
-    expect(screen.getByText('Check for updates')).toBeInTheDocument()
-  })
-
-  it('shows up-to-date badge and download page link after a check', async () => {
-    render(wrap(<AdvancedSettings />))
-    fireEvent.click(screen.getByText('Check for updates'))
-    await waitFor(() => expect(screen.getByText('up to date')).toBeInTheDocument())
-    expect(screen.getByText('Open download page')).toBeInTheDocument()
-    expect(screen.getByText('Current version: 0.11.0')).toBeInTheDocument()
-  })
-
-  it('announces an available update and opens the release page', async () => {
-    vi.mocked(api.checkAppUpdate).mockResolvedValueOnce({
-      currentVersion: '0.11.0',
-      latestVersion: 'v0.12.0',
-      updateAvailable: true,
-      releaseUrl: 'https://github.com/diff-lab-com/shannon-agent/releases/tag/v0.12.0',
-      error: null,
-    })
-    render(wrap(<AdvancedSettings />))
-    fireEvent.click(screen.getByText('Check for updates'))
-    await waitFor(() => expect(screen.getByText('v0.12.0 available')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Open download page'))
-    await waitFor(() =>
-      expect(api.openReleasePage).toHaveBeenCalledWith(
-        'https://github.com/diff-lab-com/shannon-agent/releases/tag/v0.12.0'
-      )
-    )
+    const link = screen.getByTestId('updates-moved-link')
+    expect(within(link).getByText('Updates moved to About')).toBeInTheDocument()
+    expect(link.querySelector('a')).toHaveAttribute('href', '/settings/about')
   })
 
   // US-SET-04: API Keys modal
@@ -193,62 +169,21 @@ describe('AdvancedSettings', () => {
     })
   })
 
-  // 卡A GC — session storage management card, next to the dream block.
-  // The description carries the informed-consent copy the review required
-  // (archived-only, last-activity clocked, never-auto-delete by default).
-  it('renders the session storage management card with the required disclosure copy', () => {
+  // 卡A GC — session storage management moved to Settings → 会话 (Settings
+  // R3 T6). The card itself (switch + retention gear, now with a 7-day gear)
+  // is covered by SessionSettings.test.tsx; this page keeps only a
+  // cross-link, and the old card must NOT still render here.
+  it('no longer renders the session GC card', () => {
     render(wrap(<AdvancedSettings />))
-    const card = screen.getByTestId('session-gc-card')
-    expect(within(card).getByText('Session storage management')).toBeInTheDocument()
-    const desc = within(card).getByText(/Automatically free storage by cleaning up archived sessions/)
-    const copy = desc.textContent ?? ''
-    expect(copy).toMatch(/Only archived sessions are ever cleaned/)
-    expect(copy).toMatch(/last activity/)
-    expect(copy).toMatch(/nothing is auto-deleted by default/)
+    expect(screen.queryByTestId('session-gc-card')).not.toBeInTheDocument()
+    expect(screen.queryByText('Session storage management')).not.toBeInTheDocument()
   })
 
-  it('renders the GC switch default-off and the retention select defaulting to Never', () => {
+  it('links to the Session section where session storage now lives', () => {
     render(wrap(<AdvancedSettings />))
-    const card = screen.getByTestId('session-gc-card')
-    expect(within(card).getByRole('switch')).toHaveAttribute('aria-checked', 'false')
-    const select = within(card).getByRole('combobox', { name: 'Retention window' }) as HTMLSelectElement
-    expect(select.value).toBe('0')
-    expect(select.selectedOptions[0].textContent).toBe('Never')
-  })
-
-  it('persists session_gc_enabled through configure when toggled', async () => {
-    render(wrap(<AdvancedSettings />))
-    const card = screen.getByTestId('session-gc-card')
-    fireEvent.click(within(card).getByRole('switch'))
-    await waitFor(() => {
-      expect(api.configure).toHaveBeenCalledWith({ key: 'session_gc_enabled', value: 'true' })
-    })
-  })
-
-  it('persists retention 30 days through configure as session_retention_days=30', async () => {
-    render(wrap(<AdvancedSettings />))
-    const card = screen.getByTestId('session-gc-card')
-    fireEvent.change(within(card).getByRole('combobox', { name: 'Retention window' }), { target: { value: '30' } })
-    await waitFor(() => {
-      expect(api.configure).toHaveBeenCalledWith({ key: 'session_retention_days', value: '30' })
-    })
-  })
-
-  it('persists the 永不 gear as session_retention_days=0 (0 means never)', async () => {
-    vi.mocked(api.getConfig).mockResolvedValueOnce({
-      provider: 'anthropic',
-      model: 'claude-sonnet-4-6',
-      session_retention_days: 30,
-    } as any)
-    render(wrap(<AdvancedSettings />))
-    const card = screen.getByTestId('session-gc-card')
-    // Fixture: a persisted 30-day window shows as the selected gear.
-    const select = await within(card).findByRole('combobox', { name: 'Retention window' }) as HTMLSelectElement
-    await waitFor(() => expect(select.value).toBe('30'))
-    fireEvent.change(select, { target: { value: '0' } })
-    await waitFor(() => {
-      expect(api.configure).toHaveBeenCalledWith({ key: 'session_retention_days', value: '0' })
-    })
+    const link = screen.getByTestId('session-moved-link')
+    expect(within(link).getByText('Session storage moved to the Sessions section')).toBeInTheDocument()
+    expect(link.querySelector('a')).toHaveAttribute('href', '/settings/session')
   })
 
   // P2-4 (R9-④) — remote images card. Persistence is frontend-local (the

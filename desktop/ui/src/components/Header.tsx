@@ -18,6 +18,7 @@ import { toastError } from '@/lib/errorToast';
 import { useSessionBudget } from '@/hooks/useSessionBudget';
 import { ExecutionModeSwitcher } from '@/components/chat/ExecutionModeSwitcher';
 import { PhaseTierSwitcher } from '@/components/chat/PhaseTierSwitcher';
+import AskUserCard from '@/components/chat/AskUserCard';
 import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow';
 import { modelWhyFor, type ModelWhyContext } from '@/lib/modelWhy';
 import { writeGlobalModelDefault } from '@/lib/modelSwitch';
@@ -541,6 +542,13 @@ export function Header() {
           </div>
       </Modal>
       )}
+      {/* Settings R3 T8 — the desktop ask_user question dialog, mounted in
+          the same surface slot as the approval modal above (the
+          permission-request card's render position). Self-contained: it
+          listens for `ask-user-request` / `ask-user-resolved` and answers
+          through `respond_ask_user` — renders nothing while no question is
+          pending. */}
+      <AskUserCard />
       {/* S-3 fix (R4 group 7): while the approval dialog waits, the modal
           scrim sits above the composer and the composer's glass surface is a
           `contain: paint` stacking context — its stop button can never rise

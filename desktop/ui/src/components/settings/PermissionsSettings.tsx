@@ -13,6 +13,7 @@ import * as api from '@/lib/tauri-api'
 import type { BuiltinProfileInfo, CustomProfileInfo, ProfilesList } from '@/types'
 import { useCatalog } from '@/context/CatalogContext'
 import { toastError } from '@/lib/errorToast'
+import EffectBadge from '@/components/settings/EffectBadge'
 
 // ─── Rule-list input validation (P1-3) ──────────────────────────────────────
 
@@ -534,10 +535,9 @@ export default function PermissionsSettings() {
               <span className="material-symbols-outlined icon-sm" aria-hidden="true">science</span>
               {t('settings.permissions.sandbox.landlockNote')}
             </p>
-            <p className="text-label-md text-warning flex items-center gap-xs">
-              <span className="material-symbols-outlined icon-sm" aria-hidden="true">restart_alt</span>
-              {t('settings.permissions.sandbox.restartNote')}
-            </p>
+            {/* Settings R3 (T1): the free-text restart note became the shared
+                semantics badge so every card states effect timing the same way. */}
+            <EffectBadge kind="restart-app" />
           </section>
 
           {/* Rule syntax guide */}

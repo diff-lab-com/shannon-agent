@@ -166,6 +166,57 @@ pub struct DesktopQueryFailedPayload {
     pub error_kind: &'static str,
 }
 
+// === Settings R3 T8 — desktop ask_user question round-trip ===
+//
+// `ask-user-request` / `ask-user-resolved` payloads. Desktop-only wire
+// types (same pattern as `QueryNoticePayload`): the event *names* live in
+// `shannon_types::events::event_names` so the shells agree on the strings,
+// but the engine never emits these — only `DesktopQuestionHandler` does.
+
+/// One selectable option of an `ask-user-request`. Mirrors
+/// `shannon_tools::ask_user::QuestionOption` exactly (label + description).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AskUserOptionPayload {
+    pub label: String,
+    pub description: String,
+}
+
+/// `ask-user-request` wire payload — one question from the engine's
+/// `ask_user_question` tool, flattened from
+/// `shannon_tools::ask_user::Question` plus the correlation id the answer
+/// travels back through (`respond_ask_user(request_id, answers)`). The
+/// handler asks one question at a time, so one event carries one question.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AskUserRequest {
+    /// Correlation id — echoed by `respond_ask_user` and by the
+    /// `ask-user-resolved` timeout event.
+    pub request_id: String,
+    /// The question text displayed to the user.
+    pub question: String,
+    /// Short label / chip shown alongside the question (may be empty).
+    pub header: String,
+    /// Selectable options; empty means free-form text only.
+    pub options: Vec<AskUserOptionPayload>,
+    /// Whether several options may be selected at once.
+    pub multi_select: bool,
+    /// Present only when 提问自动继续 is on: how long until the backend
+    /// auto-answers (`timeout_ms`/1000 → the card's mm:ss countdown). Pure
+    /// display — the backend drives the actual timeout; `None` = wait
+    /// forever.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+/// `ask-user-resolved` wire payload — a pending question settled without an
+/// answer (the auto-continue timeout fired). `timed_out` is always `true`
+/// today; the field keeps the wire shape stable if the answered path ever
+/// needs to broadcast resolution to every window too.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AskUserResolved {
+    pub request_id: String,
+    pub timed_out: bool,
+}
+
 /// Build the desktop `query:failed` payload — classifies the failure once,
 /// at the emit site, so every `QUERY_FAILED` emitter carries the same
 /// kind. `engine_kind` is the structured classification from the engine's
@@ -266,6 +317,9 @@ mod tests {
         );
         // P3-6 — Task 3's frontend listens on this exact string.
         assert_eq!(event_names::TERMINAL_EXIT, "terminal:exit");
+        // Settings R3 T8 — AskUserCard listens on these exact strings.
+        assert_eq!(event_names::ASK_USER_REQUEST, "ask-user-request");
+        assert_eq!(event_names::ASK_USER_RESOLVED, "ask-user-resolved");
     }
 
     #[test]
@@ -449,6 +503,63 @@ mod tests {
         let json = serde_json::to_string(&p).unwrap();
         assert!(!json.contains("session_id"), "{json}");
         assert!(json.contains("\"error_kind\":\"other\""), "{json}");
+    }
+
+    // === Settings R3 T8: ask-user payloads ===
+
+    #[test]
+    fn ask_user_request_serializes_flat_question_fields() {
+        let p = AskUserRequest {
+            request_id: "req-1".into(),
+            question: "Deploy now?".into(),
+            header: "Confirm".into(),
+            options: vec![
+                AskUserOptionPayload {
+                    label: "Yes".into(),
+                    description: "Ship it".into(),
+                },
+                AskUserOptionPayload {
+                    label: "No".into(),
+                    description: String::new(),
+                },
+            ],
+            multi_select: false,
+            timeout_ms: Some(300_000),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(back["request_id"], "req-1");
+        assert_eq!(back["question"], "Deploy now?");
+        assert_eq!(back["header"], "Confirm");
+        assert_eq!(back["options"][0]["label"], "Yes");
+        assert_eq!(back["multi_select"], false);
+        assert_eq!(back["timeout_ms"], 300_000);
+    }
+
+    #[test]
+    fn ask_user_request_omits_timeout_when_waiting_forever() {
+        let p = AskUserRequest {
+            request_id: "req-2".into(),
+            question: "Name?".into(),
+            header: String::new(),
+            options: Vec::new(),
+            multi_select: false,
+            timeout_ms: None,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("timeout_ms"), "{json}");
+    }
+
+    #[test]
+    fn ask_user_resolved_carries_request_id_and_timeout_flag() {
+        let p = AskUserResolved {
+            request_id: "req-3".into(),
+            timed_out: true,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(back["request_id"], "req-3");
+        assert_eq!(back["timed_out"], true);
     }
 
     // === R5-2: retry-notice classification (failover / key rotation) ===

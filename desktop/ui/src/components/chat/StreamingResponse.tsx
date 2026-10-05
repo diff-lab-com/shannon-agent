@@ -4,6 +4,7 @@ import { Markdown } from '@/components/chat/Markdown'
 import { splitStreamingMarkdown } from '@/lib/streamingMarkdown'
 import { SubagentBlock, ToolCallDisplay } from '@/components/chat/MessageBubble'
 import { Reasoning } from '@/components/ai-elements'
+import { readShowThinkingPref } from '@/lib/thinkingPref'
 import type { ToolCall } from '@/types'
 
 interface StreamingResponseProps {
@@ -62,6 +63,10 @@ export default function StreamingResponse({
   // B3-2: pure per-render split (cheap line scan); prefix is '' until the
   // first paragraph boundary finalizes.
   const { prefix, tail } = splitStreamingMarkdown(streamingText)
+  // Settings R3 T9: 'none' hides thinking completely — including live
+  // (streaming) output. 'first'/'all' both stream as usual: the in-flight
+  // run IS the current turn, so its thinking is that turn's first block.
+  const showThinking = readShowThinkingPref() !== 'none'
 
   return (
     <div className="relative" role="presentation">
@@ -70,11 +75,17 @@ export default function StreamingResponse({
           <span className="material-symbols-outlined text-on-primary-container">smart_toy</span>
         </div>
         <div className="space-y-md flex-1">
-          {thinkingText && (
+          {showThinking && thinkingText && (
             <Reasoning header={t('chat.streaming.thinking')} defaultOpen={false}>
               <p className="whitespace-pre-wrap">{thinkingText}</p>
             </Reasoning>
           )}
+          {/* Settings R3 T11 (C6) — controller ruling R10: streaming stays
+              PER-CARD on purpose. Grouping the live tail re-folds the last
+              group on every ~50ms flush (cards streaming in change the run's
+              kind mid-flight), which reads as layout jitter; the Explore/
+              Terminal/Changes folds render once the message commits to
+              history (MessageBubble). */}
           {activeToolCalls.map(tc => (
             tc.tool_name === 'agent_spawn' ? (
               // P1-⑥: sub-agent spawns render as first-class blocks in the

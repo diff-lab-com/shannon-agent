@@ -105,6 +105,17 @@ pub struct DesktopConfig {
     /// (`NotificationLevel::Error`). Default: enabled.
     #[serde(default = "default_true")]
     pub notifications_on_failed: bool,
+    /// Surface a desktop notification when the user's attention is required
+    /// (tool-approval waits, budget alerts — `NotificationKind::NeedsAttention`).
+    /// Default: enabled.
+    #[serde(default = "default_true")]
+    pub notifications_on_needs_attention: bool,
+    /// Play the frontend-composited chime (Web Audio) on task completed /
+    /// failed / needs-attention events. Independent of the OS notification
+    /// sound; the chime itself is gated by the master switch and DND window
+    /// frontend-side (R4). Default: disabled.
+    #[serde(default)]
+    pub notifications_sound_enabled: bool,
     /// Gateway process supervision (E-1, 方案 C). When `managed` is true the
     /// desktop app spawns and supervises a local `shannon-gateway` binary;
     /// when false, the gateway is treated as external (user/ops runs it and
@@ -208,6 +219,206 @@ pub struct DesktopConfig {
     /// deliberately NOT per session.
     #[serde(default)]
     pub effort_level: Option<String>,
+    /// Settings R3 T3 — GPU-composited webview rendering switch. `true`
+    /// (default) keeps hardware acceleration on; `false` injects the
+    /// per-platform "disable GPU" env vars BEFORE the webview backend
+    /// initializes (see [`apply_hardware_acceleration_env`]) so a broken
+    /// GPU/driver can no longer blank-screen or crash the window. Takes
+    /// effect on the NEXT app launch — the env vars are read once at
+    /// webview creation. macOS is unaffected (no injection path).
+    #[serde(default = "default_true")]
+    pub hardware_acceleration: bool,
+    /// Settings R3 T3 — always-on wake lock. When true, the desktop holds a
+    /// prevent-sleep refcount from `AppState::new` until the toggle flips
+    /// off or the app exits. Default: false (opt-in).
+    #[serde(default)]
+    pub power_keep_awake: bool,
+    /// Settings R3 T3 — block idle sleep while ANY agent run (interactive
+    /// turn, background task, goal run, best-of-N branch, routine rerun) is
+    /// streaming. Refcounted, so overlapping runs keep the lock until the
+    /// last one ends. Default: true (the agent working while the machine
+    /// dozes off is the surprising outcome).
+    #[serde(default = "default_power_block_sleep_during_tasks")]
+    pub power_block_sleep_during_tasks: bool,
+    /// Settings R3 T4 (B1) — explicit HTTP(S) proxy URL. When set, injected
+    /// at startup as `HTTPS_PROXY` + `HTTP_PROXY` + `ALL_PROXY` so every
+    /// outbound path (LLM clients, MCP stdio, gateway sidecar, command-tool
+    /// subprocesses) inherits it — reqwest reads the standard proxy env vars
+    /// by default. Empty/None keeps the implicit env fallback (R1: never
+    /// force direct connections). Empty at configure time → stored as None.
+    #[serde(default)]
+    pub network_proxy_url: Option<String>,
+    /// Settings R3 T4 (B1) — NO_PROXY companion: comma-separated hosts that
+    /// bypass the proxy (`localhost,127.0.0.1,::1,.example.com`). Injected
+    /// as `NO_PROXY` when set; empty/None leaves the env untouched.
+    #[serde(default)]
+    pub network_no_proxy: Option<String>,
+    /// Settings R3 T4 (B1) — custom CA certificate (PEM) path, `~`-expanded
+    /// at configure time and existence-checked. Injected as
+    /// `SHANNON_CA_BUNDLE` (read by the engine/desktop HTTP builders — the
+    /// workspace reqwest trusts webpki-roots only, so a corporate MITM CA
+    /// must be added explicitly) plus `NODE_EXTRA_CA_CERTS` /
+    /// `SSL_CERT_FILE` for subprocesses. Empty/None leaves the env
+    /// untouched.
+    #[serde(default)]
+    pub network_ca_cert_path: Option<String>,
+    /// Settings R3 T6 — master switch for the query engine's automatic
+    /// context compaction (the 60%/80% warning injections, micro-compaction
+    /// and the compact/truncate ladder). Default `true`: existing behavior.
+    /// When `false` the engine preserves model requests and responses
+    /// verbatim — nothing is auto-compacted or truncated, and a turn fails
+    /// only when the context window is genuinely exhausted (`/compact`
+    /// stays available as the manual path). Written via
+    /// `configure("context.auto_compact")`; the engine is rebuilt per
+    /// message, so a change applies to the NEXT message without a restart.
+    #[serde(default = "default_true")]
+    pub context_auto_compact: bool,
+    /// Settings R3 T7 — master switch for the timed auto-archive scan. When
+    /// false — the default — the scan never archives anything ("never
+    /// auto-archive" is the standing policy, mirroring the GC posture).
+    /// When true, every pass archives active sessions that are 已完成 per
+    /// the R6 adjudication (`!running && 无未读 inbox 条目`), unpinned, and
+    /// whose last activity is older than
+    /// [`DesktopConfig::session_auto_archive_days`]. Re-read live each pass
+    /// (the loop runs every 6h) — a flip needs no restart. Written via
+    /// `configure("session.auto_archive_enabled")`.
+    #[serde(default)]
+    pub session_auto_archive_enabled: bool,
+    /// Settings R3 T7 — auto-archive retention window in days. A session
+    /// qualifies when its last activity (`events.jsonl` mtime) is older than
+    /// this many days. Default 7; `configure` clamps into `1..=365` so a
+    /// hand-edited or wire-level bad value can neither wedge (0) nor explode
+    /// (u32::MAX) the scan. Written via
+    /// `configure("session.auto_archive_days")`.
+    #[serde(default = "default_session_auto_archive_days")]
+    pub session_auto_archive_days: u32,
+    /// Settings R3 T8 — 提问自动继续. When true, a desktop `ask_user_question`
+    /// left unanswered for 5 minutes (`ask_user_handler::ASK_USER_TIMEOUT_SECS`)
+    /// is auto-answered with "continue on your best judgment" (plus an
+    /// `ask-user-resolved` timed-out event for the card); when false — the
+    /// default — the agent waits for the user indefinitely. Read live by
+    /// `DesktopQuestionHandler` before each question's wait, so a flip
+    /// applies to the NEXT question without a restart. Written via
+    /// `configure("chat.ask_user_auto_continue")`.
+    #[serde(default)]
+    pub chat_ask_user_auto_continue: bool,
+}
+
+/// Settings R3 T7 — the auto-archive retention default (7 days).
+fn default_session_auto_archive_days() -> u32 {
+    7
+}
+
+fn default_power_block_sleep_during_tasks() -> bool {
+    true
+}
+
+/// Settings R3 T3 — apply the webview "disable GPU" environment for the
+/// persisted [`DesktopConfig::hardware_acceleration`] choice.
+///
+/// MUST run before `tauri::Builder` starts: the webview backend reads these
+/// variables exactly once, when the first window's webview is created — a
+/// later write is a silent no-op. Platform matrix:
+///
+/// - Linux (WebKitGTK): `WEBKIT_DISABLE_COMPOSITING_MODE=1` +
+///   `WEBKIT_DISABLE_DMABUF_RENDERER=1` — the two switches the WebKit bug
+///   trackers recommend for blank-window / GPU-crash workarounds.
+/// - Windows (WebView2): `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--disable-gpu`.
+/// - macOS (WKWebView): no-op — there is no supported escape hatch and the
+///   UI hides the card.
+///
+/// Public so the bin crate's `main()` can call it before the builder.
+pub fn apply_hardware_acceleration_env(config: &DesktopConfig) {
+    if config.hardware_acceleration {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Edition 2024: set_var is unsafe (env is process-global) — same
+        // precedent as main.rs's SHANNON_LANG test helper.
+        unsafe {
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        tracing::info!(
+            "hardware acceleration disabled: WebKitGTK compositing + DMABUF renderer off (takes effect after restart)"
+        );
+    }
+    #[cfg(target_os = "windows")]
+    {
+        unsafe {
+            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu");
+        }
+        tracing::info!(
+            "hardware acceleration disabled: WebView2 --disable-gpu (takes effect after restart)"
+        );
+    }
+    // macOS / other targets: no supported escape hatch — leave untouched.
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = config;
+        tracing::debug!("hardware acceleration toggle has no effect on this platform");
+    }
+}
+
+/// Settings R3 T4 (B1) — the effective value of one optional text config
+/// field: trimmed, empty/whitespace = unset. Shared by [`network_env`] and
+/// the configure arms so a blank UI field always means "clear".
+fn effective_network_value(raw: Option<&str>) -> Option<&str> {
+    raw.map(str::trim).filter(|v| !v.is_empty())
+}
+
+/// Settings R3 T4 (B1) — compute the process environment to inject for the
+/// corporate-network trio, as `(name, value)` pairs.
+///
+/// Pure on purpose: tests assert the returned set without mutating global
+/// process state; [`apply_network_env`] is the thin (unsafe) applier.
+///
+/// Rules (控制器裁决 R1 + 覆盖语义):
+/// - `network_proxy_url` set → `HTTPS_PROXY` = `HTTP_PROXY` = `ALL_PROXY` =
+///   the URL, so every reqwest-based client (which reads the standard proxy
+///   env vars by default) and every env-inheriting subprocess (gateway
+///   sidecar, MCP stdio, command tools) routes through the proxy.
+/// - `network_no_proxy` set → `NO_PROXY` = the list.
+/// - `network_ca_cert_path` set → `SHANNON_CA_BUNDLE` (read by the
+///   engine/desktop reqwest builders, which trust webpki-roots only) +
+///   `NODE_EXTRA_CA_CERTS` + `SSL_CERT_FILE` for Node-based subprocesses.
+/// - Unset values inject NOTHING — the implicit env keeps working (R1:
+///   leaving the UI blank never forces direct connections).
+/// - Set values WIN over pre-existing same-named env: an explicit setting is
+///   the user's intent, a stale shell export must not clobber it.
+pub fn network_env(config: &DesktopConfig) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    if let Some(proxy) = effective_network_value(config.network_proxy_url.as_deref()) {
+        for name in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
+            env.push((name.to_string(), proxy.to_string()));
+        }
+    }
+    if let Some(no_proxy) = effective_network_value(config.network_no_proxy.as_deref()) {
+        env.push(("NO_PROXY".to_string(), no_proxy.to_string()));
+    }
+    if let Some(ca) = effective_network_value(config.network_ca_cert_path.as_deref()) {
+        for name in ["SHANNON_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"] {
+            env.push((name.to_string(), ca.to_string()));
+        }
+    }
+    env
+}
+
+/// Settings R3 T4 (B1) — apply [`network_env`] to the process environment.
+///
+/// MUST run before `tauri::Builder` starts (same early block as
+/// [`apply_hardware_acceleration_env`]): the gateway sidecar and MCP stdio
+/// children are spawned from this process later during startup and inherit
+/// its environment wholesale, and the engine's HTTP clients are built once
+/// at first use.
+pub fn apply_network_env(config: &DesktopConfig) {
+    for (name, value) in network_env(config) {
+        // Edition 2024: set_var is unsafe (env is process-global) — same
+        // precedent as apply_hardware_acceleration_env above.
+        unsafe { std::env::set_var(&name, &value) };
+        tracing::info!("network env injected: {name} (from persisted config, restart-applied)");
+    }
 }
 
 /// P2-5: payload of the desktop `offpeak.model_override` config key.
@@ -705,6 +916,8 @@ impl Default for DesktopConfig {
             notifications_dnd_end: None,
             notifications_on_completed: default_true(),
             notifications_on_failed: default_true(),
+            notifications_on_needs_attention: default_true(),
+            notifications_sound_enabled: false,
             stt: None,
             voice_local: VoiceLocalConfig::default(),
             gateway: GatewayDesktopConfig::default(),
@@ -720,6 +933,16 @@ impl Default for DesktopConfig {
             act_tier: None,
             monthly_budget_usd: None,
             effort_level: None,
+            hardware_acceleration: default_true(),
+            power_keep_awake: false,
+            power_block_sleep_during_tasks: default_power_block_sleep_during_tasks(),
+            network_proxy_url: None,
+            network_no_proxy: None,
+            network_ca_cert_path: None,
+            context_auto_compact: true,
+            session_auto_archive_enabled: false,
+            session_auto_archive_days: default_session_auto_archive_days(),
+            chat_ask_user_auto_continue: false,
         }
     }
 }
@@ -751,7 +974,10 @@ pub(crate) fn user_settings_path() -> PathBuf {
     home.join(".shannon").join("settings.json")
 }
 
-fn dirs_home() -> Option<PathBuf> {
+/// Settings R3 T4 (B1): `pub(crate)` so the configure arms can `~`-expand a
+/// user-typed CA certificate path with the same home resolution every other
+/// path in this module uses (`$HOME`, falling back to `$USERPROFILE`).
+pub(crate) fn dirs_home() -> Option<PathBuf> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()
@@ -1645,6 +1871,276 @@ mod tests {
             back.open_session_windows,
             vec!["7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1".to_string()]
         );
+    }
+
+    /// Settings R3 T3: the three power/hardware keys must default correctly
+    /// when a pre-R3 `config.json` (no such keys) loads — hw-accel ON,
+    /// keep-awake OFF, block-sleep-during-tasks ON — and round-trip once
+    /// written.
+    #[test]
+    fn test_power_keys_default_compat_and_round_trip() {
+        // Legacy JSON without the new keys (the exact shape older installs
+        // have on disk).
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(legacy.hardware_acceleration, "hw accel defaults ON");
+        assert!(!legacy.power_keep_awake, "keep-awake defaults OFF");
+        assert!(
+            legacy.power_block_sleep_during_tasks,
+            "block-sleep-during-tasks defaults ON"
+        );
+
+        let config = DesktopConfig {
+            hardware_acceleration: false,
+            power_keep_awake: true,
+            power_block_sleep_during_tasks: false,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"hardware_acceleration\":false"), "{json}");
+        assert!(json.contains("\"power_keep_awake\":true"), "{json}");
+        assert!(
+            json.contains("\"power_block_sleep_during_tasks\":false"),
+            "{json}"
+        );
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert!(!back.hardware_acceleration);
+        assert!(back.power_keep_awake);
+        assert!(!back.power_block_sleep_during_tasks);
+    }
+
+    /// Settings R3 T4 (B1): the three network keys must default to None on a
+    /// pre-R3 config.json and round-trip once written.
+    #[test]
+    fn test_network_keys_default_compat_and_round_trip() {
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(legacy.network_proxy_url.is_none(), "proxy defaults unset");
+        assert!(legacy.network_no_proxy.is_none(), "no_proxy defaults unset");
+        assert!(
+            legacy.network_ca_cert_path.is_none(),
+            "ca path defaults unset"
+        );
+
+        let config = DesktopConfig {
+            network_proxy_url: Some("http://127.0.0.1:7890".into()),
+            network_no_proxy: Some("localhost,127.0.0.1".into()),
+            network_ca_cert_path: Some("/etc/shannon/root-ca.pem".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("\"network_proxy_url\":\"http://127.0.0.1:7890\""),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"network_no_proxy\":\"localhost,127.0.0.1\""),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"network_ca_cert_path\":\"/etc/shannon/root-ca.pem\""),
+            "{json}"
+        );
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.network_proxy_url.as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+        assert_eq!(
+            back.network_no_proxy.as_deref(),
+            Some("localhost,127.0.0.1")
+        );
+        assert_eq!(
+            back.network_ca_cert_path.as_deref(),
+            Some("/etc/shannon/root-ca.pem")
+        );
+    }
+
+    /// Settings R3 T6: `context_auto_compact` defaults to `true` — a legacy
+    /// config.json without the key keeps auto-compaction ON (exact pre-T6
+    /// behavior), and an explicit `false` survives a save/load round trip.
+    #[test]
+    fn test_context_auto_compact_default_compat_and_round_trip() {
+        // Legacy JSON: no `context_auto_compact` key at all → default true.
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(
+            legacy.context_auto_compact,
+            "missing key must default to auto-compaction ON"
+        );
+        assert!(DesktopConfig::default().context_auto_compact);
+
+        // Explicit off persists and reloads as off.
+        let config = DesktopConfig {
+            context_auto_compact: false,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"context_auto_compact\":false"), "{json}");
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert!(!back.context_auto_compact, "false must round-trip");
+    }
+
+    /// Settings R3 T7: the auto-archive keys default to off + 7 days — a
+    /// legacy config.json without them keeps "never auto-archive" (the
+    /// standing posture), and explicit values survive a save/load round trip.
+    #[test]
+    fn test_auto_archive_keys_default_compat_and_round_trip() {
+        // Legacy JSON: neither key present → disabled + 7-day window.
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(
+            !legacy.session_auto_archive_enabled,
+            "missing key must default to auto-archive OFF"
+        );
+        assert_eq!(legacy.session_auto_archive_days, 7);
+        assert!(!DesktopConfig::default().session_auto_archive_enabled);
+        assert_eq!(DesktopConfig::default().session_auto_archive_days, 7);
+
+        // Explicit values persist and reload verbatim.
+        let config = DesktopConfig {
+            session_auto_archive_enabled: true,
+            session_auto_archive_days: 30,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("\"session_auto_archive_enabled\":true"),
+            "{json}"
+        );
+        assert!(json.contains("\"session_auto_archive_days\":30"), "{json}");
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert!(back.session_auto_archive_enabled, "true must round-trip");
+        assert_eq!(back.session_auto_archive_days, 30, "days must round-trip");
+    }
+
+    /// Settings R3 T4 (B1): `network_env` is a pure function — given a
+    /// config, exactly the expected `(name, value)` pairs come back. Empty
+    /// / whitespace values inject NOTHING (R1: keep the implicit env
+    /// fallback, never force direct), set values produce the full trio and
+    /// override any same-named env by construction of the applier.
+    #[test]
+    fn network_env_empty_config_injects_nothing() {
+        let cfg = DesktopConfig::default();
+        assert!(
+            network_env(&cfg).is_empty(),
+            "unset network settings must not inject any env var"
+        );
+        // Whitespace-only / empty-string values (hand-edited config) count
+        // as unset too.
+        let cfg = DesktopConfig {
+            network_proxy_url: Some("   ".into()),
+            network_no_proxy: Some(String::new()),
+            network_ca_cert_path: None,
+            ..Default::default()
+        };
+        assert!(network_env(&cfg).is_empty(), "blank values = unset (R1)");
+    }
+
+    #[test]
+    fn network_env_proxy_value_yields_the_standard_proxy_vars() {
+        let cfg = DesktopConfig {
+            network_proxy_url: Some("http://127.0.0.1:7890".into()),
+            ..Default::default()
+        };
+        let env = network_env(&cfg);
+        let expected = vec![
+            (
+                "HTTPS_PROXY".to_string(),
+                "http://127.0.0.1:7890".to_string(),
+            ),
+            (
+                "HTTP_PROXY".to_string(),
+                "http://127.0.0.1:7890".to_string(),
+            ),
+            ("ALL_PROXY".to_string(), "http://127.0.0.1:7890".to_string()),
+        ];
+        assert_eq!(env, expected, "proxy set → exactly the three standard vars");
+    }
+
+    #[test]
+    fn network_env_no_proxy_and_ca_yield_their_own_vars() {
+        let cfg = DesktopConfig {
+            network_no_proxy: Some("localhost,127.0.0.1,::1,.example.com".into()),
+            network_ca_cert_path: Some("/home/u/certs/root-ca.pem".into()),
+            ..Default::default()
+        };
+        let env = network_env(&cfg);
+        assert!(
+            env.contains(&(
+                "NO_PROXY".to_string(),
+                "localhost,127.0.0.1,::1,.example.com".to_string()
+            )),
+            "no_proxy → NO_PROXY, got {env:?}"
+        );
+        for name in ["SHANNON_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"] {
+            assert!(
+                env.iter()
+                    .any(|(n, v)| n == name && v == "/home/u/certs/root-ca.pem"),
+                "{name} must carry the CA path, got {env:?}"
+            );
+        }
+        assert!(
+            !env.iter()
+                .any(|(n, _)| matches!(n.as_str(), "HTTP_PROXY" | "HTTPS_PROXY" | "ALL_PROXY")),
+            "proxy vars untouched when only ca/no_proxy set: {env:?}"
+        );
+    }
+
+    #[test]
+    fn network_env_values_are_trimmed_and_explicit() {
+        let cfg = DesktopConfig {
+            network_proxy_url: Some("  http://corp-proxy.internal:3128  ".into()),
+            ..Default::default()
+        };
+        let env = network_env(&cfg);
+        assert!(
+            env.iter()
+                .all(|(_, v)| v == "http://corp-proxy.internal:3128"),
+            "values are stored pre-trimmed (configure trims); env passthrough is verbatim: {env:?}"
+        );
+    }
+
+    #[test]
+    fn test_notification_keys_default_compat_and_round_trip() {
+        // Settings-r3 T5: the two new notification keys must default sensibly
+        // when absent from an older config.json — needs-attention ON, sound
+        // OFF (R4).
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(
+            legacy.notifications_on_needs_attention,
+            "needs-attention defaults ON"
+        );
+        assert!(!legacy.notifications_sound_enabled, "sound defaults OFF");
+
+        let config = DesktopConfig {
+            notifications_on_needs_attention: false,
+            notifications_sound_enabled: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("\"notifications_on_needs_attention\":false"),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"notifications_sound_enabled\":true"),
+            "{json}"
+        );
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert!(!back.notifications_on_needs_attention);
+        assert!(back.notifications_sound_enabled);
     }
 
     #[test]

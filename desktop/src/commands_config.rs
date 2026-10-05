@@ -274,6 +274,19 @@ fn parse_session_retention_days(value: &str) -> Result<Option<u32>, String> {
     })
 }
 
+/// Settings R3 T7: parse the `session.auto_archive_days` wire value into the
+/// stored window. There is no 永不 gear — disabling is
+/// `session.auto_archive_enabled`'s job — so the value clamps into
+/// `1..=365`: the stored config always describes a scanable window, no
+/// matter what a stale client or hand edit sent.
+fn parse_auto_archive_days(value: &str) -> Result<u32, String> {
+    let days: u32 = value
+        .trim()
+        .parse()
+        .map_err(|e| format!("Invalid session.auto_archive_days `{value}`: {e}"))?;
+    Ok(days.clamp(1, 365))
+}
+
 /// P2-1: parse the `monthly_budget_usd` wire value into the stored budget.
 /// `""` / `"null"` / `"0"` (and any parsed non-positive or non-finite
 /// amount) clear the budget — `None` = no cap, the standing default; a
@@ -318,6 +331,98 @@ pub(crate) fn validate_sandbox_mode(value: &str) -> Result<Option<String>, Strin
     }
 }
 
+// === Settings R3 T4 (B1) — `network.*` configure arms ===
+//
+// The corporate-network trio (HTTP proxy / NO_PROXY / custom CA). Validation
+// lives in pure functions below (home path injected, no process-state
+// mutation) so the round-trip / error tests run without touching `HOME`;
+// `configure`'s arm only adds persist + CONFIG_UPDATED on top.
+
+/// `~` expansion for user-typed CA paths. `home` is injected for tests
+/// (same resolution as `config::dirs_home` at call sites). A path that does
+/// not start with `~` passes through verbatim; a bare `~` (or `~/x` with no
+/// home available) comes back as-is so the caller's existence check gives
+/// the user an honest error instead of a silent mangle.
+fn expand_tilde(value: &str, home: Option<&std::path::Path>) -> String {
+    if value == "~" {
+        return home
+            .map(|h| h.to_string_lossy().into_owned())
+            .unwrap_or_else(|| value.to_string());
+    }
+    if let Some(rest) = value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
+        if let Some(h) = home {
+            return h.join(rest).to_string_lossy().into_owned();
+        }
+    }
+    value.to_string()
+}
+
+/// Validate + normalize `network.ca_cert_path`: trim, empty = None (clear),
+/// `~` expand, and the file MUST exist — the startup env injection points
+/// subprocesses at this path verbatim, so a dangling path has to be refused
+/// at write time, not discovered as TLS failures after a restart.
+pub(crate) fn validate_ca_cert_path(
+    value: &str,
+    home: Option<&std::path::Path>,
+) -> Result<Option<String>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let expanded = expand_tilde(trimmed, home);
+    let path = std::path::PathBuf::from(&expanded);
+    if !path.is_file() {
+        return Err(format!(
+            "CA certificate file not found: {expanded} — the path must point at an existing PEM bundle"
+        ));
+    }
+    Ok(Some(expanded))
+}
+
+/// Core of the three `network.*` configure arms: validate the value and
+/// write the matching in-memory field. Persist + emit stay with
+/// `configure`; `home` is injected so tests never mutate the process env.
+pub(crate) fn apply_network_config_arm(
+    cfg: &mut DesktopConfig,
+    key: &str,
+    value: &str,
+    home: Option<&std::path::Path>,
+) -> Result<(), String> {
+    match key {
+        "network.proxy_url" => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                // R1: empty = clear — the implicit env fallback keeps working.
+                cfg.network_proxy_url = None;
+            } else if trimmed.to_ascii_lowercase().starts_with("http://")
+                || trimmed.to_ascii_lowercase().starts_with("https://")
+            {
+                cfg.network_proxy_url = Some(trimmed.to_string());
+            } else {
+                return Err(format!(
+                    "Invalid {key}: `{trimmed}` — the proxy URL must start with http:// or https://"
+                ));
+            }
+        }
+        "network.no_proxy" => {
+            let trimmed = value.trim();
+            cfg.network_no_proxy = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+        "network.ca_cert_path" => {
+            cfg.network_ca_cert_path = validate_ca_cert_path(value, home)?;
+        }
+        other => return Err(format!("Unknown network config key: {other}")),
+    }
+    Ok(())
+}
+
 // === Grouped boolean toggles (`configure`) ===
 //
 // The key set here backs the Settings → Advanced switches. It used to live
@@ -346,6 +451,26 @@ fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Resu
         // and (per the config docs) an enabled GC still only ever prunes
         // **archived** sessions past the retention window.
         "session_gc_enabled" => cfg.session_gc_enabled = enabled,
+        // Settings R3 T3: hardware-acceleration escape hatch. Persist-only
+        // here — the env injection happens once, before the webview is
+        // created, so a change needs an app restart (the UI shows the
+        // EffectBadge restart-app).
+        "hardware_acceleration" => cfg.hardware_acceleration = enabled,
+        // Settings R3 T3: block idle sleep while agent runs stream. Read
+        // live at the start of every run — no restart, no side effect here.
+        "power.block_sleep_during_tasks" => cfg.power_block_sleep_during_tasks = enabled,
+        // Settings R3 T6: master switch for the engine's automatic context
+        // compaction. Read when each message's engine is built — the engine
+        // is rebuilt per message, so a flip applies to the NEXT message.
+        "context.auto_compact" => cfg.context_auto_compact = enabled,
+        // Settings R3 T7: master switch for the timed auto-archive scan.
+        // Read live at the top of every scan pass (6h cadence), so a flip
+        // lands on the next pass — no restart.
+        "session.auto_archive_enabled" => cfg.session_auto_archive_enabled = enabled,
+        // Settings R3 T8: auto-continue for unanswered agent questions
+        // (`ask_user_question`). Read live by the ask_user handler before
+        // each question's wait — a flip applies to the NEXT question.
+        "chat.ask_user_auto_continue" => cfg.chat_ask_user_auto_continue = enabled,
         other => return Err(format!("Unrecognized boolean key: {other}")),
     }
     Ok(())
@@ -761,6 +886,33 @@ pub async fn configure(
 
             Ok(())
         }
+        // Settings R3 T4 (B1) — corporate-network trio. Validation in
+        // [`apply_network_config_arm`] (proxy scheme / trim-to-clear / CA
+        // `~`-expansion + existence); the env injection itself happens once
+        // at startup ([`config::apply_network_env`]), so a change takes
+        // effect on the next app launch (UI shows the restart-app badge).
+        "network.proxy_url" | "network.no_proxy" | "network.ca_cert_path" => {
+            {
+                let mut desktop_cfg = state.desktop_config.write().await;
+                apply_network_config_arm(
+                    &mut desktop_cfg,
+                    &update.key,
+                    &update.value,
+                    config::dirs_home().as_deref(),
+                )?;
+            }
+            config::save_config(&state.desktop_config.read().await.clone())?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: update.key.clone(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
         "strategic_focus" => {
             let mut desktop_cfg = state.desktop_config.write().await;
             desktop_cfg.strategic_focus = Some(update.value.clone());
@@ -839,6 +991,35 @@ pub async fn configure(
 
             Ok(())
         }
+        // Settings R3 T3 — always-on "keep computer awake" switch. A
+        // dedicated arm (not the grouped toggle) because flipping it has an
+        // immediate side effect: start/stop the process-global wake lock.
+        "power.keep_awake" => {
+            let enabled = match update.value.to_ascii_lowercase().as_str() {
+                "true" => true,
+                "false" => false,
+                _ => {
+                    return Err(format!(
+                        "Invalid boolean for {}: {}",
+                        update.key, update.value
+                    ));
+                }
+            };
+            {
+                let mut desktop_cfg = state.desktop_config.write().await;
+                desktop_cfg.power_keep_awake = enabled;
+            }
+            config::save_config(&state.desktop_config.read().await.clone())?;
+            state.inner().apply_keep_awake(enabled);
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: update.key.clone(),
+                    value: update.value,
+                },
+            );
+            Ok(())
+        }
         // Grouped boolean toggles (the Settings switches). The guard routes
         // on `is_boolean_toggle_key`, so the arm and `set_boolean_toggle`
         // share one key list — a recognized key (`dream_enabled`,
@@ -911,6 +1092,29 @@ pub async fn configure(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
                     key: "session_retention_days".into(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
+        "session.auto_archive_days" => {
+            // Settings R3 T7: auto-archive retention window. Unlike the GC
+            // window there is no 永不 — disabled is the master switch's job
+            // (`session.auto_archive_enabled`), so the value itself clamps
+            // into `1..=365`: the stored config always stays scanable.
+            let days = parse_auto_archive_days(&update.value)?;
+            let mut desktop_cfg = state.desktop_config.write().await;
+            desktop_cfg.session_auto_archive_days = days;
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "session.auto_archive_days".into(),
                     value: update.value,
                 },
             );
@@ -1687,7 +1891,9 @@ pub async fn fetch_provider_models(
     }
 
     let url = models_list_url_for_kind(&kind, &base);
-    let client = reqwest::Client::builder()
+    // Settings R3 T4 (B1): shared desktop outbound builder — carries the
+    // SHANNON_CA_BUNDLE custom roots so probing works behind a corporate CA.
+    let client = crate::desktop_http::builder()
         // Generous listing timeout: some self-hosted gateways paginate
         // slowly. Mirrors the probe's "network-level failures are
         // unreachable" semantics.
@@ -2566,11 +2772,23 @@ mod tests {
             "dream_enabled" => Some(cfg.dream_enabled),
             "dream_skill_distill_enabled" => Some(cfg.dream_skill_distill_enabled),
             "session_gc_enabled" => Some(cfg.session_gc_enabled),
+            // Settings R3 T3 — hardware-acceleration escape hatch + the
+            // run-time sleep blocker (both plain bools). `power.keep_awake`
+            // is NOT here: it has a dedicated arm with an immediate
+            // start/stop side effect, so it must never route through the
+            // grouped applier.
+            "hardware_acceleration" => Some(cfg.hardware_acceleration),
+            "power.block_sleep_during_tasks" => Some(cfg.power_block_sleep_during_tasks),
+            "context.auto_compact" => Some(cfg.context_auto_compact),
+            // Settings R3 T7 — the auto-archive master switch.
+            "session.auto_archive_enabled" => Some(cfg.session_auto_archive_enabled),
+            // Settings R3 T8 — 提问自动继续.
+            "chat.ask_user_auto_continue" => Some(cfg.chat_ask_user_auto_continue),
             _ => None,
         }
     }
 
-    const TOGGLE_KEYS: [&str; 9] = [
+    const TOGGLE_KEYS: [&str; 14] = [
         "memory_enabled",
         "telemetry",
         "encryption",
@@ -2580,6 +2798,11 @@ mod tests {
         "dream_enabled",
         "dream_skill_distill_enabled",
         "session_gc_enabled",
+        "hardware_acceleration",
+        "power.block_sleep_during_tasks",
+        "context.auto_compact",
+        "session.auto_archive_enabled",
+        "chat.ask_user_auto_continue",
     ];
 
     #[test]
@@ -2599,6 +2822,10 @@ mod tests {
         // Unknown keys are refused, never silently accepted, and never routed.
         assert!(!is_boolean_toggle_key("not_a_toggle"));
         assert!(!is_boolean_toggle_key("agent_teams_enabled"));
+        // Settings R3 T3: the always-on keep-awake switch has a dedicated
+        // arm (immediate start/stop side effect) — it must never route
+        // through the grouped boolean applier.
+        assert!(!is_boolean_toggle_key("power.keep_awake"));
         for key in TOGGLE_KEYS {
             assert!(is_boolean_toggle_key(key), "{key} must be routed");
         }
@@ -2621,6 +2848,16 @@ mod tests {
             cfg.skill_detection_enabled = false;
             cfg.dream_enabled = false;
             cfg.dream_skill_distill_enabled = false;
+            // Settings R3 T3 keys: hw-accel + block-sleep default true, so
+            // pin them false like the rest for a deterministic start.
+            cfg.hardware_acceleration = false;
+            cfg.power_block_sleep_during_tasks = false;
+            // Settings R3 T6: auto-compaction defaults true — pin false like
+            // the rest so the round trip starts deterministic.
+            cfg.context_auto_compact = false;
+            // Settings R3 T8: ask auto-continue defaults false; pinned like
+            // the rest so the round trip starts deterministic.
+            cfg.chat_ask_user_auto_continue = false;
         }
 
         let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());
@@ -2729,6 +2966,23 @@ mod tests {
     }
 
     #[test]
+    fn auto_archive_days_wire_value_clamps_into_scanable_window() {
+        // Settings R3 T7: no 永不 gear (disabling is the master switch's
+        // job), so every value lands inside `1..=365`.
+        assert_eq!(parse_auto_archive_days("7").unwrap(), 7);
+        assert_eq!(parse_auto_archive_days(" 30 ").unwrap(), 30);
+        assert_eq!(parse_auto_archive_days("1").unwrap(), 1);
+        // 0 and undershoot clamp to the 1-day floor; overshoot clamps to
+        // the 365-day ceiling — a wedged (0-day) or eternal window can
+        // never be persisted.
+        assert_eq!(parse_auto_archive_days("0").unwrap(), 1);
+        assert_eq!(parse_auto_archive_days("99999").unwrap(), 365);
+        // Junk still errors rather than silently re-gearing.
+        assert!(parse_auto_archive_days("soon").is_err());
+        assert!(parse_auto_archive_days("").is_err());
+    }
+
+    #[test]
     fn monthly_budget_usd_wire_value_clears_on_zero_and_rejects_typos() {
         // P2-1: empty/null are the UI's "no budget" gear; "0" also clears.
         assert_eq!(parse_monthly_budget_usd("").unwrap(), None);
@@ -2771,6 +3025,124 @@ mod tests {
         let err = validate_sandbox_mode("banana").unwrap_err();
         assert!(err.contains("off | local | landlock"), "{err}");
         assert!(validate_sandbox_mode("full").is_err());
+    }
+
+    // ── Settings R3 T4 (B1): `network.*` configure arms ────────────────
+
+    #[test]
+    fn expand_tilde_uses_injected_home_and_passthrough_otherwise() {
+        let home = std::path::Path::new("/home/demo");
+        assert_eq!(
+            expand_tilde("~/certs/root-ca.pem", Some(home)),
+            "/home/demo/certs/root-ca.pem"
+        );
+        assert_eq!(expand_tilde("~", Some(home)), "/home/demo");
+        // Windows-style separator folded into the same expansion.
+        assert_eq!(
+            expand_tilde("~\\certs\\ca.pem", Some(home)),
+            "/home/demo/certs\\ca.pem"
+        );
+        // No tilde → verbatim.
+        assert_eq!(
+            expand_tilde("/etc/pki/ca.pem", Some(home)),
+            "/etc/pki/ca.pem"
+        );
+        // No home available → honest passthrough (the existence check then
+        // rejects it rather than silently mangling the path).
+        assert_eq!(expand_tilde("~/ca.pem", None), "~/ca.pem");
+    }
+
+    #[test]
+    fn validate_ca_cert_path_round_trip_and_missing_file_error() {
+        let home = std::path::Path::new("/home/demo");
+        // Empty / whitespace clears.
+        assert_eq!(
+            validate_ca_cert_path("", Some(home)).expect("empty value clears"),
+            None
+        );
+        assert_eq!(
+            validate_ca_cert_path("   ", Some(home)).expect("whitespace clears"),
+            None
+        );
+        // An existing file passes and comes back `~`-expanded.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca = dir.path().join("root-ca.pem");
+        std::fs::write(
+            &ca,
+            "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----",
+        )
+        .expect("write temp CA bundle");
+        let ok = validate_ca_cert_path(&ca.to_string_lossy(), Some(home))
+            .expect("existing bundle accepted");
+        assert_eq!(
+            ok.as_deref(),
+            Some(ca.to_string_lossy().as_ref()),
+            "existing bundle accepted verbatim"
+        );
+        // A missing file is a write-time error naming the path.
+        let err = validate_ca_cert_path("~/missing/ca.pem", Some(home))
+            .expect_err("missing bundle must be refused");
+        assert!(err.contains("/home/demo/missing/ca.pem"), "{err}");
+        assert!(err.contains("not found"), "{err}");
+    }
+
+    #[test]
+    fn network_arm_proxy_url_scheme_gate_and_clear() {
+        let mut cfg = DesktopConfig::default();
+        // Valid http(s) URLs land trimmed.
+        apply_network_config_arm(
+            &mut cfg,
+            "network.proxy_url",
+            " http://127.0.0.1:7890 ",
+            None,
+        )
+        .expect("http proxy accepted");
+        assert_eq!(
+            cfg.network_proxy_url.as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+        apply_network_config_arm(&mut cfg, "network.proxy_url", "HTTPS://corp:3128", None)
+            .expect("https proxy accepted (case-insensitive scheme)");
+        assert_eq!(cfg.network_proxy_url.as_deref(), Some("HTTPS://corp:3128"));
+        // No scheme → refused, previous value kept.
+        let err = apply_network_config_arm(&mut cfg, "network.proxy_url", "127.0.0.1:7890", None)
+            .expect_err("missing scheme must be refused");
+        assert!(err.contains("http://"), "{err}");
+        assert_eq!(cfg.network_proxy_url.as_deref(), Some("HTTPS://corp:3128"));
+        // socks:// is not supported by the env-injection path either.
+        assert!(
+            apply_network_config_arm(&mut cfg, "network.proxy_url", "socks5://corp:1080", None)
+                .is_err()
+        );
+        // Empty clears (R1: keep the implicit env fallback).
+        apply_network_config_arm(&mut cfg, "network.proxy_url", "   ", None).expect("clear");
+        assert_eq!(cfg.network_proxy_url, None);
+    }
+
+    #[test]
+    fn network_arm_no_proxy_trims_and_clears() {
+        let mut cfg = DesktopConfig::default();
+        apply_network_config_arm(
+            &mut cfg,
+            "network.no_proxy",
+            " localhost,127.0.0.1,::1,.example.com ",
+            None,
+        )
+        .expect("no_proxy accepted");
+        assert_eq!(
+            cfg.network_no_proxy.as_deref(),
+            Some("localhost,127.0.0.1,::1,.example.com")
+        );
+        apply_network_config_arm(&mut cfg, "network.no_proxy", "", None).expect("clear");
+        assert_eq!(cfg.network_no_proxy, None);
+    }
+
+    #[test]
+    fn network_arm_unknown_key_is_an_error() {
+        let mut cfg = DesktopConfig::default();
+        let err = apply_network_config_arm(&mut cfg, "network.bogus", "x", None)
+            .expect_err("unknown network key must be refused");
+        assert!(err.contains("network.bogus"), "{err}");
     }
 
     #[test]

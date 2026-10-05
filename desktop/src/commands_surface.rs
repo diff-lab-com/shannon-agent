@@ -324,6 +324,48 @@ fn is_official_release_url(url: &str) -> bool {
     }
 }
 
+/// Settings R3 — the Shannon data directory, shown read-only in
+/// Settings → 关于. `shannon_core::data_meta::home()` honors `$SHANNON_HOME`
+/// and falls back to `~/.shannon`; the UI only displays it (moving the
+/// directory is a manual migration, no command mutates it here).
+#[tauri::command]
+pub async fn get_shannon_home() -> Result<String, String> {
+    Ok(shannon_core::data_meta::home().display().to_string())
+}
+
+/// Settings R3 T3 — platform + keep-awake capability probe for the
+/// General settings' System cards.
+///
+/// The UI uses `platform` to hide the hardware-acceleration card on macOS
+/// (no escape hatch there) and `keepAwakeSupported` to disable + annotate
+/// the prevent-sleep switches where no backend exists. Supported matrix:
+/// macOS always (caffeinate), Windows always (process-domain PowerRequest
+/// at compile time), Linux only when `systemd-inhibit` resolves at runtime.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PowerCapabilities {
+    /// `std::env::consts::OS` (`"macos"` | `"windows"` | `"linux"` | …).
+    pub platform: String,
+    /// Whether the prevent-sleep backend is usable on this machine.
+    pub keep_awake_supported: bool,
+}
+
+#[tauri::command]
+pub async fn get_power_capabilities() -> PowerCapabilities {
+    let platform = std::env::consts::OS.to_string();
+    let keep_awake_supported = if cfg!(any(target_os = "macos", target_os = "windows")) {
+        true
+    } else if cfg!(target_os = "linux") {
+        shannon_core::prevent_sleep::systemd_inhibit_available()
+    } else {
+        false
+    };
+    PowerCapabilities {
+        platform,
+        keep_awake_supported,
+    }
+}
+
 /// C1①: open the release page in the system browser — same shell-open
 /// precedent as the OAuth flow in extensions_commands.rs.
 ///

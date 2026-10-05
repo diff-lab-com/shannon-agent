@@ -72,6 +72,20 @@ pub struct NotificationPrefsDto {
     pub dnd_end: Option<String>,
     pub on_completed: bool,
     pub on_failed: bool,
+    /// Surface a desktop notification when the user's attention is required
+    /// (tool-approval waits, budget alerts). `#[serde(default)]` keeps old
+    /// frontend payloads / config files loadable; defaults to enabled.
+    #[serde(default = "default_on_needs_attention")]
+    pub on_needs_attention: bool,
+    /// Play the frontend-composited chime (Web Audio) on task completed /
+    /// failed / needs-attention events. Independent of the OS notification
+    /// sound (R4). Defaults to disabled.
+    #[serde(default)]
+    pub sound_enabled: bool,
+}
+
+fn default_on_needs_attention() -> bool {
+    true
 }
 
 /// Read the current desktop-notification preferences.
@@ -85,6 +99,8 @@ pub async fn get_notification_prefs() -> Result<NotificationPrefsDto, String> {
         dnd_end: c.notifications_dnd_end,
         on_completed: c.notifications_on_completed,
         on_failed: c.notifications_on_failed,
+        on_needs_attention: c.notifications_on_needs_attention,
+        sound_enabled: c.notifications_sound_enabled,
     })
 }
 
@@ -111,6 +127,8 @@ pub async fn set_notification_prefs(
         dc.notifications_dnd_end = prefs.dnd_end;
         dc.notifications_on_completed = prefs.on_completed;
         dc.notifications_on_failed = prefs.on_failed;
+        dc.notifications_on_needs_attention = prefs.on_needs_attention;
+        dc.notifications_sound_enabled = prefs.sound_enabled;
         dc.clone()
     };
     crate::config::save_config(&snapshot)?;
@@ -258,6 +276,7 @@ async fn deliver_test_webhook(
         timestamp: chrono::Utc::now(),
         source: Some("webhook_test".to_string()),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::Completed,
     };
     let payload = handler.render_body(&notification);
     match handler.deliver_once(payload).await {
@@ -301,13 +320,14 @@ pub(crate) fn fire_query_notification(
     use chrono::Utc;
     use shannon_core::notifier::{Notification, NotificationLevel};
 
-    let (title, body, level, source, window_ms) = match kind {
+    let (title, body, level, source, window_ms, core_kind) = match kind {
         NotificationKind::Completed => (
             "Shannon".to_string(),
             "Query complete".to_string(),
             NotificationLevel::Info,
             "query_complete".to_string(),
             0_u64,
+            shannon_core::notifier::NotificationKind::Completed,
         ),
         NotificationKind::Failed(err) => {
             let body = if err.chars().count() > 200 {
@@ -322,6 +342,7 @@ pub(crate) fn fire_query_notification(
                 NotificationLevel::Error,
                 "query_error".to_string(),
                 5_000_u64,
+                shannon_core::notifier::NotificationKind::Failed,
             )
         }
     };
@@ -334,6 +355,7 @@ pub(crate) fn fire_query_notification(
         timestamp: Utc::now(),
         source: Some(source),
         action_id: None,
+        kind: core_kind,
     };
 
     notifier.notify_dedup(&notification, window_ms)
@@ -415,6 +437,7 @@ pub(crate) struct NotificationPrefs {
     dnd_end_min: Option<u32>,
     on_completed: bool,
     on_failed: bool,
+    on_needs_attention: bool,
 }
 
 impl NotificationPrefs {
@@ -429,6 +452,7 @@ impl NotificationPrefs {
             dnd_end_min: c.notifications_dnd_end.as_deref().and_then(parse_hhmm),
             on_completed: c.notifications_on_completed,
             on_failed: c.notifications_on_failed,
+            on_needs_attention: c.notifications_on_needs_attention,
         }
     }
 
@@ -445,13 +469,15 @@ impl NotificationPrefs {
     }
 
     /// Whether the event-type toggles permit a notification of the given
-    /// severity. Error notifications honor `on_failed`; everything else
-    /// (info/success/warning — e.g. query completions) honors `on_completed.
-    pub(crate) fn allows_level(&self, is_error: bool) -> bool {
-        if is_error {
-            self.on_failed
-        } else {
-            self.on_completed
+    /// semantic kind (three-way since settings-r3 T5): completions honor
+    /// `on_completed`, failures honor `on_failed`, and attention requests
+    /// (tool approvals, budget alerts) honor `on_needs_attention`.
+    pub(crate) fn allows_level(&self, kind: shannon_core::notifier::NotificationKind) -> bool {
+        use shannon_core::notifier::NotificationKind as K;
+        match kind {
+            K::Completed => self.on_completed,
+            K::Failed => self.on_failed,
+            K::NeedsAttention => self.on_needs_attention,
         }
     }
 }
@@ -761,39 +787,86 @@ mod tests {
     }
 
     #[test]
-    fn allows_level_routes_by_severity() {
-        let both = NotificationPrefs {
+    fn allows_level_routes_by_kind() {
+        use shannon_core::notifier::NotificationKind as K;
+        let all = NotificationPrefs {
             master_enabled: true,
             dnd_enabled: false,
             dnd_start_min: None,
             dnd_end_min: None,
             on_completed: true,
             on_failed: true,
+            on_needs_attention: true,
         };
-        assert!(both.allows_level(false)); // completion
-        assert!(both.allows_level(true)); // error
+        assert!(all.allows_level(K::Completed));
+        assert!(all.allows_level(K::Failed));
+        assert!(all.allows_level(K::NeedsAttention));
 
+        // Each toggle mutes exactly its own kind.
         let only_errors = NotificationPrefs {
-            master_enabled: true,
-            dnd_enabled: false,
-            dnd_start_min: None,
-            dnd_end_min: None,
             on_completed: false,
-            on_failed: true,
+            on_needs_attention: false,
+            ..all
         };
-        assert!(!only_errors.allows_level(false)); // completions muted
-        assert!(only_errors.allows_level(true)); // errors still fire
+        assert!(!only_errors.allows_level(K::Completed));
+        assert!(only_errors.allows_level(K::Failed));
+        assert!(!only_errors.allows_level(K::NeedsAttention));
 
         let only_completed = NotificationPrefs {
-            master_enabled: true,
-            dnd_enabled: false,
-            dnd_start_min: None,
-            dnd_end_min: None,
             on_completed: true,
             on_failed: false,
+            on_needs_attention: false,
+            ..all
         };
-        assert!(only_completed.allows_level(false));
-        assert!(!only_completed.allows_level(true)); // errors muted
+        assert!(only_completed.allows_level(K::Completed));
+        assert!(!only_completed.allows_level(K::Failed));
+        assert!(!only_completed.allows_level(K::NeedsAttention));
+
+        // Attention-only config: approvals/budget alerts fire while the
+        // completed/failed chatter stays muted.
+        let attention_only = NotificationPrefs {
+            on_completed: false,
+            on_failed: false,
+            on_needs_attention: true,
+            ..all
+        };
+        assert!(!attention_only.allows_level(K::Completed));
+        assert!(!attention_only.allows_level(K::Failed));
+        assert!(attention_only.allows_level(K::NeedsAttention));
+    }
+
+    #[test]
+    fn notification_prefs_dto_roundtrips_new_fields() {
+        let dto = NotificationPrefsDto {
+            master_enabled: true,
+            dnd_enabled: true,
+            dnd_start: Some("22:00".into()),
+            dnd_end: Some("07:00".into()),
+            on_completed: false,
+            on_failed: true,
+            on_needs_attention: false,
+            sound_enabled: true,
+        };
+        let json = serde_json::to_value(&dto).expect("serialize");
+        let back: NotificationPrefsDto = serde_json::from_value(json).expect("deserialize");
+        assert!(!back.on_needs_attention);
+        assert!(back.sound_enabled);
+        assert_eq!(back.dnd_start.as_deref(), Some("22:00"));
+    }
+
+    #[test]
+    fn notification_prefs_dto_defaults_new_fields_for_old_payloads() {
+        // An old frontend (or hand-rolled payload) without the two new keys
+        // must still deserialize: needs-attention on, sound off.
+        let json = serde_json::json!({
+            "master_enabled": true,
+            "dnd_enabled": false,
+            "on_completed": true,
+            "on_failed": true,
+        });
+        let dto: NotificationPrefsDto = serde_json::from_value(json).expect("parse");
+        assert!(dto.on_needs_attention, "needs-attention defaults on");
+        assert!(!dto.sound_enabled, "sound defaults off");
     }
 
     // === test_webhook (P1-7) =================================================

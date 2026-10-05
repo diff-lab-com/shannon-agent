@@ -111,6 +111,13 @@ pub struct SessionCuration {
     /// to (see [`session_query`](super::session_query)).
     #[serde(default)]
     pub archived: bool,
+    /// True once the user pinned the session (Settings R3 T7). Pinned
+    /// sessions sort first on the rail and are exempt from the auto-archive
+    /// scan. `serde(default)` keeps older curation.json files (which carry
+    /// only `archived`) fully backward-compatible — unpinned unless the
+    /// file says otherwise.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 impl SessionCuration {

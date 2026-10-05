@@ -392,7 +392,13 @@ mod tests {
         let archived = seed_session(dir.path(), &[("bash", &["cmd"])]);
         let query = SessionQuery::new(dir.path());
         query
-            .save_curation(&archived, &SessionCuration { archived: true })
+            .save_curation(
+                &archived,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
 
         let candidates_dir = tempdir().unwrap();

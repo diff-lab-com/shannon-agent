@@ -490,6 +490,18 @@ async fn a8_run_query_with(
     server: &TurnRetryMockServer,
     max_turns: usize,
 ) -> (bool, String, Vec<String>, Vec<String>, Vec<Message>) {
+    a8_run_query_custom(server, max_turns, |_| {}).await
+}
+
+/// Variant with full control over the [`QueryEngineConfig`] (Settings R3 T6:
+/// the `auto_compact_enabled` gate tests flip config fields the fixed helper
+/// cannot reach).
+#[allow(clippy::type_complexity)]
+async fn a8_run_query_custom(
+    server: &TurnRetryMockServer,
+    max_turns: usize,
+    customize: impl FnOnce(&mut QueryEngineConfig),
+) -> (bool, String, Vec<String>, Vec<String>, Vec<Message>) {
     use futures::StreamExt as _;
     let config = LlmClientConfig {
         alternate_api_keys: Vec::new(),
@@ -501,15 +513,17 @@ async fn a8_run_query_with(
         ..Default::default()
     };
     let client = LlmClient::new(config);
+    let mut engine_config = QueryEngineConfig {
+        max_turns,
+        ..Default::default()
+    };
+    customize(&mut engine_config);
     let engine = QueryEngine::new(
         client,
         ToolRegistry::new(),
         PermissionManager::new(),
         StateManager::new(),
-        QueryEngineConfig {
-            max_turns,
-            ..Default::default()
-        },
+        engine_config,
     );
     let context = QueryContext {
         query_id: uuid::Uuid::new_v4(),
@@ -2835,6 +2849,96 @@ async fn failover_event_lands_in_query_stream_and_answer_flows() {
     // Exactly one request per target: primary died once, fallback answered.
     assert_eq!(primary.bodies().len(), 1);
     assert_eq!(fallback.bodies().len(), 1);
+}
+
+// ---- Settings R3 T6: `auto_compact_enabled` gate --------------------------
+//
+// The desktop 「会话 → 自动压缩上下文」 switch maps to
+// `QueryEngineConfig::auto_compact_enabled`. Off must skip the ENTIRE
+// compaction ladder in the agent loop (60%/80% synthetic warning
+// injections, micro-compaction, evaluate→compact/truncate) while the rest
+// of the loop keeps running; on must behave exactly as before the switch
+// existed. Both tests run the SAME fixture — a tiny max-context that pins
+// the usage ratio far above the compression threshold from turn 1 — and
+// differ only in the switch.
+//
+// Observable markers (all engine Progress messages, asserted loosely over
+// the ladder's surface so selector/summarizer path changes can't break the
+// gate semantics):
+// - micro-compaction:      "Cleared stale tool results from older turns"
+// - token-based compaction: "Context compacted (token-based)"
+// - LLM 3-tier compaction:  "Context compressed (3-tier)"
+// - circuit breaker:        "Compaction skipped (too many failures)"
+// The untouched pre-send overflow guard emits "approaching limit" — used
+// only to PROVE the fixture really sat above the threshold in the off run.
+
+/// Marker: did ANY compaction-ladder progress message appear?
+fn a6_saw_ladder_progress(progress: &[String]) -> bool {
+    progress.iter().any(|m| {
+        m.contains("Cleared stale tool results")
+            || m.contains("Context compacted")
+            || m.contains("Context compressed")
+            || m.contains("Compaction skipped")
+    })
+}
+
+/// The unknown-tool loop: every request gets a `tool_use` for a tool that is
+/// not in the (empty) registry, so the engine records an error tool_result
+/// and keeps turning — the ladder is evaluated every turn above threshold.
+#[tokio::test]
+async fn a6_auto_compact_disabled_skips_the_whole_compaction_ladder() {
+    let server = TurnRetryMockServer::start(std::sync::Arc::new(|_i| a8_tool_call_sse()));
+    let (completed, _failed, progress, _warnings, _history) =
+        a8_run_query_custom(&server, 4, |cfg| {
+            // Tiny window + huge default system prompt ⇒ the estimated ratio is
+            // far above any threshold from the first evaluation.
+            cfg.max_context_tokens = Some(64);
+            cfg.compression_threshold = 0.1;
+            cfg.auto_compact_enabled = false;
+        })
+        .await;
+    let _ = completed; // turn budget ends the run either way — not the point
+    assert!(
+        !a6_saw_ladder_progress(&progress),
+        "auto_compact_enabled=false must not emit any compaction-ladder progress; got {progress:?}"
+    );
+    // The fixture genuinely sat above the threshold — the (independent,
+    // intentionally untouched) pre-send overflow guard saw the pressure.
+    assert!(
+        progress.iter().any(|m| m.contains("approaching limit")),
+        "fixture must be above the context threshold for the comparison to mean anything; got {progress:?}"
+    );
+}
+
+/// Same fixture with the switch ON (the default): the ladder runs, so at
+/// least the micro-compaction pass and one compact-branch outcome appear.
+#[tokio::test]
+async fn a6_auto_compact_enabled_keeps_the_compaction_ladder_running() {
+    let server = TurnRetryMockServer::start(std::sync::Arc::new(|_i| a8_tool_call_sse()));
+    let (completed, _failed, progress, _warnings, _history) =
+        a8_run_query_custom(&server, 4, |cfg| {
+            cfg.max_context_tokens = Some(64);
+            cfg.compression_threshold = 0.1;
+            // auto_compact_enabled defaults to true — pin it for readability.
+            cfg.auto_compact_enabled = true;
+        })
+        .await;
+    let _ = completed;
+    assert!(
+        a6_saw_ladder_progress(&progress),
+        "auto_compact_enabled=true must keep the ladder running (micro-compaction + compact branch); got {progress:?}"
+    );
+}
+
+/// Default-config compat: the switch defaults to ON, so existing hosts that
+/// never touch the field keep the pre-T6 behavior byte-for-byte.
+#[test]
+fn a6_auto_compact_enabled_defaults_to_true() {
+    let cfg = QueryEngineConfig::default();
+    assert!(
+        cfg.auto_compact_enabled,
+        "default must keep auto-compaction on"
+    );
 }
 
 // ---- S3-3 utility tier slot: the compaction request goes to the auxiliary

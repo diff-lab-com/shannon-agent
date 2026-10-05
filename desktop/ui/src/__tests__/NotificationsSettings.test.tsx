@@ -74,6 +74,8 @@ beforeEach(() => {
     dnd_end: null,
     on_completed: true,
     on_failed: true,
+    on_needs_attention: true,
+    sound_enabled: false,
   })
   setNotificationPrefs.mockResolvedValue(undefined)
   testWebhook.mockResolvedValue({ success: true, status: 200, detail: 'HTTP 200' })
@@ -557,6 +559,8 @@ describe('NotificationsSettings — DND prefs', () => {
       dnd_end: '06:30',
       on_completed: false,
       on_failed: true,
+      on_needs_attention: true,
+      sound_enabled: false,
     })
     render(<NotificationsSettings />)
     await waitForDndLoaded()
@@ -607,6 +611,8 @@ describe('NotificationsSettings — DND prefs', () => {
       dnd_end: null,
       on_completed: true,
       on_failed: true,
+      on_needs_attention: true,
+      sound_enabled: false,
     })
     render(<NotificationsSettings />)
     await waitForDndLoaded()
@@ -625,6 +631,8 @@ describe('NotificationsSettings — DND prefs', () => {
       dnd_end: '07:00',
       on_completed: true,
       on_failed: true,
+      on_needs_attention: true,
+      sound_enabled: false,
     })
     render(<NotificationsSettings />)
     await waitForDndLoaded()
@@ -644,6 +652,8 @@ describe('NotificationsSettings — DND prefs', () => {
       dnd_end: null,
       on_completed: true,
       on_failed: true,
+      on_needs_attention: true,
+      sound_enabled: false,
     })
     render(<NotificationsSettings />)
     await waitForDndLoaded()
@@ -667,5 +677,76 @@ describe('NotificationsSettings — DND prefs', () => {
     getNotificationPrefs.mockRejectedValue(new Error('prefs read failed'))
     render(<NotificationsSettings />)
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
+  })
+})
+describe('NotificationsSettings — needs-attention + sound switches (settings R3 T5)', () => {
+  it('seeds both new switches from getNotificationPrefs', async () => {
+    getNotificationPrefs.mockResolvedValue({
+      master_enabled: true,
+      dnd_enabled: false,
+      dnd_start: null,
+      dnd_end: null,
+      on_completed: true,
+      on_failed: true,
+      on_needs_attention: false,
+      sound_enabled: true,
+    })
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    expect(within(section).getByLabelText(/Needs attention/)).not.toBeChecked()
+    expect(within(section).getByLabelText(/Task sounds/)).toBeChecked()
+  })
+
+  it('renders the backend defaults when older fields are absent (attention on, sound off)', async () => {
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    // setup.ts default: on_needs_attention: true, sound_enabled: false.
+    expect(within(section).getByLabelText(/Needs attention/)).toBeChecked()
+    expect(within(section).getByLabelText(/Task sounds/)).not.toBeChecked()
+  })
+
+  it('disables both new switches when the master is off', async () => {
+    getNotificationPrefs.mockResolvedValue({
+      master_enabled: false,
+      dnd_enabled: false,
+      dnd_start: null,
+      dnd_end: null,
+      on_completed: true,
+      on_failed: true,
+      on_needs_attention: true,
+      sound_enabled: true,
+    })
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    expect(within(section).getByLabelText(/Needs attention/)).toHaveAttribute('aria-disabled', 'true')
+    expect(within(section).getByLabelText(/Task sounds/)).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('saves toggled values for both new switches', async () => {
+    const { toast } = await import('sonner')
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    // Defaults: attention on, sound off — flip both.
+    fireEvent.click(within(section).getByLabelText(/Needs attention/))
+    fireEvent.click(within(section).getByLabelText(/Task sounds/))
+    fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(setNotificationPrefs).toHaveBeenCalledTimes(1))
+    const payload = setNotificationPrefs.mock.calls[0]![0]
+    expect(payload.on_needs_attention).toBe(false)
+    expect(payload.sound_enabled).toBe(true)
+    expect(toast.success).toHaveBeenCalled()
+  })
+
+  it('keeps the test-notification button working alongside the new switches', async () => {
+    const { toast } = await import('sonner')
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    fireEvent.click(within(section).getByRole('button', { name: /Send test notification/ }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
   })
 })

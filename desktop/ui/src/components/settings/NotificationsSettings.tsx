@@ -516,6 +516,10 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
   const [end, setEnd] = useState('07:00')
   const [onCompleted, setOnCompleted] = useState(true)
   const [onFailed, setOnFailed] = useState(true)
+  // Settings R3 T5: needs-attention events (approval waits, budget alerts)
+  // and the frontend task chime (sound off by default, R4).
+  const [onNeedsAttention, setOnNeedsAttention] = useState(true)
+  const [soundEnabled, setSoundEnabled] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -528,6 +532,8 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
         if (p.dnd_end) setEnd(p.dnd_end)
         setOnCompleted(p.on_completed)
         setOnFailed(p.on_failed)
+        setOnNeedsAttention(p.on_needs_attention ?? true)
+        setSoundEnabled(p.sound_enabled ?? false)
       })
       .catch((e) => toastError(t('settings.notifications.dnd.loadFailed'), e))
       .finally(() => {
@@ -548,6 +554,8 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
         dnd_end: dnd ? end : null,
         on_completed: onCompleted,
         on_failed: onFailed,
+        on_needs_attention: onNeedsAttention,
+        sound_enabled: soundEnabled,
       })
       toast.success(t('settings.notifications.dnd.saved'))
       onSaved?.()
@@ -632,6 +640,40 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
               onCheckedChange={setOnFailed}
               disabled={windowDisabled}
               aria-label={t('settings.notifications.dnd.failed')}
+              className="shrink-0"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
+                {t('settings.notifications.needsAttention.title')}
+              </div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
+                {t('settings.notifications.needsAttention.desc')}
+              </div>
+            </div>
+            <Switch
+              checked={onNeedsAttention}
+              onCheckedChange={setOnNeedsAttention}
+              disabled={windowDisabled}
+              aria-label={t('settings.notifications.needsAttention.title')}
+              className="shrink-0"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
+                {t('settings.notifications.sound.title')}
+              </div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
+                {t('settings.notifications.sound.desc')}
+              </div>
+            </div>
+            <Switch
+              checked={soundEnabled}
+              onCheckedChange={setSoundEnabled}
+              disabled={windowDisabled}
+              aria-label={t('settings.notifications.sound.title')}
               className="shrink-0"
             />
           </div>
@@ -727,7 +769,9 @@ export default function NotificationsSettings() {
     ]).then(([webhook, prefs]) => {
       if (cancelled) return
       setHasWebhook(Boolean(webhook?.url?.trim()))
-      setHasDndEvents(Boolean(prefs?.on_completed || prefs?.on_failed))
+      setHasDndEvents(
+        Boolean(prefs?.on_completed || prefs?.on_failed || prefs?.on_needs_attention),
+      )
     })
     return () => {
       cancelled = true

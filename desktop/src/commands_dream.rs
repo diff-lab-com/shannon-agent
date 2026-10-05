@@ -3518,7 +3518,10 @@ mod tests {
         SessionQuery::new(sessions.path())
             .save_curation(
                 &archived,
-                &shannon_core::session_log::SessionCuration { archived: true },
+                &shannon_core::session_log::SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
             )
             .unwrap();
 
@@ -3576,7 +3579,10 @@ mod tests {
         SessionQuery::new(sessions.path())
             .save_curation(
                 &archived,
-                &shannon_core::session_log::SessionCuration { archived: true },
+                &shannon_core::session_log::SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
             )
             .unwrap();
 

@@ -98,6 +98,25 @@ impl NotificationLevel {
 
 use serde::{Deserialize, Serialize};
 
+/// Semantic event category of a notification. Consumed by interactive
+/// frontends (desktop app) to route the notification to its per-event-type
+/// preference toggle (`on_completed` / `on_failed` / `on_needs_attention`);
+/// pure log/shell-out handlers ignore it. Defaults to [`NotificationKind::Completed`]
+/// so older construction sites (and old serialized payloads) keep their
+/// historical "completion-like" routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationKind {
+    /// A query/task finished successfully.
+    #[default]
+    Completed,
+    /// A query/task failed.
+    Failed,
+    /// Something needs the user's attention (tool approval wait, budget
+    /// threshold alert, auto-pause, …).
+    NeedsAttention,
+}
+
 /// A single notification payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Notification {
@@ -121,6 +140,10 @@ pub struct Notification {
     /// CLI shell-out ignores this field.
     #[serde(default)]
     pub action_id: Option<String>,
+    /// Semantic event category for per-event-type preference routing.
+    /// `#[serde(default)]` keeps older serialized payloads loadable.
+    #[serde(default)]
+    pub kind: NotificationKind,
 }
 
 // ============================================================================
@@ -654,6 +677,7 @@ impl Notifier {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::default(),
         }
     }
 
@@ -1227,6 +1251,35 @@ mod tests {
         assert_eq!(NotificationLevel::Error.to_string(), "ERROR");
     }
 
+    // -- NotificationKind (settings-r3 T5) ------------------------------------
+
+    #[test]
+    fn notification_kind_defaults_to_completed_and_roundtrips() {
+        assert_eq!(NotificationKind::default(), NotificationKind::Completed);
+
+        // Old serialized payloads (pre-kind) must still load — kind falls
+        // back to Completed.
+        let legacy: Notification = serde_json::from_str(
+            r#"{"title":"t","body":"b","level":"info","id":"1","timestamp":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.kind, NotificationKind::Completed);
+
+        for (wire, expected) in [
+            ("\"completed\"", NotificationKind::Completed),
+            ("\"failed\"", NotificationKind::Failed),
+            ("\"needs_attention\"", NotificationKind::NeedsAttention),
+        ] {
+            let n: Notification = serde_json::from_str(&format!(
+                r#"{{"title":"t","body":"b","level":"info","id":"1","timestamp":"2026-01-01T00:00:00Z","kind":{wire}}}"#
+            ))
+            .unwrap_or_else(|e| panic!("kind {wire} must deserialize: {e}"));
+            assert_eq!(n.kind, expected);
+            let json = serde_json::to_string(&n).unwrap();
+            assert!(json.contains(&format!("\"kind\":{wire}")), "{json}");
+        }
+    }
+
     // -- LogNotifier ---------------------------------------------------------
 
     #[test]
@@ -1252,6 +1305,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         assert!(n.send(&notification).is_ok());
     }
@@ -1278,6 +1332,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         notifier.send(&notification).unwrap();
 
@@ -1301,6 +1356,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
 
         notifier.send(&make_notification("a")).unwrap();
@@ -1325,6 +1381,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         notifier.send(&notification).unwrap();
         assert!(path.exists());
@@ -1356,6 +1413,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         cb.send(&notification).unwrap();
 
@@ -1378,6 +1436,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         let result = cb.send(&notification);
         assert!(result.is_err());
@@ -1564,6 +1623,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         let json = serde_json::to_string(&n).unwrap();
         let back: Notification = serde_json::from_str(&json).unwrap();
@@ -1699,6 +1759,7 @@ mod tests {
             timestamp: Utc::now(),
             source: source.map(str::to_string),
             action_id: None,
+            kind: NotificationKind::Completed,
         }
     }
 
@@ -1891,6 +1952,7 @@ enabled = true
             timestamp: Utc::now(),
             source: Some("tool:Edit".into()),
             action_id: Some("approve:perm_42".into()),
+            kind: NotificationKind::Completed,
         };
         let json = serde_json::to_string(&n).unwrap();
         assert!(json.contains("\"source\":\"tool:Edit\""));
@@ -1908,6 +1970,7 @@ enabled = true
             timestamp: Utc::now(),
             source: Some("query_complete".into()),
             action_id: None,
+            kind: NotificationKind::Completed,
         }
     }
 
@@ -2175,6 +2238,7 @@ enabled = true
             timestamp: Utc::now(),
             source: Some("tool:Edit".into()),
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         let err_n = Notification {
             title: "err".into(),
@@ -2184,6 +2248,7 @@ enabled = true
             timestamp: Utc::now(),
             source: Some("query:complete".into()),
             action_id: None,
+            kind: NotificationKind::Completed,
         };
 
         notifier.notify(&info_n).unwrap();
@@ -2238,6 +2303,7 @@ enabled = true
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         let body = h.render_body(&n);
         assert_eq!(body, "evil {body}"); // {body} stays literal, SENSITIVE not injected

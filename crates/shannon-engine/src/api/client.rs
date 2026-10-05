@@ -77,6 +77,142 @@ fn generate_zhipu_jwt(api_key: &str) -> Option<String> {
 /// can log requests byte-faithfully without reconstructing them.
 pub type RequestCapture = std::sync::Arc<dyn Fn(&serde_json::Value) + Send + Sync>;
 
+/// Settings R3 T4 (B1) — split a PEM bundle into individual certificate
+/// blocks. A corporate CA bundle usually carries more than one root, and
+/// `reqwest::Certificate::from_pem` only accepts a single certificate per
+/// call, so the bundle has to be cut on the `END CERTIFICATE` markers.
+fn split_pem_blocks(pem: &str) -> Vec<&str> {
+    const END: &str = "-----END CERTIFICATE-----";
+    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    let mut blocks = Vec::new();
+    let mut rest = pem;
+    while let Some(end) = rest.find(END) {
+        let end_idx = end + END.len();
+        let begin = rest[..end].rfind(BEGIN).unwrap_or(0);
+        blocks.push(rest[begin..end_idx].trim());
+        rest = &rest[end_idx..];
+    }
+    blocks
+}
+
+/// Settings R3 T4 (B1) — validate one PEM block before handing it to
+/// reqwest. On the rustls backend `Certificate::from_pem` stores the raw PEM
+/// verbatim and the real DER parse happens inside `ClientBuilder::build()` —
+/// where a corrupt entry fails the WHOLE client build (`try_new` would then
+/// return Err and no LLM client would come up at all). To keep the
+/// warn-and-skip contract honest, decode the base64 body here (base64 is
+/// already an engine dependency) and require a DER `SEQUENCE` tag (0x30) as
+/// the first byte — the two shapes file corruption actually takes.
+/// Returns the decoded DER on success.
+fn decode_pem_block(block: &str) -> Result<Vec<u8>, String> {
+    let body: String = block
+        .lines()
+        .filter(|line| !line.contains("-----"))
+        .collect::<Vec<_>>()
+        .join("");
+    use base64::Engine;
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(body.trim())
+        .map_err(|e| format!("base64 body does not decode: {e}"))?;
+    if der.first() != Some(&0x30) {
+        return Err("decoded bytes are not a DER SEQUENCE".to_string());
+    }
+    Ok(der)
+}
+
+/// Settings R3 T4 (B1) — parse every certificate block in `pem` and add it
+/// as a trust root. A block that fails to validate is logged and skipped,
+/// never a panic: a single malformed entry in a big corporate bundle must
+/// not take the whole client down. Returns the builder plus the number of
+/// accepted certificates so the caller can warn when the bundle yielded
+/// nothing.
+fn add_pem_roots(
+    mut builder: reqwest::ClientBuilder,
+    pem: &str,
+) -> (reqwest::ClientBuilder, usize) {
+    let mut added = 0;
+    for block in split_pem_blocks(pem) {
+        let der = match decode_pem_block(block) {
+            Ok(der) => der,
+            Err(reason) => {
+                tracing::warn!(
+                    "SHANNON_CA_BUNDLE: skipping unparseable certificate block: {reason}"
+                );
+                continue;
+            }
+        };
+        match reqwest::Certificate::from_der(&der) {
+            Ok(cert) => {
+                builder = builder.add_root_certificate(cert);
+                added += 1;
+            }
+            Err(e) => {
+                tracing::warn!("SHANNON_CA_BUNDLE: skipping invalid certificate block: {e}");
+            }
+        }
+    }
+    (builder, added)
+}
+
+/// Settings R3 T4 (B1) — add the custom root certificates named by the
+/// `SHANNON_CA_BUNDLE` env var (the desktop app injects the configured CA
+/// path there at startup) to a reqwest builder.
+///
+/// reqwest is built with `rustls-tls` + webpki-roots in this workspace — it
+/// does NOT read the system certificate store — so a corporate MITM /
+/// inspection CA must be added explicitly or every LLM HTTPS call fails the
+/// TLS handshake. Failures are non-fatal: an unreadable or unparseable
+/// bundle logs a warning and the builder keeps the built-in webpki roots.
+///
+/// Public so the desktop's own outbound clients (`desktop_http`) and
+/// shannon-core's models.dev catalog fetch share the exact same trust
+/// behavior as the LLM client.
+pub fn apply_custom_root_certificates(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    let path = match std::env::var_os("SHANNON_CA_BUNDLE") {
+        Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+        _ => return builder,
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(pem) => {
+            let (builder, added) = add_pem_roots(builder, &pem);
+            if added == 0 {
+                tracing::warn!(
+                    "SHANNON_CA_BUNDLE ({}): no usable PEM certificates found — trusting built-in roots only",
+                    path.display()
+                );
+            } else {
+                tracing::info!(
+                    "SHANNON_CA_BUNDLE ({}): added {} custom root certificate(s)",
+                    path.display(),
+                    added
+                );
+            }
+            builder
+        }
+        Err(e) => {
+            tracing::warn!(
+                "SHANNON_CA_BUNDLE ({}): unreadable ({e}) — trusting built-in roots only",
+                path.display()
+            );
+            builder
+        }
+    }
+}
+
+/// Settings R3 T4 (B1) — the shared network tuning for every LLM HTTP
+/// client builder: connect/read timeouts plus the custom CA bundle.
+/// `build_client` and `try_new` must stay byte-identical in behavior, so
+/// both go through this one function instead of maintaining two builders.
+fn apply_network_tuning(
+    builder: reqwest::ClientBuilder,
+    timeout_secs: u64,
+) -> reqwest::ClientBuilder {
+    let builder = builder
+        .connect_timeout(LlmClient::CONNECT_TIMEOUT)
+        .read_timeout(Duration::from_secs(timeout_secs.max(1)));
+    apply_custom_root_certificates(builder)
+}
+
 /// LLM API client with multi-provider and streaming support
 #[derive(Clone)]
 pub struct LlmClient {
@@ -134,9 +270,7 @@ impl LlmClient {
     /// Falls back to a default client if TLS initialization fails,
     /// logging the error instead of panicking.
     fn build_client(timeout_secs: u64) -> Client {
-        Client::builder()
-            .connect_timeout(Self::CONNECT_TIMEOUT)
-            .read_timeout(Duration::from_secs(timeout_secs.max(1)))
+        apply_network_tuning(Client::builder(), timeout_secs)
             .build()
             .unwrap_or_else(|e| {
                 tracing::error!("Failed to build HTTP client with timeout ({timeout_secs}s): {e}; falling back to default");
@@ -160,9 +294,7 @@ impl LlmClient {
 
     /// Create a new LLM API client, returning an error if client construction fails.
     pub fn try_new(config: LlmClientConfig) -> Result<Self, ApiError> {
-        let client = Client::builder()
-            .connect_timeout(Self::CONNECT_TIMEOUT)
-            .read_timeout(Duration::from_secs(config.timeout_seconds.max(1)))
+        let client = apply_network_tuning(Client::builder(), config.timeout_seconds)
             .build()
             .map_err(|e| ApiError::InvalidResponse(format!("Failed to create HTTP client: {e}")))?;
         Ok(Self {
@@ -3312,5 +3444,180 @@ mod tests {
         }
         assert_eq!(text, "fallback stream");
         assert_eq!(notices.lock().unwrap().len(), 1, "one Failover notice");
+    }
+
+    // ── Settings R3 T4 (B1): custom CA bundle (SHANNON_CA_BUNDLE) ──────
+
+    /// A real, self-contained root certificate (ACCVRAIZ1, a public ES root)
+    /// so the parser is exercised against a genuine PEM, not a hand-waved
+    /// placeholder. Embedded verbatim — tests never touch the network or
+    /// the system trust store.
+    const VALID_PEM: &str = "-----BEGIN CERTIFICATE-----
+MIIH0zCCBbugAwIBAgIIXsO3pkN/pOAwDQYJKoZIhvcNAQEFBQAwQjESMBAGA1UE
+AwwJQUNDVlJBSVoxMRAwDgYDVQQLDAdQS0lBQ0NWMQ0wCwYDVQQKDARBQ0NWMQsw
+CQYDVQQGEwJFUzAeFw0xMTA1MDUwOTM3MzdaFw0zMDEyMzEwOTM3MzdaMEIxEjAQ
+BgNVBAMMCUFDQ1ZSQUlaMTEQMA4GA1UECwwHUEtJQUNDVjENMAsGA1UECgwEQUND
+VjELMAkGA1UEBhMCRVMwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQCb
+qau/YUqXry+XZpp0X9DZlv3P4uRm7x8fRzPCRKPfmt4ftVTdFXxpNRFvu8gMjmoY
+HtiP2Ra8EEg2XPBjs5BaXCQ316PWywlxufEBcoSwfdtNgM3802/J+Nq2DoLSRYWo
+G2ioPej0RGy9ocLLA76MPhMAhN9KSMDjIgro6TenGEyxCQ0jVn8ETdkXhBilyNpA
+lHPrzg5XPAOBOp0KoVdDaaxXbXmQeOW1tDvYvEyNKKGno6e6Ak4l0Squ7a4DIrhr
+IA8wKFSVf+DuzgpmndFALW4ir50awQUZ0m/A8p/4e7MCQvtQqR0tkw8jq8bBD5L/
+0KIV9VMJcRz/RROE5iZe+OCIHAr8Fraocwa48GOEAqDGWuzndN9wrqODJerWx5eH
+k6fGioozl2A3ED6XPm4pFdahD9GILBKfb6qkxkLrQaLjlUPTAYVtjrs78yM2x/47
+4KElB0iryYl0/wiPgL/AlmXz7uxLaL2diMMxs0Dx6M/2OLuc5NF/1OVYm3z61PMO
+m3WR5LpSLhl+0fXNWhn8ugb2+1KoS5kE3fj5tItQo05iifCHJPqDQsGH+tUtKSpa
+cXpkatcnYGMN285J9Y0fkIkyF/hzQ7jSWpOGYdbhdQrqeWZ2iE9x6wQl1gpaepPl
+uUsXQA+xtrn13k/c4LOsOxFwYIRKQ26ZIMApcQrAZQIDAQABo4ICyzCCAscwfQYI
+KwYBBQUHAQEEcTBvMEwGCCsGAQUFBzAChkBodHRwOi8vd3d3LmFjY3YuZXMvZmls
+ZWFkbWluL0FyY2hpdm9zL2NlcnRpZmljYWRvcy9yYWl6YWNjdjEuY3J0MB8GCCsG
+AQUFBzABhhNodHRwOi8vb2NzcC5hY2N2LmVzMB0GA1UdDgQWBBTSh7Tj3zcnk1X2
+VuqB5TbMjB4/vTAPBgNVHRMBAf8EBTADAQH/MB8GA1UdIwQYMBaAFNKHtOPfNyeT
+VfZW6oHlNsyMHj+9MIIBcwYDVR0gBIIBajCCAWYwggFiBgRVHSAAMIIBWDCCASIG
+CCsGAQUFBwICMIIBFB6CARAAQQB1AHQAbwByAGkAZABhAGQAIABkAGUAIABDAGUA
+cgB0AGkAZgBpAGMAYQBjAGkA8wBuACAAUgBhAO0AegAgAGQAZQAgAGwAYQAgAEEA
+QwBDAFYAIAAoAEEAZwBlAG4AYwBpAGEAIABkAGUAIABUAGUAYwBuAG8AbABvAGcA
+7QBhACAAeQAgAEMAZQByAHQAaQBmAGkAYwBhAGMAaQDzAG4AIABFAGwAZQBjAHQA
+cgDzAG4AaQBjAGEALAAgAEMASQBGACAAUQA0ADYAMAAxADEANQA2AEUAKQAuACAA
+QwBQAFMAIABlAG4AIABoAHQAdABwADoALwAvAHcAdwB3AC4AYQBjAGMAdgAuAGUA
+czAwBggrBgEFBQcCARYkaHR0cDovL3d3dy5hY2N2LmVzL2xlZ2lzbGFjaW9uX2Mu
+aHRtMFUGA1UdHwROMEwwSqBIoEaGRGh0dHA6Ly93d3cuYWNjdi5lcy9maWxlYWRt
+aW4vQXJjaGl2b3MvY2VydGlmaWNhZG9zL3JhaXphY2N2MV9kZXIuY3JsMA4GA1Ud
+DwEB/wQEAwIBBjAXBgNVHREEEDAOgQxhY2N2QGFjY3YuZXMwDQYJKoZIhvcNAQEF
+BQADggIBAJcxAp/n/UNnSEQU5CmH7UwoZtCPNdpNYbdKl02125DgBS4OxnnQ8pdp
+D70ER9m+27Up2pvZrqmZ1dM8MJP1jaGo/AaNRPTKFpV8M9xii6g3+CfYCS0b78gU
+JyCpZET/LtZ1qmxNYEAZSUNUY9rizLpm5U9EelvZaoErQNV/+QEnWCzI7UiRfD+m
+AM/EKXMRNt6GGT6d7hmKG9Ww7Y49nCrADdg9ZuM8Db3VlFzi4qc1GwQA9j9ajepD
+vV+JHanBsMyZ4k0ACtrJJ1vnE5Bc5PUzolVt3OAJTS+xJlsndQAJxGJ3KQhfnlms
+tn6tn1QwIgPBHnFk/vk4CpYY3QIUrCPLBhwepH2NDd4nQeit2hW3sCPdK6jT2iWH
+7ehVRE2I9DZ+hJp4rPcOVkkO1jMl1oRQQmwgEh0q1b688nCBpHBgvgW1m54ERL5h
+I6zppSSMEYCUWqKiuUnSwdzRp+0xESyeGabu4VXhwOrPDYTkF7eifKXeVSUG7szA
+h1xA2syVP1XgNce4hL60Xc16gwFy7ofmXx2utYXGJt/mwZrpHgJHnyqobalbz+xF
+d3+YJ5oyXSrjhO7FmGYvliAd3djDJ9ew+f7Zfc3Qn48LFFhRny+Lwzgt3uiP1o2H
+pPVWQxaZLPSkVrQ0uGE3ycJYgBugl6H8WY3pEfbRD0tVNEYqi4Y7
+-----END CERTIFICATE-----";
+
+    #[test]
+    fn pem_split_extracts_each_certificate_block() {
+        let bundle = format!("{VALID_PEM}\n{VALID_PEM}\nnot a pem\n");
+        let blocks = split_pem_blocks(&bundle);
+        assert_eq!(blocks.len(), 2, "two PEM blocks in, two blocks out");
+        for b in &blocks {
+            assert!(b.starts_with("-----BEGIN CERTIFICATE-----"));
+            assert!(b.ends_with("-----END CERTIFICATE-----"));
+        }
+        // A bundle with no PEM markers yields nothing (not a panic).
+        assert!(split_pem_blocks("garbage, no markers").is_empty());
+        assert!(split_pem_blocks("").is_empty());
+    }
+
+    #[test]
+    fn valid_pem_parses_into_root_certificate() {
+        let (builder, added) = add_pem_roots(reqwest::Client::builder(), VALID_PEM);
+        assert_eq!(added, 1, "the embedded certificate must parse");
+        let client = builder.build();
+        assert!(
+            client.is_ok(),
+            "builder with a custom root still builds: {client:?}"
+        );
+    }
+
+    #[test]
+    fn garbage_pem_is_skipped_without_panicking() {
+        // reqwest's rustls backend defers ALL certificate validation to
+        // ClientBuilder::build() — a corrupt entry handed to it unchecked
+        // would fail the WHOLE client build (try_new → Err, no client at
+        // all). add_pem_roots therefore validates each block itself and
+        // every bad shape is warn-and-skip, builder still buildable:
+        //
+        // - no PEM markers at all → nothing to add;
+        // - a marker block whose body is not base64 → skipped;
+        // - valid base64 but not a DER SEQUENCE (a truncated / wrong
+        //   binary file) → skipped.
+        let (builder, added) = add_pem_roots(reqwest::Client::builder(), "totally not a pem");
+        assert_eq!(added, 0, "marker-less input adds nothing");
+        assert!(builder.build().is_ok());
+
+        let (builder, added) = add_pem_roots(
+            reqwest::Client::builder(),
+            "-----BEGIN CERTIFICATE-----\nnot valid base64!!!\n-----END CERTIFICATE-----",
+        );
+        assert_eq!(added, 0, "non-base64 body skipped");
+        assert!(builder.build().is_ok());
+
+        let (builder, added) = add_pem_roots(
+            reqwest::Client::builder(),
+            "-----BEGIN CERTIFICATE-----\nanR1bmtqdW5r\n-----END CERTIFICATE-----",
+        );
+        assert_eq!(added, 0, "base64 of non-DER bytes skipped");
+        assert!(builder.build().is_ok());
+    }
+
+    #[test]
+    fn mixed_bundle_adds_the_parseable_blocks() {
+        // A real-world bundle: one corrupt-looking entry between valid
+        // roots. The corrupt one is skipped, the valid one is kept, and
+        // the builder constructs a client.
+        let bundle =
+            "-----BEGIN CERTIFICATE-----\nnot valid base64!!!\n-----END CERTIFICATE-----\n\n"
+                .to_string()
+                + VALID_PEM;
+        let (builder, added) = add_pem_roots(reqwest::Client::builder(), &bundle);
+        assert_eq!(added, 1, "the valid block is kept, the corrupt one skipped");
+        assert!(builder.build().is_ok());
+    }
+
+    #[test]
+    fn ca_bundle_env_missing_or_empty_leaves_builder_untouched() {
+        // No SHANNON_CA_BUNDLE: the helper is an identity (builds fine).
+        unsafe { std::env::remove_var("SHANNON_CA_BUNDLE") };
+        assert!(
+            apply_custom_root_certificates(reqwest::Client::builder())
+                .build()
+                .is_ok()
+        );
+        // Empty value counts as unset (desktop stores empty = cleared).
+        // NOTE: env mutation below is only safe because each nextest test
+        // runs in its own process; plain `cargo test` runs this file's env
+        // tests on one thread-scoped sequence and nothing else here reads
+        // the variable concurrently.
+        unsafe { std::env::set_var("SHANNON_CA_BUNDLE", "") };
+        assert!(
+            apply_custom_root_certificates(reqwest::Client::builder())
+                .build()
+                .is_ok()
+        );
+        unsafe { std::env::remove_var("SHANNON_CA_BUNDLE") };
+    }
+
+    #[test]
+    fn ca_bundle_env_missing_file_warns_and_builds() {
+        // Set but pointing nowhere: warn + built-in roots, never a panic.
+        unsafe { std::env::set_var("SHANNON_CA_BUNDLE", "/nonexistent/shannon-test-ca.pem") };
+        assert!(
+            apply_custom_root_certificates(reqwest::Client::builder())
+                .build()
+                .is_ok()
+        );
+        unsafe { std::env::remove_var("SHANNON_CA_BUNDLE") };
+    }
+
+    #[tokio::test]
+    async fn ca_bundle_env_with_valid_file_builds_client() {
+        let dir = std::env::temp_dir().join(format!("shannon-ca-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("root-ca.pem");
+        std::fs::write(&path, VALID_PEM).expect("write PEM");
+        unsafe { std::env::set_var("SHANNON_CA_BUNDLE", &path) };
+        let built = apply_custom_root_certificates(reqwest::Client::builder()).build();
+        unsafe { std::env::remove_var("SHANNON_CA_BUNDLE") };
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(built.is_ok(), "valid bundle on disk must build a client");
+    }
+
+    #[test]
+    fn network_tuning_applies_timeouts_and_builds() {
+        let built = apply_network_tuning(reqwest::Client::builder(), 0).build();
+        assert!(built.is_ok(), "tuned builder (clamped timeout) builds");
     }
 }

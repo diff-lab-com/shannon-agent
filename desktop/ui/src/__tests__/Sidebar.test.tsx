@@ -366,19 +366,28 @@ describe('Sidebar — Sessions rail (U1)', () => {
     expect(api.renameSession).toHaveBeenCalledTimes(1)
   })
 
-  it('pins a session to the top and persists across remounts', async () => {
+  it('pins a session through the backend and re-derives the glyph from the DTO', async () => {
+    const api = await import('@/lib/tauri-api')
     await renderWithSessions()
     expect(row('Gamma Plan').closest('[role="listitem"]')).toBeTruthy()
     await openMenu('Gamma Plan')
     fireEvent.click(screen.getByRole('menuitem', { name: 'Pin' }))
-    // Pinned row sorts first and shows the pin glyph.
+    // Settings R3 T7: the pin call goes to the backend (curation sidecar),
+    // never to localStorage.
+    await waitFor(() => expect(api.setSessionPinned).toHaveBeenCalledWith('s3', true))
+    expect(window.localStorage.getItem('shannon-sessions-pinned')).toBeNull()
+    // Optimistic: the pinned row sorts first and shows the pin glyph.
     const first = screen.getAllByRole('listitem')[0]
     expect(within(first).getByText('Gamma Plan')).toBeInTheDocument()
     expect(within(first).getByText('push_pin')).toBeInTheDocument()
-    expect(JSON.parse(window.localStorage.getItem('shannon-sessions-pinned')!)).toEqual(['s3'])
-    // Unmount + remount — pin survives (was component state before U1).
+    // Unmount + remount — the pin survives via the list DTO's `pinned` flag
+    // (the backend is the source of truth; the rail re-derives from it).
     cleanup()
-    await renderWithSessions()
+    await renderWithSessions([
+      { ...mockSessions[0] },
+      { ...mockSessions[1] },
+      { ...mockSessions[2], pinned: true },
+    ] as any)
     const firstAfter = screen.getAllByRole('listitem')[0]
     expect(within(firstAfter).getByText('Gamma Plan')).toBeInTheDocument()
     // Menu now offers Unpin.

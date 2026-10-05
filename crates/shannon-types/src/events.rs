@@ -249,6 +249,11 @@ pub struct SessionInfo {
     /// is missing (e.g. brand-new in-memory session).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<i64>,
+    /// Settings R3 T7: user-pinned flag, joined from the session's curation
+    /// sidecar at list time. `serde(default)` keeps older wire consumers
+    /// (and older desktops sending to newer UIs) unchanged — unpinned.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Session loaded event with messages.
@@ -402,6 +407,16 @@ pub mod event_names {
     pub const SESSIONS_UPDATED: &str = "sessions-updated";
     pub const SESSION_LOADED: &str = "session-loaded";
     pub const CONFIG_UPDATED: &str = "config-updated";
+    /// Settings R3 T7: emitted when a session's pinned flag changes (the
+    /// `set_session_pinned` command). Payload: `SessionPinChanged`. The
+    /// frontend refreshes the session list so the rail's pin sort/glyph
+    /// re-derives from the curation sidecar (the single source of truth).
+    pub const SESSION_PINS_CHANGED: &str = "session-pins-changed";
+    /// Settings R3 T7: emitted by the auto-archive scan for each session it
+    /// archived on the user's behalf. Payload: `SessionAutoArchived`. The
+    /// frontend toasts it so the user understands why the conversation left
+    /// the active rail (mirror of the resume auto-unarchive toast).
+    pub const SESSION_AUTO_ARCHIVED: &str = "session-auto-archived";
     pub const DIFF_REVIEW_AVAILABLE: &str = "diff-review-available";
     pub const BACKGROUND_TASK_UPDATE: &str = "background-task-update";
     pub const BACKGROUND_TASKS_UPDATED: &str = "background-tasks-updated";
@@ -460,6 +475,20 @@ pub mod event_names {
     /// parsed. Emitted right after the final output flush; explicit
     /// `terminal_kill` does not emit it (the killing client already knows).
     pub const TERMINAL_EXIT: &str = "terminal:exit";
+    /// Settings R3 T8 — the desktop `ask_user_question` tool surfaced one
+    /// question to the frontend (the GUI replacement for the terminal stdin
+    /// handler, which EOFs/hangs under a GUI). Payload: `AskUserRequest`
+    /// (`desktop/src/events.rs` — desktop-only wire type, same pattern as
+    /// `query:notice`). Frontend: the AskUserCard dialog; the answer travels
+    /// back through the `respond_ask_user` command keyed by `request_id`.
+    pub const ASK_USER_REQUEST: &str = "ask-user-request";
+    /// Settings R3 T8 — a pending ask_user question settled without an
+    /// answer: the 提问自动继续 timeout fired, the pending entry was dropped
+    /// and the tool auto-continued with a best-judgment answer. Payload:
+    /// `AskUserResolved` (`desktop/src/events.rs`); emitted on the timeout
+    /// path only — an answered question cleans up silently through
+    /// `respond_ask_user`'s remove semantics.
+    pub const ASK_USER_RESOLVED: &str = "ask-user-resolved";
 }
 
 #[cfg(test)]
@@ -613,6 +642,7 @@ mod tests {
             branch_point: None,
             running: None,
             updated_at: None,
+            pinned: false,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(!json.contains("working_dir"));
@@ -622,13 +652,15 @@ mod tests {
         // the wire shape stays byte-identical for older consumers.
         assert!(!json.contains("running"));
         assert!(!json.contains("updated_at"));
-        // Older payloads without the optional fields still parse.
+        // Older payloads without the optional fields still parse; the T7 pin
+        // flag serde-defaults to unpinned.
         let legacy: SessionInfo =
             serde_json::from_str(r#"{"id":"s1","title":"T","created_at":1,"message_count":0}"#)
                 .unwrap();
         assert_eq!(legacy.id, "s1");
         assert_eq!(legacy.running, None);
         assert_eq!(legacy.updated_at, None);
+        assert!(!legacy.pinned);
     }
 
     #[test]

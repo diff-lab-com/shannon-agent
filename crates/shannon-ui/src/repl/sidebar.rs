@@ -256,6 +256,7 @@ impl super::Repl {
                                 timestamp: Utc::now(),
                                 source: Some(format!("agent:{}:completed", agent.name)),
                                 action_id: None,
+                                kind: shannon_core::notifier::NotificationKind::Completed,
                             };
                             // 10s window — coalesce duplicate refreshes of the
                             // same agent landing as "completed" within one batch.
@@ -269,6 +270,7 @@ impl super::Repl {
                                 timestamp: Utc::now(),
                                 source: Some(format!("agent:{}:failed", agent.name)),
                                 action_id: None,
+                                kind: shannon_core::notifier::NotificationKind::Failed,
                             };
                             let _ = self.notifier.notify_dedup(&notification, 10_000);
                         }
@@ -292,6 +294,7 @@ impl super::Repl {
                             timestamp: Utc::now(),
                             source: Some(format!("agent:exit:{prev_name}")),
                             action_id: None,
+                            kind: shannon_core::notifier::NotificationKind::NeedsAttention,
                         };
                         let _ = self.notifier.notify_dedup(&notification, 5_000);
                     }

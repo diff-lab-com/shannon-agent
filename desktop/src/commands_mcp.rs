@@ -415,6 +415,9 @@ pub async fn list_mcp_servers(
                             name: a.name().to_string(),
                             description: a.description().to_string(),
                             enabled: true,
+                            // Settings R3 T11 — MCP tools carry their
+                            // declared read-only flag for the UI grouping.
+                            read_only: ToolTrait::is_read_only(a),
                         })
                         .collect();
                     (tools.len(), tools)

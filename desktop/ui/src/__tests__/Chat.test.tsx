@@ -1270,3 +1270,71 @@ describe('Chat page', () => {
     })
   })
 })
+
+// ── Settings R3 T10: running-send behavior pref ───────────────────────────
+// The dispatch reads `shannon.chat.sendBehavior` at each running send:
+// 'queue' (the status-quo default) joins the FIFO queue; 'steer' re-routes
+// the same send through the interrupt path (bolt-button primitives: cancel
+// + park, flushed at the settle). The bolt / Ctrl+Enter stays a steer in
+// both modes — exercised in ChatInputSteer.test.tsx, unchanged here.
+describe('running-send behavior pref (Settings R3 T10)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function renderQueryingChat() {
+    ctx.isQuerying = true
+    renderChat()
+    return screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
+  }
+
+  it('defaults to queue when the pref is unset (status quo): Enter joins the FIFO queue, the run is not interrupted', () => {
+    resetCtx()
+    const input = renderQueryingChat()
+    fireEvent.change(input, { target: { value: 'queued hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(ctx.enqueuePrompt).toHaveBeenCalledWith('queued hello', [])
+    expect(ctx.cancelQuery).not.toHaveBeenCalled()
+    expect(ctx.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('pref=queue: Enter joins the FIFO queue, the run is not interrupted', () => {
+    resetCtx()
+    localStorage.setItem('shannon.chat.sendBehavior', 'queue')
+    const input = renderQueryingChat()
+    fireEvent.change(input, { target: { value: 'queued hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(ctx.enqueuePrompt).toHaveBeenCalledWith('queued hello', [])
+    expect(ctx.cancelQuery).not.toHaveBeenCalled()
+    expect(ctx.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('pref=steer: Enter takes the interrupt path — cancels the run and parks the message instead of enqueueing', () => {
+    resetCtx()
+    localStorage.setItem('shannon.chat.sendBehavior', 'steer')
+    const input = renderQueryingChat()
+    fireEvent.change(input, { target: { value: 'steered hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    // steer primitives: the running turn is cancelled…
+    expect(ctx.cancelQuery).toHaveBeenCalled()
+    // …nothing joins the queue and nothing is sent yet (the steer parks
+    // until the cancel settles — useSteerSend owns the flush).
+    expect(ctx.enqueuePrompt).not.toHaveBeenCalled()
+    expect(ctx.sendMessage).not.toHaveBeenCalled()
+    // the accepted steer clears the composer, like every accepted send
+    expect(input).toHaveValue('')
+  })
+
+  it('pref=steer with an idle session: Enter degrades to an ordinary send (no interrupt primitives)', () => {
+    resetCtx()
+    localStorage.setItem('shannon.chat.sendBehavior', 'steer')
+    ctx.isQuerying = false
+    renderChat()
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    fireEvent.change(input, { target: { value: 'plain hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(ctx.sendMessage).toHaveBeenCalledWith('plain hello', undefined)
+    expect(ctx.cancelQuery).not.toHaveBeenCalled()
+    expect(ctx.enqueuePrompt).not.toHaveBeenCalled()
+  })
+})
