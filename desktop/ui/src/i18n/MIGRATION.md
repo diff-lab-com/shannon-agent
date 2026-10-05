@@ -130,7 +130,7 @@ function wrap() {
 }
 ```
 
-The default locale in tests is `en` (via `detectDefault()` falling back when `localStorage` and `navigator.language` are unset), so existing English assertions continue to work.
+The default locale in tests is `en` (via `resolveLocale()` falling back when `localStorage` has no usable pref — absent, `'system'` or unknown — and `navigator.languages` matches nothing), so existing English assertions continue to work.
 
 ### 9. Run tests
 

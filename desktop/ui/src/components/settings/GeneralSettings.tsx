@@ -6,7 +6,7 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useCatalog } from '@/context/CatalogContext'
-import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
+import { useI18n, SUPPORTED_LOCALES, type LocalePref } from '@/i18n'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { readDensityPref, setDensityPref, type DensityPref } from '@/lib/density'
@@ -56,7 +56,7 @@ export default function GeneralSettings() {
     setLinkTargetState(next)
     setLinkTargetPref(next)
   }
-  const { locale, setLocale } = useI18n()
+  const { localePref, setLocale } = useI18n()
   const [saving, setSaving] = useState(false)
   // P1-6 — migration wizard (import from Claude Code / ZCode).
   const [migrationOpen, setMigrationOpen] = useState(false)
@@ -66,7 +66,7 @@ export default function GeneralSettings() {
     navigate('/welcome')
   }
 
-  const handleLocaleChange = (next: Locale) => {
+  const handleLocaleChange = (next: LocalePref) => {
     setLocale(next)
     toast.success(intl.formatMessage({ id: 'settings.language.label' }))
   }
@@ -197,24 +197,24 @@ export default function GeneralSettings() {
             <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.language.label' })}</h3>
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.language.help' })}</p>
-          <div className="flex flex-wrap gap-sm">
+          {/* Task 2 (settings-parity R3): the 10-button wall became a select
+              styled after the link-target picker below. First option is the
+              explicit "follow system" pref — persisted verbatim as 'system'
+              so the choice survives restarts; the provider re-probes the OS
+              language live whenever it resolves. Language applies instantly,
+              so no EffectBadge (brief T2). */}
+          <select
+            data-testid="settings-language-select"
+            value={localePref}
+            onChange={e => handleLocaleChange(e.target.value as LocalePref)}
+            aria-label={intl.formatMessage({ id: 'settings.language.label' })}
+            className="font-label-md text-on-surface bg-surface-container rounded-lg px-sm py-xs border border-outline-variant/30 cursor-pointer"
+          >
+            <option value="system">{intl.formatMessage({ id: 'settings.language.system' })}</option>
             {SUPPORTED_LOCALES.map(opt => (
-              <Button
-                key={opt.id}
-                variant={locale === opt.id ? 'default' : 'outline'}
-                onClick={() => handleLocaleChange(opt.id)}
-                aria-pressed={locale === opt.id}
-                className={cn(
-                  'px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
-                  locale === opt.id
-                    ? 'bg-primary text-on-primary'
-                    : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50',
-                )}
-              >
-                {intl.formatMessage({ id: opt.labelKey })}
-              </Button>
+              <option key={opt.id} value={opt.id}>{intl.formatMessage({ id: opt.labelKey })}</option>
             ))}
-          </div>
+          </select>
         </section>
 
         {/* P2-⑧ Display density */}

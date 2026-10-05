@@ -7,10 +7,12 @@ import zhCN from './locales/zh-CN.json'
 /**
  * Shannon i18n layer (#73).
  *
- * Supports English (`en`) and Simplified Chinese (`zh-CN`). The locale is
- * persisted in `localStorage` (`shannon.locale`) and falls back to the
- * browser language on first visit. Components consume messages via the
- * `useI18n()` hook below or directly through `react-intl`'s `useIntl()`.
+ * Supports English (`en`) and Simplified Chinese (`zh-CN`). The locale
+ * preference is persisted in `localStorage` (`shannon.locale`) as either a
+ * concrete locale or the literal `'system'` ("follow the OS language", also
+ * the first-visit default — probed from `navigator.languages`). Components
+ * consume messages via the `useI18n()` hook below or directly through
+ * `react-intl`'s `useIntl()`.
  *
  * Migration pattern is documented in `./MIGRATION.md`. Phase 1 ships
  * infrastructure + Welcome.tsx as a reference; remaining ~120 components
@@ -18,6 +20,13 @@ import zhCN from './locales/zh-CN.json'
  */
 
 export type Locale = 'en' | 'zh-CN' | 'es' | 'fr' | 'de' | 'ja' | 'ko' | 'pt-BR' | 'ru' | 'zh-TW'
+
+/**
+ * What the user picked in Settings. `'system'` means "follow the operating
+ * system language"; anything else pins a concrete locale. Persisted
+ * verbatim in `localStorage` (`shannon.locale`).
+ */
+export type LocalePref = 'system' | Locale
 
 const LOCALE_STORAGE_KEY = 'shannon.locale'
 
@@ -47,33 +56,79 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
   'zh-TW': zhTW as Record<string, string>,
 }
 
-/** Detect a sensible default locale. Browser language → supported; else `en`. */
-function detectDefault(): Locale {
-  if (typeof window === 'undefined') return 'en'
-  const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY) as Locale | null
-  if (stored && stored in MESSAGES) return stored
-  const nav = window.navigator?.language?.toLowerCase() ?? ''
-  if (nav.startsWith('zh-tw') || nav.startsWith('zh-hk')) return 'zh-TW'
-  if (nav.startsWith('zh')) return 'zh-CN'
-  if (nav.startsWith('ja')) return 'ja'
-  if (nav.startsWith('ko')) return 'ko'
-  if (nav.startsWith('es')) return 'es'
-  if (nav.startsWith('fr')) return 'fr'
-  if (nav.startsWith('de')) return 'de'
-  if (nav.startsWith('pt')) return 'pt-BR'
-  if (nav.startsWith('ru')) return 'ru'
+/** Map one raw navigator language tag to a supported Locale, or null. */
+function matchNavigatorLanguage(tag: string): Locale | null {
+  const l = (tag ?? '').toLowerCase()
+  if (l.startsWith('zh-tw') || l.startsWith('zh-hk')) return 'zh-TW'
+  if (l.startsWith('zh')) return 'zh-CN'
+  if (l.startsWith('ja')) return 'ja'
+  if (l.startsWith('ko')) return 'ko'
+  if (l.startsWith('es')) return 'es'
+  if (l.startsWith('fr')) return 'fr'
+  if (l.startsWith('de')) return 'de'
+  if (l.startsWith('pt')) return 'pt-BR'
+  if (l.startsWith('ru')) return 'ru'
+  return null
+}
+
+/**
+ * Read the persisted preference. `'system'` and concrete locales pass
+ * through; a missing or unknown value means "follow system" — the same
+ * observable behavior the old detect-on-boot gave first-run users, so
+ * existing stored locales keep their exact behavior.
+ */
+function getStoredLocalePref(): LocalePref {
+  if (typeof window === 'undefined') return 'system'
+  const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY)
+  if (stored === 'system') return 'system'
+  if (stored && stored in MESSAGES) return stored as Locale
+  return 'system'
+}
+
+/**
+ * Pure preference → locale resolver (shared by the provider, the settings
+ * switcher semantics and `messageFor`).
+ *
+ * - A concrete supported locale passes straight through.
+ * - `'system'` (or a missing/unknown pref) probes `navigator.languages`
+ *   LIVE on every call — deliberately uncached, so a window opened after
+ *   the OS language changes follows it.
+ * - Nothing matches → `'en'`.
+ *
+ * The `languages` parameter is injectable for pure unit tests; production
+ * callers omit it and the global navigator is read.
+ */
+export function resolveLocale(
+  pref: string | null | undefined,
+  languages: readonly string[] | undefined = typeof navigator !== 'undefined'
+    ? navigator.languages
+    : undefined,
+): Locale {
+  if (pref && pref !== 'system' && pref in MESSAGES) return pref as Locale
+  for (const tag of languages ?? []) {
+    const hit = matchNavigatorLanguage(tag)
+    if (hit) return hit
+  }
   return 'en'
 }
 
 interface I18nContextValue {
+  /** Resolved active locale — what `IntlProvider` renders with. */
   locale: Locale
-  setLocale: (next: Locale) => void
+  /** What the user picked: `'system'` or a pinned locale (drives the switcher). */
+  localePref: LocalePref
+  setLocale: (next: LocalePref) => void
 }
 
 const I18nContext = createContext<I18nContextValue | null>(null)
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(detectDefault)
+  const [localePref, setPrefState] = useState<LocalePref>(getStoredLocalePref)
+
+  // Resolved per pref change. With 'system' the probe runs on mount and on
+  // every pref switch — never cached — so a window created after the OS
+  // language changed picks the new language up on its first render.
+  const locale = useMemo(() => resolveLocale(localePref), [localePref])
 
   // Keep `<html lang>` in sync so screen readers / browser UI match.
   useEffect(() => {
@@ -82,14 +137,19 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     }
   }, [locale])
 
-  const setLocale = useCallback((next: Locale) => {
-    setLocaleState(next)
+  const setLocale = useCallback((next: LocalePref) => {
+    setPrefState(next)
     if (typeof window !== 'undefined') {
+      // 'system' is persisted verbatim: an explicit user choice, not an
+      // absent one, so it survives restarts and reads back as follow-system.
       window.localStorage.setItem(LOCALE_STORAGE_KEY, next)
     }
   }, [])
 
-  const value = useMemo<I18nContextValue>(() => ({ locale, setLocale }), [locale, setLocale])
+  const value = useMemo<I18nContextValue>(
+    () => ({ locale, localePref, setLocale }),
+    [locale, localePref, setLocale],
+  )
 
   // B1-14 (review P1-5 / R1-3): en merged UNDER every locale so missing keys
   // resolve to English instead of rendering the raw message id — and instead
@@ -153,7 +213,7 @@ export function useT(): (id: string, values?: Record<string, PrimitiveType>) => 
  * merge semantics the IntlProvider applies above.
  */
 export function messageFor(id: string, values?: Record<string, PrimitiveType>): string {
-  const locale = detectDefault()
+  const locale = resolveLocale(getStoredLocalePref())
   const tpl = MESSAGES[locale][id] ?? MESSAGES.en[id] ?? id
   if (!values) return tpl
   return tpl.replace(/\{(\w+)\}/g, (_, k: string) =>

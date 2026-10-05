@@ -131,4 +131,70 @@ describe('GeneralSettings', () => {
       expect(window.localStorage.getItem(WELCOME_SEEN_KEY)).toBeNull()
     })
   })
+
+  // Task 2 (settings-parity R3): the language control is a select whose
+  // first option is the explicit "follow system" pref. The pref persists
+  // verbatim — 'system' for follow, the locale id for a pinned language —
+  // so both survive restarts and read back exactly as picked.
+  describe('Language select (follow system)', () => {
+    const LANGUAGE_KEY = 'shannon.locale'
+
+    beforeEach(() => {
+      window.localStorage.clear()
+    })
+
+    const languageSelect = () =>
+      // Stable testid, not the accessible name: picking a locale switches
+      // the whole UI (aria-label included) to that language mid-test.
+      screen.getByTestId('settings-language-select') as HTMLSelectElement
+
+    it('renders a select with the system option first plus all supported locales', () => {
+      render(wrap(<GeneralSettings />))
+      // A11y contract while the UI is still in English: exposed as a
+      // combobox named after the Language section label.
+      expect(screen.getByRole('combobox', { name: 'Language' })).toBe(languageSelect())
+      const values = [...languageSelect().options].map(o => o.value)
+      expect(values[0]).toBe('system')
+      expect(values).toEqual(expect.arrayContaining([
+        'en', 'zh-CN', 'zh-TW', 'ja', 'ko', 'es', 'fr', 'de', 'pt-BR', 'ru',
+      ]))
+      expect(values).toHaveLength(11)
+    })
+
+    it('first run (no stored pref) shows the follow-system option', () => {
+      render(wrap(<GeneralSettings />))
+      expect(languageSelect()).toHaveValue('system')
+      // And picking nothing writes nothing — first-run behavior is unchanged.
+      expect(window.localStorage.getItem(LANGUAGE_KEY)).toBeNull()
+    })
+
+    it('selecting system persists the literal "system" pref', () => {
+      render(wrap(<GeneralSettings />))
+      const select = languageSelect()
+      fireEvent.change(select, { target: { value: 'system' } })
+      expect(window.localStorage.getItem(LANGUAGE_KEY)).toBe('system')
+      // Element identity survives the locale re-render — assert on the
+      // captured node, not a fresh (name-dependent) query.
+      expect(select).toHaveValue('system')
+    })
+
+    it('selecting a concrete locale persists its id', () => {
+      render(wrap(<GeneralSettings />))
+      const select = languageSelect()
+      fireEvent.change(select, { target: { value: 'ja' } })
+      expect(window.localStorage.getItem(LANGUAGE_KEY)).toBe('ja')
+      expect(select).toHaveValue('ja')
+    })
+
+    it('a stored concrete locale selects that option, a stored system pref selects system', () => {
+      window.localStorage.setItem(LANGUAGE_KEY, 'de')
+      const { unmount } = render(wrap(<GeneralSettings />))
+      expect(languageSelect()).toHaveValue('de')
+      unmount()
+
+      window.localStorage.setItem(LANGUAGE_KEY, 'system')
+      render(wrap(<GeneralSettings />))
+      expect(languageSelect()).toHaveValue('system')
+    })
+  })
 })
