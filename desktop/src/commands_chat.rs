@@ -292,10 +292,24 @@ pub async fn list_tools(state: tauri::State<'_, AppState>) -> Result<Vec<ToolInf
     let tools = state.tools.list_tools_info();
     Ok(tools
         .into_iter()
-        .map(|t| ToolInfo {
-            name: t.name,
-            description: t.description,
-            enabled: true,
+        .map(|t| {
+            // Settings R3 T11 — carry `Tool::is_read_only()` so the UI can
+            // group calls into Explore/Terminal/Changes without guessing.
+            // `get` applies the same allowed_tools filter as
+            // `list_tools_info`, so the lookup cannot disagree with the
+            // listing; a miss (tool deregistered in between) defaults to
+            // read-only, matching the wire's serde default.
+            let read_only = state
+                .tools
+                .get(&t.name)
+                .map(|tool| tool.is_read_only())
+                .unwrap_or(true);
+            ToolInfo {
+                name: t.name,
+                description: t.description,
+                enabled: true,
+                read_only,
+            }
         })
         .collect())
 }

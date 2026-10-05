@@ -646,6 +646,19 @@ pub struct ToolInfo {
     pub name: String,
     pub description: String,
     pub enabled: bool,
+    /// Settings R3 T11 — whether the tool only performs read-only operations
+    /// (`Tool::is_read_only()` from the tool-interface trait). The UI's
+    /// Explore/Terminal/Changes call-grouping looks this up by name before
+    /// falling back to name heuristics. `serde(default)` keeps older wire
+    /// payloads (mock data, caches) deserializing as `true`, the conservative
+    /// grouping (a defaulted tool lands in the read-only Explore bucket).
+    #[serde(default = "default_true")]
+    pub read_only: bool,
+}
+
+/// `serde(default = ...)` helper for [`ToolInfo::read_only`].
+fn default_true() -> bool {
+    true
 }
 
 /// P0-3 — why an attachment path was refused by the send pipeline. The
@@ -3014,6 +3027,41 @@ mod tests {
         assert_eq!(deserialized.timestamp, 1700000000);
     }
 
+    /// Settings R3 T11 — `read_only` is the UI grouping's lookup field.
+    /// Older wire payloads (mock data, caches) predate the field, so
+    /// `serde(default)` must deserialize them as `true` (the conservative
+    /// Explore bucket) while fresh payloads round-trip the real value.
+    #[test]
+    fn test_tool_info_read_only_defaults_true_for_older_payloads() {
+        let old = serde_json::json!({
+            "name": "Read",
+            "description": "Read a file",
+            "enabled": true,
+        });
+        let info: ToolInfo = serde_json::from_value(old).expect("old payload must deserialize");
+        assert!(info.read_only, "missing read_only must default to true");
+
+        let fresh = serde_json::json!({
+            "name": "Write",
+            "description": "Write a file",
+            "enabled": true,
+            "read_only": false,
+        });
+        let info: ToolInfo =
+            serde_json::from_value(fresh).expect("fresh payload must deserialize");
+        assert!(!info.read_only, "explicit read_only must round-trip");
+
+        // And the serializer always emits the field for new consumers.
+        let json = serde_json::to_string(&ToolInfo {
+            name: "Bash".into(),
+            description: "run".into(),
+            enabled: true,
+            read_only: false,
+        })
+        .expect("ToolInfo serializes");
+        assert!(json.contains("\"read_only\":false"));
+    }
+
     #[test]
     fn test_chat_message_roles() {
         for role in &["user", "assistant", "system"] {
@@ -3070,11 +3118,13 @@ mod tests {
             name: "bash".to_string(),
             description: "Execute shell commands".to_string(),
             enabled: true,
+            read_only: false,
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: ToolInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.name, "bash");
         assert!(deserialized.enabled);
+        assert!(!deserialized.read_only);
     }
 
     #[test]
