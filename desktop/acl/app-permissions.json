@@ -1919,6 +1919,15 @@
       }
     },
     {
+      "identifier": "allow-check-tools-send",
+      "description": "Enables the check_tools_send command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "check_tools_send"
+        ]
+      }
+    },
+    {
       "identifier": "allow-check-vision-send",
       "description": "Enables the check_vision_send command without any pre-configured scope.",
       "commands": {
@@ -2925,6 +2934,7 @@
       "permissions": [
         "allow-cancel-background-task",
         "allow-cancel-query",
+        "allow-check-tools-send",
         "allow-check-vision-send",
         "allow-clear-session-model",
         "allow-get-active-session-id",

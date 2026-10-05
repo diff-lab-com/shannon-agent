@@ -941,6 +941,190 @@ pub async fn check_vision_send(
     })
 }
 
+// ── S2-4b (P-N9): pre-send tool-capability pre-check ────────────────────
+
+/// Wire shape of [`check_tools_send`]: which model the NEXT send of this
+/// session would use, whether that send carries tools at all, the
+/// three-state tool-calling verdict, and (when one exists) the one-click
+/// switch candidate. Mirrors [`VisionSendCheck`] so the frontend can drive
+/// both gates through one interaction pattern.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolsSendCheck {
+    /// Effective model id — session override > phase tier > global
+    /// default, the exact resolution the actual send goes through.
+    pub model: String,
+    /// Provider slug of the effective target, in the composer chip's
+    /// `set_session_model` vocabulary (the canonical `LlmProvider` name,
+    /// e.g. `"zhipu"`).
+    pub provider: String,
+    /// Whether the session's next send will carry tools at all. The
+    /// desktop send path (`send_message`, desktop/src/commands.rs) attaches
+    /// the shared tool registry UNCONDITIONALLY — the TUI/CLI's
+    /// `enable_tools` config (`SHANNON_ENABLE_TOOLS`,
+    /// `crates/shannon-core/src/unified_config.rs`) is not read anywhere on
+    /// this path — so "tools off" means exactly "the registry is empty and
+    /// the request carries no tools". `false` → the UI must not prompt.
+    pub applies: bool,
+    /// Three-state verdict: `Some(true)` = known tool-calling,
+    /// `Some(false)` = KNOWN to lack tool calling (the UI must ask before
+    /// sending into a tools-carrying request), `None` = unknown — sends
+    /// flow untouched (能力未知不拦, same contract as the vision gate).
+    pub tools: Option<bool>,
+    /// One-click switch candidate: the first tool-capable model in the
+    /// effective provider's merged roster (static catalog order first,
+    /// then the models.dev overlay), excluding the effective model.
+    /// `None` → the UI shows the notice without a switch action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<ToolsSwitchSuggestion>,
+}
+
+/// Where "switch to Y" should land. `provider` is ready for
+/// [`set_session_model`]; `model` is the canonical catalog id (the same
+/// normalization contract the composer chip writes).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolsSwitchSuggestion {
+    pub provider: String,
+    pub model: String,
+    pub name: String,
+}
+
+/// Source-aware tool bit of one merged-roster row — the SAME honesty rule
+/// `merged_row_to_wire` applies for the picker's `tools` field: overlay
+/// rows carry explicit models.dev `tool_call` data and declared rows carry
+/// the user's `providers.toml` capabilities, while the curated static
+/// table has no tool bits at all (unknown, never false).
+fn tool_bit_of(info: &shannon_core::model_registry::ModelInfo) -> Option<bool> {
+    use shannon_core::model_registry::{ModelCapabilities, ModelEntrySource};
+    match info.source {
+        ModelEntrySource::Overlay | ModelEntrySource::Declared => {
+            Some(info.capabilities.has(ModelCapabilities::tool_use()))
+        }
+        ModelEntrySource::Catalog => None,
+    }
+}
+
+/// Pure merge order backing [`tools_support_for`]: declared capabilities >
+/// static-catalog hit (which means UNKNOWN for tools — the curated table
+/// carries no tool bits, and the merged roster the picker serves is built
+/// from that row) > models.dev overlay bit > unknown. The catalog arm
+/// deliberately SHADOWS the overlay for ids present in both: the picker
+/// renders those rows from the catalog row (`source = "catalog"`,
+/// `tools = None`), so a pre-check that secretly knew better than the
+/// picker would contradict the metadata the user can see.
+fn tools_verdict(
+    declared: Option<bool>,
+    catalog_hit: bool,
+    overlay_hit: Option<bool>,
+) -> Option<bool> {
+    if let Some(declared) = declared {
+        return Some(declared);
+    }
+    if catalog_hit {
+        return None;
+    }
+    overlay_hit
+}
+
+/// Three-state tool-calling lookup over the same sources the vision
+/// pre-check walks (`vision_support_for`, which mirrors the engine gate's
+/// stages): declared models (exact id, authoritative when capabilities are
+/// listed) > static catalog (exact / forward prefix / reverse prefix — any
+/// hit means UNKNOWN here, see [`tools_verdict`]) > models.dev overlay
+/// (exact). Duplicated host-side ON PURPOSE, like the vision lookup: the
+/// pre-check must read the same data through the same strategy as the wire
+/// the picker serves, or it would second-guess the visible metadata.
+fn tools_support_for(model_id: &str) -> Option<bool> {
+    use shannon_core::model_registry::MODEL_CATALOG;
+    use shannon_types::provider_config::ModelCapability;
+
+    let declared = shannon_core::declared_models::lookup(model_id)
+        .filter(|meta| !meta.capabilities.is_empty())
+        .map(|meta| {
+            meta.capabilities
+                .iter()
+                .any(|c| matches!(c, ModelCapability::ToolUse))
+        });
+    let catalog_hit = MODEL_CATALOG
+        .iter()
+        .any(|m| m.id == model_id || m.id.starts_with(model_id) || model_id.starts_with(m.id));
+    let overlay_hit = shannon_core::model_registry::dynamic::overlay_snapshot()
+        .iter()
+        .find(|m| m.id == model_id)
+        .and_then(tool_bit_of);
+    tools_verdict(declared, catalog_hit, overlay_hit)
+}
+
+/// Pure pick for [`check_tools_send`]'s suggestion: the FIRST tool-capable
+/// model of the merged roster (static catalog order, then overlay) that is
+/// not the model being sent to. Same "first in roster order" heuristic as
+/// [`first_vision_candidate`] — catalog rows never carry the bit
+/// ([`tool_bit_of`]), so overlay entries are the natural candidate pool.
+fn first_tools_candidate(
+    roster: &[shannon_core::model_registry::ModelInfo],
+    exclude: &str,
+) -> Option<(String, String)> {
+    roster
+        .iter()
+        .find(|m| m.id != exclude && tool_bit_of(m) == Some(true))
+        .map(|m| (m.id.to_string(), m.display_name.to_string()))
+}
+
+/// Pure trigger predicate for [`check_tools_send`]: a send "will use
+/// tools" exactly when the tool registry it carries is non-empty. The
+/// desktop send path has no tools-off toggle today (see
+/// [`ToolsSendCheck::applies`]), so this is `true` for every real send —
+/// the `false` arm is the honest "not applicable" the frontend never
+/// prompts on, and stays correct if a desktop toggle ever lands.
+fn tools_gate_applies(tool_count: usize) -> bool {
+    tool_count > 0
+}
+
+/// S2-4b (P-N9): resolve what the next send of this session would use and
+/// whether that model is KNOWN to lack tool calling. Read-only; the UI
+/// calls it before EVERY send (tools ride every desktop request). `tools =
+/// Some(false)` is the only "ask" verdict — unknown models behave exactly
+/// as before (send; the engine has no tools gate to answer, so a wrong
+/// guess would degrade the run the same way it does today). Sessions whose
+/// send would carry no tools report `applies = false` and the UI skips the
+/// prompt entirely.
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn check_tools_send(
+    state: tauri::State<'_, AppState>,
+    session_id: Option<String>,
+) -> Result<ToolsSendCheck, String> {
+    let (_, session) = state
+        .registry
+        .resolve_explicit_or_active(session_id.as_deref())?;
+    let cc = resolve_client_config_for_session(&state, &session).await;
+    let provider_slug = cc.provider.to_string().to_lowercase();
+    let applies = tools_gate_applies(state.tools.list().len());
+    let tools = if applies {
+        tools_support_for(&cc.model)
+    } else {
+        // Tools off → the capability is moot; report unknown rather than a
+        // verdict the send would never exercise.
+        None
+    };
+    let suggestion = if applies && tools == Some(false) {
+        let roster = shannon_core::model_registry::merged_models_for_provider(cc.provider.clone());
+        first_tools_candidate(&roster, &cc.model).map(|(model, name)| ToolsSwitchSuggestion {
+            provider: provider_slug.clone(),
+            model,
+            name,
+        })
+    } else {
+        None
+    };
+    Ok(ToolsSendCheck {
+        model: cc.model.clone(),
+        provider: provider_slug,
+        applies,
+        tools,
+        suggestion,
+    })
+}
+
 /// P2-5 — session-level "temporary chat" toggle: `disabled = true` builds
 /// this session's subsequent queries WITHOUT the memory layer (no injection
 /// of past memories into the prompt, no auto-extraction of new ones). Other
@@ -1103,6 +1287,95 @@ mod tests {
             first_vision_candidate(&roster, "shannon-a").map(|(id, _)| id),
             Some("shannon-b".to_string())
         );
+    }
+
+    // === S2-4b (P-N9): pre-send tool-capability pre-check ===
+
+    #[test]
+    fn tools_support_is_unknown_for_catalog_rows() {
+        // The curated static table carries NO tool bits (the honest-
+        // metadata contract shared with the picker wire, see
+        // `merged_row_to_wire`), so every catalog-reachable verdict is
+        // None — including ids that resolve through the same prefix
+        // strategies the vision gate pins. `gpt-4o` HAS a vision verdict
+        // from the same row: the two gates must differ exactly where the
+        // metadata differs.
+        assert_eq!(vision_support_for("gpt-4o"), Some(true));
+        assert_eq!(tools_support_for("gpt-4o"), None);
+        assert_eq!(tools_support_for("gpt-4o-2024-08-06"), None);
+        assert_eq!(tools_support_for("shannon-desktop-unknown-model"), None);
+    }
+
+    #[test]
+    fn tools_verdict_precedence_declared_then_catalog_then_overlay() {
+        // Declared capabilities are authoritative even over a catalog hit.
+        assert_eq!(tools_verdict(Some(true), true, Some(false)), Some(true));
+        assert_eq!(tools_verdict(Some(false), false, Some(true)), Some(false));
+        // A catalog hit means UNKNOWN for tools and SHADOWS the overlay:
+        // the merged roster (what the picker serves) builds that id's row
+        // from the catalog row, whose tools field is None.
+        assert_eq!(tools_verdict(None, true, Some(true)), None);
+        // Overlay consulted only when the catalog never matched.
+        assert_eq!(tools_verdict(None, false, Some(true)), Some(true));
+        assert_eq!(tools_verdict(None, false, Some(false)), Some(false));
+        assert_eq!(tools_verdict(None, false, None), None);
+    }
+
+    #[test]
+    fn first_tools_candidate_picks_first_overlay_bit_and_skips_catalog_rows() {
+        let mk = |id: &'static str, bit: Option<bool>| {
+            let source = match bit {
+                // Catalog rows: no tool bits at all (unknown).
+                None => shannon_core::model_registry::ModelEntrySource::Catalog,
+                _ => shannon_core::model_registry::ModelEntrySource::Overlay,
+            };
+            shannon_core::model_registry::ModelInfo {
+                id,
+                display_name: id,
+                aliases: &[],
+                provider: shannon_engine::api::LlmProvider::Anthropic,
+                context_window: 200_000,
+                max_output: 4_096,
+                cost_per_m_input: 0.0,
+                cost_per_m_output: 0.0,
+                capabilities: match bit {
+                    Some(true) => shannon_core::model_registry::ModelCapabilities::tool_use(),
+                    Some(false) => shannon_core::model_registry::ModelCapabilities::coding(),
+                    None => shannon_core::model_registry::ModelCapabilities::vision(),
+                },
+                source,
+            }
+        };
+        // Roster shape mirrors the merged catalog: catalog rows first,
+        // overlay rows after. The pick must skip the catalog row (unknown),
+        // the known-no-tools overlay row, and the excluded current model.
+        let roster: Vec<_> = vec![
+            mk("curated-no-bits", None),
+            mk("overlay-blind", Some(false)),
+            mk("shannon-target", Some(false)),
+            mk("overlay-capable", Some(true)),
+        ];
+        let (id, name) = first_tools_candidate(&roster, "shannon-target").unwrap();
+        assert_eq!(id, "overlay-capable");
+        assert_eq!(name, "overlay-capable");
+        // Exclusion can exhaust the pool → notice-only.
+        assert_eq!(first_tools_candidate(&roster, "overlay-capable"), None);
+        // A tools-capable CURRENT model is never suggested against itself.
+        assert_eq!(
+            first_tools_candidate(&roster, "curated-no-bits").map(|(id, _)| id),
+            Some("overlay-capable".to_string())
+        );
+    }
+
+    #[test]
+    fn tools_gate_applies_tracks_registry_emptiness() {
+        // Empty registry = the request carries no tools = the capability
+        // gate is moot ("not applicable" — the frontend never prompts).
+        assert!(!tools_gate_applies(0));
+        // Any registered tool (the desktop registers built-ins at startup,
+        // plus MCP/skill tools per send) means the send rides tools.
+        assert!(tools_gate_applies(1));
+        assert!(tools_gate_applies(15));
     }
 
     // === Provider allowlist filter (ADR-0005 P4.9) ===

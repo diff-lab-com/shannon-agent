@@ -935,6 +935,41 @@ export const handlers: Record<string, MockHandler> = {
       suggestion,
     }
   },
+  // S2-4b (P-N9): pre-send tools pre-check — the mirror of check_vision_send
+  // above. The demo send path always rides tools (as the real desktop one
+  // does), so `applies` is constant true; the three-state verdict reads the
+  // `tools` bit off the seeded catalog (MOCK_STATUS.model is tools:true, so
+  // ordinary demo/e2e sends pass; scripting llama-4-70b reaches the hold).
+  // NO artificial delay() here, unlike the vision twin: this check rides
+  // EVERY send, so a simulated round-trip would tax every demo message and
+  // re-order the wire record against e2e assertions that read
+  // `mockSnapshot().sends[i]` right after the composer settles (the budget
+  // spec's poll was the vision-specific workaround; don't spread it).
+  async check_tools_send(args: { sessionId?: string | null }) {
+    const override =
+      seededSessionModel(args.sessionId)
+      ?? demoSessionModels.get(demoSessionKey(args.sessionId))
+      ?? null
+    const model = override?.model ?? MOCK_STATUS.model
+    const entry = MOCK_MODELS.find(m => m.id === model)
+    const tools = entry == null ? null : entry.tools ?? null
+    const suggestion =
+      tools === false
+        ? (() => {
+            const candidate = MOCK_MODELS.find(m => m.id !== model && m.tools === true)
+            return candidate == null
+              ? null
+              : { provider: candidate.provider, model: candidate.id, name: candidate.name }
+          })()
+        : null
+    return {
+      model,
+      provider: override?.provider ?? MOCK_STATUS.provider,
+      applies: true,
+      tools,
+      suggestion,
+    }
+  },
   // P2-5: session-level "temporary chat" — demo mirrors the backend's
   // durable sidecar with an in-memory set so the composer toggle persists
   // within a demo session.

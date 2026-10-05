@@ -355,6 +355,11 @@ export default function MessageArea({
     >
       <StreamStatusRegion active={streamActive} />
       <VisionConfirmBar />
+      {/* S2-4b: the tools gate's bar. At most one capability bar is ever
+          mounted — the resolvers re-enter `sendMessage`, so resolving the
+          vision bar can immediately replace it with this one (sequential
+          confirmation), never both at once. */}
+      <ToolsConfirmBar />
       {messages.length === 0 && !streamingText && <ComposerWelcome />}
 
       {messages.length > 0 && shouldVirtualize && (
@@ -678,25 +683,98 @@ export function VisionConfirmBar() {
   if (!visionConfirm) return null
   const { model, suggestion } = visionConfirm
   return (
+    <CapabilityConfirmBar
+      testIdPrefix="vision-confirm"
+      icon="image_off"
+      ariaLabel={t('chat.vision.bar.aria')}
+      blocked={t('chat.vision.blocked', { model })}
+      switchQuestion={suggestion ? t('chat.vision.switchQuestion', { model: suggestion.name }) : null}
+      noCandidate={t('chat.vision.noCandidate')}
+      cancelLabel={t('chat.vision.cancel')}
+      sendAnywayLabel={t('chat.vision.sendAnyway')}
+      switchLabel={suggestion ? t('chat.vision.switchAndSend', { model: suggestion.name }) : ''}
+      onSwitch={() => void resolveVisionConfirm('switch')}
+      onSendAnyway={() => void resolveVisionConfirm('send-anyway')}
+      onDismiss={() => void dismissVisionConfirm()}
+    />
+  )
+}
+
+/**
+ * S2-4b (review 2026-10-05 P-N9): the tools gate's confirm bar — the same
+ * three-outcome pattern as the vision bar, for a send held back because
+ * the effective model is KNOWN to lack tool calling. Generalization, not
+ * copy: both bars render through `CapabilityConfirmBar` below; only the
+ * copy, the icon, the testid prefix (`tool-confirm-*`, distinct from the
+ * vision bar's `vision-confirm-*`), and the resolver binding differ.
+ */
+export function ToolsConfirmBar() {
+  const t = useT()
+  const { toolsConfirm, resolveToolsConfirm, dismissToolsConfirm } = useChat()
+  if (!toolsConfirm) return null
+  const { model, suggestion } = toolsConfirm
+  return (
+    <CapabilityConfirmBar
+      testIdPrefix="tool-confirm"
+      icon="build"
+      ariaLabel={t('chat.tools.bar.aria')}
+      blocked={t('chat.tools.blocked', { model })}
+      switchQuestion={suggestion ? t('chat.tools.switchQuestion', { model: suggestion.name }) : null}
+      noCandidate={t('chat.tools.noCandidate')}
+      cancelLabel={t('chat.tools.cancel')}
+      sendAnywayLabel={t('chat.tools.sendAnyway')}
+      switchLabel={suggestion ? t('chat.tools.switchAndSend', { model: suggestion.name }) : ''}
+      onSwitch={() => void resolveToolsConfirm('switch')}
+      onSendAnyway={() => void resolveToolsConfirm('send-anyway')}
+      onDismiss={() => void dismissToolsConfirm()}
+    />
+  )
+}
+
+/**
+ * S2-4b: the shared render body of the capability confirm bars (vision +
+ * tools). Extracted verbatim from S2-4a's `VisionConfirmBar` when the
+ * tools gate joined — one interaction pattern, two capability verdicts;
+ * the wrappers above own the copy/testids/resolvers so the two stay
+ * independently restylable.
+ */
+function CapabilityConfirmBar(props: {
+  testIdPrefix: string
+  icon: string
+  ariaLabel: string
+  blocked: string
+  /** Question line when a switch candidate exists, else null. */
+  switchQuestion: string | null
+  /** Notice-only line when no candidate exists. */
+  noCandidate: string
+  cancelLabel: string
+  sendAnywayLabel: string
+  switchLabel: string
+  onSwitch: () => void
+  onSendAnyway: () => void
+  onDismiss: () => void
+}) {
+  const hasSuggestion = props.switchQuestion != null
+  return (
     <div
       role="alertdialog"
       aria-live="polite"
-      aria-label={t('chat.vision.bar.aria')}
-      data-testid="vision-confirm-bar"
+      aria-label={props.ariaLabel}
+      data-testid={`${props.testIdPrefix}-bar`}
       className="mx-auto mb-lg max-w-md flex flex-col gap-sm rounded-lg border border-warning/30 bg-warning-container/60 px-md py-md text-on-warning-container"
     >
       <div className="flex items-start gap-sm font-body-sm">
-        <span className="material-symbols-outlined icon-md text-warning mt-xxs">image_off</span>
+        <span className="material-symbols-outlined icon-md text-warning mt-xxs">{props.icon}</span>
         <span>
-          {t('chat.vision.blocked', { model })}
-          {suggestion ? (
+          {props.blocked}
+          {hasSuggestion ? (
             <>
               {' '}
-              {t('chat.vision.switchQuestion', { model: suggestion.name })}
+              {props.switchQuestion}
             </>
           ) : (
             <span className="block text-on-surface-variant">
-              {t('chat.vision.noCandidate')}
+              {props.noCandidate}
             </span>
           )}
         </span>
@@ -706,29 +784,29 @@ export function VisionConfirmBar() {
           type="button"
           variant="ghost"
           className="text-label-md cursor-pointer"
-          data-testid="vision-confirm-cancel"
-          onClick={() => void dismissVisionConfirm()}
+          data-testid={`${props.testIdPrefix}-cancel`}
+          onClick={props.onDismiss}
         >
-          {t('chat.vision.cancel')}
+          {props.cancelLabel}
         </Button>
         <Button
           type="button"
           variant="outline"
           className="text-label-md cursor-pointer"
-          data-testid="vision-confirm-send-anyway"
-          onClick={() => void resolveVisionConfirm('send-anyway')}
+          data-testid={`${props.testIdPrefix}-send-anyway`}
+          onClick={props.onSendAnyway}
         >
-          {t('chat.vision.sendAnyway')}
+          {props.sendAnywayLabel}
         </Button>
-        {suggestion && (
+        {hasSuggestion && (
           <Button
             type="button"
             variant="default"
             className="text-label-md cursor-pointer"
-            data-testid="vision-confirm-switch"
-            onClick={() => void resolveVisionConfirm('switch')}
+            data-testid={`${props.testIdPrefix}-switch`}
+            onClick={props.onSwitch}
           >
-            {t('chat.vision.switchAndSend', { model: suggestion.name })}
+            {props.switchLabel}
           </Button>
         )}
       </div>

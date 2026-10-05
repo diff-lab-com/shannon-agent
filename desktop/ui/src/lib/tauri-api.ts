@@ -704,6 +704,45 @@ export async function checkVisionSend(
   return invoke<VisionSendCheck>('check_vision_send', { sessionId: sessionId ?? null })
 }
 
+// --- S2-4b (review 2026-10-05 P-N9): pre-send tool-capability pre-check ---
+
+/** One-click switch candidate: the first tool-capable model of the
+ *  effective provider's merged roster (static catalog order, then the
+ *  models.dev overlay), excluding the model that would otherwise serve
+ *  the send. `provider` is ready for `setSessionModel`. Same shape as
+ *  `VisionSwitchSuggestion`. */
+export interface ToolsSwitchSuggestion {
+  provider: string
+  model: string
+  name: string
+}
+
+/** Result of the desktop pre-send tools check. `applies === false` means
+ *  the session's send carries no tools at all — the gate is moot and the
+ *  UI must not prompt (desktop sends attach the shared tool registry
+ *  unconditionally, so today this only happens with an empty registry).
+ *  `tools === false` is the ONLY "ask" verdict: the effective model
+ *  (session override > phase tier > global default) is KNOWN to lack tool
+ *  calling. `null` = unknown — sends flow untouched (能力未知不拦; the
+ *  engine has no tools gate, so a wrong guess would only degrade the run
+ *  the way it already does without this pre-check). */
+export interface ToolsSendCheck {
+  model: string
+  provider: string
+  applies: boolean
+  tools: boolean | null
+  suggestion?: ToolsSwitchSuggestion | null
+}
+
+/** Resolve what the NEXT send of this session would use and whether that
+ *  model can take a tools-carrying request. Read-only; the UI calls it
+ *  before every send (tools ride every desktop request). */
+export async function checkToolsSend(
+  sessionId: string | null | undefined,
+): Promise<ToolsSendCheck> {
+  return invoke<ToolsSendCheck>('check_tools_send', { sessionId: sessionId ?? null })
+}
+
 // --- P2-5: session-level "temporary chat" (no-memory bypass) ---
 
 /** Pin the CURRENT session's memory bypass: `disabled = true` builds this
