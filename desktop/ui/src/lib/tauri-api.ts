@@ -998,6 +998,14 @@ export async function listArchivedSessions(): Promise<ArchivedSessionRow[]> {
   return invoke('list_archived_sessions')
 }
 
+/** Session pin (Settings R3 T7): flip the curation sidecar's `pinned` flag
+ *  (the single source of truth — the auto-archive scan exempts pinned
+ *  sessions and the rail re-derives its pin sort from the list DTO). Emits
+ *  `session-pins-changed`; `true` when this call flipped the flag. */
+export async function setSessionPinned(id: string, pinned: boolean): Promise<boolean> {
+  return invoke('set_session_pinned', { id, pinned })
+}
+
 export async function renameSession(id: string, title: string): Promise<boolean> {
   return invoke('rename_session', { id, title })
 }

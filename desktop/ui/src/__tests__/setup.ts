@@ -384,6 +384,8 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   listArchivedSessions: vi.fn().mockResolvedValue([]),
   archiveSession: vi.fn().mockResolvedValue(true),
   unarchiveSession: vi.fn().mockResolvedValue(true),
+  // Settings R3 T7: the rail's pin flips (curation sidecar backend-side).
+  setSessionPinned: vi.fn().mockResolvedValue(true),
   // P-E3/P-U3 project registry — default empty so pages degrade to path-tail
   // labels without per-test mocking (the rail tree and the deep-link chips).
   listProjects: vi.fn().mockResolvedValue([]),

@@ -111,4 +111,65 @@ describe('SessionSettings (Settings R3 T6 — 会话分区)', () => {
     await screen.findByTestId('session-autocompact-card')
     expect(screen.queryByTestId('session-placeholder-card')).not.toBeInTheDocument()
   })
+
+  // ③ Auto-archive card — Settings R3 T7.
+
+  it('renders the auto-archive card with the instant badge and the informed-consent help copy', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-auto-archive-card')
+    expect(within(card).getByText('Auto-archive sessions')).toBeInTheDocument()
+    // EffectBadge instant: the toggle persists immediately (no restart);
+    // the help copy carries the scan semantics + where to restore from.
+    expect(within(card).getByText('Instant effect')).toBeInTheDocument()
+    const help = within(card).getByText(/Periodically scans sessions/i).textContent ?? ''
+    expect(help).toMatch(/not running, nothing unread/)
+    expect(help).toMatch(/unpinned/)
+    expect(help).toMatch(/Archived section/)
+  })
+
+  it('defaults the auto-archive switch to OFF and the retention gear to 7 days', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-auto-archive-card')
+    const sw = within(card).getByRole('switch', { name: 'Auto-archive sessions' })
+    expect(sw).toHaveAttribute('aria-checked', 'false')
+    const select = within(card).getByRole('combobox', { name: 'Retention period' }) as HTMLSelectElement
+    expect(select.value).toBe('7')
+    // The gear offers exactly the brief's 1/7/30/90 options.
+    expect(Array.from(select.options).map(o => o.value)).toEqual(['1', '7', '30', '90'])
+  })
+
+  it('hydrates the auto-archive switch from the persisted config', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({
+      ...baseConfig,
+      session_auto_archive_enabled: true,
+      session_auto_archive_days: 30,
+    })
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-auto-archive-card')
+    const sw = within(card).getByRole('switch', { name: 'Auto-archive sessions' })
+    await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'true'))
+    const select = within(card).getByRole('combobox', { name: 'Retention period' }) as HTMLSelectElement
+    expect(select.value).toBe('30')
+  })
+
+  it('persists the switch through configure as session.auto_archive_enabled', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-auto-archive-card')
+    const sw = within(card).getByRole('switch', { name: 'Auto-archive sessions' })
+    await waitFor(() => expect(sw).toBeInTheDocument())
+    fireEvent.click(sw)
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'session.auto_archive_enabled', value: 'true' })
+    })
+  })
+
+  it('persists the retention gear through configure as session.auto_archive_days', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-auto-archive-card')
+    const select = within(card).getByRole('combobox', { name: 'Retention period' })
+    fireEvent.change(select, { target: { value: '90' } })
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'session.auto_archive_days', value: '90' })
+    })
+  })
 })

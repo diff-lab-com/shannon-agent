@@ -19,6 +19,8 @@ vi.mock('@/lib/tauri-api', () => ({
   ]),
   archiveSession: vi.fn(async () => true),
   unarchiveSession: vi.fn(async () => true),
+  // Settings R3 T7: the one-time legacy-pin migration calls this on mount.
+  setSessionPinned: vi.fn(async () => true),
   searchSessions: vi.fn(async () => []),
   listScheduledTasks: vi.fn(async () => []),
   openSessionWindow: vi.fn(async () => undefined),

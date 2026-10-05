@@ -271,6 +271,19 @@ fn parse_session_retention_days(value: &str) -> Result<Option<u32>, String> {
     })
 }
 
+/// Settings R3 T7: parse the `session.auto_archive_days` wire value into the
+/// stored window. There is no 永不 gear — disabling is
+/// `session.auto_archive_enabled`'s job — so the value clamps into
+/// `1..=365`: the stored config always describes a scanable window, no
+/// matter what a stale client or hand edit sent.
+fn parse_auto_archive_days(value: &str) -> Result<u32, String> {
+    let days: u32 = value
+        .trim()
+        .parse()
+        .map_err(|e| format!("Invalid session.auto_archive_days `{value}`: {e}"))?;
+    Ok(days.clamp(1, 365))
+}
+
 /// P2-1: parse the `monthly_budget_usd` wire value into the stored budget.
 /// `""` / `"null"` / `"0"` (and any parsed non-positive or non-finite
 /// amount) clear the budget — `None` = no cap, the standing default; a
@@ -447,6 +460,10 @@ fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Resu
         // compaction. Read when each message's engine is built — the engine
         // is rebuilt per message, so a flip applies to the NEXT message.
         "context.auto_compact" => cfg.context_auto_compact = enabled,
+        // Settings R3 T7: master switch for the timed auto-archive scan.
+        // Read live at the top of every scan pass (6h cadence), so a flip
+        // lands on the next pass — no restart.
+        "session.auto_archive_enabled" => cfg.session_auto_archive_enabled = enabled,
         other => return Err(format!("Unrecognized boolean key: {other}")),
     }
     Ok(())
@@ -1068,6 +1085,29 @@ pub async fn configure(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
                     key: "session_retention_days".into(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
+        "session.auto_archive_days" => {
+            // Settings R3 T7: auto-archive retention window. Unlike the GC
+            // window there is no 永不 — disabled is the master switch's job
+            // (`session.auto_archive_enabled`), so the value itself clamps
+            // into `1..=365`: the stored config always stays scanable.
+            let days = parse_auto_archive_days(&update.value)?;
+            let mut desktop_cfg = state.desktop_config.write().await;
+            desktop_cfg.session_auto_archive_days = days;
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "session.auto_archive_days".into(),
                     value: update.value,
                 },
             );
@@ -2437,11 +2477,13 @@ mod tests {
             "hardware_acceleration" => Some(cfg.hardware_acceleration),
             "power.block_sleep_during_tasks" => Some(cfg.power_block_sleep_during_tasks),
             "context.auto_compact" => Some(cfg.context_auto_compact),
+            // Settings R3 T7 — the auto-archive master switch.
+            "session.auto_archive_enabled" => Some(cfg.session_auto_archive_enabled),
             _ => None,
         }
     }
 
-    const TOGGLE_KEYS: [&str; 12] = [
+    const TOGGLE_KEYS: [&str; 13] = [
         "memory_enabled",
         "telemetry",
         "encryption",
@@ -2454,6 +2496,7 @@ mod tests {
         "hardware_acceleration",
         "power.block_sleep_during_tasks",
         "context.auto_compact",
+        "session.auto_archive_enabled",
     ];
 
     #[test]
@@ -2611,6 +2654,23 @@ mod tests {
         assert!(parse_session_retention_days("-1").is_err());
         assert!(parse_session_retention_days("soon").is_err());
         assert!(parse_session_retention_days("").is_err());
+    }
+
+    #[test]
+    fn auto_archive_days_wire_value_clamps_into_scanable_window() {
+        // Settings R3 T7: no 永不 gear (disabling is the master switch's
+        // job), so every value lands inside `1..=365`.
+        assert_eq!(parse_auto_archive_days("7").unwrap(), 7);
+        assert_eq!(parse_auto_archive_days(" 30 ").unwrap(), 30);
+        assert_eq!(parse_auto_archive_days("1").unwrap(), 1);
+        // 0 and undershoot clamp to the 1-day floor; overshoot clamps to
+        // the 365-day ceiling — a wedged (0-day) or eternal window can
+        // never be persisted.
+        assert_eq!(parse_auto_archive_days("0").unwrap(), 1);
+        assert_eq!(parse_auto_archive_days("99999").unwrap(), 365);
+        // Junk still errors rather than silently re-gearing.
+        assert!(parse_auto_archive_days("soon").is_err());
+        assert!(parse_auto_archive_days("").is_err());
     }
 
     #[test]

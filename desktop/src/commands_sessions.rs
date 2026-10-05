@@ -16,6 +16,7 @@ use crate::session_registry::{SessionKey, SessionRegistry};
 use crate::{config, events, events::event_names};
 use serde::Serialize;
 use shannon_core::session_log::SessionCuration;
+use std::collections::HashSet;
 use std::path::Path;
 use tauri::Emitter;
 
@@ -30,6 +31,28 @@ pub const SESSION_AUTO_UNARCHIVED_EVENT: &str = "session-auto-unarchived";
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionAutoUnarchived {
     /// The session that was unarchived by being opened.
+    pub session_id: String,
+    /// Its title when known (empty string otherwise).
+    pub title: String,
+}
+
+/// Wire payload for [`event_names::SESSION_PINS_CHANGED`] (Settings R3 T7):
+/// one session's pin flip, emitted after the curation sidecar write lands.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionPinChanged {
+    /// The session whose pinned flag changed.
+    pub session_id: String,
+    /// The flag's new value.
+    pub pinned: bool,
+}
+
+/// Wire payload for [`event_names::SESSION_AUTO_ARCHIVED`] (Settings R3 T7):
+/// one session the auto-archive scan archived on the user's behalf. The
+/// frontend toasts it so the conversation leaving the active rail is never
+/// a surprise (mirror of [`SessionAutoUnarchived`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionAutoArchived {
+    /// The session the scan archived.
     pub session_id: String,
     /// Its title when known (empty string otherwise).
     pub title: String,
@@ -183,6 +206,13 @@ async fn session_wire_info(state: &AppState, s: &SessionMeta) -> events::Session
         Ok(id) => Some(state.registry.is_querying(id).await),
         Err(_) => None,
     };
+    // Settings R3 T7: the pin flag rides the curation sidecar — a tiny
+    // atomic-rename JSON read per row, the same shape the archived lens
+    // already pays per row. Missing/unparsable sidecars load as unpinned.
+    let pinned = match uuid::Uuid::parse_str(&s.id) {
+        Ok(id) => state.l0_store().curation(&id).pinned,
+        Err(_) => false,
+    };
     events::SessionInfo {
         id: s.id.clone(),
         title: s.title.clone(),
@@ -193,6 +223,7 @@ async fn session_wire_info(state: &AppState, s: &SessionMeta) -> events::Session
         branch_point: s.branch_point,
         running,
         updated_at: session_log_mtime(state, &s.id),
+        pinned,
     }
 }
 
@@ -323,7 +354,13 @@ pub(crate) fn apply_archived_flag(
     let flipped = was_archived != archived;
     if flipped {
         store
-            .save_curation(session_id, &SessionCuration { archived })
+            .save_curation(
+                session_id,
+                &SessionCuration {
+                    archived,
+                    ..Default::default()
+                },
+            )
             .map_err(|e| format!("failed to write session curation: {e}"))?;
     }
 
@@ -519,7 +556,13 @@ pub(crate) fn resume_unarchive_in(
     if !store.curation(session_id).archived {
         return None;
     }
-    if let Err(e) = store.save_curation(session_id, &SessionCuration { archived: false }) {
+    if let Err(e) = store.save_curation(
+        session_id,
+        &SessionCuration {
+            archived: false,
+            ..Default::default()
+        },
+    ) {
         tracing::warn!(
             error = %e,
             session_id = %session_id,
@@ -539,6 +582,57 @@ pub(crate) fn resume_unarchive_in(
             .map(|s| s.title.clone())
             .unwrap_or_default(),
     )
+}
+
+// ---------------------------------------------------------------------------
+// Session pin (Settings R3 T7) — curation sidecar flag + wire event
+// ---------------------------------------------------------------------------
+
+/// Pin/unpin a session (Settings R3 T7): flip the curation sidecar's
+/// `pinned` flag and emit `session-pins-changed`. The sidecar is the single
+/// source of truth — the auto-archive scan exempts pinned sessions and the
+/// rail re-derives its pin sort/glyph from the list DTO, so there is no
+/// localStorage to keep in sync (the legacy key is migrated once by the
+/// frontend). Returns `true` when this call flipped the flag (`false` =
+/// already in the requested state).
+#[tauri::command]
+pub async fn set_session_pinned(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    id: String,
+    pinned: bool,
+) -> Result<bool, String> {
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
+    let changed = set_pinned_in(&state.l0_store(), &session_uuid, pinned)?;
+    if changed {
+        let _ = app_handle.emit(
+            event_names::SESSION_PINS_CHANGED,
+            SessionPinChanged {
+                session_id: id,
+                pinned,
+            },
+        );
+    }
+    Ok(changed)
+}
+
+/// The pin mutation over an injected store (the hermetic seam behind
+/// [`set_session_pinned`]): a read-modify-write of the curation sidecar that
+/// preserves the `archived` flag. Returns whether the flag flipped.
+pub(crate) fn set_pinned_in(
+    store: &shannon_core::session_log::SessionStore,
+    session_id: &uuid::Uuid,
+    pinned: bool,
+) -> Result<bool, String> {
+    let mut curation = store.curation(session_id);
+    if curation.pinned == pinned {
+        return Ok(false);
+    }
+    curation.pinned = pinned;
+    store
+        .save_curation(session_id, &curation)
+        .map_err(|e| format!("failed to write session curation: {e}"))?;
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -683,6 +777,202 @@ pub fn spawn_session_gc(state: &AppState) {
             {
                 Ok(msg) => tracing::debug!(outcome = %msg, "session GC pass"),
                 Err(e) => tracing::warn!(error = %e, "session GC pass failed"),
+            }
+            tokio::time::sleep(INTERVAL).await;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Auto-archive (Settings R3 T7) — timed scan over the live config
+// ---------------------------------------------------------------------------
+
+/// Effective auto-archive retention window, resolved from the desktop config
+/// (R6: 已完成 = `!running && 无未读 inbox` — there is no completed field).
+/// Disabled (`session_auto_archive_enabled`, default) → `None`; otherwise the
+/// configured window clamped into `1..=365` days so a hand-edited config can
+/// neither wedge the scan (0) nor explode it (u32::MAX).
+pub(crate) fn effective_auto_archive_days(cfg: &config::DesktopConfig) -> Option<u32> {
+    if !cfg.session_auto_archive_enabled {
+        return None;
+    }
+    Some(cfg.session_auto_archive_days.clamp(1, 365))
+}
+
+/// Last-activity [`SystemTime`] for one session: its `events.jsonl` mtime.
+/// `None` when the log does not exist yet or the mtime is unreadable —
+/// callers skip (fail closed), the same contract the archived-session GC
+/// uses in `shannon_core::housekeeping`.
+fn session_events_mtime(
+    container: &Path,
+    session_id: &uuid::Uuid,
+) -> Option<std::time::SystemTime> {
+    let path =
+        shannon_core::session_log::session_log_container_path(container, &session_id.to_string());
+    let meta = std::fs::metadata(path).ok()?;
+    meta.modified().ok()
+}
+
+/// Sessions carrying at least one **pending** (未读 / needs-attention) inbox
+/// entry, over an injected store. The status vocabulary is the inbox side's
+/// own — `pending` is the open/needs-attention state; `read` and `archived`
+/// entries no longer demand the user's attention. Best-effort: a store
+/// failure yields the empty set (the scan proceeds; the worst case is an
+/// auto-archive the next pass skips — never a lost triage item).
+fn pending_inbox_session_ids(inbox: &shannon_core::inbox_store::InboxStore) -> HashSet<String> {
+    const SCAN_LIMIT: u32 = 10_000;
+    match inbox.list(
+        Some(shannon_core::inbox_store::InboxStatus::Pending),
+        None,
+        SCAN_LIMIT,
+    ) {
+        Ok(items) => items
+            .into_iter()
+            .filter_map(|item| item.session_id)
+            .collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "auto-archive: inbox pending query failed; treating as no unread");
+            HashSet::new()
+        }
+    }
+}
+
+/// One auto-archive scan over injected state — the hermetic seam behind
+/// [`run_auto_archive_scan`]. R6 adjudication: a session is "已完成" when it
+/// is `!running && 无未读 inbox 条目`; combined with the brief's other two
+/// exemptions, a session is archived when it is active (not already
+/// archived), not running, not pinned, carries no pending inbox entry, and
+/// its last activity (`events.jsonl` mtime) is older than the retention
+/// window. Unknown mtimes skip (fail closed). Returns the archived rows so
+/// the caller emits `session-auto-archived` per session.
+pub(crate) async fn run_auto_archive_scan_with(
+    desktop_config: &tokio::sync::RwLock<config::DesktopConfig>,
+    sessions: &tokio::sync::Mutex<Vec<SessionMeta>>,
+    store: &shannon_core::session_log::SessionStore,
+    running_ids: &HashSet<uuid::Uuid>,
+    inbox: Option<&shannon_core::inbox_store::InboxStore>,
+    now: std::time::SystemTime,
+) -> Result<Vec<SessionAutoArchived>, String> {
+    let Some(days) = ({
+        let cfg = desktop_config.read().await;
+        effective_auto_archive_days(&cfg)
+    }) else {
+        return Ok(Vec::new());
+    };
+    let cutoff = now
+        .checked_sub(std::time::Duration::from_secs(
+            u64::from(days) * 24 * 60 * 60,
+        ))
+        .unwrap_or(now);
+
+    let pending: HashSet<String> = match inbox {
+        Some(inbox) => pending_inbox_session_ids(inbox),
+        None => HashSet::new(),
+    };
+
+    let mut archived = Vec::new();
+    // Lock the display list once for the whole pass — every mutation under
+    // it is `apply_archived_flag`, which is sync and infallible-at-lock.
+    let mut rail = sessions.lock().await;
+    for info in store.list().map_err(|e| e.to_string())? {
+        let curation = store.curation(&info.session_id);
+        // Only ACTIVE sessions are candidates; the pinned exemption is the
+        // user's explicit "never auto-archive this one" (R5).
+        if curation.archived || curation.pinned || running_ids.contains(&info.session_id) {
+            continue;
+        }
+        if pending.contains(&info.session_id.to_string()) {
+            continue;
+        }
+        let Some(mtime) = session_events_mtime(store.container(), &info.session_id) else {
+            tracing::debug!(
+                session_id = %info.session_id,
+                "auto-archive: events.jsonl mtime unknown; skipping session (fail closed)"
+            );
+            continue;
+        };
+        if mtime >= cutoff {
+            continue;
+        }
+        if apply_archived_flag(store, &mut rail, &info.session_id, true)? {
+            archived.push(SessionAutoArchived {
+                session_id: info.session_id.to_string(),
+                title: info.title.clone().unwrap_or_default(),
+            });
+        }
+    }
+    Ok(archived)
+}
+
+/// Production wrapper behind the scheduler: resolves the live running set
+/// from the session registry and the shared inbox store, runs one scan, and
+/// emits `sessions-updated` + one `session-auto-archived` per archived
+/// session (the frontend toasts; both events also drive list refreshes).
+async fn run_auto_archive_scan(state: &AppState, app_handle: &tauri::AppHandle) {
+    let store = state.l0_store();
+    // Resolve the live query set once per pass — a session that starts
+    // running mid-scan is still skipped here because `apply_archived_flag`
+    // only flips curation flags; the live conversation itself is untouched.
+    let mut running_ids = HashSet::new();
+    if let Ok(infos) = store.list() {
+        for info in infos {
+            if state.registry.is_querying(info.session_id).await {
+                running_ids.insert(info.session_id);
+            }
+        }
+    }
+    let inbox = state.inbox_store();
+    let now = std::time::SystemTime::now();
+    let archived = match run_auto_archive_scan_with(
+        &state.desktop_config,
+        &state.sessions,
+        &store,
+        &running_ids,
+        Some(inbox.as_ref()),
+        now,
+    )
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "auto-archive scan failed");
+            return;
+        }
+    };
+    if archived.is_empty() {
+        return;
+    }
+    let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
+    for row in &archived {
+        let _ = app_handle.emit(event_names::SESSION_AUTO_ARCHIVED, row);
+    }
+    tracing::info!(
+        archived = archived.len(),
+        "auto-archive: archived sessions past the retention window"
+    );
+}
+
+/// Auto-archive loop (Settings R3 T7). Inert by design unless the user opts
+/// in: `session.auto_archive_enabled` (default false) gates every scan, so
+/// a disabled pass wakes, re-reads the config, and returns without doing
+/// anything. First pass 15 minutes after startup (let the app settle — the
+/// GC-loop skeleton this mirrors), then every 6 hours; the config is re-read
+/// every pass so a Settings flip lands on the next scan with no restart.
+/// Every outcome is log-only; the user-facing signal rides the per-session
+/// `session-auto-archived` events.
+pub fn spawn_auto_archive(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        const STARTUP_DELAY: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+        const INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+        tracing::info!(
+            "auto-archive loop started (inert unless session_auto_archive_enabled is set)"
+        );
+        loop {
+            tokio::time::sleep(STARTUP_DELAY).await;
+            {
+                use tauri::Manager;
+                let state: tauri::State<'_, AppState> = app.state();
+                run_auto_archive_scan(state.inner(), &app).await;
             }
             tokio::time::sleep(INTERVAL).await;
         }
@@ -1501,6 +1791,9 @@ pub async fn duplicate_session(
         branch_point: None,
         running: Some(false),
         updated_at: None,
+        // A fresh duplicate starts unpinned — the pin belongs to the
+        // original conversation, not its copy.
+        pinned: false,
     })
 }
 
@@ -1588,6 +1881,8 @@ pub(crate) async fn branch_session_internal(
         branch_point: Some(branch_point),
         running: Some(false),
         updated_at: None,
+        // Same contract as duplicate: a brand-new branch starts unpinned.
+        pinned: false,
     })
 }
 
@@ -1800,10 +2095,22 @@ mod archive_tests {
         rewrite_event_ts(&store, &newer, now_ns - hour_ns);
 
         store
-            .save_curation(&older, &SessionCuration { archived: true })
+            .save_curation(
+                &older,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         store
-            .save_curation(&newer, &SessionCuration { archived: true })
+            .save_curation(
+                &newer,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
 
         let rows = archived_rows(&store).unwrap();
@@ -1860,7 +2167,13 @@ mod archive_tests {
 
         // The wedge: flag already cleared, row nowhere.
         store
-            .save_curation(&a, &SessionCuration { archived: false })
+            .save_curation(
+                &a,
+                &SessionCuration {
+                    archived: false,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         let mut sessions = Vec::new();
         assert!(
@@ -1887,7 +2200,13 @@ mod archive_tests {
         let a = uuid::Uuid::new_v4();
         seed_session(&store, &a, Some("Stale"));
         store
-            .save_curation(&a, &SessionCuration { archived: true })
+            .save_curation(
+                &a,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         let mut sessions = display_list(&[&a]);
         assert!(apply_archived_flag(&store, &mut sessions, &a, true).unwrap());
@@ -1935,7 +2254,13 @@ mod archive_tests {
         // Wedged state (flag already cleared, row absent) + retry: the rail
         // is rebuilt from the listing anyway — no `store.load` dependency.
         store
-            .save_curation(&a, &SessionCuration { archived: false })
+            .save_curation(
+                &a,
+                &SessionCuration {
+                    archived: false,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         let mut sessions = Vec::new();
         assert!(apply_archived_flag(&store, &mut sessions, &a, false).unwrap());
@@ -2102,8 +2427,14 @@ mod archive_tests {
                 .unwrap();
         }
         for id in [&old_archived, &recent_archived] {
-            st.save_curation(id, &SessionCuration { archived: true })
-                .unwrap();
+            st.save_curation(
+                id,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         }
         (old_archived, recent_archived, old_active)
     }
@@ -2352,5 +2683,387 @@ mod auto_title_tests {
     #[test]
     fn whitespace_only_yields_empty() {
         assert_eq!(derive_title_from_message("   \n\t  "), "");
+    }
+}
+
+#[cfg(test)]
+mod pin_and_auto_archive_tests {
+    // Settings R3 T7 — the pin sidecar mutation and the auto-archive scan,
+    // hermetic over injected store/display-list/config/inbox fixtures (the
+    // same construction as `archive_tests`: real L0 logs in a tempdir,
+    // nothing touches `AppState` or `$HOME`).
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use shannon_core::inbox_store::{InboxItemNew, InboxStore, SOURCE_SESSION_APPROVAL};
+    use shannon_core::session_log::{SessionLogWriter, SessionStore};
+    use shannon_types::session_event::{
+        SessionEventBody, SessionStartPayload, TurnStartPayload, UserMessagePayload,
+    };
+
+    fn store(tmp: &tempfile::TempDir) -> SessionStore {
+        SessionStore::new(tmp.path().join("sessions"))
+    }
+
+    /// Seed one real session through the L0 writer (session/start + one
+    /// user turn) — the same write path production uses.
+    fn seed_session(store: &SessionStore, id: &uuid::Uuid, title: Option<&str>) {
+        let mut w =
+            SessionLogWriter::open_layout(store.container(), &id.to_string()).expect("open log");
+        w.record(SessionEventBody::SessionStart(SessionStartPayload {
+            model: "test-model".into(),
+            provider: None,
+            cwd: Some("/proj".into()),
+            app_version: None,
+            ..Default::default()
+        }));
+        w.record(SessionEventBody::TurnStart(TurnStartPayload {
+            query_id: None,
+        }));
+        w.record(SessionEventBody::UserMessage(UserMessagePayload {
+            source: UserMessagePayload::SOURCE_USER.into(),
+            content: "hello there".into(),
+            attachment_count: 0,
+        }));
+        w.close().expect("close log");
+        if let Some(t) = title {
+            store
+                .save_sidecar(
+                    id,
+                    &shannon_core::session_log::SessionSidecar {
+                        title: Some(t.into()),
+                        ..Default::default()
+                    },
+                )
+                .expect("save sidecar");
+        }
+    }
+
+    fn display_list(ids: &[&uuid::Uuid]) -> Vec<SessionMeta> {
+        ids.iter()
+            .map(|id| SessionMeta {
+                id: id.to_string(),
+                title: "Session".into(),
+                created_at: 1,
+                message_count: 1,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            })
+            .collect()
+    }
+
+    fn config_lock(enabled: bool, days: u32) -> tokio::sync::RwLock<config::DesktopConfig> {
+        let mut cfg = config::DesktopConfig::default();
+        cfg.session_auto_archive_enabled = enabled;
+        cfg.session_auto_archive_days = days;
+        tokio::sync::RwLock::new(cfg)
+    }
+
+    fn inbox_at(tmp: &tempfile::TempDir) -> InboxStore {
+        InboxStore::open(&tmp.path().join("inbox.db")).expect("open inbox store")
+    }
+
+    // --- pinned curation sidecar -------------------------------------------
+
+    #[test]
+    fn pinned_round_trips_and_preserves_the_archived_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Pinnable"));
+
+        // Default: unpinned. Flip → true; the write preserves archived=false.
+        assert!(!store.curation(&a).pinned);
+        assert!(
+            set_pinned_in(&store, &a, true).unwrap(),
+            "first flip changes"
+        );
+        let curation = store.curation(&a);
+        assert!(curation.pinned);
+        assert!(!curation.archived);
+
+        // Idempotent: pinning an already-pinned session reports no change…
+        assert!(!set_pinned_in(&store, &a, true).unwrap());
+        // …and unpinning flips back.
+        assert!(set_pinned_in(&store, &a, false).unwrap());
+        assert!(!store.curation(&a).pinned);
+
+        // Pin and archive are independent curation bits: once the session is
+        // archived, the pin path's read-modify-write must preserve the
+        // archived flag in both directions.
+        store
+            .save_curation(
+                &a,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(set_pinned_in(&store, &a, true).unwrap());
+        let curation = store.curation(&a);
+        assert!(curation.pinned);
+        assert!(curation.archived, "pin must not clear the archive flag");
+        assert!(set_pinned_in(&store, &a, false).unwrap());
+        let curation = store.curation(&a);
+        assert!(!curation.pinned);
+        assert!(curation.archived, "unpin must not clear the archive flag");
+    }
+
+    #[test]
+    fn legacy_curation_json_without_a_pinned_key_loads_unpinned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Legacy"));
+
+        // A pre-T7 sidecar carries only `archived`; the missing `pinned`
+        // key must deserialize as false — never wedge the read.
+        let path =
+            shannon_core::session_log::session_curation_path(store.container(), &a.to_string());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"archived":true}"#).unwrap();
+        let curation = store.curation(&a);
+        assert!(curation.archived);
+        assert!(!curation.pinned, "missing key → unpinned (serde default)");
+
+        // A completely missing file loads as the default too.
+        let b = uuid::Uuid::new_v4();
+        seed_session(&store, &b, None);
+        let curation = store.curation(&b);
+        assert!(!curation.archived);
+        assert!(!curation.pinned);
+    }
+
+    // --- the auto-archive scan ----------------------------------------------
+
+    #[tokio::test]
+    async fn scan_archives_old_inactive_unpinned_sessions_and_reports_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let old = uuid::Uuid::new_v4();
+        let fresh = uuid::Uuid::new_v4();
+        seed_session(&store, &old, Some("Old chat"));
+        seed_session(&store, &fresh, Some("Fresh chat"));
+        let sessions = tokio::sync::Mutex::new(display_list(&[&old, &fresh]));
+        let cfg = config_lock(true, 7);
+
+        // A brand-new session's events.jsonl mtime is "now": with the clock
+        // pushed 8 days ahead, the 7-day window only catches the (shared)
+        // mtime — both sessions share it here, so push past retention and
+        // verify both are archived and reported with their sidecar titles.
+        let mtime = session_events_mtime(store.container(), &old).unwrap();
+        let now = mtime + std::time::Duration::from_secs(8 * 24 * 60 * 60);
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, now)
+                .await
+                .unwrap();
+        assert_eq!(archived.len(), 2, "both sessions are past the window");
+        assert!(
+            archived
+                .iter()
+                .any(|r| r.session_id == old.to_string() && r.title == "Old chat")
+        );
+        assert!(store.curation(&old).archived);
+        assert!(store.curation(&fresh).archived);
+        // The display list sync rides apply_archived_flag: rail rows dropped.
+        assert!(sessions.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scan_skips_running_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let running = uuid::Uuid::new_v4();
+        seed_session(&store, &running, Some("Still running"));
+        let sessions = tokio::sync::Mutex::new(display_list(&[&running]));
+        let cfg = config_lock(true, 7);
+        let mtime = session_events_mtime(store.container(), &running).unwrap();
+        let now = mtime + std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+        let mut running_ids = HashSet::new();
+        running_ids.insert(running);
+        let archived = run_auto_archive_scan_with(&cfg, &sessions, &store, &running_ids, None, now)
+            .await
+            .unwrap();
+        assert!(archived.is_empty(), "R6: a running session is never 已完成");
+        assert!(!store.curation(&running).archived);
+        assert_eq!(sessions.lock().await.len(), 1, "rail row stays");
+    }
+
+    #[tokio::test]
+    async fn scan_skips_pinned_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let pinned = uuid::Uuid::new_v4();
+        seed_session(&store, &pinned, Some("Pinned"));
+        store
+            .save_curation(
+                &pinned,
+                &SessionCuration {
+                    pinned: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let sessions = tokio::sync::Mutex::new(display_list(&[&pinned]));
+        let cfg = config_lock(true, 7);
+        let mtime = session_events_mtime(store.container(), &pinned).unwrap();
+        let now = mtime + std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, now)
+                .await
+                .unwrap();
+        assert!(archived.is_empty(), "R5: the pin exempts from auto-archive");
+        assert!(!store.curation(&pinned).archived);
+        assert!(
+            store.curation(&pinned).pinned,
+            "the pin itself is untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_skips_sessions_with_pending_inbox_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let unread = uuid::Uuid::new_v4();
+        seed_session(&store, &unread, Some("Has pending approval"));
+        let inbox = inbox_at(&tmp);
+        inbox
+            .append_item(InboxItemNew {
+                source: SOURCE_SESSION_APPROVAL.into(),
+                source_id: Some("req-1".into()),
+                session_id: Some(unread.to_string()),
+                title: "Approval requested".into(),
+                summary: String::new(),
+                error: None,
+            })
+            .unwrap();
+        // A READ item is no longer 未读: a second session whose only inbox
+        // entry was read must still be archivable.
+        let read_only = uuid::Uuid::new_v4();
+        seed_session(&store, &read_only, Some("Read inbox only"));
+        let item = inbox
+            .append_item(InboxItemNew {
+                source: SOURCE_SESSION_APPROVAL.into(),
+                source_id: Some("req-2".into()),
+                session_id: Some(read_only.to_string()),
+                title: "Old approval".into(),
+                summary: String::new(),
+                error: None,
+            })
+            .unwrap();
+        inbox
+            .update_status(item.id, shannon_core::inbox_store::InboxStatus::Read)
+            .unwrap();
+
+        let sessions = tokio::sync::Mutex::new(display_list(&[&unread, &read_only]));
+        let cfg = config_lock(true, 7);
+        let mtime = session_events_mtime(store.container(), &unread).unwrap();
+        let now = mtime + std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), Some(&inbox), now)
+                .await
+                .unwrap();
+        assert_eq!(archived.len(), 1, "the read-only session is archived");
+        assert_eq!(archived[0].session_id, read_only.to_string());
+        assert!(!store.curation(&unread).archived, "pending inbox ⇒ skip");
+        assert!(store.curation(&read_only).archived, "read inbox ⇒ eligible");
+    }
+
+    #[tokio::test]
+    async fn scan_respects_the_retention_boundary_fail_closed_on_unknown_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Boundary"));
+        let sessions = tokio::sync::Mutex::new(display_list(&[&a]));
+        let cfg = config_lock(true, 7);
+        let mtime = session_events_mtime(store.container(), &a).unwrap();
+
+        // One second inside the window → kept; one second past → archived.
+        let inside = mtime + std::time::Duration::from_secs(7 * 24 * 60 * 60 - 1);
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, inside)
+                .await
+                .unwrap();
+        assert!(
+            archived.is_empty(),
+            "mtime >= cutoff is kept (>= is the boundary)"
+        );
+        assert!(!store.curation(&a).archived);
+
+        let past = mtime + std::time::Duration::from_secs(7 * 24 * 60 * 60 + 1);
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, past)
+                .await
+                .unwrap();
+        assert_eq!(archived.len(), 1);
+        assert!(store.curation(&a).archived);
+
+        // A session whose events.jsonl vanished mid-flight drops out of the
+        // store listing entirely — the pass reports Ok with nothing archived
+        // (a listed-but-unreadable mtime would take the `session_events_mtime`
+        // None branch and skip fail-closed instead).
+        let b = uuid::Uuid::new_v4();
+        seed_session(&store, &b, Some("Ghost"));
+        let log = store.container().join(b.to_string()).join("events.jsonl");
+        std::fs::remove_file(&log).unwrap();
+        let sessions = tokio::sync::Mutex::new(display_list(&[&b]));
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, past)
+                .await
+                .unwrap();
+        assert!(archived.is_empty(), "a logless session is not a candidate");
+        assert!(!store.curation(&b).archived);
+    }
+
+    #[tokio::test]
+    async fn scan_disabled_is_a_no_op() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Ancient"));
+        let sessions = tokio::sync::Mutex::new(display_list(&[&a]));
+        let cfg = config_lock(false, 7);
+        let mtime = session_events_mtime(store.container(), &a).unwrap();
+        let now = mtime + std::time::Duration::from_secs(365 * 24 * 60 * 60);
+
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, now)
+                .await
+                .unwrap();
+        assert!(archived.is_empty(), "default-off gates every pass");
+        assert!(!store.curation(&a).archived);
+        assert_eq!(sessions.lock().await.len(), 1);
+    }
+
+    #[test]
+    fn effective_auto_archive_days_clamps_into_the_scanable_window() {
+        // Disabled → None regardless of the stored window.
+        assert_eq!(
+            effective_auto_archive_days(&config::DesktopConfig::default()),
+            None
+        );
+        // Enabled: the stored days clamp into 1..=365 so a hand-edited
+        // config can neither wedge (0) nor explode (u32::MAX) the scan.
+        let cfg = config_lock(true, 0);
+        let days = {
+            let cfg = cfg.blocking_read();
+            effective_auto_archive_days(&cfg)
+        };
+        assert_eq!(days, Some(1));
+        let cfg = config_lock(true, 7);
+        let days = {
+            let cfg = cfg.blocking_read();
+            effective_auto_archive_days(&cfg)
+        };
+        assert_eq!(days, Some(7));
+        let mut big = config::DesktopConfig::default();
+        big.session_auto_archive_enabled = true;
+        big.session_auto_archive_days = u32::MAX;
+        assert_eq!(effective_auto_archive_days(&big), Some(365));
     }
 }
