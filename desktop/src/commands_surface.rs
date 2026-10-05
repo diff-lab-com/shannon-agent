@@ -339,8 +339,8 @@ pub async fn get_shannon_home() -> Result<String, String> {
 /// The UI uses `platform` to hide the hardware-acceleration card on macOS
 /// (no escape hatch there) and `keepAwakeSupported` to disable + annotate
 /// the prevent-sleep switches where no backend exists. Supported matrix:
-/// macOS always (caffeinate), Windows always (SetThreadExecutionState at
-/// compile time), Linux only when `systemd-inhibit` resolves at runtime.
+/// macOS always (caffeinate), Windows always (process-domain PowerRequest
+/// at compile time), Linux only when `systemd-inhibit` resolves at runtime.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PowerCapabilities {

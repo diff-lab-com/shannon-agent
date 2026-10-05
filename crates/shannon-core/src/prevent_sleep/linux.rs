@@ -12,6 +12,14 @@
 //! distros, minimal containers), acquire degrades to a no-op and warns ONCE
 //! — every later start/stop pair stays balanced and silent.
 //!
+//! Orphan hardening (fix round 1): the child is spawned with
+//! `PR_SET_PDEATHSIG = SIGKILL`, so a hard crash of this process (SIGKILL,
+//! panic=abort) cannot leave the inhibitor running and holding the
+//! idle-inhibit lock forever. The `pre_exec` closure also re-checks the
+//! parent to close the classic race where the parent dies between `fork`
+//! and `prctl` (the child would already have been re-parented to PID 1 and
+//! never receive the death signal — in that window it exits immediately).
+//!
 //! Only compiled on `target_os = "linux"`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +27,17 @@ use std::sync::Mutex;
 
 /// The stored inhibitor child (None = not holding / degraded no-op).
 static INHIBIT_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
+
+/// Poison-tolerant lock on [`INHIBIT_CHILD`]: a panicked thread must not
+/// strand the inhibitor. The guarded value is a plain `Child` with no
+/// cross-call invariant, so recovering it after poison is sound — and it
+/// lets the poisoned path still kill + reap the stored child instead of
+/// leaking it.
+fn child_slot() -> std::sync::MutexGuard<'static, Option<std::process::Child>> {
+    INHIBIT_CHILD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// Warn-once latch for the missing-binary degradation.
 static WARNED_MISSING: AtomicBool = AtomicBool::new(false);
@@ -65,17 +84,25 @@ pub(super) fn acquire() {
         // Own process group so `release` can kill the inhibitor AND its
         // `sleep infinity` child in one signal.
         .process_group(0);
+    // Die with the parent even on a hard crash (SIGKILL / panic=abort);
+    // see `set_parent_death_signal` for the spawn-race re-check.
+    // SAFETY: the hook only calls async-signal-safe syscalls (`prctl`,
+    // `getppid`) and runs between fork and exec, as `pre_exec` requires.
+    unsafe {
+        command.pre_exec(|| set_parent_death_signal());
+    }
 
     match command.spawn() {
         Ok(child) => {
             tracing::debug!("Started systemd-inhibit (pid: {:?})", child.id());
-            let prev = INHIBIT_CHILD.lock().ok().and_then(|mut guard| guard.take());
-            if let Some(mut prev) = prev {
+            // Hold the slot across reap + store so a concurrent
+            // force-stop/panic can't interleave; the killed child needs
+            // nothing from this mutex to die, so blocking here is safe.
+            let mut slot = child_slot();
+            if let Some(mut prev) = slot.take() {
                 kill_child_group(&mut prev);
             }
-            if let Ok(mut guard) = INHIBIT_CHILD.lock() {
-                *guard = Some(child);
-            }
+            *slot = Some(child);
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Degraded platform (no systemd / not on PATH): stay silent
@@ -95,11 +122,38 @@ pub(super) fn acquire() {
 
 /// Kill the stored inhibitor and its process group (no-op when none).
 pub(super) fn release() {
-    let prev = INHIBIT_CHILD.lock().ok().and_then(|mut guard| guard.take());
-    if let Some(mut child) = prev {
+    let mut slot = child_slot();
+    if let Some(mut child) = slot.take() {
         kill_child_group(&mut child);
         tracing::debug!("Stopped systemd-inhibit");
     }
+}
+
+/// `pre_exec` hook: ask the kernel to SIGKILL this (child) process the
+/// moment its parent dies, and close the fork/prctl race.
+///
+/// Safety contract (for `CommandExt::pre_exec`): runs in the forked child
+/// before exec, must be async-signal-safe — `prctl(2)` and `getppid(2)`
+/// are. Errors abort the spawn (`spawn` reports them to the caller).
+unsafe fn set_parent_death_signal() -> std::io::Result<()> {
+    // PR_SET_PDEATHSIG survives execve for non-setuid binaries;
+    // systemd-inhibit is a normal root-owned executable, so the signal
+    // survives into the final image.
+    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // Race window: the parent may have died between fork and prctl. The
+    // kernel delivers PDEATHSIG only on the death of the *original*
+    // parent, so if we were already re-parented to init (PID 1) the signal
+    // will never fire — exit now instead of living on as an orphan lock
+    // holder. (In PID namespaces init is that namespace's PID 1, which is
+    // exactly the re-parent target, so the check stays correct there.)
+    if unsafe { libc::getppid() } == 1 {
+        return Err(std::io::Error::other(
+            "parent died before PR_SET_PDEATHSIG was set",
+        ));
+    }
+    Ok(())
 }
 
 /// SIGKILL the child's whole process group, then reap it. Group-kill first
@@ -126,15 +180,24 @@ pub fn systemd_inhibit_available() -> bool {
 }
 
 /// Pure helper behind [`systemd_inhibit_available`]: scan a `:`-separated
-/// PATH string for a directory containing an executable-looking
-/// `systemd-inhibit` entry.
+/// PATH string for a directory containing an *executable*
+/// `systemd-inhibit` entry (any of the owner/group/other exec bits set —
+/// matching `execvp`'s own notion of "runnable").
 fn systemd_inhibit_in_path(path_var: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
     path_var
         .split(':')
         .filter(|dir| !dir.is_empty())
         .any(|dir| {
             let candidate = std::path::Path::new(dir).join("systemd-inhibit");
-            candidate.is_file()
+            match candidate.metadata() {
+                // Regular file (or at least a file-like entry) with some
+                // executable bit set; a bare `is_file()` would report
+                // 0644 data files as usable and then fail to spawn.
+                Ok(meta) => meta.mode() & 0o111 != 0,
+                Err(_) => false,
+            }
         })
 }
 
@@ -242,9 +305,14 @@ mod tests {
 
     #[test]
     fn path_scan_finds_systemd_inhibit_only_in_existing_dirs() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let fake = dir.path().join("systemd-inhibit");
         std::fs::write(&fake, b"#!/bin/sh\n").unwrap();
+        // The scan must require an executable bit (execvp semantics), so
+        // make the fixture actually executable.
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let joined = format!(
             "{}:{}",
@@ -258,5 +326,38 @@ mod tests {
         // Empty entries and an empty PATH string are tolerated.
         assert!(!systemd_inhibit_in_path(""));
         assert!(!systemd_inhibit_in_path("::"));
+    }
+
+    /// Fix round 1 — a non-executable `systemd-inhibit` on PATH must not
+    /// count as available (the spawn would just fail at runtime).
+    #[test]
+    fn path_scan_rejects_non_executable_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("systemd-inhibit");
+        std::fs::write(&fake, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(!systemd_inhibit_in_path(&dir.path().display().to_string()));
+    }
+
+    /// Fix round 1 — spawning goes through the `pre_exec` pdeathsig hook:
+    /// if `prctl(PR_SET_PDEATHSIG)` were to fail, `spawn()` would return
+    /// Err and no child would be stored. This proves the hook succeeds on
+    /// the current kernel. (The kill-on-parent-death behaviour itself can
+    /// only be observed by killing this process, which a test cannot do.)
+    #[test]
+    fn acquire_spawns_child_through_pdeathsig_hook() {
+        let _guard = lock();
+        set_override("/bin/sleep", &["30"]);
+        reset_state();
+
+        acquire();
+        let pid = stored_child_pid().expect("pre_exec hook must not fail the spawn");
+        assert!(process_alive(pid), "child must be alive right after spawn");
+
+        clear_override();
+        reset_state();
     }
 }

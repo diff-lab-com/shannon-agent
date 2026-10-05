@@ -10,6 +10,16 @@ use std::sync::Mutex;
 /// Stored caffeinate child process.
 static CAFFEINATE_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
 
+/// Poison-tolerant lock on [`CAFFEINATE_CHILD`]: a panicked thread must not
+/// strand a running `caffeinate` (Minor #3, fix round 1). The guarded value
+/// is a plain `Child` with no cross-call invariant, so recovering it after
+/// poison is sound — the poisoned path still kill+wait-s the stored child.
+fn child_slot() -> std::sync::MutexGuard<'static, Option<std::process::Child>> {
+    CAFFEINATE_CHILD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Spawn `caffeinate` (previously-held child, if any, is reaped first).
 pub(super) fn acquire() {
     use std::process::{Command, Stdio};
@@ -22,15 +32,15 @@ pub(super) fn acquire() {
     {
         Ok(child) => {
             tracing::debug!("Started caffeinate (pid: {:?})", child.id());
-            // Take previous child out of the lock before blocking on kill/wait
-            let prev = CAFFEINATE_CHILD.lock().ok().and_then(|mut guard| guard.take());
-            if let Some(mut prev) = prev {
+            // Hold the slot across reap + store so a concurrent
+            // force-stop/panic can't interleave; the killed child needs
+            // nothing from this mutex to die, so blocking here is safe.
+            let mut slot = child_slot();
+            if let Some(mut prev) = slot.take() {
                 let _ = prev.kill();
                 let _ = prev.wait();
             }
-            if let Ok(mut guard) = CAFFEINATE_CHILD.lock() {
-                *guard = Some(child);
-            }
+            *slot = Some(child);
         }
         Err(e) => {
             tracing::warn!("Failed to start caffeinate: {}", e);
@@ -40,12 +50,11 @@ pub(super) fn acquire() {
 
 /// Kill the stored caffeinate process (no-op when none is alive).
 pub(super) fn release() {
-    if let Ok(mut guard) = CAFFEINATE_CHILD.lock() {
-        if let Some(ref mut child) = *guard {
-            let _ = child.kill();
-            let _ = child.wait();
-            tracing::debug!("Stopped caffeinate");
-        }
-        *guard = None;
+    let mut slot = child_slot();
+    if let Some(ref mut child) = *slot {
+        let _ = child.kill();
+        let _ = child.wait();
+        tracing::debug!("Stopped caffeinate");
     }
+    *slot = None;
 }

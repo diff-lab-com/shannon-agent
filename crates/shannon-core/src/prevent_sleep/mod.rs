@@ -8,8 +8,10 @@
 //! - macOS: `caffeinate -i -t 300` child process (`macos` module)
 //! - Linux: `systemd-inhibit --what=idle sleep infinity` child process,
 //!   degrading to a warn-once no-op when the binary is missing (`linux`)
-//! - Windows: `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`
-//!   via the `windows` crate already in the dependency graph (`windows`)
+//! - Windows: process-domain `PowerRequest` (`PowerCreateRequest` +
+//!   `PowerSetRequest(PowerRequestSystemRequired)`) via the `windows` crate
+//!   already in the dependency graph (`windows`) — process-scoped so
+//!   acquire and release may run on different threads
 //! - anything else: inert stubs (`other`)
 
 #[cfg(target_os = "macos")]

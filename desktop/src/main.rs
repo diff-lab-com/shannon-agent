@@ -1032,7 +1032,7 @@ fn main() {
     // on exit: the always-on keep-awake refcount plus any count an
     // in-flight run still holds. The global force-stop drops every counter
     // to zero and releases the platform backend (caffeinate / systemd-inhibit
-    // child killed, SetThreadExecutionState reset). Runs on the main thread
+    // child killed, Windows PowerRequest cleared). Runs on the main thread
     // after the loop returns; `App::run` never returns Ok/Err — it exits.
     app.run(|_app_handle, event| {
         if let tauri::RunEvent::Exit = event {
