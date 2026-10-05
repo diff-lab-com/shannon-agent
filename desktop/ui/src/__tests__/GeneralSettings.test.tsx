@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
@@ -61,13 +61,15 @@ describe('GeneralSettings', () => {
     vi.mocked(api.getConfig).mockResolvedValueOnce(configWith('confirm'))
     render(wrap(<GeneralSettings />))
     // Legacy values normalize for display: confirm ≡ ask, and the ask tier
-    // radio is the one that selects.
+    // radio is the one that selects. (Scope: the approval-mode group — the
+    // show-thinking card (T9) adds its own radiogroup on the same page.)
     await waitFor(() => {
-      const radios = screen.getAllByRole('radio')
+      const approvalGroup = within(screen.getByRole('radiogroup', { name: 'Approval mode' }))
+      const radios = approvalGroup.getAllByRole('radio')
       expect(radios).toHaveLength(3)
-      expect(screen.getByRole('radio', { name: 'Ask' })).toHaveAttribute('aria-checked', 'true')
+      expect(approvalGroup.getByRole('radio', { name: 'Ask' })).toHaveAttribute('aria-checked', 'true')
       for (const radio of radios) {
-        if (radio !== screen.getByRole('radio', { name: 'Ask' })) {
+        if (radio !== approvalGroup.getByRole('radio', { name: 'Ask' })) {
           expect(radio).toHaveAttribute('aria-checked', 'false')
         }
       }
@@ -88,9 +90,11 @@ describe('GeneralSettings', () => {
     vi.mocked(api.getConfig).mockResolvedValueOnce(configWith('bypass_permissions'))
     render(wrap(<GeneralSettings />))
     // Expert modes are not quick tiers: no radio selects, but the current
-    // mode line still states the truth (Bypass approvals).
+    // mode line still states the truth (Bypass approvals). (Scoped to the
+    // approval-mode group; the show-thinking card (T9) has its own radios.)
     await waitFor(() => {
-      for (const radio of screen.getAllByRole('radio')) {
+      const approvalGroup = within(screen.getByRole('radiogroup', { name: 'Approval mode' }))
+      for (const radio of approvalGroup.getAllByRole('radio')) {
         expect(radio).toHaveAttribute('aria-checked', 'false')
       }
     })
