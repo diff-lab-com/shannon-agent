@@ -3,9 +3,13 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
+import EffectBadge from '@/components/settings/EffectBadge'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type { TerminalSettings as TerminalSettingsDto } from '@/types'
+
+/** Task 12: placeholder mirroring the built-in monospace fallback stack. */
+const FONT_FAMILY_PLACEHOLDER = "'JetBrains Mono', 'Fira Code', monospace"
 
 /**
  * P3-1 — Advanced-settings card for the integrated terminal's persisted
@@ -14,9 +18,10 @@ import type { TerminalSettings as TerminalSettingsDto } from '@/types'
  *
  * Contract notes:
  *  - The backend clamps every numeric knob (fontSize 8–32, scrollback
- *    0–100000, drawerHeight 120–1200) and trims/blanks the shell. The
- *    frontend sends the raw values and then renders the EFFECTIVE values
- *    from the set-response, so what's on screen is what's on disk.
+ *    0–100000, drawerHeight 120–1200), truncates the font stack to 200
+ *    chars and trims/blanks the shell + font family. The frontend sends
+ *    the raw values and then renders the EFFECTIVE values from the
+ *    set-response, so what's on screen is what's on disk.
  *  - Changes only reach terminals opened afterwards — live xterm
  *    instances are never re-geometried behind the user's back.
  *  - Load failure is NOT an editable empty form: every field disables,
@@ -36,6 +41,10 @@ export function TerminalSettings() {
   const [scrollback, setScrollback] = useState('')
   const [drawerHeight, setDrawerHeight] = useState('')
   const [screenReaderMode, setScreenReaderMode] = useState(false)
+  // Task 12: login-shell inheritance (switch) + font family override
+  // (kept as a string so the user can type freely; blank = unset).
+  const [loginShell, setLoginShell] = useState(false)
+  const [fontFamily, setFontFamily] = useState('')
   const [loading, setLoading] = useState(true)
   // True only after a SUCCESSFUL load — Save stays gated on it so a
   // failed load can never springboard a clobbering save from empty inputs.
@@ -50,6 +59,8 @@ export function TerminalSettings() {
     setScrollback(String(s.scrollback))
     setDrawerHeight(String(s.drawerHeight))
     setScreenReaderMode(s.screenReaderMode)
+    setLoginShell(s.loginShell)
+    setFontFamily(s.fontFamily ?? '')
   }, [])
 
   const load = useCallback(() => {
@@ -81,6 +92,10 @@ export function TerminalSettings() {
         scrollback: Number(scrollback),
         drawerHeight: Number(drawerHeight),
         screenReaderMode,
+        // Task 12: blank font family = built-in monospace stack (null on
+        // the wire, skipped key on disk); login-shell rides as a bool.
+        loginShell,
+        fontFamily: fontFamily.trim() === '' ? null : fontFamily.trim(),
       })
       // Show what the backend actually stored (clamped into range), not
       // the raw input.
@@ -143,6 +158,29 @@ export function TerminalSettings() {
           </span>
         </label>
 
+        {/* Task 12 — terminal font family (blank = built-in stack). */}
+        <label className="flex flex-col gap-xs md:col-span-2">
+          <span className="flex items-center gap-sm">
+            <span className="font-label-sm text-label-sm text-on-surface-variant">
+              {t('settings.terminal.fontFamily.label')}
+            </span>
+            <EffectBadge kind="new-session" />
+          </span>
+          <input
+            type="text"
+            value={fontFamily}
+            onChange={e => setFontFamily(e.target.value)}
+            disabled={fieldsDisabled}
+            placeholder={FONT_FAMILY_PLACEHOLDER}
+            aria-label={t('settings.terminal.fontFamily.label')}
+            data-testid="terminal-font-family-input"
+            className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 placeholder:text-on-surface-variant/50"
+          />
+          <span className="font-label-sm text-label-sm text-on-surface-variant">
+            {t('settings.terminal.fontFamily.desc')}
+          </span>
+        </label>
+
         <label className="flex flex-col gap-xs">
           <span className="font-label-sm text-label-sm text-on-surface-variant">
             {t('settings.terminal.fontSize')}
@@ -190,6 +228,27 @@ export function TerminalSettings() {
             className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
           />
         </label>
+
+        {/* Task 12 — inherit login shell environment (login shell spawn). */}
+        <div className="flex items-center justify-between gap-md">
+          <div>
+            <div className="flex items-center gap-sm font-label-md text-label-md text-on-surface font-semibold mb-1">
+              {t('settings.terminal.loginShell.label')}
+              <EffectBadge kind="new-session" />
+            </div>
+            <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
+              {t('settings.terminal.loginShell.desc')}
+            </div>
+          </div>
+          <Switch
+            checked={loginShell}
+            onCheckedChange={setLoginShell}
+            disabled={fieldsDisabled}
+            className="shrink-0"
+            aria-label={t('settings.terminal.loginShell.label')}
+            data-testid="terminal-login-shell-switch"
+          />
+        </div>
 
         <div className="flex items-center justify-between gap-md">
           <div>

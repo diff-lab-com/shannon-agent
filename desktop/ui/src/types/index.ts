@@ -1691,9 +1691,9 @@ export interface TerminalExitPayload {
  * P3-1: persisted terminal preferences (`[terminal]` in
  * `~/.shannon/config.toml`; camelCase over the wire, frozen shape).
  * The backend clamps `fontSize` (8–32), `scrollback` (0–100000) and
- * `drawerHeight` (120–1200) and blanks the shell on read AND write —
- * after a set, render the values the response carries, not the ones the
- * caller sent.
+ * `drawerHeight` (120–1200), blanks the shell and the font family, and
+ * clamps the font stack to 200 chars — after a set, render the values
+ * the response carries, not the ones the caller sent.
  */
 export interface TerminalSettings {
   shell: string | null
@@ -1701,6 +1701,17 @@ export interface TerminalSettings {
   scrollback: number
   drawerHeight: number
   screenReaderMode: boolean
+  /**
+   * Task 12 (R3): spawn a login-capable shell (`bash`/`zsh`/`fish`/`ksh`,
+   * never on Windows) with `-l` so it inherits the login environment
+   * (profile chain — proxies, kube config). Opt-in, default off.
+   */
+  loginShell: boolean
+  /**
+   * Task 12 (R3): xterm.js `fontFamily` override for terminals opened
+   * afterwards. `null` (blank on disk) = the built-in monospace stack.
+   */
+  fontFamily: string | null
 }
 
 // --- Inter-agent message history (Phase D C3) ---
