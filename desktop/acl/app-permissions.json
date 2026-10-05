@@ -758,6 +758,15 @@
       }
     },
     {
+      "identifier": "allow-get-power-capabilities",
+      "description": "Enables the get_power_capabilities command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_power_capabilities"
+        ]
+      }
+    },
+    {
       "identifier": "allow-get-provider-allowlist",
       "description": "Enables the get_provider_allowlist command without any pre-configured scope.",
       "commands": {
@@ -862,6 +871,15 @@
       "commands": {
         "allow": [
           "get_session_usage"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-shannon-home",
+      "description": "Enables the get_shannon_home command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_shannon_home"
         ]
       }
     },
@@ -2981,6 +2999,8 @@
         "allow-check-app-update",
         "allow-engine-discovery-get-mode",
         "allow-get-cli-install-status",
+        "allow-get-power-capabilities",
+        "allow-get-shannon-home",
         "allow-get-surface-info",
         "allow-install-cli-to-path",
         "allow-mobile-generate-pair-token",

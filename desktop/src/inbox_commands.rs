@@ -1288,6 +1288,14 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     let usage_store = deps.usage_store.clone();
     let tools = deps.tools.clone();
     let memory_store = deps.memory_store.clone();
+    // Settings R3 T3 — routine runs are agent runs too: read the sleep
+    // blocker here; the spawned task below holds the RAII guard so every
+    // exit path (attempt retries, aborts, panics) stays balanced.
+    let block_sleep = deps
+        .desktop_config
+        .read()
+        .await
+        .power_block_sleep_during_tasks;
 
     // W2-3 mid-run budget guard. `policy_budget` is `None` when no budget is
     // configured — the whole guard (tracker polling, abort signal, abort
@@ -1534,6 +1542,10 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     let ctx_task_id = ctx.task_id.clone();
     let ctx_task_name = ctx.task_name.clone();
     tokio::spawn(async move {
+        // Settings R3 T3 — hold the prevent-sleep refcount for the whole
+        // routine run (RAII, released on every task exit).
+        let _prevent_sleep_guard =
+            block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
         // W2-3: poll month aggregate + this run's last-known in-flight spend
         // against the cap while the engine runs; a trip sends the abort
         // signal the attempt race is parked on.

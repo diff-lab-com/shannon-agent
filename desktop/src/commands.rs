@@ -219,6 +219,13 @@ pub struct AppState {
     /// loopback server is spawned; `Some(External)` when another engine
     /// was already serving on 33420.
     pub engine_mode: Arc<std::sync::RwLock<Option<crate::engine_discovery::EngineMode>>>,
+    /// Settings R3 T3 — whether THIS AppState currently holds the
+    /// always-on prevent-sleep refcount (`power_keep_awake`). The global
+    /// refcount itself is invisible to us (other runs hold their own
+    /// counts), so this flag is the only way to keep the always-on
+    /// start/stop pairs balanced (a blind `start` on every enable would
+    /// double-count and one `stop` would never release).
+    pub(crate) keep_awake_active: std::sync::atomic::AtomicBool,
 }
 
 /// Session metadata for session list.
@@ -868,7 +875,12 @@ impl AppState {
             memory_bypass_sidecar.apply_to_registry(&registry);
         }
 
-        Self {
+        // Settings R3 T3 — honor the persisted always-on keep-awake switch
+        // (`power_keep_awake`, default false, so unit tests that build an
+        // AppState never spawn a wake lock). Read before the local config
+        // moves into the Arc below.
+        let power_keep_awake_startup = desktop_config.power_keep_awake;
+        let state = Self {
             registry,
             session_overrides: std::sync::Mutex::new(override_sidecar),
             session_memory_bypass: std::sync::Mutex::new(memory_bypass_sidecar),
@@ -914,6 +926,37 @@ impl AppState {
             notifier: Arc::new(shannon_core::notifier::Notifier::new()),
             gateway_supervisor: Arc::new(tokio::sync::Mutex::new(None)),
             engine_mode: Arc::new(std::sync::RwLock::new(None)),
+            keep_awake_active: std::sync::atomic::AtomicBool::new(false),
+        };
+        // Settings R3 T3 — honor the persisted always-on keep-awake switch
+        // (`power_keep_awake`, default false, so unit tests that build an
+        // AppState never spawn a wake lock).
+        state.apply_keep_awake(power_keep_awake_startup);
+        state
+    }
+
+    /// Settings R3 T3 — apply the always-on keep-awake switch. Idempotent:
+    /// the [`AppState::keep_awake_active`] flag tracks whether WE hold a
+    /// refcount on the process-global prevent-sleep counter, so repeated
+    /// enables/disables stay balanced (a blind start/start would
+    /// double-count and one stop would never release). Called from
+    /// `AppState::new` (persisted `power_keep_awake`) and from
+    /// `configure('power.keep_awake')`.
+    pub(crate) fn apply_keep_awake(&self, enabled: bool) {
+        let was = self
+            .keep_awake_active
+            .swap(enabled, std::sync::atomic::Ordering::SeqCst);
+        match (enabled, was) {
+            (true, false) => {
+                shannon_core::prevent_sleep::start_prevent_sleep();
+                tracing::info!("keep-awake enabled — holding wake lock");
+            }
+            (false, true) => {
+                shannon_core::prevent_sleep::stop_prevent_sleep();
+                tracing::info!("keep-awake disabled — wake lock released");
+            }
+            // No state change — keep the refcount untouched.
+            _ => {}
         }
     }
 
@@ -1776,6 +1819,11 @@ pub async fn send_message(
     // the only event surface; a future SessionsPanel revival rebuilds the
     // channel bounded-with-consumer per chat-upgrade P2-5b.
     let return_qid = qid_str.clone();
+    // Settings R3 T3 — block idle sleep while this turn streams
+    // (`power.block_sleep_during_tasks`, default on). Read before the
+    // spawn; the guard lives inside the task so every exit path (ok /
+    // error / cancel / caught panic) drops it exactly once.
+    let block_sleep = desktop_cfg.power_block_sleep_during_tasks;
     // Engine→UI permission bridge: each prompt from the query pipeline
     // becomes a pending Tauri permission; the scoped user decision maps back
     // onto the engine's choice enum (AlwaysAllow also lands in the engine's
@@ -1836,6 +1884,12 @@ pub async fn send_message(
     });
     tokio::spawn(async move {
         use futures::FutureExt;
+        // Settings R3 T3 — hold the prevent-sleep refcount for the whole
+        // turn (only when `power.block_sleep_during_tasks` is on). RAII:
+        // the Option<Guard> drops — and releases the count — on every task
+        // exit, including a caught-panic unwind.
+        let _prevent_sleep_guard =
+            block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
         // P3 (streaming-panic hardening): a panic anywhere in the loop below
         // used to unwind straight out of this task and skip the per-session
         // flag reset at the bottom — the session stayed latched `querying`
@@ -2571,6 +2625,9 @@ pub async fn start_background_task(
     let provider = client_config.provider.to_string();
     let usage_store = state.usage_store.clone();
     let approval_mode_str = state.desktop_config.read().await.approval_mode.clone();
+    // Settings R3 T3 — block idle sleep for the duration of this
+    // background task (same switch the interactive turn reads).
+    let block_sleep = state.desktop_config.read().await.power_block_sleep_during_tasks;
     // P2-4b: hand the shared memory handle to the spawned task — the runner
     // attaches it to its engine instead of leaving memory: None.
     let memory_store = state.memory_store.clone();
@@ -2579,6 +2636,10 @@ pub async fn start_background_task(
     let inbox_store = state.inbox_store();
 
     tokio::spawn(async move {
+        // Settings R3 T3 — hold the prevent-sleep refcount for the whole
+        // background task (RAII: released on every exit, incl. cancel).
+        let _prevent_sleep_guard =
+            block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
         // Build query engine for this task
         let client = LlmClient::new(client_config);
 

@@ -343,6 +343,14 @@ fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Resu
         // and (per the config docs) an enabled GC still only ever prunes
         // **archived** sessions past the retention window.
         "session_gc_enabled" => cfg.session_gc_enabled = enabled,
+        // Settings R3 T3: hardware-acceleration escape hatch. Persist-only
+        // here — the env injection happens once, before the webview is
+        // created, so a change needs an app restart (the UI shows the
+        // EffectBadge restart-app).
+        "hardware_acceleration" => cfg.hardware_acceleration = enabled,
+        // Settings R3 T3: block idle sleep while agent runs stream. Read
+        // live at the start of every run — no restart, no side effect here.
+        "power.block_sleep_during_tasks" => cfg.power_block_sleep_during_tasks = enabled,
         other => return Err(format!("Unrecognized boolean key: {other}")),
     }
     Ok(())
@@ -834,6 +842,35 @@ pub async fn configure(
                 },
             );
 
+            Ok(())
+        }
+        // Settings R3 T3 — always-on "keep computer awake" switch. A
+        // dedicated arm (not the grouped toggle) because flipping it has an
+        // immediate side effect: start/stop the process-global wake lock.
+        "power.keep_awake" => {
+            let enabled = match update.value.to_ascii_lowercase().as_str() {
+                "true" => true,
+                "false" => false,
+                _ => {
+                    return Err(format!(
+                        "Invalid boolean for {}: {}",
+                        update.key, update.value
+                    ));
+                }
+            };
+            {
+                let mut desktop_cfg = state.desktop_config.write().await;
+                desktop_cfg.power_keep_awake = enabled;
+            }
+            config::save_config(&state.desktop_config.read().await.clone())?;
+            state.inner().apply_keep_awake(enabled);
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: update.key.clone(),
+                    value: update.value,
+                },
+            );
             Ok(())
         }
         // Grouped boolean toggles (the Settings switches). The guard routes
@@ -2267,11 +2304,18 @@ mod tests {
             "dream_enabled" => Some(cfg.dream_enabled),
             "dream_skill_distill_enabled" => Some(cfg.dream_skill_distill_enabled),
             "session_gc_enabled" => Some(cfg.session_gc_enabled),
+            // Settings R3 T3 — hardware-acceleration escape hatch + the
+            // run-time sleep blocker (both plain bools). `power.keep_awake`
+            // is NOT here: it has a dedicated arm with an immediate
+            // start/stop side effect, so it must never route through the
+            // grouped applier.
+            "hardware_acceleration" => Some(cfg.hardware_acceleration),
+            "power.block_sleep_during_tasks" => Some(cfg.power_block_sleep_during_tasks),
             _ => None,
         }
     }
 
-    const TOGGLE_KEYS: [&str; 9] = [
+    const TOGGLE_KEYS: [&str; 11] = [
         "memory_enabled",
         "telemetry",
         "encryption",
@@ -2281,6 +2325,8 @@ mod tests {
         "dream_enabled",
         "dream_skill_distill_enabled",
         "session_gc_enabled",
+        "hardware_acceleration",
+        "power.block_sleep_during_tasks",
     ];
 
     #[test]
@@ -2300,6 +2346,10 @@ mod tests {
         // Unknown keys are refused, never silently accepted, and never routed.
         assert!(!is_boolean_toggle_key("not_a_toggle"));
         assert!(!is_boolean_toggle_key("agent_teams_enabled"));
+        // Settings R3 T3: the always-on keep-awake switch has a dedicated
+        // arm (immediate start/stop side effect) — it must never route
+        // through the grouped boolean applier.
+        assert!(!is_boolean_toggle_key("power.keep_awake"));
         for key in TOGGLE_KEYS {
             assert!(is_boolean_toggle_key(key), "{key} must be routed");
         }
@@ -2322,6 +2372,10 @@ mod tests {
             cfg.skill_detection_enabled = false;
             cfg.dream_enabled = false;
             cfg.dream_skill_distill_enabled = false;
+            // Settings R3 T3 keys: hw-accel + block-sleep default true, so
+            // pin them false like the rest for a deterministic start.
+            cfg.hardware_acceleration = false;
+            cfg.power_block_sleep_during_tasks = false;
         }
 
         let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());

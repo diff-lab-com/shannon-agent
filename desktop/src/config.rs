@@ -198,6 +198,75 @@ pub struct DesktopConfig {
     /// by `usage_governance::get_usage_governance`.
     #[serde(default)]
     pub monthly_budget_usd: Option<f64>,
+    /// Settings R3 T3 — GPU-composited webview rendering switch. `true`
+    /// (default) keeps hardware acceleration on; `false` injects the
+    /// per-platform "disable GPU" env vars BEFORE the webview backend
+    /// initializes (see [`apply_hardware_acceleration_env`]) so a broken
+    /// GPU/driver can no longer blank-screen or crash the window. Takes
+    /// effect on the NEXT app launch — the env vars are read once at
+    /// webview creation. macOS is unaffected (no injection path).
+    #[serde(default = "default_true")]
+    pub hardware_acceleration: bool,
+    /// Settings R3 T3 — always-on wake lock. When true, the desktop holds a
+    /// prevent-sleep refcount from `AppState::new` until the toggle flips
+    /// off or the app exits. Default: false (opt-in).
+    #[serde(default)]
+    pub power_keep_awake: bool,
+    /// Settings R3 T3 — block idle sleep while ANY agent run (interactive
+    /// turn, background task, goal run, best-of-N branch, routine rerun) is
+    /// streaming. Refcounted, so overlapping runs keep the lock until the
+    /// last one ends. Default: true (the agent working while the machine
+    /// dozes off is the surprising outcome).
+    #[serde(default = "default_power_block_sleep_during_tasks")]
+    pub power_block_sleep_during_tasks: bool,
+}
+
+fn default_power_block_sleep_during_tasks() -> bool {
+    true
+}
+
+/// Settings R3 T3 — apply the webview "disable GPU" environment for the
+/// persisted [`DesktopConfig::hardware_acceleration`] choice.
+///
+/// MUST run before `tauri::Builder` starts: the webview backend reads these
+/// variables exactly once, when the first window's webview is created — a
+/// later write is a silent no-op. Platform matrix:
+///
+/// - Linux (WebKitGTK): `WEBKIT_DISABLE_COMPOSITING_MODE=1` +
+///   `WEBKIT_DISABLE_DMABUF_RENDERER=1` — the two switches the WebKit bug
+///   trackers recommend for blank-window / GPU-crash workarounds.
+/// - Windows (WebView2): `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--disable-gpu`.
+/// - macOS (WKWebView): no-op — there is no supported escape hatch and the
+///   UI hides the card.
+///
+/// Public so the bin crate's `main()` can call it before the builder.
+pub fn apply_hardware_acceleration_env(config: &DesktopConfig) {
+    if config.hardware_acceleration {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Edition 2024: set_var is unsafe (env is process-global) — same
+        // precedent as main.rs's SHANNON_LANG test helper.
+        unsafe {
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        tracing::info!("hardware acceleration disabled: WebKitGTK compositing + DMABUF renderer off (takes effect after restart)");
+    }
+    #[cfg(target_os = "windows")]
+    {
+        unsafe {
+            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu");
+        }
+        tracing::info!("hardware acceleration disabled: WebView2 --disable-gpu (takes effect after restart)");
+    }
+    // macOS / other targets: no supported escape hatch — leave untouched.
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = config;
+        tracing::debug!("hardware acceleration toggle has no effect on this platform");
+    }
 }
 
 /// P2-5: payload of the desktop `offpeak.model_override` config key.
@@ -698,6 +767,9 @@ impl Default for DesktopConfig {
             plan_tier: None,
             act_tier: None,
             monthly_budget_usd: None,
+            hardware_acceleration: default_true(),
+            power_keep_awake: false,
+            power_block_sleep_during_tasks: default_power_block_sleep_during_tasks(),
         }
     }
 }
@@ -1623,6 +1695,44 @@ mod tests {
             back.open_session_windows,
             vec!["7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1".to_string()]
         );
+    }
+
+    /// Settings R3 T3: the three power/hardware keys must default correctly
+    /// when a pre-R3 `config.json` (no such keys) loads — hw-accel ON,
+    /// keep-awake OFF, block-sleep-during-tasks ON — and round-trip once
+    /// written.
+    #[test]
+    fn test_power_keys_default_compat_and_round_trip() {
+        // Legacy JSON without the new keys (the exact shape older installs
+        // have on disk).
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(legacy.hardware_acceleration, "hw accel defaults ON");
+        assert!(!legacy.power_keep_awake, "keep-awake defaults OFF");
+        assert!(
+            legacy.power_block_sleep_during_tasks,
+            "block-sleep-during-tasks defaults ON"
+        );
+
+        let config = DesktopConfig {
+            hardware_acceleration: false,
+            power_keep_awake: true,
+            power_block_sleep_during_tasks: false,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"hardware_acceleration\":false"), "{json}");
+        assert!(json.contains("\"power_keep_awake\":true"), "{json}");
+        assert!(
+            json.contains("\"power_block_sleep_during_tasks\":false"),
+            "{json}"
+        );
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert!(!back.hardware_acceleration);
+        assert!(back.power_keep_awake);
+        assert!(!back.power_block_sleep_during_tasks);
     }
 
     #[test]

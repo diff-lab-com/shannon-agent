@@ -1459,6 +1459,17 @@ async fn run_goal_loop<R: tauri::Runtime>(
             Ok(runner) => runner,
             Err(e) => return GoalTerminal::Paused { reason: Some(e) },
         };
+        // Settings R3 T3 — hold the prevent-sleep refcount for the WHOLE
+        // goal run (turn after turn), not per turn: the run is the task
+        // the user expects to keep the machine awake. RAII — released on
+        // every exit incl. the join-panic path below.
+        let block_sleep = deps_for_runner
+            .desktop_config
+            .read()
+            .await
+            .power_block_sleep_during_tasks;
+        let _prevent_sleep_guard =
+            block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
         let terminal = run_turn_loop(
             &deps_for_runner,
             &app_for_runner,
