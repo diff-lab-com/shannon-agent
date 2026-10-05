@@ -169,6 +169,38 @@ describe('MessageBubble — Explore/Terminal/Changes grouping (T11)', () => {
     expect(cardTexts('read_file')).toHaveLength(2)
   })
 
+  it('orders each banner inline (fix round 1): after the preceding success card, before its chain\u2019s first failed card', () => {
+    // Two chains separated by cards and runs — pre-fix, both banners were
+    // hoisted to the top of the tool area, breaking the P2-⑨ (D7)
+    // failure→retry narrative. DOM order must stay:
+    //   read-a, banner-x, x1, x2, read-b, banner-y, y1, y2
+    bubbleWith([
+      call('read_file', 'a'),
+      call('bash', 'x1', { status: 'error', is_error: true, result: 'boom' }),
+      call('bash', 'x2', { status: 'error', is_error: true, result: 'boom again' }),
+      call('read_file', 'b'),
+      call('bash', 'y1', { status: 'error', is_error: true, result: 'boom' }),
+      call('bash', 'y2', { status: 'error', is_error: true, result: 'boom' }),
+    ])
+    const follows = (first: Element, then: Element) =>
+      !!(first.compareDocumentPosition(then) & Node.DOCUMENT_POSITION_FOLLOWING)
+    const banners = screen.getAllByTestId('retry-chain-banner')
+    expect(banners).toHaveLength(2)
+    const reads = cardTexts('read_file')
+    expect(reads).toHaveLength(2)
+    const errs = cardTexts('bash')
+    expect(errs).toHaveLength(4)
+    // banner-x sits between read-a and its chain's first failed card…
+    expect(follows(reads[0], banners[0])).toBe(true)
+    expect(follows(banners[0], errs[0])).toBe(true)
+    // …does not displace the later content (read-b comes after chain-x)…
+    expect(follows(errs[1], reads[1])).toBe(true)
+    // …and banner-y stays between read-b and chain-y's first failed card.
+    expect(follows(reads[1], banners[1])).toBe(true)
+    expect(follows(banners[1], errs[2])).toBe(true)
+    expect(screen.queryByTestId('tool-group-card')).toBeNull()
+  })
+
   it('an agent_spawn block is not grouped and its neighbours stay singles', () => {
     bubbleWith([call('read_file', 'a'), call('agent_spawn', 'sub'), call('read_file', 'b')])
     expect(screen.queryByTestId('tool-group-card')).toBeNull()

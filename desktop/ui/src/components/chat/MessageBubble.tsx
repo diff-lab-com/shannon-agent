@@ -551,10 +551,13 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                     />
                   )
                 // Pass 1 — the P2-⑨ retry-chain walk, now emitting units:
-                // chain members stay non-groupable (the banner precedes them
-                // and the narrative reads card-by-card); everything else is
-                // a grouping candidate except subagent spawns.
-                const units: ToolGroupUnit<ToolCall>[] = []
+                // the banner is an ORDERED MARKER (emitted at its sequence
+                // position in pass 2 — fix round 1: hoisting it into the
+                // node list early piled every banner at the top of the tool
+                // area, breaking the failure→retry narrative); its chain
+                // members stay non-groupable, and everything else is a
+                // grouping candidate except subagent spawns.
+                const units: ToolGroupUnit<ToolCall, React.ReactNode>[] = []
                 let i = 0
                 while (i < tcs.length) {
                   const tc = tcs[i]
@@ -574,23 +577,28 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                         const line = (tc.result ?? '').split('\n').find(l => l.trim()) ?? ''
                         return line.trim().slice(0, 120)
                       })
-                      nodes.push(
-                        <RetryChainBanner
-                          key={`chain-${tc.tool_use_id}`}
-                          count={chainLen}
-                          reasons={reasons}
-                        />,
-                      )
-                      for (let k = i; k <= j; k++) units.push({ tc: tcs[k], groupable: false })
+                      units.push({
+                        type: 'marker',
+                        marker: (
+                          <RetryChainBanner
+                            key={`chain-${tc.tool_use_id}`}
+                            count={chainLen}
+                            reasons={reasons}
+                          />
+                        ),
+                      })
+                      for (let k = i; k <= j; k++) units.push({ type: 'tool', tc: tcs[k], groupable: false })
                       i = j + 1
                       continue
                     }
                   }
-                  units.push({ tc, groupable: tc.tool_name !== 'agent_spawn' })
+                  units.push({ type: 'tool', tc, groupable: tc.tool_name !== 'agent_spawn' })
                   i++
                 }
-                // Pass 2 — adjacent same-kind merge, gated on the per-kind
-                // switches (lib/toolGrouping readGroupingPrefs, default ON).
+                // Pass 2 — ordered emission: adjacent same-kind merge, gated
+                // on the per-kind switches (lib/toolGrouping
+                // readGroupingPrefs, default ON); markers pass through at
+                // their sequence position and reopen the segmentation.
                 for (const seg of groupToolSegments(units, readGroupingPrefs())) {
                   if (seg.type === 'group') {
                     const items = seg.items
@@ -612,6 +620,8 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                         ))}
                       </ToolGroupCard>,
                     )
+                  } else if (seg.type === 'marker') {
+                    nodes.push(seg.marker)
                   } else {
                     nodes.push(renderTool(seg.tc, seg.tc.tool_use_id))
                   }

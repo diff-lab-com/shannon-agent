@@ -13,7 +13,9 @@
 //      MessageBubble: adjacent same-kind cards merge into a group segment
 //      ONLY while that kind's switch is on; special cards (subagent blocks,
 //      retry-chain members, …) are marked non-groupable by the caller and
-//      always pass through individually.
+//      always pass through individually, and the retry-chain banner rides
+//      along as an ordered marker so the failure→retry narrative keeps its
+//      original position.
 //
 // Streaming keeps per-card rendering by controller ruling R10 (grouping a
 // live stream re-folds the tail every flush — jitter); groups render once
@@ -129,6 +131,16 @@ const FILE_MUTATING_NAMES = new Set(
 /**
  * Classify ONE tool call by name for grouping.
  *
+ * 三桶语义边界 (review fix round 1): the read-only map is authoritative,
+ * and its flag only separates "read-only" from "mutates state" — it cannot
+ * tell FILE mutation from other side effects. So a map hit that is NOT
+ * read-only lands in `terminal` for shell runners and in `changes` for
+ * EVERYTHING else: browser_* / computer_use / schedule_wakeup / messaging
+ * tools group under the 「文件更改 / File changes」 banner even though they
+ * touch no files. That is the documented boundary (state mutation other
+ * than terminal), not a bug — the UI copy stays 写文件类; revisiting it
+ * would need a richer backend classification than `is_read_only`.
+ *
  * Order: read-only map first (authoritative, from `list_tools`) →
  * name heuristics only when the map doesn't know the tool.
  *  - map hit, read-only            → explore
@@ -177,17 +189,20 @@ export function writeGroupingPref(kind: ToolGroupKind, value: boolean): void {
 
 /* ─────── 4. sequence → segments ─────── */
 
-/** One tool call as MessageBubble's walk produces it. `groupable: false`
- *  marks the existing special cards — subagent blocks, retry-chain members
- *  — which keep their bespoke rendering and break any adjacent group. */
-export interface ToolGroupUnit<T> {
-  tc: T
-  groupable: boolean
-}
+/** One item of the caller's tool walk. `tool` units are grouping
+ *  candidates (or forced singles via `groupable: false` — special cards
+ *  such as subagent blocks and retry-chain members). `marker` units are
+ *  ORDERED PASSTHROUGHS the caller renders verbatim (the retry-chain
+ *  banner): they are emitted in sequence position, and crossing one
+ *  reopens the segmentation — a run may never span a marker. */
+export type ToolGroupUnit<T, M = unknown> =
+  | { type: 'tool'; tc: T; groupable: boolean }
+  | { type: 'marker'; marker: M }
 
-export type ToolGroupSegment<T> =
+export type ToolGroupSegment<T, M = unknown> =
   | { type: 'group'; kind: ToolGroupKind; items: T[] }
   | { type: 'single'; tc: T }
+  | { type: 'marker'; marker: M }
 
 /**
  * Project a tool-call sequence into render segments (pure — no React, no
@@ -198,14 +213,18 @@ export type ToolGroupSegment<T> =
  *    kind's switch is ON and the run has ≥ 2 calls;
  *  - kind change, switch OFF, or a non-groupable unit cuts the run —
  *    everything cut renders as individual singles (original cards);
+ *  - markers emit at their sequence position (fix round 1: the retry-chain
+ *    banner must stay between its preceding card and its chain's first
+ *    failed card, never hoisted to the top of the tool area) and reset
+ *    the current run;
  *  - all-batch classification is stable regardless of the map's async
  *    arrival: callers re-render via the map version subscription.
  */
-export function groupToolSegments<T extends { tool_name: string }>(
-  units: ToolGroupUnit<T>[],
+export function groupToolSegments<T extends { tool_name: string }, M>(
+  units: ToolGroupUnit<T, M>[],
   prefs: GroupingPrefs,
-): ToolGroupSegment<T>[] {
-  const segments: ToolGroupSegment<T>[] = []
+): ToolGroupSegment<T, M>[] {
+  const segments: ToolGroupSegment<T, M>[] = []
   let run: { kind: ToolGroupKind; items: T[] } | null = null
 
   const flush = () => {
@@ -218,7 +237,13 @@ export function groupToolSegments<T extends { tool_name: string }>(
     run = null
   }
 
-  for (const { tc, groupable } of units) {
+  for (const unit of units) {
+    if (unit.type === 'marker') {
+      flush()
+      segments.push(unit)
+      continue
+    }
+    const { tc, groupable } = unit
     const kind = classifyTool(tc.tool_name)
     if (groupable && prefs[kind]) {
       if (run && run.kind === kind) {

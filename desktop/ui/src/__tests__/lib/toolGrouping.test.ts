@@ -63,6 +63,23 @@ describe('classifyTool — read-only map hit (authoritative)', () => {
     expect(classifyTool('Write')).toBe('changes')
   })
 
+  it('pins the documented three-bucket boundary: non-file state mutators land in changes', () => {
+    // Review fix round 1 — the read-only flag cannot tell file mutation from
+    // other side effects, so known non-file mutators (browser, computer use,
+    // scheduled wakeups, messaging) group under the File changes banner by
+    // design (see classifyTool's 三桶语义边界 comment — documented, not a bug).
+    setToolReadOnlyMap([
+      { name: 'browser_click', read_only: false },
+      { name: 'computer', read_only: false },
+      { name: 'ScheduleWakeup', read_only: false },
+      { name: 'SendMessage', read_only: false },
+    ])
+    expect(classifyTool('browser_click')).toBe('changes')
+    expect(classifyTool('computer')).toBe('changes')
+    expect(classifyTool('ScheduleWakeup')).toBe('changes')
+    expect(classifyTool('SendMessage')).toBe('changes')
+  })
+
   it('keeps a read-only shell variant in explore (terminal is 非只读 only)', () => {
     setToolReadOnlyMap([{ name: 'bash', read_only: true }])
     expect(classifyTool('bash')).toBe('explore')
@@ -101,7 +118,7 @@ describe('groupToolSegments — sequence → segments', () => {
 
   it('merges adjacent same-kind explore calls into one group', () => {
     const segs = groupToolSegments(
-      [tc('Read', 'a'), tc('Grep', 'b'), tc('Glob', 'c')].map(x => ({ tc: x, groupable: true })),
+      [tc('Read', 'a'), tc('Grep', 'b'), tc('Glob', 'c')].map(x => ({ type: 'tool' as const, tc: x, groupable: true })),
       ALL_ON,
     )
     expect(segs).toEqual([{ type: 'group', kind: 'explore', items: expect.any(Array) }])
@@ -125,7 +142,7 @@ describe('groupToolSegments — sequence → segments', () => {
 
   it('passes cards through individually when that kind\u2019s switch is OFF', () => {
     const segs = groupToolSegments(
-      [tc('Read', 'a'), tc('Grep', 'b'), tc('Bash', 'c'), tc('bash', 'd')].map(x => ({ tc: x, groupable: true })),
+      [tc('Read', 'a'), tc('Grep', 'b'), tc('Bash', 'c'), tc('bash', 'd')].map(x => ({ type: 'tool' as const, tc: x, groupable: true })),
       { explore: false, terminal: true, changes: true },
     )
     expect(segs.map(s => (s.type === 'group' ? `group:${s.kind}` : 'single'))).toEqual([
@@ -138,9 +155,9 @@ describe('groupToolSegments — sequence → segments', () => {
   it('a non-groupable unit (special card) breaks the run and renders alone', () => {
     const segs = groupToolSegments(
       [
-        { tc: tc('Read', 'a'), groupable: true },
-        { tc: tc('agent_spawn', 'sub'), groupable: false },
-        { tc: tc('Read', 'b'), groupable: true },
+        { type: 'tool' as const, tc: tc('Read', 'a'), groupable: true },
+        { type: 'tool' as const, tc: tc('agent_spawn', 'sub'), groupable: false },
+        { type: 'tool' as const, tc: tc('Read', 'b'), groupable: true },
       ],
       ALL_ON,
     )
@@ -155,11 +172,11 @@ describe('groupToolSegments — sequence → segments', () => {
   it('switch-off kind between two runs lets each remaining kind group around it', () => {
     const segs = groupToolSegments(
       [
-        { tc: tc('Read', 'a'), groupable: true },
-        { tc: tc('Grep', 'a2'), groupable: true },
-        { tc: tc('Bash', 'b'), groupable: true },
-        { tc: tc('Grep', 'c'), groupable: true },
-        { tc: tc('Glob', 'c2'), groupable: true },
+        { type: 'tool' as const, tc: tc('Read', 'a'), groupable: true },
+        { type: 'tool' as const, tc: tc('Grep', 'a2'), groupable: true },
+        { type: 'tool' as const, tc: tc('Bash', 'b'), groupable: true },
+        { type: 'tool' as const, tc: tc('Grep', 'c'), groupable: true },
+        { type: 'tool' as const, tc: tc('Glob', 'c2'), groupable: true },
       ],
       { explore: true, terminal: false, changes: true },
     )
@@ -171,12 +188,63 @@ describe('groupToolSegments — sequence → segments', () => {
   })
 
   it('a lone groupable card stays single (no group of one)', () => {
-    const segs = groupToolSegments([{ tc: tc('Read', 'a'), groupable: true }], ALL_ON)
+    const segs = groupToolSegments([{ type: 'tool' as const, tc: tc('Read', 'a'), groupable: true }], ALL_ON)
     expect(segs).toEqual([{ type: 'single', tc: expect.any(Object) }])
   })
 
   it('empty sequence → no segments', () => {
     expect(groupToolSegments([], ALL_ON)).toEqual([])
+  })
+
+  // Fix round 1 — ordered marker passthrough (the retry-chain banner).
+
+  it('emits markers at their sequence position, in order', () => {
+    const segs = groupToolSegments<ToolCall, string>(
+      [
+        { type: 'marker', marker: 'banner-1' },
+        { type: 'tool', tc: tc('Read', 'a'), groupable: true },
+        { type: 'marker', marker: 'banner-2' },
+      ],
+      ALL_ON,
+    )
+    expect(segs).toEqual([
+      { type: 'marker', marker: 'banner-1' },
+      { type: 'single', tc: expect.any(Object) },
+      { type: 'marker', marker: 'banner-2' },
+    ])
+  })
+
+  it('crossing a marker reopens segmentation (a run never spans one)', () => {
+    const segs = groupToolSegments<ToolCall, string>(
+      [
+        { type: 'tool', tc: tc('Read', 'a'), groupable: true },
+        { type: 'marker', marker: 'banner' },
+        { type: 'tool', tc: tc('Grep', 'b'), groupable: true },
+      ],
+      ALL_ON,
+    )
+    // Both reads stay singles — the banner cut the explore run.
+    expect(segs.map(s => s.type)).toEqual(['single', 'marker', 'single'])
+  })
+
+  it('banner between two full runs keeps both groups with the banner ordered between them', () => {
+    const segs = groupToolSegments<ToolCall, string>(
+      [
+        { type: 'tool', tc: tc('Read', 'a'), groupable: true },
+        { type: 'tool', tc: tc('Grep', 'a2'), groupable: true },
+        { type: 'marker', marker: 'banner-x' },
+        { type: 'tool', tc: tc('bash', 'x1'), groupable: false },
+        { type: 'tool', tc: tc('bash', 'x2'), groupable: false },
+        { type: 'tool', tc: tc('Glob', 'b'), groupable: true },
+        { type: 'tool', tc: tc('Read', 'b2'), groupable: true },
+        { type: 'marker', marker: 'banner-y' },
+        { type: 'tool', tc: tc('Bash', 'y1'), groupable: false },
+      ],
+      ALL_ON,
+    )
+    expect(
+      segs.map(s => (s.type === 'group' ? `group:${s.kind}` : s.type === 'marker' ? s.marker : 'single')),
+    ).toEqual(['group:explore', 'banner-x', 'single', 'single', 'group:explore', 'banner-y', 'single'])
   })
 })
 
