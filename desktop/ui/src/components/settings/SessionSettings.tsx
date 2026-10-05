@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useIntl } from 'react-intl'
+import { useIntl, type PrimitiveType } from 'react-intl'
 import { toast } from 'sonner'
 import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
@@ -10,7 +10,7 @@ import EffectBadge from './EffectBadge'
 /**
  * Settings → 会话 (Settings R3, T6): session lifecycle settings.
  *
- * Two cards:
+ * Three cards:
  * ① 「自动压缩上下文」 — the engine-level `auto_compact_enabled` switch
  *    (persisted as `context_auto_compact`, configure key
  *    `context.auto_compact`). The engine is rebuilt per message, so a flip
@@ -20,6 +20,11 @@ import EffectBadge from './EffectBadge'
  *    the auto-clean switch + retention gear, with a new 7-day option. The
  *    Advanced page keeps a cross-link (i18n
  *    `settings.advanced.movedToSession`) instead of the card.
+ * ③ 「自动归档」 (Settings R3 T7) — the timed scan switch
+ *    (`session.auto_archive_enabled`, configure key
+ *    `session.auto_archive_enabled`) + retention gear
+ *    (`session.auto_archive_days`, default 7, clamped 1..=365). Default off;
+ *    both re-read live on every 6h scan pass.
  *
  * Later tasks in this batch append more cards to this page (see the anchor
  * comment at the end of the JSX).
@@ -28,7 +33,11 @@ import EffectBadge from './EffectBadge'
 export default function SessionSettings() {
   const { config, refreshConfig } = useCatalog()
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  // String-returning helper (aria-labels etc. need strings); `values` runs
+  // the ICU message through formatMessage for interpolated keys (T7's
+  // `{days, plural, ...}` gear labels).
+  const t = (id: string, values?: Record<string, PrimitiveType>): string =>
+    values === undefined ? intl.formatMessage({ id }) : intl.formatMessage({ id }, values)
 
   // ① Auto-compaction: default ON (backend serde default true), follows the
   // persisted config on refresh like every other config-backed toggle.
@@ -49,6 +58,17 @@ export default function SessionSettings() {
   useEffect(() => {
     setSessionRetentionDays(config?.session_retention_days ?? 0)
   }, [config?.session_retention_days])
+
+  // ③ Auto-archive (Settings R3 T7): default OFF (backend serde default)
+  // with a 7-day retention gear (backend default + clamp 1..=365).
+  const [autoArchiveEnabled, setAutoArchiveEnabled] = useState(config?.session_auto_archive_enabled ?? false)
+  const [autoArchiveDays, setAutoArchiveDays] = useState<number>(config?.session_auto_archive_days ?? 7)
+  useEffect(() => {
+    setAutoArchiveEnabled(config?.session_auto_archive_enabled ?? false)
+  }, [config?.session_auto_archive_enabled])
+  useEffect(() => {
+    setAutoArchiveDays(config?.session_auto_archive_days ?? 7)
+  }, [config?.session_auto_archive_days])
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
@@ -77,6 +97,22 @@ export default function SessionSettings() {
       toast.success(t('settings.advanced.sessionGc.saved'))
     } catch (e) {
       toastError(t('settings.advanced.updateFailed'), e)
+    }
+  }
+
+  // T7: persist the auto-archive retention gear. Options are already inside
+  // the backend's 1..=365 clamp; failures re-read the config like the toggle.
+  const handleAutoArchiveDaysChange = async (next: string) => {
+    const days = Number(next)
+    if (!Number.isInteger(days) || days < 1) return
+    setAutoArchiveDays(days)
+    try {
+      await api.configure({ key: 'session.auto_archive_days', value: String(days) })
+      await refreshConfig()
+      toast.success(t('settings.session.autoArchive.saved'))
+    } catch (e) {
+      toastError(t('settings.advanced.updateFailed'), e)
+      refreshConfig().catch(() => {})
     }
   }
 
@@ -156,6 +192,57 @@ export default function SessionSettings() {
             <p className="font-label-sm text-label-xs text-on-surface-variant mt-xs">{t('settings.advanced.sessionGc.retentionDesc')}</p>
           </div>
         </div>
+
+        {/* ③ 自动归档 (Settings R3 T7) — the timed scan that archives
+            已完成 (R6: !running && 无未读 inbox)、未置顶 sessions past the
+            retention window. Default off; the config is re-read every
+            6h pass, so a flip/days change lands on the next scan (the
+            instant badge marks the toggle persisting immediately — no
+            restart; the help copy spells out the scan cadence). */}
+        <section
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          data-testid="session-auto-archive-card"
+        >
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">archive</span>
+            <h3 className="font-headline-md text-headline-md">{t('settings.session.autoArchive.title')}</h3>
+            <span className="flex-1" />
+            <EffectBadge kind="instant" />
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-md">{t('settings.session.autoArchive.help')}</p>
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.session.autoArchive.toggle')}</div>
+            </div>
+            <Switch
+              checked={autoArchiveEnabled}
+              onCheckedChange={v => void handleToggle('session.auto_archive_enabled', v, setAutoArchiveEnabled)}
+              className="shrink-0"
+              aria-label={t('settings.session.autoArchive.title')}
+              data-testid="session-auto-archive-switch"
+            />
+          </div>
+          <div className="mt-md">
+            <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs" htmlFor="session-auto-archive-days-select">
+              {t('settings.session.autoArchive.retention')}
+            </label>
+            {/* Native select (the settings modals' pattern) — the wire value
+                is the plain day count, clamped 1..=365 backend-side. */}
+            <select
+              id="session-auto-archive-days-select"
+              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm cursor-pointer"
+              value={String(autoArchiveDays)}
+              onChange={e => void handleAutoArchiveDaysChange(e.target.value)}
+              aria-label={t('settings.session.autoArchive.retention')}
+            >
+              <option value="1">{t('settings.session.autoArchive.retentionDays', { days: 1 })}</option>
+              <option value="7">{t('settings.session.autoArchive.retentionDays', { days: 7 })}</option>
+              <option value="30">{t('settings.session.autoArchive.retentionDays', { days: 30 })}</option>
+              <option value="90">{t('settings.session.autoArchive.retentionDays', { days: 90 })}</option>
+            </select>
+            <p className="font-label-sm text-label-xs text-on-surface-variant mt-xs">{t('settings.session.autoArchive.retentionDesc')}</p>
+          </div>
+        </section>
 
         {/* 后续任务在此追加: 自动归档 / ask 自动继续 / 发送行为 / 分组 */}
       </div>

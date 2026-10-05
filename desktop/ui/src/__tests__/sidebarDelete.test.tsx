@@ -13,6 +13,8 @@ vi.mock('@/lib/tauri-api', () => ({
   listArchivedSessions: vi.fn(async () => []),
   archiveSession: vi.fn(async () => true),
   unarchiveSession: vi.fn(async () => true),
+  // Settings R3 T7: the one-time legacy-pin migration calls this on mount.
+  setSessionPinned: vi.fn(async () => true),
   searchSessions: vi.fn(async () => []),
   listScheduledTasks: vi.fn(async () => []),
   openSessionWindow: vi.fn(async () => undefined),
@@ -152,8 +154,9 @@ describe('archived 永久删除 (B4 P2-6)', () => {
   })
 })
 
-describe('stale map pruning (B4 P2-7)', () => {
-  it('prunes deleted sessions from shannon-sessions-order and shannon-sessions-pinned', async () => {
+describe('stale map pruning (B4 P2-7; pins backend-side since Settings R3 T7)', () => {
+  it('prunes deleted sessions from shannon-sessions-order; the legacy pin key migrates to the backend', async () => {
+    const api = await import('@/lib/tauri-api')
     window.localStorage.setItem('shannon-sessions-pinned', JSON.stringify(['s1', 's2']))
     window.localStorage.setItem('shannon-sessions-order', JSON.stringify({ s1: 0, s2: 1, s3: 2 }))
     const list = sessions()
@@ -162,19 +165,22 @@ describe('stale map pruning (B4 P2-7)', () => {
     fireEvent.click(dialog.querySelector('[data-testid="delete-session-confirm"]') as HTMLButtonElement)
     rerenderWith(list.filter(s => s.id !== 's2'))
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
-    expect(JSON.parse(window.localStorage.getItem('shannon-sessions-pinned')!)).toEqual(['s1'])
+    // The drag-order map is still localStorage-pruned on a real delete.
     expect(JSON.parse(window.localStorage.getItem('shannon-sessions-order')!)).toEqual({ s1: 0, s3: 2 })
+    // Settings R3 T7: pins live in the curation sidecar now — the one-time
+    // mount migration committed the legacy ids through set_session_pinned
+    // and retired the localStorage key; localStorage is never written again.
+    await waitFor(() => expect(api.setSessionPinned).toHaveBeenCalledWith('s2', true))
+    await waitFor(() => expect(window.localStorage.getItem('shannon-sessions-pinned')).toBeNull())
   })
 
-  it('leaves pin/order entries alone on archive (reversible; inert while archived)', async () => {
+  it('leaves the drag-order map alone on archive (reversible; inert while archived)', async () => {
     const api = await import('@/lib/tauri-api')
-    window.localStorage.setItem('shannon-sessions-pinned', JSON.stringify(['s1']))
     window.localStorage.setItem('shannon-sessions-order', JSON.stringify({ s1: 0 }))
     renderRail()
     fireEvent.click(screen.getByRole('button', { name: 'Actions for Alpha' }))
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }))
     await waitFor(() => expect(api.archiveSession).toHaveBeenCalledWith('s1'))
-    expect(JSON.parse(window.localStorage.getItem('shannon-sessions-pinned')!)).toEqual(['s1'])
     expect(JSON.parse(window.localStorage.getItem('shannon-sessions-order')!)).toEqual({ s1: 0 })
   })
 })

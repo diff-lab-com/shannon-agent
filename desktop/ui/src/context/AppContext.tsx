@@ -1621,6 +1621,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
               : messageFor('sidebar.sessions.archived.autoUnarchived.untitled'),
           )
         }),
+        // Settings R3 T7: a pin flip (this or another window) — the curation
+        // sidecar is the source of truth, so re-read the list and let the
+        // rail re-derive its pin sort/glyph from the DTO.
+        listen(EVENT_NAMES.SESSION_PINS_CHANGED, () => { refreshSessions() }),
+        // Settings R3 T7: the auto-archive scan archived a session — toast
+        // so the conversation leaving the active rail is never a surprise
+        // (messageFor works outside IntlProvider, same as the resume toast).
+        listen(EVENT_NAMES.SESSION_AUTO_ARCHIVED, (e) => {
+          const p = e.payload as { session_id: string; title?: string }
+          const title = p.title?.trim() || p.session_id.split('-')[0]
+          toast.success(messageFor('sessions.autoArchivedToast', { title }))
+        }),
         listen(EVENT_NAMES.CONFIG_UPDATED, (e) => {
           refreshConfig()
           // Settings R3 T5: notification-prefs saves emit CONFIG_UPDATED with

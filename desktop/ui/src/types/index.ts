@@ -254,6 +254,9 @@ export interface SessionInfo {
   /** P0 sidebar telemetry: epoch **ms** of the session's last activity
    *  (L0 log mtime). Absent on older engines / brand-new sessions. */
   updated_at?: number
+  /** Settings R3 T7: user-pinned flag, joined from the curation sidecar.
+   *  Absent on older engines — treat as false (unpinned). */
+  pinned?: boolean
 }
 
 /** Session archive (卡A): one archived session as the sidebar's 已归档
@@ -651,6 +654,14 @@ export interface DesktopConfig {
    *  verbatim; the engine is rebuilt per message, so a change applies to
    *  the next message. Written via `configure('context.auto_compact')`. */
   context_auto_compact?: boolean
+  /** Settings R3 T7: master switch for the timed auto-archive scan. Default
+   *  false — the scan archives nothing until opted in. Written via
+   *  `configure('session.auto_archive_enabled')`; re-read every pass. */
+  session_auto_archive_enabled?: boolean
+  /** Settings R3 T7: auto-archive retention window in days. Default 7;
+   *  the backend clamps into 1..=365. Written via
+   *  `configure('session.auto_archive_days')`. */
+  session_auto_archive_days?: number
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
@@ -1633,6 +1644,11 @@ export const EVENT_NAMES = {
   SESSIONS_UPDATED: 'sessions-updated',
   /** 卡A: switch_session auto-unarchived an archived session (toast cue). */
   SESSION_AUTO_UNARCHIVED: 'session-auto-unarchived',
+  /** Settings R3 T7: a session's pinned flag changed — refresh the list so
+   *  the rail's pin sort/glyph re-derives from the curation sidecar. */
+  SESSION_PINS_CHANGED: 'session-pins-changed',
+  /** Settings R3 T7: the auto-archive scan archived a session (toast cue). */
+  SESSION_AUTO_ARCHIVED: 'session-auto-archived',
   SESSION_LOADED: 'session-loaded',
   CONFIG_UPDATED: 'config-updated',
   DIFF_REVIEW_AVAILABLE: 'diff-review-available',

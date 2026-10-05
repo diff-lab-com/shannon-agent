@@ -48,6 +48,10 @@ const deletedSessions = new Set<string>()
 const renamedSessions = new Map<string, SessionInfo>()
 // W2 journey #19: demo twin of the backend's archived-session registry.
 const archivedSessions = new Set<string>()
+// Settings R3 T7: demo twin of the curation sidecar's pinned flags — the
+// list/search reads project them so the rail's pin sort survives a mock-mode
+// remount, exactly like the real backend reading curation.json back.
+const pinnedSessions = new Set<string>()
 
 // P1-3: mutable desktop config so execution-mode / sandbox switches in the
 // demo feel live (get_config hands out a fresh clone of this).
@@ -978,6 +982,7 @@ export const handlers: Record<string, MockHandler> = {
     return clone(MOCK_SESSIONS)
       .filter(s => !deletedSessions.has(s.id) && !archivedSessions.has(s.id))
       .map(s => renamedSessions.get(s.id) ?? s)
+      .map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
   },
   async search_sessions(args: { query: string }) {
     await delay()
@@ -991,6 +996,7 @@ export const handlers: Record<string, MockHandler> = {
       .filter(s => !deletedSessions.has(s.id))
       .map(s => renamedSessions.get(s.id) ?? s)
       .filter(s => s.title.toLowerCase().includes(q))
+      .map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
   },
   // P0 plan dock: a demo plan so the dock's 计划 tab has content in mock mode.
   async get_session_plan(args: { workingDir?: string }) {
@@ -1080,6 +1086,15 @@ export const handlers: Record<string, MockHandler> = {
     recordSeedSessionUnarchived(args.id)
     notifySeededSessionsUpdated()
     archivedSessions.delete(args.id)
+    return true
+  },
+  // Settings R3 T7: the pin twin — same in-memory-set contract as the
+  // archive handlers, so a demo pin survives remounts through the
+  // list_sessions/search_sessions projections above.
+  async set_session_pinned(args: { id: string; pinned: boolean }) {
+    await delay(60)
+    if (args.pinned) pinnedSessions.add(args.id)
+    else pinnedSessions.delete(args.id)
     return true
   },
   async duplicate_session(args: { id: string }) {
