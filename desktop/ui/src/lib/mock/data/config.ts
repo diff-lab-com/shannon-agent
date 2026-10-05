@@ -77,7 +77,9 @@ export const MOCK_MODELS: ModelInfo[] = [
   { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', context_window: 200_000, price_in: 3, price_out: 15, vision: true, tools: true, tier: 'standard' },
   { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', provider: 'anthropic', context_window: 200_000, price_in: 0.8, price_out: 4, vision: false, tools: true, tier: 'fast' },
   { id: 'gpt-5', name: 'GPT-5', provider: 'openai', context_window: 256_000, price_in: 1.25, price_out: 10, vision: true, tools: true, tier: 'pro' },
-  { id: 'gpt-5-mini', name: 'GPT-5 Mini', provider: 'openai', context_window: 128_000, price_in: 0.25, price_out: 2, tools: true, tier: 'fast' },
+  // S3-1: one overlay-sourced row so the shared source badge is exercisable
+  // in demo/e2e on every picker surface (catalog rows stay unbadged).
+  { id: 'gpt-5-mini', name: 'GPT-5 Mini', provider: 'openai', context_window: 128_000, price_in: 0.25, price_out: 2, tools: true, tier: 'fast', source: 'overlay' },
   { id: 'gemini-3-pro', name: 'Gemini 3 Pro', provider: 'google', context_window: 2_000_000, price_in: 1.25, price_out: 10, vision: true, tools: true, tier: 'pro' },
   { id: 'llama-4-70b', name: 'Llama 4 70B (local)', provider: 'ollama', context_window: 32_000, price_in: 0, price_out: 0, vision: false, tools: false, tier: 'standard' },
 ]

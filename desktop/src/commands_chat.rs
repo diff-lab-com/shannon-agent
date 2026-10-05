@@ -344,6 +344,13 @@ fn llm_provider_from_slug(s: &str) -> Option<shannon_engine::api::LlmProvider> {
 }
 
 /// Get current application status.
+///
+/// S3-1 (P-N11): also carries the engine store's ACTIVE model profile name
+/// (`active_profile`) so the model pickers can render the "pinned by
+/// profile X" why-active label from the same snapshot they already poll —
+/// no second round trip. The engine normalizes an unset pointer to the
+/// `"default"` sentinel (`active_profile_key`), which the UI treats as
+/// "no explicit profile pin" for labeling purposes.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusResponse, String> {
@@ -351,6 +358,10 @@ pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusRespo
     let model = cc.model.clone();
     let provider = cc.provider.to_string();
     drop(cc);
+    let active_profile = {
+        let store = state.provider_store.lock().await;
+        store.config().active_profile_key().to_string()
+    };
     let session = state.registry.get_or_create_active();
     let querying = session.querying.lock().await;
     let messages = session.messages.lock().await;
@@ -364,6 +375,7 @@ pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusRespo
         querying: *querying,
         message_count: messages.len(),
         working_dir,
+        active_profile: Some(active_profile),
     })
 }
 
@@ -510,9 +522,10 @@ pub async fn list_tools(state: tauri::State<'_, AppState>) -> Result<Vec<ToolInf
 /// `apply_phase_tier_to_base` helper), and (c) the unattended constructors
 /// clone the `client_config` Arc without resolving through here. The
 /// `unattended_paths_pin_global_config` test in this file pins (a)+(b)+(c).
-pub(crate) async fn resolve_client_config_for_session(
+pub(crate) async fn resolve_client_config_for_session<R: tauri::Runtime>(
     state: &AppState,
     session: &crate::session_registry::SessionState,
+    ui: Option<&tauri::AppHandle<R>>,
 ) -> shannon_engine::api::LlmClientConfig {
     let base = state.client_config.read().await.clone();
     let Some(ov) = session.model_override_snapshot() else {
@@ -532,8 +545,57 @@ pub(crate) async fn resolve_client_config_for_session(
                 model = %ov.model,
                 "session model override no longer resolvable — falling back to global default"
             );
+            // S3-2 (P-N10): the silent fallback is now also a UI event. The
+            // chip's "· session" suffix keeps pointing at a model the engine
+            // can no longer reach (e.g. its provider vanished with a profile
+            // switch); one toast tells the user why the next answer does NOT
+            // come from the pinned model. Best-effort: a failed emit never
+            // blocks the send. Callers without an `AppHandle` (the read-only
+            // pre-check commands) pass `None` — the send itself follows and
+            // emits there.
+            if let Some(app) = ui {
+                notify_override_fallback(app, session.session_id, &ov.provider, &ov.model);
+            }
             base
         }
+    }
+}
+
+/// S3-2 (P-N10) — wire name of the stale-override fallback event. Desktop
+/// shell-local (not in the shared `shannon_types::events` table): the
+/// engine has no use for it, and keeping it here avoids widening the
+/// engine↔shell contract for a desktop-only UX cue.
+pub const MODEL_OVERRIDE_FALLBACK: &str = "model-override-fallback";
+
+/// Payload of [`MODEL_OVERRIDE_FALLBACK`]: the session whose pinned target
+/// failed to re-resolve, and the `(provider, model)` pin that was ignored
+/// for this query (the query itself went out on the global default).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ModelOverrideFallbackPayload {
+    pub session_id: String,
+    pub provider: String,
+    pub model: String,
+}
+
+/// Emit [`MODEL_OVERRIDE_FALLBACK`]. Fire-and-forget: a failed emit is
+/// logged at debug and swallowed — the tracing warn in the caller stays the
+/// authoritative engine-side record.
+fn notify_override_fallback<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    session_id: uuid::Uuid,
+    provider: &str,
+    model: &str,
+) {
+    use tauri::Emitter;
+    if let Err(e) = app.emit(
+        MODEL_OVERRIDE_FALLBACK,
+        ModelOverrideFallbackPayload {
+            session_id: session_id.to_string(),
+            provider: provider.to_string(),
+            model: model.to_string(),
+        },
+    ) {
+        tracing::debug!(error = %e, "model-override-fallback emit failed");
     }
 }
 
@@ -802,6 +864,26 @@ pub async fn get_session_model(
     Ok(session.model_override_snapshot())
 }
 
+/// S3-2 (P-N10): how many sessions currently carry a model override.
+///
+/// Counts the durable sidecar's entries (load-pruned against the L0 session
+/// log, write-reconciled on every set/clear) — i.e. the sessions that would
+/// KEEP their pinned model across a profile switch and fall back to the
+/// global default only where the pin no longer resolves. The Settings
+/// profile switch confirm renders this count; a failed lock surfaces as a
+/// command error (the caller degrades to no-confirm, never blocks).
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn count_session_model_overrides(
+    state: tauri::State<'_, AppState>,
+) -> Result<u32, String> {
+    let store = state
+        .session_overrides
+        .lock()
+        .map_err(|_| "session override sidecar lock poisoned".to_string())?;
+    Ok(store.len() as u32)
+}
+
 // ── S2-4a (P-N9): pre-send vision pre-check ─────────────────────────────
 
 /// Wire shape of [`check_vision_send`]: which model the NEXT send of this
@@ -920,7 +1002,9 @@ pub async fn check_vision_send(
     let (_, session) = state
         .registry
         .resolve_explicit_or_active(session_id.as_deref())?;
-    let cc = resolve_client_config_for_session(&state, &session).await;
+    let cc =
+        resolve_client_config_for_session(&state, &session, None::<&tauri::AppHandle<tauri::Wry>>)
+            .await;
     let provider_slug = cc.provider.to_string().to_lowercase();
     let vision = vision_support_for(&cc.model);
     let suggestion = if vision == Some(false) {
@@ -1096,7 +1180,9 @@ pub async fn check_tools_send(
     let (_, session) = state
         .registry
         .resolve_explicit_or_active(session_id.as_deref())?;
-    let cc = resolve_client_config_for_session(&state, &session).await;
+    let cc =
+        resolve_client_config_for_session(&state, &session, None::<&tauri::AppHandle<tauri::Wry>>)
+            .await;
     let provider_slug = cc.provider.to_string().to_lowercase();
     let applies = tools_gate_applies(state.tools.list().len());
     let tools = if applies {
@@ -1754,13 +1840,107 @@ mod tests {
                     model: "ghost-model".into(),
                 });
 
-            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
             let base = state.client_config.read().await.clone();
             assert_eq!(
                 resolved.model, base.model,
                 "stale override → global default"
             );
             assert_eq!(resolved.provider, base.provider);
+        }
+
+        /// S3-2 (P-N10) — the stale fallback also reaches the UI: with an
+        /// `AppHandle` present, the unresolvable-override path emits
+        /// `model-override-fallback` carrying the session id and the pin it
+        /// ignored. This is the replacement for the old tracing-only
+        /// silence; the send itself is unaffected (global default below).
+        #[tokio::test]
+        async fn stale_override_emits_fallback_event() {
+            use tauri::Listener;
+
+            let app = tauri::test::mock_app().handle().clone();
+            let state = AppState::new();
+            let key = state.registry.create();
+            let session = state.registry.get(key).unwrap();
+            *session.model_override.lock().unwrap() =
+                Some(crate::session_registry::SessionModelOverride {
+                    provider: "nonexistent".into(),
+                    model: "ghost-model".into(),
+                });
+
+            let seen = std::sync::Arc::new(tokio::sync::Mutex::new(
+                Option::<super::super::ModelOverrideFallbackPayload>::None,
+            ));
+            let sink = seen.clone();
+            let _unlisten = app.listen(
+                super::super::MODEL_OVERRIDE_FALLBACK,
+                move |event: tauri::Event| {
+                    let payload =
+                        serde_json::from_str::<super::super::ModelOverrideFallbackPayload>(
+                            event.payload(),
+                        )
+                        .expect("fallback payload parses");
+                    *sink.try_lock().unwrap() = Some(payload);
+                },
+            );
+
+            let resolved =
+                super::super::resolve_client_config_for_session(&state, &session, Some(&app)).await;
+            let base = state.client_config.read().await.clone();
+            assert_eq!(
+                resolved.model, base.model,
+                "send still rides the global default"
+            );
+
+            let payload = seen.lock().await.take().expect("fallback event emitted");
+            assert_eq!(payload.session_id, key.0.to_string());
+            assert_eq!(payload.provider, "nonexistent");
+            assert_eq!(payload.model, "ghost-model");
+        }
+
+        /// The `None`-handle path (read-only pre-check commands) emits
+        /// nothing — the event is owned by the send path.
+        #[tokio::test]
+        async fn stale_override_without_handle_emits_nothing() {
+            use tauri::Listener;
+
+            let app = tauri::test::mock_app().handle().clone();
+            let state = AppState::new();
+            let key = state.registry.create();
+            let session = state.registry.get(key).unwrap();
+            *session.model_override.lock().unwrap() =
+                Some(crate::session_registry::SessionModelOverride {
+                    provider: "nonexistent".into(),
+                    model: "ghost-model".into(),
+                });
+
+            let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = hits.clone();
+            let _unlisten = app.listen(
+                super::super::MODEL_OVERRIDE_FALLBACK,
+                move |_event: tauri::Event| {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                },
+            );
+
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
+            let base = state.client_config.read().await.clone();
+            assert_eq!(resolved.model, base.model);
+            assert_eq!(
+                hits.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "no AppHandle → no event"
+            );
         }
 
         /// Without an override and without any phase-tier preference the
@@ -1780,7 +1960,12 @@ mod tests {
                 cfg.act_tier = None;
             }
 
-            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
             let base = state.client_config.read().await.clone();
             assert_eq!(resolved.model, base.model);
             assert_eq!(resolved.provider, base.provider);
@@ -1822,7 +2007,12 @@ mod tests {
                 cfg.act_tier = Some("fast".into());
             }
 
-            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
             let base = state.client_config.read().await.clone();
             assert_eq!(resolved.provider, base.provider, "tier stays in-provider");
             assert_eq!(
@@ -1852,7 +2042,12 @@ mod tests {
                 cfg.act_tier = Some("fast".into());
             }
 
-            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
             let base = state.client_config.read().await.clone();
             assert_eq!(
                 Some(resolved.model.as_str()),
@@ -1890,7 +2085,12 @@ mod tests {
                 cfg.act_tier = Some("fast".into());
             }
 
-            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                &session,
+                None::<&tauri::AppHandle<tauri::Wry>>,
+            )
+            .await;
             assert_eq!(
                 resolved.model, "claude-opus-4-7",
                 "session override wins over the phase tier"
@@ -2114,6 +2314,7 @@ mod tests {
             let resolved = super::super::resolve_client_config_for_session(
                 &state,
                 state.registry.get(key).unwrap().as_ref(),
+                None::<&tauri::AppHandle<tauri::Wry>>,
             )
             .await;
             assert_eq!(

@@ -590,6 +590,14 @@ pub struct StatusResponse {
     pub querying: bool,
     pub message_count: usize,
     pub working_dir: String,
+    /// S3-1 (P-N11 "why this model is active"): the engine store's ACTIVE
+    /// model profile name (`providers.toml` `active_profile`). The global
+    /// default model IS that profile's pinned active target, so the pickers
+    /// can label the default row "pinned by profile X" without a second
+    /// round trip. `None` when the store carries no profiles map (legacy
+    /// files); the UI falls back to the plain "global default" label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_profile: Option<String>,
 }
 
 /// Model info for the model selector. The optional fields are populated
@@ -1607,8 +1615,12 @@ pub async fn send_message(
     // R2-1: session-level model override — a chip override on THIS session
     // re-resolves provider/model/base_url/credential against the engine
     // store; no override inherits the global `client_config` (the default).
-    let client_config =
-        crate::commands_chat::resolve_client_config_for_session(&state, &active_session).await;
+    let client_config = crate::commands_chat::resolve_client_config_for_session(
+        &state,
+        &active_session,
+        Some(&app_handle),
+    )
+    .await;
     let effective_model = client_config.model.clone();
     let effective_provider = client_config.provider.to_string();
     let client = LlmClient::new(client_config);
@@ -2980,6 +2992,7 @@ mod tests {
             querying: true,
             message_count: 42,
             working_dir: "/home/user".to_string(),
+            active_profile: Some("default".to_string()),
         };
         let json = serde_json::to_string(&resp).unwrap();
         let deserialized: StatusResponse = serde_json::from_str(&json).unwrap();

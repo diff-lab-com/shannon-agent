@@ -307,6 +307,12 @@ export interface StatusResponse {
   querying: boolean
   message_count: number
   working_dir: string
+  /** S3-1 (P-N11): the engine store's ACTIVE model profile name — the
+   *  global default model IS that profile's pinned target, so the pickers
+   *  can label the default row "pinned by profile X". `null`/absent on
+   *  legacy payloads; the `"default"` sentinel means the pointer is unset
+   *  (rendered as the plain "global default" label). */
+  active_profile?: string | null
 }
 
 export interface ModelInfo {
@@ -1659,6 +1665,14 @@ export const EVENT_NAMES = {
   SESSION_AUTO_UNARCHIVED: 'session-auto-unarchived',
   SESSION_LOADED: 'session-loaded',
   CONFIG_UPDATED: 'config-updated',
+  /**
+   * S3-2 (P-N10): a session's pinned model override no longer resolves
+   * (e.g. its provider vanished with a profile switch) and the query rode
+   * the global default. Payload: ModelOverrideFallbackPayload
+   * { session_id, provider, model } — rendered as a one-time toast per
+   * distinct triple, replacing the old tracing-only silence.
+   */
+  MODEL_OVERRIDE_FALLBACK: 'model-override-fallback',
   DIFF_REVIEW_AVAILABLE: 'diff-review-available',
   BACKGROUND_TASK_UPDATE: 'background-task-update',
   BACKGROUND_TASKS_UPDATED: 'background-tasks-updated',

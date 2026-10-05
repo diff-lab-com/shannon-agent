@@ -1472,6 +1472,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const unlisteners: UnlistenFn[] = []
     let cancelled = false
 
+    // S3-2 (P-N10): the backend emitted model-override-fallback — a session's
+    // pinned (provider, model) no longer resolves (e.g. its provider vanished
+    // with a profile switch) and the query rode the global default instead.
+    // "一次性告知": the event fires per QUERY while the pin is stale, so the
+    // dedupe set below toasts only the FIRST occurrence of each distinct
+    // (session, provider, model) triple per app run.
+    const overrideFallbackAnnounced = new Set<string>()
+
     async function register() {
       const handlers = [
         listen(EVENT_NAMES.QUERY_TEXT, (e) => {
@@ -1823,6 +1831,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // refreshModels is the CatalogContext-exposed refresh; the event
           // is low-frequency so no debounce is needed.
           void refreshModels()
+        }),
+        // S3-2 (P-N10): a pinned session model silently fell back to the
+        // global default at query time (replaces the old tracing-only
+        // warn). One toast per distinct (session, provider, model) — the
+        // user learns why the answer didn't come from the pinned model
+        // without being re-notified on every turn of the same staleness.
+        listen(EVENT_NAMES.MODEL_OVERRIDE_FALLBACK, (e) => {
+          const p = e.payload as { session_id?: string; provider?: string; model?: string }
+          const provider = typeof p.provider === 'string' ? p.provider : ''
+          const model = typeof p.model === 'string' ? p.model : ''
+          if (!provider || !model) return
+          const key = `${typeof p.session_id === 'string' ? p.session_id : ''}:${provider}:${model}`
+          if (overrideFallbackAnnounced.has(key)) return
+          overrideFallbackAnnounced.add(key)
+          toast.warning(messageFor('chat.input.overrideFallback.toast', { provider, model }))
         }),
         // B3 P1-25: a background-task change can also mean a new/finished
         // agent run — refresh the agents inventory alongside the tasks so

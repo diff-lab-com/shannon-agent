@@ -999,7 +999,18 @@ export const handlers: Record<string, MockHandler> = {
       ...clone(MOCK_STATUS),
       model: demoConfig.model ?? MOCK_STATUS.model,
       provider: demoConfig.provider ?? MOCK_STATUS.provider,
+      // S3-1 (P-N11): the ACTIVE profile name — the demo mirrors the
+      // backend's `active_profile_key` (the "default" sentinel when unset),
+      // feeding the pickers' "pinned by profile X" why-active label.
+      active_profile: demoProviderProfiles.find((p) => p.active)?.name ?? 'default',
     }
+  },
+  // S3-2 (P-N10): the demo mirror of the durable override sidecar — the
+  // per-session override map's size. Chat-surface switches (chip) write the
+  // same map, so arming an override then counting returns 1.
+  async count_session_model_overrides() {
+    await delay()
+    return demoSessionModels.size
   },
   async list_tools() { await delay(); return clone(MOCK_TOOLS) },
 

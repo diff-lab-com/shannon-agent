@@ -154,6 +154,10 @@ fn main() {
             commands_chat::set_session_model,
             commands_chat::clear_session_model,
             commands_chat::get_session_model,
+            // S3-2 (P-N10) — active session-override count for the Settings
+            // profile-switch confirm ("N sessions still use override
+            // models").
+            commands_chat::count_session_model_overrides,
             // S2-4a (P-N9) — pre-send vision pre-check: the UI asks before
             // pointing image attachments at a model KNOWN to lack vision,
             // with a one-click switch candidate. The engine gate stays the
