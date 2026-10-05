@@ -480,7 +480,7 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   requestPermission: vi.fn().mockResolvedValue(true),
   featuredVendorToEntry: vi.fn().mockResolvedValue({ id: 'test', kind: 'mcp', name: 'Test', description: '', trust: 'community', homepage_url: null, source: null, metadata: {}, tags: [] }),
   sendNotification: vi.fn().mockResolvedValue(undefined),
-  getNotificationPrefs: vi.fn().mockResolvedValue({ master_enabled: true, dnd_enabled: false, dnd_start: null, dnd_end: null, on_completed: true, on_failed: true }),
+  getNotificationPrefs: vi.fn().mockResolvedValue({ master_enabled: true, dnd_enabled: false, dnd_start: null, dnd_end: null, on_completed: true, on_failed: true, on_needs_attention: true, sound_enabled: false }),
   setNotificationPrefs: vi.fn().mockResolvedValue(undefined),
   getWebhookConfig: vi.fn().mockResolvedValue(null),
   saveWebhookConfig: vi.fn().mockResolvedValue(undefined),

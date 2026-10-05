@@ -417,7 +417,8 @@ export async function sendNotification(payload: NotificationPayload): Promise<vo
 }
 
 /** Desktop-notification preferences — master enable, quiet-hours (DND) window,
- *  and per-event-type toggles (completions vs failures). */
+ *  and per-event-type toggles (completions vs failures vs needs-attention)
+ *  plus the frontend task-chime opt-in. */
 export interface NotificationPrefs {
   master_enabled: boolean
   dnd_enabled: boolean
@@ -428,6 +429,13 @@ export interface NotificationPrefs {
   on_completed: boolean
   /** Surface OS notifications for error events (query/task failure). */
   on_failed: boolean
+  /** Surface OS notifications for attention requests (approval waits, budget
+   *  alerts). Backend defaults this to true for older payloads. */
+  on_needs_attention: boolean
+  /** Play the frontend-composited task chime (Web Audio) on completed /
+   *  failed / needs-attention events. Independent of the OS notification
+   *  sound. Defaults to false. */
+  sound_enabled: boolean
 }
 
 export async function getNotificationPrefs(): Promise<NotificationPrefs> {

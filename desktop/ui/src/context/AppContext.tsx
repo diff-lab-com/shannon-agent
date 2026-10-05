@@ -14,6 +14,7 @@ import { messageFor } from '@/i18n'
 import { describeBackendError } from '@/lib/backendError'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
+import { invalidateNotificationPrefsCache, maybePlayTaskChime } from '@/lib/notificationChime'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
 import { clearDraft, tombstoneDraft } from '@/lib/composerDraft'
 import { basenameOf } from '@/lib/fileRefs'
@@ -1445,6 +1446,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (isStaleQueryEvent(key, p.query_id)) return
           retireQueryEvent(key, p.query_id)
           noteSessionActivity(key === claimedKey ? sid : key, 'end')
+          // Settings R3 T5 (B4): task-completed chime (frontend-synthesized,
+          // gated by the notification prefs' sound_enabled + DND + per-event
+          // toggles; no-op unless the user opted in). Background sessions
+          // chime too — that's the point when the window is buried.
+          void maybePlayTaskChime('completed')
           // §P2-18: the completed session commits ITS OWN bucket, and UI
           // mutations only fire when it is the one on screen — a background
           // session finishing must not append to (or clear) another
@@ -1506,6 +1512,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (isStaleQueryEvent(key, p.query_id)) return
           retireQueryEvent(key, p.query_id)
           noteSessionActivity(key === claimedKey ? p.session_id : key, 'fail')
+          // Settings R3 T5 (B4): task-failed chime (same prefs gate as the
+          // completed chime; on_failed toggle).
+          void maybePlayTaskChime('failed')
           // §P2-18: like QUERY_COMPLETED, failure state is scoped to the
           // session that owns the run — a background run failing must not
           // overwrite the on-screen session's composer/error state (its
@@ -1593,6 +1602,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // above). Through the helper so the ref mirror stays in step.
           // Batch B2: amber dot on the owning session's rail row.
           noteSessionApproval(p.session_id, true)
+          // Settings R3 T5 (B4): needs-attention chime for the approval wait
+          // (on_needs_attention toggle; the OS side fires its own
+          // NeedsAttention notification backend-side).
+          void maybePlayTaskChime('attention')
           applyPermissionRequest(p)
         }),
         listen(EVENT_NAMES.SESSIONS_UPDATED, () => { refreshSessions() }),
@@ -1608,8 +1621,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
               : messageFor('sidebar.sessions.archived.autoUnarchived.untitled'),
           )
         }),
-        listen(EVENT_NAMES.CONFIG_UPDATED, () => {
+        listen(EVENT_NAMES.CONFIG_UPDATED, (e) => {
           refreshConfig()
+          // Settings R3 T5: notification-prefs saves emit CONFIG_UPDATED with
+          // key=notifications — drop the chime gate's cached prefs so the
+          // next event re-reads them (a freshly-disabled sound must go
+          // silent without an app restart).
+          if ((e.payload as { key?: string } | null)?.key === 'notifications') {
+            invalidateNotificationPrefsCache()
+          }
           // Provider saves/activations emit CONFIG_UPDATED — keep the
           // gating snapshot (active provider / has_api_key) in lockstep.
           void refreshProviderStatus()
