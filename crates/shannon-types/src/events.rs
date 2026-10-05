@@ -238,6 +238,11 @@ pub struct SessionInfo {
     /// is missing (e.g. brand-new in-memory session).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<i64>,
+    /// Settings R3 T7: user-pinned flag, joined from the session's curation
+    /// sidecar at list time. `serde(default)` keeps older wire consumers
+    /// (and older desktops sending to newer UIs) unchanged — unpinned.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Session loaded event with messages.
@@ -391,6 +396,16 @@ pub mod event_names {
     pub const SESSIONS_UPDATED: &str = "sessions-updated";
     pub const SESSION_LOADED: &str = "session-loaded";
     pub const CONFIG_UPDATED: &str = "config-updated";
+    /// Settings R3 T7: emitted when a session's pinned flag changes (the
+    /// `set_session_pinned` command). Payload: `SessionPinChanged`. The
+    /// frontend refreshes the session list so the rail's pin sort/glyph
+    /// re-derives from the curation sidecar (the single source of truth).
+    pub const SESSION_PINS_CHANGED: &str = "session-pins-changed";
+    /// Settings R3 T7: emitted by the auto-archive scan for each session it
+    /// archived on the user's behalf. Payload: `SessionAutoArchived`. The
+    /// frontend toasts it so the user understands why the conversation left
+    /// the active rail (mirror of the resume auto-unarchive toast).
+    pub const SESSION_AUTO_ARCHIVED: &str = "session-auto-archived";
     pub const DIFF_REVIEW_AVAILABLE: &str = "diff-review-available";
     pub const BACKGROUND_TASK_UPDATE: &str = "background-task-update";
     pub const BACKGROUND_TASKS_UPDATED: &str = "background-tasks-updated";
@@ -602,6 +617,7 @@ mod tests {
             branch_point: None,
             running: None,
             updated_at: None,
+            pinned: false,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(!json.contains("working_dir"));
@@ -611,13 +627,15 @@ mod tests {
         // the wire shape stays byte-identical for older consumers.
         assert!(!json.contains("running"));
         assert!(!json.contains("updated_at"));
-        // Older payloads without the optional fields still parse.
+        // Older payloads without the optional fields still parse; the T7 pin
+        // flag serde-defaults to unpinned.
         let legacy: SessionInfo =
             serde_json::from_str(r#"{"id":"s1","title":"T","created_at":1,"message_count":0}"#)
                 .unwrap();
         assert_eq!(legacy.id, "s1");
         assert_eq!(legacy.running, None);
         assert_eq!(legacy.updated_at, None);
+        assert!(!legacy.pinned);
     }
 
     #[test]

@@ -515,7 +515,13 @@ mod tests {
         // Default curation (missing file) never archives anything.
         assert!(!query.curation(&visible).archived);
         query
-            .save_curation(&archived, &SessionCuration { archived: true })
+            .save_curation(
+                &archived,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
 
         let default_view = query.list_recent(7, false).unwrap();
@@ -538,7 +544,13 @@ mod tests {
         let id = Uuid::new_v4();
         seed_session(query.store(), &id, "distill me");
         query
-            .save_curation(&id, &SessionCuration { archived: true })
+            .save_curation(
+                &id,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         assert!(query.curation(&id).archived);
 
@@ -783,7 +795,13 @@ mod tests {
         // Archived sessions fall out of the default view like everywhere
         // else in this adapter.
         query
-            .save_curation(&b, &SessionCuration { archived: true })
+            .save_curation(
+                &b,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         let by_name = stats_by_name(&query.tool_call_stats(7).unwrap());
         assert_eq!(by_name["Bash"].calls, 1, "only session a's Bash remains");

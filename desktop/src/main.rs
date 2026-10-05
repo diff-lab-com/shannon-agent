@@ -293,6 +293,8 @@ fn main() {
             commands_sessions::archive_session,
             commands_sessions::unarchive_session,
             commands_sessions::list_archived_sessions,
+            // Settings R3 T7 — session pin (curation sidecar flag)
+            commands_sessions::set_session_pinned,
             // §4.14 — Turn Timeline panel data source
             commands_sessions::trace_timeline,
             // P-E3 — project registry (adopt-not-migrate)
@@ -846,6 +848,13 @@ fn main() {
                 let gc_state: tauri::State<'_, commands::AppState> = app.state();
                 commands_sessions::spawn_session_gc(gc_state.inner());
             }
+
+            // Settings R3 T7 — auto-archive: 6h scan that archives 已完成
+            // (`!running && 无未读 inbox`), unpinned sessions past the
+            // retention window. Inert unless the user enables it in config
+            // (`session.auto_archive_enabled`, default false); per-session
+            // `session-auto-archived` events let the UI toast each archive.
+            commands_sessions::spawn_auto_archive(app.handle().clone());
 
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and

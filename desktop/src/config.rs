@@ -263,6 +263,30 @@ pub struct DesktopConfig {
     /// message, so a change applies to the NEXT message without a restart.
     #[serde(default = "default_true")]
     pub context_auto_compact: bool,
+    /// Settings R3 T7 — master switch for the timed auto-archive scan. When
+    /// false — the default — the scan never archives anything ("never
+    /// auto-archive" is the standing policy, mirroring the GC posture).
+    /// When true, every pass archives active sessions that are 已完成 per
+    /// the R6 adjudication (`!running && 无未读 inbox 条目`), unpinned, and
+    /// whose last activity is older than
+    /// [`DesktopConfig::session_auto_archive_days`]. Re-read live each pass
+    /// (the loop runs every 6h) — a flip needs no restart. Written via
+    /// `configure("session.auto_archive_enabled")`.
+    #[serde(default)]
+    pub session_auto_archive_enabled: bool,
+    /// Settings R3 T7 — auto-archive retention window in days. A session
+    /// qualifies when its last activity (`events.jsonl` mtime) is older than
+    /// this many days. Default 7; `configure` clamps into `1..=365` so a
+    /// hand-edited or wire-level bad value can neither wedge (0) nor explode
+    /// (u32::MAX) the scan. Written via
+    /// `configure("session.auto_archive_days")`.
+    #[serde(default = "default_session_auto_archive_days")]
+    pub session_auto_archive_days: u32,
+}
+
+/// Settings R3 T7 — the auto-archive retention default (7 days).
+fn default_session_auto_archive_days() -> u32 {
+    7
 }
 
 fn default_power_block_sleep_during_tasks() -> bool {
@@ -884,6 +908,8 @@ impl Default for DesktopConfig {
             network_no_proxy: None,
             network_ca_cert_path: None,
             context_auto_compact: true,
+            session_auto_archive_enabled: false,
+            session_auto_archive_days: default_session_auto_archive_days(),
         }
     }
 }
@@ -1928,6 +1954,41 @@ mod tests {
         assert!(!back.context_auto_compact, "false must round-trip");
     }
 
+    /// Settings R3 T7: the auto-archive keys default to off + 7 days — a
+    /// legacy config.json without them keeps "never auto-archive" (the
+    /// standing posture), and explicit values survive a save/load round trip.
+    #[test]
+    fn test_auto_archive_keys_default_compat_and_round_trip() {
+        // Legacy JSON: neither key present → disabled + 7-day window.
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(
+            !legacy.session_auto_archive_enabled,
+            "missing key must default to auto-archive OFF"
+        );
+        assert_eq!(legacy.session_auto_archive_days, 7);
+        assert!(!DesktopConfig::default().session_auto_archive_enabled);
+        assert_eq!(DesktopConfig::default().session_auto_archive_days, 7);
+
+        // Explicit values persist and reload verbatim.
+        let config = DesktopConfig {
+            session_auto_archive_enabled: true,
+            session_auto_archive_days: 30,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("\"session_auto_archive_enabled\":true"),
+            "{json}"
+        );
+        assert!(json.contains("\"session_auto_archive_days\":30"), "{json}");
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert!(back.session_auto_archive_enabled, "true must round-trip");
+        assert_eq!(back.session_auto_archive_days, 30, "days must round-trip");
+    }
+
     /// Settings R3 T4 (B1): `network_env` is a pure function — given a
     /// config, exactly the expected `(name, value)` pairs come back. Empty
     /// / whitespace values inject NOTHING (R1: keep the implicit env
@@ -2040,7 +2101,10 @@ mod tests {
             json.contains("\"notifications_on_needs_attention\":false"),
             "{json}"
         );
-        assert!(json.contains("\"notifications_sound_enabled\":true"), "{json}");
+        assert!(
+            json.contains("\"notifications_sound_enabled\":true"),
+            "{json}"
+        );
         let back: DesktopConfig = serde_json::from_str(&json).unwrap();
         assert!(!back.notifications_on_needs_attention);
         assert!(back.notifications_sound_enabled);

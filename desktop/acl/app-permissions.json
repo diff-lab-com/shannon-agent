@@ -101,6 +101,15 @@
       }
     },
     {
+      "identifier": "allow-set-session-pinned",
+      "description": "Enables the set_session_pinned command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_session_pinned"
+        ]
+      }
+    },
+    {
       "identifier": "allow-archive-triage-item",
       "description": "Enables the archive_triage_item command without any pre-configured scope.",
       "commands": {
@@ -3075,6 +3084,7 @@
         "allow-rewind-session",
         "allow-search-sessions",
         "allow-set-project-appearance",
+        "allow-set-session-pinned",
         "allow-set-session-working-dir",
         "allow-skill-loop-approve",
         "allow-skill-loop-evaluate",

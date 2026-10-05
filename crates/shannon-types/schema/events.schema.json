@@ -467,6 +467,11 @@
           "null"
         ]
       },
+      "pinned": {
+        "default": false,
+        "description": "Settings R3 T7 mirror — must mirror src/events.rs exactly.",
+        "type": "boolean"
+      },
       "running": {
         "description": "P0 sidebar telemetry mirror — must mirror src/events.rs exactly.",
         "type": [
