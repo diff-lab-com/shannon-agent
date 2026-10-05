@@ -33,7 +33,9 @@ import { DefaultMaxTokensField } from './add-provider-modal/DefaultMaxTokensFiel
 import { FallbackModelsEditor } from './add-provider-modal/FallbackModelsEditor'
 import { Field } from './add-provider-modal/Field'
 import { HeaderRowsEditor } from './add-provider-modal/HeaderRowsEditor'
+import ModelCurationEditor from './add-provider-modal/ModelCurationEditor'
 import { TiersEditor } from './add-provider-modal/TiersEditor'
+import { selectedToInputs, selectionEquals } from './add-provider-modal/modelCuration'
 import {
   KIND_INFO,
   QUICK_FILL,
@@ -78,6 +80,14 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   const [error, setError] = useState<string | null>(null)
   // B6-37: which field the error belongs to — drives aria-invalid/aria-describedby.
   const [errorField, setErrorField] = useState<'label' | 'baseUrl' | null>(null)
+  // S2-1 (模型仓固化): the curated selection that becomes this provider's
+  // `models` vault. Edit mode starts from the provider's EXISTING
+  // declarations (unchecking is explicit — a save must never silently wipe
+  // a curated vault); a new connection starts at zero selected (裁定⑥).
+  const declaredIds = editing?.models?.map((m) => m.id) ?? []
+  const [curated, setCurated] = useState<Set<string>>(() => new Set(declaredIds))
+  const resetCurated = () => setCurated(new Set(declaredIds))
+
   // P2: the modal holds unsaved edits (label, key, advanced rows…) — a stray
   // Esc / backdrop click must not silently throw them away once anything is
   // filled in.
@@ -87,7 +97,8 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
     kind !== (editing?.kind ?? 'openai-compatible') ||
     baseUrl.trim() !== (editing?.base_url ?? '') ||
     apiKey.trim() !== '' ||
-    model.trim() !== ''
+    model.trim() !== '' ||
+    !selectionEquals(curated, new Set(declaredIds))
 
   const requestClose = () => {
     if (dirty) {
@@ -112,6 +123,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
     setSuggestions(null)
     setFetchFailure(null)
     setTestState(null)
+    resetCurated()
   }
 
   // The stored key counts in edit mode: the backend falls back to the saved
@@ -217,8 +229,22 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
     }
     try {
       const fresh = await api.saveProvider(input)
+      // S2-1: 固化 the curated selection into the provider's model vault.
+      // The just-saved provider id: explicit on edit; on insert the save
+      // repointed the store's active target at the new slot, which the
+      // returned file mirrors as `active_provider_id`. An edit always
+      // syncs (unchecking everything is an explicit clear); a fresh
+      // connection with zero selected skips the call (vault already
+      // empty).
+      const providerId = input.id ?? fresh.active_provider_id ?? null
+      const vault = selectedToInputs(suggestions, curated)
+      if (providerId && (vault.length > 0 || editing != null)) {
+        await api.setProviderModels(providerId, vault)
+      }
       onSaved(fresh)
     } catch (e) {
+      // The provider save itself may have landed — the error keeps the
+      // modal open (and the dirty guard on) so nothing is silently lost.
       setError(String(e))
       setErrorField(null)
     } finally {
@@ -381,6 +407,14 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
                 <p data-testid="models-found" className="mt-xs font-label-sm text-on-surface-variant">
                   {intl.formatMessage({ id: 'settings.models.providers.modelsFound' }, { count: suggestions.length })}
                 </p>
+                {/* S2-1: pick the models to 固化 into the provider's model
+                    vault — the curated whitelist the picker filters by
+                    (裁定③), capacity-guarded per 裁定⑥. */}
+                <ModelCurationEditor
+                  suggestions={suggestions}
+                  selected={curated}
+                  onChange={setCurated}
+                />
               </>
             )}
             {suggestions != null && suggestions.length === 0 && (

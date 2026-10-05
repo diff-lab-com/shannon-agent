@@ -614,7 +614,8 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
     /// Whether this entry comes from the dynamic models.dev overlay rather
-    /// than the static catalog. Surfaces a freshness indicator in the UI.
+    /// than the static catalog. Superseded by `source` (S2-1) — kept on the
+    /// wire for older readers; always `None` from the current writer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dynamic: Option<bool>,
     /// Vision (image input) capability from the merged catalog metadata
@@ -623,6 +624,23 @@ pub struct ModelInfo {
     /// dot rather than guessing (R2-3 honest metadata).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<bool>,
+    /// S2-3 (裁定⑩): declared/catalog maximum output tokens per request.
+    /// `None` = unknown — the UI renders "—" rather than a fabricated cap.
+    /// A declared value wins over the catalog's curated estimate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u32>,
+    /// S2-1 (裁定③/S2-1 source badge): where this row's metadata came from —
+    /// `"catalog"` (curated static table), `"overlay"` (models.dev-only row)
+    /// or `"declared"` (synthesized from the provider's curated vault in
+    /// `providers.toml` with no catalog metadata behind it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// S2-4b (schema/wire only — no gating behavior yet): native tool-calling
+    /// support. `Some` only where the source is explicit (models.dev
+    /// `tool_call`, user declaration); `None` = the catalog doesn't curate
+    /// tool bits, so unknown — same honest-metadata contract as `vision`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<bool>,
 }
 
 /// Tool info for the tools panel.
@@ -2982,11 +3000,24 @@ mod tests {
             tier: None,
             dynamic: None,
             vision: Some(false),
+            max_output: Some(16_384),
+            source: Some("catalog".to_string()),
+            tools: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: ModelInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id, "gpt-4");
         assert_eq!(deserialized.context_window, 128_000);
+        assert_eq!(deserialized.max_output, Some(16_384));
+        assert_eq!(deserialized.source.as_deref(), Some("catalog"));
+        // Old readers (and old payloads): the new fields are optional with
+        // serde defaults — a payload without them deserializes cleanly.
+        let legacy: ModelInfo =
+            serde_json::from_str(r#"{"id":"m","name":"m","provider":"p","context_window":0}"#)
+                .unwrap();
+        assert_eq!(legacy.max_output, None);
+        assert_eq!(legacy.source, None);
+        assert_eq!(legacy.tools, None);
     }
 
     #[test]

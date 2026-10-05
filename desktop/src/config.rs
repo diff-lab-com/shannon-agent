@@ -430,6 +430,14 @@ pub struct ProviderConnection {
     /// exposes it for managed connections.
     #[serde(default)]
     pub tiers: ProviderTiers,
+    /// S2-1 (模型仓固化): the provider slot's curated model declarations
+    /// (`ModelSpec`s in `providers.toml` v2). Passes through verbatim in
+    /// both directions so the desktop's read-modify-write save path can no
+    /// longer wipe declarations authored by the vault (or the CLI's
+    /// `providers model-meta`), and the AddProviderModal can pre-select the
+    /// existing curation when editing.
+    #[serde(default)]
+    pub models: Vec<shannon_types::provider_config::ModelSpec>,
 }
 
 /// Container persisted to `~/.shannon/desktop/providers.json`.
@@ -510,10 +518,9 @@ impl ProviderConnection {
             fallback_models: self.fallback_models.clone(),
             quirks: self.quirks.clone(),
             tiers: self.tiers.clone(),
-            // R2-4 (engine): per-model metadata declarations. The desktop's
-            // legacy `ProviderConnection` cache carries none — the engine
-            // store's reload-merge is where declared models enter.
-            models: Vec::new(),
+            // S2-1: pass the curated vault through verbatim — an
+            // engine-store round trip must never silently drop it.
+            models: self.models.clone(),
         }
     }
 }
@@ -560,6 +567,9 @@ pub(crate) fn from_provider_profile(
         fallback_models: p.fallback_models.clone(),
         quirks: p.quirks.clone(),
         tiers: p.tiers.clone(),
+        // S2-1: the curated vault travels to the UI so the AddProviderModal
+        // can pre-select the existing curation in edit mode.
+        models: p.models.clone(),
     }
 }
 
@@ -1888,6 +1898,15 @@ mod tests {
                 standard: Some("std-model".into()),
                 pro: Some("pro-model".into()),
             },
+            models: vec![shannon_types::provider_config::ModelSpec {
+                id: "vault-model".into(),
+                display_name: None,
+                context_window: Some(65_536),
+                max_output: Some(8_192),
+                cost_per_m_input: None,
+                cost_per_m_output: None,
+                capabilities: Vec::new(),
+            }],
         }
     }
 
@@ -1917,6 +1936,10 @@ mod tests {
         assert_eq!(profile.tiers.fast.as_deref(), Some("fast-model"));
         assert_eq!(profile.tiers.standard.as_deref(), Some("std-model"));
         assert_eq!(profile.tiers.pro.as_deref(), Some("pro-model"));
+        // S2-1: the curated vault passes through verbatim — an engine-store
+        // round trip must never silently drop it.
+        assert_eq!(profile.models.len(), 1);
+        assert_eq!(profile.models[0].id, "vault-model");
     }
 
     #[test]

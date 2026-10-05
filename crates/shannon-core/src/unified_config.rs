@@ -699,7 +699,9 @@ pub fn build_client_from_resolved(
     // R2-4: whichever profile actually drove this client construction owns
     // the per-model metadata registry (pricing / context / tier overrides).
     // Replacement, not accumulation — a provider switch re-registers here.
-    crate::declared_models::replace_from_specs(&rt.profile.models);
+    // S2-5: the declarations bind to the active provider slot so the tier
+    // scan can attribute them correctly.
+    crate::declared_models::replace_for_provider(&rt.provider, &rt.profile.models);
 
     let provider = rt.provider;
     let base_url = rt.profile.base_url.clone();
@@ -715,11 +717,24 @@ pub fn build_client_from_resolved(
     let alternate_api_keys = resolved_keys.into_iter().skip(1).collect::<Vec<String>>();
 
     // Decision: explicit config override > profile default > engine fallback.
-    let max_tokens = cfg
+    let mut max_tokens = cfg
         .max_tokens
         .map(|v| v as u32)
         .or(rt.profile.default_max_tokens)
         .unwrap_or(4096);
+    // S2-3 (裁定⑩): a declared `max_output` on the ACTIVE model is a real
+    // endpoint constraint — clamp the request ceiling down to it. Clamp only:
+    // a declaration never *raises* the ceiling (a model without a configured
+    // default keeps the 4096 fallback even when it could take more).
+    if let Some(spec) = rt
+        .profile
+        .models
+        .iter()
+        .find(|m| m.id == rt.model_id)
+        .and_then(|m| m.max_output)
+    {
+        max_tokens = max_tokens.min(spec);
+    }
     let timeout_seconds = cfg.timeout.unwrap_or(if provider == LlmProvider::Ollama {
         300
     } else {
@@ -1004,6 +1019,107 @@ mod tests {
         );
         // A model absent from the declaration is not registered.
         assert_eq!(crate::declared_models::lookup("other-model"), None);
+        crate::declared_models::clear();
+    }
+
+    /// S2-3 (裁定⑩): a declared `max_output` on the ACTIVE model is a real
+    /// endpoint constraint — the request `max_tokens` ceiling is clamped
+    /// DOWN to it, never raised.
+    #[test]
+    fn build_client_from_resolved_clamps_max_tokens_to_declared_max_output() {
+        use shannon_types::provider_config::ModelSpec;
+
+        let declared = |max_output: Option<u32>| {
+            let mut profile = anthropic_profile("K");
+            profile.models.push(ModelSpec {
+                id: "clamped-model".to_string(),
+                display_name: None,
+                context_window: None,
+                max_output,
+                cost_per_m_input: None,
+                cost_per_m_output: None,
+                capabilities: vec![],
+            });
+            ShannonConfig {
+                provider_model: v2_default_profile(profile, "clamped-model"),
+                ..Default::default()
+            }
+        };
+
+        // 1. The declared value beats the engine fallback (4096 → 1024).
+        let cfg = declared(Some(1_024));
+        let rt = crate::provider_resolver::resolve_active_target(&cfg.provider_model)
+            .expect("active target resolves");
+        let client = build_client_from_resolved(&cfg, rt);
+        assert_eq!(
+            client.max_tokens, 1_024,
+            "fallback 4096 must clamp down to the declared cap"
+        );
+
+        // 2. The declared value beats the desktop/config override too.
+        let cfg = ShannonConfig {
+            max_tokens: Some(8_192),
+            ..declared(Some(2_048))
+        };
+        let rt = crate::provider_resolver::resolve_active_target(&cfg.provider_model)
+            .expect("active target resolves");
+        let client = build_client_from_resolved(&cfg, rt);
+        assert_eq!(client.max_tokens, 2_048, "config override must clamp down");
+
+        // 3. Clamp only — a declaration NEVER raises the ceiling: a model
+        // with a large declared cap but no configured default keeps 4096.
+        let cfg = declared(Some(65_536));
+        let rt = crate::provider_resolver::resolve_active_target(&cfg.provider_model)
+            .expect("active target resolves");
+        let client = build_client_from_resolved(&cfg, rt);
+        assert_eq!(
+            client.max_tokens, 4096,
+            "declaration must not raise the default"
+        );
+    }
+
+    /// S2-5: client construction binds the declarations to the resolved
+    /// provider, so the tier scan can attribute declared models correctly
+    /// (the profile-level `replace_from_specs` legacy path is
+    /// provider-agnostic; this is the provider-aware upgrade).
+    #[test]
+    fn build_client_from_resolved_binds_declarations_to_the_provider() {
+        use shannon_engine::api::LlmProvider;
+        use shannon_types::provider_config::ModelSpec;
+
+        let mut profile = anthropic_profile("K");
+        profile.models.push(ModelSpec {
+            id: "bound-declared-model".to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: Some(9.0),
+            cost_per_m_output: Some(9.0),
+            capabilities: vec![shannon_types::provider_config::ModelCapability::Reasoning],
+        });
+        let cfg = ShannonConfig {
+            provider_model: v2_default_profile(profile, "bound-declared-model"),
+            ..Default::default()
+        };
+        crate::declared_models::clear();
+        let rt = crate::provider_resolver::resolve_active_target(&cfg.provider_model)
+            .expect("active target resolves");
+        assert_eq!(rt.provider, LlmProvider::Anthropic);
+        let _client = build_client_from_resolved(&cfg, rt);
+
+        // Bound to Anthropic → the Anthropic tier scan sees it.
+        let candidates = crate::declared_models::tier_candidates(&LlmProvider::Anthropic);
+        assert!(
+            candidates.iter().any(|c| c.id == "bound-declared-model"),
+            "declared model must be a tier candidate for its own provider"
+        );
+        // ...and no other provider's scan does.
+        assert!(
+            !crate::declared_models::tier_candidates(&LlmProvider::OpenAI)
+                .iter()
+                .any(|c| c.id == "bound-declared-model"),
+            "declared models must not leak across providers"
+        );
         crate::declared_models::clear();
     }
 

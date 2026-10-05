@@ -20,6 +20,7 @@ fn main() {
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_memory;
     use shannon_desktop::commands_mobile_pairing;
+    use shannon_desktop::commands_models;
     use shannon_desktop::commands_notifications;
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
@@ -187,6 +188,9 @@ fn main() {
             commands_profiles::set_active_provider_profile,
             commands_profiles::rename_provider_profile,
             commands_profiles::delete_provider_profile,
+            // S2-1 (模型仓固化) — persist the AddProviderModal fetch
+            // curation into the provider slot's `models` declarations.
+            commands_models::set_provider_models,
             // R4-3 (desktop slice) — per-provider multi-key management
             // (Settings → Models "API keys" panel; same credential store
             // the CLI's `providers keys` drives).

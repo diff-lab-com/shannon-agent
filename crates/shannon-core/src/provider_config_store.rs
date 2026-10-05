@@ -680,6 +680,70 @@ impl ProviderConfigStore {
         Ok(())
     }
 
+    /// S2-1 (模型仓固化): replace the whole per-model declaration list of the
+    /// provider slot whose stored id is `provider_id` with `models`
+    /// (overwrite semantics — the UI's curated selection is authoritative).
+    /// Every spec is validated here (`InvalidData`) and ids must be unique,
+    /// so an invalid batch can never reach disk through this path; an empty
+    /// list clears the declarations (the picker falls back to the unfiltered
+    /// catalog). `model_profile` names the model profile to write into —
+    /// `None` targets the **active** one (the same slot every other
+    /// store mutator drives). Errors (`NotFound`) when no provider slot with
+    /// that id exists in that profile.
+    pub fn set_provider_models(
+        &mut self,
+        provider_id: &str,
+        models: Vec<shannon_types::provider_config::ModelSpec>,
+        model_profile: Option<&str>,
+    ) -> io::Result<()> {
+        for spec in &models {
+            if let Err(e) = spec.validate() {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, e));
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for spec in &models {
+            if !seen.insert(spec.id.as_str()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "duplicate model declaration for id '{}' on provider '{provider_id}'",
+                        spec.id
+                    ),
+                ));
+            }
+        }
+        let model_profile = match model_profile {
+            Some(name) => self.config.profiles.get_mut(name).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("no model profile named '{name}' in providers.toml"),
+                )
+            })?,
+            None => self.config.active_model_profile_mut().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "no active model profile in providers.toml",
+                )
+            })?,
+        };
+        let profile = model_profile
+            .providers
+            .iter_mut()
+            .find(|p| p.id == provider_id)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "no provider slot with id '{provider_id}' in the target profile of \
+                         providers.toml; run `shannon list-providers` to see configured ids"
+                    ),
+                )
+            })?;
+        profile.models = models;
+        Ok(())
+    }
+
     /// Remove the per-model declaration `model_id` from provider slot
     /// `provider_id`. Returns whether an entry was removed (idempotent
     /// otherwise, matching [`Self::remove_profile`]'s contract).
@@ -1623,6 +1687,130 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         let glm = &store.config().profiles["default"].providers[0];
         assert!(glm.models.is_empty(), "invalid spec must not be stored");
+    }
+
+    // ---- S2-1: curated model vault (set_provider_models) ----
+
+    fn glm_store() -> ProviderConfigStore {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        store
+    }
+
+    #[test]
+    fn set_provider_models_overwrites_the_whole_list() {
+        let mut store = glm_store();
+        store
+            .set_provider_models("glm", vec![meta_spec("a"), meta_spec("b")], None)
+            .unwrap();
+        // Overwrite semantics: the curated selection is authoritative.
+        store
+            .set_provider_models("glm", vec![meta_spec("c")], None)
+            .unwrap();
+        let glm = &store.config().profiles["default"].providers[0];
+        assert_eq!(glm.models.len(), 1);
+        assert_eq!(glm.models[0].id, "c");
+
+        // Empty list clears the vault (picker falls back to unfiltered).
+        store.set_provider_models("glm", Vec::new(), None).unwrap();
+        let glm = &store.config().profiles["default"].providers[0];
+        assert!(glm.models.is_empty());
+    }
+
+    #[test]
+    fn set_provider_models_rejects_invalid_and_duplicate_batches() {
+        let mut store = glm_store();
+        store
+            .set_provider_models("glm", vec![meta_spec("a")], None)
+            .unwrap();
+
+        let mut bad = meta_spec("bad");
+        bad.max_output = Some(0);
+        let err = store
+            .set_provider_models("glm", vec![meta_spec("ok"), bad], None)
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            store.config().profiles["default"].providers[0]
+                .models
+                .iter()
+                .all(|m| m.id == "a"),
+            "a failed batch must leave the existing vault untouched"
+        );
+
+        let err = store
+            .set_provider_models("glm", vec![meta_spec("dup"), meta_spec("dup")], None)
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn set_provider_models_unknown_provider_errors() {
+        let mut store = glm_store();
+        let err = store
+            .set_provider_models("ghost", vec![meta_spec("m")], None)
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn set_provider_models_targets_the_named_profile_when_given() {
+        let mut store = glm_store();
+        store.insert_model_profile("work").unwrap();
+        // The named profile starts empty — the slot only exists in "default".
+        let err = store
+            .set_provider_models("glm", vec![meta_spec("m")], Some("work"))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+
+        // Seed the slot in "work" and write there; "default" stays untouched.
+        store
+            .config
+            .profiles
+            .get_mut("work")
+            .unwrap()
+            .providers
+            .push(sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ));
+        store
+            .set_provider_models("glm", vec![meta_spec("m")], Some("work"))
+            .unwrap();
+        assert_eq!(store.config.profiles["work"].providers[0].models.len(), 1);
+        assert!(
+            store.config.profiles["default"].providers[0]
+                .models
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn set_provider_models_round_trips_through_save_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
+        let mut store = glm_store();
+        store
+            .set_provider_models("glm", vec![meta_spec("glm-5.3-flash")], None)
+            .unwrap();
+        store.save_at(&path).unwrap();
+        let loaded = load(Some(&path)).expect("should parse back");
+        let glm = loaded.profiles["default"]
+            .providers
+            .iter()
+            .find(|p| p.id == "glm")
+            .unwrap();
+        assert_eq!(glm.models.len(), 1);
+        assert_eq!(glm.models[0].id, "glm-5.3-flash");
     }
 
     #[test]

@@ -9,6 +9,7 @@ import type {
   ProviderConnection,
   ProvidersFile,
   ProviderInput,
+  DeclaredModelInput,
   ProviderProfileSummary,
   DeleteProfileOutcome,
   ProviderKeySummary,
@@ -561,6 +562,27 @@ export async function saveProvider(input: ProviderInput): Promise<ProvidersFile>
   return invoke('save_provider', { input })
 }
 
+/// S2-1 (模型仓固化): persist the curated model selection for one provider
+/// slot — replaces that slot's `models: Vec<ModelSpec>` in providers.toml
+/// v2 wholesale (overwrite semantics; an empty list clears the vault and
+/// the picker falls back to the unfiltered catalog). Emits
+/// `CONFIG_UPDATED { key: "provider_models" }`. `profile` names the target
+/// model profile; omit it to write the active one.
+export async function setProviderModels(
+  providerId: string,
+  models: DeclaredModelInput[],
+  profile?: string,
+): Promise<ProviderModelsOutcome> {
+  return invoke('set_provider_models', { providerId, models, profile: profile ?? null })
+}
+
+/// Echo of the committed vault from `set_provider_models`.
+export interface ProviderModelsOutcome {
+  provider_id: string
+  model_profile: string
+  models: DeclaredModelInput[]
+}
+
 /// Delete a managed provider by id. Returns the updated (masked) file.
 export async function deleteProvider(id: string): Promise<ProvidersFile> {
   return invoke('delete_provider', { id })
@@ -577,6 +599,7 @@ export type {
   ProvidersFile,
   ProviderInput,
   ProviderStatus,
+  DeclaredModelInput,
 }
 export type { SurfaceInfo, CliInstallStatus, CliInstallResult, AppUpdateInfo }
 

@@ -17,6 +17,11 @@ impl ModelCapabilities {
     const SPEED: u8 = 1 << 2;
     const CHEAP: u8 = 1 << 3;
     const VISION: u8 = 1 << 4;
+    /// S2-4b bit (schema/wire only — no gating behavior consumes it yet; a
+    /// follow-up PR wires tool-path prechecks off this flag). Populated from
+    /// the models.dev overlay's `tool_call` field and from user declarations
+    /// (`providers.toml` `ModelSpec.capabilities = ["tool_use"]`).
+    const TOOL_USE: u8 = 1 << 5;
 
     pub const fn empty() -> Self {
         Self(0)
@@ -35,6 +40,9 @@ impl ModelCapabilities {
     }
     pub const fn vision() -> Self {
         Self(Self::VISION)
+    }
+    pub const fn tool_use() -> Self {
+        Self(Self::TOOL_USE)
     }
 
     pub const fn has(self, cap: ModelCapabilities) -> bool {
@@ -65,6 +73,35 @@ impl TierLabel {
     }
 }
 
+/// Provenance of a merged catalog entry (S2-1 / 裁定③). `merge_static_and_dynamic`
+/// tags each row so the desktop can render an honest source badge instead of the
+/// old always-off `dynamic` flag (redteam 发现#9: the merge used to lose
+/// provenance). `Declared` is applied by the picker's whitelist step for rows
+/// synthesized from `providers.toml` `ModelSpec` declarations that have no
+/// catalog/overlay entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ModelEntrySource {
+    /// Curated static `MODEL_CATALOG` row (or a locally-detected Ollama model).
+    #[default]
+    Catalog,
+    /// models.dev overlay-only row (no static entry).
+    Overlay,
+    /// Synthesized from a user declaration (`ModelSpec`) with no
+    /// catalog/overlay metadata behind it.
+    Declared,
+}
+
+impl ModelEntrySource {
+    /// Canonical wire token (`ModelInfo.source` on the desktop bridge).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Catalog => "catalog",
+            Self::Overlay => "overlay",
+            Self::Declared => "declared",
+        }
+    }
+}
+
 /// Metadata for a single model offering.
 #[derive(Debug, Clone)]
 pub struct ModelInfo {
@@ -86,6 +123,10 @@ pub struct ModelInfo {
     pub cost_per_m_output: f64,
     /// Capability flags for routing.
     pub capabilities: ModelCapabilities,
+    /// Where this row's metadata came from (S2-1 source badge). Static
+    /// catalog rows are `Catalog`; the merge and the picker's declared
+    /// synthesis retag the rest.
+    pub source: ModelEntrySource,
 }
 
 impl ModelInfo {
@@ -95,22 +136,24 @@ impl ModelInfo {
     /// inspects the model id for known "pro" suffixes, and finally falls
     /// back to capability-driven reasoning/coding classification.
     pub fn tier_label(&self) -> TierLabel {
-        let caps = self.capabilities;
-        let id = self.id;
-        if caps.has(ModelCapabilities::cheap()) || caps.has(ModelCapabilities::speed()) {
-            TierLabel::Fast
-        } else if id.contains("opus")
-            || id.contains("o1")
-            || id.contains("ultra")
-            || id.contains("max")
-        {
-            TierLabel::Pro
-        } else if caps.has(ModelCapabilities::reasoning()) || caps.has(ModelCapabilities::coding())
-        {
-            TierLabel::Standard
-        } else {
-            TierLabel::Unknown
-        }
+        tier_label_for_caps(self.id, self.capabilities)
+    }
+}
+
+/// The tier heuristic as a free function over `(id, capabilities)` — the
+/// shape declared-only rows (S2-1 vault synthesis) have without needing a
+/// leaked catalog `ModelInfo`. Kept in lockstep with `ModelInfo::tier_label`
+/// (which delegates here).
+pub fn tier_label_for_caps(id: &str, caps: ModelCapabilities) -> TierLabel {
+    if caps.has(ModelCapabilities::cheap()) || caps.has(ModelCapabilities::speed()) {
+        TierLabel::Fast
+    } else if id.contains("opus") || id.contains("o1") || id.contains("ultra") || id.contains("max")
+    {
+        TierLabel::Pro
+    } else if caps.has(ModelCapabilities::reasoning()) || caps.has(ModelCapabilities::coding()) {
+        TierLabel::Standard
+    } else {
+        TierLabel::Unknown
     }
 }
 
@@ -130,6 +173,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 3.0,
         cost_per_m_output: 15.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "claude-opus-4-20250115",
@@ -143,6 +187,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::reasoning()
             .or(ModelCapabilities::coding())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "claude-haiku-4-5-20251001",
@@ -154,6 +199,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.80,
         cost_per_m_output: 4.0,
         capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "claude-3-5-sonnet-20241022",
@@ -165,6 +211,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 3.0,
         cost_per_m_output: 15.0,
         capabilities: ModelCapabilities::coding(),
+        source: ModelEntrySource::Catalog,
     },
     // ── OpenAI ─────────────────────────────────────────────────
     ModelInfo {
@@ -179,6 +226,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::reasoning())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "gpt-4o-mini",
@@ -190,6 +238,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.15,
         cost_per_m_output: 0.60,
         capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "o3-mini",
@@ -201,6 +250,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 1.10,
         cost_per_m_output: 4.40,
         capabilities: ModelCapabilities::reasoning().or(ModelCapabilities::coding()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "gpt-4-turbo",
@@ -212,6 +262,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 10.0,
         cost_per_m_output: 30.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     // ── Google Gemini ──────────────────────────────────────────
     ModelInfo {
@@ -226,6 +277,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::reasoning()
             .or(ModelCapabilities::coding())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "gemini-2.5-flash",
@@ -238,6 +290,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_output: 0.60,
         capabilities: ModelCapabilities::cheap()
             .or(ModelCapabilities::speed().or(ModelCapabilities::vision())),
+        source: ModelEntrySource::Catalog,
     },
     // ── DeepSeek ───────────────────────────────────────────────
     ModelInfo {
@@ -250,6 +303,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.27,
         cost_per_m_output: 1.10,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "deepseek-reasoner",
@@ -261,6 +315,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.55,
         cost_per_m_output: 2.19,
         capabilities: ModelCapabilities::reasoning().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "deepseek-v4-flash",
@@ -274,6 +329,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::cheap())
             .or(ModelCapabilities::speed()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "deepseek-v4-pro",
@@ -285,6 +341,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.435,
         cost_per_m_output: 0.87,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     // ── GLM / Zhipu ──────────────────────────────────────────
     ModelInfo {
@@ -297,6 +354,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 7.14,
         cost_per_m_output: 7.14,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-4-flash",
@@ -308,6 +366,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-4-long",
@@ -319,6 +378,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::cheap(),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-4-air",
@@ -330,6 +390,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-4v-flash",
@@ -341,6 +402,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::vision().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5",
@@ -352,6 +414,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 7.14,
         cost_per_m_output: 7.14,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5.1",
@@ -363,6 +426,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 10.0,
         cost_per_m_output: 10.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5-flash",
@@ -374,6 +438,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5.1-flash",
@@ -385,6 +450,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5.3-flash",
@@ -405,6 +471,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::speed()
             .or(ModelCapabilities::cheap())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     // ── GLM / Zhipu International ──────────────────────────────
     ModelInfo {
@@ -417,6 +484,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 7.14,
         cost_per_m_output: 7.14,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-4-flash-intl",
@@ -428,6 +496,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-4-long-intl",
@@ -439,6 +508,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::cheap(),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5-intl",
@@ -450,6 +520,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 7.14,
         cost_per_m_output: 7.14,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5.1-intl",
@@ -461,6 +532,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 10.0,
         cost_per_m_output: 10.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5-flash-intl",
@@ -472,6 +544,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5.3-flash-intl",
@@ -488,6 +561,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::speed()
             .or(ModelCapabilities::cheap())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     // ── Kimi / Moonshot ──────────────────────────────────────
     ModelInfo {
@@ -502,6 +576,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::reasoning())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "kimi-k2.5",
@@ -515,6 +590,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::reasoning())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "moonshot-v1-128k",
@@ -526,6 +602,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 1.43,
         cost_per_m_output: 4.29,
         capabilities: ModelCapabilities::cheap(),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "moonshot-v1-32k",
@@ -537,6 +614,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.71,
         cost_per_m_output: 2.86,
         capabilities: ModelCapabilities::cheap(),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "moonshot-v1-8k",
@@ -548,6 +626,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.29,
         cost_per_m_output: 1.43,
         capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
+        source: ModelEntrySource::Catalog,
     },
     // ── Mistral ────────────────────────────────────────────────
     ModelInfo {
@@ -560,6 +639,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 2.0,
         cost_per_m_output: 6.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "codestral-latest",
@@ -571,6 +651,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.30,
         cost_per_m_output: 0.90,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     // ── Qwen / DashScope ──────────────────────────────────────
     ModelInfo {
@@ -583,6 +664,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 1.43,
         cost_per_m_output: 5.71,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "qwen3.6-plus",
@@ -594,6 +676,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.57,
         cost_per_m_output: 2.29,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "qwen3.6-flash",
@@ -607,6 +690,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::speed())
             .or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     // ── MiniMax ───────────────────────────────────────────────
     ModelInfo {
@@ -620,6 +704,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.29,
         cost_per_m_output: 1.18,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "MiniMax-M2.7",
@@ -631,6 +716,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.29,
         cost_per_m_output: 1.18,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "MiniMax-M2.5",
@@ -642,6 +728,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.29,
         cost_per_m_output: 1.18,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "MiniMax-M2.7-highspeed",
@@ -653,6 +740,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.59,
         cost_per_m_output: 2.35,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::speed()),
+        source: ModelEntrySource::Catalog,
     },
     // ── Groq ───────────────────────────────────────────────────
     ModelInfo {
@@ -665,6 +753,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.59,
         cost_per_m_output: 0.79,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "mixtral-8x7b-32768",
@@ -676,6 +765,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.24,
         cost_per_m_output: 0.24,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     // ── Anthropic (2026 frontier, 1M context GA — no beta header needed) ──
     ModelInfo {
@@ -690,6 +780,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::reasoning())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "claude-opus-4-6",
@@ -703,6 +794,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::reasoning()
             .or(ModelCapabilities::coding())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     // ── OpenAI (2026 frontier) ───────────────────────────────
     ModelInfo {
@@ -717,6 +809,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::reasoning())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "gpt-5-mini",
@@ -728,6 +821,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.25,
         cost_per_m_output: 2.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     // ── xAI / Grok ──
     // 2026-09 refresh per xAI official pricing/migration pages: grok-4.6 is
@@ -747,6 +841,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::reasoning())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "grok-4.5",
@@ -760,6 +855,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::reasoning())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "grok-build-0.1",
@@ -771,6 +867,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 1.0,
         cost_per_m_output: 2.0,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     // ── Perplexity ───────────────────────────────────────────
     ModelInfo {
@@ -783,6 +880,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 3.0,
         cost_per_m_output: 15.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "sonar-reasoning-pro",
@@ -794,6 +892,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 2.0,
         cost_per_m_output: 8.0,
         capabilities: ModelCapabilities::reasoning().or(ModelCapabilities::coding()),
+        source: ModelEntrySource::Catalog,
     },
     // ── Cohere ───────────────────────────────────────────────
     ModelInfo {
@@ -806,6 +905,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 2.50,
         cost_per_m_output: 10.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     // ── SiliconFlow ──────────────────────────────────────────
     ModelInfo {
@@ -818,6 +918,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.27,
         cost_per_m_output: 1.10,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     // ── Together AI ──────────────────────────────────────────
     ModelInfo {
@@ -830,6 +931,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.88,
         cost_per_m_output: 0.88,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     // ── Fireworks AI ─────────────────────────────────────────
     ModelInfo {
@@ -842,6 +944,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.90,
         cost_per_m_output: 0.90,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     // ── AI21 Labs ────────────────────────────────────────────
     ModelInfo {
@@ -854,6 +957,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 2.0,
         cost_per_m_output: 8.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     // ── OpenRouter ───────────────────────────────────────────
     // First-switch defaults for `/provider openrouter` (the aggregator had
@@ -872,6 +976,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 3.0,
         cost_per_m_output: 15.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "anthropic/claude-opus-4",
@@ -885,6 +990,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::reasoning()
             .or(ModelCapabilities::coding())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "openai/gpt-5",
@@ -898,6 +1004,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::reasoning())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "google/gemini-2.5-pro",
@@ -911,6 +1018,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::reasoning()
             .or(ModelCapabilities::coding())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "deepseek/deepseek-chat",
@@ -922,6 +1030,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.27,
         cost_per_m_output: 1.10,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "meta-llama/llama-3.3-70b-instruct",
@@ -935,6 +1044,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.59,
         cost_per_m_output: 0.79,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+        source: ModelEntrySource::Catalog,
     },
     // ── AWS Bedrock ──────────────────────────────────────────
     // US cross-region inference-profile ids (`us.anthropic.claude-*-v1:0`).
@@ -950,6 +1060,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 3.0,
         cost_per_m_output: 15.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "us.anthropic.claude-opus-4-20250514-v1:0",
@@ -963,6 +1074,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::reasoning()
             .or(ModelCapabilities::coding())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -974,6 +1086,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.80,
         cost_per_m_output: 4.0,
         capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
+        source: ModelEntrySource::Catalog,
     },
     // ── Azure OpenAI ─────────────────────────────────────────
     // First-switch defaults for `/provider azure` (review P-N14: the provider
@@ -1058,6 +1171,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 10.0,
         cost_per_m_output: 10.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5.3-flash-coding",
@@ -1073,6 +1187,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::speed()
             .or(ModelCapabilities::cheap())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5.1-coding-plan",
@@ -1084,6 +1199,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 10.0,
         cost_per_m_output: 10.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+        source: ModelEntrySource::Catalog,
     },
     ModelInfo {
         id: "glm-5.3-flash-coding-plan",
@@ -1099,6 +1215,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::speed()
             .or(ModelCapabilities::cheap())
             .or(ModelCapabilities::vision()),
+        source: ModelEntrySource::Catalog,
     },
 ];
 

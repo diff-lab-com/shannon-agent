@@ -573,6 +573,7 @@ pub enum ModelCapability {
     Speed,
     Cheap,
     Vision,
+    ToolUse,
 }
 
 /// R2-4 mirror — must match src/provider_config.rs exactly.

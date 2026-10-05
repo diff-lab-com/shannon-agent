@@ -38,6 +38,7 @@
 use std::collections::BTreeMap;
 use std::sync::RwLock;
 
+use shannon_engine::api::LlmProvider;
 use shannon_types::provider_config::{ModelCapability, ModelSpec, ProviderModelConfig};
 
 use crate::model_registry::{ModelCapabilities, TierLabel};
@@ -67,6 +68,30 @@ impl DeclaredModelMeta {
         }
     }
 
+    /// The declaration's capability set projected onto the engine's catalog
+    /// bitset (`ModelCapabilities`). Shared by the tier-label heuristic and
+    /// the tier-resolution candidate scan (S2-5). `#[non_exhaustive]`
+    /// future flags contribute no catalog bit until the mapping learns
+    /// about them.
+    pub fn catalog_caps(&self) -> ModelCapabilities {
+        let mut caps = ModelCapabilities::empty();
+        for cap in &self.capabilities {
+            caps = caps.or(match cap {
+                ModelCapability::Reasoning => ModelCapabilities::reasoning(),
+                ModelCapability::Coding => ModelCapabilities::coding(),
+                ModelCapability::Speed => ModelCapabilities::speed(),
+                ModelCapability::Cheap => ModelCapabilities::cheap(),
+                ModelCapability::Vision => ModelCapabilities::vision(),
+                ModelCapability::ToolUse => ModelCapabilities::tool_use(),
+                // ModelCapability is #[non_exhaustive]; a future flag
+                // contributes no catalog bit until the mapping learns about
+                // it.
+                _ => ModelCapabilities::empty(),
+            });
+        }
+        caps
+    }
+
     /// The declared pricing entry, when the declaration prices **both**
     /// directions. A lone half is ignored so billing never mixes a declared
     /// price with a guessed one. Cache rates stay `None` (cache tokens bill
@@ -82,14 +107,44 @@ impl DeclaredModelMeta {
     }
 }
 
-static DECLARED: RwLock<BTreeMap<String, DeclaredModelMeta>> = RwLock::new(BTreeMap::new());
+/// One registry row: the declared metadata plus the provider slot it was
+/// registered from (S2-5). The binding is what lets the tier-resolution scan
+/// attribute a declared model to the provider being resolved instead of
+/// leaking it across providers.
+#[derive(Debug, Clone, PartialEq)]
+struct RegisteredDecl {
+    /// Canonical provider slug (`LlmProvider::to_string()`, e.g. `"openai"`)
+    /// of the slot the declarations were registered from. `None` for the
+    /// legacy `replace_from_specs` path (tests, callers without provider
+    /// context) — such entries participate in every provider's tier scan,
+    /// matching the pre-binding behavior.
+    provider: Option<String>,
+    meta: DeclaredModelMeta,
+}
 
-/// Replace the whole registry with `specs` (keyed by `ModelSpec::id`).
-/// Registration is replacement — call this, not an append, whenever the
-/// active profile changes so stale declarations never outlive their
-/// profile. Invalid specs (unvalidatable here — the store validates on
-/// load) are skipped defensively rather than poisoning the registry.
+static DECLARED: RwLock<BTreeMap<String, RegisteredDecl>> = RwLock::new(BTreeMap::new());
+
+/// Replace the whole registry with `specs` (keyed by `ModelSpec::id`),
+/// registered **without** a provider binding (tier scans treat the entries
+/// as provider-agnostic). Registration is replacement — call this, not an
+/// append, whenever the active profile changes so stale declarations never
+/// outlive their profile. Invalid specs (unvalidatable here — the store
+/// validates on load) are skipped defensively rather than poisoning the
+/// registry.
 pub fn replace_from_specs(specs: &[ModelSpec]) {
+    replace_for_provider_inner(None, specs)
+}
+
+/// S2-5: replace the registry from `specs`, binding every entry to the
+/// canonical `provider` slot they were declared on. This is the path
+/// client construction (`build_client_from_resolved`) drives — the engine
+/// knows which provider slot is active, so the tier scan can attribute
+/// declared models correctly.
+pub fn replace_for_provider(provider: &LlmProvider, specs: &[ModelSpec]) {
+    replace_for_provider_inner(Some(provider.to_string().to_lowercase()), specs)
+}
+
+fn replace_for_provider_inner(provider: Option<String>, specs: &[ModelSpec]) {
     let mut map = BTreeMap::new();
     for spec in specs {
         if spec.validate().is_err() {
@@ -99,7 +154,13 @@ pub fn replace_from_specs(specs: &[ModelSpec]) {
             );
             continue;
         }
-        map.insert(spec.id.clone(), DeclaredModelMeta::from_spec(spec));
+        map.insert(
+            spec.id.clone(),
+            RegisteredDecl {
+                provider: provider.clone(),
+                meta: DeclaredModelMeta::from_spec(spec),
+            },
+        );
     }
     let count = map.len();
     *registry_mut() = map;
@@ -109,12 +170,13 @@ pub fn replace_from_specs(specs: &[ModelSpec]) {
 }
 
 /// Replace the registry from a v2 config: the **active** provider profile's
-/// declarations become authoritative (B3 phase-1: single active profile).
-/// No active target → the registry is cleared.
+/// declarations become authoritative (B3 phase-1: single active profile),
+/// bound to the active provider slot's canonical provider. No active target
+/// → the registry is cleared.
 pub fn replace_from_config(pm: &ProviderModelConfig) {
     let active = crate::provider_resolver::resolve_active_target(pm);
     match active {
-        Some(rt) => replace_from_specs(&rt.profile.models),
+        Some(rt) => replace_for_provider(&rt.provider, &rt.profile.models),
         None => clear(),
     }
 }
@@ -156,14 +218,55 @@ pub fn replace_for_provider_in(slug: &str, cfg: &ProviderModelConfig) {
         })
     });
     match slot {
-        Some(p) => replace_from_specs(&p.models),
+        Some(p) => {
+            let binding = crate::provider_resolver::llm_provider_from_slug(&p.id)
+                .map(|lp| lp.to_string().to_lowercase());
+            replace_for_provider_inner(binding, &p.models)
+        }
         None => clear(),
     }
 }
 
 /// Look up the declared metadata for `model` (exact id match).
 pub fn lookup(model: &str) -> Option<DeclaredModelMeta> {
-    registry().get(model).cloned()
+    registry().get(model).map(|r| r.meta.clone())
+}
+
+/// One declared model projected for tier-resolution inference (S2-5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeclaredTierCandidate {
+    /// The declared model id (exactly what tier resolution should return).
+    pub id: String,
+    /// Declared capabilities on the engine's catalog bitset.
+    pub caps: ModelCapabilities,
+    /// Declared total cost per million tokens (in + out); `0.0` when either
+    /// direction is undeclared (matches the catalog's "0.0 if unknown").
+    pub total_cost: f64,
+}
+
+/// Enumerate declared entries usable as tier-inference candidates for
+/// `provider` (S2-5). Only entries registered without a provider binding or
+/// bound to this exact provider participate — a proxy provider's declared
+/// models never leak into another provider's tier resolution. Catalog
+/// entries still take priority on ties: the caller merges catalog
+/// candidates first.
+pub fn tier_candidates(provider: &LlmProvider) -> Vec<DeclaredTierCandidate> {
+    let want = provider.to_string().to_lowercase();
+    registry()
+        .iter()
+        .filter(|(_, r)| match &r.provider {
+            Some(p) => *p == want,
+            None => true,
+        })
+        .map(|(id, r)| DeclaredTierCandidate {
+            id: id.clone(),
+            caps: r.meta.catalog_caps(),
+            total_cost: match (r.meta.cost_per_m_input, r.meta.cost_per_m_output) {
+                (Some(i), Some(o)) => i + o,
+                _ => 0.0,
+            },
+        })
+        .collect()
 }
 
 /// Declared pricing for `model`, when both directions are declared.
@@ -196,19 +299,7 @@ pub fn tier_label_for(model_id: &str) -> Option<TierLabel> {
     if meta.capabilities.is_empty() {
         return None;
     }
-    let mut caps = ModelCapabilities::empty();
-    for cap in &meta.capabilities {
-        caps = caps.or(match cap {
-            ModelCapability::Reasoning => ModelCapabilities::reasoning(),
-            ModelCapability::Coding => ModelCapabilities::coding(),
-            ModelCapability::Speed => ModelCapabilities::speed(),
-            ModelCapability::Cheap => ModelCapabilities::cheap(),
-            ModelCapability::Vision => ModelCapabilities::vision(),
-            // ModelCapability is #[non_exhaustive]; a future flag contributes
-            // no catalog bit until the mapping learns about it.
-            _ => ModelCapabilities::empty(),
-        });
-    }
+    let caps = meta.catalog_caps();
     // Mirror of ModelInfo::tier_label — keep in sync with the catalog
     // heuristic (cheap/speed, flagship id markers, reasoning/coding).
     let id = model_id.to_lowercase();
@@ -230,11 +321,11 @@ pub fn tier_label_for(model_id: &str) -> Option<TierLabel> {
     )
 }
 
-fn registry() -> std::sync::RwLockReadGuard<'static, BTreeMap<String, DeclaredModelMeta>> {
+fn registry() -> std::sync::RwLockReadGuard<'static, BTreeMap<String, RegisteredDecl>> {
     DECLARED.read().unwrap_or_else(|e| e.into_inner())
 }
 
-fn registry_mut() -> std::sync::RwLockWriteGuard<'static, BTreeMap<String, DeclaredModelMeta>> {
+fn registry_mut() -> std::sync::RwLockWriteGuard<'static, BTreeMap<String, RegisteredDecl>> {
     DECLARED.write().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -292,6 +383,54 @@ mod tests {
             assert_eq!(p.cache_read_per_mtok, None);
             assert_eq!(p.cache_write_per_mtok, None);
         });
+    }
+
+    #[test]
+    fn tool_use_declaration_maps_to_the_catalog_bit_without_affecting_tier() {
+        let mut tool = spec("tool-model");
+        tool.capabilities = vec![ModelCapability::ToolUse];
+        with_registry(&[tool], || {
+            let meta = lookup("tool-model").unwrap();
+            assert!(meta.catalog_caps().has(ModelCapabilities::tool_use()));
+            // tool_use contributes no tier signal (same as vision alone).
+            assert_eq!(tier_label_for("tool-model"), Some(TierLabel::Unknown));
+        });
+    }
+
+    #[test]
+    fn tier_candidates_aggregate_cost_and_respect_provider_binding() {
+        use shannon_engine::api::LlmProvider;
+
+        let mut a = spec("bound-a");
+        a.cost_per_m_input = Some(1.0);
+        a.cost_per_m_output = Some(3.0);
+        a.capabilities = vec![ModelCapability::Coding];
+        let mut b = spec("bound-b");
+        b.cost_per_m_input = Some(0.5);
+        b.capabilities = vec![ModelCapability::Cheap]; // lone half → cost 0.0
+
+        replace_for_provider(&LlmProvider::Anthropic, &[a, b]);
+        // Clear via the same API the tests use to avoid leaking state.
+        let out = tier_candidates(&LlmProvider::Anthropic);
+        let ca = out.iter().find(|c| c.id == "bound-a").unwrap();
+        assert!((ca.total_cost - 4.0).abs() < 1e-9);
+        assert!(ca.caps.has(ModelCapabilities::coding()));
+        let cb = out.iter().find(|c| c.id == "bound-b").unwrap();
+        assert_eq!(cb.total_cost, 0.0, "lone half-price → unknown cost");
+
+        // Bound to another provider → invisible.
+        assert!(tier_candidates(&LlmProvider::OpenAI).is_empty());
+        clear();
+
+        // Legacy (provider-less) registration participates everywhere.
+        replace_from_specs(&[{
+            let mut s = spec("legacy");
+            s.capabilities = vec![ModelCapability::Reasoning];
+            s
+        }]);
+        assert_eq!(tier_candidates(&LlmProvider::Anthropic).len(), 1);
+        assert_eq!(tier_candidates(&LlmProvider::OpenAI).len(), 1);
+        clear();
     }
 
     #[test]
