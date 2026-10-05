@@ -16,7 +16,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
 import { clearDraft, tombstoneDraft } from '@/lib/composerDraft'
-import { basenameOf } from '@/lib/fileRefs'
+import { basenameOf, isVisionImagePath } from '@/lib/fileRefs'
 import {
   beginRun as runBegin,
   endRun as runEnd,
@@ -956,7 +956,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [currentSessionId, windowSessionId, setSessionQuerying, cancelStreamFlush, setChatError])
 
-  // S2-4a (review 2026-10-05 P-N9): the public send entry — an image-
+  // S2-4a (review 2026-10-05 P-N9): the public send entry — an IMAGE-
   // carrying message is pre-checked against the EFFECTIVE model (session
   // override > phase tier > global default, resolved backend-side by
   // `check_vision_send` from the same data the engine gate reads). A model
@@ -964,7 +964,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // instead of silently walking into a guaranteed refusal; unknown-
   // capability models (and any command error — fail open) send exactly as
   // before. The engine gate remains the final backstop behind "send
-  // anyway".
+  // anyway". Text-only attachments never trip the gate: the pipeline
+  // parses them into text blocks (`is_vision_image_mime` would drop them
+  // from the image blocks anyway), so a vision-less model + a .md file
+  // sends without the hold.
   const sendMessage = useCallback(async (
     message: string,
     filePaths?: string[],
@@ -976,7 +979,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return false
     }
     setChatError(null)
-    if (filePaths && filePaths.length > 0 && !options?.visionConfirmed) {
+    const carriesImage = (filePaths ?? []).some(isVisionImagePath)
+    if (carriesImage && !options?.visionConfirmed) {
       try {
         const check = await api.checkVisionSend(windowSessionId ?? currentSessionId)
         if (check.vision === false) {
