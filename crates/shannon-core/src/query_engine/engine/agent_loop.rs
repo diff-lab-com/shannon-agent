@@ -846,6 +846,10 @@ impl QueryEngine {
                     QueryEvent::Failed {
                         query_id,
                         error: violation,
+                        // Pre-flight refusal, not a provider answer — no
+                        // typed status to classify; shells keep their
+                        // (transitional) text fallback.
+                        error_kind: None,
                     }
                 );
                 return;
@@ -4199,6 +4203,10 @@ impl QueryEngine {
                                                     error: format!(
                                                         "Provider stream error: {message}"
                                                     ),
+                                                    // In-stream parser message — the
+                                                    // typed error is gone by here; text
+                                                    // fallback applies (transitional).
+                                                    error_kind: None,
                                                 }
                                             );
                                             return;
@@ -4377,6 +4385,9 @@ impl QueryEngine {
                                                             send_event!(tx, QueryEvent::Failed {
                                                                 query_id,
                                                                 error: "This model cannot produce valid output — it may be too small or incompatible. Try /model to switch to a larger model.".to_string(),
+                                                                // Pre-rendered local-model
+                                                                // refusal — no typed status.
+                                                                error_kind: None,
                                                             });
                                                             return;
                                                         }
@@ -4466,6 +4477,12 @@ impl QueryEngine {
                                                     QueryEvent::Failed {
                                                         query_id,
                                                         error: error_msg,
+                                                        // retry_err is the typed ApiError
+                                                        // from the non-streaming retry —
+                                                        // classify from it.
+                                                        error_kind: Some(
+                                                            retry_err.error_kind().to_string()
+                                                        ),
                                                     }
                                                 );
                                                 return;
@@ -4477,6 +4494,8 @@ impl QueryEngine {
                                                 send_event!(tx, QueryEvent::Failed {
                                                     query_id,
                                                     error: "Local model error — retry timed out. The model may be loading, try again.".to_string(),
+                                                    // Local timeout, not a provider status.
+                                                    error_kind: None,
                                                 });
                                                 return;
                                             }
@@ -4502,6 +4521,10 @@ impl QueryEngine {
                                         QueryEvent::Failed {
                                             query_id,
                                             error: user_error,
+                                            // `e` is the typed ApiError that ended
+                                            // the LLM call — the single-source
+                                            // classification point (S1-1/P-N1).
+                                            error_kind: Some(e.error_kind().to_string()),
                                         }
                                     );
                                     return;
@@ -5082,6 +5105,12 @@ impl QueryEngine {
                                                             error: format!(
                                                                 "Auto-compact retry also failed: {retry_err}.{suggestion}"
                                                             ),
+                                                            // retry_err is the typed ApiError
+                                                            // that survived auto-compact —
+                                                            // classify from it (S1-1).
+                                                            error_kind: Some(
+                                                                retry_err.error_kind().to_string()
+                                                            ),
                                                         }
                                                     );
                                                     return;
@@ -5130,6 +5159,11 @@ impl QueryEngine {
                                                 query_id,
                                                 error: format!(
                                                     "Token overflow — auto-compact retry failed: {retry_err}.{suggestion}"
+                                                ),
+                                                // retry_err is the typed ApiError —
+                                                // classify from it (S1-1).
+                                                error_kind: Some(
+                                                    retry_err.error_kind().to_string()
                                                 ),
                                             }
                                         );
@@ -5193,6 +5227,9 @@ impl QueryEngine {
                                                 send_event!(tx, QueryEvent::Failed {
                                                     query_id,
                                                     error: "This model cannot produce valid output — it may be too small or incompatible. Try /model to switch to a larger model.".to_string(),
+                                                    // Pre-rendered local-model refusal —
+                                                    // no typed status.
+                                                    error_kind: None,
                                                 });
                                                 return;
                                             }
@@ -5270,6 +5307,10 @@ impl QueryEngine {
                                         QueryEvent::Failed {
                                             query_id,
                                             error: error_msg,
+                                            // retry_err is the typed ApiError from
+                                            // the non-streaming retry — classify
+                                            // from it.
+                                            error_kind: Some(retry_err.error_kind().to_string()),
                                         }
                                     );
                                     return;
@@ -5279,6 +5320,8 @@ impl QueryEngine {
                                     send_event!(tx, QueryEvent::Failed {
                                         query_id,
                                         error: "Local model error — retry timed out. The model may be loading, try again.".to_string(),
+                                        // Local timeout, not a provider status.
+                                        error_kind: None,
                                     });
                                     return;
                                 }
@@ -5304,6 +5347,10 @@ impl QueryEngine {
                             QueryEvent::Failed {
                                 query_id,
                                 error: user_error,
+                                // `e` is the typed ApiError that ended the LLM
+                                // call — the single-source classification point
+                                // (S1-1/P-N1).
+                                error_kind: Some(e.error_kind().to_string()),
                             }
                         );
                         return;

@@ -56,6 +56,7 @@ fn test_api_error_provider_error() {
         provider: "anthropic".to_string(),
         error_type: "invalid_request".to_string(),
         message: "max tokens too large".to_string(),
+        status: None,
     };
     let msg = err.to_string();
     assert!(msg.contains("anthropic"));
@@ -90,6 +91,7 @@ fn test_anthropic_error_parsing() {
             provider,
             error_type,
             message,
+            ..
         } => {
             assert_eq!(provider, "anthropic");
             assert_eq!(error_type, "invalid_request_error");
@@ -119,6 +121,7 @@ fn test_openai_error_parsing_400() {
             provider,
             error_type,
             message,
+            ..
         } => {
             assert_eq!(provider, "openai");
             assert_eq!(error_type, "invalid_request_error");
@@ -138,6 +141,7 @@ fn test_ollama_error_parsing() {
             provider,
             error_type,
             message,
+            ..
         } => {
             assert_eq!(provider, "ollama");
             assert_eq!(error_type, "ollama_error");

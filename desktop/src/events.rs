@@ -33,11 +33,22 @@ pub use shannon_types::events::{
 };
 
 /// `query:failed` payload `error_kind` for provider-authentication failures
-/// (HTTP 401/403 — bad/revoked API key). The chat UI routes these to a
+/// (HTTP 401 — bad/revoked API key). The chat UI routes these to a
 /// dedicated "update your key" banner instead of the raw error line.
 pub const QUERY_ERROR_KIND_AUTH: &str = "auth";
+/// `query:failed` payload `error_kind` for HTTP 402 — provider quota or
+/// credit exhausted. Routed to the "quota exhausted" banner with
+/// update-key / view-usage recovery actions (S1-1, review P-N1).
+pub const QUERY_ERROR_KIND_QUOTA: &str = "quota";
+/// `query:failed` payload `error_kind` for HTTP 429 — rate limited.
+/// Routed to the "rate limited" banner with a wait hint + Retry.
+pub const QUERY_ERROR_KIND_RATE_LIMIT: &str = "rate_limit";
+/// `query:failed` payload `error_kind` for HTTP 403 — the key is valid but
+/// lacks permission for the model/resource. Routed to the "access denied"
+/// banner pointing at Settings.
+pub const QUERY_ERROR_KIND_AUTHZ: &str = "authz";
 /// `query:failed` payload `error_kind` for every other failure (network,
-/// rate limit, provider outage, engine bug, …). Rendered as today.
+/// timeout, 5xx, provider outage, engine bug, …). Rendered as today.
 pub const QUERY_ERROR_KIND_OTHER: &str = "other";
 
 // === R5-2 — failover / key-rotation notices on the wire ===
@@ -94,20 +105,36 @@ pub struct QueryNoticePayload {
     pub session_id: Option<String>,
 }
 
-/// Classify a query-failure error string into the machine-readable
-/// `error_kind` carried on the desktop `query:failed` payload.
+/// Resolve the machine-readable `error_kind` carried on the desktop
+/// `query:failed` payload (S1-1, review 2026-10-05 §3 P-N1).
 ///
-/// The engine's stream pipeline hands the desktop only the error's
-/// **Display string** (the exact string that lands in
-/// `QueryEvent::Failed`), so the classification has to match text — same
-/// trade-off the CLI's `classify_headless_failure` already makes. The
-/// primary signal is the engine `ApiError::AuthenticationFailed` Display
-/// text ("Authentication failed", `shannon-engine/src/api/error.rs`),
-/// which is what an HTTP 401/403 from any provider collapses to; the
-/// remaining phrases cover error strings that surface from other layers
-/// (provider JSON bodies, gateway relays) without re-introducing a
-/// typed-error dependency the stream doesn't carry.
-pub(crate) fn classify_query_error_kind(error: &str) -> &'static str {
+/// The structured kind is **preferred**: the engine classifies at the emit
+/// site where the typed error is in scope (`ApiError::error_kind()` —
+/// typed status → kind, no string sniffing) and ships it on
+/// `QueryEvent::Failed`. This function consumes it verbatim; the desktop
+/// never re-derives a classification the engine already made.
+///
+/// The `error` text matching below is a **transitional fallback** only,
+/// for emit paths that don't carry the field yet (stream `Err` payloads,
+/// panic messages, engine events from before the field). Once every
+/// engine failure path sets `error_kind`, the fallback — and this
+/// function's text-sniffing branch — should be deleted.
+///
+/// An unknown structured kind (a future engine adding a value this shell
+/// doesn't know) lands in `other`: the engine has spoken, so the text
+/// fallback must NOT re-classify its decision; `other` keeps the plain
+/// error banner, which is safe for any unseen kind.
+pub(crate) fn classify_query_error_kind(engine_kind: Option<&str>, error: &str) -> &'static str {
+    if let Some(kind) = engine_kind {
+        return match kind {
+            QUERY_ERROR_KIND_AUTH => QUERY_ERROR_KIND_AUTH,
+            QUERY_ERROR_KIND_QUOTA => QUERY_ERROR_KIND_QUOTA,
+            QUERY_ERROR_KIND_RATE_LIMIT => QUERY_ERROR_KIND_RATE_LIMIT,
+            QUERY_ERROR_KIND_AUTHZ => QUERY_ERROR_KIND_AUTHZ,
+            _ => QUERY_ERROR_KIND_OTHER,
+        };
+    }
+    // === transitional text fallback (see doc comment) ===
     let lower = error.to_lowercase();
     if lower.contains("authentication failed")
         || lower.contains("unauthorized")
@@ -125,9 +152,11 @@ pub(crate) fn classify_query_error_kind(error: &str) -> &'static str {
 /// Desktop `query:failed` wire payload — the frozen engine
 /// `QueryFailedPayload` shape (`shannon-types`, read-only for the desktop)
 /// plus a desktop-only `error_kind` field, so the frontend can route
-/// authentication failures without string matching in JS. Field names and
-/// the first three fields mirror the engine type exactly; `error_kind` is
-/// additive, so older frontends ignore it.
+/// failure classes without string matching in JS. Field names and the
+/// first three fields mirror the engine type exactly; `error_kind` is
+/// additive, so older frontends ignore it. The kind is the engine's
+/// structured classification when the event carries one, else the
+/// transitional text fallback (see [`classify_query_error_kind`]).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DesktopQueryFailedPayload {
     pub query_id: String,
@@ -137,18 +166,22 @@ pub struct DesktopQueryFailedPayload {
     pub error_kind: &'static str,
 }
 
-/// Build the desktop `query:failed` payload — classifies `error` once, at
-/// the emit site, so every `QUERY_FAILED` emitter carries the same kind.
+/// Build the desktop `query:failed` payload — classifies the failure once,
+/// at the emit site, so every `QUERY_FAILED` emitter carries the same
+/// kind. `engine_kind` is the structured classification from the engine's
+/// `QueryEvent::Failed` (`None` when the failure never had a typed error:
+/// stream errors, panics).
 pub(crate) fn query_failed_payload(
     query_id: &str,
     error: &str,
     session_id: Option<String>,
+    engine_kind: Option<&str>,
 ) -> DesktopQueryFailedPayload {
     DesktopQueryFailedPayload {
         query_id: query_id.to_string(),
         error: error.to_string(),
         session_id,
-        error_kind: classify_query_error_kind(error),
+        error_kind: classify_query_error_kind(engine_kind, error),
     }
 }
 
@@ -301,57 +334,109 @@ mod tests {
     }
 
     // === query:failed error_kind classification (2026-09-29 provider review
-    // §2-3: chat auth failures must route to the "update key" banner) ===
+    // §2-3: chat auth failures must route to the "update key" banner;
+    // S1-1/P-N1: structured engine kinds take precedence, the text match
+    // below is a transitional fallback) ===
 
     #[test]
-    fn classify_query_error_kind_matches_engine_auth_failure_text() {
-        // The engine `ApiError::AuthenticationFailed` Display text — what an
-        // HTTP 401/403 from any provider collapses to.
-        assert_eq!(
-            classify_query_error_kind("Authentication failed"),
-            QUERY_ERROR_KIND_AUTH
-        );
-        // ... and its `user_suggestion` wording (some paths embed it).
+    fn classify_query_error_kind_prefers_structured_engine_kind() {
+        // The engine's structured kind wins verbatim — no text re-classification.
+        for (kind, expected) in [
+            (QUERY_ERROR_KIND_AUTH, QUERY_ERROR_KIND_AUTH),
+            (QUERY_ERROR_KIND_QUOTA, QUERY_ERROR_KIND_QUOTA),
+            (QUERY_ERROR_KIND_RATE_LIMIT, QUERY_ERROR_KIND_RATE_LIMIT),
+            (QUERY_ERROR_KIND_AUTHZ, QUERY_ERROR_KIND_AUTHZ),
+            (QUERY_ERROR_KIND_OTHER, QUERY_ERROR_KIND_OTHER),
+        ] {
+            assert_eq!(
+                classify_query_error_kind(Some(kind), "irrelevant text"),
+                expected,
+                "structured kind '{kind}' must pass through"
+            );
+        }
+        // Even auth-worded text must NOT override a structured decision.
         assert_eq!(
             classify_query_error_kind(
+                Some(QUERY_ERROR_KIND_QUOTA),
+                "Authentication failed: insufficient balance"
+            ),
+            QUERY_ERROR_KIND_QUOTA
+        );
+        // A future engine kind this shell doesn't know lands in `other`
+        // (never text-reclassified, never dropped).
+        assert_eq!(
+            classify_query_error_kind(Some("model_overloaded"), "boom"),
+            QUERY_ERROR_KIND_OTHER
+        );
+    }
+
+    #[test]
+    fn classify_query_error_kind_falls_back_to_text_without_engine_kind() {
+        // Transitional: emit paths without a typed error (stream Err, panic).
+        assert_eq!(
+            classify_query_error_kind(None, "Authentication failed"),
+            QUERY_ERROR_KIND_AUTH
+        );
+        assert_eq!(
+            classify_query_error_kind(None, "invalid api key provided"),
+            QUERY_ERROR_KIND_AUTH
+        );
+        assert_eq!(
+            classify_query_error_kind(None, "401 Unauthorized from upstream"),
+            QUERY_ERROR_KIND_AUTH
+        );
+        // The fallback stays auth/other only — quota/rate-limit/authz wording
+        // deliberately does NOT classify here (no string sniffing beyond the
+        // legacy auth vocabulary).
+        assert_eq!(
+            classify_query_error_kind(None, "Insufficient Balance"),
+            QUERY_ERROR_KIND_OTHER
+        );
+        assert_eq!(
+            classify_query_error_kind(None, "boom"),
+            QUERY_ERROR_KIND_OTHER
+        );
+        assert_eq!(classify_query_error_kind(None, ""), QUERY_ERROR_KIND_OTHER);
+    }
+
+    #[test]
+    fn classify_query_error_kind_matches_legacy_auth_fallback_text() {
+        // Pre-S1-1 behaviour kept verbatim for the fallback branch.
+        assert_eq!(
+            classify_query_error_kind(
+                None,
                 "Authentication failed. Check your API key with /config or set SHANNON_API_KEY."
             ),
             QUERY_ERROR_KIND_AUTH
         );
-        // Other layers' unauthorized phrasings.
-        assert_eq!(
-            classify_query_error_kind("invalid api key provided"),
-            QUERY_ERROR_KIND_AUTH
-        );
-        assert_eq!(
-            classify_query_error_kind("401 Unauthorized from upstream"),
-            QUERY_ERROR_KIND_AUTH
-        );
     }
 
     #[test]
-    fn classify_query_error_kind_leaves_other_failures_unclassified() {
-        assert_eq!(classify_query_error_kind("boom"), QUERY_ERROR_KIND_OTHER);
-        assert_eq!(
-            classify_query_error_kind("Rate limit exceeded"),
-            QUERY_ERROR_KIND_OTHER
-        );
-        assert_eq!(
-            classify_query_error_kind("error sending request"),
-            QUERY_ERROR_KIND_OTHER
-        );
-        assert_eq!(classify_query_error_kind(""), QUERY_ERROR_KIND_OTHER);
+    fn desktop_error_kind_constants_match_engine_canonical_set() {
+        // Single source: the engine's `error_kind` module defines the wire
+        // values; the desktop constants must never drift from them.
+        use shannon_engine::api::error::error_kind as engine_kinds;
+        assert_eq!(QUERY_ERROR_KIND_AUTH, engine_kinds::AUTH);
+        assert_eq!(QUERY_ERROR_KIND_QUOTA, engine_kinds::QUOTA);
+        assert_eq!(QUERY_ERROR_KIND_RATE_LIMIT, engine_kinds::RATE_LIMIT);
+        assert_eq!(QUERY_ERROR_KIND_AUTHZ, engine_kinds::AUTHZ);
+        assert_eq!(QUERY_ERROR_KIND_OTHER, engine_kinds::OTHER);
     }
 
     #[test]
     fn query_failed_payload_carries_kind_and_mirrors_engine_fields() {
-        let p = query_failed_payload("q-1", "Authentication failed", Some("s1".into()));
+        let p = query_failed_payload(
+            "q-1",
+            "Insufficient Balance",
+            Some("s1".into()),
+            Some(QUERY_ERROR_KIND_QUOTA),
+        );
         assert_eq!(p.query_id, "q-1");
-        assert_eq!(p.error, "Authentication failed");
+        assert_eq!(p.error, "Insufficient Balance");
         assert_eq!(p.session_id.as_deref(), Some("s1"));
-        assert_eq!(p.error_kind, QUERY_ERROR_KIND_AUTH);
+        assert_eq!(p.error_kind, QUERY_ERROR_KIND_QUOTA);
         let json = serde_json::to_string(&p).unwrap();
-        assert!(json.contains("\"error_kind\":\"auth\""), "{json}");
+        assert!(json.contains("\"error_kind\":\"quota\""), "{json}");
         // The three engine-mirrored field names are unchanged.
         assert!(json.contains("\"query_id\":\"q-1\""), "{json}");
         assert!(json.contains("\"session_id\":\"s1\""), "{json}");
@@ -360,7 +445,7 @@ mod tests {
     #[test]
     fn query_failed_payload_without_session_omits_field() {
         // Matches the engine payload's skip_serializing_if contract.
-        let p = query_failed_payload("q-2", "boom", None);
+        let p = query_failed_payload("q-2", "boom", None, None);
         let json = serde_json::to_string(&p).unwrap();
         assert!(!json.contains("session_id"), "{json}");
         assert!(json.contains("\"error_kind\":\"other\""), "{json}");

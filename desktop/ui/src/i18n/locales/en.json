@@ -3941,5 +3941,15 @@
   "settings.general.approvalMode.bypass.label": "Bypass approvals",
   "settings.general.approvalMode.bypass.description": "Skip all checks except deny rules — trusted environments only",
   "settings.general.approvalMode.advanced": "Advanced",
-  "settings.general.approvalMode.advanced.none": "Reset to a ladder tier"
+  "settings.general.approvalMode.advanced.none": "Reset to a ladder tier",
+  "chat.error.quota.title": "Quota exhausted",
+  "chat.error.quota.body": "Your provider quota is used up. Update the key, check usage, or switch to a cheaper model from the composer's model menu.",
+  "chat.error.quota.updateKey": "Update key",
+  "chat.error.quota.viewUsage": "View usage",
+  "chat.error.rateLimit.title": "Requests are being rate limited",
+  "chat.error.rateLimit.body": "The provider is throttling requests — wait a moment, then retry.",
+  "chat.error.rateLimit.retryAfter": "You can retry in {seconds}s",
+  "chat.error.authz.title": "Access denied (403)",
+  "chat.error.authz.body": "This API key does not have access to the requested model or resource. Check the key and its permissions in Settings → Models.",
+  "chat.error.authz.checkKey": "Check key"
 }

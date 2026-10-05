@@ -291,6 +291,12 @@ pub struct QueryFailedPayload {
     /// must mirror src/events.rs exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+
+    /// S1-1: structured failure classification ("auth" | "quota" |
+    /// "rate_limit" | "authz" | "other"), engine-classified from the typed
+    /// error. Additive — must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
 }
 
 /// P1-3 mirror of `src/events.rs::PermissionReason` — frozen camelCase wire

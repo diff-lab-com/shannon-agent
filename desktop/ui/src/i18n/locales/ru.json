@@ -3941,5 +3941,15 @@
   "settings.general.approvalMode.bypass.label": "Без проверок",
   "settings.general.approvalMode.bypass.description": "Пропускает все проверки, кроме запретов — только доверенные среды",
   "settings.general.approvalMode.advanced": "Расширенные",
-  "settings.general.approvalMode.advanced.none": "Вернуться к обычной ступени"
+  "settings.general.approvalMode.advanced.none": "Вернуться к обычной ступени",
+  "chat.error.quota.title": "Квота исчерпана",
+  "chat.error.quota.body": "Квота провайдера израсходована. Можно обновить ключ, посмотреть расход или переключиться на более дешёвую модель в меню моделей в поле ввода.",
+  "chat.error.quota.updateKey": "Обновить ключ",
+  "chat.error.quota.viewUsage": "Посмотреть расход",
+  "chat.error.rateLimit.title": "Запросы ограничены",
+  "chat.error.rateLimit.body": "Провайдер ограничивает запросы — подождите немного и повторите попытку.",
+  "chat.error.rateLimit.retryAfter": "Повторная попытка через {seconds} с",
+  "chat.error.authz.title": "Доступ запрещён (403)",
+  "chat.error.authz.body": "У этого API-ключа нет доступа к запрошенной модели или ресурсу. Проверьте ключ и его права в разделе Настройки → Модели.",
+  "chat.error.authz.checkKey": "Проверить ключ"
 }

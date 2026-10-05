@@ -3941,5 +3941,15 @@
   "settings.general.approvalMode.bypass.label": "Omitir aprobaciones",
   "settings.general.approvalMode.bypass.description": "Omite todas las comprobaciones excepto reglas de denegación — solo entornos de confianza",
   "settings.general.approvalMode.advanced": "Avanzado",
-  "settings.general.approvalMode.advanced.none": "Volver a un nivel estándar"
+  "settings.general.approvalMode.advanced.none": "Volver a un nivel estándar",
+  "chat.error.quota.title": "Cuota agotada",
+  "chat.error.quota.body": "Has agotado la cuota de tu proveedor. Puedes actualizar la clave, consultar el uso o cambiar a un modelo más barato desde el menú de modelos del compositor.",
+  "chat.error.quota.updateKey": "Actualizar clave",
+  "chat.error.quota.viewUsage": "Ver uso",
+  "chat.error.rateLimit.title": "Solicitudes limitadas",
+  "chat.error.rateLimit.body": "El proveedor está limitando las solicitudes: espera un momento e inténtalo de nuevo.",
+  "chat.error.rateLimit.retryAfter": "Puedes reintentar en {seconds} s",
+  "chat.error.authz.title": "Acceso denegado (403)",
+  "chat.error.authz.body": "Esta clave de API no tiene acceso al modelo o recurso solicitado. Revisa la clave y sus permisos en Configuración → Modelos.",
+  "chat.error.authz.checkKey": "Revisar clave"
 }

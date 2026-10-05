@@ -3941,5 +3941,15 @@
   "settings.general.approvalMode.bypass.label": "跳过审批",
   "settings.general.approvalMode.bypass.description": "跳过除拒绝规则外的所有检查——仅限可信环境",
   "settings.general.approvalMode.advanced": "高级模式",
-  "settings.general.approvalMode.advanced.none": "切换回常规档位"
+  "settings.general.approvalMode.advanced.none": "切换回常规档位",
+  "chat.error.quota.title": "配额已耗尽",
+  "chat.error.quota.body": "该提供商的配额已用完。可更新密钥、查看用量，或在输入框的模型菜单中切换更便宜的模型。",
+  "chat.error.quota.updateKey": "更新密钥",
+  "chat.error.quota.viewUsage": "查看用量",
+  "chat.error.rateLimit.title": "请求被限流",
+  "chat.error.rateLimit.body": "提供商正在限流，请稍候后重试。",
+  "chat.error.rateLimit.retryAfter": "{seconds} 秒后可重试",
+  "chat.error.authz.title": "访问被拒绝（403）",
+  "chat.error.authz.body": "当前 API 密钥无权访问该模型或资源。请在 设置 → 模型 中检查密钥及其权限。",
+  "chat.error.authz.checkKey": "检查密钥"
 }

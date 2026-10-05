@@ -6,6 +6,7 @@
 // chatRunStatus; this file pins what MessageArea itself decides.)
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { ChatErrorKind } from '@/context/CatalogContext'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import type { Virtualizer } from '@tanstack/react-virtual'
@@ -28,7 +29,7 @@ const ctx = vi.hoisted(() => ({
   currentSessionId: 'session-1' as string | null,
   windowSessionId: null as string | null,
   error: null as string | null,
-  errorKind: null as 'auth' | 'other' | null,
+  errorKind: null as ChatErrorKind | null,
   providerStatus: null as any,
   feedback: {} as Record<string, string>,
   sendMessage: vi.fn().mockResolvedValue(true),
@@ -173,6 +174,71 @@ describe('MessageArea — error banner routing (auth vs other)', () => {
     // arg carries its attachment paths — `undefined` when it has none.
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(ctx.sendMessage).toHaveBeenCalledWith('tell me a story', undefined)
+  })
+
+  it('routes quota (402) failures to the quota banner with update-key / view-usage actions and the model-switch hint', () => {
+    ctx.error = 'Provider error (deepseek): insufficient_balance — Insufficient Balance'
+    ctx.errorKind = 'quota'
+    ctx.messages = [{ role: 'user', content: 'hi', timestamp: 1 }]
+    renderArea()
+
+    const banner = screen.getByTestId('quota-error-banner')
+    expect(banner).toBeInTheDocument()
+    expect(banner).toHaveTextContent('Quota exhausted')
+    expect(banner).toHaveTextContent('switch to a cheaper model')
+    expect(screen.getByRole('button', { name: 'Update key' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'View usage' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    // The raw provider line stays out of the UI, like the auth banner.
+    expect(screen.queryByText(ctx.error)).toBeNull()
+  })
+
+  it('routes rate-limit (429) failures to the rate-limit banner with a wait hint, retry-in countdown, and Retry', () => {
+    ctx.error = 'Rate limit exceeded: Rate limit reached, try again in 20s'
+    ctx.errorKind = 'rate_limit'
+    ctx.messages = [{ role: 'user', content: 'hi', timestamp: 1 }]
+    renderArea()
+
+    const banner = screen.getByTestId('rate-limit-error-banner')
+    expect(banner).toBeInTheDocument()
+    expect(banner).toHaveTextContent('Requests are being rate limited')
+    expect(banner).toHaveTextContent('You can retry in 20s')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(screen.queryByText(ctx.error)).toBeNull()
+  })
+
+  it('omits the retry-in line when the rate-limit error text carries no parseable delay', () => {
+    ctx.error = 'Rate limit exceeded'
+    ctx.errorKind = 'rate_limit'
+    ctx.messages = [{ role: 'user', content: 'hi', timestamp: 1 }]
+    renderArea()
+
+    const banner = screen.getByTestId('rate-limit-error-banner')
+    expect(banner).toBeInTheDocument()
+    expect(banner).not.toHaveTextContent('You can retry in')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+  })
+
+  it('routes authz (403) failures to the access-denied banner with a Settings pointer', () => {
+    ctx.error = 'Provider error (openai): permission_error — your key cannot access this model'
+    ctx.errorKind = 'authz'
+    ctx.messages = [{ role: 'user', content: 'hi', timestamp: 1 }]
+    renderArea()
+
+    const banner = screen.getByTestId('authz-error-banner')
+    expect(banner).toBeInTheDocument()
+    expect(banner).toHaveTextContent('Access denied (403)')
+    expect(banner).toHaveTextContent('does not have access to the requested model or resource')
+    expect(screen.getByRole('button', { name: 'Check key' })).toBeInTheDocument()
+    expect(screen.queryByText(ctx.error)).toBeNull()
+  })
+
+  it('parseRetryAfterSeconds extracts provider-provided delays, nothing otherwise', async () => {
+    const { parseRetryAfterSeconds } = await import('@/pages/chat/MessageArea')
+    expect(parseRetryAfterSeconds('Rate limited. Retry-After: 42 seconds')).toBe(42)
+    expect(parseRetryAfterSeconds('please try again in 7s')).toBe(7)
+    expect(parseRetryAfterSeconds('rate limit exceeded')).toBeNull()
+    expect(parseRetryAfterSeconds('')).toBeNull()
   })
 
   it('hides Retry entirely when there is no user message to resend', () => {
