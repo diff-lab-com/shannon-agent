@@ -649,6 +649,15 @@ pub struct ModelInfo {
     /// tool bits, so unknown — same honest-metadata contract as `vision`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<bool>,
+    /// S3-5 (P2-19): reasoning/thinking support. `Some(false)` is the ONLY
+    /// decisive verdict — the composer's effort sub-tier shows its
+    /// "effort steers thinking models" note on it. `Some(true)` from an
+    /// explicit source (models.dev reasoning modality, user declaration);
+    /// `None` = unknown (static catalog rows don't curate reasoning bits) —
+    /// the sub-tier renders normally, exactly like the engine's own pass-through
+    /// posture (effort params are sent and the PROVIDER arbitrates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
 }
 
 /// Tool info for the tools panel.
@@ -1701,6 +1710,19 @@ pub async fn send_message(
         memory_disabled,
         session_working_dir.as_deref(),
     );
+    // S3-5 (P2-19): the effort dial — the composer's picker sub-tier writes
+    // the desktop `effort_level` key; apply it to the per-turn engine exactly
+    // like the CLI does for `--effort` / REPL `/effort` (one `set_effort`
+    // per built engine). An unpersisted/junk value falls back to the engine
+    // default (Standard = byte-identical to the pre-dial behavior), so a bad
+    // write can never poison a send.
+    let effort_raw = state.desktop_config.read().await.effort_level.clone();
+    if let Some(level) = effort_raw
+        .as_deref()
+        .and_then(shannon_core::query_engine::EffortLevel::parse)
+    {
+        engine.set_effort(level);
+    }
     // W3-4 — per-turn citation snapshot: the entries this turn's system
     // prompt is about to inject. Computed right after the store is attached
     // (which refreshes from disk), so it is the same store + frozen project
@@ -3016,6 +3038,7 @@ mod tests {
             max_output: Some(16_384),
             source: Some("catalog".to_string()),
             tools: None,
+            reasoning: Some(true),
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: ModelInfo = serde_json::from_str(&json).unwrap();

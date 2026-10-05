@@ -4031,5 +4031,10 @@
   "chat.error.rateLimit.retryAfter": "{seconds} 秒後可重試",
   "chat.error.authz.title": "存取被拒絕（403）",
   "chat.error.authz.body": "目前 API 金鑰無權存取該模型或資源。請在「設定 → 模型」中檢查金鑰及其權限。",
-  "chat.error.authz.checkKey": "檢查金鑰"
+  "chat.error.authz.checkKey": "檢查金鑰",
+  "chat.input.effort.standard": "標準",
+  "chat.input.effort.notApplicable": "此模型未宣告推理能力——推理強度僅對思考型模型生效",
+  "chat.input.cost.aria": "傳送成本預估（僅供參考，不設限制）",
+  "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
+  "chat.input.cost.budget": "≈工作階段預算的 {percent}%"
 }

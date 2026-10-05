@@ -4031,5 +4031,10 @@
   "chat.error.rateLimit.retryAfter": "Erneuter Versuch möglich in {seconds} s",
   "chat.error.authz.title": "Zugriff verweigert (403)",
   "chat.error.authz.body": "Dieser API-Schlüssel hat keinen Zugriff auf das angeforderte Modell oder die Ressource. Prüfe Schlüssel und Berechtigungen unter Einstellungen → Modelle.",
-  "chat.error.authz.checkKey": "Schlüssel prüfen"
+  "chat.error.authz.checkKey": "Schlüssel prüfen",
+  "chat.input.effort.standard": "Standard",
+  "chat.input.effort.notApplicable": "Dieses Modell weist kein Reasoning aus — Denkleistungsstufen wirken nur auf Denkmodelle",
+  "chat.input.cost.aria": "Kostenschätzung für das Senden (hinweisend, keine Grenze)",
+  "chat.input.cost.range": "≈ {tokens} Tokens · {low}–{high}",
+  "chat.input.cost.budget": "≈{percent}% des Sitzungsbudgets"
 }

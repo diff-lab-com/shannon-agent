@@ -4031,5 +4031,10 @@
   "chat.error.rateLimit.retryAfter": "Puedes reintentar en {seconds} s",
   "chat.error.authz.title": "Acceso denegado (403)",
   "chat.error.authz.body": "Esta clave de API no tiene acceso al modelo o recurso solicitado. Revisa la clave y sus permisos en Configuración → Modelos.",
-  "chat.error.authz.checkKey": "Revisar clave"
+  "chat.error.authz.checkKey": "Revisar clave",
+  "chat.input.effort.standard": "Estándar",
+  "chat.input.effort.notApplicable": "Este modelo no anuncia razonamiento: el esfuerzo de razonamiento solo afecta a modelos con pensamiento",
+  "chat.input.cost.aria": "Estimación de coste de envío (orientativa, no es un límite)",
+  "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
+  "chat.input.cost.budget": "≈{percent} % del presupuesto de sesión"
 }

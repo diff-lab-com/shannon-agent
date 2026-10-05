@@ -4031,5 +4031,10 @@
   "chat.error.rateLimit.retryAfter": "You can retry in {seconds}s",
   "chat.error.authz.title": "Access denied (403)",
   "chat.error.authz.body": "This API key does not have access to the requested model or resource. Check the key and its permissions in Settings → Models.",
-  "chat.error.authz.checkKey": "Check key"
+  "chat.error.authz.checkKey": "Check key",
+  "chat.input.effort.standard": "Standard",
+  "chat.input.effort.notApplicable": "This model does not advertise reasoning — effort levels steer thinking models only",
+  "chat.input.cost.aria": "Send cost estimate (advisory, not a limit)",
+  "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
+  "chat.input.cost.budget": "≈{percent}% of session budget"
 }

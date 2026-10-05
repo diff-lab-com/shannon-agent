@@ -198,6 +198,16 @@ pub struct DesktopConfig {
     /// by `usage_governance::get_usage_governance`.
     #[serde(default)]
     pub monthly_budget_usd: Option<f64>,
+    /// S3-5 (P2-19): effort dial — `low` | `standard` | `high` | `max`
+    /// (canonical forms; `medium` is accepted on write and normalized to
+    /// `standard`, the engine's alias). `None` = the engine default
+    /// (`Standard`, which sends no thinking parameters). Written by the
+    /// composer's effort sub-tier via `configure('effort_level')` — the same
+    /// key vocabulary the CLI `/effort` surface speaks — and applied per turn
+    /// via `QueryEngine::set_effort` in the send path. Global preference,
+    /// deliberately NOT per session.
+    #[serde(default)]
+    pub effort_level: Option<String>,
 }
 
 /// P2-5: payload of the desktop `offpeak.model_override` config key.
@@ -708,6 +718,7 @@ impl Default for DesktopConfig {
             plan_tier: None,
             act_tier: None,
             monthly_budget_usd: None,
+            effort_level: None,
         }
     }
 }

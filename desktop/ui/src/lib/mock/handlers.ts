@@ -512,6 +512,43 @@ export const handlers: Record<string, MockHandler> = {
   // stream a live query, so the honest answer is always idle.
   async get_session_querying() { await delay(); return false },
 
+  // --- S3-6: pre-send cost estimate (demo twin) ---
+  // Deterministic stand-in for the backend's billing-grade command: same
+  // wire shape (camelCase), derived from the draft + a canned context so the
+  // composer's estimate row renders in demo/e2e. The range math mirrors the
+  // real contract (floor = input-only, ceiling = input at max output).
+  async estimate_send_cost(args: { draftText?: string; filePaths?: string[] | null }) {
+    await delay()
+    const draft = String(args?.draftText ?? '')
+    const draftTokens = draft.length === 0 ? 0 : Math.max(1, Math.ceil(draft.length / 4))
+    const contextTokens = 1200
+    const attachmentTokens = (args?.filePaths ?? []).length * 100
+    const inputTokens = contextTokens + draftTokens + attachmentTokens
+    const model = demoConfig.model ?? MOCK_CONFIG.model ?? ''
+    // Rough per-Mtok table (mirrors the real catalog's shape, not its data):
+    // gpt-family 1.25/10, claude-family 3/15, everyone else 1/2.
+    const [priceIn, priceOut] = /gpt/i.test(model)
+      ? [1.25, 10]
+      : /claude/i.test(model)
+        ? [3, 15]
+        : [1, 2]
+    const maxOutput = 4096
+    const cost = (outputTokens: number) =>
+      (inputTokens / 1_000_000) * priceIn + (outputTokens / 1_000_000) * priceOut
+    return {
+      model,
+      inputTokens,
+      contextTokens,
+      draftTokens,
+      attachmentTokens,
+      maxOutputTokens: maxOutput,
+      costLow: cost(0),
+      costHigh: cost(maxOutput),
+      budgetUsd: demoBudgetUsd,
+      spentUsd: 0,
+    }
+  },
+
   // --- Speech-to-text (wave-2 task 6, voice-input journey) ---
   // Previously these five voice commands were UNMOCKED_ALLOWLIST entries
   // ("no browser equivalent") and demo mode threw for them. The nightly

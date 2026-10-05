@@ -4031,5 +4031,10 @@
   "chat.error.rateLimit.retryAfter": "Nova tentativa em {seconds} s",
   "chat.error.authz.title": "Acesso negado (403)",
   "chat.error.authz.body": "Esta chave de API não tem acesso ao modelo ou recurso solicitado. Verifique a chave e as permissões em Configurações → Modelos.",
-  "chat.error.authz.checkKey": "Verificar chave"
+  "chat.error.authz.checkKey": "Verificar chave",
+  "chat.input.effort.standard": "Padrão",
+  "chat.input.effort.notApplicable": "Este modelo não anuncia raciocínio — o esforço de raciocínio só afeta modelos com pensamento",
+  "chat.input.cost.aria": "Estimativa de custo de envio (informativa, não é um limite)",
+  "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
+  "chat.input.cost.budget": "≈{percent}% do orçamento da sessão"
 }
