@@ -949,6 +949,7 @@ pub(crate) fn notify_query_complete(
         timestamp: chrono::Utc::now(),
         source: Some("query_complete".to_string()),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::Completed,
     };
     // window_ms=0 — each query completion is unique and worth surfacing.
     let _ = notifier.notify_dedup(&notification, 0);

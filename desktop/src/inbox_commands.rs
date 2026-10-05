@@ -946,6 +946,7 @@ fn notify_budget_abort(port: &dyn RunNotifyPort, task_name: &str, cap: f64, spen
         timestamp: chrono::Utc::now(),
         source: Some("routine_budget_abort".to_string()),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::NeedsAttention,
     };
     port.notify(&notification);
     tracing::info!(
@@ -1972,6 +1973,7 @@ fn notify_run_failed(port: &dyn RunNotifyPort, task_name: &str, error: Option<&s
         timestamp: chrono::Utc::now(),
         source: Some("routine_run_failed".to_string()),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::Failed,
     };
     port.notify(&notification);
     tracing::debug!(task_name, "routine failure notification dispatched");
@@ -1997,6 +1999,7 @@ fn notify_auto_paused(notify: &dyn RunNotifyPort, task_name: &str) {
         timestamp: chrono::Utc::now(),
         source: Some("routine_auto_pause".to_string()),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::NeedsAttention,
     };
     notify.notify(&notification);
     tracing::info!(task_name, "routine auto-pause notification dispatched");
@@ -2060,6 +2063,11 @@ fn deliver_routine_webhook(
         timestamp: chrono::Utc::now(),
         source: Some("routine_finish".to_string()),
         action_id: None,
+        kind: if outcome.failed {
+            shannon_core::notifier::NotificationKind::Failed
+        } else {
+            shannon_core::notifier::NotificationKind::Completed
+        },
     };
     deps.webhook.deliver(&notification);
     tracing::debug!(run_id = %ctx.run_id, "routine finish: webhook notification dispatched");

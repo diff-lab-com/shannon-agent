@@ -1330,6 +1330,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     timestamp: chrono::Utc::now(),
                     source: Some("query_complete".to_string()),
                     action_id: None,
+                    kind: shannon_core::notifier::NotificationKind::Completed,
                 });
             }
         }
