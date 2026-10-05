@@ -651,8 +651,11 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       }
       const before =
         typeof params.before === "string" && params.before.length > 0 ? params.before : undefined;
+      // §J4: the <1 → 1 clamp lives ENGINE-side — pass every finite number
+      // through (0 and negatives included) so the clamp reaches the wire;
+      // only a non-number/non-finite limit means "absent" (engine default 50).
       const limit =
-        typeof params.limit === "number" && Number.isFinite(params.limit) && params.limit >= 1
+        typeof params.limit === "number" && Number.isFinite(params.limit)
           ? Math.floor(params.limit)
           : undefined;
       return withSessionClient(async (call) => {
