@@ -298,14 +298,11 @@ export default function ModelsSettings() {
                           {t(`settings.models.tier${m.tier.charAt(0).toUpperCase()}${m.tier.slice(1)}` as 'settings.models.tierFast' | 'settings.models.tierStandard' | 'settings.models.tierPro')}
                         </span>
                       ) : null}
-                      {m.dynamic ? (
-                        <span
-                          className="px-xs py-[2px] bg-tertiary-container text-on-tertiary-container rounded-sm text-label-2xs font-bold uppercase tracking-wider"
-                          title={t('models.modelsDev.title')}
-                        >
-                          {t('settings.models.dynamicBadge')}
-                        </span>
-                      ) : null}
+                      {/* S1-3 (P-N3): the `dynamic` (models.dev overlay)
+                          badge is gone — the engine currently hardcodes
+                          `dynamic: None` on the ModelInfo wire, so the badge
+                          never lit. The wire field stays (S2-1 reuses it for
+                          a real source badge); no UI replacement here yet. */}
                     </div>
                     <p className="text-label-sm text-on-surface-variant">
                       {m.provider}

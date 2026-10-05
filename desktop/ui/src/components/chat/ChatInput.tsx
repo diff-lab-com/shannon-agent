@@ -1412,10 +1412,10 @@ export default function ChatInput({
                 data-testid="model-chip-trigger"
                 aria-label={t('chat.input.model.label')}
                 title={sessionOverride
-                  ? intl.formatMessage(
+                  ? `${intl.formatMessage(
                       { id: 'chat.input.model.sessionTitle' },
                       { model: currentModel?.name ?? sessionOverride.model },
-                    )
+                    )} ${t('chat.input.model.sessionPinNote')}`
                   : t('chat.input.model.title')}
                 className="max-w-[170px] rounded-full border border-outline-variant/50 bg-transparent hover:bg-surface-container-low/50 transition-colors"
               >
@@ -1479,6 +1479,13 @@ export default function ChatInput({
                   <>
                     <div role="presentation" className="px-sm pt-0 pb-xs font-label-xs uppercase tracking-wider text-on-surface-variant">
                       {t('chat.input.model.sessionSection')}
+                    </div>
+                    {/* S1-2 (P-N2): the pin's failover contract, stated where
+                        the pin action lives — a pinned session opts THIS chat
+                        out of model-level automatic failover (key rotation is
+                        unaffected). */}
+                    <div role="presentation" className="px-sm pt-0 pb-xs text-label-xs text-on-surface-variant">
+                      {t('chat.input.model.sessionPinNote')}
                     </div>
                     <SelectItem value="set-default" data-testid="model-action-set-default">
                       <span className="flex items-center gap-xs">

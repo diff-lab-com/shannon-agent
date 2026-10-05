@@ -191,6 +191,30 @@ describe('Header component', () => {
     expect(document.activeElement).toBe(trigger)
   })
 
+  // S1-5 (P-N16①) — the old `models.length > 0` gate removed the whole
+  // Portal, so clicking the trigger on an empty catalog was a silent no-op.
+  // Now the menu always renders; with no models it carries one explanatory
+  // entry that deep-links to the model settings page.
+  it('empty catalog: the menu renders an explanatory entry deep-linking to /settings/models', async () => {
+    mockCtx.models = []
+    render(
+      wrap(
+        <>
+          <Header />
+          <LocationProbe />
+        </>,
+        { route: '/tasks' },
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Select model' }))
+    const entry = await screen.findByTestId('header-model-empty')
+    expect(entry).toHaveTextContent('No models available — add one in Settings')
+    fireEvent.click(entry)
+    await waitFor(() => {
+      expect(screen.getByTestId('header-location')).toHaveTextContent('/settings/models')
+    })
+  })
+
   // 2026-09 dedup: on /chat the composer chip is the single model surface
   // (issue: 三处模型名重复). Header must hide its selector on that page
   // so there's exactly one entry point per view.
