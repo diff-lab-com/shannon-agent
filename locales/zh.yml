@@ -105,7 +105,7 @@ commands:
     available: "可用的 provider："
     legend: "* = 当前 | 使用 /provider <名称> 切换"
     switched: "Provider：%{provider} | 模型：%{model}"
-    switched_no_catalog: "Provider 已设为 %{provider}。它没有内置模型列表 — 使用 `/model <provider>/<model-id>` 选择模型。"
+    no_catalog_pick_required: "Provider %{provider} 没有模型目录，不会沿用之前的模型。请在刚打开的选择器中挑选一个模型（Esc 取消），或显式切换：/provider %{provider} <model-id>"
     foreign_model_warning: "⚠ 注意：当前模型 %{model} 属于 %{old_provider}；切换后会保留该模型，请求将被发送到 %{new_provider}。如需显式选择模型：/model %{new_provider}/<model-id>"
     no_selection: "未选择 provider。请先运行 /connect <provider> <key>。"
     health_skipped_header: "已跳过（无可探测的模型列表端点）："

@@ -104,7 +104,7 @@ commands:
     available: "Provedores disponíveis:"
     legend: "* = atual | Use /provider <nome> para alternar"
     switched: "Provedor: %{provider} | Modelo: %{model}"
-    switched_no_catalog: "Provedor definido como %{provider}. Ele não tem lista de modelos integrada — use `/model <provider>/<model-id>` para escolher um modelo."
+    no_catalog_pick_required: "O provedor %{provider} não tem catálogo de modelos, então o modelo anterior NÃO é mantido. Escolha um no seletor recém-aberto (Esc cancela) ou troque explicitamente: /provider %{provider} <model-id>"
     no_selection: "Nenhum provedor selecionado. Execute /connect <provedor> <chave> primeiro."
   disconnect:
     usage: "Uso: /disconnect <provedor>\nRemove a conexão salva de um provedor (sua entrada em providers.toml) para que ele não fique mais conectado. Sua chave de API armazenada é mantida — execute /connect novamente para reconectar."

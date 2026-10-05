@@ -975,6 +975,72 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_output: 4.0,
         capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
     },
+    // ── Azure OpenAI ─────────────────────────────────────────
+    // First-switch defaults for `/provider azure` (review P-N14: the provider
+    // had zero catalog entries, so switching kept the previous provider's
+    // model). Azure serves the OpenAI first-party lineup through per-resource
+    // deployments; Shannon's engine pins the deployment name to the model id
+    // (`endpoint_url` composes
+    // /openai/deployments/{model}/chat/completions). Catalog ids therefore
+    // take a deployment-legal "-azure" suffix — the same convention as the
+    // "-coding" Zhipu entries — instead of the OpenRouter-style
+    // "azure/<model>" slash prefix, because "/" is not a legal deployment
+    // name. Azure pricing ≈ the OpenAI list price (same models, passthrough
+    // rates; region/licensing multipliers aside), so each entry mirrors its
+    // OpenAI first-party sibling below; per-resource rates can be overridden
+    // via providers.toml per-model metadata (R2-4).
+    ModelInfo {
+        id: "gpt-5-azure",
+        display_name: "GPT-5 (Azure)",
+        aliases: &[],
+        provider: LlmProvider::Azure,
+        context_window: 400_000,
+        max_output: 128_000,
+        // Mirrors the OpenAI gpt-5 entry ($1.25/$10.00 per Mtok list).
+        cost_per_m_input: 1.25,
+        cost_per_m_output: 10.0,
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::reasoning())
+            .or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "gpt-4o-azure",
+        display_name: "GPT-4o (Azure)",
+        aliases: &[],
+        provider: LlmProvider::Azure,
+        context_window: 128_000,
+        max_output: 16_384,
+        // Mirrors the OpenAI gpt-4o entry ($2.50/$10.00 per Mtok list).
+        cost_per_m_input: 2.50,
+        cost_per_m_output: 10.0,
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::reasoning())
+            .or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "gpt-4o-mini-azure",
+        display_name: "GPT-4o Mini (Azure)",
+        aliases: &[],
+        provider: LlmProvider::Azure,
+        context_window: 128_000,
+        max_output: 16_384,
+        // Mirrors the OpenAI gpt-4o-mini entry ($0.15/$0.60 per Mtok list).
+        cost_per_m_input: 0.15,
+        cost_per_m_output: 0.60,
+        capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
+    },
+    ModelInfo {
+        id: "gpt-5-mini-azure",
+        display_name: "GPT-5 Mini (Azure)",
+        aliases: &[],
+        provider: LlmProvider::Azure,
+        context_window: 400_000,
+        max_output: 128_000,
+        // Mirrors the OpenAI gpt-5-mini entry ($0.25/$2.00 per Mtok list).
+        cost_per_m_input: 0.25,
+        cost_per_m_output: 2.0,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+    },
     // ── GLM / Zhipu Coding & Coding Plan ─────────────────────
     // Both Zhipu coding providers serve the same GLM lineup as the Zhipu
     // entries above: `zhipu-coding` is the Anthropic-compatible
@@ -1095,13 +1161,15 @@ mod tests {
 
     /// Review P1-8 (2026-09-29): OpenRouter / Bedrock / ZhipuCoding /
     /// ZhipuCodingPlan had zero catalog entries, so `/provider <slug>` kept
-    /// the previous provider's model (silent misconfiguration). Each gap
-    /// provider must now ship first-switch defaults.
+    /// the previous provider's model (silent misconfiguration). Review
+    /// P-N14 (2026-10-05): Azure was the remaining zero-entry mainstream
+    /// provider. Each gap provider must now ship first-switch defaults.
     #[test]
     fn gap_providers_have_catalog_entries() {
         for (provider, min) in [
             (LlmProvider::OpenRouter, 4),
             (LlmProvider::Bedrock, 2),
+            (LlmProvider::Azure, 4),
             (LlmProvider::ZhipuCoding, 2),
             (LlmProvider::ZhipuCodingPlan, 2),
         ] {
@@ -1145,6 +1213,12 @@ mod tests {
                 "us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 "claude-haiku-4-5-20251001",
             ),
+            // Azure deployments mirror the OpenAI first-party list price
+            // (same model family served per-resource).
+            ("gpt-5-azure", "gpt-5"),
+            ("gpt-4o-azure", "gpt-4o"),
+            ("gpt-4o-mini-azure", "gpt-4o-mini"),
+            ("gpt-5-mini-azure", "gpt-5-mini"),
             // Zhipu coding endpoints mirror the Zhipu (bigmodel.cn) entries.
             ("glm-5.1-coding", "glm-5.1"),
             ("glm-5.3-flash-coding", "glm-5.3-flash"),
@@ -1189,6 +1263,10 @@ mod tests {
                 "us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 TierLabel::Fast,
             ),
+            ("gpt-5-azure", TierLabel::Standard),
+            ("gpt-4o-azure", TierLabel::Standard),
+            ("gpt-4o-mini-azure", TierLabel::Fast),
+            ("gpt-5-mini-azure", TierLabel::Fast),
             ("glm-5.1-coding", TierLabel::Standard),
             ("glm-5.3-flash-coding", TierLabel::Fast),
             ("glm-5.1-coding-plan", TierLabel::Standard),

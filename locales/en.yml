@@ -105,7 +105,7 @@ commands:
     available: "Available providers:"
     legend: "* = current | Use /provider <name> to switch"
     switched: "Provider: %{provider} | Model: %{model}"
-    switched_no_catalog: "Provider set to %{provider}. It has no built-in model list — use `/model <provider>/<model-id>` to choose a model."
+    no_catalog_pick_required: "Provider %{provider} has no model catalog, so the previous model is NOT carried over. Pick one in the model picker that just opened (Esc cancels), or switch explicitly: /provider %{provider} <model-id>"
     foreign_model_warning: "⚠ Note: current model %{model} belongs to %{old_provider}; the switch keeps it, so requests would go to %{new_provider}. To pick a model explicitly: /model %{new_provider}/<model-id>"
     no_selection: "No provider selected. Run /connect <provider> <key> first."
     health_skipped_header: "Skipped (no probeable list-models endpoint):"
