@@ -647,6 +647,23 @@ export const handlers: Record<string, MockHandler> = {
     } else if (key === 'power.block_sleep_during_tasks') {
       // Settings R3 T3: run-time sleep blocker.
       demoConfig.power_block_sleep_during_tasks = String(value) === 'true'
+    } else if (key === 'context.auto_compact') {
+      // Settings R3 T6: engine-level auto-compaction switch (a flip lands on
+      // the next message).
+      demoConfig.context_auto_compact = String(value) === 'true'
+    } else if (key === 'session.auto_archive_enabled') {
+      // Settings R3 T7: timed auto-archive scan switch.
+      demoConfig.session_auto_archive_enabled = String(value) === 'true'
+    } else if (key === 'session.auto_archive_days') {
+      // Settings R3 T7: archive retention gear — stored as a number, clamped
+      // 1..=365 like the backend configure arm (options are inside the clamp).
+      const days = Math.round(Number(value))
+      if (Number.isFinite(days) && days >= 1) {
+        demoConfig.session_auto_archive_days = Math.min(365, days)
+      }
+    } else if (key === 'chat.ask_user_auto_continue') {
+      // Settings R3 T8: auto-answer an agent question left unanswered 5 min.
+      demoConfig.chat_ask_user_auto_continue = String(value) === 'true'
     } else if (key === 'network.proxy_url' || key === 'network.no_proxy' || key === 'network.ca_cert_path') {
       // Settings R3 T4 (B1): corporate-network trio — empty clears (R1:
       // the implicit env fallback stays). The demo does not re-check the

@@ -38,8 +38,7 @@ import { readGroupingPrefs, writeGroupingPref, type ToolGroupKind } from '@/lib/
  *    grouping switches (localStorage `shannon.chat.grouping.*`, default ON;
  *    display-only prefs, no engine config surface).
  *
- * Later tasks in this batch append more cards to this page (see the anchor
- * comment at the end of the JSX).
+ * Cards ①-⑥ cover the full settings surface for this batch.
  */
 
 export default function SessionSettings() {

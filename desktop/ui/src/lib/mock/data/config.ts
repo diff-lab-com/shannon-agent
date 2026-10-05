@@ -49,6 +49,10 @@ export const MOCK_CONFIG: DesktopConfig = {
   network_ca_cert_path: null,
   // Settings R3 T6: auto-compaction on — the backend default, verbatim.
   context_auto_compact: true,
+  // Settings R3 T7: timed auto-archive off with 7-day retention — the
+  // backend serde defaults, verbatim.
+  session_auto_archive_enabled: false,
+  session_auto_archive_days: 7,
   // Settings R3 T8: 提问自动继续 off — the backend default, verbatim (the
   // agent waits for the user's answer indefinitely).
   chat_ask_user_auto_continue: false,
