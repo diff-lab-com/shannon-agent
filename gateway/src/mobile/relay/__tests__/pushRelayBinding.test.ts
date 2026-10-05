@@ -129,4 +129,36 @@ describe("PushRelayBinding (§O3/§T6 frames)", () => {
     t.receive({ t: "push.bind.ack", id: "late", ok: true, handle: "h" });
     expect(t.frames.length).toBe(before);
   });
+
+  // ── v1.1 §6.1 version-skew capability gate ────────────────────────────────
+
+  it("gate: bind degrades to not_configured/NOT_IMPLEMENTED without any wire frame when uncapable", async () => {
+    const t = fakeTransport();
+    const binding = new PushRelayBinding(t, { logger, capable: () => false });
+    const err = await binding.bind("devA", { platform: "fcm", token: "tok" }).catch((e) => e);
+    expect(err).toBeInstanceOf(PushRelayError);
+    expect((err as PushRelayError).relayCode).toBe("not_configured");
+    expect((err as PushRelayError).code).toBe(-32603);
+    expect(t.frames).toHaveLength(0);
+  });
+
+  it("gate: unbind is an honest no-op and wake is dropped with a warn when uncapable", async () => {
+    const t = fakeTransport();
+    const warn = vi.fn();
+    const binding = new PushRelayBinding(t, { logger: { warn }, capable: () => false });
+    await expect(binding.unbind("devA")).resolves.toBeUndefined();
+    binding.wake("devA", 7);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("not push-capable"));
+    expect(t.frames).toHaveLength(0);
+  });
+
+  it("gate: a capable relay gets the normal wire frames", async () => {
+    const t = fakeTransport();
+    const binding = new PushRelayBinding(t, { logger, capable: () => true });
+    const promise = binding.bind("devA", { platform: "fcm", token: "tok" });
+    t.receive({ t: "push.bind.ack", id: t.frames[0]!["id"], ok: true, handle: "h" });
+    await expect(promise).resolves.toEqual({ handle: "h" });
+    expect(t.frames[0]!["t"]).toBe("push.bind");
+  });
 });

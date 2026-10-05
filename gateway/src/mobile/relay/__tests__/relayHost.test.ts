@@ -35,6 +35,8 @@ class MockRelay {
   private phones = new Map<string, WebSocket>();
   /** Most recent register frame (for contract assertions). */
   lastRegister: Record<string, unknown> | null = null;
+  /** v1.1 §6.1: capability advertisement carried on host_ready (unset = old relay). */
+  caps?: string[];
 
   start(port = 0): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -99,7 +101,7 @@ class MockRelay {
     }
     if (type === "register" && role === "host") {
       this.hosts.set(sid, ws);
-      ws.send(JSON.stringify({ t: "host_ready", sid }));
+      ws.send(JSON.stringify({ t: "host_ready", sid, ...(this.caps ? { caps: this.caps } : {}) }));
       this.tryPair(sid);
     } else if (type === "register" && role === "phone") {
       this.phones.set(sid, ws);
@@ -120,7 +122,7 @@ class MockRelay {
   reissueHostReady(sid: string): void {
     const host = this.hosts.get(sid);
     if (host && host.readyState === WebSocket.OPEN) {
-      host.send(JSON.stringify({ t: "host_ready", sid }));
+      host.send(JSON.stringify({ t: "host_ready", sid, ...(this.caps ? { caps: this.caps } : {}) }));
     }
   }
 
@@ -651,6 +653,36 @@ describe("startRelayHost onRegistered (修正1 reconcile hook)", () => {
     } finally {
       await throwing.stop().catch(() => {});
     }
+  });
+});
+
+describe("startRelayHost push capability (v1.1 §6.1 version-skew gate)", () => {
+  it("pushCapable() follows the host_ready caps advertisement, re-evaluated per (re)registration", async () => {
+    const relay = new MockRelay();
+    const relayPort = await relay.start(0);
+    const handle = startRelayHost({
+      relayUrl: `ws://127.0.0.1:${relayPort}`,
+      sid: "sid-caps",
+      sessionKey: deriveSessionKey("caps-token"),
+      handlers: healthHandlers(),
+      logger,
+      pairTimeout: 5000,
+    });
+    hostHandle = handle;
+
+    // Old relay (no caps): not push-capable — bind must not even be attempted.
+    await vi.waitFor(() => expect(relay.lastRegister!["sid"]).toBe("sid-caps"));
+    expect(handle.pushCapable()).toBe(false);
+
+    // Relay upgraded + host re-registers: host_ready now carries caps:["push"].
+    relay.caps = ["push"];
+    relay.reissueHostReady("sid-caps");
+    await vi.waitFor(() => expect(handle.pushCapable()).toBe(true));
+
+    // Flipping back off (e.g. downgrade) re-evaluates on the next host_ready.
+    relay.caps = undefined;
+    relay.reissueHostReady("sid-caps");
+    await vi.waitFor(() => expect(handle.pushCapable()).toBe(false));
   });
 });
 

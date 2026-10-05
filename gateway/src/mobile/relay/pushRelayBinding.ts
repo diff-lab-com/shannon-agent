@@ -13,7 +13,10 @@
  * SAME phone-visible code as an unwired sink — so the phone's tri-state
  * "推送不可用" has exactly one code regardless of which hop lacks the vendor
  * credentials; every other relay refusal maps to ENGINE_ERROR (§O2's
- * structured-error contract, never a mocked success).
+ * structured-error contract, never a mocked success). The v1.1 §6.1
+ * version-skew gate (`capable` option) reuses the same code: a relay that
+ * never advertised `caps:["push"]` in `host_ready` degrades identically
+ * instead of surfacing an ack timeout as a generic ENGINE_ERROR.
  */
 
 import { ShannonError } from "../protocol.js";
@@ -54,6 +57,15 @@ export interface PushRelayBindingOptions {
   logger: { warn(message: string): void };
   /** Ack wait per bind/unbind round-trip (default 5000ms). */
   timeoutMs?: number;
+  /**
+   * v1.1 §6.1 version-skew capability gate: false while the current relay
+   * registration advertised no `caps:["push"]` in `host_ready`. An old relay
+   * silently ignores push.* text frames, so bind must degrade to
+   * `not_configured` (single 「推送不可用」 rendering) instead of burning a 5s
+   * ack timeout; unbind degrades to an honest no-op (no binding can exist on
+   * a relay that never advertised push); wake is dropped with a warn.
+   */
+  capable?: () => boolean;
 }
 
 interface PendingRequest {
@@ -86,8 +98,17 @@ export class PushRelayBinding {
   /**
    * `push.bind` — register (or rotate) the device's vendor token; resolves
    * with the relay-assigned random handle. Refusals throw PushRelayError.
+   * A relay that advertised no push capability degrades to `not_configured`
+   * before any frame goes out (v1.1 §6.1 version-skew gate).
    */
   async bind(deviceId: string, binding: PushBindingRequest): Promise<{ handle: string }> {
+    if (this.opts.capable && !this.opts.capable()) {
+      throw new PushRelayError(
+        "not_configured",
+        ShannonError.NOT_IMPLEMENTED,
+        "relay does not advertise push capability (host_ready caps)",
+      );
+    }
     const ack = await this.request({
       t: "push.bind",
       deviceId,
@@ -104,6 +125,8 @@ export class PushRelayBinding {
 
   /** `push.unbind` — unregister (honest no-op on the relay for unknown ids). */
   async unbind(deviceId: string): Promise<void> {
+    // No push-capable relay ⇒ no binding can exist there; skipping is honest.
+    if (this.opts.capable && !this.opts.capable()) return;
     const ack = await this.request({ t: "push.unbind", deviceId });
     if (ack["ok"] !== true) throw this.asError(ack, "push.unbind");
   }
@@ -112,8 +135,14 @@ export class PushRelayBinding {
    * `push.wake` — fire-and-forget per §O3 (the relay merges per handle with
    * the 10s window; no ack wait). Dropped silently when the link is down —
    * a desktop whose relay link is down cannot be woken through it anyway.
+   * Dropped with a warn when the relay never advertised push capability —
+   * the old relay would silently ignore the text frame (v1.1 §6.1).
    */
   wake(deviceId: string, seq: number): void {
+    if (this.opts.capable && !this.opts.capable()) {
+      this.opts.logger.warn(`push wake dropped (relay not push-capable): ${deviceId} seq=${seq}`);
+      return;
+    }
     const sent = this.transport.send({ t: "push.wake", deviceId, seq });
     if (!sent) this.opts.logger.warn(`push wake dropped (relay link down): ${deviceId} seq=${seq}`);
   }
