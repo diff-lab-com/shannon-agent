@@ -246,6 +246,8 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
     error: null,
   }),
   openReleasePage: vi.fn().mockResolvedValue(undefined),
+  // Settings R3 (T1) — About section: read-only data directory.
+  getShannonHome: vi.fn().mockResolvedValue('/home/tester/.shannon'),
   // Remote targets (SSH hosts / Docker containers). Default: one saved
   // ssh target so the Remotes settings page renders its list.
   remoteListTargets: vi.fn().mockResolvedValue({

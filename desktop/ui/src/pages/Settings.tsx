@@ -12,16 +12,25 @@ import { useSidebarMode } from '@/components/Sidebar';
 // 2026-09 dedup: the sidebar's disclosure was retired; this rail is now the
 // only section switcher. 高级 stays dev-gated here — same contract as before
 // (Sidebar.tsx:386-388 historical).
+//
+// Settings R3 (T1): 网络 / 会话 / 关于 join the rail (about absorbs the
+// update-check content that used to live behind the dev-gated 高级), and
+// 高级 moves to the end of the list — it is the least-frequently visited
+// section and already hidden outside dev mode.
 
 const SECTIONS: Array<{ to: string; labelId: string; icon: string }> = [
   { to: '/settings/general', labelId: 'nav.general', icon: 'tune' },
   { to: '/settings/theme', labelId: 'nav.theme', icon: 'palette' },
   { to: '/settings/models', labelId: 'nav.models', icon: 'smart_toy' },
   { to: '/settings/permissions', labelId: 'nav.permissions', icon: 'shield' },
-  { to: '/settings/advanced', labelId: 'nav.advanced', icon: 'developer_mode' },
+  { to: '/settings/network', labelId: 'nav.network', icon: 'lan' },
+  { to: '/settings/session', labelId: 'nav.session', icon: 'forum' },
   { to: '/settings/notifications', labelId: 'nav.notifications', icon: 'notifications' },
   { to: '/settings/connections', labelId: 'nav.connections', icon: 'cloud' },
   { to: '/settings/remotes', labelId: 'nav.remotes', icon: 'settings_remote' },
+  { to: '/settings/about', labelId: 'nav.about', icon: 'info' },
+  // Dev-gated — filtered out below in simple mode; always rendered last.
+  { to: '/settings/advanced', labelId: 'nav.advanced', icon: 'developer_mode' },
 ];
 
 export default function Settings() {
