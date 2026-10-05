@@ -1,7 +1,7 @@
 # Provider/Model R2 实施排期稿(2026-10-05,决策①-⑪已拍板)
 
 > 方案:[docs/reviews/2026-10-05-provider-model-config-review-r2.md](../reviews/2026-10-05-provider-model-config-review-r2.md)(v1.2 可执行稿) · 红队:[…-redteam.md](../reviews/2026-10-05-provider-model-config-review-r2-redteam.md)
-> 实施方式沿用 #154/chat-r3 口径:每个 PR 一个 worktree + 分支,文件域隔离的 agent 并行实施;验收门槛 = fmt / clippy(lib+bin+test,`-D warnings`)/ nextest(触及 crates)/ rustdoc / `pnpm lint`(tsc+eslint+design-token+i18n-check)/ vitest 全量 / 全套 desktop e2e(CI 复核)/ mock tripwire。基线:dev @ `827122346`(PR #290 合并点)。
+> **状态:已全量实施(2026-10-05,18 PR 合入,终点 dev @ b92bf0618,PR 对照表见方案文档「✅ 实施结果」节)**。实施方式沿用 #154/chat-r3 口径:每个 PR 一个 worktree + 分支,文件域隔离的 agent 并行实施;验收门槛 = fmt / clippy(lib+bin+test,`-D warnings`)/ nextest(触及 crates)/ rustdoc / `pnpm lint`(tsc+eslint+design-token+i18n-check)/ vitest 全量 / 全套 desktop e2e(CI 复核)/ mock tripwire。基线:dev @ `827122346`(PR #290 合并点)。
 
 ## 波次与 PR 映射
 
