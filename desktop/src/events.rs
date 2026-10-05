@@ -156,7 +156,7 @@ pub(crate) fn classify_query_error_kind(engine_kind: Option<&str>, error: &str) 
 /// first three fields mirror the engine type exactly; `error_kind` is
 /// additive, so older frontends ignore it. The kind is the engine's
 /// structured classification when the event carries one, else the
-/// transitional text fallback (see [`classify_query_error_kind`]).
+/// transitional text fallback (see `classify_query_error_kind`).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DesktopQueryFailedPayload {
     pub query_id: String,

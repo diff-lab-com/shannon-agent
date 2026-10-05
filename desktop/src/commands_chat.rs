@@ -1091,6 +1091,7 @@ mod tests {
                     } else {
                         shannon_core::model_registry::ModelCapabilities::coding()
                     },
+                    source: shannon_core::model_registry::ModelEntrySource::Overlay,
                 })
                 .collect();
         assert_eq!(
