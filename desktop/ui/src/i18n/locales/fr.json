@@ -3912,6 +3912,16 @@
   "settings.models.phaseTier.unresolved": "Aucun modèle correspondant dans le catalogue — le défaut global reste actif",
   "settings.models.phaseTier.precedence": "Priorité : remplacement par modèle de session → palier de phase → défaut global. Le palier de planification s'applique tant que le mode plan est activé.",
   "settings.models.phaseTier.failed": "Impossible d'enregistrer le palier de modèle",
+  "settings.models.utility.title": "Emplacements de modèles pour tâches de fond",
+  "settings.models.utility.subtitle": "Attribuez un modèle aux tâches de fond qui n'ont pas besoin du modèle principal. Chaque emplacement suit le défaut global tant que vous ne le modifiez pas.",
+  "settings.models.utility.compaction": "Compaction",
+  "settings.models.utility.summary": "Résumé de session",
+  "settings.models.utility.followDefault": "Suivre le défaut global",
+  "settings.models.utility.followHint": "Cette tâche de fond utilise le modèle par défaut global",
+  "settings.models.utility.resolved": "Cette tâche de fond envoie à {provider} · {model}",
+  "settings.models.utility.unresolved": "Le fournisseur configuré n'est plus au catalogue — le défaut global reste actif",
+  "settings.models.utility.orthogonal": "Les emplacements utilitaires ne s'appliquent qu'aux tâches de fond. Les envois de chat suivent toujours : override de session → palier de phase → défaut global.",
+  "settings.models.utility.failed": "Impossible d'enregistrer l'emplacement utilitaire",
   "settings.models.profiles.title": "Profils",
   "settings.models.profiles.subtitle": "Profils de routage nommés — chacun embarque ses propres fournisseurs et son modèle actif. Le changement redéfinit le défaut global.",
   "settings.models.profiles.create": "Nouveau profil",
@@ -4129,5 +4139,10 @@
   "chat.error.rateLimit.retryAfter": "Nouvelle tentative possible dans {seconds} s",
   "chat.error.authz.title": "Accès refusé (403)",
   "chat.error.authz.body": "Cette clé d'API n'a pas accès au modèle ou à la ressource demandé(e). Vérifie la clé et ses autorisations dans les paramètres → Modèles.",
-  "chat.error.authz.checkKey": "Vérifier la clé"
+  "chat.error.authz.checkKey": "Vérifier la clé",
+  "chat.input.effort.standard": "Standard",
+  "chat.input.effort.notApplicable": "Ce modèle n’annonce pas de raisonnement — l’effort de raisonnement ne concerne que les modèles avec réflexion",
+  "chat.input.cost.aria": "Estimation du coût d’envoi (indicative, pas une limite)",
+  "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
+  "chat.input.cost.budget": "≈{percent} % du budget de session"
 }

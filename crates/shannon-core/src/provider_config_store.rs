@@ -793,6 +793,78 @@ impl ProviderConfigStore {
         Ok(())
     }
 
+    /// S3-3 (utility tier 槽位化): set the auxiliary target for `role` on the
+    /// **active** model profile — providers.toml v2's
+    /// `auxiliary.<role>` map, the schema slot that had zero consumers until
+    /// this chain. **Surgical field write** in the [`Self::set_provider_fallback_models`]
+    /// mold: the `active_target` pointer (and every other field) is never
+    /// touched, so assigning a utility slot can never move the user's active
+    /// provider or model.
+    ///
+    /// The `provider_id` must name an existing slot in the active profile's
+    /// roster — a utility target that could never resolve is rejected at
+    /// write time instead of silently falling back at consume time (the same
+    /// write-time-validation contract `set_session_model` holds on the
+    /// interactive side). Errors (`NotFound`) for a missing active profile or
+    /// a missing provider slot.
+    pub fn set_auxiliary_target(
+        &mut self,
+        role: shannon_types::provider_config::AuxRole,
+        provider_id: &str,
+        model_id: &str,
+    ) -> io::Result<()> {
+        let provider_id = provider_id.trim();
+        let model_id = model_id.trim();
+        if provider_id.is_empty() || model_id.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "auxiliary target needs a non-empty provider id and model id",
+            ));
+        }
+        let mp = self.config.active_model_profile_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "no active model profile in providers.toml",
+            )
+        })?;
+        if !mp.providers.iter().any(|p| p.id == provider_id) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "no provider slot with id '{provider_id}' in the active profile of \
+                     providers.toml; run `shannon list-providers` to see configured ids"
+                ),
+            ));
+        }
+        mp.auxiliary.insert(
+            role,
+            shannon_types::provider_config::ActiveTarget {
+                provider_id: provider_id.to_string(),
+                model_id: model_id.to_string(),
+                scope: shannon_types::provider_config::Scope::Global,
+            },
+        );
+        Ok(())
+    }
+
+    /// S3-3 twin of [`Self::set_auxiliary_target`]: clear the auxiliary
+    /// target for `role` so the slot falls back to the default behavior
+    /// (the consumer rides the session's own model). Returns whether an
+    /// entry was actually removed (idempotent otherwise). Never touches the
+    /// `active_target` pointer.
+    pub fn clear_auxiliary_target(
+        &mut self,
+        role: shannon_types::provider_config::AuxRole,
+    ) -> io::Result<bool> {
+        let mp = self.config.active_model_profile_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "no active model profile in providers.toml",
+            )
+        })?;
+        Ok(mp.auxiliary.remove(&role).is_some())
+    }
+
     /// Remove the per-model declaration `model_id` from provider slot
     /// `provider_id`. Returns whether an entry was removed (idempotent
     /// otherwise, matching [`Self::remove_profile`]'s contract).
@@ -1949,6 +2021,124 @@ mod tests {
             .set_provider_fallback_models("glm", vec!["m".to_string()], Some("ghost"))
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    // ---- S3-3: utility tier slots (set/clear_auxiliary_target) ----
+
+    use shannon_types::provider_config::AuxRole;
+
+    #[test]
+    fn set_auxiliary_target_is_a_surgical_field_write() {
+        // The whole point of the S3-3 write path: assigning a utility slot
+        // lands in `auxiliary` and NEVER repoints `active_target` (the
+        // behavioral red line — the interactive chain is untouchable from
+        // here).
+        let mut store = glm_store();
+        store
+            .set_auxiliary_target(AuxRole::Compression, "glm", "glm-5.3-air")
+            .unwrap();
+
+        let mp = store.config().active_model_profile().unwrap();
+        assert_eq!(mp.active_target.provider_id, "glm");
+        assert_eq!(mp.active_target.model_id, "glm-5.3-flash");
+        let target = mp.auxiliary.get(&AuxRole::Compression).unwrap();
+        assert_eq!(target.provider_id, "glm");
+        assert_eq!(target.model_id, "glm-5.3-air");
+        assert_eq!(target.scope, Scope::Global);
+        // Other roles are untouched by a per-role write.
+        assert!(!mp.auxiliary.contains_key(&AuxRole::TitleGeneration));
+
+        // Overwrite semantics: a second write replaces the same role only.
+        store
+            .set_auxiliary_target(AuxRole::Compression, "glm", "glm-5.3-flash")
+            .unwrap();
+        let mp = store.config().active_model_profile().unwrap();
+        assert_eq!(
+            mp.auxiliary[&AuxRole::Compression].model_id,
+            "glm-5.3-flash"
+        );
+        assert_eq!(mp.active_target.model_id, "glm-5.3-flash");
+    }
+
+    #[test]
+    fn set_auxiliary_target_rejects_empty_or_unknown_provider() {
+        let mut store = glm_store();
+        // Unknown roster id → NotFound (write-time validation, mirroring
+        // `set_session_model`'s contract on the interactive side).
+        let err = store
+            .set_auxiliary_target(AuxRole::Compression, "ghost", "m")
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        // Empty inputs → InvalidInput.
+        for (provider, model) in [("", "m"), ("glm", ""), (" ", " ")] {
+            let err = store
+                .set_auxiliary_target(AuxRole::Compression, provider, model)
+                .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        }
+        // Nothing was written by any of the failed calls.
+        assert!(
+            store
+                .config()
+                .active_model_profile()
+                .unwrap()
+                .auxiliary
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn clear_auxiliary_target_is_idempotent_and_reports() {
+        let mut store = glm_store();
+        // Clearing an unset slot reports false and stays error-free.
+        assert!(!store.clear_auxiliary_target(AuxRole::Compression).unwrap());
+        store
+            .set_auxiliary_target(AuxRole::Compression, "glm", "glm-5.3-air")
+            .unwrap();
+        assert!(store.clear_auxiliary_target(AuxRole::Compression).unwrap());
+        let mp = store.config().active_model_profile().unwrap();
+        assert!(mp.auxiliary.is_empty());
+        // The active target pointer survives the clear, too.
+        assert_eq!(mp.active_target.model_id, "glm-5.3-flash");
+        // Second clear: still false.
+        assert!(!store.clear_auxiliary_target(AuxRole::Compression).unwrap());
+    }
+
+    #[test]
+    fn auxiliary_target_round_trips_through_disk() {
+        // The v2 file must carry the auxiliary map: write through the store,
+        // reload from disk, read the slot back.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
+        let mut store = ProviderConfigStore::from_config(anthropic_connect_config());
+        store
+            .set_auxiliary_target(AuxRole::Compression, "anthropic", "claude-haiku-4-5")
+            .unwrap();
+        store.save_at(&path).unwrap();
+
+        let reloaded = ProviderConfigStore::load_or_default_at(&path);
+        let target = reloaded
+            .config()
+            .active_model_profile()
+            .unwrap()
+            .auxiliary
+            .get(&AuxRole::Compression)
+            .unwrap()
+            .clone();
+        assert_eq!(target.provider_id, "anthropic");
+        assert_eq!(target.model_id, "claude-haiku-4-5");
+        // And a file WITHOUT the auxiliary key still parses (pre-S3-3 files).
+        let legacy = ProviderConfigStore::from_config(anthropic_connect_config());
+        legacy.save_at(&path).unwrap();
+        let reloaded = ProviderConfigStore::load_or_default_at(&path);
+        assert!(
+            reloaded
+                .config()
+                .active_model_profile()
+                .unwrap()
+                .auxiliary
+                .is_empty()
+        );
     }
 
     #[test]

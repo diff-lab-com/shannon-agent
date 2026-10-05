@@ -3911,6 +3911,16 @@
   "settings.models.phaseTier.unresolved": "カタログに一致するモデルがありません — グローバルデフォルトを維持します",
   "settings.models.phaseTier.precedence": "優先順位: セッションモデルのオーバーライド → フェーズティア → グローバルデフォルト。プランモード中は計画ティアが適用されます。",
   "settings.models.phaseTier.failed": "モデルティアを保存できませんでした",
+  "settings.models.utility.title": "バックグラウンドタスクのモデルスロット",
+  "settings.models.utility.subtitle": "メインモデルを必要としないバックグラウンドタスク専用のモデルを指定します。空欄のスロットはグローバルデフォルトに従います。",
+  "settings.models.utility.compaction": "コンテキスト圧縮",
+  "settings.models.utility.summary": "セッション要約",
+  "settings.models.utility.followDefault": "グローバルデフォルトに従う",
+  "settings.models.utility.followHint": "このバックグラウンドタスクはグローバルデフォルトモデルを使用",
+  "settings.models.utility.resolved": "このバックグラウンドタスクは {provider} · {model} に送信されます",
+  "settings.models.utility.unresolved": "設定されたプロバイダーがロスターに存在しません — グローバルデフォルトを使用",
+  "settings.models.utility.orthogonal": "ユーティリティスロットはバックグラウンドタスクのみに適用されます。チャットの送信は常に「セッションオーバーライド → フェーズティア → グローバルデフォルト」に従います。",
+  "settings.models.utility.failed": "ユーティリティスロットを保存できませんでした",
   "settings.models.profiles.title": "プロファイル",
   "settings.models.profiles.subtitle": "名前付きルーティングプロファイル — それぞれ独自のプロバイダーとアクティブなモデルを持ちます。切り替えるとグローバルデフォルトが付け替わります。",
   "settings.models.profiles.create": "新規プロファイル",
@@ -4129,5 +4139,10 @@
   "chat.error.rateLimit.retryAfter": "{seconds}秒後に再試行できます",
   "chat.error.authz.title": "アクセスが拒否されました（403）",
   "chat.error.authz.body": "この API キーには、要求されたモデルやリソースへのアクセス権がありません。設定 → モデル でキーと権限を確認してください。",
-  "chat.error.authz.checkKey": "キーを確認"
+  "chat.error.authz.checkKey": "キーを確認",
+  "chat.input.effort.standard": "標準",
+  "chat.input.effort.notApplicable": "このモデルは推論をサポートしません — 推論の強さは思考モデルにのみ作用します",
+  "chat.input.cost.aria": "送信コストの見積り（参考値、制限ではありません）",
+  "chat.input.cost.range": "≈ {tokens} トークン · {low}–{high}",
+  "chat.input.cost.budget": "セッション予算の ≈{percent}%"
 }

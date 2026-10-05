@@ -54,6 +54,7 @@ fn main() {
     use shannon_desktop::skill_pattern_detection;
     use shannon_desktop::terminal_commands;
     use shannon_desktop::usage_governance;
+    use shannon_desktop::utility_tier;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
@@ -185,6 +186,10 @@ fn main() {
             // P2-5 — session-level "temporary chat" (no-memory bypass).
             commands_chat::set_session_memory_bypass,
             commands_chat::get_session_memory_bypass,
+            // S3-6 — pre-send cost estimate for the composer: billing-grade
+            // token counting + pricing (the same estimator/pricer the engine
+            // and the usage ledger run), display-only.
+            commands_chat::estimate_send_cost,
             commands_config::configure,
             commands_config::get_config,
             commands_config::detect_provider_from_env,
@@ -219,6 +224,14 @@ fn main() {
             // into the provider slot's `fallback_models` (never automatic).
             commands_models::recommend_fallback_chain,
             commands_models::set_provider_fallback_models,
+            // S3-3 (utility tier 槽位化) — compaction + session-summary
+            // auxiliary slots (providers.toml v2 `auxiliary`). The write
+            // path never touches `active_target`; the compaction slot feeds
+            // the background summarizer through the orthogonal resolver in
+            // `utility_tier` (裁定⑦ — the interactive precedence chain is
+            // untouched).
+            utility_tier::get_utility_slots,
+            utility_tier::set_utility_slot,
             // R4-3 (desktop slice) — per-provider multi-key management
             // (Settings → Models "API keys" panel; same credential store
             // the CLI's `providers keys` drives).

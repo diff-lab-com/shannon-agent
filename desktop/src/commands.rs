@@ -663,6 +663,15 @@ pub struct ModelInfo {
     /// tool bits, so unknown — same honest-metadata contract as `vision`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<bool>,
+    /// S3-5 (P2-19): reasoning/thinking support. `Some(false)` is the ONLY
+    /// decisive verdict — the composer's effort sub-tier shows its
+    /// "effort steers thinking models" note on it. `Some(true)` from an
+    /// explicit source (models.dev reasoning modality, user declaration);
+    /// `None` = unknown (static catalog rows don't curate reasoning bits) —
+    /// the sub-tier renders normally, exactly like the engine's own pass-through
+    /// posture (effort params are sent and the PROVIDER arbitrates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
 }
 
 /// Tool info for the tools panel.
@@ -1763,6 +1772,17 @@ pub async fn send_message(
     // per-message engine config. The engine is rebuilt every message, so a
     // flip in Settings applies to the NEXT message without a restart.
     let context_auto_compact = desktop_cfg.context_auto_compact;
+    // S3-3 utility tier slot: the compaction slot (providers.toml v2
+    // `auxiliary.compression`) resolves through the ORTHOGONAL resolver in
+    // `utility_tier` — it reads only the auxiliary map and its roster, never
+    // this session's override or the phase tiers (裁定⑦). `None` (slot
+    // unconfigured, the default) keeps the historical behavior byte-identical:
+    // the background compaction request rides the session's own client.
+    let auxiliary_compaction_client = crate::utility_tier::resolve_auxiliary_client(
+        &state,
+        shannon_types::provider_config::AuxRole::Compression,
+    )
+    .await;
     let mut engine = crate::commands_memory::attach_shared_memory_if(
         QueryEngine::with_defaults_arc_and_config(
             client,
@@ -1770,11 +1790,25 @@ pub async fn send_message(
             permissions,
             StateManager::new(),
             |config| config.auto_compact_enabled = context_auto_compact,
-        ),
+        )
+        .with_auxiliary_compaction_client(auxiliary_compaction_client),
         &state.memory_store,
         memory_disabled,
         session_working_dir.as_deref(),
     );
+    // S3-5 (P2-19): the effort dial — the composer's picker sub-tier writes
+    // the desktop `effort_level` key; apply it to the per-turn engine exactly
+    // like the CLI does for `--effort` / REPL `/effort` (one `set_effort`
+    // per built engine). An unpersisted/junk value falls back to the engine
+    // default (Standard = byte-identical to the pre-dial behavior), so a bad
+    // write can never poison a send.
+    let effort_raw = state.desktop_config.read().await.effort_level.clone();
+    if let Some(level) = effort_raw
+        .as_deref()
+        .and_then(shannon_core::query_engine::EffortLevel::parse)
+    {
+        engine.set_effort(level);
+    }
     // W3-4 — per-turn citation snapshot: the entries this turn's system
     // prompt is about to inject. Computed right after the store is attached
     // (which refreshes from disk), so it is the same store + frozen project
@@ -3157,6 +3191,7 @@ mod tests {
             max_output: Some(16_384),
             source: Some("catalog".to_string()),
             tools: None,
+            reasoning: Some(true),
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: ModelInfo = serde_json::from_str(&json).unwrap();

@@ -2940,3 +2940,163 @@ fn a6_auto_compact_enabled_defaults_to_true() {
         "default must keep auto-compaction on"
     );
 }
+
+// ---- S3-3 utility tier slot: the compaction request goes to the auxiliary
+// target ---------------------------------------------------------------
+// When the host pins an auxiliary compaction client
+// (`QueryEngine::with_auxiliary_compaction_client`, resolved by the desktop
+// from providers.toml v2 `auxiliary.compression`), the background
+// summarization request must reach THE AUXILIARY endpoint — never the
+// session's own. Without the pin (every other test in this file), the loop
+// passes the session client, so the historical behavior stays byte-identical.
+//
+// NOTE on shape: the loop-level LLM compaction path cannot be driven
+// end-to-end inside a tokio test — `LlmSummarizer::new` (both targets, the
+// pre-existing constructor) blocks on a fresh runtime from inside the
+// producer task and the task dies pre-request (a pre-existing property this
+// batch deliberately does NOT change). The pin therefore composes the two
+// halves the loop actually performs: (1) the client pick —
+// `compaction_summarizer_client`, pinned to hand the loop EXACTLY the
+// auxiliary / session client — and (2) the wire — `CompactEngine::
+// with_llm_summarizer(picked)` driven outside any runtime (the same shape
+// as the secret-guard summarizer-wire test above), asserting where the
+// background request physically lands.
+
+/// Compaction marker the LLM summarizer's system prompt carries — a request
+/// containing it IS a background summarization request.
+const COMPACTION_PROMPT_MARKER: &str = "conversation compression assistant";
+
+/// History shaped so the P2-1 selector picks the LLM summarizer
+/// (MessageHeavy: more than `high_message_count` moderate messages), not the
+/// token-based shortcut.
+fn oversized_history() -> Vec<Message> {
+    (0..30)
+        .map(|i| Message {
+            role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
+            content: MessageContent::Text(format!(
+                "history line {i}: discussed module_{i} and touched src/file_{i}.rs"
+            )),
+        })
+        .collect()
+}
+
+fn anthropic_client_at(base_url: &str, model: &str, key: &str) -> LlmClient {
+    LlmClient::new(LlmClientConfig {
+        alternate_api_keys: Vec::new(),
+        thinking_type: None,
+        api_key: key.to_string(),
+        base_url: base_url.to_string(),
+        model: model.to_string(),
+        provider: shannon_engine::api::LlmProvider::Anthropic,
+        ..Default::default()
+    })
+}
+
+#[test]
+fn compaction_summarizer_client_picks_auxiliary_only_when_pinned() {
+    let aux = anthropic_client_at("http://aux.example", "aux-model", "aux-key");
+    let session = anthropic_client_at("http://main.example", "main-model", "main-key");
+
+    // Slot configured: the loop gets the AUXILIARY client — model, endpoint
+    // and credential all auxiliary (asserted through the client accessors,
+    // the exact handles the LlmSummarizer sends with).
+    let picked =
+        crate::query_engine::engine::agent_loop::compaction_summarizer_client(Some(&aux), &session);
+    assert_eq!(picked.model(), "aux-model");
+    assert_eq!(picked.base_url(), "http://aux.example");
+    assert_eq!(picked.api_key(), "aux-key");
+
+    // Slot unset (every pre-S3-3 host): the session client, unchanged.
+    let picked =
+        crate::query_engine::engine::agent_loop::compaction_summarizer_client(None, &session);
+    assert_eq!(picked.model(), "main-model");
+    assert_eq!(picked.base_url(), "http://main.example");
+    assert_eq!(picked.api_key(), "main-key");
+}
+
+/// The wire half of the pin: `CompactEngine::with_llm_summarizer(picked)` —
+/// the EXACT construction the loop performs — must send the background
+/// summarization request to the picked client's endpoint. Runs OUTSIDE any
+/// tokio runtime (same shape as
+/// `compaction_summarizer_wire_carries_surrogates_not_secrets`).
+#[test]
+fn utility_slot_wire_compaction_request_lands_on_the_auxiliary_endpoint() {
+    // Auxiliary target: non-streaming JSON answer (the summarizer uses
+    // send_message, not the stream).
+    let aux_server = TurnRetryMockServer::start(std::sync::Arc::new(|_i| {
+        a8_http_response(
+            "200 OK",
+            "application/json",
+            r#"{"id":"msg_aux","role":"assistant","content":[{"type":"text","text":"summary"}],"model":"aux-model","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#,
+        )
+    }));
+    let aux = anthropic_client_at(&aux_server.base_url, "aux-model", "aux-key");
+
+    let mut engine = shannon_engine::compact::CompactEngine::with_llm_summarizer(
+        crate::query_engine::engine::agent_loop::compaction_summarizer_client(
+            Some(&aux),
+            &anthropic_client_at("http://main.example", "main-model", "main-key"),
+        ),
+    )
+    .expect("compact engine constructs");
+    let mut history = oversized_history();
+    let outcome = engine.compact(&mut history).expect("compaction succeeds");
+    assert!(
+        outcome.messages_removed > 0,
+        "history must actually compact"
+    );
+
+    let bodies = aux_server.bodies();
+    assert_eq!(
+        bodies.len(),
+        1,
+        "exactly one background request must hit the auxiliary endpoint"
+    );
+    assert!(
+        bodies[0].contains(COMPACTION_PROMPT_MARKER),
+        "the auxiliary request must be the background summarization call"
+    );
+    assert!(
+        bodies[0].contains("aux-model"),
+        "the auxiliary request must carry the auxiliary model id: {}",
+        bodies[0]
+    );
+    assert!(
+        bodies[0].contains("history line 0:"),
+        "the summarizer carries the conversation being compacted"
+    );
+}
+
+#[test]
+fn default_wire_compaction_request_rides_the_session_endpoint() {
+    // The control (slot unset — the pre-S3-3 behavior): the same
+    // construction fed the SESSION client sends the background request to
+    // the session endpoint, carrying the session model.
+    let main_server = TurnRetryMockServer::start(std::sync::Arc::new(|_i| {
+        a8_http_response(
+            "200 OK",
+            "application/json",
+            r#"{"id":"msg_main","role":"assistant","content":[{"type":"text","text":"summary"}],"model":"main-model","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#,
+        )
+    }));
+    let session = anthropic_client_at(&main_server.base_url, "main-model", "main-key");
+
+    let mut engine = shannon_engine::compact::CompactEngine::with_llm_summarizer(
+        crate::query_engine::engine::agent_loop::compaction_summarizer_client(None, &session),
+    )
+    .expect("compact engine constructs");
+    let mut history = oversized_history();
+    engine.compact(&mut history).expect("compaction succeeds");
+
+    let bodies = main_server.bodies();
+    assert_eq!(
+        bodies.len(),
+        1,
+        "one background request on the session endpoint"
+    );
+    assert!(bodies[0].contains(COMPACTION_PROMPT_MARKER));
+    assert!(
+        bodies[0].contains("main-model"),
+        "the default path must keep carrying the session model id"
+    );
+}

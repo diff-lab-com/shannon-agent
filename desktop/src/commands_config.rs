@@ -1170,6 +1170,41 @@ pub async fn configure(
             messages.clear();
             Ok(())
         }
+        "effort_level" => {
+            // S3-5 (P2-19): the composer's effort sub-tier — the same key
+            // vocabulary the CLI `/effort` / `--effort` surface speaks, with
+            // the engine's own parser (`EffortLevel::parse`) as the single
+            // validator: `low|medium|standard|high|max`, case-insensitive;
+            // `medium` normalizes to the canonical `standard` so what's
+            // persisted is always an engine `Display` form. Stored GLOBAL
+            // (like the CLI's persisted config), applied per turn in the
+            // send path via `QueryEngine::set_effort`.
+            let parsed =
+                shannon_core::query_engine::EffortLevel::parse(&update.value).ok_or_else(|| {
+                    format!(
+                        "Invalid effort level `{}` — expected low|medium|standard|high|max",
+                        update.value
+                    )
+                })?;
+            let canonical = parsed.to_string();
+            {
+                let mut desktop_cfg = state.desktop_config.write().await;
+                desktop_cfg.effort_level = Some(canonical.clone());
+            }
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+            drop(desktop_cfg);
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "effort_level".into(),
+                    value: canonical,
+                },
+            );
+
+            Ok(())
+        }
         "factory_reset" => {
             let default_cfg = DesktopConfig::default();
             let mut desktop_cfg = state.desktop_config.write().await;

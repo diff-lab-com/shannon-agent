@@ -3912,6 +3912,16 @@
   "settings.models.phaseTier.unresolved": "Nenhum modelo correspondente no catálogo — o padrão global permanece ativo",
   "settings.models.phaseTier.precedence": "Precedência: substituição do modelo da sessão → nível da fase → padrão global. O nível de planejamento se aplica enquanto o modo plano estiver ativo.",
   "settings.models.phaseTier.failed": "Não foi possível salvar o nível de modelo",
+  "settings.models.utility.title": "Espaços de modelo para tarefas em segundo plano",
+  "settings.models.utility.subtitle": "Atribua um modelo a tarefas em segundo plano que não precisam do modelo principal. Cada espaço segue o padrão global até você alterá-lo.",
+  "settings.models.utility.compaction": "Compactação",
+  "settings.models.utility.summary": "Resumo da sessão",
+  "settings.models.utility.followDefault": "Seguir o padrão global",
+  "settings.models.utility.followHint": "Esta tarefa em segundo plano usa o modelo padrão global",
+  "settings.models.utility.resolved": "Esta tarefa em segundo plano envia para {provider} · {model}",
+  "settings.models.utility.unresolved": "O provedor configurado não está mais no catálogo — o padrão global permanece ativo",
+  "settings.models.utility.orthogonal": "Os espaços de utilidade aplicam-se apenas a tarefas em segundo plano. Envios de chat sempre seguem: substituição de sessão → nível de fase → padrão global.",
+  "settings.models.utility.failed": "Não foi possível salvar o espaço de utilidade",
   "settings.models.profiles.title": "Perfis",
   "settings.models.profiles.subtitle": "Perfis de roteamento nomeados — cada um carrega seus próprios provedores e modelo ativo. Ao trocar, o padrão global é redirecionado.",
   "settings.models.profiles.create": "Novo perfil",
@@ -4129,5 +4139,10 @@
   "chat.error.rateLimit.retryAfter": "Nova tentativa em {seconds} s",
   "chat.error.authz.title": "Acesso negado (403)",
   "chat.error.authz.body": "Esta chave de API não tem acesso ao modelo ou recurso solicitado. Verifique a chave e as permissões em Configurações → Modelos.",
-  "chat.error.authz.checkKey": "Verificar chave"
+  "chat.error.authz.checkKey": "Verificar chave",
+  "chat.input.effort.standard": "Padrão",
+  "chat.input.effort.notApplicable": "Este modelo não anuncia raciocínio — o esforço de raciocínio só afeta modelos com pensamento",
+  "chat.input.cost.aria": "Estimativa de custo de envio (informativa, não é um limite)",
+  "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
+  "chat.input.cost.budget": "≈{percent}% do orçamento da sessão"
 }

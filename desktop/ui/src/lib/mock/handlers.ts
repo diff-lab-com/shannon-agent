@@ -103,6 +103,12 @@ const state = {
   background: clone(MOCK_BACKGROUND_TASKS),
   providers: clone(MOCK_PROVIDERS),
   inbox: clone(MOCK_INBOX_ITEMS) as InboxItem[],
+  // S3-3: utility tier slots — the demo mirror of providers.toml v2's
+  // `auxiliary` map. Both slots start unset (follow the global default).
+  utilitySlots: {
+    compression: null as { provider: string; model: string } | null,
+    title_generation: null as { provider: string; model: string } | null,
+  },
 }
 
 // ids for inbox items created at runtime (rerun simulation).
@@ -367,6 +373,20 @@ function providersFile() {
   return clone(state.providers)
 }
 
+// S3-3: one utility slot row (role + provider/model or the unset nulls).
+function utilitySlotValue(v: { provider: string; model: string } | null) {
+  return v ? { provider: v.provider, model: v.model, resolves: true } : { provider: null, model: null, resolves: false }
+}
+
+// S3-3: candidate models of one demo roster provider — the curated vault
+// (`models` declarations) when present, else the active model as a minimal
+// honest candidate list.
+function demoRosterModels(p: { id: string; models?: { id: string }[] }) {
+  const declared = (p.models ?? []).map((m) => m.id).filter(Boolean)
+  if (declared.length > 0) return declared
+  return [MOCK_CONFIG.model].filter((m): m is string => typeof m === 'string' && m.length > 0)
+}
+
 function findTask(id: string) {
   return state.tasks.find(t => t.id === id)
 }
@@ -537,6 +557,43 @@ export const handlers: Record<string, MockHandler> = {
   // B1-4 (P1-3): the stop watchdog's reconciliation read. Demo runs never
   // stream a live query, so the honest answer is always idle.
   async get_session_querying() { await delay(); return false },
+
+  // --- S3-6: pre-send cost estimate (demo twin) ---
+  // Deterministic stand-in for the backend's billing-grade command: same
+  // wire shape (camelCase), derived from the draft + a canned context so the
+  // composer's estimate row renders in demo/e2e. The range math mirrors the
+  // real contract (floor = input-only, ceiling = input at max output).
+  async estimate_send_cost(args: { draftText?: string; filePaths?: string[] | null }) {
+    await delay()
+    const draft = String(args?.draftText ?? '')
+    const draftTokens = draft.length === 0 ? 0 : Math.max(1, Math.ceil(draft.length / 4))
+    const contextTokens = 1200
+    const attachmentTokens = (args?.filePaths ?? []).length * 100
+    const inputTokens = contextTokens + draftTokens + attachmentTokens
+    const model = demoConfig.model ?? MOCK_CONFIG.model ?? ''
+    // Rough per-Mtok table (mirrors the real catalog's shape, not its data):
+    // gpt-family 1.25/10, claude-family 3/15, everyone else 1/2.
+    const [priceIn, priceOut] = /gpt/i.test(model)
+      ? [1.25, 10]
+      : /claude/i.test(model)
+        ? [3, 15]
+        : [1, 2]
+    const maxOutput = 4096
+    const cost = (outputTokens: number) =>
+      (inputTokens / 1_000_000) * priceIn + (outputTokens / 1_000_000) * priceOut
+    return {
+      model,
+      inputTokens,
+      contextTokens,
+      draftTokens,
+      attachmentTokens,
+      maxOutputTokens: maxOutput,
+      costLow: cost(0),
+      costHigh: cost(maxOutput),
+      budgetUsd: demoBudgetUsd,
+      spentUsd: 0,
+    }
+  },
 
   // --- Speech-to-text (wave-2 task 6, voice-input journey) ---
   // Previously these five voice commands were UNMOCKED_ALLOWLIST entries
@@ -814,6 +871,47 @@ export const handlers: Record<string, MockHandler> = {
       state.providers.active_provider_id = null
     }
     return providersFile()
+  },
+  // --- S3-3: utility tier slots (compaction + session summary) ---
+  // Demo mirror of the providers.toml v2 `auxiliary` map: both slots start
+  // unset (follow the global default); set stores the target on the demo
+  // roster so the selection round trip is observable in demos. Write-time
+  // validation mirrors the backend: the provider must be in the roster.
+  async get_utility_slots() {
+    await delay()
+    return {
+      slots: [
+        { role: 'compression', ...utilitySlotValue(state.utilitySlots.compression) },
+        { role: 'title_generation', ...utilitySlotValue(state.utilitySlots.title_generation) },
+      ],
+      roster: state.providers.providers.map((p) => ({
+        provider_id: p.id,
+        display_name: p.display_name,
+        models: demoRosterModels(p),
+      })),
+      profile: 'default',
+    }
+  },
+  async set_utility_slot(args: { role: string; provider: string | null; model: string | null }) {
+    await delay(120)
+    const key =
+      args.role === 'compression'
+        ? 'compression'
+        : args.role === 'title_generation'
+          ? 'title_generation'
+          : null
+    if (!key) throw new Error(`set_utility_slot: unknown utility role \`${args.role}\``)
+    if (args.provider == null || args.model == null) {
+      state.utilitySlots[key] = null
+    } else {
+      if (!state.providers.providers.some((p) => p.id === args.provider)) {
+        throw new Error(
+          `no provider slot with id '${args.provider}' in the active profile of providers.toml`,
+        )
+      }
+      state.utilitySlots[key] = { provider: args.provider, model: args.model }
+    }
+    return { role: key, provider: args.provider, model: args.model }
   },
   async set_active_provider(args: { id: string }) {
     await delay(150)

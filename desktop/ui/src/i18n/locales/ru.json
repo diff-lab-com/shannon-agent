@@ -3912,6 +3912,16 @@
   "settings.models.phaseTier.unresolved": "В каталоге нет подходящей модели — остаётся глобальная по умолчанию",
   "settings.models.phaseTier.precedence": "Приоритет: переопределение модели сессии → уровень фазы → глобальное значение по умолчанию. Уровень планирования действует, пока включён режим плана.",
   "settings.models.phaseTier.failed": "Не удалось сохранить уровень модели",
+  "settings.models.utility.title": "Слоты моделей для фоновых задач",
+  "settings.models.utility.subtitle": "Назначьте отдельную модель фоновым задачам, которым не нужна основная. Каждый слот наследует глобальное значение по умолчанию, пока вы его не измените.",
+  "settings.models.utility.compaction": "Сжатие контекста",
+  "settings.models.utility.summary": "Сводка сессии",
+  "settings.models.utility.followDefault": "Следовать глобальному значению",
+  "settings.models.utility.followHint": "Эта фоновая задача использует глобальную модель по умолчанию",
+  "settings.models.utility.resolved": "Эта фоновая задача отправляется на {provider} · {model}",
+  "settings.models.utility.unresolved": "Настроенный провайдер больше не в списке — используется глобальное значение по умолчанию",
+  "settings.models.utility.orthogonal": "Слоты утилит применяются только к фоновым задачам. Отправка в чате всегда следует: переопределение сессии → уровень фазы → глобальное значение по умолчанию.",
+  "settings.models.utility.failed": "Не удалось сохранить слот утилиты",
   "settings.models.profiles.title": "Профили",
   "settings.models.profiles.subtitle": "Именованные профили маршрутизации — каждый несёт свои провайдеры и активную модель. При переключении глобальное значение по умолчанию перепривязывается.",
   "settings.models.profiles.create": "Новый профиль",
@@ -4129,5 +4139,10 @@
   "chat.error.rateLimit.retryAfter": "Повторная попытка через {seconds} с",
   "chat.error.authz.title": "Доступ запрещён (403)",
   "chat.error.authz.body": "У этого API-ключа нет доступа к запрошенной модели или ресурсу. Проверьте ключ и его права в разделе Настройки → Модели.",
-  "chat.error.authz.checkKey": "Проверить ключ"
+  "chat.error.authz.checkKey": "Проверить ключ",
+  "chat.input.effort.standard": "Стандарт",
+  "chat.input.effort.notApplicable": "Эта модель не заявляет рассуждения — уровни усилия действуют только на думающие модели",
+  "chat.input.cost.aria": "Оценка стоимости отправки (справочно, не лимит)",
+  "chat.input.cost.range": "≈ {tokens} токенов · {low}–{high}",
+  "chat.input.cost.budget": "≈{percent}% бюджета сессии"
 }

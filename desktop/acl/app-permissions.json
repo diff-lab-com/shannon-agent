@@ -461,6 +461,15 @@
       }
     },
     {
+      "identifier": "allow-estimate-send-cost",
+      "description": "Enables the estimate_send_cost command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "estimate_send_cost"
+        ]
+      }
+    },
+    {
       "identifier": "allow-export-diagnostics",
       "description": "Enables the export_diagnostics command without any pre-configured scope.",
       "commands": {
@@ -2585,6 +2594,24 @@
       }
     },
     {
+      "identifier": "allow-get-utility-slots",
+      "description": "Enables the get_utility_slots command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_utility_slots"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-utility-slot",
+      "description": "Enables the set_utility_slot command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_utility_slot"
+        ]
+      }
+    },
+    {
       "identifier": "allow-skill-loop-approve",
       "description": "Enables the skill_loop_approve command without any pre-configured scope.",
       "commands": {
@@ -3001,6 +3028,7 @@
         "allow-check-vision-send",
         "allow-clear-session-model",
         "allow-count-session-model-overrides",
+        "allow-estimate-send-cost",
         "allow-get-active-session-id",
         "allow-get-background-tasks",
         "allow-get-conversation",
@@ -3039,6 +3067,8 @@
         "allow-set-active-provider",
         "allow-set-active-provider-profile",
         "allow-set-provider-fallback-models",
+        "allow-get-utility-slots",
+        "allow-set-utility-slot",
         "allow-set-provider-models",
         "allow-test-all-providers",
         "allow-test-provider-connection",

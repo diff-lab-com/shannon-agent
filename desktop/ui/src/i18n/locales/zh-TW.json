@@ -3912,6 +3912,16 @@
   "settings.models.phaseTier.unresolved": "目錄中沒有符合該檔位的模型——保持全域預設",
   "settings.models.phaseTier.precedence": "優先順序：會話模型覆寫 → 階段檔位 → 全域預設。規劃模式開啟時套用規劃檔位。",
   "settings.models.phaseTier.failed": "無法儲存模型檔位",
+  "settings.models.utility.title": "背景任務模型槽位",
+  "settings.models.utility.subtitle": "為不需要主模型的背景小任務單獨指定模型。每個槽位留空則跟隨全域預設。",
+  "settings.models.utility.compaction": "上下文壓縮",
+  "settings.models.utility.summary": "工作階段摘要",
+  "settings.models.utility.followDefault": "跟隨全域預設",
+  "settings.models.utility.followHint": "該背景任務使用全域預設模型",
+  "settings.models.utility.resolved": "該背景任務將傳送到 {provider} · {model}",
+  "settings.models.utility.unresolved": "設定的 provider 已不在名冊中 — 繼續使用全域預設",
+  "settings.models.utility.orthogonal": "背景任務槽位只作用於背景任務。聊天傳送始終遵循：工作階段覆寫 → 階段檔位 → 全域預設。",
+  "settings.models.utility.failed": "儲存背景任務槽位失敗",
   "settings.models.profiles.title": "設定檔",
   "settings.models.profiles.subtitle": "具名路由設定檔——各自維護獨立的 provider 清單與使用中模型；切換會重新指定全域預設。",
   "settings.models.profiles.create": "新增設定檔",
@@ -4129,5 +4139,10 @@
   "chat.error.rateLimit.retryAfter": "{seconds} 秒後可重試",
   "chat.error.authz.title": "存取被拒絕（403）",
   "chat.error.authz.body": "目前 API 金鑰無權存取該模型或資源。請在「設定 → 模型」中檢查金鑰及其權限。",
-  "chat.error.authz.checkKey": "檢查金鑰"
+  "chat.error.authz.checkKey": "檢查金鑰",
+  "chat.input.effort.standard": "標準",
+  "chat.input.effort.notApplicable": "此模型未宣告推理能力——推理強度僅對思考型模型生效",
+  "chat.input.cost.aria": "傳送成本預估（僅供參考，不設限制）",
+  "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
+  "chat.input.cost.budget": "≈工作階段預算的 {percent}%"
 }

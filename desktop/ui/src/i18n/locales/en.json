@@ -3950,6 +3950,16 @@
   "settings.models.phaseTier.unresolved": "No matching model in the catalog — the global default stays active",
   "settings.models.phaseTier.precedence": "Precedence: session model override → phase tier → global default. The planning tier applies while plan mode is on.",
   "settings.models.phaseTier.failed": "Could not save the model tier",
+  "settings.models.utility.title": "Utility model slots",
+  "settings.models.utility.subtitle": "Pin a model for background tasks that don't need the main model. Each slot inherits the global default until you change it.",
+  "settings.models.utility.compaction": "Compaction",
+  "settings.models.utility.summary": "Session summary",
+  "settings.models.utility.followDefault": "Follow global default",
+  "settings.models.utility.followHint": "Uses the global default model for this background task",
+  "settings.models.utility.resolved": "This background task sends to {provider} · {model}",
+  "settings.models.utility.unresolved": "Configured provider is no longer in the roster — the global default stays active",
+  "settings.models.utility.orthogonal": "Utility slots only apply to background tasks. Chat sends always follow: session override → phase tier → global default.",
+  "settings.models.utility.failed": "Could not save the utility slot",
   "settings.models.profiles.title": "Profiles",
   "settings.models.profiles.subtitle": "Named routing profiles — each carries its own providers and active model. Switching re-points the global default.",
   "settings.models.profiles.create": "New profile",
@@ -4129,5 +4139,10 @@
   "chat.error.rateLimit.retryAfter": "You can retry in {seconds}s",
   "chat.error.authz.title": "Access denied (403)",
   "chat.error.authz.body": "This API key does not have access to the requested model or resource. Check the key and its permissions in Settings → Models.",
-  "chat.error.authz.checkKey": "Check key"
+  "chat.error.authz.checkKey": "Check key",
+  "chat.input.effort.standard": "Standard",
+  "chat.input.effort.notApplicable": "This model does not advertise reasoning — effort levels steer thinking models only",
+  "chat.input.cost.aria": "Send cost estimate (advisory, not a limit)",
+  "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
+  "chat.input.cost.budget": "≈{percent}% of session budget"
 }

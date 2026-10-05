@@ -284,6 +284,13 @@ pub mod commands_keys;
 pub mod commands_models;
 
 #[cfg(feature = "tauri")]
+/// S3-3 (utility tier 槽位化) — the first consumption chain for the
+/// providers.toml v2 `auxiliary` map: compaction + session-summary slots,
+/// strictly orthogonal to the interactive precedence chain (裁定⑦). See the
+/// module docs for the honest per-slot consumption verdict.
+pub mod utility_tier;
+
+#[cfg(feature = "tauri")]
 pub mod commands_notifications;
 
 #[cfg(feature = "tauri")]

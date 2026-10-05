@@ -3912,6 +3912,16 @@
   "settings.models.phaseTier.unresolved": "카탈로그에 일치하는 모델이 없습니다 — 전역 기본값을 유지합니다",
   "settings.models.phaseTier.precedence": "우선순위: 세션 모델 재정의 → 단계 티어 → 전역 기본값. 계획 모드가 켜져 있을 때 계획 티어가 적용됩니다.",
   "settings.models.phaseTier.failed": "모델 티어를 저장하지 못했습니다",
+  "settings.models.utility.title": "백그라운드 작업 모델 슬롯",
+  "settings.models.utility.subtitle": "기본 모델이 필요 없는 백그라운드 작업에 별도의 모델을 지정합니다. 슬롯을 비워 두면 전역 기본값을 따릅니다.",
+  "settings.models.utility.compaction": "컨텍스트 압축",
+  "settings.models.utility.summary": "세션 요약",
+  "settings.models.utility.followDefault": "전역 기본값 따르기",
+  "settings.models.utility.followHint": "이 백그라운드 작업은 전역 기본 모델을 사용합니다",
+  "settings.models.utility.resolved": "이 백그라운드 작업은 {provider} · {model}(으)로 전송됩니다",
+  "settings.models.utility.unresolved": "구성된 공급자가 더 이상 목록에 없습니다 — 전역 기본값을 사용합니다",
+  "settings.models.utility.orthogonal": "유틸리티 슬롯은 백그라운드 작업에만 적용됩니다. 채팅 전송은 항상 세션 재정의 → 페이즈 티어 → 전역 기본값을 따릅니다.",
+  "settings.models.utility.failed": "유틸리티 슬롯을 저장하지 못했습니다",
   "settings.models.profiles.title": "프로필",
   "settings.models.profiles.subtitle": "이름 있는 라우팅 프로필 — 각각 자체 프로바이더와 활성 모델을 가집니다. 전환 시 전역 기본값이 다시 지정됩니다.",
   "settings.models.profiles.create": "새 프로필",
@@ -4129,5 +4139,10 @@
   "chat.error.rateLimit.retryAfter": "{seconds}초 후 다시 시도할 수 있습니다",
   "chat.error.authz.title": "액세스가 거부되었습니다(403)",
   "chat.error.authz.body": "이 API 키에는 요청한 모델이나 리소스에 대한 권한이 없습니다. 설정 → 모델에서 키와 권한을 확인하세요.",
-  "chat.error.authz.checkKey": "키 확인"
+  "chat.error.authz.checkKey": "키 확인",
+  "chat.input.effort.standard": "표준",
+  "chat.input.effort.notApplicable": "이 모델은 추론 기능이 없습니다 — 추론 강도는 사고형(추론) 모델에만 작동합니다",
+  "chat.input.cost.aria": "전송 비용 예상 (참고용, 제한 아님)",
+  "chat.input.cost.range": "≈ {tokens} 토큰 · {low}–{high}",
+  "chat.input.cost.budget": "세션 예산의 ≈{percent}%"
 }

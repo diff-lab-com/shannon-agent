@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useId, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useId, useCallback, useMemo, Fragment } from 'react'
 import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -27,7 +27,7 @@ import {
 } from '@/lib/fileMention'
 import { imageFilesFromClipboard, clipboardHasText, blobToBase64, PASTE_IMAGE_MIME_TO_EXT, MAX_PASTED_IMAGE_BYTES } from '@/lib/pasteImage'
 import * as api from '@/lib/tauri-api'
-import type { RejectedAttachmentReason, AttachmentExtractionReport } from '@/types'
+import type { RejectedAttachmentReason, AttachmentExtractionReport, SendCostEstimate } from '@/types'
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
 import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow'
@@ -86,6 +86,18 @@ function basename(p: string): string {
  * still hit send. Hard limits should go through the Rust backend. */
 const CHAR_SHOW_AT = 2000
 const CHAR_SOFT_WARN_AT = 8000
+
+/* S3-6 — pre-send cost estimate debounce. The estimate command is cheap
+ * (cached context + attachment counts backend-side), but per-keystroke IPC
+ * is still waste: re-estimate 300 ms after the draft settles. Exported for
+ * the debounce test. */
+export const ESTIMATE_DEBOUNCE_MS = 300
+
+/* S3-6 — the budget linkage threshold: when the projected send (spent so
+ * far + the estimate's high end) reaches this share of the session budget,
+ * the estimate row turns warning-toned and names the share. Copy-only
+ * linkage — BudgetBanner stays the single banner (no second one here). */
+const ESTIMATE_BUDGET_WARN_RATIO = 0.8
 
 interface ChatInputProps {
   value: string
@@ -510,16 +522,31 @@ export default function ChatInput({
     }
   }
 
-  // Audit D8 — reasoning-effort picker. The engine already persists
-  // `effort_level` (CLI /effort → config) and maps it to the provider's
-  // reasoning parameter; the desktop composer previously had no surface for it.
-  const currentEffort = (config as Record<string, unknown> | undefined)?.effort_level as string | undefined ?? 'medium'
-  const effortOptions = [
-    { value: 'low', label: t('chat.input.effort.low') },
-    { value: 'medium', label: t('chat.input.effort.medium') },
-    { value: 'high', label: t('chat.input.effort.high') },
-    { value: 'max', label: t('chat.input.effort.max') },
+  // S3-5 (P2-19) — effort as a picker sub-tier. The engine's dial has four
+  // canonical levels (`low|standard|high|max`, `EffortLevel` in
+  // shannon-core); `medium` is a legacy alias of `standard` the write path
+  // normalizes away, and a stale persisted `medium` (old demo writes)
+  // normalizes here so the highlight never breaks. `standard` is the
+  // default — the engine sends nothing at that level.
+  const EFFORT_LEVELS = ['low', 'standard', 'high', 'max'] as const
+  type EffortValue = (typeof EFFORT_LEVELS)[number]
+  const normalizeEffort = (raw: string | null | undefined): EffortValue => {
+    const v = (raw ?? '').trim().toLowerCase()
+    if (v === 'medium') return 'standard'
+    return (EFFORT_LEVELS as readonly string[]).includes(v) ? (v as EffortValue) : 'standard'
+  }
+  const currentEffort = normalizeEffort(
+    (config as Record<string, unknown> | undefined)?.effort_level as string | undefined,
+  )
+  const effortOptions: { value: EffortValue; labelKey: string }[] = [
+    { value: 'low', labelKey: 'chat.input.effort.low' },
+    { value: 'standard', labelKey: 'chat.input.effort.standard' },
+    { value: 'high', labelKey: 'chat.input.effort.high' },
+    { value: 'max', labelKey: 'chat.input.effort.max' },
   ]
+  const currentEffortLabel = effortOptions.find(e => e.value === currentEffort)
+    ? t(`chat.input.effort.${currentEffort}`)
+    : currentEffort
   const handleEffortChange = async (effort: string | null) => {
     if (!effort) return
     try {
@@ -529,6 +556,43 @@ export default function ChatInput({
       toastError(t('chat.input.effort.failed'), err)
     }
   }
+
+  // S3-6 — pre-send cost estimate. The backend counts with the SAME
+  // estimator the engine/billing stack uses (同源 DoD) and prices through the
+  // billing chain; this side only renders. Advisory by contract: a failed
+  // call silently hides the row (never a toast, never a send gate), an
+  // empty composer hides it too. Debounced — see ESTIMATE_DEBOUNCE_MS.
+  const [costEstimate, setCostEstimate] = useState<SendCostEstimate | null>(null)
+  const attachmentsKey = attachedFiles.join('\n')
+  useEffect(() => {
+    if (!value.trim() && attachedFiles.length === 0) {
+      setCostEstimate(null)
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      api.estimateSendCost(sessionId ?? null, value, attachedFiles)
+        .then(est => { if (!cancelled) setCostEstimate(est) })
+        .catch(() => {
+          // Advisory: estimate unavailability (mock backend, older backend)
+          // must never surface as an error — the row just stays hidden.
+          if (!cancelled) setCostEstimate(null)
+        })
+    }, ESTIMATE_DEBOUNCE_MS)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- attachmentsKey IS the attachedFiles identity (joined): a content-change re-arms the timer, a parent re-render that passes an equal-content array must not.
+  }, [value, attachmentsKey, sessionId])
+  // Budget linkage: the projected high end against the session cap. The
+  // BudgetBanner keeps owning banner duty — this only tints the estimate row.
+  const estimateBudgetRatio =
+    costEstimate && costEstimate.budgetUsd && costEstimate.budgetUsd > 0
+      ? (costEstimate.spentUsd + costEstimate.costHigh) / costEstimate.budgetUsd
+      : null
+  const estimateBudgetNearing =
+    estimateBudgetRatio !== null && estimateBudgetRatio >= ESTIMATE_BUDGET_WARN_RATIO
 
   const mergePaths = (paths: string[]) => {
     const merged = [...new Set([...attachedFiles, ...paths])]
@@ -1297,9 +1361,52 @@ export default function ChatInput({
           />
         </div>
 
+        {/* S3-6 — pre-send cost estimate (display-only, never a send gate).
+            One quiet line under the draft: projected input tokens + the
+            cost range (floor → max-output ceiling). At ≥80% of the session
+            budget the row turns warning-toned and names the share — copy
+            linkage only; BudgetBanner remains the single banner. Purely
+            visual (no aria-live): per-keystroke announcements would repeat
+            the P2-9 mistake. */}
+        {costEstimate && (
+          <div
+            data-testid="send-cost-estimate"
+            title={t('chat.input.cost.aria')}
+            className={cn(
+              'flex items-center justify-end gap-xs px-sm pt-xs font-label-xs tabular-nums',
+              estimateBudgetNearing ? 'text-warning' : 'text-on-surface-variant/70',
+            )}
+          >
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">payments</span>
+            <span>
+              {intl.formatMessage({ id: 'chat.input.cost.range' }, {
+                tokens: new Intl.NumberFormat(intl.locale).format(costEstimate.inputTokens),
+                low: new Intl.NumberFormat(intl.locale, {
+                  style: 'currency',
+                  currency: 'USD',
+                  maximumFractionDigits: costEstimate.costLow < 1 ? 4 : 2,
+                }).format(costEstimate.costLow),
+                high: new Intl.NumberFormat(intl.locale, {
+                  style: 'currency',
+                  currency: 'USD',
+                  maximumFractionDigits: costEstimate.costHigh < 1 ? 4 : 2,
+                }).format(costEstimate.costHigh),
+              })}
+            </span>
+            {estimateBudgetNearing && estimateBudgetRatio !== null && (
+              <span data-testid="send-cost-budget-note" className="font-bold">
+                {intl.formatMessage(
+                  { id: 'chat.input.cost.budget' },
+                  { percent: Math.round(estimateBudgetRatio * 100) },
+                )}
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="flex items-center justify-between gap-xs px-sm py-xs border-t border-outline-variant/20">
           {/* Classic AI-composer layout: one "+" menu, ONE mode surface, the
-              model pill (reasoning effort folded into its dropdown) on the
+              model pill (effort via its picker sub-tier — S3-5) on the
               left; mic / counter / send on the right. The old row showed a
               separate 计划模式 toggle next to the approval-mode select that
               also held 计划/只读 — two controls for the same key. */}
@@ -1444,27 +1551,21 @@ export default function ChatInput({
                 <span className="material-symbols-outlined icon-sm">smart_toy</span>
                 {/* Render the effective model NAME — the session override's
                     model when one is active (with a "· session" suffix so the
-                    override is never silent), else the global default. */}
+                    override is never silent), else the global default. S3-5
+                    (P2-19): the reasoning effort is NO LONGER glued onto this
+                    label (`name · High` is gone) — it wears its own badge
+                    beside the chip below, and its interactive home is the
+                    picker's effort sub-tier. */}
                 <SelectValue placeholder={status?.model || t('chat.input.model.label')}>
                   {(value: unknown) => {
-                    // Reflect a non-default reasoning effort on the chip —
-                    // the Select's value is always a model id (effort picks
-                    // commit via `effort:` in onValueChange but never become
-                    // the Select value), so read it from config directly.
-                    const eff = effortOptions.find(e => e.value === currentEffort)
                     const m = modelList.find(x => x.id === value)
                     const name = m?.name
                       ?? sessionOverride?.model
                       ?? status?.model
                       ?? t('chat.input.model.label')
-                    let label = name
-                    if (eff && eff.value !== 'medium') {
-                      label = `${label} · ${eff.label}`
-                    }
-                    if (sessionOverride) {
-                      label = `${label} · ${t('chat.input.model.sessionSuffix')}`
-                    }
-                    return label
+                    return sessionOverride
+                      ? `${name} · ${t('chat.input.model.sessionSuffix')}`
+                      : name
                   }}
                 </SelectValue>
               </SelectTrigger>
@@ -1485,11 +1586,65 @@ export default function ChatInput({
                     {t('chat.input.model.priorityLine')}
                   </div>
                 )}
-                {modelList.map(m => (
-                  <SelectItem key={m.id} value={m.id} data-testid={`model-option-${m.id}`}>
-                    <ModelPickerRowContent model={m} why={modelWhyFor(m, whyCtx, modelList)} />
-                  </SelectItem>
-                ))}
+                {/* S3-5 (裁定⑪/P2-19): the effort dial is a SECOND-LEVEL
+                    interaction inside the picker — the effective model's row
+                    expands its effort sub-tier directly beneath it (the
+                    Codex /model shape). Not a separate control (that would
+                    add a switching surface, against S3-1's convergence), and
+                    no longer a bottom section disconnected from any model. */}
+                {modelList.flatMap(m => {
+                  const row = (
+                    <SelectItem key={m.id} value={m.id} data-testid={`model-option-${m.id}`}>
+                      <ModelPickerRowContent model={m} why={modelWhyFor(m, whyCtx, modelList)} />
+                    </SelectItem>
+                  )
+                  if (m.id !== (currentModel?.id ?? '')) return [row]
+                  return [
+                    row,
+                    <Fragment key={`effort-subtier-${m.id}`}>
+                      <div
+                        role="presentation"
+                        data-testid="effort-subtier-header"
+                        className="px-sm pt-xs pb-0 font-label-2xs uppercase tracking-wider text-on-surface-variant"
+                      >
+                        {t('chat.input.effort.section')}
+                      </div>
+                      {/* Three-state honesty (mirrors the engine): the engine
+                          passes effort parameters through and the PROVIDER
+                          arbitrates, so a known-no-reasoning model gets a note
+                          — not a lockout. Unknown (`undefined`/null) renders
+                          normally. */}
+                      {currentModel?.reasoning === false && (
+                        <div
+                          role="note"
+                          data-testid="effort-not-applicable-note"
+                          className="px-sm pb-xs text-label-2xs text-on-surface-variant"
+                        >
+                          {t('chat.input.effort.notApplicable')}
+                        </div>
+                      )}
+                      {effortOptions.map(effort => (
+                        <SelectItem
+                          key={`effort-${effort.value}`}
+                          value={`effort:${effort.value}`}
+                          data-testid={`effort-option-${effort.value}`}
+                        >
+                          {/* Indented under the model row: the sub-tier
+                              reading of 裁定⑪, kept inside the Select's own
+                              item semantics (keyboard + SR for free). */}
+                          <span className="flex items-center gap-xs pl-md">
+                            <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                              {currentEffort === effort.value ? 'radio_button_checked' : 'radio_button_unchecked'}
+                            </span>
+                            <span className={currentEffort === effort.value ? 'font-medium' : undefined}>
+                              {t(effort.labelKey)}
+                            </span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </Fragment>,
+                  ]
+                })}
                 {modelList.length > 0 && (
                   <div role="presentation" className="mx-sm my-xs border-t border-outline-variant/20" />
                 )}
@@ -1525,24 +1680,23 @@ export default function ChatInput({
                     )}
                   </>
                 )}
-                <div role="presentation" className="px-sm pt-0 pb-xs font-label-xs uppercase tracking-wider text-on-surface-variant">
-                  {t('chat.input.effort.section')}
-                </div>
-                {effortOptions.map(effort => (
-                  <SelectItem
-                    key={`effort-${effort.value}`}
-                    value={`effort:${effort.value}`}
-                  >
-                    <span className="flex items-center gap-xs">
-                      <span className="material-symbols-outlined icon-sm" aria-hidden="true">
-                        {currentEffort === effort.value ? 'radio_button_checked' : 'radio_button_unchecked'}
-                      </span>
-                      {effort.label}
-                    </span>
-                  </SelectItem>
-                ))}
               </SelectContent>
             </Select>
+            {/* S3-5 (P2-19): the effort badge — an independent status chip,
+                no longer part of the model name (`name · High` is dead). It
+                is a READ-ONLY indicator (no new switching surface): the
+                interaction lives in the picker's effort sub-tier. Hidden at
+                the `standard` default so the resting composer stays clean. */}
+            {currentEffort !== 'standard' && (
+              <span
+                data-testid="effort-badge"
+                title={t('chat.input.effort.title')}
+                className="inline-flex shrink-0 items-center gap-[2px] rounded-full bg-secondary-container/70 px-xs py-[2px] text-label-2xs font-bold text-on-secondary-container"
+              >
+                <span className="material-symbols-outlined icon-xs leading-none" aria-hidden="true">bolt</span>
+                {currentEffortLabel}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-xs shrink-0">
