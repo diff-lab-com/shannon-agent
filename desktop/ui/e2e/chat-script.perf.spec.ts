@@ -116,7 +116,13 @@ test.describe('chat long-session performance guard', () => {
     // not a missing seed.
     await expect(chat.composer()).toBeVisible({ timeout: 15_000 })
     expect(await chat.messageCount()).toBeGreaterThan(0)
-    await expect(chat.bubbleAt(SEEDED_PAIRS * 2 - 1)).toContainText(`回答 ${SEEDED_PAIRS}`, { timeout: 10_000 })
+    // The tail row only exists once the scroll container reaches the bottom.
+    // The initial auto-follow is a SMOOTH scroll — on a loaded CI runner it
+    // can still be mid-flight (or interrupted by the projection commits) when
+    // the assertion fires, leaving row 59 unmounted ("element(s) not found",
+    // first-ever CI nightly run). Scroll deterministically, then assert.
+    await chat.scrollToBottom()
+    await expect(chat.bubbleAt(SEEDED_PAIRS * 2 - 1)).toContainText(`回答 ${SEEDED_PAIRS}`, { timeout: 15_000 })
 
     // Dense burst: accelerate the scripted chunk gap for THIS turn (the
     // constant must be passed across the browser boundary explicitly).
@@ -218,8 +224,19 @@ test.describe('chat long-session performance guard', () => {
    *  (the coalesced projection keeps re-parse cost near-invisible at this
    *  size — B3-2's job is to keep it that way as the surface grows). The
    *  budget is an absolute jank ceiling: >2s of blocked main thread during
-   *  a ~7.5s stream means streaming went regressive regardless of baseline. */
-  const LONGTASK_TOTAL_BUDGET_MS = 2_000
+   *  a ~7.5s stream means streaming went regressive regardless of baseline.
+   *  CI CALIBRATION (first-ever CI nightly run, 2-core runner): total hit
+   *  7141/7600ms over 85-88 tasks — ~85ms/task of slower hardware, NOT a
+   *  re-parse regression (worst task stayed 141-193ms, i.e. bounded per
+   *  flush). Total budget raised to 12s for the runner class; the
+   *  regression signal moved to LONGTASK_WORST_BUDGET_MS below, which
+   *  hardware cannot excuse (a full 24K-char re-parse would push the worst
+   *  single task into seconds — B3-2 keeps it bounded). */
+  const LONGTASK_TOTAL_BUDGET_MS = 12_000
+  /** Worst SINGLE long task across the stream: the O(n²) re-parse tax shows
+   *  up here (one flush = one full-document parse of a growing doc), while
+   *  B3-2's incremental rendering keeps each flush bounded. */
+  const LONGTASK_WORST_BUDGET_MS = 500
 
   const LONG_PHRASE = '流式渲染压力测试句子，覆盖分片边界与增量刷新路径。'
 
@@ -318,7 +335,7 @@ test.describe('chat long-session performance guard', () => {
       streamSpeed: LONG_STREAM_SPEED,
       completionMs,
       completionBudgetMs: LONG_COMPLETION_BUDGET_MS,
-      longtask: { count: lt?.count ?? 0, totalMs: Math.round(lt?.totalMs ?? 0), worstMs: Math.round(lt?.worstMs ?? 0), budgetMs: LONGTASK_TOTAL_BUDGET_MS },
+      longtask: { count: lt?.count ?? 0, totalMs: Math.round(lt?.totalMs ?? 0), worstMs: Math.round(lt?.worstMs ?? 0), budgetMs: LONGTASK_TOTAL_BUDGET_MS, worstBudgetMs: LONGTASK_WORST_BUDGET_MS },
     }
     await test.info().attach('perf-long-reply-stats', { body: JSON.stringify(report, null, 2), contentType: 'application/json' })
     // eslint-disable-next-line no-console
@@ -332,6 +349,10 @@ test.describe('chat long-session performance guard', () => {
       Math.round(lt?.totalMs ?? 0),
       `main-thread long-task time during the long-reply stream = ${Math.round(lt?.totalMs ?? 0)}ms over ${lt?.count ?? 0} tasks, worst ${Math.round(lt?.worstMs ?? 0)}ms (budget ${LONGTASK_TOTAL_BUDGET_MS}ms — the B3-2 re-parse tax proxy)`,
     ).toBeLessThanOrEqual(LONGTASK_TOTAL_BUDGET_MS)
+    expect(
+      Math.round(lt?.worstMs ?? 0),
+      `worst single long task during the long-reply stream = ${Math.round(lt?.worstMs ?? 0)}ms (budget ${LONGTASK_WORST_BUDGET_MS}ms — a full-document re-parse of a growing 24K-char doc would blow past this; B3-2's incremental flushes must stay bounded)`,
+    ).toBeLessThanOrEqual(LONGTASK_WORST_BUDGET_MS)
 
     // A long stream must still end clean — no swallowed errors.
     await expectNoConsoleErrors(page)

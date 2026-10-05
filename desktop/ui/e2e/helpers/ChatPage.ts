@@ -49,6 +49,21 @@ export class ChatPage {
     return this.page.locator(`[data-message-index="${index}"]`)
   }
 
+  /**
+   * Jump the message area to its bottom. The list VIRTUALIZES past 30
+   * messages (react-virtual): rows outside the viewport window are not in
+   * the DOM, so a test that asserts a specific tail row must scroll the
+   * scroll container to it FIRST (the initial auto-follow is smooth and can
+   * still be mid-flight — or interrupted — on a loaded runner).
+   */
+  async scrollToBottom(): Promise<void> {
+    await this.page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>('[data-testid="chat-scroll-container"]')
+      if (!el) throw new Error('chat scroll container not found — MessageArea testid missing?')
+      el.scrollTop = el.scrollHeight
+    })
+  }
+
   runStatusLine(): Locator {
     return this.page.getByTestId('run-status-line')
   }

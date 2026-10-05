@@ -316,7 +316,14 @@ export default function MessageArea({
   )
 
   return (
-    <div ref={scrollParentRef} className="relative flex-1 overflow-y-auto px-xl pt-lg pb-md">
+    // chat-scroll-container: stable testid for e2e scroll helpers — the
+    // virtualized list only mounts the viewport window, so a test that
+    // needs a specific row must scroll THIS container to it first.
+    <div
+      ref={scrollParentRef}
+      data-testid="chat-scroll-container"
+      className="relative flex-1 overflow-y-auto px-xl pt-lg pb-md"
+    >
       <StreamStatusRegion active={streamActive} />
       {messages.length === 0 && !streamingText && <ComposerWelcome />}
 
