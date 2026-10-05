@@ -260,7 +260,9 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     const term = new xterm.Terminal({
       convertEol: false,
       cursorBlink: true,
-      fontFamily: FONT_FAMILY,
+      // Task 12: configurable font family; unset/blank on disk falls back
+      // to the built-in monospace stack.
+      fontFamily: settings?.fontFamily || FONT_FAMILY,
       fontSize: settings?.fontSize ?? DEFAULT_FONT_SIZE,
       scrollback: settings?.scrollback ?? DEFAULT_SCROLLBACK,
       screenReaderMode: settings?.screenReaderMode ?? false,

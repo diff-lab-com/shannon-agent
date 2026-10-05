@@ -146,6 +146,9 @@ const demoTerminalSettings: TerminalSettings = {
   scrollback: 5000,
   drawerHeight: 320,
   screenReaderMode: false,
+  // Task 12: login-shell inheritance off, built-in font stack (null).
+  loginShell: false,
+  fontFamily: null,
 }
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.floor(v)))
 
@@ -2357,12 +2360,16 @@ export const handlers: Record<string, MockHandler> = {
     const s = args?.settings
     if (!s || typeof s !== 'object') throw new Error('invalid terminal settings')
     const shell = (s.shell ?? '').trim()
+    // Task 12: same sanitize discipline as the backend for the new knobs.
+    const fontFamily = (s.fontFamily ?? '').trim()
     Object.assign(demoTerminalSettings, {
       shell: shell === '' ? null : shell,
       fontSize: clamp(Number(s.fontSize) || 0, 8, 32),
       scrollback: clamp(Number(s.scrollback) || 0, 0, 100000),
       drawerHeight: clamp(Number(s.drawerHeight) || 0, 120, 1200),
       screenReaderMode: s.screenReaderMode === true,
+      loginShell: s.loginShell === true,
+      fontFamily: fontFamily === '' ? null : fontFamily.slice(0, 200),
     })
     return clone(demoTerminalSettings)
   },
