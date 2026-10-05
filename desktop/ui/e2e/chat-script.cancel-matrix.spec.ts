@@ -134,7 +134,7 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
 
     // q-0 streams → stop → cancelled settles. D6: the streamed partial
     // commits as a stopped-marked assistant bubble. The first chunk is out
-    // before the stop; how many of the 400ms-gap chunks landed by then is
+    // before the stop; how many of the 1s-gap chunks landed by then is
     // timing-dependent, so the text is asserted by containment (the count
     // and the marker are the deterministic part).
     await chat.send('第一条（将被取消）')

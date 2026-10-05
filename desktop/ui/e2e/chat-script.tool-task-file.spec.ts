@@ -27,8 +27,11 @@ test.describe('scripted chat backend — tool-task-file (journey #3)', () => {
 
     // Open the seeded session so the run carries a real session_id (the
     // elapsed clause of the status pill reads the session's startedAt).
-    await page.getByTestId('desktop-session-row-script-sess-tool').click()
-    await expect(page.getByRole('heading', { name: 'Write todo.md' })).toBeVisible({ timeout: 10_000 })
+    // Row-click-swallow guard (same as cancel-matrix's openSession).
+    await expect(async () => {
+      await page.getByTestId('desktop-session-row-script-sess-tool').click()
+      await expect(page.getByRole('heading', { name: 'Write todo.md' })).toBeVisible()
+    }).toPass({ timeout: 15_000 })
 
     await chat.send(script.turns[0]!.user)
     await chat.expectStreamingCursor()
@@ -55,9 +58,28 @@ test.describe('scripted chat backend — tool-task-file (journey #3)', () => {
       }).__shannonMock.control.resume()
     })
 
-    // Second progress event: 0.8 → 80% + its own message.
+    // Second progress event: 0.8 → 80% + its own message. Park BEFORE the
+    // tool-result step (index 5) so the 80% state is a HELD state, not a
+    // transient: resume() plays the remaining steps synchronously, and on a
+    // starved page the tool-result/completed tail could retire the progress
+    // chip between two polls before the message assert ever sampled it.
+    await page.evaluate(() => {
+      (window as unknown as {
+        __shannonMock: { control: { pauseAt(i: number): void; resume(): void } }
+      }).__shannonMock.control.pauseAt(5)
+    })
+    await page.evaluate(() => {
+      (window as unknown as {
+        __shannonMock: { control: { resume(): void } }
+      }).__shannonMock.control.resume()
+    })
     await expect(page.getByTestId('run-progress-pct')).toHaveText('· 80%', { timeout: 5_000 })
     await expect(page.getByTestId('run-progress-message')).toHaveText('flushing buffer')
+    await page.evaluate(() => {
+      (window as unknown as {
+        __shannonMock: { control: { resume(): void } }
+      }).__shannonMock.control.resume()
+    })
 
     // ok tool-result: the card converges to the completed form.
     const doneCard = page.locator('[data-tool-name="Bash"][data-tool-status="completed"]')
@@ -91,8 +113,13 @@ test.describe('scripted chat backend — tool-task-file (journey #3)', () => {
   test('FileCard action surface: pdf preview fails honest, csv builds a draft, save-as cancel is silent, reveal/open toast', async ({ page }) => {
     test.setTimeout(90_000)
     await loadChatScript(page, 'tool-task-file', test.info())
-    await page.getByTestId('desktop-session-row-script-sess-files').click()
-    await expect(page.getByRole('heading', { name: 'Generated files' })).toBeVisible({ timeout: 10_000 })
+    // Row-click-swallow guard (same as cancel-matrix's openSession): a click
+    // landing during hydration switches nothing — retry until the heading
+    // proves the switch landed.
+    await expect(async () => {
+      await page.getByTestId('desktop-session-row-script-sess-files').click()
+      await expect(page.getByRole('heading', { name: 'Generated files' })).toBeVisible()
+    }).toPass({ timeout: 15_000 })
 
     // Three generated files render as FileCards under their tool blocks.
     const pdfCard = page.getByTestId('file-card').filter({ hasText: 'report.pdf' })

@@ -42,5 +42,8 @@ turns:
         chunks:
           - "编辑后的回答："
           - "潮汐按周期可分为半日潮、全日潮和混合潮。"
-        chunkDelayMs: 250
+        # 1s gap — same starved-runner rationale as mid-stream-fail /
+        # cancel-then-resend: the streaming-cursor window (and cancel-matrix
+        # #5's Escape-cancels window) must outlast a loaded page's poll gap.
+        chunkDelayMs: 1000
       - event: query:completed
