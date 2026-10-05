@@ -13,6 +13,7 @@
 // queue-drain effect run for real against jsdom.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { ChatErrorKind } from '@/context/CatalogContext'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import * as dialog from '@tauri-apps/plugin-dialog'
@@ -34,7 +35,7 @@ const ctx = vi.hoisted(() => ({
   currentSessionId: null as string | null,
   windowSessionId: null as string | null,
   error: null as string | null,
-  errorKind: null as 'auth' | 'other' | null,
+  errorKind: null as ChatErrorKind | null,
   providerStatus: null as any,
   config: null as any,
   feedback: {} as Record<string, string>,

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { ChatErrorKind } from '@/context/CatalogContext'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter, useNavigate } from 'react-router-dom'
 import * as dialog from '@tauri-apps/plugin-dialog'
@@ -22,7 +23,7 @@ const ctx = vi.hoisted(() => ({
   error: null as string | null,
   // 2026-09-29 provider review — the banner/welcome gates read the
   // provider-status snapshot, not the dead `config.provider` fields.
-  errorKind: null as 'auth' | 'other' | null,
+  errorKind: null as ChatErrorKind | null,
   providerStatus: null as any,
   config: null as any,
   status: null as any,

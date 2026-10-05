@@ -51,7 +51,7 @@ import {
 } from '@/types'
 import { ChatProvider, useChat, type ChatContextValue, type PromptQueueItem, type StreamNotice } from './ChatContext'
 import { SessionContext, useSessions, type SessionContextValue } from './SessionContext'
-import { CatalogContext, useCatalog, type CatalogContextValue } from './CatalogContext'
+import { CatalogContext, useCatalog, normalizeChatErrorKind, type CatalogContextValue, type ChatErrorKind } from './CatalogContext'
 
 export type AppContextValue = ChatContextValue & SessionContextValue & CatalogContextValue
 
@@ -264,11 +264,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([])
   const [error, setError] = useState<string | null>(null)
-  // Review §2-3: machine-readable failure class for the chat error banner —
-  // `auth` (401/403, classified Rust-side on the QUERY_FAILED payload) gets
-  // the dedicated "update key" banner; `other` keeps the raw error line.
-  // Kept in lockstep with `error` via setChatError below.
-  const [errorKind, setErrorKind] = useState<'auth' | 'other' | null>(null)
+  // Review §2-3 + S1-1 (P-N1): machine-readable failure class for the chat
+  // error banner — classified Rust-side on the QUERY_FAILED payload from the
+  // engine's typed error (`error_kind`: auth/quota/rate_limit/authz/other);
+  // each kind gets its own recovery banner in MessageArea, `other` keeps the
+  // raw error line. Kept in lockstep with `error` via setChatError below.
+  const [errorKind, setErrorKind] = useState<ChatErrorKind | null>(null)
   // P0-2: sessions currently owned by a desktop goal run (running/paused).
   // Manual sends to these are blocked — goal and manual input are mutually
   // exclusive; the backend `send_message` guard is the backstop.
@@ -751,7 +752,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Single writer for the chat error surface so `errorKind` can never go
   // stale relative to `error` (a subsequent non-auth failure must clear the
   // auth classification, and a new send must clear both).
-  const setChatError = useCallback((message: string | null, kind: 'auth' | 'other' = 'other') => {
+  const setChatError = useCallback((message: string | null, kind: ChatErrorKind = 'other') => {
     setError(message)
     setErrorKind(message == null ? null : kind)
   }, [])
@@ -1491,10 +1492,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }),
         listen(EVENT_NAMES.QUERY_FAILED, (e) => {
-          // Desktop emits `error_kind` ("auth" | "other") on the payload —
-          // classified Rust-side from the engine's AuthenticationFailed
-          // text (events::classify_query_error_kind), so the JS side never
-          // string-matches provider errors.
+          // Desktop emits `error_kind` on the payload — the engine's
+          // structured classification (typed status → auth/quota/rate_limit/
+          // authz/other, single-sourced in shannon-engine), with a
+          // Rust-side text fallback for legacy paths (S1-1/P-N1). The JS
+          // side normalizes against the known set and never string-matches
+          // provider errors.
           const p = e.payload as { query_id?: string; error: string; error_kind?: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId) && ownerSessionKeyOfQuery(p.query_id) === null) return
           const visibleKey = visibleSessionIdRef.current ?? ''
@@ -1546,7 +1549,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 ...(citations && citations.length > 0 ? { injected_memories: citations } : {}),
               }])
             }
-            setChatError(p.error, p.error_kind === 'auth' ? 'auth' : 'other')
+            setChatError(p.error, normalizeChatErrorKind(p.error_kind))
             setStreamingText('')
             setThinkingText('')
             // Review P2-4: completed tool cards must not linger under the

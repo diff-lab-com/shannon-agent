@@ -3941,5 +3941,15 @@
   "settings.general.approvalMode.bypass.label": "承認をバイパス",
   "settings.general.approvalMode.bypass.description": "拒否ルール以外のチェックを省略 — 信頼できる環境のみ",
   "settings.general.approvalMode.advanced": "詳細モード",
-  "settings.general.approvalMode.advanced.none": "通常ティアへ戻す"
+  "settings.general.approvalMode.advanced.none": "通常ティアへ戻す",
+  "chat.error.quota.title": "クォータを使い切りました",
+  "chat.error.quota.body": "プロバイダーのクォータを使い切りました。キーの更新、使用量の確認、または入力欄のモデルメニューから安価なモデルへの切り替えができます。",
+  "chat.error.quota.updateKey": "キーを更新",
+  "chat.error.quota.viewUsage": "使用量を確認",
+  "chat.error.rateLimit.title": "リクエストがレート制限されています",
+  "chat.error.rateLimit.body": "プロバイダーがレート制限中です。しばらく待ってから再試行してください。",
+  "chat.error.rateLimit.retryAfter": "{seconds}秒後に再試行できます",
+  "chat.error.authz.title": "アクセスが拒否されました（403）",
+  "chat.error.authz.body": "この API キーには、要求されたモデルやリソースへのアクセス権がありません。設定 → モデル でキーと権限を確認してください。",
+  "chat.error.authz.checkKey": "キーを確認"
 }

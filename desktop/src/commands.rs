@@ -2262,7 +2262,11 @@ pub async fn send_message(
                             }
                         });
                     }
-                    QueryEvent::Failed { error, .. } => {
+                    QueryEvent::Failed {
+                        error,
+                        error_kind,
+                        ..
+                    } => {
                         // OBS1 (unify the failed half with D6): whatever the
                         // run already streamed stays. The engine tee finalizes
                         // the open step as
@@ -2295,6 +2299,9 @@ pub async fn send_message(
                                 &qid_str,
                                 &error,
                                 Some(session_id_str.clone()),
+                                // S1-1: structured engine classification wins;
+                                // None → events.rs's transitional text fallback.
+                                error_kind.as_deref(),
                             ),
                         );
                         // T5: the turn failed — surface it in the unified
@@ -2326,10 +2333,13 @@ pub async fn send_message(
                     let err_string = e.to_string();
                     let _ = app.emit(
                         event_names::QUERY_FAILED,
+                        // Stream-level error: no typed ApiError in scope —
+                        // transitional text fallback classifies (see events.rs).
                         events::query_failed_payload(
                             &qid_str,
                             &err_string,
                             Some(session_id_str.clone()),
+                            None,
                         ),
                     );
                     // T5: stream error — same needs-attention write as the
@@ -2372,7 +2382,13 @@ pub async fn send_message(
             );
             let _ = app.emit(
                 event_names::QUERY_FAILED,
-                events::query_failed_payload(&qid_str, &panic_msg, Some(session_id_str.clone())),
+                // Panic: no classification possible — plain banner via fallback.
+                events::query_failed_payload(
+                    &qid_str,
+                    &panic_msg,
+                    Some(session_id_str.clone()),
+                    None,
+                ),
             );
             crate::commands_notifications::fire_query_notification_logged(
                 &notifier_arc,

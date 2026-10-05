@@ -120,6 +120,7 @@ pub fn representative_events() -> Vec<QueryEvent> {
         QueryEvent::Failed {
             query_id: qid,
             error: "boom".to_string(),
+            error_kind: None,
         },
         QueryEvent::Warning {
             query_id: qid,

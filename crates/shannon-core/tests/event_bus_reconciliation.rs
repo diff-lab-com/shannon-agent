@@ -171,6 +171,7 @@ mod reconciliation {
         events.push(QueryEvent::Failed {
             query_id: q,
             error: "boom: rate limited".into(),
+            error_kind: None,
         });
         events
     }

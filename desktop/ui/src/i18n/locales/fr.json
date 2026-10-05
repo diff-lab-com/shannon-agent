@@ -3941,5 +3941,15 @@
   "settings.general.approvalMode.bypass.label": "Contourner les approbations",
   "settings.general.approvalMode.bypass.description": "Ignore toutes les vérifications sauf les règles de refus — environnements de confiance uniquement",
   "settings.general.approvalMode.advanced": "Avancé",
-  "settings.general.approvalMode.advanced.none": "Revenir à un palier standard"
+  "settings.general.approvalMode.advanced.none": "Revenir à un palier standard",
+  "chat.error.quota.title": "Quota épuisé",
+  "chat.error.quota.body": "Le quota de ton fournisseur est épuisé. Tu peux mettre à jour la clé, consulter l'utilisation ou passer à un modèle moins cher depuis le menu de modèles du composeur.",
+  "chat.error.quota.updateKey": "Mettre à jour la clé",
+  "chat.error.quota.viewUsage": "Voir l'utilisation",
+  "chat.error.rateLimit.title": "Requêtes en limite de débit",
+  "chat.error.rateLimit.body": "Le fournisseur limite actuellement les requêtes — patiente un instant, puis réessaie.",
+  "chat.error.rateLimit.retryAfter": "Nouvelle tentative possible dans {seconds} s",
+  "chat.error.authz.title": "Accès refusé (403)",
+  "chat.error.authz.body": "Cette clé d'API n'a pas accès au modèle ou à la ressource demandé(e). Vérifie la clé et ses autorisations dans les paramètres → Modèles.",
+  "chat.error.authz.checkKey": "Vérifier la clé"
 }

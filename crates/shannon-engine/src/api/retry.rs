@@ -565,6 +565,7 @@ mod tests {
             provider: "openai".to_string(),
             error_type: "invalid_request_error".to_string(),
             message: "nope".to_string(),
+            status: None,
         }));
         assert!(!config.is_failover_eligible(&ApiError::InvalidResponse("bad".to_string())));
     }
@@ -601,6 +602,7 @@ mod tests {
                     provider: "openai".to_string(),
                     error_type: error_type.to_string(),
                     message: "nope".to_string(),
+                    status: None,
                 }),
                 "ProviderError type '{error_type}' must rotate"
             );
@@ -610,6 +612,7 @@ mod tests {
                 provider: "openai".to_string(),
                 error_type: "invalid_request_error".to_string(),
                 message: "Incorrect API key provided".to_string(),
+                status: None,
             }),
             "auth-ish message must rotate"
         );
@@ -632,6 +635,7 @@ mod tests {
             provider: "openai".to_string(),
             error_type: "invalid_request_error".to_string(),
             message: "max_tokens is required".to_string(),
+            status: None,
         }));
         assert!(!config.is_key_rotation_eligible(&ApiError::InvalidResponse("bad".to_string())));
         assert!(!config.is_key_rotation_eligible(&ApiError::Timeout));
@@ -896,6 +900,7 @@ mod tests {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
             message: "can't find closing '}' symbol".to_string(),
+            status: None,
         };
         assert!(
             !config.is_retryable(&err),
@@ -910,6 +915,7 @@ mod tests {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
             message: "model 'foo' not found".to_string(),
+            status: None,
         };
         assert!(
             !config.is_retryable(&err),
@@ -924,6 +930,7 @@ mod tests {
             provider: "openai".to_string(),
             error_type: "invalid_request_error".to_string(),
             message: "max_tokens is required".to_string(),
+            status: None,
         };
         assert!(
             !config.is_retryable(&err),
@@ -961,6 +968,7 @@ mod tests {
                     provider: "openai".to_string(),
                     error_type: "invalid_request_error".to_string(),
                     message: "invalid api key".to_string(),
+                    status: None,
                 })
             }
         })

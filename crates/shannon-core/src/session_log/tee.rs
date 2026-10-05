@@ -1114,6 +1114,7 @@ mod tests {
             tee.record_query_event(&QueryEvent::Failed {
                 query_id: query_id(),
                 error: "boom".into(),
+                error_kind: None,
             });
             tee.close();
         }
@@ -1547,6 +1548,7 @@ mod tests {
             for input in crate::session_log::query_event_to_bus_inputs(&QueryEvent::Failed {
                 query_id: query_id(),
                 error: "upstream connection reset while streaming".into(),
+                error_kind: None,
             }) {
                 tee.record_bus_input(&input);
             }

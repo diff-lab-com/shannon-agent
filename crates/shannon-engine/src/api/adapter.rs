@@ -965,6 +965,9 @@ pub fn normalize_response(
                         provider: "ollama".to_string(),
                         error_type: String::new(),
                         message: error.clone(),
+                        // Parsed from a response body, not an HTTP error
+                        // exchange — no status to preserve.
+                        status: None,
                     };
                     if probe.is_ollama_malformed_output() {
                         tracing::warn!("Ollama recoverable error (returning warning): {error}");
@@ -988,6 +991,9 @@ pub fn normalize_response(
                         provider: "ollama".to_string(),
                         error_type: "ollama_error".to_string(),
                         message: error.clone(),
+                        // Parsed from a response body, not an HTTP error
+                        // exchange — no status to preserve.
+                        status: None,
                     });
                 }
             }
@@ -4422,6 +4428,7 @@ mod tests {
                 provider,
                 error_type,
                 message,
+                ..
             }) => {
                 assert_eq!(provider, "ollama");
                 assert_eq!(error_type, "ollama_error");

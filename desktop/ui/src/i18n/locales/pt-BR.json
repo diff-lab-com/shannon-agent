@@ -3941,5 +3941,15 @@
   "settings.general.approvalMode.bypass.label": "Ignorar aprovações",
   "settings.general.approvalMode.bypass.description": "Pula todas as verificações, exceto regras de negação — só ambientes confiáveis",
   "settings.general.approvalMode.advanced": "Avançado",
-  "settings.general.approvalMode.advanced.none": "Voltar para um nível padrão"
+  "settings.general.approvalMode.advanced.none": "Voltar para um nível padrão",
+  "chat.error.quota.title": "Cota esgotada",
+  "chat.error.quota.body": "Você esgotou a cota do seu provedor. É possível atualizar a chave, ver o uso ou trocar para um modelo mais barato no menu de modelos do composer.",
+  "chat.error.quota.updateKey": "Atualizar chave",
+  "chat.error.quota.viewUsage": "Ver uso",
+  "chat.error.rateLimit.title": "Solicitações limitadas",
+  "chat.error.rateLimit.body": "O provedor está limitando as solicitações — aguarde um momento e tente novamente.",
+  "chat.error.rateLimit.retryAfter": "Nova tentativa em {seconds} s",
+  "chat.error.authz.title": "Acesso negado (403)",
+  "chat.error.authz.body": "Esta chave de API não tem acesso ao modelo ou recurso solicitado. Verifique a chave e as permissões em Configurações → Modelos.",
+  "chat.error.authz.checkKey": "Verificar chave"
 }

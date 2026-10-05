@@ -47,6 +47,29 @@ function useStableMessageKeys(messages: { role: string; content: string; timesta
 }
 
 /**
+ * S1-1 (review 2026-10-05 §3 P-N1): best-effort extraction of a Retry-After
+ * delay from the raw provider error text (429 bodies sometimes carry
+ * "Retry-After: N" / "try again in Ns"). DISPLAY HINT ONLY — it feeds the
+ * rate-limit banner's "{seconds}s" line and is never a classification
+ * signal; classification stays engine-side (error_kind).
+ * Exported for direct unit testing.
+ */
+export function parseRetryAfterSeconds(error: string): number | null {
+  const patterns = [
+    /retry[-\s]?after\D{0,16}(\d{1,5})/i,
+    /try\s+again\s+in\s+(\d{1,5})\s*(?:s\b|sec|second)/i,
+  ]
+  for (const re of patterns) {
+    const m = error.match(re)
+    if (m) {
+      const seconds = Number(m[1])
+      if (Number.isFinite(seconds) && seconds > 0) return seconds
+    }
+  }
+  return null
+}
+
+/**
  * P2-17 (§4-17): the single aria-live region for run state transitions.
  * The streaming log itself used to be a polite live region (screen-reader
  * token spam) — now only the transitions announce: "generating" when a run
@@ -246,6 +269,12 @@ export default function MessageArea({
   const { error, errorKind, providerStatus } = useCatalog()
   const navigate = useNavigate()
   const t = useT()
+  // S1-1: rate-limit banner shows "retry in Ns" when the provider error
+  // text carries a parseable delay (see parseRetryAfterSeconds).
+  const retryAfterSeconds = useMemo(
+    () => (errorKind === 'rate_limit' && error ? parseRetryAfterSeconds(error) : null),
+    [error, errorKind],
+  )
   const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
   const messageKeys = useStableMessageKeys(messages)
   // P2-17: one run-level status region for the whole flow — the list and
@@ -388,12 +417,16 @@ export default function MessageArea({
           expanding tool cards. */}
       {isQuerying && <RunStatusLine startedAt={currentSessionId ? sessionActivity[currentSessionId]?.startedAt ?? null : null} activeTool={currentSessionId ? sessionActivity[currentSessionId]?.activeTool ?? null : null} toolProgress={toolProgress} />}
 
-      {/* Review §2-3: auth failures (401/403, classified Rust-side on the
-          QUERY_FAILED payload as error_kind="auth") get a dedicated banner
-          that names the provider and deep-links to Settings → Models, where
-          the key is actually fixable — the engine's raw text points at the
-          CLI's /config, a dead end on desktop. All other failures keep the
-          raw error line + Retry. */}
+      {/* Review §2-3 + S1-1 (P-N1): failures classified Rust-side on the
+          QUERY_FAILED payload (engine's typed error → error_kind) get
+          dedicated recovery banners:
+            auth (401)       → provider key banner (unchanged behavior);
+            quota (402)      → "quota exhausted" + update key / view usage /
+                               switch-model hint;
+            rate_limit (429) → wait hint (+ "retry in Ns" when the provider
+                               text carries a delay) + Retry;
+            authz (403)      → "access denied" + Settings pointer.
+          All other failures keep the raw error line + Retry. */}
       {error && errorKind === 'auth' ? (
         <Banner
           variant="card"
@@ -419,6 +452,85 @@ export default function MessageArea({
             onClick={() => navigate('/settings/models')}
           >
             {t('chat.error.auth.updateKey')}
+          </Button>
+          <ComposerRetryButton />
+        </Banner>
+      ) : error && errorKind === 'quota' ? (
+        <Banner
+          variant="card"
+          tone="error"
+          className="mx-auto max-w-md text-error font-label-md"
+          data-testid="quota-error-banner"
+        >
+          <span className="material-symbols-outlined icon-md text-error">payments</span>
+          <span className="flex-1 text-center">
+            {t('chat.error.quota.title')}
+            <span className="block font-body-sm text-on-surface-variant mt-xs">
+              {t('chat.error.quota.body')}
+            </span>
+          </span>
+          <div className="mt-sm flex items-center justify-center gap-xs">
+            <Button
+              type="button"
+              variant="ghost"
+              className="text-error hover:bg-error/10 text-label-md cursor-pointer"
+              onClick={() => navigate('/settings/models')}
+            >
+              {t('chat.error.quota.updateKey')}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="text-error hover:bg-error/10 text-label-md cursor-pointer"
+              onClick={() => navigate('/usage')}
+            >
+              {t('chat.error.quota.viewUsage')}
+            </Button>
+          </div>
+          <ComposerRetryButton />
+        </Banner>
+      ) : error && errorKind === 'rate_limit' ? (
+        <Banner
+          variant="card"
+          tone="error"
+          className="mx-auto max-w-md text-error font-label-md"
+          data-testid="rate-limit-error-banner"
+        >
+          <span className="material-symbols-outlined icon-md text-error">hourglass_top</span>
+          <span className="flex-1 text-center">
+            {t('chat.error.rateLimit.title')}
+            <span className="block font-body-sm text-on-surface-variant mt-xs">
+              {t('chat.error.rateLimit.body')}
+            </span>
+            {retryAfterSeconds !== null && (
+              <span className="block font-body-sm text-on-surface-variant mt-xs">
+                {t('chat.error.rateLimit.retryAfter', { seconds: retryAfterSeconds })}
+              </span>
+            )}
+          </span>
+          <ComposerRetryButton />
+        </Banner>
+      ) : error && errorKind === 'authz' ? (
+        <Banner
+          variant="card"
+          tone="error"
+          className="mx-auto max-w-md text-error font-label-md"
+          data-testid="authz-error-banner"
+        >
+          <span className="material-symbols-outlined icon-md text-error">lock</span>
+          <span className="flex-1 text-center">
+            {t('chat.error.authz.title')}
+            <span className="block font-body-sm text-on-surface-variant mt-xs">
+              {t('chat.error.authz.body')}
+            </span>
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            className="mt-sm text-error hover:bg-error/10 text-label-md cursor-pointer"
+            onClick={() => navigate('/settings/models')}
+          >
+            {t('chat.error.authz.checkKey')}
           </Button>
           <ComposerRetryButton />
         </Banner>

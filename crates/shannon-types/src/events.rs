@@ -168,6 +168,17 @@ pub struct QueryFailedPayload {
     pub error: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// S1-1 (review 2026-10-05 §3 P-N1): structured failure classification,
+    /// produced by the engine where the typed error is in scope
+    /// (`shannon_engine::api::ApiError::error_kind`). One of the canonical
+    /// wire strings: `"auth"` (401) | `"quota"` (402) | `"rate_limit"` (429)
+    /// | `"authz"` (403) | `"other"` (network/timeout/5xx/…). `None` when
+    /// the emit site only had a rendered string — consumers fall back to
+    /// Display-text matching, which is transitional. Additive like
+    /// `session_id`: older payloads keep parsing, older consumers ignore
+    /// the field; the wire shape is unchanged when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
 }
 
 /// P1-3: explanation of why a permission prompt was raised. Field names are a

@@ -3941,5 +3941,15 @@
   "settings.general.approvalMode.bypass.label": "Genehmigungen umgehen",
   "settings.general.approvalMode.bypass.description": "Überspringt alle Prüfungen außer Verbotsregeln — nur vertrauenswürdige Umgebungen",
   "settings.general.approvalMode.advanced": "Erweitert",
-  "settings.general.approvalMode.advanced.none": "Zur Standardstufe zurückkehren"
+  "settings.general.approvalMode.advanced.none": "Zur Standardstufe zurückkehren",
+  "chat.error.quota.title": "Kontingent erschöpft",
+  "chat.error.quota.body": "Dein Provider-Kontingent ist aufgebraucht. Du kannst den Schlüssel aktualisieren, die Nutzung ansehen oder im Modellmenü des Eingabefelds zu einem günstigeren Modell wechseln.",
+  "chat.error.quota.updateKey": "Schlüssel aktualisieren",
+  "chat.error.quota.viewUsage": "Nutzung ansehen",
+  "chat.error.rateLimit.title": "Anfragen werden gerade gedrosselt",
+  "chat.error.rateLimit.body": "Der Provider drosselt derzeit Anfragen — warte einen Moment und versuche es dann erneut.",
+  "chat.error.rateLimit.retryAfter": "Erneuter Versuch möglich in {seconds} s",
+  "chat.error.authz.title": "Zugriff verweigert (403)",
+  "chat.error.authz.body": "Dieser API-Schlüssel hat keinen Zugriff auf das angeforderte Modell oder die Ressource. Prüfe Schlüssel und Berechtigungen unter Einstellungen → Modelle.",
+  "chat.error.authz.checkKey": "Schlüssel prüfen"
 }
