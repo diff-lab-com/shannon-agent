@@ -5070,3 +5070,50 @@ fn i18n_en_copy_is_byte_identical_to_previous_hardcoded_strings() {
         "─────────────────────"
     );
 }
+
+// ── P1-18 residue: providers.toml corruption warning parity with the CLI ──
+
+#[test]
+#[serial]
+fn providers_toml_corruption_warning_flags_only_unparseable_files() {
+    // HOME swap via the shared, lock-serialized guard (see test_env docs):
+    // parse_error(None) reads $HOME/.shannon/providers.toml.
+    let _home = crate::test_env::HomeGuard::new();
+    let shannon_dir = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .expect("HOME set by HomeGuard")
+        .join(".shannon");
+    std::fs::create_dir_all(&shannon_dir).expect("mkdir ~/.shannon");
+    let providers_toml = shannon_dir.join("providers.toml");
+
+    // Absent file → silent (the "nothing connected" state is honest).
+    assert!(providers_toml_corruption_warning().is_none());
+
+    // Corrupt file (deny_unknown_fields rejects the whole document) → the
+    // one-line warning, same wording as the CLI's read-side hint.
+    std::fs::write(&providers_toml, "totally_unknown_field = true\n").expect("write corrupt");
+    let warning = providers_toml_corruption_warning().expect("corrupt file must warn");
+    assert!(warning.contains("providers.toml"), "{warning}");
+    assert!(
+        warning.contains("is being ignored until fixed"),
+        "warning must state the silent-degrade semantics: {warning}"
+    );
+    assert!(
+        warning.contains("writes to it are refused"),
+        "warning must state the write-refusal contract: {warning}"
+    );
+
+    // Empty file parses-as-absent → silent again.
+    std::fs::write(&providers_toml, "").expect("write empty");
+    assert!(providers_toml_corruption_warning().is_none());
+
+    // A valid minimal v2 doc → silent.
+    std::fs::write(
+        &providers_toml,
+        "version = 2\n\n[profiles.default]\nname = \"default\"\n\n\
+         [profiles.default.active_target]\nprovider_id = \"ollama\"\nmodel_id = \"llama3\"\n\
+         scope = \"global\"\n",
+    )
+    .expect("write valid");
+    assert!(providers_toml_corruption_warning().is_none());
+}

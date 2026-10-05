@@ -711,6 +711,22 @@ fn main() {
                     );
                 }
 
+                // P1-18 residue — corruption-warning parity with the
+                // CLI/TUI: when `~/.shannon/providers.toml` exists but fails
+                // the provider-config schema, the desktop's reads silently
+                // degrade to "nothing connected" and writes to the file are
+                // refused. The CLI warns on every provider command and the
+                // REPL prints the same line at startup; the desktop (no
+                // stderr surface) logs the same warning once, at startup,
+                // where the support log picks it up.
+                if let Some(err) = shannon_core::provider_config_store::parse_error(None) {
+                    tracing::warn!(
+                        error = %err,
+                        "~/.shannon/providers.toml exists but is not a valid provider config; \
+                         it is being ignored until fixed (writes to it are refused)"
+                    );
+                }
+
                 // G1 P0-1.2 — seed the MCP process pool in the BACKGROUND.
                 // Startup must not block on server handshakes: a single
                 // hung server would hold the first window for up to the

@@ -1142,6 +1142,91 @@ pub const EXPORT_SCHEMA: &str = "shannon-providers-export/v1";
 /// reference.
 pub const REDACTED_MARKER: &str = "<redacted>";
 
+/// Why an `extra_headers` entry looks like it is carrying a credential
+/// (P-N12 / decision ④: sniff, warn, never silently rewrite).
+///
+/// Three patterns, all case-insensitive, deliberately simple enough to
+/// explain in one line:
+/// - the header *name* contains `authorization`, `api-key`, or `token`
+///   (the common spellings of auth-carrying headers, `X-Api-Key` included);
+/// - the value starts with a `Bearer ` auth-scheme prefix;
+/// - the value contains an `sk-` key fragment anywhere.
+fn sensitive_header_reason(name: &str, value: &str) -> Option<&'static str> {
+    let lower_name = name.to_ascii_lowercase();
+    if lower_name.contains("authorization")
+        || lower_name.contains("api-key")
+        || lower_name.contains("token")
+    {
+        return Some("header name looks credential-bearing (authorization/api-key/token)");
+    }
+    let lower_value = value.to_ascii_lowercase();
+    if value
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Bearer "))
+    {
+        return Some("value carries a `Bearer ` auth-scheme prefix");
+    }
+    if lower_value.contains("sk-") {
+        return Some("value contains an `sk-` key fragment");
+    }
+    None
+}
+
+/// One sniffed `extra_headers` entry: where it lives and why it was flagged.
+/// The value itself is never carried — warnings must be safe to display.
+#[derive(Debug)]
+struct ExtraHeaderFinding {
+    profile: String,
+    provider: String,
+    header: String,
+    reason: &'static str,
+}
+
+/// Scan every provider's `extra_headers` in `config` for credential-looking
+/// values (P-N12 / decision ④). The export prints one warning per finding;
+/// `--redact` additionally replaces each flagged value with
+/// [`REDACTED_MARKER`] (key name kept).
+fn audit_extra_headers(config: &ProviderModelConfig) -> Vec<ExtraHeaderFinding> {
+    let mut findings = Vec::new();
+    for profile_name in config.profile_names() {
+        let Some(mp) = config.profiles.get(&profile_name) else {
+            continue;
+        };
+        for provider in &mp.providers {
+            for (name, value) in &provider.extra_headers {
+                if let Some(reason) = sensitive_header_reason(name, value) {
+                    findings.push(ExtraHeaderFinding {
+                        profile: profile_name.clone(),
+                        provider: provider.id.clone(),
+                        header: name.clone(),
+                        reason,
+                    });
+                }
+            }
+        }
+    }
+    findings
+}
+
+/// The `(profile, provider)` slots still carrying a legacy inline credential
+/// (`CredentialRef::InlineLegacy`). Production write paths never construct
+/// one (A1: every writer emits Env/Keyring/Store references), so one in
+/// `providers.toml` means a hand-edited or pre-migration file.
+fn find_inline_legacy_credentials(config: &ProviderModelConfig) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    for profile_name in config.profile_names() {
+        let Some(mp) = config.profiles.get(&profile_name) else {
+            continue;
+        };
+        for provider in &mp.providers {
+            if matches!(provider.credential, CredentialRef::InlineLegacy { .. }) {
+                found.push((profile_name.clone(), provider.id.clone()));
+            }
+        }
+    }
+    found
+}
+
 /// The portable snapshot envelope. `schema`/`redacted` let the importer
 /// reject foreign files and refuse redacted snapshots *before* attempting to
 /// parse the payload, so each failure mode gets its own actionable error.
@@ -1191,8 +1276,9 @@ fn export_header(redacted: bool) -> String {
     s.push_str("# needs attention.\n");
     if redacted {
         s.push_str(&format!(
-            "# --redact: credential references were masked to \"{REDACTED_MARKER}\" — this file\n\
-             # is for review/sharing, NOT for import (the references are gone).\n"
+            "# --redact: credential references and credential-looking extra-header values\n\
+             # were masked to \"{REDACTED_MARKER}\" — this file is for review/sharing,\n\
+             # NOT for import (the references are gone).\n"
         ));
     }
     s
@@ -1218,10 +1304,12 @@ fn build_export_document(store: &ProviderConfigStore) -> Result<ProviderExportFi
 }
 
 /// Replace every `credential` table under `config.profiles.*.providers[*]`
-/// with the [`REDACTED_MARKER`] string. Returns how many references were
-/// masked. Targeted walk (not a generic recursion) so exactly the
-/// credential-ref details are masked and nothing else in the snapshot moves.
-fn redact_export_value(value: &mut toml::Value) -> usize {
+/// with the [`REDACTED_MARKER`] string, and every credential-looking
+/// `extra_headers` value with it too (key name kept — decision ④). Returns
+/// how many references and header values were masked. Targeted walk (not a
+/// generic recursion) so exactly the credential-ref details are masked and
+/// nothing else in the snapshot moves.
+fn redact_export_value(value: &mut toml::Value) -> (usize, usize) {
     let Some(providers) = value
         .get_mut("config")
         .and_then(|c| c.get_mut("profiles"))
@@ -1234,37 +1322,56 @@ fn redact_export_value(value: &mut toml::Value) -> usize {
                 .collect::<Vec<_>>()
         })
     else {
-        return 0;
+        return (0, 0);
     };
-    let mut masked = 0;
+    let mut masked_refs = 0;
+    let mut masked_headers = 0;
     for arr in providers {
         for provider in arr.iter_mut() {
-            if let Some(table) = provider.as_table_mut()
-                && table.contains_key("credential")
-            {
+            let Some(table) = provider.as_table_mut() else {
+                continue;
+            };
+            if table.contains_key("credential") {
                 table.insert(
                     "credential".to_string(),
                     toml::Value::String(REDACTED_MARKER.to_string()),
                 );
-                masked += 1;
+                masked_refs += 1;
+            }
+            if let Some(headers) = table
+                .get_mut("extra_headers")
+                .and_then(|h| h.as_table_mut())
+            {
+                for (name, header_value) in headers.iter_mut() {
+                    let Some(text) = header_value.as_str() else {
+                        continue;
+                    };
+                    if sensitive_header_reason(name, text).is_some() {
+                        *header_value = toml::Value::String(REDACTED_MARKER.to_string());
+                        masked_headers += 1;
+                    }
+                }
             }
         }
     }
-    masked
+    (masked_refs, masked_headers)
 }
 
 /// Render the export file: header comments + pretty TOML. With `redact`,
-/// credential references are masked first and the envelope's `redacted` flag
-/// is set so an importer refuses the file with the redaction explanation
-/// instead of a confusing credential-parse error.
-fn render_export_toml(doc: &ProviderExportFile, redact: bool) -> Result<String> {
+/// credential references (and credential-looking extra-header values) are
+/// masked first and the envelope's `redacted` flag is set so an importer
+/// refuses the file with the redaction explanation instead of a confusing
+/// credential-parse error. Returns the text plus how many extra-header
+/// values were masked (for the stderr summary).
+fn render_export_toml(doc: &ProviderExportFile, redact: bool) -> Result<(String, usize)> {
     // Round-trip through a mutable `toml::Value` so --redact can rewrite the
     // credential tables in place.
     let serialized = toml::to_string_pretty(doc).context("export payload is not serializable")?;
     let mut value: toml::Value =
         toml::from_str(&serialized).context("export payload is not valid TOML")?;
+    let mut masked_headers = 0;
     if redact {
-        let masked = redact_export_value(&mut value);
+        let (masked, masked_header_values) = redact_export_value(&mut value);
         debug_assert_eq!(
             masked,
             doc.config
@@ -1274,6 +1381,12 @@ fn render_export_toml(doc: &ProviderExportFile, redact: bool) -> Result<String> 
                 .sum::<usize>(),
             "redaction must mask every credential reference"
         );
+        debug_assert_eq!(
+            masked_header_values,
+            audit_extra_headers(&doc.config).len(),
+            "redaction must mask exactly the credential-looking extra headers"
+        );
+        masked_headers = masked_header_values;
         if let Some(envelope) = value.as_table_mut() {
             envelope.insert("redacted".to_string(), toml::Value::Boolean(true));
         }
@@ -1282,7 +1395,7 @@ fn render_export_toml(doc: &ProviderExportFile, redact: bool) -> Result<String> 
         toml::to_string_pretty(&value).context("redacted export payload is not serializable")?;
     let mut out = export_header(redact);
     out.push_str(&body);
-    Ok(out)
+    Ok((out, masked_headers))
 }
 
 /// Parse + validate an export file body. Every failure names the fix: missing
@@ -1341,9 +1454,65 @@ fn parse_export_document(text: &str) -> Result<ProviderExportFile> {
 /// redirected stdout carries nothing but the TOML. Files are written 0600 —
 /// the snapshot reveals endpoint URLs and credential *names*, which is less
 /// than providers.toml itself exposes, but there is no reason to publish it.
+///
+/// Export safety (P-N12 / decision ④):
+/// - a profile slot still on a legacy inline credential refuses to export —
+///   migrate the key first, or pass `--redact` for a masked review copy;
+/// - every `extra_headers` entry that smells like a credential
+///   (auth-carrying header name, `Bearer ` prefix, `sk-` fragment) is
+///   reported by name + reason (never the value); `--redact` replaces those
+///   values with [`REDACTED_MARKER`], keeping the header names. Nothing is
+///   ever rewritten silently.
 pub fn run_providers_export(store: &ProviderConfigStore, args: &ExportArgs) -> Result<()> {
     let doc = build_export_document(store)?;
-    let text = render_export_toml(&doc, args.redact)?;
+
+    // P-N12 hardening (decision ④): a legacy inline credential never leaves
+    // the machine. Production write paths stopped producing InlineLegacy long
+    // ago (A1 — every writer emits Env/Keyring/Store references), so one here
+    // means a hand-edited or pre-migration file: refuse and point at the
+    // migration, or let --redact carry a masked copy.
+    let inline_legacy = find_inline_legacy_credentials(&doc.config);
+    if !inline_legacy.is_empty() && !args.redact {
+        let slots: Vec<String> = inline_legacy
+            .iter()
+            .map(|(profile, id)| format!("{profile}/{id}"))
+            .collect();
+        bail!(
+            "cannot export: {} provider slot(s) still carry a legacy inline credential \
+             ({}) — inline credentials must not leave the machine. Migrate first (re-enter \
+             the key via /connect, or `shannon providers keys <provider> add env:VAR|store:SVC`) \
+             and re-export; or export with --redact for a masked review copy",
+            inline_legacy.len(),
+            slots.join(", ")
+        );
+    }
+
+    // Decision ④: sniff credential-looking extra headers. Every hit is
+    // reported (name + reason, never the value); --redact masks the values.
+    let header_findings = audit_extra_headers(&doc.config);
+    let (text, masked_header_values) = render_export_toml(&doc, args.redact)?;
+    for finding in &header_findings {
+        if args.redact {
+            eprintln!(
+                "  --redact: profile '{}' provider '{}' extra header '{}' masked to \
+                 \"{REDACTED_MARKER}\" ({})",
+                finding.profile, finding.provider, finding.header, finding.reason
+            );
+        } else {
+            eprintln!(
+                "  warning: profile '{}' provider '{}' extra header '{}' {} — the value is \
+                 exported as-is; pass --redact to mask it",
+                finding.profile, finding.provider, finding.header, finding.reason
+            );
+        }
+    }
+    if !inline_legacy.is_empty() {
+        eprintln!(
+            "  --redact: {} legacy inline credential(s) masked to \"{REDACTED_MARKER}\" — \
+             migrate them (re-enter via /connect) before real use",
+            inline_legacy.len()
+        );
+    }
     let profile_count = doc.config.profiles.len();
     let provider_count: usize = doc
         .config
@@ -1379,6 +1548,12 @@ pub fn run_providers_export(store: &ProviderConfigStore, args: &ExportArgs) -> R
                     "  --redact: credential references masked to \"{REDACTED_MARKER}\"; \
                      this file cannot be re-imported — re-connect providers on the target machine"
                 );
+                if masked_header_values > 0 {
+                    eprintln!(
+                        "  --redact: {masked_header_values} credential-looking extra-header \
+                         value(s) also masked (header names kept)"
+                    );
+                }
             }
         }
         None => {
@@ -1714,6 +1889,7 @@ fn render_table_for_tests(store: &ProviderConfigStore) -> String {
 #[allow(clippy::too_many_arguments)]
 mod tests {
     use super::*;
+    use shannon_types::provider_config::{ActiveTarget, ModelProfile, Scope};
     use std::collections::HashMap;
 
     fn sample_profile(
@@ -2614,7 +2790,7 @@ mod tests {
         assert_eq!(doc.schema, EXPORT_SCHEMA);
         assert!(!doc.redacted);
 
-        let text = render_export_toml(&doc, false).expect("renders");
+        let (text, _) = render_export_toml(&doc, false).expect("renders");
         assert!(
             text.starts_with("# Shannon provider setup export"),
             "{text}"
@@ -2661,7 +2837,7 @@ mod tests {
         let store = ProviderConfigStore::load_or_default_at(&path);
         let doc = build_export_document(&store).expect("document builds");
 
-        let plain = render_export_toml(&doc, false).expect("plain renders");
+        let (plain, _) = render_export_toml(&doc, false).expect("plain renders");
         // Grep-level no-plaintext guarantee: refs (names) may appear; a
         // secret VALUE cannot (decision A1 — the schema has nowhere to put
         // one). The masked legacy credential of a snapshot is masked by
@@ -2671,7 +2847,7 @@ mod tests {
             "plain export keeps ref names: {plain}"
         );
 
-        let redacted = render_export_toml(&doc, true).expect("redacted renders");
+        let (redacted, masked_headers) = render_export_toml(&doc, true).expect("redacted renders");
         assert!(redacted.contains("redacted = true"), "{redacted}");
         assert!(redacted.contains("<redacted>"), "{redacted}");
         assert!(
@@ -2683,7 +2859,160 @@ mod tests {
             2,
             "exactly one masked ref per provider (the header mention aside)"
         );
+        // `X-Team = "alpha"` is benign — the header sniffer must not touch it.
+        assert_eq!(
+            masked_headers, 0,
+            "benign extra headers stay unmasked: {redacted}"
+        );
         // Redacted files are refused on import (see parse test below).
+    }
+
+    // ── export safety: extra-header sniffing + InlineLegacy (P-N12, 裁定④) ──
+
+    #[test]
+    fn export_header_sniffer_flags_all_three_patterns_and_nothing_benign() {
+        // Pattern 1: credential-bearing header NAME (case-insensitive).
+        assert!(sensitive_header_reason("Authorization", "opaque").is_some());
+        assert!(sensitive_header_reason("X-Api-Key", "opaque").is_some());
+        assert!(sensitive_header_reason("x_auth_token", "opaque").is_some());
+        // Pattern 2: `Bearer ` value prefix (case-insensitive on the scheme).
+        assert!(sensitive_header_reason("X-Custom", "Bearer abc123").is_some());
+        assert!(sensitive_header_reason("X-Custom", "bearer abc123").is_some());
+        // Pattern 3: `sk-` fragment anywhere in the value.
+        assert!(sensitive_header_reason("X-Custom", "key sk-123 tail").is_some());
+        // Benign headers/values stay unflagged.
+        assert!(sensitive_header_reason("X-Team", "alpha").is_none());
+        assert!(sensitive_header_reason("Accept", "application/json").is_none());
+        assert!(sensitive_header_reason("X-Trace-Id", "abcdef0123").is_none());
+    }
+
+    /// An in-memory export config with `profiles` (hand-built, not through
+    /// the service write path: the InlineLegacy fixture is deliberately a
+    /// state no writer produces — that is the point of the refusal).
+    fn export_config_with(profiles: Vec<ProviderProfile>) -> ProviderModelConfig {
+        let mut map = HashMap::new();
+        map.insert(
+            "default".to_string(),
+            ModelProfile {
+                name: "default".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: profiles[0].id.clone(),
+                    model_id: "m".to_string(),
+                    scope: Scope::Global,
+                },
+                providers: profiles,
+                auxiliary: HashMap::new(),
+                credential_scope: Default::default(),
+            },
+        );
+        ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
+            profiles: map,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn export_warns_per_sensitive_header_and_redact_masks_values_keeping_names() {
+        let mut authz = rich_profile("glm", "glm-svc", "https://open.bigmodel.cn/v1", "glm-4.6");
+        authz.extra_headers = HashMap::from([
+            (
+                "Authorization".to_string(),
+                "Bearer sk-live-999".to_string(),
+            ),
+            ("X-Team".to_string(), "alpha".to_string()),
+        ]);
+        let mut apikey = rich_profile("proxy", "proxy-svc", "https://proxy.example.com/v1", "px-1");
+        apikey.extra_headers =
+            HashMap::from([("X-Api-Key".to_string(), "sk-proxy-abc123".to_string())]);
+        let doc = ProviderExportFile {
+            schema: EXPORT_SCHEMA.to_string(),
+            redacted: false,
+            config: export_config_with(vec![authz, apikey]),
+        };
+
+        // Sniffing: one finding per sensitive header, carrying names+reason
+        // but never the value.
+        let findings = audit_extra_headers(&doc.config);
+        let mut flagged: Vec<&str> = findings.iter().map(|f| f.header.as_str()).collect();
+        flagged.sort_unstable();
+        assert_eq!(flagged, ["Authorization", "X-Api-Key"]);
+        assert!(
+            findings.iter().all(|f| !format!("{f:?}").contains("sk-")),
+            "findings must never carry the header value"
+        );
+
+        // Plain export keeps the values (decision ④: no silent rewriting).
+        let (plain, plain_masked) = render_export_toml(&doc, false).expect("plain renders");
+        assert!(plain.contains("sk-live-999"), "plain export is verbatim");
+        assert_eq!(plain_masked, 0);
+
+        // --redact replaces exactly the flagged values with the marker,
+        // keeping header names and the benign entry.
+        let (redacted, masked) = render_export_toml(&doc, true).expect("redacted renders");
+        assert_eq!(masked, 2, "both sensitive values masked");
+        assert!(
+            redacted.contains("Authorization = \"<redacted>\"")
+                && redacted.contains("X-Api-Key = \"<redacted>\""),
+            "flagged values replaced in place, key names kept: {redacted}"
+        );
+        assert!(
+            !redacted.contains("sk-live-999") && !redacted.contains("sk-proxy-abc123"),
+            "sensitive values must be gone: {redacted}"
+        );
+        assert!(
+            redacted.contains("X-Team = \"alpha\""),
+            "benign headers travel untouched: {redacted}"
+        );
+    }
+
+    #[test]
+    fn export_refuses_inline_legacy_and_redact_is_the_release_valve() {
+        let mut legacy = rich_profile("glm", "glm-svc", "https://open.bigmodel.cn/v1", "glm-4.6");
+        legacy.credential = CredentialRef::InlineLegacy {
+            masked: "***legacy***".to_string(),
+        };
+        let store = ProviderConfigStore::from_config(export_config_with(vec![legacy]));
+
+        // Default: refuse the export, name the slot, point at migration.
+        let err = run_providers_export(
+            &store,
+            &ExportArgs {
+                out: None,
+                redact: false,
+            },
+        )
+        .expect_err("inline legacy must refuse to export");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("default/glm"), "{msg}");
+        assert!(
+            msg.contains("legacy inline credential") && msg.contains("--redact"),
+            "error must name the state and the release valve: {msg}"
+        );
+
+        // --redact: the credential is masked wholesale and the export goes
+        // through (a review copy, not a working migration).
+        let out = tempfile::tempdir().expect("tempdir");
+        let path = out.path().join("snap.toml");
+        run_providers_export(
+            &store,
+            &ExportArgs {
+                out: Some(path.clone()),
+                redact: true,
+            },
+        )
+        .expect("redacted export passes");
+        let text = std::fs::read_to_string(&path).expect("snapshot readable");
+        assert!(text.contains("redacted = true"), "{text}");
+        assert!(
+            text.contains("credential = \"<redacted>\""),
+            "inline legacy masked wholesale: {text}"
+        );
+        assert!(
+            !text.contains("***legacy***"),
+            "the masked value must not travel: {text}"
+        );
     }
 
     #[test]
@@ -2700,7 +3029,7 @@ mod tests {
         );
         let original = ProviderConfigStore::load_or_default_at(&original_path);
         let doc = build_export_document(&original).expect("document builds");
-        let text = render_export_toml(&doc, false).expect("renders");
+        let (text, _) = render_export_toml(&doc, false).expect("renders");
 
         // Fresh machine: a brand-new path, no providers.toml at all.
         let fresh_dir = tempfile::tempdir().expect("tempdir");
@@ -2767,7 +3096,7 @@ mod tests {
         let mut target = ProviderConfigStore::load_or_default_at(&target_path);
 
         // Serialize the snapshot where the command can read it.
-        let text = render_export_toml(&doc, false).expect("renders");
+        let (text, _) = render_export_toml(&doc, false).expect("renders");
         std::fs::write(target_dir.path().join("snapshot.toml"), &text).expect("write");
 
         // Default: refuse, listing the conflicts, without writing.
@@ -2903,7 +3232,7 @@ mod tests {
         let target_dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             target_dir.path().join("snap.toml"),
-            render_export_toml(&doc, false).expect("renders"),
+            render_export_toml(&doc, false).expect("renders").0,
         )
         .expect("write snapshot");
         let mut fresh =

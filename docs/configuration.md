@@ -26,7 +26,7 @@ Per-provider walkthroughs (get a key → connect → verify → troubleshoot) li
 | `.shannon.toml` (project root) | hand-edited | Same keys as `config.toml`, scoped to the project. |
 | `~/.shannon/config.json` | `/config`, the agent `Config` tool | A key-value store for tooling. Only allowlisted keys are mirrored into `config.toml`. |
 
-Auxiliary files: `preferences.json` (last model/provider/theme, written on every switch), and `~/.shannon/cache/` (`models-dev.json`, `litellm-prices.json` — 24h model/pricing caches).
+Auxiliary files: `preferences.json` (last model/provider/theme, written on every switch), `~/.shannon/desktop/session-model-overrides.json` (the desktop's per-session model overrides — see [Model override semantics](#model-override-semantics-tui--cli-vs-desktop-vs-gateway)), and `~/.shannon/cache/` (`models-dev.json`, `litellm-prices.json` — 24h model/pricing caches).
 
 ## Precedence
 
@@ -115,6 +115,11 @@ Import semantics:
 - **Foreign files are refused** with actionable errors: anything without the `shannon-providers-export/v1` schema marker (including a raw `providers.toml` copy), a payload from an incompatible schema version, or invalid per-model metadata (the same validation `providers.toml` load applies).
 - `--redact` masks every credential reference to `"<redacted>"` for review/sharing copies. Such a file **cannot be re-imported** (the references are gone); export without `--redact` for migration.
 
+Export safety checks (both directions, nothing is rewritten silently):
+
+- **`extra_headers` sniffing** — users often put auth headers here. On a plain export, every entry whose header name looks credential-bearing (`authorization` / `api-key` / `token`), whose value starts with a `Bearer ` scheme prefix, or whose value contains an `sk-` key fragment produces one warning line per hit (profile, provider, header name, reason — never the value). The value is exported as-is; pass `--redact` to have exactly those values replaced with `"<redacted>"` (header names kept, benign headers untouched).
+- **Legacy inline credentials refuse to export** — a provider slot still on a pre-migration inline credential (`InlineLegacy`; production write paths never produce one, so this means a hand-edited file) blocks the export with the offending `profile/provider` named. Migrate first (`/connect`, or `shannon providers keys <provider> add env:VAR|store:SVC`), or pass `--redact` for a masked review copy.
+
 Snapshot format (abridged):
 
 ```toml
@@ -187,6 +192,51 @@ The Add Provider modal has quick-fill chips (Anthropic, OpenAI, DeepSeek, GLM, K
 - **Pricing** — resolved per model from, in order: a per-model declaration in `providers.toml` (see [Per-model metadata declarations](#per-model-metadata-declarations)) → the static catalog → the built-in gap-filler table → a `.shannon-pricing.json` file in the project root → `SHANNON_PRICING_JSON` → the LiteLLM community feed (24h cache at `~/.shannon/cache/litellm-prices.json`, refreshed by `/model refresh`; used only for models the sources above do not price). Negative prices in overrides are rejected.
 - An id unknown to both catalogs is used as-is with a warning: `⚠ '<id>' is not in the catalog; using as-is. Run /model refresh to pull the latest models, or /model <provider>/<id> for a qualified id.`
 - `/model --max-tokens N` sets a per-provider output ceiling used when a request doesn't specify one; `clear` (or `0`) reverts to the catalog default. It reports `(not saved)` unless `--save` is passed.
+
+### Model override semantics: TUI / CLI vs desktop vs gateway
+
+"Switch the model" means something different on each surface, and the words deliberately do not mean the same thing everywhere:
+
+| Surface | Mechanism | Scope | Survives restart? |
+|---------|-----------|-------|-------------------|
+| TUI | `/model <id>` without `--save` | That one session (one REPL process = one session); `--save` persists the global default into `providers.toml` instead | No (session-scoped) |
+| CLI | `--model` / `--provider` flag | That one invocation | No (per-invocation overlay) |
+| Desktop | Composer chip session override ("Set as default" promotes it) | Per chat session | **Yes** — persisted per session in the sidecar `~/.shannon/desktop/session-model-overrides.json` (atomic writes, restored at launch) |
+| Gateway (mobile bridge) | `shannon/model.switch` | **The whole gateway process** — one global value shared by every device and every session routed through it | No (in-memory only) |
+
+Details that matter at the edges:
+
+- **Desktop**: an override is validated at write time (the provider must be in the active profile's roster) and re-resolved at query time. If its provider has since been deleted or the profile switched, the session falls back to the global default with a warning — never a hard failure. Pinning a session also disables model-level failover for it (the pin says "this model").
+- **Gateway**: `shannon/model.switch` sets a single in-process override consulted whenever a mobile query arrives without an explicit model. It is not per-session and not coupled to the engine's session state, so two phones sharing a gateway see each other's switch, and a gateway restart silently reverts to the default model. Treat it as a convenience override for a single-user gateway, not a durable setting; convergence with the engine's session-override model is a known follow-up.
+
+## Utility model slots (background tasks)
+
+Some work should not touch the model you are talking to. Utility slots pin a model for **background tasks** — the first two slots are **Compaction** (the context-compression summarizer) and **Session summary**. A slot is optional: left empty it shows "Follow global default", meaning the task simply rides the session's own model, exactly as before the feature existed.
+
+Configure per profile, either way:
+
+- **Desktop**: Settings → Models → **Utility model slots** — pick a model per slot, or leave each on "Follow global default".
+- **`providers.toml`** — an `auxiliary` map on the named profile:
+
+  ```toml
+  # ~/.shannon/providers.toml — inside [profiles.default]
+  [profiles.default.auxiliary.compression]
+  provider_id = "glm"        # must be in the same profile's roster
+  model_id = "glm-5-flash"
+  scope = "global"
+
+  [profiles.default.auxiliary.title_generation]
+  provider_id = "glm"
+  model_id = "glm-5-flash"
+  scope = "global"
+  ```
+
+Resolution rules:
+
+- The slot's provider identity, base URL, credential reference, and extra headers resolve from that roster entry — the same sources as any first-class target. Everything else (max_tokens, timeout, effort, the failover chain, the session pin) stays at engine defaults; utility requests do not inherit interactive-chain behavior.
+- **Utility slots are orthogonal to the interactive precedence chain.** `session override > Plan/Act tier > global default` governs the model you talk to and never consults the auxiliary map; the auxiliary map is consulted only by the background-task channel. Unattended runs keep pinning the global config and are unaffected.
+- A configured slot whose provider has vanished from the roster (deleted, profile switch, hand edit) **falls back to the default behavior with a warning** — a stale slot never breaks a background task.
+- Slot names are the schema's `snake_case` role names (`compression`, `title_generation`; further roles such as `vision` / `web_extract` / `session_search` exist in the schema but have no consumer yet). The session-summary slot is wired end-to-end on the write side (schema, store, Settings UI); it activates the moment an LLM-backed summary/title generation point consumes it — until then compaction is the consumed slot.
 
 ## Per-model metadata declarations
 
@@ -357,7 +407,7 @@ With no credential, no base URL, and no provider configured anywhere, Shannon fa
 | `401` / `Authentication failed` mid-session | Update the key with `/connect <provider> <new-key>` — **not** `/config` (it cannot set keys). The new key is hot-reloaded, no restart. |
 | `⚠ '<id>' is not in the catalog` after `/model` | Run `/model refresh` to pull the latest models.dev catalog, or use the qualified form `/model <provider>/<model-id>`. |
 | Ollama models not detected | Ensure `ollama` is on `PATH` and running (`ollama list` must work). For a non-default host, export `OLLAMA_HOST`; endpoints are auto-detected from `:11434` or `ollama` in the URL. `/local-models` probes `localhost:11434` and LM Studio on `localhost:1234`. |
-| `warning: ~/.shannon/providers.toml exists but is not a valid provider config; it is being ignored until fixed (writes to it are refused): ...` | The file failed to parse (the schema rejects unknown fields — often a hand edit). Fix or remove the file; Shannon refuses to overwrite it so your edits are never silently destroyed. |
+| `warning: ~/.shannon/providers.toml exists but is not a valid provider config; it is being ignored until fixed (writes to it are refused): ...` | The file failed to parse (the schema rejects unknown fields — often a hand edit). Fix or remove the file; Shannon refuses to overwrite it so your edits are never silently destroyed. Every surface says so: the CLI prints this on provider commands, the TUI prints it once at startup, and the desktop logs the same warning at launch. |
 | `/provider health` shows no row for Gemini / Bedrock / Azure / Replicate | Expected: they have no shared list-models endpoint to probe and are skipped. Everything else is probed concurrently (5s timeout each). |
 | Provider is down | `/provider health` lists reachable candidates and suggests `/provider <name>` — switching is always manual; Shannon ships no automatic model router. |
 | Config change seems ignored | Run `shannon --dump-config` and check which layer won. A `providers.toml` entry (the connected layer) beats `SHANNON_*` env vars; a CLI flag beats both. |

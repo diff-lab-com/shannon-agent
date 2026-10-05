@@ -21,6 +21,9 @@
 //! - `model` / `provider` / `base_url` are v2 aliases: they live inside the
 //!   `provider_model` key of each layer, so the render descends into each
 //!   layer's active target (this is what "model → connected layer" means);
+//! - desktop-only keys (`plan_tier`, `approval_mode`, … — P-N18) get the
+//!   desktop answer: they live in the desktop's own `config.json`, which the
+//!   engine never reads, so there is no layer ladder to render;
 //! - credential-shaped names (contains `api_key`, `token`, …) get the A1
 //!   answer: secrets are never part of the layered config — `/connect`;
 //! - anything else prints the known-key list.
@@ -98,6 +101,39 @@ const MODEL_ALIASES: &[(&str, &str)] = &[
     ),
 ];
 
+/// The desktop's own config file. This is the desktop crate's `config_path()`
+/// (`~/.shannon/desktop/config.json`, `desktop/src/config.rs`) — the constant
+/// lives in the desktop crate and is private, so the CLI states the resolved
+/// path here. Read-only: `--explain` never writes it.
+const DESKTOP_CONFIG_PATH: &str = "~/.shannon/desktop/config.json";
+
+/// Desktop-UI-only keys (P-N18): they are persisted in the *desktop's* own
+/// config file ([`DESKTOP_CONFIG_PATH`]) and the engine's layered config
+/// never reads them — so unlike the keys above there is no layer ladder to
+/// render, only a pointer at the Settings surface that writes each one.
+const DESKTOP_KEYS: &[(&str, &str)] = &[
+    (
+        "plan_tier",
+        "desktop Settings → Models → Plan/Act phase tiers (Plan row)",
+    ),
+    (
+        "act_tier",
+        "desktop Settings → Models → Plan/Act phase tiers (Act row)",
+    ),
+    (
+        "effort_level",
+        "the chat composer's model menu (reasoning-effort sub-tier)",
+    ),
+    (
+        "approval_mode",
+        "desktop Settings → General → approval mode (or the composer's execution-mode switcher)",
+    ),
+    (
+        "enabled_providers",
+        "desktop Settings → Models → provider visibility",
+    ),
+];
+
 /// Build the layer dump for `--explain`, exactly like `shannon --dump-config`
 /// does (same loaders, same overlay reconstruction from this invocation's
 /// flags) so the two surfaces can never disagree about provenance.
@@ -146,15 +182,17 @@ enum ExplainTarget {
     /// A field inside each layer's `provider_model` value (`model`,
     /// `provider`, `base_url`).
     ModelAlias(&'static str),
+    /// A desktop-UI-only key (P-N18) — no layer ladder, the desktop answer.
+    DesktopKey(&'static str),
     /// A credential-shaped name — gets the A1 answer.
     Credential,
 }
 
 /// Resolve the user's key to an [`ExplainTarget`], or `None` (with the known
-/// keys) when unrecognized. The known-key allowlist is consulted FIRST — the
-/// same order `shannon config <key>=<value>` uses — because the secret-shape
-/// predicate is coarse (`max_tokens` contains "token") and the real keys are
-/// non-secret by definition.
+/// keys) when unrecognized. The known-key allowlists are consulted FIRST —
+/// the same order `shannon config <key>=<value>` uses — because the
+/// secret-shape predicate is coarse (`max_tokens` contains "token") and the
+/// real keys are non-secret by definition.
 fn resolve_key(key: &str) -> (Option<ExplainTarget>, Vec<&'static str>) {
     let trimmed = key.trim();
     if let Some((name, _)) = MODEL_ALIASES
@@ -169,11 +207,18 @@ fn resolve_key(key: &str) -> (Option<ExplainTarget>, Vec<&'static str>) {
     {
         return (Some(ExplainTarget::Scalar(name)), Vec::new());
     }
+    if let Some((name, _)) = DESKTOP_KEYS
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(trimmed))
+    {
+        return (Some(ExplainTarget::DesktopKey(name)), Vec::new());
+    }
     if shannon_core::config_persist::is_secret_shaped_key(trimmed) {
         return (Some(ExplainTarget::Credential), Vec::new());
     }
     let mut known: Vec<&'static str> = KNOWN_KEYS.iter().map(|(k, _)| *k).collect();
     known.extend(MODEL_ALIASES.iter().map(|(k, _)| *k));
+    known.extend(DESKTOP_KEYS.iter().map(|(k, _)| *k));
     known.sort_unstable();
     (None, known)
 }
@@ -186,6 +231,31 @@ fn hint_for(name: &str) -> &'static str {
         .find(|(k, _)| *k == name)
         .map(|(_, h)| *h)
         .unwrap_or("see `shannon config --help`")
+}
+
+/// The Settings surface that writes a desktop-only key.
+fn desktop_hint_for(name: &str) -> &'static str {
+    DESKTOP_KEYS
+        .iter()
+        .find(|(k, _)| *k == name)
+        .map(|(_, h)| *h)
+        .unwrap_or("see the desktop Settings")
+}
+
+/// Best-effort, read-only peek at the desktop's config for the current value
+/// of a desktop-only key. Absent file, unparsable JSON, or missing/null key
+/// → `None` (the desktop answer never depends on it). The CLI never writes
+/// this file. Path resolution mirrors the desktop's own `config_path()`
+/// (`HOME` → `~/.shannon/desktop/config.json`) exactly.
+fn read_desktop_config_value(name: &str) -> Option<Value> {
+    let path = dirs::home_dir()?
+        .join(".shannon")
+        .join("desktop")
+        .join("config.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    let v = value.get(name)?;
+    if v.is_null() { None } else { Some(v.clone()) }
 }
 
 /// Where a layer's value comes from: the env var name for the env layer, the
@@ -292,6 +362,7 @@ fn defining_layers<'a>(
                     out.push((layer, v));
                 }
             }
+            ExplainTarget::DesktopKey(_) => {}
             ExplainTarget::Credential => {}
         }
     }
@@ -300,17 +371,47 @@ fn defining_layers<'a>(
 
 /// Render the explanation for `key` against `dump`. Human-readable text with
 /// one fact per line: the layer ladder (origin + value per defining layer),
-/// the winner, the change-it hint; or the known-key list for an unknown key;
-/// or the A1 credentials answer for secret-shaped names.
+/// the winner, the change-it hint; the desktop answer for desktop-only keys;
+/// the known-key list for an unknown key; or the A1 credentials answer for
+/// secret-shaped names.
 pub fn render_explain(key: &str, dump: &shannon_core::config_dump::ConfigDump) -> String {
     let (target, known) = resolve_key(key);
     let Some(target) = target else {
         return render_unknown(key, &known);
     };
-    let ExplainTarget::Credential = target else {
-        return render_layered(key, &target, dump);
-    };
-    render_credentials_answer(key)
+    match target {
+        ExplainTarget::Credential => render_credentials_answer(key),
+        ExplainTarget::DesktopKey(name) => {
+            let current = read_desktop_config_value(name);
+            render_desktop_key(key, name, current.as_ref())
+        }
+        _ => render_layered(key, &target, dump),
+    }
+}
+
+/// The desktop-only-key answer (P-N18): these keys live in the desktop's own
+/// config file, which the engine never reads — so there is no layer ladder,
+/// only where the value is stored and which Settings surface writes it. The
+/// same answer whether or not the desktop has the key configured; a current
+/// value is appended (read-only, best-effort) when one is present.
+fn render_desktop_key(key: &str, name: &str, current: Option<&Value>) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("key: {}\n", key.trim()));
+    out.push_str(&format!(
+        "  '{name}' is a desktop-UI-only key (桌面 UI 专属键): the engine never reads it,\n\
+         \x20 so it has no layer in the config ladder.\n"
+    ));
+    out.push_str(&format!(
+        "  stored in: {DESKTOP_CONFIG_PATH} (the desktop's own config file)\n"
+    ));
+    if let Some(value) = current {
+        out.push_str(&format!(
+            "  current desktop value: {} (read-only peek at {DESKTOP_CONFIG_PATH})\n",
+            display_value(value)
+        ));
+    }
+    out.push_str(&format!("  change it: {}\n", desktop_hint_for(name)));
+    out
 }
 
 /// The layered answer: ladder + winner + hint.
@@ -322,6 +423,9 @@ fn render_layered(
     let layers = defining_layers(target, &dump.layers);
     let canonical = match target {
         ExplainTarget::Scalar(k) | ExplainTarget::ModelAlias(k) => *k,
+        ExplainTarget::DesktopKey(_) => {
+            unreachable!("desktop keys are answered by render_desktop_key, not the layer ladder")
+        }
         ExplainTarget::Credential => unreachable!("credential target never reaches here"),
     };
     let mut out = String::new();
@@ -342,6 +446,9 @@ fn render_layered(
     let entry_key = match target {
         ExplainTarget::Scalar(k) => *k,
         ExplainTarget::ModelAlias(_) => "provider_model",
+        ExplainTarget::DesktopKey(_) => {
+            unreachable!("desktop keys are answered by render_desktop_key, not the layer ladder")
+        }
         ExplainTarget::Credential => unreachable!("credential target never reaches here"),
     };
     out.push_str("  defined by (lowest → highest precedence):\n");
@@ -557,5 +664,97 @@ mod tests {
         let out = render_explain("  MAX_TOKENS  ", &fixture_dump());
         assert!(out.starts_with("key: MAX_TOKENS"), "{out}");
         assert!(out.contains("winner: env-vars"), "{out}");
+    }
+
+    // ── desktop-only keys (P-N18) ───────────────────────────────────────
+
+    #[test]
+    fn desktop_only_keys_get_the_desktop_answer_with_path_and_hint() {
+        for key in [
+            "plan_tier",
+            "act_tier",
+            "effort_level",
+            "approval_mode",
+            "enabled_providers",
+        ] {
+            let out = render_explain(key, &fixture_dump());
+            assert!(out.contains(&format!("key: {key}")), "{key}: {out}");
+            assert!(
+                out.contains("desktop-UI-only") && out.contains("桌面"),
+                "{key} must be named desktop-UI-only: {out}"
+            );
+            assert!(
+                out.contains("~/.shannon/desktop/config.json"),
+                "{key} must name the desktop config path: {out}"
+            );
+            assert!(
+                out.contains("the engine never reads it"),
+                "{key} must state the engine ignores it: {out}"
+            );
+            assert!(
+                out.contains("change it:"),
+                "{key} must point at where to change it: {out}"
+            );
+            // Every key's hint names its own Settings surface (effort lives
+            // in the composer's model menu, not a Settings pane).
+            if key == "effort_level" {
+                assert!(out.contains("composer"), "{key}: {out}");
+            } else {
+                assert!(out.contains("Settings"), "{key}: {out}");
+            }
+            // No layer ladder: the engine layers cannot define these keys.
+            assert!(
+                !out.contains("winner:") && !out.contains("defined by"),
+                "{key} must not render a layer ladder: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_key_answer_is_identical_without_a_configured_value() {
+        // Unconfigured (no desktop config file readable): the static answer,
+        // no "current desktop value" line.
+        let plain = render_desktop_key("plan_tier", "plan_tier", None);
+        assert!(
+            !plain.contains("current desktop value"),
+            "no value line when unconfigured: {plain}"
+        );
+        // Configured: same answer, plus the read-only value line (strings
+        // render bare, per the display_value contract).
+        let configured =
+            render_desktop_key("plan_tier", "plan_tier", Some(&serde_json::json!("pro")));
+        assert!(
+            configured.contains("current desktop value: pro"),
+            "{configured}"
+        );
+        for line in plain.lines() {
+            if line.contains("current desktop value") {
+                continue;
+            }
+            assert!(
+                configured.contains(line),
+                "configured answer keeps the static answer, differs only by the value line: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_keys_are_case_insensitive_and_listed_as_known() {
+        let out = render_explain("PLAN_TIER", &fixture_dump());
+        assert!(out.contains("desktop-UI-only"), "{out}");
+        // Unknown-key listing now includes the desktop keys.
+        let unknown = render_explain("plan_tier_typo", &fixture_dump());
+        for key in [
+            "plan_tier",
+            "act_tier",
+            "effort_level",
+            "approval_mode",
+            "enabled_providers",
+        ] {
+            assert!(
+                unknown.contains(key),
+                "known keys list must include {key}: {unknown}"
+            );
+        }
     }
 }
