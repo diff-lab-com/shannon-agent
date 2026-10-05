@@ -134,6 +134,11 @@ fn main() {
     // persisted config straight from disk (free function, no AppState yet).
     let startup_config = shannon_desktop::config::load_config();
     shannon_desktop::config::apply_hardware_acceleration_env(&startup_config);
+    // Settings R3 T4 (B1) — corporate-network trio (proxy / NO_PROXY /
+    // custom CA). Same early window: the gateway sidecar + MCP stdio
+    // children inherit this process env wholesale, and the engine/desktop
+    // reqwest builders read SHANNON_CA_BUNDLE when first built.
+    shannon_desktop::config::apply_network_env(&startup_config);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

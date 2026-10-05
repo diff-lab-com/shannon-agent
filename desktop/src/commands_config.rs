@@ -315,6 +315,98 @@ pub(crate) fn validate_sandbox_mode(value: &str) -> Result<Option<String>, Strin
     }
 }
 
+// === Settings R3 T4 (B1) — `network.*` configure arms ===
+//
+// The corporate-network trio (HTTP proxy / NO_PROXY / custom CA). Validation
+// lives in pure functions below (home path injected, no process-state
+// mutation) so the round-trip / error tests run without touching `HOME`;
+// `configure`'s arm only adds persist + CONFIG_UPDATED on top.
+
+/// `~` expansion for user-typed CA paths. `home` is injected for tests
+/// (same resolution as `config::dirs_home` at call sites). A path that does
+/// not start with `~` passes through verbatim; a bare `~` (or `~/x` with no
+/// home available) comes back as-is so the caller's existence check gives
+/// the user an honest error instead of a silent mangle.
+fn expand_tilde(value: &str, home: Option<&std::path::Path>) -> String {
+    if value == "~" {
+        return home
+            .map(|h| h.to_string_lossy().into_owned())
+            .unwrap_or_else(|| value.to_string());
+    }
+    if let Some(rest) = value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
+        if let Some(h) = home {
+            return h.join(rest).to_string_lossy().into_owned();
+        }
+    }
+    value.to_string()
+}
+
+/// Validate + normalize `network.ca_cert_path`: trim, empty = None (clear),
+/// `~` expand, and the file MUST exist — the startup env injection points
+/// subprocesses at this path verbatim, so a dangling path has to be refused
+/// at write time, not discovered as TLS failures after a restart.
+pub(crate) fn validate_ca_cert_path(
+    value: &str,
+    home: Option<&std::path::Path>,
+) -> Result<Option<String>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let expanded = expand_tilde(trimmed, home);
+    let path = std::path::PathBuf::from(&expanded);
+    if !path.is_file() {
+        return Err(format!(
+            "CA certificate file not found: {expanded} — the path must point at an existing PEM bundle"
+        ));
+    }
+    Ok(Some(expanded))
+}
+
+/// Core of the three `network.*` configure arms: validate the value and
+/// write the matching in-memory field. Persist + emit stay with
+/// `configure`; `home` is injected so tests never mutate the process env.
+pub(crate) fn apply_network_config_arm(
+    cfg: &mut DesktopConfig,
+    key: &str,
+    value: &str,
+    home: Option<&std::path::Path>,
+) -> Result<(), String> {
+    match key {
+        "network.proxy_url" => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                // R1: empty = clear — the implicit env fallback keeps working.
+                cfg.network_proxy_url = None;
+            } else if trimmed.to_ascii_lowercase().starts_with("http://")
+                || trimmed.to_ascii_lowercase().starts_with("https://")
+            {
+                cfg.network_proxy_url = Some(trimmed.to_string());
+            } else {
+                return Err(format!(
+                    "Invalid {key}: `{trimmed}` — the proxy URL must start with http:// or https://"
+                ));
+            }
+        }
+        "network.no_proxy" => {
+            let trimmed = value.trim();
+            cfg.network_no_proxy = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+        "network.ca_cert_path" => {
+            cfg.network_ca_cert_path = validate_ca_cert_path(value, home)?;
+        }
+        other => return Err(format!("Unknown network config key: {other}")),
+    }
+    Ok(())
+}
+
 // === Grouped boolean toggles (`configure`) ===
 //
 // The key set here backs the Settings → Advanced switches. It used to live
@@ -760,6 +852,33 @@ pub async fn configure(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
                     key: "offpeak.model_override".into(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
+        // Settings R3 T4 (B1) — corporate-network trio. Validation in
+        // [`apply_network_config_arm`] (proxy scheme / trim-to-clear / CA
+        // `~`-expansion + existence); the env injection itself happens once
+        // at startup ([`config::apply_network_env`]), so a change takes
+        // effect on the next app launch (UI shows the restart-app badge).
+        "network.proxy_url" | "network.no_proxy" | "network.ca_cert_path" => {
+            {
+                let mut desktop_cfg = state.desktop_config.write().await;
+                apply_network_config_arm(
+                    &mut desktop_cfg,
+                    &update.key,
+                    &update.value,
+                    config::dirs_home().as_deref(),
+                )?;
+            }
+            config::save_config(&state.desktop_config.read().await.clone())?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: update.key.clone(),
                     value: update.value,
                 },
             );
@@ -1555,7 +1674,9 @@ pub async fn fetch_provider_models(
     }
 
     let url = models_list_url_for_kind(&kind, &base);
-    let client = reqwest::Client::builder()
+    // Settings R3 T4 (B1): shared desktop outbound builder — carries the
+    // SHANNON_CA_BUNDLE custom roots so probing works behind a corporate CA.
+    let client = crate::desktop_http::builder()
         // Generous listing timeout: some self-hosted gateways paginate
         // slowly. Mirrors the probe's "network-level failures are
         // unreachable" semantics.
@@ -2526,6 +2647,124 @@ mod tests {
         let err = validate_sandbox_mode("banana").unwrap_err();
         assert!(err.contains("off | local | landlock"), "{err}");
         assert!(validate_sandbox_mode("full").is_err());
+    }
+
+    // ── Settings R3 T4 (B1): `network.*` configure arms ────────────────
+
+    #[test]
+    fn expand_tilde_uses_injected_home_and_passthrough_otherwise() {
+        let home = std::path::Path::new("/home/demo");
+        assert_eq!(
+            expand_tilde("~/certs/root-ca.pem", Some(home)),
+            "/home/demo/certs/root-ca.pem"
+        );
+        assert_eq!(expand_tilde("~", Some(home)), "/home/demo");
+        // Windows-style separator folded into the same expansion.
+        assert_eq!(
+            expand_tilde("~\\certs\\ca.pem", Some(home)),
+            "/home/demo/certs\\ca.pem"
+        );
+        // No tilde → verbatim.
+        assert_eq!(
+            expand_tilde("/etc/pki/ca.pem", Some(home)),
+            "/etc/pki/ca.pem"
+        );
+        // No home available → honest passthrough (the existence check then
+        // rejects it rather than silently mangling the path).
+        assert_eq!(expand_tilde("~/ca.pem", None), "~/ca.pem");
+    }
+
+    #[test]
+    fn validate_ca_cert_path_round_trip_and_missing_file_error() {
+        let home = std::path::Path::new("/home/demo");
+        // Empty / whitespace clears.
+        assert_eq!(
+            validate_ca_cert_path("", Some(home)).expect("empty value clears"),
+            None
+        );
+        assert_eq!(
+            validate_ca_cert_path("   ", Some(home)).expect("whitespace clears"),
+            None
+        );
+        // An existing file passes and comes back `~`-expanded.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca = dir.path().join("root-ca.pem");
+        std::fs::write(
+            &ca,
+            "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----",
+        )
+        .expect("write temp CA bundle");
+        let ok = validate_ca_cert_path(&ca.to_string_lossy(), Some(home))
+            .expect("existing bundle accepted");
+        assert_eq!(
+            ok.as_deref(),
+            Some(ca.to_string_lossy().as_ref()),
+            "existing bundle accepted verbatim"
+        );
+        // A missing file is a write-time error naming the path.
+        let err = validate_ca_cert_path("~/missing/ca.pem", Some(home))
+            .expect_err("missing bundle must be refused");
+        assert!(err.contains("/home/demo/missing/ca.pem"), "{err}");
+        assert!(err.contains("not found"), "{err}");
+    }
+
+    #[test]
+    fn network_arm_proxy_url_scheme_gate_and_clear() {
+        let mut cfg = DesktopConfig::default();
+        // Valid http(s) URLs land trimmed.
+        apply_network_config_arm(
+            &mut cfg,
+            "network.proxy_url",
+            " http://127.0.0.1:7890 ",
+            None,
+        )
+        .expect("http proxy accepted");
+        assert_eq!(
+            cfg.network_proxy_url.as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+        apply_network_config_arm(&mut cfg, "network.proxy_url", "HTTPS://corp:3128", None)
+            .expect("https proxy accepted (case-insensitive scheme)");
+        assert_eq!(cfg.network_proxy_url.as_deref(), Some("HTTPS://corp:3128"));
+        // No scheme → refused, previous value kept.
+        let err = apply_network_config_arm(&mut cfg, "network.proxy_url", "127.0.0.1:7890", None)
+            .expect_err("missing scheme must be refused");
+        assert!(err.contains("http://"), "{err}");
+        assert_eq!(cfg.network_proxy_url.as_deref(), Some("HTTPS://corp:3128"));
+        // socks:// is not supported by the env-injection path either.
+        assert!(
+            apply_network_config_arm(&mut cfg, "network.proxy_url", "socks5://corp:1080", None)
+                .is_err()
+        );
+        // Empty clears (R1: keep the implicit env fallback).
+        apply_network_config_arm(&mut cfg, "network.proxy_url", "   ", None).expect("clear");
+        assert_eq!(cfg.network_proxy_url, None);
+    }
+
+    #[test]
+    fn network_arm_no_proxy_trims_and_clears() {
+        let mut cfg = DesktopConfig::default();
+        apply_network_config_arm(
+            &mut cfg,
+            "network.no_proxy",
+            " localhost,127.0.0.1,::1,.example.com ",
+            None,
+        )
+        .expect("no_proxy accepted");
+        assert_eq!(
+            cfg.network_no_proxy.as_deref(),
+            Some("localhost,127.0.0.1,::1,.example.com")
+        );
+        apply_network_config_arm(&mut cfg, "network.no_proxy", "", None).expect("clear");
+        assert_eq!(cfg.network_no_proxy, None);
+    }
+
+    #[test]
+    fn network_arm_unknown_key_is_an_error() {
+        let mut cfg = DesktopConfig::default();
+        let err = apply_network_config_arm(&mut cfg, "network.bogus", "x", None)
+            .expect_err("unknown network key must be refused");
+        assert!(err.contains("network.bogus"), "{err}");
     }
 
     #[test]

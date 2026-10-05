@@ -634,6 +634,18 @@ export interface DesktopConfig {
   /** Settings R3 T3: block idle sleep while agent runs stream
    *  (`power.block_sleep_during_tasks`). Default true. */
   power_block_sleep_during_tasks?: boolean
+  /** Settings R3 T4 (B1): explicit HTTP(S) proxy URL. Injected at startup
+   *  as HTTPS_PROXY/HTTP_PROXY/ALL_PROXY; null/empty keeps the implicit
+   *  env fallback (never forces direct connections). Restart to apply. */
+  network_proxy_url?: string | null
+  /** Settings R3 T4 (B1): comma-separated hosts that bypass the proxy —
+   *  injected as NO_PROXY. null/empty leaves the env untouched. */
+  network_no_proxy?: string | null
+  /** Settings R3 T4 (B1): custom CA certificate (PEM) path, `~`-expanded
+   *  server-side and existence-checked at configure time. Injected as
+   *  SHANNON_CA_BUNDLE / NODE_EXTRA_CA_CERTS / SSL_CERT_FILE. Restart to
+   *  apply. */
+  network_ca_cert_path?: string | null
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */

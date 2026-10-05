@@ -42,6 +42,11 @@ export const MOCK_CONFIG: DesktopConfig = {
   hardware_acceleration: true,
   power_keep_awake: false,
   power_block_sleep_during_tasks: true,
+  // Settings R3 T4 (B1): corporate-network trio unset — the demo keeps the
+  // implicit env fallback (R1), never a forced proxy or CA.
+  network_proxy_url: null,
+  network_no_proxy: null,
+  network_ca_cert_path: null,
 }
 
 // Managed-providers roster for the Models P2 UI (mirrors the Rust
