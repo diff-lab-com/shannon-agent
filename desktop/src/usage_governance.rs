@@ -331,6 +331,7 @@ fn fire_budget_threshold_notification(
         timestamp: Utc::now(),
         source: Some(format!("usage_budget_{threshold_pct}")),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::NeedsAttention,
     };
     match notifier.notify(&notification) {
         Ok(()) => tracing::info!(threshold_pct, "monthly budget notification dispatched"),

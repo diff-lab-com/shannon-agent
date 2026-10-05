@@ -310,6 +310,7 @@ mod tests {
             timestamp: Utc::now(),
             source: Some("test_source".into()),
             action_id: None,
+            kind: shannon_core::notifier::NotificationKind::Completed,
         }
     }
 

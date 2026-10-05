@@ -3466,6 +3466,7 @@ fn fire_headless_completion_notification(exit_code: HeadlessExitCode, prompt: &s
         timestamp: chrono::Utc::now(),
         source: Some(format!("headless:{exit_code:?}")),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::Failed,
     };
 
     let notifier = notifications::ShellNotifier::new();

@@ -105,6 +105,17 @@ pub struct DesktopConfig {
     /// (`NotificationLevel::Error`). Default: enabled.
     #[serde(default = "default_true")]
     pub notifications_on_failed: bool,
+    /// Surface a desktop notification when the user's attention is required
+    /// (tool-approval waits, budget alerts — `NotificationKind::NeedsAttention`).
+    /// Default: enabled.
+    #[serde(default = "default_true")]
+    pub notifications_on_needs_attention: bool,
+    /// Play the frontend-composited chime (Web Audio) on task completed /
+    /// failed / needs-attention events. Independent of the OS notification
+    /// sound; the chime itself is gated by the master switch and DND window
+    /// frontend-side (R4). Default: disabled.
+    #[serde(default)]
+    pub notifications_sound_enabled: bool,
     /// Gateway process supervision (E-1, 方案 C). When `managed` is true the
     /// desktop app spawns and supervises a local `shannon-gateway` binary;
     /// when false, the gateway is treated as external (user/ops runs it and
@@ -753,6 +764,8 @@ impl Default for DesktopConfig {
             notifications_dnd_end: None,
             notifications_on_completed: default_true(),
             notifications_on_failed: default_true(),
+            notifications_on_needs_attention: default_true(),
+            notifications_sound_enabled: false,
             stt: None,
             voice_local: VoiceLocalConfig::default(),
             gateway: GatewayDesktopConfig::default(),
@@ -1733,6 +1746,37 @@ mod tests {
         assert!(!back.hardware_acceleration);
         assert!(back.power_keep_awake);
         assert!(!back.power_block_sleep_during_tasks);
+    }
+
+    #[test]
+    fn test_notification_keys_default_compat_and_round_trip() {
+        // Settings-r3 T5: the two new notification keys must default sensibly
+        // when absent from an older config.json — needs-attention ON, sound
+        // OFF (R4).
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(
+            legacy.notifications_on_needs_attention,
+            "needs-attention defaults ON"
+        );
+        assert!(!legacy.notifications_sound_enabled, "sound defaults OFF");
+
+        let config = DesktopConfig {
+            notifications_on_needs_attention: false,
+            notifications_sound_enabled: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("\"notifications_on_needs_attention\":false"),
+            "{json}"
+        );
+        assert!(json.contains("\"notifications_sound_enabled\":true"), "{json}");
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert!(!back.notifications_on_needs_attention);
+        assert!(back.notifications_sound_enabled);
     }
 
     #[test]
