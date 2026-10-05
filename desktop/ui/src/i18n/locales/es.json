@@ -1739,8 +1739,8 @@
   "chat.error.backend.noWorkingDir": "No hay un directorio de trabajo configurado — elige uno en Ajustes antes de adjuntar archivos (los adjuntos se limitan al directorio de trabajo)",
   "chat.error.backend.queryInProgress": "Ya hay una consulta en curso — espera a que termine o deténla antes de enviar de nuevo",
   "chat.error.backend.goalRunActive": "Hay una ejecución de objetivo activa en esta sesión — paúsala o deténla desde la página de tareas antes de enviar mensajes",
-  "chat.notice.failover": "Model fallback",
-  "chat.notice.keyRotation": "API key rotation",
+  "chat.notice.failover": "Respaldo de modelo",
+  "chat.notice.keyRotation": "Rotación de clave API",
   "chat.session.switching": "Switching session…",
   "chat.search.placeholder": "Search in conversation",
   "chat.search.aria": "Search in conversation",
@@ -4046,5 +4046,8 @@
   "chat.input.effort.notApplicable": "Este modelo no anuncia razonamiento: el esfuerzo de razonamiento solo afecta a modelos con pensamiento",
   "chat.input.cost.aria": "Estimación de coste de envío (orientativa, no es un límite)",
   "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
-  "chat.input.cost.budget": "≈{percent} % del presupuesto de sesión"
+  "chat.input.cost.budget": "≈{percent} % del presupuesto de sesión",
+  "settings.models.providerTabs.aria": "Filtrar el catálogo de modelos por proveedor",
+  "settings.models.providers.modelsUrlField": "URL de modelos (opcional)",
+  "settings.models.providers.probeUnsupportedHint": "Este tipo de proveedor no admite probar la conexión — guárdalo y úsalo directamente. «Obtener lista de modelos» también puede no estar disponible."
 }

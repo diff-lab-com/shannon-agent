@@ -172,12 +172,16 @@ const UNMOCKED_ALLOWLIST: Record<string, string> = {
   // chat-testing wave: the chat-fence HTML artifact path DOES reach them —
   // the demo handler throws so HtmlRenderer's static-hint fallback is the
   // demo truth, and the failure stays off coreMock's console.error path.)
-  get_provider_allowlist: 'engine/gateway probe demo never reaches',
+  // (get_provider_allowlist / test_all_providers left this list in the S4
+  // hygiene batch: the Settings → Models Test-all fan-out and the provider
+  // visibility panel both reach them, so demo mode previously toast-errored
+  // "not available" (P-N21). handlers.ts now answers the batch probe with
+  // per-connection success rows and the allowlist with the persisted desktop
+  // override.)
   featured_vendor_to_entry: 'engine/gateway probe demo never reaches',
   verify_signature: 'engine/gateway probe demo never reaches',
   probe_url_frameable: 'engine/gateway probe demo never reaches',
   seed_sample_data: 'engine/gateway probe demo never reaches',
-  test_all_providers: 'engine/gateway probe demo never reaches',
   scan_prompt_injection: 'engine/gateway probe demo never reaches',
   scan_prompt_injection_with_readme: 'engine/gateway probe demo never reaches',
   get_webhook_config: 'engine/gateway probe demo never reaches',

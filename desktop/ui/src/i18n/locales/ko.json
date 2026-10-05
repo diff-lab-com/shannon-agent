@@ -4046,5 +4046,8 @@
   "chat.input.effort.notApplicable": "이 모델은 추론 기능이 없습니다 — 추론 강도는 사고형(추론) 모델에만 작동합니다",
   "chat.input.cost.aria": "전송 비용 예상 (참고용, 제한 아님)",
   "chat.input.cost.range": "≈ {tokens} 토큰 · {low}–{high}",
-  "chat.input.cost.budget": "세션 예산의 ≈{percent}%"
+  "chat.input.cost.budget": "세션 예산의 ≈{percent}%",
+  "settings.models.providerTabs.aria": "공급자별로 모델 카탈로그 필터링",
+  "settings.models.providers.modelsUrlField": "모델 URL (선택)",
+  "settings.models.providers.probeUnsupportedHint": "이 공급자 유형은 연결 테스트를 지원하지 않습니다 — 바로 저장해 사용하세요. 모델 목록 가져오기도 사용할 수 없을 수 있습니다."
 }

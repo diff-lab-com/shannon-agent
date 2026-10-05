@@ -31,14 +31,6 @@ vi.mock('react-router-dom', async () => {
 const mockRefreshConfig = vi.fn()
 const mockRefreshStatus = vi.fn()
 
-// The catalog the chip renders. `reasoning` is the S3-5 three-state wire
-// bit: undefined (unknown) renders the sub-tier normally; false renders the
-// honest "steers thinking models only" note.
-const MOCK_MODELS = [
-  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', context_window: 200000, reasoning: true },
-  { id: 'text-legacy-3', name: 'Legacy Text 3', provider: 'openai', context_window: 8192, reasoning: false },
-]
-
 const catalog = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
   status: { model: 'claude-sonnet-4-6', provider: 'anthropic', querying: false, message_count: 0, working_dir: '/home/user/projects' } as Record<string, unknown>,
@@ -48,6 +40,9 @@ vi.mock('@/context/CatalogContext', () => ({
   useCatalog: () => ({
     config: catalog.config,
     status: catalog.status,
+    // The catalog the chip renders. `reasoning` is the S3-5 three-state wire
+    // bit: undefined (unknown) renders the sub-tier normally; false renders
+    // the honest "steers thinking models only" note.
     models: [
       { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', context_window: 200000, reasoning: true },
       { id: 'text-legacy-3', name: 'Legacy Text 3', provider: 'openai', context_window: 8192, reasoning: false },

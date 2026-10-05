@@ -1043,7 +1043,7 @@
   "settings.models.fetchError.invalidBaseUrl": "Diese Basis-URL sieht nicht gültig aus: {detail}",
   "settings.models.globalParams": "Globale Parameter",
   "settings.models.globalDesc": "Diese Einstellungen gelten für das Standardmodell, sofern sie nicht auf Agent-Ebene überschrieben werden.",
-  "settings.models.temperature": "Temperature",
+  "settings.models.temperature": "Temperatur",
   "settings.models.precise": "Präzise",
   "settings.models.creative": "Kreativ",
   "settings.models.maxTokens": "Max. Tokens",
@@ -4046,5 +4046,8 @@
   "chat.input.effort.notApplicable": "Dieses Modell weist kein Reasoning aus — Denkleistungsstufen wirken nur auf Denkmodelle",
   "chat.input.cost.aria": "Kostenschätzung für das Senden (hinweisend, keine Grenze)",
   "chat.input.cost.range": "≈ {tokens} Tokens · {low}–{high}",
-  "chat.input.cost.budget": "≈{percent}% des Sitzungsbudgets"
+  "chat.input.cost.budget": "≈{percent}% des Sitzungsbudgets",
+  "settings.models.providerTabs.aria": "Modellkatalog nach Anbieter filtern",
+  "settings.models.providers.modelsUrlField": "Modelllisten-URL (optional)",
+  "settings.models.providers.probeUnsupportedHint": "Dieser Providertyp unterstützt keinen Verbindungstest — speichere ihn und verwende ihn direkt. „Modellliste abrufen“ ist möglicherweise ebenfalls nicht verfügbar."
 }

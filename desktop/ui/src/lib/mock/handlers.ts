@@ -88,6 +88,54 @@ const state = {
   },
 }
 
+// ── S4 (P-N20/P-N21) e2e scenario hooks ──────────────────────────────────
+// The real commands read the shell world (OLLAMA_HOST / upstream models.dev /
+// the credential store); a browser demo has none. The Welcome + catalog e2e
+// journeys arm deterministic scenarios through localStorage keys, the same
+// way specs already pin locale/theme (`shannon.locale` / `shannon-theme`).
+// PRODUCT CODE NEVER WRITES THESE — they are e2e-only seams, and every read
+// is wrapped so a denied storage partition degrades to the unarmed default.
+
+/** localStorage as the e2e scenario channel (never throws). */
+function demoHook(name: string): string | null {
+  try {
+    return window.localStorage.getItem(name)
+  } catch {
+    return null
+  }
+}
+
+/** `shannon.demo.envProvider` — JSON `{ provider, has_api_key? }`. Armed, the
+ *  Welcome mount probe (`detect_provider_from_env`) reports this hit — the
+ *  demo twin of a shell exporting OLLAMA_HOST / an API key (S1-4a's
+ *  bare-Ollama scenario). Unset → null, byte-identical to the old handler. */
+function demoEnvProvider(): { provider: string; has_api_key: boolean } | null {
+  const raw = demoHook('shannon.demo.envProvider')
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as { provider?: string; has_api_key?: boolean }
+    if (!parsed?.provider) return null
+    return { provider: parsed.provider, has_api_key: parsed.has_api_key === true }
+  } catch {
+    return null
+  }
+}
+
+/** `shannon.demo.unconfigured` — armed (`"1"`), `get_provider_status` reports
+ *  the "nothing configured, nothing in the env" snapshot so the empty-canvas
+ *  provider CTA (WelcomeState) and the Layout welcome gate see the fresh-user
+ *  world instead of the demo roster's seeded connection. */
+function demoUnconfigured(): boolean {
+  return demoHook('shannon.demo.unconfigured') === '1'
+}
+
+/** `shannon.demo.catalogRefreshFails` — armed (`"1"`), the models.dev overlay
+ *  refresh REJECTS with an upstream reason so the Settings refresh button's
+ *  failed state (inline reason) is drivable like its idle/busy/done states. */
+function demoCatalogRefreshShouldFail(): boolean {
+  return demoHook('shannon.demo.catalogRefreshFails') === '1'
+}
+
 // ids for inbox items created at runtime (rerun simulation).
 let nextInboxId = Math.max(...MOCK_INBOX_ITEMS.map(i => i.id)) + 1
 
@@ -683,6 +731,25 @@ export const handlers: Record<string, MockHandler> = {
       // P2-5: frozen config key — empty value disables the override.
       const trimmed = String(value ?? '').trim()
       demoConfig.offpeak = { model_override: trimmed ? trimmed : null }
+    } else if (key === 'enabled_providers') {
+      // S4 (P-N21): the provider-visibility override — 'null' clears the
+      // desktop override (engine env vars decide), otherwise a JSON slug
+      // array. Mirrors the backend arm so get_provider_allowlist answers
+      // the persisted state and the panel's toggles persist in demo mode
+      // (previously a silent no-op: unknown keys fell through).
+      const raw = String(value ?? 'null').trim()
+      try {
+        const parsed = JSON.parse(raw) as unknown
+        if (parsed === null) {
+          delete (demoConfig as Record<string, unknown>).enabled_providers
+        } else if (Array.isArray(parsed) && parsed.every((v) => typeof v === 'string')) {
+          ;(demoConfig as Record<string, unknown>).enabled_providers = parsed
+        } else {
+          throw new Error('not a string array or null')
+        }
+      } catch (e) {
+        throw new Error(`invalid enabled_providers value \`${value}\`: ${String(e)}`)
+      }
     } else if (key === 'agent_teams_enabled') {
       // B2: real sub-agent execution toggle (demo persists the flag; there
       // is no live registry behind it).
@@ -704,6 +771,19 @@ export const handlers: Record<string, MockHandler> = {
   // regression). Mirror the demo roster's active provider.
   async get_provider_status() {
     await delay()
+    // S4 (P-N20): the empty-canvas CTA journey arms the fresh-user snapshot —
+    // no managed connection, nothing in the env — the honest answer for a
+    // browser demo asked to pretend no provider exists.
+    if (demoUnconfigured()) {
+      return {
+        active_provider_id: null,
+        display_name: null,
+        kind: null,
+        has_api_key: false,
+        model: MOCK_CONFIG.model ?? null,
+        env_provider: null,
+      }
+    }
     const active = MOCK_PROVIDERS.providers.find(p => p.id === MOCK_PROVIDERS.active_provider_id)
     const status = {
       active_provider_id: MOCK_PROVIDERS.active_provider_id,
@@ -726,6 +806,34 @@ export const handlers: Record<string, MockHandler> = {
     await delay(200)
     return { kind: 'success' }
   },
+  // S4 (P-N21): previously UNMOCKED_ALLOWLISTed ("engine/gateway probe demo
+  // never reaches") — clicking Test-all in demo mode could only ever toast
+  // "not available". The demo twin mirrors the batch shape the Rust command
+  // returns (one ProviderTestRow per managed connection, roster order): the
+  // demo has no real endpoints, so every probe reports the same success
+  // verdict the single-provider test_provider_credentials handler gives,
+  // each with a small round-trip latency.
+  async test_all_providers() {
+    await delay(300)
+    return state.providers.providers.map((p, i) => ({
+      id: p.id,
+      label: p.display_name,
+      provider_kind: p.kind,
+      result: { kind: 'success' },
+      latency_ms: 20 + i * 15 + Math.round(Math.random() * 10),
+    }))
+  },
+  // S4 (P-N21): the provider-visibility panel's effective allowlist read —
+  // previously unmocked on the same allowlist row. The demo answers with the
+  // desktop override it persists through configure('enabled_providers'):
+  // null (engine env vars decide) until the user toggles a checkbox, then
+  // the explicit slug list — exactly the wire contract getProviderAllowlist
+  // documents.
+  async get_provider_allowlist() {
+    await delay()
+    const override = (demoConfig as Record<string, unknown>).enabled_providers
+    return clone(override ?? null) as string[] | null
+  },
   async list_providers() { await delay(); return providersFile() },
   async save_provider(args: { input: ProviderInput }) {
     await delay(120)
@@ -741,16 +849,32 @@ export const handlers: Record<string, MockHandler> = {
         kind: input.kind,
         has_api_key: keepKey ? existing.has_api_key : !!input.api_key,
         base_url: input.base_url || null,
+        // S4 (P-N23 残留): the v2 `models_url` field finally has an input —
+        // mirror it onto the connection so the edit round trip is observable
+        // in demos (empty input keeps the stored value, like base_url).
+        models_url: input.models_url ?? (existing as { models_url?: string | null }).models_url ?? null,
       })
-    } else {
-      state.providers.providers.push({
-        id: `prov-${Date.now()}`,
-        display_name: input.display_name,
-        kind: input.kind,
-        has_api_key: !!input.api_key,
-        base_url: input.base_url || null,
-      })
+      return providersFile()
     }
+    const id = `prov-${Date.now()}`
+    state.providers.providers.push({
+      id,
+      display_name: input.display_name,
+      kind: input.kind,
+      has_api_key: !!input.api_key,
+      base_url: input.base_url || null,
+      models_url: input.models_url || null,
+    })
+    // Backend contract (commands_config.rs save_provider →
+    // land_profile_in_engine_store → upsert(profile, model_id,
+    // make_active = true)): EVERY save — insert or edit — repoints the
+    // store's active target at the saved slot, which the returned file
+    // mirrors as `active_provider_id`. The AddProviderModal's 固化 step
+    // reads it to target the new connection's vault write, and Welcome's
+    // handleAddProviderSaved activates the id it carries. The demo
+    // previously kept the old pointer, so a fresh connection's curated
+    // models landed on the WRONG provider's slot.
+    state.providers.active_provider_id = id
     return providersFile()
   },
   // S2-1 (模型仓固化): demo mode stores the curated vault on the demo
@@ -1116,9 +1240,15 @@ export const handlers: Record<string, MockHandler> = {
     return demoMemoryBypass.has(demoSessionKey(args.sessionId))
   },
   // R2-2: demo refresh pretends to re-fetch models.dev — reports the seeded
-  // catalog size and bumps the generation so the success line moves.
+  // catalog size and bumps the generation so the success line moves. S4
+  // (P-N20): the catalog-refresh journey arms the failure fixture so the
+  // button's failed state (inline upstream reason) is drivable like its
+  // idle/busy/done states.
   async refresh_model_catalog() {
-    await delay(600)
+    await delay(700)
+    if (demoCatalogRefreshShouldFail()) {
+      throw new Error('models.dev upstream unreachable (demo failure fixture)')
+    }
     demoCatalogGeneration += 1
     return { count: MOCK_MODELS.length, generation: demoCatalogGeneration }
   },
@@ -2650,9 +2780,13 @@ export const handlers: Record<string, MockHandler> = {
     await delay();
     return [];
   },
+  // S4 (P-N20): the Welcome mount probe. The real command scans the shell
+  // env (3 API keys + OLLAMA_HOST, plus S1-4a's default-endpoint probe);
+  // the browser demo has no shell, so it answers the e2e hook (null when
+  // unarmed — byte-identical to the previous unconditional null).
   async detect_provider_from_env() {
     await delay();
-    return null;
+    return demoEnvProvider();
   },
 }
 

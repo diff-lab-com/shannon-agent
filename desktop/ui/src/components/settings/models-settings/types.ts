@@ -25,6 +25,20 @@ export function kindLabel(intl: ReturnType<typeof useIntl>, kind: string): strin
   return intl.formatMessage({ id: KIND_INFO[kind]?.labelKey ?? 'settings.models.providers.kinds.openaiCompatible' })
 }
 
+// === Probe support (S4 / P-N25) ===
+//
+// Mirror of the desktop's `NON_PROBEABLE_PROVIDER_KINDS`
+// (desktop/src/commands_config.rs): kinds with NO shared list-models
+// endpoint, so `test_provider_credentials` / `fetch_provider_models`
+// honestly refuse them (`is_probeable_kind` is an allowlist — its Rust
+// pin test keeps the two lists equal). The Add Provider modal surfaces a
+// pre-submit hint on these kinds instead of letting users walk into the
+// silent dead-end of an always-"Unknown" verdict. Typed `readonly
+// string[]` on purpose: `azure` is not yet a KIND_INFO row (S2-6 adds
+// it) but the Rust side already refuses probing it, and the hint must
+// be live the day the kind appears.
+export const NON_PROBEABLE_PROVIDER_KINDS: readonly string[] = ['azure', 'gemini']
+
 /**
  * Format a per-million-token USD price for the model list. Returns the
  * i18n "unknown" placeholder for null / non-finite values so the UI

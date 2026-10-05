@@ -4046,5 +4046,8 @@
   "chat.input.effort.notApplicable": "This model does not advertise reasoning — effort levels steer thinking models only",
   "chat.input.cost.aria": "Send cost estimate (advisory, not a limit)",
   "chat.input.cost.range": "≈ {tokens} tokens · {low}–{high}",
-  "chat.input.cost.budget": "≈{percent}% of session budget"
+  "chat.input.cost.budget": "≈{percent}% of session budget",
+  "settings.models.providerTabs.aria": "Filter the model catalog by provider",
+  "settings.models.providers.modelsUrlField": "Models URL (optional)",
+  "settings.models.providers.probeUnsupportedHint": "This provider type does not support connection probing — save it and use it directly. Fetch model list may be unavailable too."
 }
