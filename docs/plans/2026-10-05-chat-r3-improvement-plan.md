@@ -31,6 +31,8 @@
 
 **DoD 门禁(合并后 dev @ 3e59845aa 实测)**: 前端 vitest 全量 **3072 passed / 9 skipped / 0 failed**(278 文件)+ tsc 零错误 + i18n-check OK;desktop lib **1389 绿**;chat_contract_smoke **7 绿**;生产代码 `set_current_dir` 零调用(仅 batch_commands.rs:519 文档注释与 scheduled_commands 测试内既有用法)。e2e:PR-gate 四旅程 spec 本地两轮 16 passed,nightly perf spec 2 passed(CI 复核随门禁)。
 
+**CI 复盘(2026-10-05,dev @ d9cc1428 → 37d76607)**: 本轮 PR 合并后 dev CI 曾两处失败——① Fast checks 的 `cargo fmt --check`(B2-2 的 shannon-core 三文件 + B1-3/B1-4 的 desktop 三文件,共 13 处 diff);② Clippy job 内 `cargo doc --workspace` 的 `rustdoc::broken-intra-doc-links`(B2-2 文档注释);另有 B1-5 引入的 2 处 eslint `consistent-type-imports` 警告在 Desktop Unit 门禁暴露。三类均由并行会话的 #278 吸收修复(fmt 重排/`986be1145` doc link/`1a68b770` eslint),**dev @ 37d76607 全部 35 job 绿**,本会话已逐项本地复验(fmt exit 0 / `cargo doc -p shannon-core` exit 0 / eslint --max-warnings 0 clean)。根因是合并门禁的盲区:agent 验证清单缺 `cargo fmt --check`、`cargo doc` 与全量 `pnpm lint`,且本地 clippy 用了 feature fallback(`--no-default-features`)与 CI 的 `--workspace` 全量口径不一致;此外 PR 未经 CI 完成即 admin 合并。**后续波次的合并前门禁统一为:`cargo fmt --all -- --check` + `cargo clippy --workspace --all-targets -- -D warnings`(无 feature fallback)+ `cargo doc --workspace --no-deps` + `pnpm lint`,且等待 PR CI 全绿再合并**。另发现:Chat Nightly E2E 工作流文件只存在于 dev、默认分支没有 → schedule 永不触发,全量 e2e 矩阵(含本轮 5 个新旅程钉与 nightly 性能代理)目前只有本地实跑背书,建议把该文件带上 `workflow_dispatch` 合入默认分支(独立小 PR,非本轮范围)。
+
 **遗留跟进**(均有归属,非阻塞): ① 远程图片占位态的 visual-matrix 新基线(#282 报告,后续视觉规格);② auto-drain 触发器(R9-②,用户反馈驱动);③ nightly perf 阈值按 CI 基线校准(#283 perf-stats 附件);④ B3-5 指出的 steer timeout toast 按条数重复(#269 报告,聚合属 handler 契约调整)。
 
 ---
