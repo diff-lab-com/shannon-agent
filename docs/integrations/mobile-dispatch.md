@@ -210,15 +210,27 @@ relay 端到端加密通道的浏览器支持（§7），或使用原生客户�
 
 ### 8.5 §O 推送面（`shannon/push.register` + wake 触发；r2 跟进批）
 
-落点：`engineBridge.ts`（§O2 注册面）、`hub.ts` `setWake`（§O3 触发缝）、
+落点：`engineBridge.ts`（§O2 注册/注销面）、`hub.ts` `setWake`（§O3 触发缝）、
 `relay/pushRelayBinding.ts`（desktop↔relay 帧，契约见
-`docs/protocol/relay-push-wake-frames.md`）、`relay/relayHost.ts`（控制帧旁路）。
+`docs/protocol/relay-push-wake-frames.md`，**已 ACCEPTED v1**）、`relay/relayHost.ts`
+（控制帧旁路）、`relay/pushExpectedState.ts`（期望态 + 对账）。
 
 - **`shannon/push.register`** —— 请求 `{enable?: bool(默认 true), platform: "fcm"|"apns",
   token: "<厂商设备 token>"}`，响应 `{ok: true, handle: "<relay 分配的随机句柄>"}`；
-  `enable:false` 为注销（本地诚实 ok）。要求已配对会话（`PAIRING_REQUIRED`）；
-  token 经桌面沿 relay 控制面转发（`push.bind` 帧），relay 分配 handle 并把
-  `deviceId→handle→token`（加密落盘）存为绑定；
+  要求已配对会话（`PAIRING_REQUIRED`）；token 经桌面沿 relay 控制面转发（`push.bind`
+  帧），relay 分配 handle 并把 `(sid,)deviceId→handle→token`（加密落盘）存为绑定；
+- **注销（`enable:false`，§O2 + 修正 1）**：不再是本地 no-op——桌面转发
+  `push.unbind(deviceId)`（deviceId = 发起会话的设备 id，与 bind 同键），指示 relay
+  摘除绑定；手机侧响应仍是诚实 `{ok:true}`（未绑定/链路断也是 ok，§M2 同姿态），
+  relay 腿尽力而为（即时尝试不阻塞响应），失败由**期望态对账**兜底（见下）；
+- **期望态对账（修正 1，`pushExpectedState.ts`）**：每 deviceId 的
+  `{enabled, platform?, token?}` 意图加密落盘（AES-256-GCM，密钥首启自生成 0600，
+  `~/.shannon/mobile-push-state/`）；控制链路建立/重连（`relayHost` `host_ready` →
+  `onRegistered`）时重申全部期望（期望开 → `push.bind`、期望关 → `push.unbind`），
+  幂等、末态制胜、无动作队列。附带自愈：relay 侧绑定丢失后链路重连自动重建全部绑定；
+- **§M2 吊销级联（修正 1）**：`shannon/device.revoke` 成功路径在既有广播/重放环清理
+  之外，同款级联——抹被吊销设备的期望态 + 尽力 `push.unbind`（bootstrap
+  `onDeviceRevoked` 接线，链路断由对账兜底）；
 - **三态诚实降级（§O2，契约测试钉死）**：relay host 模式未开 → `NOT_IMPLEMENTED`；
   relay 已连但厂商凭据未配置（`not_configured`）→ 同 `NOT_IMPLEMENTED`（推送不可用
   单一码）；其余 relay 拒绝 → `ENGINE_ERROR`。手机对结构化错误一律渲染「推送不可用」，

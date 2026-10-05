@@ -68,6 +68,14 @@ export interface RelayHostOptions {
    * register the connection so pushes can reach the phone over the relay.
    */
   onContext?: (ctx: MethodContext) => void;
+  /**
+   * 修正1 (frame contract review 2026-10-05): invoked on EVERY successful
+   * (re-)registration (`host_ready`) — the control link (re)establishment
+   * that reconciles the desktop's persisted push expected state
+   * (expected on → push.bind, expected off → push.unbind; 末态制胜).
+   * Fire-and-forget from the host's perspective; must not throw.
+   */
+  onRegistered?: () => void;
 }
 
 export interface RelayHostHandle {
@@ -248,6 +256,16 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
         logger.info("relay host: registered, waiting for phone to join");
         // Registration (re)succeeded — the backoff did its job.
         reconnectAttempts = 0;
+        // 修正1: control link (re)established — re-assert the persisted push
+        // expected state (expected on → bind, off → unbind). A throw here must
+        // not break the join state machine, hence the guard.
+        if (opts.onRegistered) {
+          try {
+            opts.onRegistered();
+          } catch (err) {
+            logger.warn(`relay host: onRegistered reconcile hook failed: ${(err as Error).message}`);
+          }
+        }
         break;
 
       case "paired": {

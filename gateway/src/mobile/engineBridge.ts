@@ -119,6 +119,16 @@ export type PushBindingSink = (
   binding: PushBindingRequest,
 ) => Promise<{ handle: string }>;
 
+/**
+ * 修正1（帧契约评审 2026-10-05）：the unregister leg — `shannon/push.register
+ * {enable:false}` forwards a `push.unbind` through this sink instead of the
+ * old local no-op (§O2: 注销 = desktop 指示 relay 摘除该 deviceId 绑定). The
+ * phone still gets its honest `{ok:true}` — 未绑定/链路断也是 ok；the sink
+ * records the disabled intent and the expected-state reconciliation
+ * (`relay/pushExpectedState.ts`) re-asserts it when the control link returns.
+ */
+export type PushUnbindSink = (deviceId: string) => Promise<void>;
+
 export interface EngineBridgeOptions {
   /** Engine WS URL, e.g. `ws://127.0.0.1:33420/api/ws`. */
   engineWsUrl: string;
@@ -204,6 +214,14 @@ export interface EngineBridgeOptions {
    * success.
    */
   pushBindingSink?: PushBindingSink;
+  /**
+   * 修正1: the unregister sink behind `shannon/push.register {enable:false}`.
+   * Best-effort by contract — the handler answers the honest `{ok:true}`
+   * regardless; the sink records the intent and the link-reconnect
+   * reconciliation is the backstop. Absent → keep the pre-review local-ok
+   * behavior (unwired test setups).
+   */
+  pushUnbindSink?: PushUnbindSink;
 }
 
 /** Sentinel key for queries without a session_id (P1.2 replaces it with a device id). */
@@ -781,8 +799,23 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           message: "params.enable (boolean, default true) is required when present",
         };
       }
-      // Unregister is a local no-op until a binding exists — honestly ok.
-      if (enable === false) return { kind: "result", result: { ok: true } };
+      // 修正1 (frame contract review 2026-10-05): unregister FORWARDS a
+      // push.unbind — the §O2 ruling (「enable:false → 注销：desktop 指示
+      // relay 摘除该 deviceId 绑定」) supersedes the old documented local
+      // no-op. The phone's ok stays honest (未绑定/链路断也是 ok，§M2 同姿态):
+      // the relay leg is best-effort (即时尝试) and the expected-state
+      // reconciliation re-asserts the disabled intent on link (re)connect
+      // (对账兜底), so failures here must not fail the RPC.
+      if (enable === false) {
+        if (opts.pushUnbindSink && ctx.sessionId != null) {
+          void opts.pushUnbindSink(ctx.sessionId).catch((err: unknown) => {
+            opts.logger.warn(
+              `push.unbind forward failed (reconcile will retry): ${(err as Error).message}`,
+            );
+          });
+        }
+        return { kind: "result", result: { ok: true } };
+      }
       if (params.platform !== "fcm" && params.platform !== "apns") {
         return {
           kind: "error",
