@@ -45,7 +45,7 @@ use shannon_engine::api::client::LlmClient;
 use shannon_engine::permissions::{PermissionManager, PermissionRuleChecker};
 use shannon_engine::state::StateManager;
 use shannon_tools::register_default_tools_with_providers;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -1462,6 +1462,21 @@ async fn run_goal_loop<R: tauri::Runtime>(
     let app_for_runner = app.clone();
     let handle_for_runner = handle.clone();
     let engine_future = async move {
+        // Settings R3 followup F2 — the goal run's session is the live run
+        // for the whole loop (registered before anything can raise an
+        // ask_user question; RAII — unregistered on every exit path).
+        // `try_state`: absent only under mock runtimes whose tests never
+        // manage `AppState` (they drive the loop through stub runners).
+        let goal_session_id = handle_for_runner.state.lock().await.session_id.to_string();
+        let _active_run_guard =
+            app_for_runner
+                .try_state::<crate::commands::AppState>()
+                .map(|state| {
+                    crate::commands::ActiveSessionRunGuard::register(
+                        &state.active_run_sessions,
+                        goal_session_id,
+                    )
+                });
         let mut runner = match EngineGoalTurnRunner::new(
             &deps_for_runner,
             app_for_runner.clone(),

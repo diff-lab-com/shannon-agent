@@ -13,6 +13,21 @@
 //!   already in the dependency graph (`windows`) — process-scoped so
 //!   acquire and release may run on different threads
 //! - anything else: inert stubs (`other`)
+//!
+//! # Platform verification matrix (Settings R3 followups F5)
+//!
+//! How far each backend is actually exercised — CI proves more than
+//! compilation, but none of it replaces an on-device check:
+//!
+//! | Backend | Verified where | Scope |
+//! |---------|----------------|-------|
+//! | macOS `caffeinate` | Cross-platform Check (macos-latest leg) and the nightly core-tests run the `macos` module's smoke natively: acquire, child kernel-visible (kill(0) + pgrep on the full command line), release, gone | CI native smoke only — **no manual on-device verification has been performed** |
+//! | Windows `PowerRequest` | Cross-platform Check (windows-latest leg) and the nightly core-tests run the `windows` module's round trip natively | CI native smoke at "the Power Request API accepts our request" level — the OS power state itself is not assertable from user space; **no manual on-device verification has been performed** |
+//! | Linux `systemd-inhibit` | Unit tests on every PR (Test job): injected-binary spawn/kill semantics, pdeathsig hook, group kill | Real child-process semantics; binary presence is probed at runtime (`systemd_inhibit_available`) and absence degrades to a warn-once no-op |
+//!
+//! The platform smoke tests self-skip when the platform environment is
+//! unavailable (no `caffeinate` on PATH, `PowerCreateRequest` fails) — a
+//! runner limitation must never turn the CI gate red.
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -120,6 +135,17 @@ mod tests {
 
     fn lock() -> std::sync::MutexGuard<'static, ()> {
         TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    /// Shared serialization point for the platform smoke tests (the
+    /// `macos` / `windows` test modules): their acquire/release calls run
+    /// this module's platform transitions, so under plain `cargo test`
+    /// (one process, many threads) they must not interleave with these
+    /// refcount assertions. Gated to the platforms that have a smoke test
+    /// so it never becomes dead code on Linux.
+    #[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+    pub(super) fn shared_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        lock()
     }
     use super::*;
 

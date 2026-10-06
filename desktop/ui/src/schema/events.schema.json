@@ -383,6 +383,13 @@
       "multi_select": {
         "type": "boolean"
       },
+      "session_id": {
+        "description": "Settings R3 followup F2: the live run's session when exactly one run is active — the card shows only in windows viewing that session. Absent when ambiguous (zero or several runs) — every-window fallback. Additive — must mirror desktop/src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "timeout_ms": {
         "description": "Settings R3 T8: present only when 提问自动继续 is on — the auto-continue countdown the card renders. Additive — must mirror desktop/src/events.rs exactly.",
         "type": [

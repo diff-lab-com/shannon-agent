@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useT } from '@/i18n'
 import type { ScheduledRoutine } from '@/types'
@@ -16,6 +16,14 @@ const TRIGGER_BASE = 'http://127.0.0.1:33420/api/routines'
 export default function WebhookTriggerCard({ routines }: { routines: ScheduledRoutine[] }) {
   const t = useT()
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  // "Copied" flag auto-reset. Keep the timer in a ref and clear it on
+  // unmount — same delayed-callback hygiene as CostEstimateHint's 350ms
+  // debounce (F6): never fire into an unmounted component, and a re-copy
+  // restarts the window instead of stacking timers.
+  const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current)
+  }, [])
   const webhookRoutines = routines.filter(r => r.trigger_type === 'webhook' && r.enabled)
 
   if (webhookRoutines.length === 0) return null
@@ -25,7 +33,8 @@ export default function WebhookTriggerCard({ routines }: { routines: ScheduledRo
     try {
       await navigator.clipboard.writeText(url)
       setCopiedId(routine.id)
-      setTimeout(() => setCopiedId(null), 1500)
+      if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current)
+      copiedResetTimer.current = setTimeout(() => setCopiedId(null), 1500)
     } catch {
       // Clipboard may be denied in some webviews — the URL is selectable text.
     }

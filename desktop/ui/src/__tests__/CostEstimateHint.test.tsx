@@ -60,4 +60,40 @@ describe('CostEstimateHint (P2-6)', () => {
       expect(container).toBeEmptyDOMElement()
     })
   })
+
+  // F6 flake regression: the 350ms debounce previously escaped as an
+  // "unhandled error" in OffpeakWindow/ScheduleForm/OPCKanbanBoard runs when
+  // the test outlived the debounce with an incomplete tauri-api mock. These
+  // pin the timer contract: fires once after 350ms while mounted, never
+  // after unmount.
+  it('debounces the estimate until 350ms after mount, then calls it once', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(api.estimateTaskCost).mockResolvedValue(estimate({}))
+      render(<CostEstimateHint taskId="routine-9" />)
+
+      await vi.advanceTimersByTimeAsync(349)
+      expect(api.estimateTaskCost).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(api.estimateTaskCost).toHaveBeenCalledTimes(1)
+      expect(api.estimateTaskCost).toHaveBeenCalledWith('routine-9')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the debounce timer on unmount — estimateTaskCost never fires afterwards', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(api.estimateTaskCost).mockResolvedValue(estimate({}))
+      const { unmount } = render(<CostEstimateHint taskId="routine-9" />)
+      unmount()
+
+      await vi.advanceTimersByTimeAsync(350)
+      expect(api.estimateTaskCost).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

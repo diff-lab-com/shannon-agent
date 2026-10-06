@@ -43,6 +43,16 @@ pub struct SessionContextStats {
 /// already carries the resolved system prompt / context-window overrides);
 /// otherwise constructs a minimal one — the client is never contacted, the
 /// engine is only consulted for its local estimators.
+///
+/// Settings R3 followup F4 sweep verdict — deliberately NOT wired to
+/// `context_auto_compact` (`with_defaults_arc_and_config`): this engine
+/// never runs `process_query`, and the auto-compaction ladder is gated
+/// inside that loop only (`agent_loop.rs`, `config.auto_compact_enabled` —
+/// the toggle's sole read site), so the field would be dead here. Its two
+/// consumers are `/context` (pure token estimate) and `/compact` (a MANUAL
+/// compaction driven by a separate `CompactEngine`, which must work
+/// regardless of the auto-compact switch). This is the "纯本地估算器" case
+/// the F4 plan keeps on `with_defaults_arc`.
 pub(crate) async fn restored_engine(
     state: &AppState,
     session_id: uuid::Uuid,

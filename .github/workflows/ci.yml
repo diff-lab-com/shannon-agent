@@ -844,6 +844,26 @@ jobs:
         # test of the public Rust API surface. shannon-desktop is
         # built fully in release.yml under each platform's matrix leg.
         run: cargo check --workspace --exclude shannon-desktop
+      - name: Install nextest
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-nextest
+      - name: Prevent-sleep platform smoke (native)
+        # F5 (Settings R3 followups): until now the macOS `caffeinate` and
+        # Windows `PowerRequest` backends only ever proved they
+        # cross-compile — the `cargo check` above says nothing about
+        # whether spawn / PowerCreateRequest actually succeed on the real
+        # platform. Run the prevent_sleep module's tests natively on every
+        # leg: macOS asserts the caffeinate child appears (kill(0) + pgrep
+        # on the full command line) and is killed and reaped on release;
+        # Windows asserts the PowerRequest acquire/release round trip at
+        # "the API accepts our request" level; Linux re-runs the existing
+        # systemd-inhibit injected-binary tests. The tests self-skip when
+        # the platform environment is unavailable (no caffeinate on PATH,
+        # PowerCreateRequest fails), so a runner limitation can never turn
+        # this required gate red. `--profile ci` = the repo's nextest
+        # profile (retries, slow-test timeout) — see .config/nextest.toml.
+        run: cargo nextest run -p shannon-core prevent_sleep --profile ci
       - name: Check landlock feature (Linux only)
         # The optional landlock feature is off by default, so nothing else
         # compiles it — it rotted for months with 12 errors before #71.

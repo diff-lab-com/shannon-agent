@@ -14,7 +14,7 @@ import { messageFor } from '@/i18n'
 import { describeBackendError } from '@/lib/backendError'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
-import { invalidateNotificationPrefsCache, maybePlayTaskChime } from '@/lib/notificationChime'
+import { chimeKey, invalidateNotificationPrefsCache, maybePlayTaskChime } from '@/lib/notificationChime'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
 import { clearDraft, tombstoneDraft } from '@/lib/composerDraft'
 import { basenameOf, isVisionImagePath } from '@/lib/fileRefs'
@@ -1660,7 +1660,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // gated by the notification prefs' sound_enabled + DND + per-event
           // toggles; no-op unless the user opted in). Background sessions
           // chime too — that's the point when the window is buried.
-          void maybePlayTaskChime('completed')
+          // F3: the stable payload-derived key lets the windows that all
+          // receive this event agree on who plays (multi-window dedup).
+          void maybePlayTaskChime('completed', chimeKey('query:completed', sid, p.query_id))
           // §P2-18: the completed session commits ITS OWN bucket, and UI
           // mutations only fire when it is the one on screen — a background
           // session finishing must not append to (or clear) another
@@ -1725,8 +1727,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           retireQueryEvent(key, p.query_id)
           noteSessionActivity(key === claimedKey ? p.session_id : key, 'fail')
           // Settings R3 T5 (B4): task-failed chime (same prefs gate as the
-          // completed chime; on_failed toggle).
-          void maybePlayTaskChime('failed')
+          // completed chime; on_failed toggle). F3: stable cross-window key.
+          void maybePlayTaskChime('failed', chimeKey('query:failed', p.session_id, p.query_id))
           // §P2-18: like QUERY_COMPLETED, failure state is scoped to the
           // session that owns the run — a background run failing must not
           // overwrite the on-screen session's composer/error state (its
@@ -1816,8 +1818,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           noteSessionApproval(p.session_id, true)
           // Settings R3 T5 (B4): needs-attention chime for the approval wait
           // (on_needs_attention toggle; the OS side fires its own
-          // NeedsAttention notification backend-side).
-          void maybePlayTaskChime('attention')
+          // NeedsAttention notification backend-side). F3: request_id is the
+          // stable cross-window key for one approval prompt.
+          void maybePlayTaskChime('attention', chimeKey('permission', p.session_id, p.request_id))
           applyPermissionRequest(p)
         }),
         listen(EVENT_NAMES.SESSIONS_UPDATED, () => { refreshSessions() }),

@@ -13,6 +13,11 @@ const getWebhookConfig = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/tauri-api', () => ({
   previewCron: (...args: unknown[]) => previewCron(...args),
   getWebhookConfig: (...args: unknown[]) => getWebhookConfig(...args),
+  // P2-6/F6: fillRequired flips ScheduleForm's valid gate, which mounts
+  // CostEstimateHint — its 350ms debounce calls estimateTaskCost. Missing
+  // here = TypeError inside that timer when a test outlives the debounce
+  // (intermittent unhandled-error flake).
+  estimateTaskCost: vi.fn().mockResolvedValue({ hasHistory: false, runsCounted: 0, minUsd: null, maxUsd: null, avgUsd: null, lastUsd: null }),
 }))
 
 beforeEach(() => {

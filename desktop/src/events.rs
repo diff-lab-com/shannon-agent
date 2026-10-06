@@ -189,7 +189,7 @@ pub struct AskUserOptionPayload {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AskUserRequest {
     /// Correlation id — echoed by `respond_ask_user` and by the
-    /// `ask-user-resolved` timeout event.
+    /// `ask-user-resolved` event.
     pub request_id: String,
     /// The question text displayed to the user.
     pub question: String,
@@ -199,6 +199,14 @@ pub struct AskUserRequest {
     pub options: Vec<AskUserOptionPayload>,
     /// Whether several options may be selected at once.
     pub multi_select: bool,
+    /// Settings R3 followup F2 — the live run's session when exactly one
+    /// run is active (`sole_active_run_session` on the managed app state);
+    /// absent when zero or several runs make the run ambiguous. Frontend
+    /// scoping: a scoped card shows only in windows viewing this session;
+    /// an absent field keeps the every-window fallback (the pre-F2
+    /// behavior).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     /// Present only when 提问自动继续 is on: how long until the backend
     /// auto-answers (`timeout_ms`/1000 → the card's mm:ss countdown). Pure
     /// display — the backend drives the actual timeout; `None` = wait
@@ -207,10 +215,11 @@ pub struct AskUserRequest {
     pub timeout_ms: Option<u64>,
 }
 
-/// `ask-user-resolved` wire payload — a pending question settled without an
-/// answer (the auto-continue timeout fired). `timed_out` is always `true`
-/// today; the field keeps the wire shape stable if the answered path ever
-/// needs to broadcast resolution to every window too.
+/// `ask-user-resolved` wire payload — a pending question settled. Emitted
+/// on BOTH resolution paths (Settings R3 followup F2): the answered path
+/// (`timed_out: false`, broadcast right after `respond_ask_user` delivers
+/// the answer) and the auto-continue timeout (`timed_out: true`), so every
+/// window's card for the request clears instead of lingering.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AskUserResolved {
     pub request_id: String,
@@ -524,6 +533,7 @@ mod tests {
                 },
             ],
             multi_select: false,
+            session_id: Some("sess-1".into()),
             timeout_ms: Some(300_000),
         };
         let json = serde_json::to_string(&p).unwrap();
@@ -537,6 +547,30 @@ mod tests {
     }
 
     #[test]
+    fn ask_user_request_scoped_session_serializes_and_ambiguous_omits() {
+        // F2: exactly one live run → the scoping session rides on the wire.
+        let scoped = AskUserRequest {
+            request_id: "req-3".into(),
+            question: "q".into(),
+            header: String::new(),
+            options: Vec::new(),
+            multi_select: false,
+            session_id: Some("sess-9".into()),
+            timeout_ms: None,
+        };
+        let json = serde_json::to_string(&scoped).unwrap();
+        assert!(json.contains("\"session_id\":\"sess-9\""), "{json}");
+
+        // Zero or several live runs → omitted → every-window fallback.
+        let ambiguous = AskUserRequest {
+            session_id: None,
+            ..scoped
+        };
+        let json = serde_json::to_string(&ambiguous).unwrap();
+        assert!(!json.contains("session_id"), "{json}");
+    }
+
+    #[test]
     fn ask_user_request_omits_timeout_when_waiting_forever() {
         let p = AskUserRequest {
             request_id: "req-2".into(),
@@ -544,6 +578,7 @@ mod tests {
             header: String::new(),
             options: Vec::new(),
             multi_select: false,
+            session_id: None,
             timeout_ms: None,
         };
         let json = serde_json::to_string(&p).unwrap();

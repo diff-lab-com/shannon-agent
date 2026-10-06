@@ -48,7 +48,7 @@ use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMet
 use shannon_engine::api::client::LlmClient;
 use shannon_engine::permissions::{PermissionManager, PermissionRuleChecker};
 use shannon_engine::state::StateManager;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
 use crate::commands::AppState;
@@ -578,6 +578,21 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
             .power_block_sleep_during_tasks;
         let _prevent_sleep_guard =
             block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
+        // Settings R3 followup F2 — this branch's fresh session (minted
+        // here, before the engine build below consumes it) is the live run
+        // while the branch streams (RAII: released on every exit path).
+        // `try_state`: absent only under mock runtimes whose tests never
+        // manage `AppState` (they drive branches through the stub runner).
+        let session_id = uuid::Uuid::new_v4();
+        let _active_run_guard = self
+            .app
+            .try_state::<crate::commands::AppState>()
+            .map(|state| {
+                crate::commands::ActiveSessionRunGuard::register(
+                    &state.active_run_sessions,
+                    session_id.to_string(),
+                )
+            });
         let client_config = self.deps.client_config.read().await.clone();
         let approval_mode_str = self.deps.desktop_config.read().await.approval_mode.clone();
         // Settings R3 T6: batch branches honor the same auto-compaction
@@ -618,7 +633,7 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
             None,
         );
 
-        let session_id = uuid::Uuid::new_v4();
+        // F2: `session_id` was minted above for the active-run registration.
         let context = QueryContext {
             query_id: uuid::Uuid::new_v4(),
             session_id,

@@ -122,7 +122,10 @@ describe('SessionSettings (Settings R3 T6 — 会话分区)', () => {
     // the help copy carries the scan semantics + where to restore from.
     expect(within(card).getByText('Instant effect')).toBeInTheDocument()
     const help = within(card).getByText(/Periodically scans sessions/i).textContent ?? ''
-    expect(help).toMatch(/not running, nothing unread/)
+    // F1 copy is rail-scoped: the scan candidate set is "sessions in the
+    // sidebar" — same membership the ask_user rail check uses.
+    expect(help).toMatch(/sessions in the sidebar/)
+    expect(help).toMatch(/unread-free/)
     expect(help).toMatch(/unpinned/)
     expect(help).toMatch(/Archived section/)
   })
