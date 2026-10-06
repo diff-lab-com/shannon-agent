@@ -2950,12 +2950,14 @@ fn a6_auto_compact_enabled_defaults_to_true() {
 // session's own. Without the pin (every other test in this file), the loop
 // passes the session client, so the historical behavior stays byte-identical.
 //
-// NOTE on shape: the loop-level LLM compaction path cannot be driven
-// end-to-end inside a tokio test — `LlmSummarizer::new` (both targets, the
-// pre-existing constructor) blocks on a fresh runtime from inside the
-// producer task and the task dies pre-request (a pre-existing property this
-// batch deliberately does NOT change). The pin therefore composes the two
-// halves the loop actually performs: (1) the client pick —
+// NOTE on shape: before the legacy-④ runtime fix, the loop-level LLM
+// compaction path could not be driven end-to-end inside a tokio test —
+// `LlmSummarizer::new` (both targets, the pre-existing constructor) blocked
+// on a fresh runtime from inside the producer task and the task died
+// pre-request. With the fix (the summarizer now reuses the ambient runtime
+// via `block_in_place`), the full loop IS drivable — the end-to-end pin
+// lives at the bottom of this section. The two composable halves it
+// replaces stay pinned as-is: (1) the client pick —
 // `compaction_summarizer_client`, pinned to hand the loop EXACTLY the
 // auxiliary / session client — and (2) the wire — `CompactEngine::
 // with_llm_summarizer(picked)` driven outside any runtime (the same shape
@@ -3098,5 +3100,232 @@ fn default_wire_compaction_request_rides_the_session_endpoint() {
     assert!(
         bodies[0].contains("main-model"),
         "the default path must keep carrying the session model id"
+    );
+}
+
+/// A trivial registered tool: every call succeeds with a code-fence output,
+/// so each turn is a clean tool round-trip (no malformed-call stop-loss, no
+/// re-prompt nudges) and the conversation tail stays code-heavy — every
+/// message carries ToolUse/ToolResult blocks, which pins the P2-1 selector
+/// onto the SummaryBased (LLM compaction) path.
+struct GrowthTool;
+
+#[async_trait::async_trait]
+impl crate::tools::Tool for GrowthTool {
+    fn name(&self) -> &str {
+        "growth_tool"
+    }
+    fn description(&self) -> &str {
+        "test double that grows the conversation"
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+    ) -> crate::tools::ToolResult<crate::tools::ToolOutput> {
+        Ok(crate::tools::ToolOutput::success(
+            "fn growth_step() { 42 } // src/lib.rs marker\n".repeat(6),
+        ))
+    }
+}
+
+/// Full Anthropic SSE stream: a short code-ish text answer plus a
+/// `growth_tool` call with REAL (non-empty) input — a clean tool
+/// round-trip every turn. The tool_use id is unique per request (the
+/// engine dedups repeated ids as duplicate emissions).
+fn growth_tool_call_sse(request_index: usize) -> String {
+    let sse = [
+        r#"event: message_start"#,
+        r#"data: {"type":"message_start","message":{"id":"msg_growth","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+        r#"event: content_block_start"#,
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"event: content_block_delta"#,
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Running the growth step in src/step.rs"}}"#,
+        r#"event: content_block_stop"#,
+        r#"data: {"type":"content_block_stop","index":0}"#,
+        "event: content_block_start",
+        format!(
+            r#"data: {{"type":"content_block_start","index":1,"content_block":{{"type":"tool_use","id":"toolu_growth_{request_index}","name":"growth_tool","input":{{}}}}}}"#
+        )
+        .as_str(),
+        r#"event: content_block_delta"#,
+        r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"step\":1}"}}"#,
+        r#"event: content_block_stop"#,
+        r#"data: {"type":"content_block_stop","index":1}"#,
+        r#"event: message_delta"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}"#,
+        r#"event: message_stop"#,
+        r#"data: {"type":"message_stop"}"#,
+    ]
+    .join("\n\n");
+    a8_http_response("200 OK", "text/event-stream", &sse)
+}
+
+/// Aux-aware variant of [`a8_run_query_custom`]: pins the auxiliary
+/// (utility-slot) compaction client on the engine, then drives one full
+/// `process_query` and returns (completed, failed_error, progress_messages).
+#[allow(clippy::type_complexity)]
+async fn a8_run_query_with_aux(
+    server: &TurnRetryMockServer,
+    aux_client: LlmClient,
+    max_turns: usize,
+) -> (bool, String, Vec<String>) {
+    use futures::StreamExt as _;
+    let client = anthropic_client_at(&server.base_url, "test-model", "test-key");
+    let tools = ToolRegistry::new();
+    tools.register(Box::new(GrowthTool)).unwrap();
+    let mut permissions = PermissionManager::new();
+    permissions.allow_tool("growth_tool");
+    let engine = QueryEngine::new(
+        client,
+        tools,
+        permissions,
+        StateManager::new(),
+        QueryEngineConfig {
+            max_turns,
+            // Fixture math: the assembled default system prompt weighs in at
+            // ~900 estimated tokens and each turn adds ~75 (text + tool_use +
+            // result), so a 1800-token window crosses the P2-1 selector's
+            // 0.75 trigger around turn 7-8 — exactly when the history has
+            // grown past `keep_recent_count + 1` (= 11), the point where the
+            // loop-level LLM summarizer actually sends — while staying under
+            // the pre-send overflow guard (ratio < 1.0) for all 12 turns.
+            max_context_tokens: Some(1800),
+            compression_threshold: 0.4,
+            ..Default::default()
+        },
+    )
+    .with_auxiliary_compaction_client(Some(aux_client));
+    let context = QueryContext {
+        query_id: uuid::Uuid::new_v4(),
+        session_id: uuid::Uuid::new_v4(),
+        user_message: "original user task".to_string(),
+        attachments: Vec::new(),
+        metadata: QueryMetadata {
+            timestamp: chrono::Utc::now(),
+            // Tools must be advertised for the loop to run the registered
+            // growth_tool round-trip every turn (same shape as the §P2-2
+            // in-loop tool test).
+            tools_allowed: true,
+            max_tokens: None,
+            model: "test-model".to_string(),
+            temperature: None,
+            top_p: None,
+        },
+    };
+    let mut stream = engine.process_query(context, None).await;
+    let mut completed = false;
+    let mut failed = String::new();
+    let mut progress: Vec<String> = Vec::new();
+    while let Some(ev) = stream.next().await {
+        match ev {
+            Ok(QueryEvent::Completed { .. }) => {
+                completed = true;
+                break;
+            }
+            Ok(QueryEvent::Failed { error, .. }) => {
+                failed = error;
+                break;
+            }
+            Err(e) => {
+                failed = e.to_string();
+                break;
+            }
+            Ok(QueryEvent::Progress { message, .. }) => progress.push(message),
+            Ok(QueryEvent::Warning { message, .. }) => progress.push(format!("[WARN] {message}")),
+            _ => {}
+        }
+    }
+    (completed, failed, progress)
+}
+
+/// The S3-3 leftover this batch closes (legacy-④): with `LlmSummarizer`
+/// now reusing the ambient runtime, the loop-level LLM compaction path can
+/// finally be driven END-TO-END through `process_query` — pre-fix the
+/// producer task died with "Cannot start a runtime from within a runtime"
+/// before any request was sent. The full wire pin: the background
+/// summarization request that the LOOP issues lands on the AUXILIARY
+/// (utility slot) endpoint carrying the auxiliary model, and the session
+/// endpoint never sees a compaction request.
+///
+/// The multi-thread flavor is load-bearing: the compaction branch blocks
+/// on the ambient runtime via `block_in_place`, which a current-thread
+/// test runtime cannot serve (the summarizer would degrade to its
+/// rule-based fallback and never reach the wire).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn utility_slot_loop_level_compaction_request_lands_on_the_auxiliary_endpoint() {
+    // Session endpoint: every turn answers with a clean `growth_tool` call
+    // (registered in the helper) — the loop records a success tool_result
+    // and keeps turning, so the history grows past the compaction threshold
+    // turn after turn.
+    let session_server = TurnRetryMockServer::start(std::sync::Arc::new(growth_tool_call_sse));
+    // Auxiliary (utility slot) endpoint: non-streaming JSON summary for
+    // the background compaction requests.
+    let aux_server = TurnRetryMockServer::start(std::sync::Arc::new(|_i| {
+        a8_http_response(
+            "200 OK",
+            "application/json",
+            r#"{"id":"msg_aux","role":"assistant","content":[{"type":"text","text":"summary"}],"model":"aux-model","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#,
+        )
+    }));
+
+    let aux_client = anthropic_client_at(&aux_server.base_url, "aux-model", "aux-key");
+    // 12 turns: `CompactConfig::default().keep_recent_count` is 10, so the
+    // first REAL summarization (messages > keep + 1) fires around turn 6-8
+    // and several more follow as the tail regrows.
+    let (completed, failed, progress) =
+        a8_run_query_with_aux(&session_server, aux_client, 12).await;
+    assert!(
+        failed.is_empty(),
+        "the query must not die mid-loop (pre-fix the compaction panic killed the producer task here): {failed}; progress: {progress:?}"
+    );
+    let _ = completed;
+
+    let aux_bodies = aux_server.bodies();
+    assert!(
+        !aux_bodies.is_empty(),
+        "the loop must send background compaction requests to the auxiliary endpoint (completed={completed}, session_requests={}) progress: {progress:?}",
+        session_server.bodies().len()
+    );
+    for body in &aux_bodies {
+        assert!(
+            body.contains(COMPACTION_PROMPT_MARKER),
+            "every auxiliary hit must be a background summarization request: {body}"
+        );
+        assert!(
+            body.contains("aux-model"),
+            "every auxiliary hit must carry the auxiliary model id: {body}"
+        );
+    }
+    assert!(
+        aux_bodies[0].contains("original user task"),
+        "the summarizer must carry the conversation being compacted: {}",
+        aux_bodies[0]
+    );
+
+    let session_bodies = session_server.bodies();
+    assert!(
+        session_bodies.len() >= 6,
+        "the loop must have kept turning against the session endpoint: {}",
+        session_bodies.len()
+    );
+    for body in &session_bodies {
+        assert!(
+            !body.contains(COMPACTION_PROMPT_MARKER),
+            "the session endpoint must never see the background compaction request: {body}"
+        );
+        assert!(
+            !body.contains("aux-model"),
+            "the session endpoint must never carry the auxiliary model id: {body}"
+        );
+    }
+
+    assert!(
+        progress
+            .iter()
+            .any(|m| m.contains("Context compressed (3-tier)")),
+        "the loop-level LLM compaction branch must have run to completion in-loop; progress: {progress:?}"
     );
 }
