@@ -1671,15 +1671,20 @@ pub async fn send_message(
     // Promote the first user message to the session title while the title
     // is still the generated placeholder. User renames are never touched;
     // the UI refreshes its session rail off the emitted SESSIONS_UPDATED.
-    if first_user_message {
+    // `Some(derived)` = this send's session was just auto-titled, i.e. NOT
+    // user-renamed — the one gate the TitleGeneration slot consumer needs
+    // (legacy ①); `None` keeps that path completely out of the picture.
+    let first_query_title: Option<String> = if first_user_message {
         crate::commands_sessions::auto_title_from_first_message(
             &state,
             &app_handle,
             session_id,
             &message,
         )
-        .await;
-    }
+        .await
+    } else {
+        None
+    };
 
     let query_id = uuid::Uuid::new_v4();
     let qid_str = query_id.to_string();
@@ -2564,6 +2569,27 @@ pub async fn send_message(
         // so it never outlives its querying epoch — the NEXT run must not
         // inherit an old stop.
         session_for_task.clear_cancel_pending();
+
+        // Legacy ① — the TitleGeneration utility slot's consumption point.
+        // This session's FIRST query has settled (this block runs on every
+        // exit path), and `first_query_title` being `Some` proves the Tier-1
+        // auto-title just retitled it (placeholder → derived), i.e. the
+        // session was never user-renamed. Fire-and-forget: one small LLM
+        // request to the SLOT target proposes a real title — it can never
+        // block the send path, never enter the event stream, and loses to a
+        // user rename both here (guard above) and in the apply-time
+        // compare-and-swap. Unconfigured slot → the task exits before any
+        // network call, so the default behavior stays byte-identical.
+        if let Some(expected_title) = first_query_title.clone() {
+            let exchange =
+                crate::session_title::first_exchange(&session_for_task.messages.lock().await);
+            crate::session_title::spawn_title_task(
+                app.clone(),
+                session_id,
+                expected_title,
+                exchange,
+            );
+        }
     });
 
     Ok(SendMessageResponse {
