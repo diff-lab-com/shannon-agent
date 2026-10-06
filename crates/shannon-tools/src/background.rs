@@ -280,11 +280,11 @@ impl Tool for RunBackgroundTool {
             if analysis.risk_level >= crate::system::SecurityLevel::High {
                 return Err(ToolError::ExecutionFailed(format!(
                     "Security gate: command rejected as {}-risk. Background shells \
-                     bypass the interactive sandbox/confirmation path that Bash \
+                     bypass the interactive confirmation path that Bash \
                      applies to risky commands, so High- or Critical-risk work \
                      cannot run here.\nCommand: {}\nWarnings:\n  - {}\n\nRun it \
                      through Bash instead (risky commands get the interactive \
-                     confirmation/sandbox path), or split it into safer steps.",
+                     confirmation path), or split it into safer steps.",
                     crate::system::describe_risk_level(analysis.risk_level),
                     parsed.command,
                     analysis.warnings.join("\n  - "),
@@ -303,10 +303,9 @@ impl Tool for RunBackgroundTool {
                 return Err(ToolError::ExecutionFailed(format!(
                     "Security gate: outbound-network commands cannot run as \
                      background shells. Background processes bypass the \
-                     interactive sandbox/confirmation path, so network-sending \
+                     interactive confirmation path, so network-sending \
                      commands are refused here.\nCommand: {}\n\nRun it through \
-                     Bash instead (it gets the interactive confirmation/sandbox \
-                     path).",
+                     Bash instead (it gets the interactive confirmation path).",
                     parsed.command,
                 )));
             }
@@ -1055,7 +1054,7 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("Security gate"), "got: {msg}");
         assert!(
-            msg.contains("bypass the interactive sandbox/confirmation path"),
+            msg.contains("bypass the interactive confirmation path"),
             "message must explain why, got: {msg}"
         );
         assert!(

@@ -268,6 +268,11 @@ pub struct ToolProviders {
     /// Shared world-roots override for swappable execution worlds (remote
     /// targets). `None` keeps every tool's sandbox fully local.
     pub world_sandbox: Option<std::sync::Arc<crate::file::sandbox::WorldSandboxHandle>>,
+    /// Set by §4.12 world assemblies (`sandbox::assemble` / `assemble_local`,
+    /// desktop `sandbox_assembly`): the incoming providers already carry a
+    /// sandbox decorator, so `register_all_tools` must NOT stack the legacy
+    /// argv-level wrapper on top — two sandboxes compose into lies.
+    pub sandbox_assembled: bool,
 }
 
 impl Default for ToolProviders {
@@ -277,6 +282,7 @@ impl Default for ToolProviders {
             process: defaults::process(),
             denial_classifier: None,
             world_sandbox: None,
+            sandbox_assembled: false,
         }
     }
 }
@@ -295,6 +301,7 @@ fn register_all_tools(
         process,
         denial_classifier,
         world_sandbox,
+        sandbox_assembled,
     } = providers;
 
     // Project-scoped sandbox when a project directory is given (same config
@@ -383,6 +390,29 @@ fn register_all_tools(
     }
 
     // ── System operations ──────────────────────────────────────────────
+    // Sandbox parity for the sibling process tools: Bash carries the legacy
+    // argv-level wrapper (bubblewrap/Seatbelt/Docker) in its dedicated
+    // `process_sandbox` slot, but PowerShell / Repl / the background family
+    // historically spawned through the RAW provider — a prompt-injected
+    // command that Bash would sandbox ran unsandboxed one tool over. The
+    // [`LocalArgvSandbox`] decorator gives them the same wrapper while
+    // staying remote-safe: it consults `capabilities()` on every spawn, so a
+    // `/remote use` swap underneath bypasses it by itself. Skipped for
+    // §4.12-assembled worlds (`sandbox_assembled`) — never stack two
+    // sandboxes — and for remote provider sets (static `--target` worlds).
+    let sibling_process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider> =
+        match project_dir {
+            Some(dir) if !sandbox_assembled && !process.capabilities().is_remote => {
+                match crate::system::detect_argv_sandbox_rewrite(dir) {
+                    Some(rewrite) => std::sync::Arc::new(crate::sandbox::LocalArgvSandbox::new(
+                        process.clone(),
+                        rewrite,
+                    )),
+                    None => process.clone(),
+                }
+            }
+            _ => process.clone(),
+        };
     let mut bash = match project_dir {
         Some(dir) => BashTool::with_process_sandbox(dir),
         None => BashTool::new(),
@@ -394,9 +424,11 @@ fn register_all_tools(
     registry.register(Box::new(bash))?;
     registry.register(Box::new(SleepTool::new()))?;
     registry.register(Box::new(
-        PowerShellTool::new().with_process(process.clone()),
+        PowerShellTool::new().with_process(sibling_process.clone()),
     ))?;
-    registry.register(Box::new(ReplTool::new().with_process(process.clone())))?;
+    registry.register(Box::new(
+        ReplTool::new().with_process(sibling_process.clone()),
+    ))?;
 
     // ── Background processes (§B.5) ────────────────────────────────────
     // Spawn / poll / kill long-running children. Only meaningful against a
@@ -406,13 +438,13 @@ fn register_all_tools(
     let is_remote = process.capabilities().is_remote;
     if !is_remote {
         registry.register(Box::new(
-            RunBackgroundTool::new().with_process(process.clone()),
+            RunBackgroundTool::new().with_process(sibling_process.clone()),
         ))?;
         registry.register(Box::new(
-            WaitForLogTool::new().with_process(process.clone()),
+            WaitForLogTool::new().with_process(sibling_process.clone()),
         ))?;
         registry.register(Box::new(
-            KillBackgroundTool::new().with_process(process.clone()),
+            KillBackgroundTool::new().with_process(sibling_process.clone()),
         ))?;
     }
 

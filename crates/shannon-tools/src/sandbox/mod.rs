@@ -30,7 +30,7 @@ use shannon_tool_interface::sandbox::{
 };
 use shannon_tool_interface::{
     CapturedOutput, DirEntryInfo, FileMeta, FileSystemProvider, PipedChild, PipedSpawn,
-    ProcessProvider, ProcessRequest,
+    ProcessProvider, ProcessRequest, SpawnRewrite,
 };
 use std::io;
 use std::path::{Path, PathBuf};
@@ -287,6 +287,75 @@ impl ProcessProvider for SandboxedProcess {
 }
 
 // ---------------------------------------------------------------------------
+// Legacy argv-sandbox decorator for the non-Bash process tools
+// ---------------------------------------------------------------------------
+
+/// Process world decorated with the **legacy argv-level sandbox wrapper**
+/// (bubblewrap / Seatbelt / Docker — see `shannon_core::sandbox`).
+///
+/// This is the parity seam for the sibling process tools: BashTool carries
+/// the same wrapper in its dedicated `process_sandbox` slot, while
+/// PowerShell / Repl / RunBackground historically spawned through the raw
+/// provider — a prompt-injected command that Bash would wrap ran unsandboxed
+/// one tool over. Wrapping happens **only while the inner world is local**:
+/// the decorator consults `inner.capabilities()` on every spawn, so a
+/// `/remote use` world swap underneath bypasses it automatically and remote
+/// commands are never argv-rewritten. `capabilities()` delegates so the
+/// tools' own remote-world gates keep working unchanged.
+pub struct LocalArgvSandbox {
+    inner: Arc<dyn ProcessProvider>,
+    rewrite: Arc<dyn SpawnRewrite>,
+}
+
+impl std::fmt::Debug for LocalArgvSandbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalArgvSandbox")
+            .field("remote", &self.inner.capabilities().is_remote)
+            .finish()
+    }
+}
+
+impl LocalArgvSandbox {
+    /// Wrap `inner` so local spawns go through `rewrite` (identity on remote
+    /// worlds).
+    pub fn new(inner: Arc<dyn ProcessProvider>, rewrite: Arc<dyn SpawnRewrite>) -> Self {
+        Self { inner, rewrite }
+    }
+
+    fn prepare(&self, request: &ProcessRequest) -> io::Result<ProcessRequest> {
+        if self.inner.capabilities().is_remote {
+            return Ok(request.clone());
+        }
+        self.rewrite
+            .rewrite(request.clone())
+            .map_err(io::Error::other)
+    }
+}
+
+#[async_trait::async_trait]
+impl ProcessProvider for LocalArgvSandbox {
+    fn capabilities(&self) -> shannon_tool_interface::ExecCaps {
+        self.inner.capabilities()
+    }
+
+    fn run_blocking(&self, request: &ProcessRequest) -> io::Result<CapturedOutput> {
+        let prepared = self.prepare(request)?;
+        self.inner.run_blocking(&prepared)
+    }
+
+    async fn run_async(&self, request: &ProcessRequest) -> io::Result<CapturedOutput> {
+        let prepared = self.prepare(request)?;
+        self.inner.run_async(&prepared).await
+    }
+
+    async fn spawn_piped(&self, spec: &PipedSpawn) -> io::Result<Box<dyn PipedChild>> {
+        let mut prepared = spec.clone();
+        prepared.request = self.prepare(&spec.request)?;
+        self.inner.spawn_piped(&prepared).await
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Settings (env > project .shannon.toml > ~/.shannon/config.toml)
 // ---------------------------------------------------------------------------
 
@@ -521,6 +590,7 @@ pub fn assemble(
                     process: proc_world,
                     denial_classifier: Some(kernel_denial_classifier()),
                     world_sandbox: None,
+                    sandbox_assembled: true,
                 },
                 kind: "landlock",
                 notices,
@@ -551,6 +621,7 @@ pub fn assemble_local(settings: &SandboxSettings, project_dir: &Path) -> Assembl
             process: Arc::new(SandboxedProcess::new(proc_inner, "local", Vec::new())),
             denial_classifier: None,
             world_sandbox: None,
+            sandbox_assembled: true,
         },
         kind: "local",
         notices: vec![DegradeNotice::new(

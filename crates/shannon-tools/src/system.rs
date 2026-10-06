@@ -1351,6 +1351,39 @@ impl SandboxPosture {
 /// Posture resolution from the detected backend type plus the
 /// `SHANNON_SANDBOX` env value (the explicit opt-out). Pure so tests can
 /// pin every combination without touching the host.
+/// The [`SandboxConfig`] shared by `BashTool::with_process_sandbox` and
+/// [`detect_argv_sandbox_rewrite`]: project dir plus the
+/// `SHANNON_SANDBOX_EXTRA_RO_MOUNTS` read-only mounts.
+fn argv_sandbox_config(project_dir: &std::path::Path) -> SandboxConfig {
+    let mut config = SandboxConfig::new(project_dir);
+    if let Ok(extra) = std::env::var("SHANNON_SANDBOX_EXTRA_RO_MOUNTS") {
+        for dir in extra.split(':').filter(|s| !s.is_empty()) {
+            config = config.readonly_mount(dir);
+        }
+    }
+    config
+}
+
+/// Build the legacy argv-level sandbox rewrite for `project_dir` — the same
+/// executor + posture detection `BashTool::with_process_sandbox` applies.
+/// `None` when no backend is available or `SHANNON_SANDBOX=off` (the caller
+/// must then run undecorated, exactly like BashTool's degraded posture).
+/// Used by `register_all_tools` to give the sibling process tools
+/// (PowerShell / Repl / RunBackground family) the sandbox Bash already had.
+pub(crate) fn detect_argv_sandbox_rewrite(
+    project_dir: &std::path::Path,
+) -> Option<std::sync::Arc<dyn shannon_tool_interface::SpawnRewrite>> {
+    let executor = std::sync::Arc::new(SandboxExecutor::new(argv_sandbox_config(project_dir)));
+    let env_override = std::env::var("SHANNON_SANDBOX").ok();
+    let posture = resolve_sandbox_posture(executor.sandbox_type(), env_override.as_deref());
+    match posture {
+        SandboxPosture::Active => Some(std::sync::Arc::new(SandboxExecutorRewrite::new(
+            executor,
+        ))),
+        _ => None,
+    }
+}
+
 pub(crate) fn resolve_sandbox_posture(
     sandbox_type: SandboxType,
     shannon_sandbox_env: Option<&str>,
@@ -1448,14 +1481,11 @@ impl BashTool {
     /// hatch for making host toolchains (e.g. `/usr/local`, a nvm checkout)
     /// visible inside the sandbox without changing code.
     pub fn with_process_sandbox(project_dir: impl Into<std::path::PathBuf>) -> Self {
-        let mut config = SandboxConfig::new(project_dir);
-        if let Ok(extra) = std::env::var("SHANNON_SANDBOX_EXTRA_RO_MOUNTS") {
-            for dir in extra.split(':').filter(|s| !s.is_empty()) {
-                config = config.readonly_mount(dir);
-            }
-        }
         let env_override = std::env::var("SHANNON_SANDBOX").ok();
-        Self::with_detected_sandbox(SandboxExecutor::new(config), env_override.as_deref())
+        Self::with_detected_sandbox(
+            SandboxExecutor::new(argv_sandbox_config(project_dir.into().as_path())),
+            env_override.as_deref(),
+        )
     }
 
     /// Assemble the tool from an already-constructed executor plus the
