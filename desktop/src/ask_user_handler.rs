@@ -8,7 +8,9 @@
 //! swaps the same-named tool for one backed by `DesktopQuestionHandler`:
 //!
 //! 1. `ask_question` mints a `request_id`, parks a oneshot sender in
-//!    `AppState::pending_questions` and emits `ask-user-request`.
+//!    `AppState::pending_questions` and emits `ask-user-request`, plus ONE
+//!    deduped OS notification through the shared `AppState::notifier`
+//!    (F7 — unattended runs; mirrors the approval prompt's B4 heads-up).
 //! 2. The frontend's AskUserCard renders the question; the answer travels
 //!    back through the [`respond_ask_user`] command (remove + send +
 //!    broadcast — repeating `commands_permissions::respond_permission`'s
@@ -94,6 +96,11 @@ impl<R: tauri::Runtime> QuestionHandler for DesktopQuestionHandler<R> {
             (timeout_ms, session_id)
         };
 
+        // The emit below moves `session_id` into the payload; the OS
+        // notification needs it too — clone first, like the approval
+        // site's `session_id_for_inbox`.
+        let session_id_for_notify = session_id.clone();
+
         let _ = self.app.emit(
             event_names::ASK_USER_REQUEST,
             events::AskUserRequest {
@@ -113,6 +120,61 @@ impl<R: tauri::Runtime> QuestionHandler for DesktopQuestionHandler<R> {
                 timeout_ms,
             },
         );
+
+        // F7 (settings-r3 followup): OS-level heads-up while the question
+        // waits — an unanswered ask_user silently stalls the run when no
+        // window is being watched (background / batch / routine runs).
+        // Mirrors the approval prompt's notification (B4,
+        // `commands_permissions::prompt_user`): goes through the shared
+        // `Notifier` so the desktop handler applies the master/DND/
+        // `on_needs_attention` prefs and the webhook fan-out fires too —
+        // no gating duplicated here, and no window-focus check by design
+        // (the B4 precedent fires unconditionally). Deduped on `ask_user`
+        // within 5s so a burst of questions doesn't stack popups. Fired
+        // ONCE per question, at ask time: the 提问自动继续 timeout below
+        // deliberately does NOT re-notify (same ruling as the approval
+        // auto-deny).
+        {
+            let state = self.app.state::<AppState>();
+            // Same lookup the approval site uses — computed once, shared
+            // with the title below. Unscoped (zero/ambiguous runs) → plain
+            // "Shannon": no guessing which session asked.
+            let session_title = match session_id_for_notify.as_deref() {
+                Some(sid) => {
+                    Some(crate::inbox_session_events::session_display_title(&state, sid).await)
+                }
+                None => None,
+            };
+            // The header is the card's short line; empty → truncate the
+            // full question text (char-boundary safe) to keep the popup
+            // one line-ish.
+            let body = if question.header.is_empty() {
+                format!(
+                    "Question needs your answer: {}",
+                    question.question.chars().take(80).collect::<String>()
+                )
+            } else {
+                format!("Question needs your answer: {}", question.header)
+            };
+            let notification = shannon_core::notifier::Notification {
+                title: match session_title.as_deref() {
+                    Some(t) if !t.is_empty() => format!("Shannon — {t}"),
+                    _ => "Shannon".to_string(),
+                },
+                body,
+                level: shannon_core::notifier::NotificationLevel::Warning,
+                id: uuid::Uuid::new_v4().to_string(),
+                timestamp: chrono::Utc::now(),
+                source: Some("ask_user".to_string()),
+                action_id: None,
+                kind: shannon_core::notifier::NotificationKind::NeedsAttention,
+            };
+            match state.notifier.notify_dedup(&notification, 5_000) {
+                Ok(true) => tracing::debug!(%request_id, "ask_user OS notification dispatched"),
+                Ok(false) => tracing::debug!(%request_id, "ask_user OS notification deduped"),
+                Err(e) => tracing::warn!(error = %e, "ask_user OS notification dispatch failed"),
+            }
+        }
 
         let wait = async {
             match rx.await {
@@ -306,6 +368,71 @@ mod tests {
             });
         }
         captured
+    }
+
+    // ── F7: OS notification recording ───────────────────────────────────
+
+    /// What a `NotificationHandler::send` saw — only the fields the tests
+    /// assert on.
+    #[derive(Debug, Clone)]
+    struct RecordedNotification {
+        kind: shannon_core::notifier::NotificationKind,
+        source: Option<String>,
+        title: String,
+        body: String,
+    }
+
+    /// `NotificationHandler` pushing every dispatch into a shared buffer.
+    struct RecordingHandler {
+        recorded: std::sync::Arc<std::sync::Mutex<Vec<RecordedNotification>>>,
+    }
+
+    impl shannon_core::notifier::NotificationHandler for RecordingHandler {
+        fn send(
+            &self,
+            notification: &shannon_core::notifier::Notification,
+        ) -> Result<(), shannon_core::notifier::NotifierError> {
+            self.recorded
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(RecordedNotification {
+                    kind: notification.kind,
+                    source: notification.source.clone(),
+                    title: notification.title.clone(),
+                    body: notification.body.clone(),
+                });
+            Ok(())
+        }
+
+        fn name(&self) -> &str {
+            "recording"
+        }
+    }
+
+    /// Mock-runtime app whose `AppState` notifier carries a `Cooldown` plus
+    /// the recording handler — the production shape `attach_notification_handler`
+    /// builds (`AppState::new()`'s bare notifier has NO cooldown, so
+    /// `notify_dedup` would never suppress there). Must run BEFORE
+    /// `app.manage(...)`: the handler needs the sole `Arc` to install into.
+    fn mock_app_with_recording_notifier() -> (
+        tauri::AppHandle<tauri::test::MockRuntime>,
+        tauri::App<tauri::test::MockRuntime>,
+        std::sync::Arc<std::sync::Mutex<Vec<RecordedNotification>>>,
+    ) {
+        let app = tauri::test::mock_app();
+        let mut state = AppState::new();
+        let recorded: std::sync::Arc<std::sync::Mutex<Vec<RecordedNotification>>> =
+            Default::default();
+        {
+            let mut notifier = shannon_core::notifier::Notifier::new()
+                .with_cooldown(shannon_core::notifier::Cooldown::new());
+            notifier.add_handler(Box::new(RecordingHandler {
+                recorded: recorded.clone(),
+            }));
+            state.notifier = std::sync::Arc::new(notifier);
+        }
+        app.manage(state);
+        (app.handle().clone(), app, recorded)
     }
 
     #[tokio::test]
@@ -719,5 +846,178 @@ mod tests {
         assert!(!output.is_error);
         assert!(output.content.contains("Registry override check?"));
         assert!(output.content.contains("Ok"));
+    }
+
+    // ── F7: OS notification via the shared Notifier ─────────────────────
+
+    #[tokio::test]
+    async fn ask_time_notification_dispatched_with_needs_attention_kind() {
+        let (handle, _app, recorded) = mock_app_with_recording_notifier();
+
+        let handler = DesktopQuestionHandler::new(handle.clone(), 60);
+        let q = sample_question();
+        let ask = tokio::spawn(async move { handler.ask_question(&q).await });
+        let request_id = wait_pending(&handle).await;
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id,
+            vec!["Yes".to_string()],
+        )
+        .await
+        .unwrap();
+        ask.await.unwrap().unwrap();
+
+        let recorded = recorded.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(recorded.len(), 1, "exactly one OS dispatch: {recorded:?}");
+        assert_eq!(
+            recorded[0].kind,
+            shannon_core::notifier::NotificationKind::NeedsAttention
+        );
+        assert_eq!(recorded[0].source.as_deref(), Some("ask_user"));
+        // Unscoped question → plain title, header in the body.
+        assert_eq!(recorded[0].title, "Shannon");
+        assert_eq!(recorded[0].body, "Question needs your answer: Confirm");
+    }
+
+    #[tokio::test]
+    async fn notification_title_carries_session_display_title_when_scoped() {
+        let (handle, _app, recorded) = mock_app_with_recording_notifier();
+
+        // F2 scoping active (sole live run + the session on the display
+        // rail) → the OS title carries the session's display title, same
+        // lookup the approval site performs.
+        let _guard = {
+            let state = handle.state::<AppState>();
+            state
+                .sessions
+                .lock()
+                .await
+                .push(crate::commands::SessionMeta {
+                    id: "sess-solo".to_string(),
+                    title: "Deploy bot".into(),
+                    created_at: 0,
+                    message_count: 0,
+                    working_dir: None,
+                    parent_id: None,
+                    branch_point: None,
+                });
+            crate::commands::ActiveSessionRunGuard::register(
+                &state.active_run_sessions,
+                "sess-solo".to_string(),
+            )
+        };
+
+        let handler = DesktopQuestionHandler::new(handle.clone(), 60);
+        let q = sample_question();
+        let ask = tokio::spawn(async move { handler.ask_question(&q).await });
+        let request_id = wait_pending(&handle).await;
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id,
+            vec!["Yes".to_string()],
+        )
+        .await
+        .unwrap();
+        ask.await.unwrap().unwrap();
+
+        let recorded = recorded.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(recorded.len(), 1, "exactly one OS dispatch: {recorded:?}");
+        assert_eq!(recorded[0].title, "Shannon — Deploy bot");
+    }
+
+    #[tokio::test]
+    async fn headerless_question_body_falls_back_to_truncated_question_text() {
+        let (handle, _app, recorded) = mock_app_with_recording_notifier();
+
+        // Multibyte text on purpose: the 80-char cut must be char-boundary
+        // safe (no mid-codepoint slicing panic).
+        let q = Question {
+            question: "问".repeat(100),
+            header: String::new(),
+            options: vec![QuestionOption {
+                label: "Ok".to_string(),
+                description: String::new(),
+            }],
+            multi_select: false,
+        };
+        let handler = DesktopQuestionHandler::new(handle.clone(), 60);
+        let ask = tokio::spawn(async move { handler.ask_question(&q).await });
+        let request_id = wait_pending(&handle).await;
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id,
+            vec!["Ok".to_string()],
+        )
+        .await
+        .unwrap();
+        ask.await.unwrap().unwrap();
+
+        let recorded = recorded.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(
+            recorded[0].body,
+            format!("Question needs your answer: {}", "问".repeat(80))
+        );
+    }
+
+    #[tokio::test]
+    async fn second_rapid_question_notification_is_deduped_within_window() {
+        let (handle, _app, recorded) = mock_app_with_recording_notifier();
+
+        // Two questions back to back, both answered (each resolves its own
+        // pending entry before the next parks) — well inside the 5s window.
+        for _ in 0..2 {
+            let handler = DesktopQuestionHandler::new(handle.clone(), 60);
+            let q = sample_question();
+            let ask = tokio::spawn(async move { handler.ask_question(&q).await });
+            let request_id = wait_pending(&handle).await;
+            respond_ask_user(
+                handle.clone(),
+                handle.state(),
+                request_id,
+                vec!["Yes".to_string()],
+            )
+            .await
+            .unwrap();
+            ask.await.unwrap().unwrap();
+        }
+
+        let recorded = recorded.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(
+            recorded.len(),
+            1,
+            "second dispatch within 5s must be suppressed: {recorded:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn timeout_auto_continue_does_not_renotify() {
+        let (handle, _app, recorded) = mock_app_with_recording_notifier();
+        set_auto_continue(&handle, true).await;
+
+        let handler = DesktopQuestionHandler::new(handle.clone(), 1); // 1s — test-scale
+        let q = sample_question();
+        let ask = tokio::spawn(async move { handler.ask_question(&q).await });
+        let _request_id = wait_pending(&handle).await;
+
+        // Do NOT answer — the auto-continue path must answer for the user.
+        let answers = tokio::time::timeout(std::time::Duration::from_secs(5), ask)
+            .await
+            .expect("timeout path did not resolve the ask")
+            .unwrap()
+            .unwrap();
+        assert_eq!(answers, vec![AUTO_CONTINUE_ANSWER.to_string()]);
+
+        // The timeout fired: the dispatch count stays at exactly the ONE
+        // ask-time notification — the timeout deliberately does NOT
+        // re-notify (mirrors the approval auto-deny ruling).
+        assert_eq!(
+            recorded.lock().unwrap_or_else(|p| p.into_inner()).len(),
+            1,
+            "timeout must stay silent — one dispatch per question, at ask time"
+        );
     }
 }
