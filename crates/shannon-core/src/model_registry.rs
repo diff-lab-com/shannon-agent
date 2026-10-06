@@ -576,8 +576,8 @@ pub fn model_info_for_alias(alias: &str) -> Option<&'static ModelInfo> {
 /// Classify a model id into a routing tier via the catalog — the single
 /// source of truth for tier classification. Resolves exact ids and
 /// segment-boundary dated variants (short names like `"claude-sonnet-4"`
-/// resolve to `"claude-sonnet-4-20250514"`) through
-/// [`find_capability_source`], the same strategy as the vision capability
+/// resolve to `"claude-sonnet-4-20250514"`) through the private
+/// `find_capability_source`, the same strategy as the vision capability
 /// lookup. Returns [`TierLabel::Unknown`] for anything not in the catalog.
 ///
 /// R2-4: a per-model declaration from the active `providers.toml` v2 profile
