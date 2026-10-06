@@ -118,7 +118,10 @@ export interface AskUserOption {
  * `ask_user_question` tool, flattened from `Question` plus the correlation
  * id the answer travels back through (`respondAskUser(requestId, answers)`).
  * `timeout_ms` is present only when 提问自动继续 is on (drives the card's
- * pure-display countdown); `None` = wait forever.
+ * pure-display countdown); `None` = wait forever. `session_id` (F2) is
+ * present only when exactly one run is active — the card then shows just in
+ * windows viewing that session; absent = ambiguous run → every-window
+ * fallback.
  */
 export interface AskUserRequest {
   request_id: string
@@ -126,10 +129,17 @@ export interface AskUserRequest {
   header: string
   options: AskUserOption[]
   multi_select: boolean
+  /** F2: the live run's session when unambiguous; absent keeps the every-window fallback. */
+  session_id?: string
   timeout_ms?: number
 }
 
-/** `ask-user-resolved` payload — the auto-continue timeout fired. */
+/**
+ * `ask-user-resolved` payload — the question settled. Emitted on BOTH
+ * paths (F2): `timed_out: true` on the auto-continue timeout,
+ * `timed_out: false` right after an answer was submitted (any window).
+ * Cards for the request clear on either.
+ */
 export interface AskUserResolved {
   request_id: string
   timed_out: boolean

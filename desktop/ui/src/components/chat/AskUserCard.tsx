@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import { useTauriEventValidated } from '@/hooks/useTauriEventValidated'
+import { useSessions } from '@/context/SessionContext'
 import { EVENT_NAMES, type AskUserRequest } from '@/types'
 
 type AskStatus = 'pending' | 'answered' | 'timedout'
@@ -35,6 +36,14 @@ const SETTLED_AUTO_DISMISS_MS = 6000
  * `ask-user-resolved` (timed_out) and the card shows the auto-continued
  * state. `timeout_ms` on the request drives a pure-display mm:ss countdown;
  * the backend timeout is the authority.
+ *
+ * F2 session scoping: the request carries the live run's `session_id` when
+ * exactly one run is active — a scoped card renders ONLY in windows viewing
+ * that session (`windowSessionId` pin, else the active session); an absent
+ * `session_id` (ambiguous run) keeps the every-window fallback. Both
+ * resolution paths broadcast `ask-user-resolved` — an answered-elsewhere
+ * broadcast clears the still-pending card here, a timed-out broadcast shows
+ * the auto-continued cue.
  */
 export default function AskUserCard() {
   const intl = useIntl()
@@ -42,6 +51,7 @@ export default function AskUserCard() {
     (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values),
     [intl],
   )
+  const { currentSessionId, windowSessionId } = useSessions()
 
   const [card, setCard] = useState<CardState | null>(null)
   const [selected, setSelected] = useState<string[]>([])
@@ -60,9 +70,16 @@ export default function AskUserCard() {
   useTauriEventValidated<{ request_id: string; timed_out: boolean }>(
     EVENT_NAMES.ASK_USER_RESOLVED,
     (e) => {
-      setCard((cur) =>
-        cur && cur.req.request_id === e.payload.request_id ? { ...cur, status: 'timedout' } : cur,
-      )
+      setCard((cur) => {
+        if (!cur || cur.req.request_id !== e.payload.request_id) return cur
+        // Timed out elsewhere → the auto-continued cue (backend already
+        // answered with the best-judgment text).
+        if (e.payload.timed_out) return { ...cur, status: 'timedout' }
+        // Answered — here or in another window. A card already in the
+        // answered state (THIS window submitted it) keeps its brief settled
+        // linger; a still-pending card was answered elsewhere → clear it.
+        return cur.status === 'answered' ? cur : null
+      })
     },
   )
 
@@ -102,8 +119,15 @@ export default function AskUserCard() {
     [card, t],
   )
 
+  // F2 render-level session scoping: show the card when the request is
+  // unscoped (ambiguous run → every window, pre-F2 behavior) or when it
+  // belongs to the session THIS window is viewing (a pinned session window
+  // wins, else the active chat session). Evaluated at render time, so
+  // switching sessions hides/reveals a pending card without an event replay.
+  const visibleSessionId = windowSessionId ?? currentSessionId
   if (!card) return null
   const { req, status } = card
+  if (req.session_id != null && req.session_id !== visibleSessionId) return null
   const trimmed = custom.trim()
   const canSend = trimmed.length > 0 || selected.length > 0
 

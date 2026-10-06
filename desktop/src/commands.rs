@@ -150,6 +150,18 @@ pub struct AppState {
     /// removes + emits `ask-user-resolved`. `DashMap` (sync): the critical
     /// sections are pure map edits, never held across an await.
     pub(crate) pending_questions: Arc<DashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>>,
+    /// Settings R3 followup F2 — sessions with a live run (interactive
+    /// turn, goal run, batch branch, routine attempt, background task),
+    /// keyed by session id with a per-session run count. The
+    /// `DesktopQuestionHandler` reads it before emitting
+    /// `ask-user-request`: exactly one entry → the payload carries that
+    /// session id (the card is scoped to windows viewing that session);
+    /// zero or several → `None` (the card stays visible in every window —
+    /// the pre-F2 behavior). Runs register through
+    /// [`ActiveSessionRunGuard`] at the same task boundary as the T3
+    /// prevent-sleep guard. `DashMap` (sync): the critical sections are
+    /// pure map edits, never held across an await.
+    pub(crate) active_run_sessions: Arc<DashMap<String, usize>>,
     /// Session metadata for session list. (P0-4: kept on AppState for
     /// now; this is the *display* list (titles, message counts), not the
     /// per-session query state. Migrating this into the registry is
@@ -788,7 +800,59 @@ impl Default for AppState {
     }
 }
 
+/// RAII registration of one live run on [`AppState::active_run_sessions`]
+/// (Settings R3 followup F2). Held for the whole run — interactive turn,
+/// goal run, batch branch, routine attempt, background task — at the same
+/// task boundary as the T3 `PreventSleepGuard`; dropping it decrements the
+/// session's run count and removes the entry at zero, so every exit path
+/// (completion, error, cancel, caught panic) unregisters exactly once and
+/// no phantom "active run" outlives its task.
+pub(crate) struct ActiveSessionRunGuard {
+    map: Arc<DashMap<String, usize>>,
+    session_id: String,
+}
+
+impl ActiveSessionRunGuard {
+    /// Register `session_id` as a live run. Refcounted per session so a
+    /// nested/overlapping pair of runs on one id keeps its entry until the
+    /// last run ends.
+    pub(crate) fn register(map: &Arc<DashMap<String, usize>>, session_id: String) -> Self {
+        *map.entry(session_id.clone()).or_insert(0) += 1;
+        Self {
+            map: map.clone(),
+            session_id,
+        }
+    }
+}
+
+impl std::ops::Drop for ActiveSessionRunGuard {
+    fn drop(&mut self) {
+        if let Some(mut count) = self.map.get_mut(&self.session_id) {
+            *count -= 1;
+            if *count == 0 {
+                drop(count);
+                self.map.remove(&self.session_id);
+            }
+        }
+    }
+}
+
 impl AppState {
+    /// F2 — the session id of the SOLE live run, or `None` when zero or
+    /// several runs are active. This is the ask_user card's scoping key:
+    /// unambiguous single run → the request is scoped to that session;
+    /// anything else → `None`, and the card falls back to visible-in-every-
+    /// window (the pre-F2 behavior) instead of guessing.
+    pub(crate) fn sole_active_run_session(&self) -> Option<String> {
+        if self.active_run_sessions.len() != 1 {
+            return None;
+        }
+        self.active_run_sessions
+            .iter()
+            .next()
+            .map(|entry| entry.key().clone())
+    }
+
     /// The L0 session store over this app's sessions directory (§4.6).
     ///
     /// Every session read/write outside the live query path projects from or
@@ -951,6 +1015,7 @@ impl AppState {
             desktop_config: Arc::new(RwLock::new(desktop_config)),
             pending_permissions: Arc::new(Mutex::new(HashMap::new())),
             pending_questions: Arc::new(DashMap::new()),
+            active_run_sessions: Arc::new(DashMap::new()),
             sessions: Arc::new(Mutex::new(Vec::new())),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
             skill_registry: Arc::new(SkillRegistry::new()),
@@ -1919,6 +1984,11 @@ pub async fn send_message(
     // spawn; the guard lives inside the task so every exit path (ok /
     // error / cancel / caught panic) drops it exactly once.
     let block_sleep = desktop_cfg.power_block_sleep_during_tasks;
+    // Settings R3 followup F2 — register this turn's session as the live
+    // run for the whole turn (same boundary as the prevent-sleep guard
+    // below), so an ask_user question raised mid-turn can be scoped to the
+    // session the user is actually looking at.
+    let active_runs_for_task = state.active_run_sessions.clone();
     // Engine→UI permission bridge: each prompt from the query pipeline
     // becomes a pending Tauri permission; the scoped user decision maps back
     // onto the engine's choice enum (AlwaysAllow also lands in the engine's
@@ -1985,6 +2055,14 @@ pub async fn send_message(
         // exit, including a caught-panic unwind.
         let _prevent_sleep_guard =
             block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
+        // Settings R3 followup F2 — this session is the live run for the
+        // whole turn (RAII, unregistered on every exit incl. the
+        // caught-panic path below): the scoping key `DesktopQuestionHandler`
+        // stamps onto `ask-user-request` payloads.
+        let _active_run_guard = crate::commands::ActiveSessionRunGuard::register(
+            &active_runs_for_task,
+            session_id_str.clone(),
+        );
         // P3 (streaming-panic hardening): a panic anywhere in the loop below
         // used to unwind straight out of this task and skip the per-session
         // flag reset at the bottom — the session stayed latched `querying`
@@ -2746,6 +2824,11 @@ pub async fn start_background_task(
     // Settings R3 T6 — same auto-compaction switch the interactive turn
     // reads; applies to this task's engine at spawn time.
     let context_auto_compact = state.desktop_config.read().await.context_auto_compact;
+    // Settings R3 followup F2 — the task's own session, minted up front so
+    // the active-run registration inside the task and the QueryContext
+    // below carry the same id.
+    let task_session_id = uuid::Uuid::new_v4();
+    let active_runs_for_task = state.active_run_sessions.clone();
     // P2-4b: hand the shared memory handle to the spawned task — the runner
     // attaches it to its engine instead of leaving memory: None.
     let memory_store = state.memory_store.clone();
@@ -2758,6 +2841,13 @@ pub async fn start_background_task(
         // background task (RAII: released on every exit, incl. cancel).
         let _prevent_sleep_guard =
             block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
+        // Settings R3 followup F2 — the task's fresh session (minted below,
+        // before the QueryContext consumes it) is the live run while the
+        // task streams (RAII, released on every exit).
+        let _active_run_guard = crate::commands::ActiveSessionRunGuard::register(
+            &active_runs_for_task,
+            task_session_id.to_string(),
+        );
         // Build query engine for this task
         let client = LlmClient::new(client_config);
 
@@ -2810,7 +2900,9 @@ pub async fn start_background_task(
 
         let context = QueryContext {
             query_id,
-            session_id: uuid::Uuid::new_v4(),
+            // F2: minted before the spawn so the active-run registration
+            // above can carry it (see `task_session_id`).
+            session_id: task_session_id,
             user_message: prompt.clone(),
             attachments: Vec::new(),
             metadata: shannon_core::query_engine::QueryMetadata {
@@ -3025,6 +3117,54 @@ pub async fn cancel_background_task(
 
 #[cfg(test)]
 mod tests {
+    // === Settings R3 followup F2 — active-run registration ===
+
+    #[test]
+    fn active_run_guard_registers_and_raii_unregisters() {
+        let state = AppState::new();
+        assert_eq!(state.sole_active_run_session(), None);
+
+        let guard = ActiveSessionRunGuard::register(
+            &state.active_run_sessions,
+            "11111111-1111-1111-1111-111111111111".to_string(),
+        );
+        assert_eq!(
+            state.sole_active_run_session().as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
+
+        // Overlapping second run on the SAME session: refcounted.
+        let guard2 = ActiveSessionRunGuard::register(
+            &state.active_run_sessions,
+            "11111111-1111-1111-1111-111111111111".to_string(),
+        );
+        assert_eq!(
+            state.sole_active_run_session().as_deref(),
+            Some("11111111-1111-1111-1111-111111111111"),
+            "still registered while a run overlaps"
+        );
+        drop(guard);
+        assert_eq!(
+            state.sole_active_run_session().as_deref(),
+            Some("11111111-1111-1111-1111-111111111111"),
+            "first drop must not unregister the overlapping run"
+        );
+        drop(guard2);
+        assert_eq!(state.sole_active_run_session(), None);
+    }
+
+    #[test]
+    fn sole_active_run_is_none_when_two_sessions_run_concurrently() {
+        let state = AppState::new();
+        let _ga = ActiveSessionRunGuard::register(&state.active_run_sessions, "a".to_string());
+        let _gb = ActiveSessionRunGuard::register(&state.active_run_sessions, "b".to_string());
+        assert_eq!(
+            state.sole_active_run_session(),
+            None,
+            "ambiguous (two runs) → None → every-window fallback"
+        );
+    }
+
     /// Seed alternating user/assistant engine messages into a session's L0
     /// log (§4.6): desktop flows project history from this record only.
     fn seed_l0_messages(

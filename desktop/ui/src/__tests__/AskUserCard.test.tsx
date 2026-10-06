@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import AskUserCard from '@/components/chat/AskUserCard'
+import { SessionContext, type SessionContextValue } from '@/context/SessionContext'
 import { EVENT_NAMES } from '@/types'
 import * as api from '@/lib/tauri-api'
 
@@ -44,14 +45,40 @@ const request = (over: Partial<Record<string, unknown>> = {}) => ({
   ...over,
 })
 
+// F2: the card scopes itself via the session slice — provide a minimal
+// SessionContext (AppProvider hosts the real provider in the app shell).
+const baseSessionCtx: SessionContextValue = {
+  sessions: [],
+  sessionActivity: {},
+  goalRunsBySession: {},
+  subagentLive: null,
+  currentSessionId: null,
+  windowSessionId: null,
+  switchingSession: false,
+  createSession: vi.fn(async () => {}),
+  createSessionInWorktree: vi.fn(async () => {}),
+  switchSession: vi.fn(async () => {}),
+  deleteSession: vi.fn(async () => {}),
+  renameSession: vi.fn(async () => {}),
+  refreshSessions: vi.fn(async () => {}),
+  sessionSources: {},
+  addSessionSource: vi.fn(),
+  removeSessionSource: vi.fn(),
+  queueDepthsBySession: {},
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   for (const key of Object.keys(captured)) delete captured[key]
   vi.mocked(api.respondAskUser).mockResolvedValue(undefined)
 })
 
-async function renderCard() {
-  render(<AskUserCard />)
+async function renderCard(session: Partial<SessionContextValue> = {}) {
+  render(
+    <SessionContext.Provider value={{ ...baseSessionCtx, ...session }}>
+      <AskUserCard />
+    </SessionContext.Provider>,
+  )
   // The card renders nothing until listeners registered + a request arrived.
   await waitFor(() => {
     expect((captured[EVENT_NAMES.ASK_USER_REQUEST] ?? []).length).toBeGreaterThan(0)
@@ -162,5 +189,95 @@ describe('AskUserCard (Settings R3 T8 — desktop ask_user round-trip)', () => {
 
     // Back to the form so the user can retry.
     expect(await screen.findByTestId('ask-user-send')).toBeInTheDocument()
+  })
+
+  // === F2 — session scoping + resolved broadcast on both paths ===
+
+  it('shows a scoped request whose session matches the visible session', async () => {
+    await renderCard({ currentSessionId: 'sess-a' })
+    flush(EVENT_NAMES.ASK_USER_REQUEST, request({ session_id: 'sess-a' }))
+
+    expect(await screen.findByTestId('ask-user-card')).toBeInTheDocument()
+  })
+
+  it('shows a scoped request matching the pinned window session (window mode)', async () => {
+    await renderCard({ currentSessionId: null, windowSessionId: 'sess-w' })
+    flush(EVENT_NAMES.ASK_USER_REQUEST, request({ session_id: 'sess-w' }))
+
+    expect(await screen.findByTestId('ask-user-card')).toBeInTheDocument()
+  })
+
+  it('hides a scoped request for another session', async () => {
+    await renderCard({ currentSessionId: 'sess-a' })
+    flush(EVENT_NAMES.ASK_USER_REQUEST, request({ session_id: 'sess-b' }))
+
+    // Background session's question (F2): scoped away from this window.
+    expect(screen.queryByTestId('ask-user-card')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('ask-user-question')).not.toBeInTheDocument()
+  })
+
+  it('keeps a hidden scoped request hidden until its session becomes visible', async () => {
+    const view = render(
+      <SessionContext.Provider value={{ ...baseSessionCtx, currentSessionId: 'sess-a' }}>
+        <AskUserCard />
+      </SessionContext.Provider>,
+    )
+    await waitFor(() => {
+      expect((captured[EVENT_NAMES.ASK_USER_REQUEST] ?? []).length).toBeGreaterThan(0)
+    })
+    flush(EVENT_NAMES.ASK_USER_REQUEST, request({ session_id: 'sess-b' }))
+    expect(screen.queryByTestId('ask-user-card')).not.toBeInTheDocument()
+
+    // User switches to the asking session → the pending card appears.
+    view.rerender(
+      <SessionContext.Provider value={{ ...baseSessionCtx, currentSessionId: 'sess-b' }}>
+        <AskUserCard />
+      </SessionContext.Provider>,
+    )
+    expect(await screen.findByTestId('ask-user-card')).toBeInTheDocument()
+    expect(screen.getByTestId('ask-user-question')).toHaveTextContent('Deploy to production?')
+  })
+
+  it('shows an unscoped request (ambiguous run) regardless of the visible session', async () => {
+    await renderCard({ currentSessionId: 'sess-a' })
+    flush(EVENT_NAMES.ASK_USER_REQUEST, request()) // no session_id → every-window fallback
+
+    expect(await screen.findByTestId('ask-user-card')).toBeInTheDocument()
+  })
+
+  it('clears a pending card when the answered broadcast (timed_out: false) arrives', async () => {
+    await renderCard({ currentSessionId: 'sess-a' })
+    flush(EVENT_NAMES.ASK_USER_REQUEST, request({ session_id: 'sess-a' }))
+    await screen.findByTestId('ask-user-card')
+
+    // Another window answered → every other window's card clears.
+    flush(EVENT_NAMES.ASK_USER_RESOLVED, { request_id: 'req-1', timed_out: false })
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('ask-user-card')).not.toBeInTheDocument()
+    })
+  })
+
+  it('keeps the answered linger in the window that submitted the answer', async () => {
+    await renderCard()
+    flush(EVENT_NAMES.ASK_USER_REQUEST, request())
+    const group = await screen.findByTestId('ask-user-options')
+    fireEvent.click(within(group).getByRole('button', { name: 'Yes' }))
+    await waitFor(() => expect(api.respondAskUser).toHaveBeenCalledWith('req-1', ['Yes']))
+    expect(await screen.findByTestId('ask-user-status')).toHaveTextContent('Answered')
+
+    // The broadcast triggered by THIS window's own submit arrives back —
+    // the settled (answered) card keeps its linger, it is not blanked.
+    flush(EVENT_NAMES.ASK_USER_RESOLVED, { request_id: 'req-1', timed_out: false })
+    expect(screen.getByTestId('ask-user-status')).toHaveTextContent('Answered')
+  })
+
+  it('shows the timed-out cue when the answered broadcast carries timed_out: true', async () => {
+    await renderCard()
+    flush(EVENT_NAMES.ASK_USER_REQUEST, request())
+    await screen.findByTestId('ask-user-card')
+
+    flush(EVENT_NAMES.ASK_USER_RESOLVED, { request_id: 'req-1', timed_out: true })
+    expect(await screen.findByTestId('ask-user-status')).toHaveTextContent(/Timed out/i)
   })
 })
