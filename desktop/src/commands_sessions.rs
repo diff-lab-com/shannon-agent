@@ -142,24 +142,28 @@ pub(crate) fn derive_title_from_message(message: &str) -> String {
 /// StateManager save with `Some(title)`); later auto-saves pass
 /// `title: None`, which `StateManager::save_session` backfills from disk,
 /// so the derived title survives every subsequent save.
-pub(crate) async fn auto_title_from_first_message(
+///
+/// Returns the derived title **when it was applied** — the TitleGeneration
+/// slot consumer (`session_title`) keys its one-shot LLM retitling off this
+/// (spawn only what the deterministic pass actually retitled, so a session
+/// the user renamed — in this or any previous process — can never reach the
+/// LLM title path). `None` = the placeholder was kept, no LLM title either.
+pub(crate) async fn auto_title_from_first_message<R: tauri::Runtime>(
     state: &AppState,
-    app_handle: &tauri::AppHandle,
+    app_handle: &tauri::AppHandle<R>,
     session_id: uuid::Uuid,
     message: &str,
-) {
+) -> Option<String> {
     let title = derive_title_from_message(message);
     if title.is_empty() {
-        return;
+        return None;
     }
     let id_str = session_id.to_string();
 
     let mut sessions = state.sessions.lock().await;
-    let Some(session) = sessions.iter_mut().find(|s| s.id == id_str) else {
-        return;
-    };
+    let session = sessions.iter_mut().find(|s| s.id == id_str)?;
     if !session.title.starts_with("Session ") {
-        return;
+        return None;
     }
     session.title = title.clone();
 
@@ -170,12 +174,13 @@ pub(crate) async fn auto_title_from_first_message(
     let _ = state.l0_store().save_sidecar(
         &session_id,
         &shannon_core::session_log::SessionSidecar {
-            title: Some(title),
+            title: Some(title.clone()),
             ..Default::default()
         },
     );
 
     let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
+    Some(title)
 }
 
 /// List all sessions.
@@ -2683,6 +2688,73 @@ mod auto_title_tests {
     #[test]
     fn whitespace_only_yields_empty() {
         assert_eq!(derive_title_from_message("   \n\t  "), "");
+    }
+
+    /// The return contract the TitleGeneration slot consumer keys off
+    /// (`session_title` spawns its one LLM attempt only on `Some`): the
+    /// derived title is returned when — and only when — it was applied, and
+    /// a user-renamed session (placeholder rule) never reaches the LLM path.
+    #[tokio::test]
+    async fn auto_title_returns_the_applied_title_and_none_for_user_renames() {
+        use crate::commands::{AppState, SessionMeta};
+        use shannon_engine::state::StateManager;
+        use std::sync::Arc;
+        use tauri::Manager;
+
+        let app = tauri::test::mock_app().handle().clone();
+        let dir = tempfile::tempdir().unwrap();
+        let mut app_state = AppState::new();
+        app_state.state_manager =
+            Arc::new(StateManager::with_sessions_dir(dir.path().join("sessions")).unwrap());
+        app.manage(app_state);
+        let state = app.state::<AppState>();
+
+        async fn push(state: &AppState, id: uuid::Uuid, title: &str) {
+            state.sessions.lock().await.push(SessionMeta {
+                id: id.to_string(),
+                title: title.to_string(),
+                created_at: 0,
+                message_count: 0,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            });
+        }
+
+        // Placeholder-titled session → retitled; returns the derived title.
+        let fresh = uuid::Uuid::new_v4();
+        push(&state, fresh, "Session abcd1234").await;
+        let derived =
+            super::auto_title_from_first_message(&state, &app, fresh, "Fix the login bug").await;
+        assert_eq!(derived.as_deref(), Some("Fix the login bug"));
+        let id_str = fresh.to_string();
+        let title = state
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .find(|s| s.id == id_str)
+            .map(|s| s.title.clone())
+            .unwrap_or_default();
+        assert_eq!(title, "Fix the login bug");
+
+        // User-renamed session (this or a previous process) → None; the
+        // title — and therefore the LLM title path — is never touched.
+        let renamed = uuid::Uuid::new_v4();
+        push(&state, renamed, "My Own Name").await;
+        let derived =
+            super::auto_title_from_first_message(&state, &app, renamed, "Fix the login bug").await;
+        assert_eq!(derived, None);
+        let id_str = renamed.to_string();
+        let title = state
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .find(|s| s.id == id_str)
+            .map(|s| s.title.clone())
+            .unwrap_or_default();
+        assert_eq!(title, "My Own Name");
     }
 }
 
