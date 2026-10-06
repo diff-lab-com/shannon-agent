@@ -210,8 +210,11 @@ pub struct LlmSummarizer {
 impl LlmSummarizer {
     /// Create a new LLM summarizer wrapping the given client.
     ///
-    /// Each call to `summarize` / `micro_summarize` will create a temporary
-    /// tokio runtime. Prefer `with_handle` when a runtime is already available.
+    /// With no stored handle each call to `summarize` / `micro_summarize`
+    /// reuses the *ambient* tokio runtime when the caller is already inside
+    /// one (blocking via `block_in_place`), and only builds a temporary
+    /// runtime on a plain thread. Prefer `with_handle` when a specific
+    /// runtime should be used.
     pub fn new(client: crate::api::LlmClient) -> Self {
         Self {
             client,
@@ -250,17 +253,42 @@ impl LlmSummarizer {
     }
 
     /// Execute an async LLM call using the stored handle or a fresh runtime.
+    ///
+    /// Runtime nesting rules (regression legacy-④: this used to build a
+    /// fresh [`tokio::runtime::Runtime`] unconditionally, so any caller
+    /// already inside a runtime — e.g. the agent-loop producer task running
+    /// the loop-level compaction — died with "Cannot start a runtime from
+    /// within a runtime" before the request was even sent):
+    ///
+    /// - ambient multi-thread runtime → hand the worker core back with
+    ///   [`tokio::task::block_in_place`] and block on the stored handle
+    ///   (or the ambient one when none is stored); this is the documented
+    ///   way to block inside a runtime and introduces no new runtime;
+    /// - ambient current-thread runtime → blocking can never be safe (the
+    ///   single thread *is* the driver), so return `Err` and let the
+    ///   caller fall back to the rule-based summarizer instead of panicking;
+    /// - no ambient runtime (plain thread) → the stored handle, or a fresh
+    ///   temporary runtime when none was given — the historical behavior,
+    ///   byte-identical.
     fn block_on_llm<F, T>(&self, fut: F) -> Result<T, String>
     where
         F: std::future::Future<Output = Result<T, String>>,
     {
-        if let Some(handle) = &self.runtime_handle {
-            handle.block_on(fut)
-        } else {
-            match tokio::runtime::Runtime::new() {
+        if let Ok(ambient) = tokio::runtime::Handle::try_current() {
+            if ambient.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+                return Err("refusing to block inside a current-thread runtime; \
+                     the rule-based fallback will be used"
+                    .to_string());
+            }
+            let handle = self.runtime_handle.clone().unwrap_or(ambient);
+            return tokio::task::block_in_place(|| handle.block_on(fut));
+        }
+        match &self.runtime_handle {
+            Some(handle) => handle.block_on(fut),
+            None => match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt.block_on(fut),
                 Err(e) => Err(format!("Failed to create runtime: {e}")),
-            }
+            },
         }
     }
 
@@ -677,5 +705,179 @@ mod tests {
     fn test_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<RuleBasedSummarizer>();
+    }
+
+    // ── LlmSummarizer: runtime nesting (legacy-④ regression) ─────────────
+
+    /// Minimal local HTTP mock: answers every request with one fixed
+    /// Anthropic-style non-streaming JSON message and records the raw
+    /// request bodies (same shape as the core agent-loop wire mocks).
+    struct WireMockServer {
+        base_url: String,
+        bodies: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl WireMockServer {
+        fn start(text: &'static str) -> Self {
+            use std::io::{Read, Write};
+
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let captured = bodies.clone();
+            // Detached accept loop: lives until process exit (one connection
+            // per request — every response carries `Connection: close`).
+            std::thread::spawn(move || {
+                for mut stream in listener.incoming().flatten() {
+                    let mut buf = vec![0u8; 1 << 16];
+                    let mut read = 0usize;
+                    loop {
+                        match stream.read(&mut buf[read..]) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => read += n,
+                        }
+                        let s = String::from_utf8_lossy(&buf[..read]).to_string();
+                        if let Some(header_end) = s.find("\r\n\r\n") {
+                            let cl: usize = s[..header_end]
+                                .to_ascii_lowercase()
+                                .split("\r\n")
+                                .find_map(|l| l.strip_prefix("content-length:"))
+                                .and_then(|v| v.trim().parse().ok())
+                                .unwrap_or(0);
+                            if read >= header_end + 4 + cl {
+                                break;
+                            }
+                        }
+                        if read == buf.len() {
+                            break;
+                        }
+                    }
+                    captured
+                        .lock()
+                        .unwrap()
+                        .push(String::from_utf8_lossy(&buf[..read]).to_string());
+                    let body = format!(
+                        r#"{{"id":"msg_mock","role":"assistant","content":[{{"type":"text","text":"{text}"}}],"model":"mock-model","stop_reason":"end_turn","usage":{{"input_tokens":1,"output_tokens":1}}}}"#
+                    );
+                    let http = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream.write_all(http.as_bytes()).ok();
+                    stream.flush().ok();
+                }
+            });
+            Self {
+                base_url: format!("http://127.0.0.1:{port}"),
+                bodies,
+            }
+        }
+
+        fn request_bodies(&self) -> Vec<String> {
+            self.bodies.lock().unwrap().clone()
+        }
+    }
+
+    fn mock_client(base_url: &str) -> crate::api::LlmClient {
+        crate::api::LlmClient::new(crate::api::LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
+            api_key: "test-key".to_string(),
+            base_url: base_url.to_string(),
+            model: "mock-model".to_string(),
+            provider: crate::api::LlmProvider::Anthropic,
+            ..Default::default()
+        })
+    }
+
+    fn summarize_input() -> Vec<Message> {
+        (0..4)
+            .map(|i| text_message("user", &format!("turn {i}: discussed module_{i}")))
+            .collect()
+    }
+
+    /// Legacy-④ regression pin. The loop-level compaction constructs
+    /// `LlmSummarizer::new` (no stored handle) INSIDE the agent-loop's
+    /// producer task. Pre-fix, `block_on_llm` built a fresh `Runtime` there
+    /// and the task died with "Cannot start a runtime from within a
+    /// runtime" before the request was ever sent. Post-fix the ambient
+    /// multi-thread runtime is reused via `block_in_place` and the
+    /// summarization request physically reaches the wire.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn llm_summarize_from_inside_a_multi_thread_runtime_hits_the_wire() {
+        let server = WireMockServer::start("LLM SUMMARY BODY");
+        let client = mock_client(&server.base_url);
+
+        // Mirror the agent loop: summarize runs inside a spawned task on a
+        // runtime worker, not on the `block_on` caller thread.
+        let task = tokio::spawn(async move {
+            let summarizer = LlmSummarizer::new(client);
+            summarizer.summarize(&summarize_input(), 1000)
+        });
+        let summary = task
+            .await
+            .expect("summarize task must not panic")
+            .expect("summarize must succeed");
+
+        assert_eq!(summary, "LLM SUMMARY BODY");
+        let bodies = server.request_bodies();
+        assert_eq!(
+            bodies.len(),
+            1,
+            "exactly one LLM request must physically reach the wire: {bodies:?}"
+        );
+        assert!(
+            bodies[0].contains("mock-model"),
+            "the request must carry the client's model: {}",
+            bodies[0]
+        );
+        assert!(
+            bodies[0].contains("turn 0"),
+            "the request must carry the conversation being summarized: {}",
+            bodies[0]
+        );
+    }
+
+    /// Legacy-④ companion: inside a CURRENT-THREAD runtime blocking can
+    /// never be safe (the single thread IS the driver). Pre-fix this
+    /// panicked exactly like the multi-thread case; post-fix the
+    /// summarizer degrades to the rule-based fallback instead of
+    /// panicking, and no request is sent.
+    #[tokio::test]
+    async fn llm_summarize_inside_a_current_thread_runtime_falls_back_without_panicking() {
+        let server = WireMockServer::start("LLM SUMMARY BODY");
+        let summarizer = LlmSummarizer::new(mock_client(&server.base_url));
+
+        let summary = summarizer
+            .summarize(&summarize_input(), 1000)
+            .expect("must fall back, not panic");
+
+        assert!(
+            summary.contains("[Conversation summary"),
+            "expected the rule-based fallback shape, got: {summary}"
+        );
+        assert!(
+            server.request_bodies().is_empty(),
+            "no LLM request can be driven on a current-thread runtime"
+        );
+    }
+
+    /// The `with_handle` contract (desktop/repl callers of
+    /// `with_llm_summarizer_on_runtime`): a stored handle used from a
+    /// plain thread outside any runtime keeps working exactly as before
+    /// the fix — real request, no fallback.
+    #[test]
+    fn llm_summarize_with_stored_handle_from_a_plain_thread_hits_the_wire() {
+        let server = WireMockServer::start("STORED HANDLE SUMMARY");
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let summarizer =
+            LlmSummarizer::with_handle(mock_client(&server.base_url), rt.handle().clone());
+
+        let summary = summarizer
+            .summarize(&summarize_input(), 1000)
+            .expect("summarize must succeed");
+
+        assert_eq!(summary, "STORED HANDLE SUMMARY");
+        assert_eq!(server.request_bodies().len(), 1);
     }
 }
