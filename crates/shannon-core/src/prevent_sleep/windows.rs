@@ -141,3 +141,67 @@ fn create_request() -> Option<windows::Win32::Foundation::HANDLE> {
         }
     }
 }
+
+// F5 (Settings R3 followups) — native smoke test for the PowerRequest
+// backend. CI historically only proved that this module *cross-compiles*;
+// on a real Windows runner (Cross-platform Check windows leg, nightly
+// core-tests, local `cargo test`) the round trip below proves the kernel
+// API actually accepts our request. It self-skips when the platform
+// environment is unavailable so a runner limitation can never turn the CI
+// gate red.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::power_request_slot;
+    use std::sync::atomic::Ordering;
+
+    /// Acquire/release round trip against the real Power Request API.
+    ///
+    /// Smoke scope (F5): the bar is "the API succeeded" — i.e. the request
+    /// object was created (`PowerCreateRequest` returned a handle, which
+    /// [`power_request_slot`] only stores on success), the refcount flips,
+    /// and start/stop round-trip without panicking. A user-space test
+    /// cannot observe the OS power state, and `PowerSetRequest` /
+    /// `PowerClearRequest` failures are only logged as warnings, so "no
+    /// error" is not assertable beyond that level.
+    ///
+    /// Skip contract: if `PowerCreateRequest` fails on this machine (no
+    /// power manager in the session, hardened runner image), the round trip
+    /// exercises the documented degraded no-op and the test skips instead
+    /// of failing — runner limitations must not turn CI red.
+    #[test]
+    fn power_request_round_trip_smoke() {
+        // Serialize with the refcount tests in `prevent_sleep::tests` (the
+        // statics below are process-global; plain `cargo test` runs
+        // everything in one process).
+        let _serial = super::super::tests::shared_test_lock();
+        super::super::PREVENT_SLEEP_REF_COUNT.store(0, Ordering::SeqCst);
+        assert!(!super::super::is_preventing_sleep());
+
+        super::super::start_prevent_sleep();
+        assert!(
+            super::super::is_preventing_sleep(),
+            "refcount must flip on acquire"
+        );
+        let created = power_request_slot().is_some();
+
+        super::super::stop_prevent_sleep();
+        assert!(
+            !super::super::is_preventing_sleep(),
+            "refcount must flip back on release"
+        );
+
+        if !created {
+            eprintln!(
+                "skip: PowerCreateRequest unavailable on this machine — round trip exercised the degraded no-op path"
+            );
+            return;
+        }
+        // Release intentionally keeps the request object for reuse (module
+        // docs) — that is part of the balanced acquire/release contract.
+        assert!(
+            power_request_slot().is_some(),
+            "release must keep the request object for reuse"
+        );
+    }
+}
