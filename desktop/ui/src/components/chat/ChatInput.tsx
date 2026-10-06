@@ -1453,7 +1453,16 @@ export default function ChatInput({
                   {() => <span className="truncate">{selectedMode.rawLabel ?? t(selectedMode.labelKey)}</span>}
                 </SelectValue>
               </SelectTrigger>
-              <SelectContent>
+              {/* The composer sits on the window's bottom edge, and the
+                  default trigger-aligned popup opens DOWNWARD from the
+                  selected item — the ladder + high-risk note then overflow
+                  the viewport and the popup scrolls internally (bug:
+                  权限模式弹出框显示不全面). Open upward with standard
+                  popover positioning instead: the whole ladder and the note
+                  fit in the ~550px between the composer and the header.
+                  min-w-56 stops the two-line descriptions wrapping three
+                  deep (the trigger-aligned w-(--anchor-width) was pill-width). */}
+              <SelectContent side="top" alignItemWithTrigger={false} className="min-w-56">
                 {APPROVAL_MODES.map(mode => (
                   <SelectItem key={mode.value} value={mode.value}>
                     <div className="flex items-start gap-xs py-0.5">
