@@ -68,6 +68,15 @@ export interface ApprovalRespondRequest {
   request_id: string;
 }
 
+export interface ApprovalModeState {
+  mode: string;
+}
+
+export interface ApprovalModeRequest {
+  mode: string;
+  session_id: string;
+}
+
 export type ApprovalDecision =
   | "allow_once"
   | "always_allow"

@@ -689,7 +689,10 @@ mod tests {
             );
         }
         for host in ["127.0.0.1", "127.8.8.8", "::1"] {
-            assert!(is_loopback_host(host), "host '{host}' must count as loopback");
+            assert!(
+                is_loopback_host(host),
+                "host '{host}' must count as loopback"
+            );
         }
     }
 

@@ -1674,10 +1674,15 @@ mod tests {
 
     #[test]
     fn test_agent_defs_builtin_has_system_prompts() {
-        let tool = AgentTool::new();
-        let defs = tool.get_agent_defs();
+        // Hermetic: assert on the BUILT-IN definitions only. Going through
+        // `AgentTool::new()` → `load_from_dirs()` also loads user-global
+        // (`~/.shannon/agents`, `~/.claude/agents`) and project-local
+        // overrides, so this test failed on any machine whose own
+        // code-reviewer override reworded the prompt.
+        let mut registry = shannon_agents::AgentDefinitionRegistry::new();
+        registry.with_builtin_defaults();
 
-        let explorer = defs.get("explorer").unwrap();
+        let explorer = registry.get("explorer").unwrap();
         assert!(explorer.system_prompt.is_some());
         assert!(
             explorer
@@ -1687,7 +1692,7 @@ mod tests {
                 .contains("code explorer")
         );
 
-        let reviewer = defs.get("code-reviewer").unwrap();
+        let reviewer = registry.get("code-reviewer").unwrap();
         assert!(reviewer.system_prompt.is_some());
         assert!(
             reviewer
