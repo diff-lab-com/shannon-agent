@@ -401,6 +401,112 @@ pub fn all_model_ids() -> Vec<&'static str> {
     MODEL_CATALOG.iter().map(|m| m.id).collect()
 }
 
+// ── Capability-lookup id matching (legacy ⑦, review 2026-10-05 #297) ──
+
+/// Segment delimiters recognized by [`is_capability_variant_of`]. A model id
+/// is read as delimiter-separated segments (`glm`, `4.5`, `air`), so a
+/// prefix relationship only counts when it lines up with segment edges.
+const ID_SEGMENT_DELIMITERS: [char; 4] = ['-', '_', '.', '/'];
+
+/// The FINAL rule for capability-prefix inheritance (legacy ⑦, #297):
+/// a catalog entry's metadata may be inherited by a differently-spelled id
+/// only when the two ids are equal, or one is a byte-prefix of the other
+/// **at a segment boundary** and the leftover tail is a purely numeric
+/// release suffix — a single delimiter followed by one or more digit-only
+/// segments separated by the same delimiters (`-20250514`, `-2024-08-06`,
+/// `_20251001`, `-6`).
+///
+/// Concretely, with entry `glm-4.5` in the catalog:
+/// - `glm-4.5-20250715` inherits (date snapshot of the same model);
+/// - `claude-sonnet-4-6-20260101` inherits from `claude-sonnet-4-6`
+///   (acceptance a — dated variants resolve);
+/// - `glm-4.5-air` does **not** inherit (acceptance b — `-air` carries a
+///   letter segment: a different, smaller product, not a snapshot);
+/// - `glm-4.5v` does not inherit either (`v` is glued on — not even a
+///   segment boundary).
+///
+/// Deliberately strict on purpose: capability bits gate real traffic
+/// (the R3-4 vision gate refuses on a known-false bit), so an id the rule
+/// cannot vouch for resolves to "unknown" and the callers' forward-compat
+/// path (no gate, no fabricated tier) takes over instead.
+///
+/// Both capability consumers — the vision lookup
+/// (`query_engine::engine::agent_loop::model_supports_vision`) and
+/// [`tier_label_for_id`] — resolve through this one predicate so the two
+/// can never drift again. Explicit `providers.toml` declarations stay
+/// authoritative ahead of any inheritance (exact-id only), and the billing
+/// path (`query_engine::types::find_pricing`) intentionally keeps its own
+/// substring semantics — this rule does not apply there.
+pub(crate) fn is_capability_variant_of(entry_id: &str, model_id: &str) -> bool {
+    if entry_id == model_id {
+        return true;
+    }
+    // One id must be a byte-prefix of the other. Both sides are valid
+    // UTF-8 and identical over the shared range, so the cut is a char
+    // boundary of the longer id and slicing is sound.
+    let tail = if model_id.len() > entry_id.len()
+        && model_id.as_bytes().starts_with(entry_id.as_bytes())
+    {
+        &model_id[entry_id.len()..]
+    } else if entry_id.len() > model_id.len()
+        && entry_id.as_bytes().starts_with(model_id.as_bytes())
+    {
+        &entry_id[model_id.len()..]
+    } else {
+        return false;
+    };
+    is_numeric_release_suffix(tail)
+}
+
+/// True when `tail` (the non-shared remainder of the longer id) is a
+/// numeric release suffix: one delimiter, then only digit segments. See
+/// [`is_capability_variant_of`] for the rule this implements.
+fn is_numeric_release_suffix(tail: &str) -> bool {
+    let Some(body) = tail.strip_prefix(ID_SEGMENT_DELIMITERS) else {
+        return false;
+    };
+    !body.is_empty()
+        && body
+            .split(ID_SEGMENT_DELIMITERS)
+            .all(|segment| !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Resolve `model_id` against `catalog` for capability lookups: exact id
+/// first, then the segment-boundary variant match of
+/// [`is_capability_variant_of`] (forward: the entry extends the query with
+/// a dated suffix, e.g. `gpt-4o` → `gpt-4o-2024-08-06`; reverse: the query
+/// extends the entry, e.g. `claude-sonnet-4-6-20260101` →
+/// `claude-sonnet-4-6`; longest entry wins, mirroring the historical stage
+/// order). Returns `None` when nothing vouches for the id — callers treat
+/// that as "capability unknown".
+///
+/// Legacy ⑦ (#297): replaces the old raw bidirectional `starts_with` scan
+/// that let `glm-4.5-air` inherit `glm-4.5`'s vision bit. Parameterized
+/// over the catalog slice so tests can pin the EXACT strategy against
+/// synthetic catalogs.
+pub(crate) fn find_capability_source<'a>(
+    catalog: &'a [ModelInfo],
+    model_id: &str,
+) -> Option<&'a ModelInfo> {
+    if let Some(info) = catalog.iter().find(|m| m.id == model_id) {
+        return Some(info);
+    }
+    // Forward: catalog entry extends the query id at a segment boundary.
+    if let Some(info) = catalog
+        .iter()
+        .find(|m| m.id.len() > model_id.len() && is_capability_variant_of(m.id, model_id))
+    {
+        return Some(info);
+    }
+    // Reverse: query id extends a catalog entry (strictly shorter, since a
+    // longer match would have been caught by the forward stage above);
+    // longest entry wins.
+    catalog
+        .iter()
+        .filter(|m| is_capability_variant_of(m.id, model_id))
+        .max_by_key(|m| m.id.len())
+}
+
 /// Conservative context-window fallback (200K) for internal budgets
 /// (compaction thresholds, sidebar gauge denominator) when a model's real
 /// limit is unknown. This is a safety cap, **not** a claim about the model —
@@ -468,10 +574,11 @@ pub fn model_info_for_alias(alias: &str) -> Option<&'static ModelInfo> {
 }
 
 /// Classify a model id into a routing tier via the catalog — the single
-/// source of truth for tier classification. Matches exact id first, then
-/// prefix (so short names like `"claude-sonnet-4"` resolve to
-/// `"claude-sonnet-4-20250514"`), mirroring [`context_window_for`]'s lookup
-/// strategy. Returns [`TierLabel::Unknown`] for anything not in the catalog.
+/// source of truth for tier classification. Resolves exact ids and
+/// segment-boundary dated variants (short names like `"claude-sonnet-4"`
+/// resolve to `"claude-sonnet-4-20250514"`) through
+/// [`find_capability_source`], the same strategy as the vision capability
+/// lookup. Returns [`TierLabel::Unknown`] for anything not in the catalog.
 ///
 /// R2-4: a per-model declaration from the active `providers.toml` v2 profile
 /// wins first — its declared capabilities feed the same heuristic the catalog
@@ -482,25 +589,15 @@ pub fn model_info_for_alias(alias: &str) -> Option<&'static ModelInfo> {
 /// UI layers (status bar, status card) call this instead of maintaining their
 /// own string-heuristic copies.
 pub fn tier_label_for_id(model_id: &str) -> TierLabel {
-    // Empty id would otherwise prefix-match the first catalog entry
-    // (`m.id.starts_with("")` is always true) — guard it explicitly.
+    // Empty id would otherwise read as a prefix of the first catalog
+    // entry — guard it explicitly.
     if model_id.is_empty() {
         return TierLabel::Unknown;
     }
     if let Some(label) = crate::declared_models::tier_label_for(model_id) {
         return label;
     }
-    if let Some(info) = model_info_for(model_id) {
-        return info.tier_label();
-    }
-    if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id.starts_with(model_id)) {
-        return info.tier_label();
-    }
-    if let Some(info) = MODEL_CATALOG
-        .iter()
-        .filter(|m| model_id.starts_with(m.id))
-        .max_by_key(|m| m.id.len())
-    {
+    if let Some(info) = find_capability_source(MODEL_CATALOG, model_id) {
         return info.tier_label();
     }
     TierLabel::Unknown
@@ -1756,6 +1853,84 @@ mod tests {
         // Non-catalog / empty.
         assert_eq!(tier_label_for_id("made-up-model"), TierLabel::Unknown);
         assert_eq!(tier_label_for_id(""), TierLabel::Unknown);
+    }
+
+    #[test]
+    fn capability_variant_rule_is_dated_suffix_only() {
+        // Legacy ⑦ (#297) FINAL RULE, pinned directly on the shared
+        // predicate both capability lookups resolve through: prefix
+        // inheritance requires a segment boundary AND a purely numeric
+        // release suffix on the leftover tail.
+
+        // Dated snapshots of the same model — the legitimate inheritors.
+        assert!(is_capability_variant_of(
+            "claude-sonnet-4-6",
+            "claude-sonnet-4-6-20260101"
+        ));
+        assert!(is_capability_variant_of("glm-4.5", "glm-4.5-20250715"));
+        assert!(is_capability_variant_of("gpt-4o", "gpt-4o-2024-08-06"));
+        assert!(is_capability_variant_of("foo_bar", "foo_bar_2025"));
+
+        // Cross-product / letter extensions — must NOT inherit.
+        assert!(
+            !is_capability_variant_of("glm-4.5", "glm-4.5-air"),
+            "-air is a different product, not a snapshot"
+        );
+        assert!(!is_capability_variant_of("gpt-4o", "gpt-4o-mini"));
+        assert!(!is_capability_variant_of("glm-5.1", "glm-5.1-flash"));
+        assert!(
+            !is_capability_variant_of("glm-5.1", "glm-5.1-flash-x"),
+            "letter segments anywhere in the tail disqualify inheritance"
+        );
+        assert!(
+            !is_capability_variant_of("glm-4.5", "glm-4.5v"),
+            "glued tail is not even a segment boundary"
+        );
+        assert!(
+            !is_capability_variant_of("glm-4.5", "glm-4.5-air-20250715"),
+            "a date suffix cannot launder a letter segment before it"
+        );
+        // Symmetric: the entry may also be the LONGER side (short query →
+        // dated catalog entry).
+        assert!(is_capability_variant_of(
+            "claude-sonnet-4-20250514",
+            "claude-sonnet-4"
+        ));
+        // Equality is exact-match territory, still true here.
+        assert!(is_capability_variant_of("gpt-4o", "gpt-4o"));
+        // Unrelated ids.
+        assert!(!is_capability_variant_of("gpt-4o", "claude-sonnet-4"));
+    }
+
+    #[test]
+    fn tier_lookup_follows_the_variant_rule() {
+        // Declared models stay authoritative ahead of the catalog; make
+        // sure no declaration from a sibling test is visible here.
+        crate::declared_models::clear();
+
+        // Acceptance (a): the dated variant of claude-sonnet-4-6 inherits
+        // its tier (forward-compat for real-world dated ids).
+        assert_eq!(tier_label_for_id("claude-sonnet-4-6"), TierLabel::Standard);
+        assert_eq!(
+            tier_label_for_id("claude-sonnet-4-6-20260101"),
+            TierLabel::Standard,
+            "dated variant inherits the base entry's tier"
+        );
+
+        // Acceptance (b) on tier: a letter-suffixed cross-product id no
+        // longer inherits the nearest listed ancestor's tier — it is
+        // Unknown, exactly like any other capability-unknown id.
+        assert_eq!(
+            tier_label_for_id("glm-5.1-flash"),
+            TierLabel::Fast,
+            "exact entry still wins"
+        );
+        assert_eq!(
+            tier_label_for_id("glm-5.1-flash-x"),
+            TierLabel::Unknown,
+            "no inheritance across a letter segment"
+        );
+        crate::declared_models::clear();
     }
 
     #[test]
