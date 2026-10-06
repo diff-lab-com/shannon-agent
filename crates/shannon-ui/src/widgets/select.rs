@@ -924,6 +924,32 @@ mod tests {
     }
 
     #[test]
+    fn focus_provider_records_switch_target_for_manual_entry() {
+        // Ruling ⑤ follow-up: the forced picker must remember the switch
+        // target so the manual-id hatch (`i` + Enter) lands the typed id on
+        // the target provider instead of the still-active pre-switch one.
+        // A plain `/model` picker records no target and keeps the old
+        // manual-entry semantics.
+        let plain = ModelPickerWidget::new(None);
+        assert!(
+            plain.switch_target().is_none(),
+            "a plain /model picker has no switch target"
+        );
+
+        let mut forced = ModelPickerWidget::new(Some("claude-sonnet-4-20250514"));
+        assert!(
+            forced.switch_target().is_none(),
+            "constructor alone records no switch target"
+        );
+        forced.focus_provider(&LlmProvider::Bedrock);
+        assert_eq!(
+            forced.switch_target(),
+            Some(&LlmProvider::Bedrock),
+            "focus_provider records the forced switch target"
+        );
+    }
+
+    #[test]
     fn model_cost_label_honest_about_unknown() {
         use shannon_core::model_registry::{ModelCapabilities, ModelInfo};
         use shannon_engine::api::LlmProvider;
@@ -1075,6 +1101,12 @@ pub struct ModelPickerWidget {
     manual_mode: bool,
     /// Typed model id while in manual entry mode.
     manual_input: String,
+    /// The provider a forced `/provider` switch is targeting (ruling ⑤
+    /// ForcePicker context). When set, a manually typed id confirmed with
+    /// Enter lands on **this** provider (`<target>/<typed id>`) instead of
+    /// the still-active pre-switch one. Plain `/model` pickers leave it
+    /// `None` and keep the typed id on the current provider.
+    switch_target: Option<LlmProvider>,
 }
 
 /// Honest cost label for a model shown in the picker detail line.
@@ -1124,6 +1156,7 @@ impl ModelPickerWidget {
             current_tier_idx: 0,
             manual_mode: false,
             manual_input: String::new(),
+            switch_target: None,
         };
 
         // Find the provider of the current model to open the right tab
@@ -1276,16 +1309,32 @@ impl ModelPickerWidget {
     /// `/provider` switch forces the picker pre-tabbed at the target so the
     /// user lands an explicit model instead of silently keeping the old one).
     ///
-    /// No-op when the provider has no tab (filtered out by the
-    /// `SHANNON_*_PROVIDERS` allowlist/denylist) — the picker then stays on
-    /// the tab it was constructed on. A tab whose catalog is empty renders
-    /// as an empty list; the manual-entry hatch (`i`) and the Esc cancel are
-    /// always available.
+    /// `provider` is also recorded as the picker's [`switch_target`](Self::switch_target):
+    /// this picker exists because a switch onto `provider` was forced, so a
+    /// manually typed model id confirmed with Enter must land on `provider`
+    /// (`<target>/<typed id>`), not on the still-active pre-switch one. The
+    /// target is recorded even when the tab lookup below no-ops (a provider
+    /// filtered out of the tabs by `SHANNON_*_PROVIDERS` still steers manual
+    /// entry — the explicit-id grammar passes regardless of tab coverage).
+    ///
+    /// No-op on the tab position when the provider has no tab (filtered out
+    /// by the `SHANNON_*_PROVIDERS` allowlist/denylist) — the picker then
+    /// stays on the tab it was constructed on. A tab whose catalog is empty
+    /// renders as an empty list; the manual-entry hatch (`i`) and the Esc
+    /// cancel are always available.
     pub fn focus_provider(&mut self, provider: &LlmProvider) {
+        self.switch_target = Some(provider.clone());
         if let Some(idx) = self.providers.iter().position(|p| p == provider) {
             self.current_provider_idx = idx;
             self.refresh_models();
         }
+    }
+
+    /// The provider this picker's manual-id entry lands on, when it was
+    /// opened by a forced `/provider` switch (ruling ⑤); `None` for a plain
+    /// `/model` picker (manual ids keep the current provider).
+    pub fn switch_target(&self) -> Option<&LlmProvider> {
+        self.switch_target.as_ref()
     }
 
     /// Get the currently selected model info.
@@ -1523,8 +1572,18 @@ impl ModelPickerWidget {
         // ── Manual entry line (escape hatch for catalog-external models) ──
         if self.manual_mode {
             lines.push(Line::from(""));
+            // A forced-switch picker (ruling ⑤) shows the landing provider as
+            // a pasteable prefix: the typed id becomes `<target>/<id>`, not a
+            // replacement on the still-active provider.
+            let prefix = match self.switch_target.as_ref() {
+                Some(target) => format!(
+                    "{}/",
+                    shannon_core::provider_resolver::llm_provider_id(target)
+                ),
+                None => String::new(),
+            };
             lines.push(Line::from(Span::styled(
-                format!(" Model ID: {}▏", self.manual_input),
+                format!(" Model ID: {prefix}{}▏", self.manual_input),
                 Style::default()
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),

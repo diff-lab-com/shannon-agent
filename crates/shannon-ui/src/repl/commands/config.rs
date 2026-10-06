@@ -38,7 +38,7 @@ pub(crate) use config_kv::{
 pub(crate) use connect::{handle_connect, handle_disconnect};
 pub(crate) use model::handle_model;
 pub(crate) use profiles::handle_profiles;
-pub(crate) use provider::handle_provider;
+pub(crate) use provider::{apply_explicit_provider_model, handle_provider};
 
 /// Resolve a `/model` argument into `(model_id, optional provider)` (ADR-0005
 /// Phase 3).

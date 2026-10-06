@@ -63,23 +63,7 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
                 // always honored — the user named the exact target (ruling ⑤:
                 // "explicit full id passes"); a bare switch lands on the
                 // provider's first catalog entry as before.
-                apply_model_selection(repl, provider.clone(), Some(model_id.clone()), None, false)?;
-                repl.chat.add_message(
-                    ChatRole::System,
-                    t!(
-                        "commands.provider.switched",
-                        provider = &provider.to_string(),
-                        model = &model_id
-                    )
-                    .to_string(),
-                );
-                // The foreign-model warning copy stays wired for the explicit
-                // path: an id the catalog attributes to another provider is
-                // allowed (it was explicit, not silent), but the cross-trip
-                // must stay visible (review P1-8 warning semantics).
-                if let Some(warning) = foreign_model_warning(Some(&model_id), None, &provider) {
-                    repl.chat.add_message(ChatRole::System, warning);
-                }
+                apply_explicit_provider_model(repl, provider, &model_id)?;
             }
             ProviderSwitchDecision::ForcePicker => {
                 // Ruling ⑤: a provider with no catalog entry must not
@@ -102,6 +86,43 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
                 );
             }
         }
+    }
+    Ok(())
+}
+
+/// Land an explicit model id on `provider` through the single switch path
+/// (ADR-0008 Decision 2), with the "switched" message and the foreign-model
+/// warning (review P1-8 copy: an explicit cross-provider id is allowed but
+/// must stay visible).
+///
+/// Shared by the two explicit-id entry points so they cannot drift: the
+/// `/provider <name> <model-id>` grammar and the ForcePicker manual-entry
+/// confirm (ruling ⑤ follow-up: an id typed into the forced picker is the
+/// same explicit id for the same target provider, just entered
+/// interactively).
+pub(crate) fn apply_explicit_provider_model(
+    repl: &mut Repl,
+    provider: LlmProvider,
+    model_id: &str,
+) -> Result<()> {
+    apply_model_selection(
+        repl,
+        provider.clone(),
+        Some(model_id.to_string()),
+        None,
+        false,
+    )?;
+    repl.chat.add_message(
+        ChatRole::System,
+        t!(
+            "commands.provider.switched",
+            provider = &provider.to_string(),
+            model = model_id
+        )
+        .to_string(),
+    );
+    if let Some(warning) = foreign_model_warning(Some(model_id), None, &provider) {
+        repl.chat.add_message(ChatRole::System, warning);
     }
     Ok(())
 }
@@ -613,6 +634,31 @@ mod tests {
         assert!(
             matches!(decision, ProviderSwitchDecision::UseModel(_)),
             "azure must have catalog defaults now"
+        );
+    }
+
+    // ── Explicit-id landing path shared by the `/provider <name> <model-id>`
+    //    grammar and the ForcePicker manual-entry confirm (ruling ⑤
+    //    follow-up): the helper alone must perform the full switch. ────────
+
+    #[test]
+    fn explicit_provider_model_helper_switches_provider_and_model() {
+        let mut repl = Repl::new().unwrap();
+        repl.state.model = Some("claude-sonnet-4-20250514".to_string());
+        repl.state.selected_provider = Some(LlmProvider::Anthropic);
+
+        apply_explicit_provider_model(&mut repl, LlmProvider::Bedrock, "my-tune").unwrap();
+
+        assert_eq!(
+            repl.state.selected_provider,
+            Some(LlmProvider::Bedrock),
+            "the helper lands the explicit id on the named provider"
+        );
+        assert_eq!(repl.state.model.as_deref(), Some("my-tune"));
+        let last = repl.chat.last_message().unwrap().content.clone();
+        assert!(
+            last.contains("my-tune"),
+            "switched message names the id: {last}"
         );
     }
 
