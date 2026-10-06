@@ -15,6 +15,14 @@
 | `6da012a6` | **A PR-3** 工具分发原语 → tool_dispatch.rs |
 | `8421110d` | **A PR-4** 流收尾原语 → stream_finalization.rs |
 
+> **⚠️ 落地状态勘误（2026-10-06）**：本报告描述的是分支 `review/harness-arch-20260921` 的状态。该分支并入 dev（98b08f65a）时，**A PR-3（`tool_dispatch.rs`）与 A PR-4（`stream_finalization.rs`）两个模块未随之落地**——dev 树上不存在这两个文件；表格中的 `6da012a6` / `8421110d` 与下文"显著度量""接入路径"里的对应条目仅在分支历史上成立，在 dev 上不可达。经 2026-10-06 复核，**二者不再补做**，理由：
+>
+> - PR-4 要解决的 `stream_finalized: bool` 标志问题，已由 engine/ 拆分（f9896addf，结构性 Task 4 §P3-5）以同名 `StreamingPhase{Receiving, Finalized}` 状态机原位取代（`engine/agent_loop.rs`）。
+> - PR-3 封装的 `partition_tool_calls` / `ToolBatch`（`tools.rs:848/883`）已在 dev 主循环真实接线（`engine/agent_loop.rs`），并非 dead code。
+> - `engine/agent_loop.rs` 的循环是单个深嵌套函数，move-only 拆分不可细分；若未来需要提取工具分发/流收尾决策，应届时以 dev 现状为基准需求驱动地重新设计，而非复活本分支的 dead-code 脚手架。
+>
+> 其余条目（B、C+D Phase 1/2/3、A PR-1、A PR-2）均已落地 dev；其中 C+D Phase 2 的 `SHANNON_LEGACY_TASK_TOOLS=1` 兼容开关位于 `crates/shannon-tools/src/lib.rs`。分支本体已归档至本地 bundle（`backup-harness-arch-20261006.bundle`）后删除。
+
 ---
 
 ## B · MCP 注解 → Tool trait flags（强烈推荐 PR）
