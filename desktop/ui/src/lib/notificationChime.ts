@@ -123,27 +123,28 @@ export function chimeAllowed(prefs: ChimePrefs | null, kind: ChimeKind, now: Dat
 
 // === Multi-window dedup (F3) ================================================
 //
-// One audible chime per event across all windows, via three cooperating rules:
+// One audible chime per event across all windows, via two cooperating rules:
 //
-//  1. Visibility rule — only a window whose `document.visibilityState` is
-//     'visible' plays locally. A buried window would only duplicate the
-//     focused one's sound.
-//  2. All-background fallback — when THIS window is not visible and no window
-//     has played anything within the TTL (the local seen table is empty), this
-//     window plays anyway, so a fully minimized setup still gets its notice.
-//  3. Cross-window records — every play is announced on
-//     `BroadcastChannel('shannon-chime')` as `{key, ts}`. Received records are
-//     written into the local seen table; the same key is not replayed while a
-//     record is younger than CHIME_DEDUP_TTL_MS.
+//  1. Per-key seen rule — every play is announced on
+//     `BroadcastChannel('shannon-chime')` as `{key, ts}` and recorded in the
+//     local seen table (this window's own marks plus received records). The
+//     same key is not replayed while its record is younger than
+//     CHIME_DEDUP_TTL_MS — no matter which window sounded it first.
+//  2. All-background fallback, per-key — a window plays any key that has no
+//     young record, visible or not. A hidden window playing an unseen key is
+//     the all-background fallback (a fully minimized setup still gets its
+//     notice). Review I1: the fallback is strictly PER-KEY — a DIFFERENT
+//     key's recent record must never swallow an event (the old
+//     "hidden + any record → silent" rule ate the failure chime that came 1s
+//     after the completion chime in an all-background setup).
 //
 // Per-play ordering: check seen → mark self → play → broadcast. Marking
 // before playing makes same-window duplicate deliveries (double listener,
 // re-fired event) single-shot; broadcasting after means an announcement never
 // precedes an actual sound. Two windows deciding in the same tick — before
 // either broadcast has arrived — can both play; that millisecond-scale race
-// is accepted, and the visibility rule shrinks it to the rare case of several
-// simultaneously visible windows. Without BroadcastChannel (SSR, test envs)
-// the layer degrades to the pre-F3 direct play via try/catch.
+// is accepted. Without BroadcastChannel (SSR, test envs) the layer degrades
+// to the pre-F3 direct play via try/catch.
 
 const CHIME_DEDUP_CHANNEL = 'shannon-chime'
 
@@ -200,30 +201,23 @@ function pruneExpiredChimePlays(now: number): void {
   }
 }
 
-function isThisWindowVisible(): boolean {
-  try {
-    return document.visibilityState === 'visible'
-  } catch {
-    return true // No DOM to ask (SSR-ish) → behave like the focused window.
-  }
-}
-
 /**
  * Reserve the right to play `key` in THIS window. False means the dedup layer
  * suppresses it: the same key was already played within the TTL (by this
- * window or a received broadcast), or this window is hidden while some window
- * played anything recently (the focused window is expected to own the sound).
- * No BroadcastChannel → always true (pre-F3 direct play).
+ * window or a received broadcast). Per-key (review I1): suppression never
+ * looks at OTHER keys, and window visibility no longer gates playback — a
+ * hidden window plays any key nothing has recorded recently (the
+ * all-background fallback), which is what keeps a fully minimized setup
+ * notified. No BroadcastChannel → always true (pre-F3 direct play).
  */
 function tryClaimChime(key: string): boolean {
   if (!getChimeChannel()) return true
   const now = Date.now()
   pruneExpiredChimePlays(now)
-  // ① Seen check — same key already sounded within the TTL → stay silent.
+  // ① Seen check — the SAME key already sounded within the TTL → stay
+  //    silent. Nothing else suppresses: a different key's record (recent
+  //    completion vs. this failure, say) is irrelevant to this event.
   if (seenChimePlays.has(key)) return false
-  // ①+② Visibility rule: visible windows play; hidden ones only as the
-  //     all-background fallback (nobody has played anything recently).
-  if (!isThisWindowVisible() && seenChimePlays.size > 0) return false
   // ② Mark self BEFORE playing so a same-tick duplicate delivery in this
   //    window cannot double-play.
   seenChimePlays.set(key, now)
@@ -262,9 +256,9 @@ export async function maybePlayTaskChime(kind: ChimeKind, key?: string): Promise
   try {
     const prefs = await loadPrefs()
     if (!chimeAllowed(prefs, kind, new Date())) return
-    // Keyless callers: unique per-call key (same-ms calls included), so their
-    // gates-open behavior is exactly the pre-F3 one; cross-window suppression
-    // for them rides on the hidden-window fallback rule alone.
+    // Keyless callers: unique per-call key (same-ms calls included), so every
+    // gate-open call plays — the pre-F3 behavior, in this window and
+    // elsewhere (per-key suppression can never match a unique key).
     const dedupKey = key ?? `${kind}:#${++keylessChimeSeq}`
     if (!tryClaimChime(dedupKey)) return
     playTaskChime(kind)

@@ -3,7 +3,7 @@
 // Covers: the pure DND window helper (incl. the overnight wrap), the chime
 // gate matrix (`chimeAllowed`), the Web Audio synthesis path against a
 // fake AudioContext (no throw + oscillator call sequence), and the F3
-// multi-window dedup layer (visibility rule, all-background fallback,
+// multi-window dedup layer (per-key seen rule, all-background fallback,
 // BroadcastChannel records, TTL expiry) against a faithful channel double.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -432,17 +432,31 @@ describe('multi-window dedup (F3)', () => {
     expect(oscs).toHaveLength(2)
   })
 
-  it('hidden window stays silent once any window played within the TTL', async () => {
+  it('hidden window stays silent for the SAME key within the TTL (per-key)', async () => {
     const oscs = stubAudio()
     stubVisibility('hidden')
     const { MockChannel } = makeBroadcastChannelMock()
     vi.stubGlobal('BroadcastChannel', MockChannel)
 
     await maybePlayTaskChime('completed', 'k1') // fallback play (seen table empty)
-    // A different key, but a window already played within the TTL and this
-    // window is hidden — the focused window owns the sound.
-    await maybePlayTaskChime('failed', 'k2')
+    // Same key redelivered while hidden: still suppressed — per-key, like
+    // the visible path.
+    await maybePlayTaskChime('failed', 'k1')
     expect(oscs).toHaveLength(2)
+  })
+
+  it('hidden window plays a DIFFERENT key within the TTL (review I1)', async () => {
+    const oscs = stubAudio()
+    stubVisibility('hidden')
+    const { MockChannel } = makeBroadcastChannelMock()
+    vi.stubGlobal('BroadcastChannel', MockChannel)
+
+    await maybePlayTaskChime('completed', 'k1') // fallback play (seen table empty)
+    // Review I1 regression: a different key moments later (completion chime
+    // then failure chime, all windows in background) must NOT be swallowed
+    // by the unrelated k1 record — the fallback is strictly per-key.
+    await maybePlayTaskChime('failed', 'k2')
+    expect(oscs).toHaveLength(4)
   })
 
   it('plays again after the TTL expires', async () => {
@@ -509,14 +523,17 @@ describe('multi-window dedup (F3)', () => {
     expect(oscs).toHaveLength(4)
   })
 
-  it('a hidden keyless call after another play stays silent (fallback rule)', async () => {
+  it('a hidden keyless call plays (unique key → per-key rule never matches)', async () => {
     const oscs = stubAudio()
     stubVisibility('hidden')
     const { MockChannel } = makeBroadcastChannelMock()
     vi.stubGlobal('BroadcastChannel', MockChannel)
 
     await maybePlayTaskChime('completed', 'k1')
-    await maybePlayTaskChime('failed') // hidden + records exist → suppressed
-    expect(oscs).toHaveLength(2)
+    // Keyless calls mint a unique key each time, so the per-key seen rule
+    // can never suppress them — even hidden, they keep the pre-F3
+    // always-play behavior (documented contract of the keyless path).
+    await maybePlayTaskChime('failed')
+    expect(oscs).toHaveLength(4)
   })
 })
