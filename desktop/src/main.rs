@@ -1086,13 +1086,7 @@ fn main() {
             let refresh_handle = app.handle().clone();
             let _ = app.listen(
                 shannon_desktop::events::event_names::CONFIG_UPDATED,
-                move |_| {
-                    let texts = tray_texts(&detect_tray_lang());
-                    let label = tray_status_label(&refresh_handle, &texts);
-                    if let Err(e) = rebuild_tray_menu(&refresh_handle, &texts, &label) {
-                        tracing::warn!(error = %e, "tray refresh: failed to rebuild menu");
-                    }
-                },
+                move |_| queue_tray_refresh(&refresh_handle),
             );
 
             // B1-15: the startup auto-update check went away with the
@@ -1315,12 +1309,19 @@ fn tray_texts(lang: &str) -> TrayTexts {
 ///
 /// G7 (P1-8): the `"Status: "` prefix is localized via [`TrayTexts`].
 #[cfg(feature = "tauri")]
-fn tray_status_label(app: &tauri::AppHandle, texts: &TrayTexts) -> String {
+fn tray_status_label<R: tauri::Runtime>(app: &tauri::AppHandle<R>, texts: &TrayTexts) -> String {
     use shannon_desktop::commands;
     use tauri::Manager;
+    // try_read, never blocking_read: queue_tray_refresh hops to the main
+    // thread, but nothing stops a future caller from invoking this on a
+    // runtime thread (the tauri test runtime even runs queued main-thread
+    // tasks inline) — and blocking_read panics there
+    // ("Cannot block the current thread from within a runtime", crash
+    // reports 2026-10-07). A contended lock just falls back to the default
+    // label for one refresh; the next config-updated corrects it.
     let cc = app
         .try_state::<commands::AppState>()
-        .map(|s| s.client_config.blocking_read().clone());
+        .and_then(|s| s.client_config.try_read().ok().map(|c| c.clone()));
     let (provider, model) = match cc {
         Some(c) => (c.provider.to_string(), c.model),
         None => (String::from("anthropic"), String::from("claude-sonnet-4-6")),
@@ -1328,19 +1329,47 @@ fn tray_status_label(app: &tauri::AppHandle, texts: &TrayTexts) -> String {
     format!("{}{provider} / {model}", texts.status_prefix)
 }
 
+/// One tray refresh: recompute the status label and rebuild the menu +
+/// tooltip. Must run on the main thread — see [`queue_tray_refresh`].
+#[cfg(feature = "tauri")]
+fn refresh_tray_now<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let texts = tray_texts(&detect_tray_lang());
+    let label = tray_status_label(app, &texts);
+    if let Err(e) = rebuild_tray_menu(app, &texts, &label) {
+        tracing::warn!(error = %e, "tray refresh: failed to rebuild menu");
+    }
+}
+
+/// Queue a tray refresh from a `config-updated` event.
+///
+/// Crash fix (2026-10-07 crash reports ×3): `emit` from an async command —
+/// `configure('theme')`, model saves, notification toggles — runs `listen`
+/// callbacks inline on a Tokio worker thread, and [`tray_status_label`] reads
+/// `client_config` with `blocking_read()`, which panics inside the runtime
+/// ("Cannot block the current thread from within a runtime"): every settings
+/// save killed the whole app. Hop to the main thread, where the blocking read
+/// is legal (same context as the setup path) and where GTK wants the
+/// tray/menu mutation anyway.
+#[cfg(feature = "tauri")]
+fn queue_tray_refresh<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let handle = app.clone();
+    let task_handle = handle.clone();
+    let _ = handle.run_on_main_thread(move || refresh_tray_now(&task_handle));
+}
+
 /// Rebuild the tray's menu and tooltip with an updated status label. Looks up
 /// the tray by [`TRAY_ID`]; returns an error if the tray is gone (e.g. the app
 /// is shutting down).
 #[cfg(feature = "tauri")]
-fn rebuild_tray_menu(
-    app: &tauri::AppHandle,
+fn rebuild_tray_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     texts: &TrayTexts,
     label: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder};
     use tauri::tray::TrayIcon;
 
-    let tray: TrayIcon = app
+    let tray: TrayIcon<R> = app
         .tray_by_id(TRAY_ID)
         .ok_or_else(|| "tray icon not found".to_string())?;
 
@@ -1431,5 +1460,53 @@ mod tray_i18n_tests {
         let lang = detect_tray_lang();
         assert!(TRAY_LANGS.contains(&lang.as_str()));
         unsafe { std::env::remove_var("SHANNON_LANG") };
+    }
+}
+
+#[cfg(all(test, feature = "tauri"))]
+mod tray_refresh_tests {
+    use super::*;
+
+    /// Regression for the 2026-10-07 crash reports (×3, one per Settings
+    /// save): `configure()` — a theme switch, a model change, a
+    /// notification toggle — emits `config-updated` from an async command,
+    /// so Tauri runs `listen` callbacks inline on a Tokio worker thread.
+    /// The refresh reads `client_config` with `blocking_read()`, which
+    /// panics inside the runtime ("Cannot block the current thread from
+    /// within a runtime") and kills the whole app. The queue step must get
+    /// the blocking read OFF the runtime thread.
+    #[test]
+    fn config_updated_listener_survives_emission_from_tokio_runtime() {
+        use shannon_desktop::commands;
+        use tauri::{Emitter, Listener, Manager};
+
+        let app = tauri::test::mock_app();
+        let handle = app.handle().clone();
+        // A real AppState so `tray_status_label` actually reaches the
+        // `client_config` read — `try_state` → None would skip the
+        // blocking read and pass vacuously against the old code.
+        handle.manage(commands::AppState::new());
+        let listener_handle = handle.clone();
+        let _unlisten = handle.listen(
+            shannon_desktop::events::event_names::CONFIG_UPDATED,
+            move |_| queue_tray_refresh(&listener_handle),
+        );
+
+        // Emit from inside a Tokio context, exactly like the async
+        // `configure` command does on the live event loop.
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            handle
+                .emit(
+                    shannon_desktop::events::event_names::CONFIG_UPDATED,
+                    shannon_desktop::events::ConfigUpdatedPayload {
+                        key: "theme".into(),
+                        value: "dracula".into(),
+                    },
+                )
+                .expect("emit config-updated");
+        });
+        // Reaching here at all is the regression fix: the old inline body
+        // panicked inside `block_on`.
     }
 }
