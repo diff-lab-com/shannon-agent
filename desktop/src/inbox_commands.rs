@@ -1145,6 +1145,61 @@ impl RunOutcome {
     }
 }
 
+/// The compaction utility slot for ONE routine fire (legacy ②). Resolved
+/// per fire — deliberately not a `RoutineRunDeps` field: the scheduler
+/// builds its deps once at app start, so a deps snapshot would freeze the
+/// slot at startup for every scheduled fire instead of at spawn time (the
+/// timing the run's `client_config` read uses, from its Arc per fire). No
+/// managed state (tests driving mock runtimes) resolves to `None` — the
+/// default, byte-identical behavior.
+async fn resolve_run_aux_compaction<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Option<shannon_engine::api::LlmClient> {
+    use tauri::Manager;
+    match app.try_state::<crate::commands::AppState>() {
+        Some(state) => {
+            crate::utility_tier::resolve_auxiliary_client(
+                &state,
+                shannon_types::provider_config::AuxRole::Compression,
+            )
+            .await
+        }
+        None => None,
+    }
+}
+
+/// The per-attempt routine engine build — shared by the run task's
+/// `make_engine_future` factory and the wire tests (legacy ②): the
+/// compaction utility slot resolved per fire is pinned onto every attempt's
+/// engine; `None` (slot unconfigured/dangling, the default) keeps the build
+/// byte-identical to the pre-slot behavior.
+fn routine_attempt_engine(
+    client: shannon_engine::api::LlmClient,
+    aux_compaction: Option<shannon_engine::api::LlmClient>,
+    tools: std::sync::Arc<shannon_core::tools::ToolRegistry>,
+    permissions: shannon_engine::permissions::PermissionManager,
+    state_manager: shannon_engine::state::StateManager,
+    memory_store: &crate::commands_memory::SharedMemoryStore,
+    context_auto_compact: bool,
+) -> QueryEngine {
+    crate::commands_memory::attach_shared_memory(
+        QueryEngine::with_defaults_arc_and_config(
+            client,
+            tools,
+            permissions,
+            state_manager,
+            // Settings R3 T6: routine runs honor the switch.
+            |config| config.auto_compact_enabled = context_auto_compact,
+        )
+        .with_auxiliary_compaction_client(aux_compaction),
+        memory_store,
+        // B2-2: the routine's directory (if any) is pinned right
+        // below — pass None here so the freeze below stays the only
+        // wd write (pre-B2-2 behavior otherwise).
+        None,
+    )
+}
+
 /// Kick off an unattended routine execution and return its run id.
 ///
 /// Mirrors `commands::start_background_task`: fresh engine, configured
@@ -1300,6 +1355,11 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     // Settings R3 T6: routine runs honor the same auto-compaction switch as
     // interactive turns; cloned into the per-attempt engine factory below.
     let context_auto_compact = deps.desktop_config.read().await.context_auto_compact;
+    // Legacy ②: the compaction utility slot, resolved per fire (see
+    // [`resolve_run_aux_compaction`] for why this is not a deps snapshot).
+    // `None` (unconfigured/dangling, the default) keeps every attempt's
+    // engine byte-identical to the pre-slot build.
+    let aux_compaction = resolve_run_aux_compaction(&app).await;
 
     // W2-3 mid-run budget guard. `policy_budget` is `None` when no budget is
     // configured — the whole guard (tracker polling, abort signal, abort
@@ -1366,6 +1426,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         let model_for_usage = model_for_usage.clone();
         let spend_tracker = engine_spend_tracker.clone();
         let active_run_sessions = active_run_sessions.clone();
+        let aux_compaction = aux_compaction.clone();
         async move {
             let client = LlmClient::new(client_config);
 
@@ -1402,20 +1463,14 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
                         );
                         StateManager::new()
                     });
-            let engine = crate::commands_memory::attach_shared_memory(
-                QueryEngine::with_defaults_arc_and_config(
-                    client,
-                    tools,
-                    permissions,
-                    state_manager,
-                    // Settings R3 T6: routine runs honor the switch.
-                    |config| config.auto_compact_enabled = context_auto_compact,
-                ),
+            let engine = routine_attempt_engine(
+                client,
+                aux_compaction,
+                tools,
+                permissions,
+                state_manager,
                 &memory_store,
-                // B2-2: the routine's directory (if any) is pinned right
-                // below — pass None here so the freeze below stays the only
-                // wd write (pre-B2-2 behavior otherwise).
-                None,
+                context_auto_compact,
             );
             // P-E1: the routine's project drives the engine's host-dependent
             // reads (memory injection/extraction project key) — an existing
@@ -4382,6 +4437,82 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .starts_with(AUTO_PAUSE_MARKER)
+        );
+    }
+
+    // ── Legacy ②: the compaction utility slot rides the routine engine ──
+
+    /// A mock app with a managed `AppState` whose provider store carries a
+    /// configured `auxiliary.compression` slot.
+    async fn slot_app(with_slot: bool) -> tauri::AppHandle<tauri::test::MockRuntime> {
+        use crate::utility_tier::test_support::{compression_slot_config, install_config};
+
+        let app = tauri::test::mock_app();
+        let state = crate::commands::AppState::new();
+        install_config(
+            &state,
+            compression_slot_config("http://127.0.0.1:1", with_slot),
+        )
+        .await;
+        app.manage(state);
+        app.handle().clone()
+    }
+
+    /// Wire pin (configured): the per-fire resolver hands the SLOT target to
+    /// the per-attempt engine build (`routine_attempt_engine` is that build,
+    /// shared with `make_engine_future`) — not the active model.
+    #[tokio::test]
+    async fn configured_compaction_slot_rides_the_routine_engine() {
+        use crate::utility_tier::test_support::SLOT_MODEL_ID;
+
+        let app = slot_app(true).await;
+        let aux_compaction = resolve_run_aux_compaction(&app)
+            .await
+            .expect("slot resolves per fire");
+        assert_eq!(aux_compaction.model(), SLOT_MODEL_ID);
+
+        let engine = routine_attempt_engine(
+            LlmClient::new(shannon_engine::api::types::LlmClientConfig::default()),
+            Some(aux_compaction),
+            std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+            shannon_engine::permissions::PermissionManager::new(),
+            shannon_engine::state::StateManager::new(),
+            &crate::commands_memory::open_shared_store(),
+            true,
+        );
+        let pinned = engine
+            .auxiliary_compaction_client()
+            .expect("the routine engine carries the slot client");
+        assert_eq!(pinned.model(), SLOT_MODEL_ID);
+        assert_eq!(pinned.base_url(), "http://127.0.0.1:1");
+    }
+
+    /// Wire pin (unconfigured / no managed state): the resolver falls back
+    /// to `None` and the engine stays byte-identical to the pre-slot build.
+    /// The `try_state → None` arm is the arm every existing scheduler /
+    /// loopback test under a mock runtime takes.
+    #[tokio::test]
+    async fn unconfigured_or_unmanaged_state_leaves_the_routine_engine_default() {
+        // Unconfigured slot on a managed state.
+        let app = slot_app(false).await;
+        assert!(resolve_run_aux_compaction(&app).await.is_none());
+
+        // No managed AppState at all (the existing mock-runtime tests).
+        let bare = tauri::test::mock_app();
+        assert!(resolve_run_aux_compaction(bare.handle()).await.is_none());
+
+        let engine = routine_attempt_engine(
+            LlmClient::new(shannon_engine::api::types::LlmClientConfig::default()),
+            None,
+            std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+            shannon_engine::permissions::PermissionManager::new(),
+            shannon_engine::state::StateManager::new(),
+            &crate::commands_memory::open_shared_store(),
+            true,
+        );
+        assert!(
+            engine.auxiliary_compaction_client().is_none(),
+            "None pin = the pre-slot behavior"
         );
     }
 }
