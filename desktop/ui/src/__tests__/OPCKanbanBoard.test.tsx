@@ -28,6 +28,10 @@ vi.mock('@/lib/tauri-api', () => ({
   default: {},
   startBackgroundTask: (...args: unknown[]) => startBackgroundTask(...args),
   updateTask: (...args: unknown[]) => updateTask(...args),
+  // P2-6/F6: typing in the quick-add mounts CostEstimateHint, whose 350ms
+  // debounce calls estimateTaskCost — must exist or the timer throws an
+  // unhandled error whenever a test outlives the debounce.
+  estimateTaskCost: vi.fn().mockResolvedValue({ hasHistory: false, runsCounted: 0, minUsd: null, maxUsd: null, avgUsd: null, lastUsd: null }),
 }))
 
 const refreshTasks = vi.fn()
