@@ -2820,6 +2820,37 @@ pub(crate) fn chrono_timestamp() -> i64 {
         .as_millis() as i64
 }
 
+/// Build the background task's engine — shared by [`start_background_task`]'s
+/// spawn closure and its wire tests (legacy ②): the compaction utility slot
+/// resolved at spawn time is pinned onto the engine; `None` (slot
+/// unconfigured/dangling, the default) keeps the build byte-identical to the
+/// pre-slot behavior.
+fn background_task_engine(
+    client: LlmClient,
+    aux_compaction: Option<LlmClient>,
+    tools: Arc<ToolRegistry>,
+    permissions: PermissionManager,
+    memory_store: &crate::commands_memory::SharedMemoryStore,
+    context_auto_compact: bool,
+) -> QueryEngine {
+    crate::commands_memory::attach_shared_memory(
+        QueryEngine::with_defaults_arc_and_config(
+            client,
+            tools,
+            permissions,
+            StateManager::new(),
+            // Settings R3 T6: background tasks honor the same
+            // auto-compaction switch as interactive turns.
+            |config| config.auto_compact_enabled = context_auto_compact,
+        )
+        .with_auxiliary_compaction_client(aux_compaction),
+        memory_store,
+        // B2-2: background tasks have no session directory of their
+        // own — keep the process-cwd freeze (pre-B2-2 behavior).
+        None,
+    )
+}
+
 /// Start a new background task.
 #[tauri::command]
 pub async fn start_background_task(
@@ -2885,6 +2916,16 @@ pub async fn start_background_task(
     // R2-P1-5: a failed task writes its triage inbox item through the same
     // store the inbox commands serve, so the failure outlives the panel.
     let inbox_store = state.inbox_store();
+    // Legacy ② — the compaction utility slot (providers.toml v2
+    // `auxiliary.compression`), resolved at spawn time: the same snapshot
+    // semantics as `client_config` above. `None` (unconfigured/dangling,
+    // the default) keeps the engine — and therefore the task — byte-identical
+    // to the pre-slot build. The main client is untouched (裁定⑦).
+    let aux_compaction = crate::utility_tier::resolve_auxiliary_client(
+        &state,
+        shannon_types::provider_config::AuxRole::Compression,
+    )
+    .await;
 
     tokio::spawn(async move {
         // Settings R3 T3 — hold the prevent-sleep refcount for the whole
@@ -2925,20 +2966,13 @@ pub async fn start_background_task(
             ));
         }
 
-        let engine = crate::commands_memory::attach_shared_memory(
-            QueryEngine::with_defaults_arc_and_config(
-                client,
-                tools,
-                permissions,
-                StateManager::new(),
-                // Settings R3 T6: background tasks honor the same
-                // auto-compaction switch as interactive turns.
-                |config| config.auto_compact_enabled = context_auto_compact,
-            ),
+        let engine = background_task_engine(
+            client,
+            aux_compaction,
+            tools,
+            permissions,
             &memory_store,
-            // B2-2: background tasks have no session directory of their
-            // own — keep the process-cwd freeze (pre-B2-2 behavior).
-            None,
+            context_auto_compact,
         );
 
         let query_id = uuid::Uuid::new_v4();
@@ -5500,6 +5534,72 @@ mod cancel_race_tests {
         assert!(
             matches!(step, StreamStep::Cancelled),
             "a queued event must not preempt a fired token (old loop-top order), got {step:?}"
+        );
+    }
+}
+
+/// Legacy ② — wire pins for the background-task runner's compaction utility
+/// slot: `background_task_engine` (the build shared with
+/// `start_background_task`'s spawn closure) carries the slot client resolved
+/// at spawn time, and stays byte-identical when the slot is unconfigured.
+#[cfg(test)]
+mod background_task_slot_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn configured_compaction_slot_rides_the_background_task_engine() {
+        use crate::utility_tier::test_support::{
+            SLOT_MODEL_ID, compression_slot_config, install_config,
+        };
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", true)).await;
+        let aux_compaction = crate::utility_tier::resolve_auxiliary_client(
+            &state,
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await
+        .expect("slot resolves");
+
+        let engine = background_task_engine(
+            LlmClient::new(LlmClientConfig::default()),
+            Some(aux_compaction),
+            Arc::new(ToolRegistry::new()),
+            PermissionManager::new(),
+            &state.memory_store,
+            true,
+        );
+        let pinned = engine
+            .auxiliary_compaction_client()
+            .expect("the task engine carries the slot client");
+        assert_eq!(pinned.model(), SLOT_MODEL_ID);
+        assert_eq!(pinned.base_url(), "http://127.0.0.1:1");
+    }
+
+    #[tokio::test]
+    async fn unconfigured_slot_leaves_the_background_task_engine_default() {
+        use crate::utility_tier::test_support::{compression_slot_config, install_config};
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", false)).await;
+        let aux_compaction = crate::utility_tier::resolve_auxiliary_client(
+            &state,
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await;
+        assert!(aux_compaction.is_none(), "unconfigured slot → None");
+
+        let engine = background_task_engine(
+            LlmClient::new(LlmClientConfig::default()),
+            aux_compaction,
+            Arc::new(ToolRegistry::new()),
+            PermissionManager::new(),
+            &state.memory_store,
+            true,
+        );
+        assert!(
+            engine.auxiliary_compaction_client().is_none(),
+            "None pin = the pre-slot behavior"
         );
     }
 }

@@ -380,6 +380,15 @@ pub(crate) struct GoalRunDeps {
     /// (and the Tasks page) see. Empty handle = placeholder behaviour,
     /// identical to pre-B2 runs.
     pub(crate) agent_tool_context: Arc<std::sync::Mutex<Option<shannon_tools::AgentToolContext>>>,
+    /// Legacy ② — the compaction utility slot (providers.toml v2
+    /// `auxiliary.compression`), resolved into a client at run-spawn time by
+    /// [`GoalRunDeps::from_state_for_run`] and pinned onto the run's engine.
+    /// `None` (slot unconfigured/dangling, the default) keeps the historical
+    /// behavior byte-identical: background compaction rides the session's
+    /// own client. The main client is unaffected — the unattended
+    /// constructors still read the global `client_config` Arc directly
+    /// (裁定⑦ orthogonality; `unattended_paths_pin_global_config`).
+    pub(crate) aux_compaction: Option<shannon_engine::api::LlmClient>,
 }
 
 impl GoalRunDeps {
@@ -392,7 +401,28 @@ impl GoalRunDeps {
             memory_store: state.memory_store.clone(),
             sessions_dir: state.state_manager.sessions_dir().to_path_buf(),
             agent_tool_context: state.agent_tool_context.clone(),
+            // Run-spawning entries resolve the slot through
+            // [`GoalRunDeps::from_state_for_run`]; the status/sidecar-only
+            // entries (list/get/stop/pause/objective) never build an engine,
+            // so the default `None` is final for them.
+            aux_compaction: None,
         }
+    }
+
+    /// [`GoalRunDeps::from_state`] plus the compaction utility slot resolved
+    /// (legacy ②). The entries that spawn a run loop use this so the slot is
+    /// snapshotted at spawn time — the same timing the run's `client_config`
+    /// read uses. A dangling slot has already fallen back to `None` inside
+    /// the resolver (with its warn); a spawned run never fails because of
+    /// the utility slot.
+    pub(crate) async fn from_state_for_run(state: &AppState) -> Self {
+        let mut deps = Self::from_state(state);
+        deps.aux_compaction = crate::utility_tier::resolve_auxiliary_client(
+            state,
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await;
+        deps
     }
 
     fn session_store(&self) -> SessionStore {
@@ -454,7 +484,7 @@ pub async fn start_goal_run(
         ),
     };
 
-    let deps = GoalRunDeps::from_state(&state);
+    let deps = GoalRunDeps::from_state_for_run(&state).await;
     let started = now_ms();
     let run_state = GoalRunState {
         session_id: session_uuid,
@@ -615,7 +645,9 @@ pub async fn resume_goal_run(
     session_id: String,
 ) -> Result<(), String> {
     let uuid = Uuid::parse_str(session_id.trim()).map_err(|e| format!("invalid sessionId: {e}"))?;
-    let deps = GoalRunDeps::from_state(&state);
+    // Resume re-spawns the run loop → resolve the compaction utility slot
+    // (legacy ②), same as `start_goal_run`.
+    let deps = GoalRunDeps::from_state_for_run(&state).await;
     if let Some(handle) = state.goal_runs.get(&uuid) {
         handle.resume().await?;
         // Sidecar anchor back to active while the loop runs again.
@@ -1157,7 +1189,12 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                 StateManager::new(),
                 // Settings R3 T6: goal runs honor the auto-compaction switch.
                 |config| config.auto_compact_enabled = context_auto_compact,
-            ),
+            )
+            // Legacy ②: pin the compaction utility slot resolved at spawn
+            // time (`from_state_for_run`). `None` (the default) keeps the
+            // historical behavior — background compaction rides this run's
+            // own client.
+            .with_auxiliary_compaction_client(deps.aux_compaction.clone()),
             &deps.memory_store,
             // B2-2: goal runs keep their pre-B2-2 directory behavior (the
             // process-cwd freeze).
@@ -1911,6 +1948,7 @@ mod tests {
             )),
             sessions_dir: dir.join("sessions"),
             agent_tool_context: Arc::new(std::sync::Mutex::new(None)),
+            aux_compaction: None,
         }
     }
 
@@ -2767,5 +2805,65 @@ mod tests {
             .expect("waiter must wake on resume")
             .unwrap();
         assert!(parked, "observing a paused state must report parked=true");
+    }
+
+    // ── Legacy ②: the compaction utility slot rides the goal engine ────
+
+    /// A configured `auxiliary.compression` slot resolved at run-spawn time
+    /// (`from_state_for_run`) is pinned onto the engine the goal runner
+    /// builds — and the target is the SLOT, not the profile's active model.
+    #[tokio::test]
+    async fn configured_compaction_slot_rides_the_goal_engine() {
+        use crate::utility_tier::test_support::{
+            SLOT_MODEL_ID, compression_slot_config, install_config,
+        };
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", true)).await;
+        let mut deps = GoalRunDeps::from_state_for_run(&state).await;
+        assert_eq!(
+            deps.aux_compaction
+                .as_ref()
+                .expect("slot resolves into deps")
+                .model(),
+            SLOT_MODEL_ID
+        );
+
+        // Keep the engine's session restore off the real sessions dir.
+        let tmp = tempfile::tempdir().unwrap();
+        deps.sessions_dir = tmp.path().join("sessions");
+        let handle = handle_for(Uuid::new_v4(), GoalRunStatus::Running);
+        let runner = EngineGoalTurnRunner::new(&deps, mock_app(), &handle)
+            .await
+            .expect("runner builds");
+        let pinned = runner
+            .engine
+            .auxiliary_compaction_client()
+            .expect("the goal engine carries the slot client");
+        assert_eq!(pinned.model(), SLOT_MODEL_ID);
+        assert_eq!(pinned.base_url(), "http://127.0.0.1:1");
+    }
+
+    /// Unconfigured slot (the default): `from_state_for_run` resolves `None`
+    /// and the engine stays byte-identical to the pre-slot build.
+    #[tokio::test]
+    async fn unconfigured_slot_leaves_the_goal_engine_default() {
+        use crate::utility_tier::test_support::{compression_slot_config, install_config};
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", false)).await;
+        let mut deps = GoalRunDeps::from_state_for_run(&state).await;
+        assert!(deps.aux_compaction.is_none(), "unconfigured slot → None");
+
+        let tmp = tempfile::tempdir().unwrap();
+        deps.sessions_dir = tmp.path().join("sessions");
+        let handle = handle_for(Uuid::new_v4(), GoalRunStatus::Running);
+        let runner = EngineGoalTurnRunner::new(&deps, mock_app(), &handle)
+            .await
+            .expect("runner builds");
+        assert!(
+            runner.engine.auxiliary_compaction_client().is_none(),
+            "None pin = the pre-slot behavior"
+        );
     }
 }

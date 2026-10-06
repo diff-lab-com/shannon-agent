@@ -41,8 +41,14 @@
 //!   it (pinned structurally by the pure signature, behaviorally by the tests
 //!   below).
 //! - The `unattended_paths_pin_global_config` table is untouched: unattended
-//!   run constructors keep reading `state.client_config` directly and never
-//!   route through this module.
+//!   run constructors keep reading `state.client_config` directly — the MAIN
+//!   client still never routes through this module. What does route through
+//!   here (since legacy ②) is the **aux slot read**: the unattended runners
+//!   (goal / background task / batch branch / routine) and the manual
+//!   `/compact` resolve their `auxiliary.compression` slot through
+//!   `resolve_auxiliary_client` (crate-internal), so the slot behaves
+//!   identically on attended and unattended paths without touching the
+//!   main-model pin.
 //! - The write path is a surgical field write that can never move the user's
 //!   `active_target` (unlike `upsert_profile`, which repoints it).
 //! - No client-config rebuild is performed after a slot write: the global
@@ -745,5 +751,85 @@ mod tests {
         assert_eq!(view.slots.len(), UTILITY_ROLES.len());
         assert!(view.slots.iter().all(|s| s.provider.is_none()));
         assert!(view.roster.is_empty());
+    }
+}
+
+/// Providers.toml fixture shared by the compaction-slot wire tests of the
+/// consumers wired in legacy ② (goal / background task / batch branch /
+/// routine runners + manual `/compact`): one OpenAI-compatible roster slot
+/// plus, when `with_slot`, an `auxiliary.compression` target pinned to it
+/// with [`SLOT_MODEL_ID`]. Same minimal shape as the TitleGeneration
+/// wiring's fixture (`session_title` tests).
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Roster id of the slot the fixtures pin the compaction target to.
+    pub(crate) const SLOT_PROVIDER_ID: &str = "mock-utility";
+    /// Model the fixture's `auxiliary.compression` target carries — the
+    /// wire tests assert this id shows up on the consumer's engine.
+    pub(crate) const SLOT_MODEL_ID: &str = "compact-model-1";
+
+    /// A providers.toml snapshot whose active profile hosts ONE
+    /// OpenAI-compatible roster slot at `base_url` and, when `with_slot`,
+    /// a Compression auxiliary target pinned to it.
+    pub(crate) fn compression_slot_config(base_url: &str, with_slot: bool) -> ProviderModelConfig {
+        let mock = ProviderProfile {
+            id: SLOT_PROVIDER_ID.to_string(),
+            kind: shannon_types::provider_config::ProviderKind::OpenAiCompatible,
+            display_name: "Mock".to_string(),
+            base_url: base_url.to_string(),
+            models_url: None,
+            credential: shannon_types::provider_config::CredentialRef::InlineLegacy {
+                masked: "test-key".to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: shannon_types::provider_config::ProviderTiers::default(),
+            models: Vec::new(),
+        };
+        let mut auxiliary = HashMap::new();
+        if with_slot {
+            auxiliary.insert(
+                AuxRole::Compression,
+                ActiveTarget {
+                    provider_id: SLOT_PROVIDER_ID.to_string(),
+                    model_id: SLOT_MODEL_ID.to_string(),
+                    scope: shannon_types::provider_config::Scope::Global,
+                },
+            );
+        }
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "default".to_string(),
+            shannon_types::provider_config::ModelProfile {
+                name: "default".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: SLOT_PROVIDER_ID.to_string(),
+                    model_id: "main-model".to_string(),
+                    scope: shannon_types::provider_config::Scope::Global,
+                },
+                providers: vec![mock],
+                auxiliary,
+                credential_scope: shannon_types::provider_config::CredentialScope::Shared,
+            },
+        );
+        ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
+            profiles,
+            gateway: Default::default(),
+        }
+    }
+
+    /// Install `config` as the app's provider store (the same overwrite the
+    /// orthogonality pins in this module's own tests use, so a developer's
+    /// real `~/.shannon/providers.toml` cannot leak into a wire test).
+    pub(crate) async fn install_config(state: &AppState, config: ProviderModelConfig) {
+        use shannon_core::provider_config_store::ProviderConfigStore;
+        *state.provider_store.lock().await = ProviderConfigStore::from_config(config);
     }
 }

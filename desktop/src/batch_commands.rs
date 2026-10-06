@@ -462,6 +462,15 @@ pub(crate) struct BatchRunDeps {
     /// Shared memory store handle (P2-4b) — passed into the spawned branch
     /// runner so its engine attaches the same store the interactive path uses.
     pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
+    /// Legacy ② — the compaction utility slot (providers.toml v2
+    /// `auxiliary.compression`), resolved at batch-spawn time by
+    /// [`BatchRunDeps::from_state_for_run`] and pinned onto every branch
+    /// engine. `None` (slot unconfigured/dangling, the default) keeps the
+    /// historical behavior byte-identical: background compaction rides the
+    /// branch's own client. The main client is unaffected — the unattended
+    /// constructors still read the global `client_config` Arc directly
+    /// (裁定⑦ orthogonality; `unattended_paths_pin_global_config`).
+    pub(crate) aux_compaction: Option<shannon_engine::api::LlmClient>,
 }
 
 impl BatchRunDeps {
@@ -473,7 +482,53 @@ impl BatchRunDeps {
             desktop_config: state.desktop_config.clone(),
             tools: state.tools.clone(),
             memory_store: state.memory_store.clone(),
+            // Resolved for run-spawning entries by
+            // [`BatchRunDeps::from_state_for_run`].
+            aux_compaction: None,
         }
+    }
+
+    /// [`BatchRunDeps::from_state`] plus the compaction utility slot resolved
+    /// (legacy ②). The batch-spawning entry uses this so the slot is
+    /// snapshotted at spawn time — the same timing the branches'
+    /// `client_config` read uses. A dangling slot has already fallen back to
+    /// `None` inside the resolver (with its warn); starting a batch never
+    /// fails because of the utility slot.
+    pub(crate) async fn from_state_for_run(state: &AppState) -> Self {
+        let mut deps = Self::from_state(state);
+        deps.aux_compaction = crate::utility_tier::resolve_auxiliary_client(
+            state,
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await;
+        deps
+    }
+
+    /// The branch engine build — shared by
+    /// [`EngineBatchBranchRunner::stream_branch`] and the wire tests
+    /// (legacy ②). The compaction slot resolved at batch-spawn time is
+    /// pinned here; `None` keeps the build byte-identical to pre-slot.
+    fn build_branch_engine(
+        &self,
+        client: shannon_engine::api::LlmClient,
+        permissions: PermissionManager,
+        context_auto_compact: bool,
+    ) -> QueryEngine {
+        crate::commands_memory::attach_shared_memory(
+            QueryEngine::with_defaults_arc_and_config(
+                client,
+                self.tools.clone(),
+                permissions,
+                StateManager::new(),
+                // Settings R3 T6: batch branches honor the switch.
+                |config| config.auto_compact_enabled = context_auto_compact,
+            )
+            .with_auxiliary_compaction_client(self.aux_compaction.clone()),
+            &self.memory_store,
+            // B2-2: best-of-N batches have no session directory — keep the
+            // process-cwd freeze (pre-B2-2 behavior).
+            None,
+        )
     }
 }
 
@@ -602,7 +657,6 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
         let model_for_usage = model.clone();
         let provider = client_config.provider.to_string();
         let usage_store = self.deps.usage_store.clone();
-        let memory_store = self.deps.memory_store.clone();
 
         let mut permissions = PermissionManager::new();
         // review §P1-2: default to Suggest (require explicit opt-in for FullAuto)
@@ -618,19 +672,10 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
             ));
         }
 
-        let engine = crate::commands_memory::attach_shared_memory(
-            QueryEngine::with_defaults_arc_and_config(
-                LlmClient::new(client_config),
-                self.deps.tools.clone(),
-                permissions,
-                StateManager::new(),
-                // Settings R3 T6: batch branches honor the switch.
-                |config| config.auto_compact_enabled = context_auto_compact,
-            ),
-            &memory_store,
-            // B2-2: best-of-N batches have no session directory — keep the
-            // process-cwd freeze (pre-B2-2 behavior).
-            None,
+        let engine = self.deps.build_branch_engine(
+            LlmClient::new(client_config),
+            permissions,
+            context_auto_compact,
         );
 
         // F2: `session_id` was minted above for the active-run registration.
@@ -1129,7 +1174,9 @@ pub async fn start_batch_run(
     count: u32,
     base_session_id: Option<String>,
 ) -> Result<BatchRunStarted, String> {
-    let deps = BatchRunDeps::from_state(&state);
+    // Legacy ②: the branches spawn engines → resolve the compaction utility
+    // slot at batch-spawn time (same snapshot timing as client_config).
+    let deps = BatchRunDeps::from_state_for_run(&state).await;
     let repo_hint = resolve_session_working_dir(&state, base_session_id.as_deref()).await?;
     let factory = Arc::new(EngineRunnerFactory {
         deps: deps.clone(),
@@ -1710,6 +1757,7 @@ mod tests {
                 memory_store: std::sync::Arc::new(std::sync::RwLock::new(
                     shannon_core::MemoryStore::new(dir.path().join("memories")),
                 )),
+                aux_compaction: None,
             },
             repo_root,
             app: tauri::test::mock_app().handle().clone(),
@@ -2771,5 +2819,70 @@ mod tests {
             let loaded = env.registry.get_or_load(evil).await;
             assert!(loaded.is_err(), "{evil}: must not load");
         }
+    }
+
+    // ── Legacy ②: the compaction utility slot rides every branch engine ──
+
+    /// Wire pin: a slot resolved at batch-spawn time (`from_state_for_run`)
+    /// is pinned onto the engines the branch runner builds
+    /// (`build_branch_engine` is that build, shared with `stream_branch`).
+    /// The pinned client targets the SLOT, not the active model.
+    #[tokio::test]
+    async fn configured_compaction_slot_rides_the_branch_engine() {
+        use crate::utility_tier::test_support::{
+            SLOT_MODEL_ID, compression_slot_config, install_config,
+        };
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", true)).await;
+        let mut deps = BatchRunDeps::from_state_for_run(&state).await;
+        assert_eq!(
+            deps.aux_compaction
+                .as_ref()
+                .expect("slot resolves into deps")
+                .model(),
+            SLOT_MODEL_ID
+        );
+
+        // Redirect the shared memory store into a tempdir so the build
+        // touches nothing real.
+        let tmp = tempfile::tempdir().unwrap();
+        deps.memory_store = crate::commands_memory::open_shared_store_at(tmp.path().join("mem"));
+
+        let engine = deps.build_branch_engine(
+            LlmClient::new(shannon_engine::api::types::LlmClientConfig::default()),
+            PermissionManager::new(),
+            true,
+        );
+        let pinned = engine
+            .auxiliary_compaction_client()
+            .expect("the branch engine carries the slot client");
+        assert_eq!(pinned.model(), SLOT_MODEL_ID);
+        assert_eq!(pinned.base_url(), "http://127.0.0.1:1");
+    }
+
+    /// Unconfigured slot (the default): `from_state_for_run` resolves `None`
+    /// and the branch engine stays byte-identical to the pre-slot build.
+    #[tokio::test]
+    async fn unconfigured_slot_leaves_the_branch_engine_default() {
+        use crate::utility_tier::test_support::{compression_slot_config, install_config};
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", false)).await;
+        let mut deps = BatchRunDeps::from_state_for_run(&state).await;
+        assert!(deps.aux_compaction.is_none(), "unconfigured slot → None");
+
+        let tmp = tempfile::tempdir().unwrap();
+        deps.memory_store = crate::commands_memory::open_shared_store_at(tmp.path().join("mem"));
+
+        let engine = deps.build_branch_engine(
+            LlmClient::new(shannon_engine::api::types::LlmClientConfig::default()),
+            PermissionManager::new(),
+            true,
+        );
+        assert!(
+            engine.auxiliary_compaction_client().is_none(),
+            "None pin = the pre-slot behavior"
+        );
     }
 }

@@ -302,6 +302,15 @@ fn build_turns(messages: &[shannon_engine::api::Message]) -> Vec<(String, String
     turns
 }
 
+/// Slot-first summarizer client for the manual `/compact` (legacy ②): a
+/// configured compaction utility slot (`auxiliary.compression`) wins;
+/// `None` (unconfigured, or dangling — the resolver has already warned)
+/// keeps the historical behavior of riding the session's own client. Same
+/// semantics the interactive send path wires into its engine.
+fn compact_summarizer_client(slot: Option<LlmClient>, engine: &QueryEngine) -> LlmClient {
+    slot.unwrap_or_else(|| engine.client().clone())
+}
+
 #[tauri::command]
 pub async fn compact_session(
     state: tauri::State<'_, AppState>,
@@ -340,11 +349,21 @@ pub async fn compact_session(
     }
 
     // LLM summarizer on the current runtime (mirrors the REPL), falling back
-    // to the extractive summarizer when the client can't serve one.
-    let client = engine.client().clone();
-    let mut compact_engine = shannon_engine::compact::CompactEngine::with_llm_summarizer(client)
-        .or_else(|_| shannon_engine::compact::CompactEngine::with_defaults())
-        .map_err(|e| format!("compact engine error: {e}"))?;
+    // to the extractive summarizer when the client can't serve one. Legacy ②:
+    // slot-first — the compaction utility slot is preferred when configured,
+    // the session's own client otherwise.
+    let summarizer = compact_summarizer_client(
+        crate::utility_tier::resolve_auxiliary_client(
+            state.inner(),
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await,
+        &engine,
+    );
+    let mut compact_engine =
+        shannon_engine::compact::CompactEngine::with_llm_summarizer(summarizer)
+            .or_else(|_| shannon_engine::compact::CompactEngine::with_defaults())
+            .map_err(|e| format!("compact engine error: {e}"))?;
 
     let mut messages = history.clone();
     let result = compact_engine
@@ -729,5 +748,71 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&temp).ok();
+    }
+
+    // ── Legacy ②: manual /compact prefers the compaction utility slot ────
+
+    /// A minimal engine whose client carries `fallback-model` — the
+    /// historical `/compact` summarizer source.
+    fn fallback_engine() -> QueryEngine {
+        let config = shannon_engine::api::types::LlmClientConfig {
+            model: "fallback-model".to_string(),
+            ..shannon_engine::api::types::LlmClientConfig::default()
+        };
+        QueryEngine::with_defaults(
+            LlmClient::new(config),
+            shannon_core::tools::ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+        )
+    }
+
+    /// Wire pin (slot-first): with a configured `auxiliary.compression`
+    /// slot, the manual `/compact` summarizer is the SLOT client — the
+    /// exact client `resolve_auxiliary_client` resolves — not the
+    /// session's own.
+    #[tokio::test]
+    async fn configured_slot_wins_over_the_session_client_for_compact() {
+        use crate::utility_tier::test_support::{compression_slot_config, install_config};
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", true)).await;
+        let slot = crate::utility_tier::resolve_auxiliary_client(
+            &state,
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await
+        .expect("slot resolves");
+
+        let engine = fallback_engine();
+        let summarizer = compact_summarizer_client(Some(slot), &engine);
+        assert_eq!(summarizer.model(), "compact-model-1");
+        assert_eq!(summarizer.base_url(), "http://127.0.0.1:1");
+    }
+
+    /// Wire pin (fallback): unconfigured slot resolves `None` and the
+    /// summarizer is the session's own client — byte-identical to the
+    /// pre-slot `/compact` behavior.
+    #[tokio::test]
+    async fn unconfigured_slot_falls_back_to_the_session_client_for_compact() {
+        use crate::utility_tier::test_support::{compression_slot_config, install_config};
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", false)).await;
+        let slot = crate::utility_tier::resolve_auxiliary_client(
+            &state,
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await;
+        assert!(slot.is_none(), "unconfigured slot → None");
+
+        let engine = fallback_engine();
+        let summarizer = compact_summarizer_client(slot, &engine);
+        assert_eq!(summarizer.model(), "fallback-model");
+        assert_eq!(
+            summarizer.model(),
+            engine.client().model(),
+            "fallback = the session's own client"
+        );
     }
 }
