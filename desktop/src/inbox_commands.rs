@@ -42,7 +42,7 @@ use shannon_engine::api::client::LlmClient;
 use shannon_engine::permissions::{PermissionManager, PermissionRuleChecker};
 use shannon_engine::state::StateManager;
 use std::time::Duration;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
 use crate::commands::AppState;
@@ -1339,6 +1339,12 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     // Owned copy for the engine future (the closure must be 'static; `deps`
     // is only borrowed here).
     let run_sessions_dir = deps.sessions_dir.clone();
+    // Settings R3 followup F2 — per-attempt live-run registration handle.
+    // `try_state`: absent only under mock runtimes whose tests never manage
+    // `AppState` (scheduler/loopback tests) — no registration there.
+    let active_run_sessions = app
+        .try_state::<crate::commands::AppState>()
+        .map(|state| state.active_run_sessions.clone());
     // W2-3: the engine-future factory gets its own handle on the shared
     // tracker; the run task keeps the original for the watcher and finalize.
     let engine_spend_tracker = spend_tracker.clone();
@@ -1359,6 +1365,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         let tools = tools.clone();
         let model_for_usage = model_for_usage.clone();
         let spend_tracker = engine_spend_tracker.clone();
+        let active_run_sessions = active_run_sessions.clone();
         async move {
             let client = LlmClient::new(client_config);
 
@@ -1422,6 +1429,13 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
             };
 
             let session_id = uuid::Uuid::new_v4();
+            // Settings R3 followup F2 — this attempt's fresh session is the
+            // live run while its stream executes (RAII: released when the
+            // attempt settles, so a retry's next attempt re-registers its
+            // own id).
+            let _active_run_guard = active_run_sessions.as_ref().map(|map| {
+                crate::commands::ActiveSessionRunGuard::register(map, session_id.to_string())
+            });
             // W2-3: pin the live attempt's session on the shared tracker so a
             // budget abort can link the in-flight spend back to this run.
             spend_tracker.set_session(session_id);

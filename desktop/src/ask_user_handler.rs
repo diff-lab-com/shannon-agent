@@ -10,15 +10,17 @@
 //! 1. `ask_question` mints a `request_id`, parks a oneshot sender in
 //!    `AppState::pending_questions` and emits `ask-user-request`.
 //! 2. The frontend's AskUserCard renders the question; the answer travels
-//!    back through the [`respond_ask_user`] command (remove + send —
-//!    repeating `commands_permissions::respond_permission`'s contract,
-//!    but idempotent: an unknown/expired id is a logged `Ok`).
+//!    back through the [`respond_ask_user`] command (remove + send +
+//!    broadcast — repeating `commands_permissions::respond_permission`'s
+//!    contract, but idempotent: an unknown/expired id is a logged `Ok`).
 //! 3. With 提问自动继续 (`chat_ask_user_auto_continue`, default off) the
 //!    wait is bounded by [`ASK_USER_TIMEOUT_SECS`]; on timeout the pending
-//!    entry is dropped, an `ask-user-resolved` (timed_out) event is emitted
-//!    and the tool receives a best-judgment continuation answer — mirroring
-//!    the permission side's timeout auto-deny
-//!    (`commands_permissions::prompt_user`). Off → wait forever.
+//!    entry is dropped and an `ask-user-resolved` (timed_out) event is
+//!    emitted, and the tool receives a best-judgment continuation answer —
+//!    mirroring the permission side's timeout auto-deny
+//!    (`commands_permissions::prompt_user`). Off → wait forever. Both the
+//!    answered and the timed-out path emit `ask-user-resolved` (Settings R3
+//!    followup F2), so every window's card clears on either.
 
 use crate::commands::AppState;
 use crate::events::{self, event_names};
@@ -67,22 +69,29 @@ impl<R: tauri::Runtime> QuestionHandler for DesktopQuestionHandler<R> {
         let request_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
 
-        // Read the auto-continue switch live and park the oneshot. The
-        // DashMap critical sections are pure map edits — never held across
-        // the await below.
-        let timeout_ms = {
+        // Read the auto-continue switch live, resolve the scoping session,
+        // and park the oneshot. The DashMap critical sections are pure map
+        // edits — never held across the await below.
+        let (timeout_ms, session_id) = {
             let state = self.app.state::<AppState>();
             let auto_continue = state
                 .desktop_config
                 .read()
                 .await
                 .chat_ask_user_auto_continue;
+            // Settings R3 followup F2 — stamp the question with the live
+            // run's session when exactly one run is active, so windows
+            // viewing other sessions don't pop the card. Zero or several
+            // active runs → `None`: the card falls back to visible in
+            // every window (the pre-F2 behavior) instead of guessing.
+            let session_id = state.sole_active_run_session();
             state.pending_questions.insert(request_id.clone(), tx);
-            if auto_continue {
+            let timeout_ms = if auto_continue {
                 Some(self.timeout_secs.saturating_mul(1000))
             } else {
                 None // 无限等待 — the user answers whenever they answer.
-            }
+            };
+            (timeout_ms, session_id)
         };
 
         let _ = self.app.emit(
@@ -100,6 +109,7 @@ impl<R: tauri::Runtime> QuestionHandler for DesktopQuestionHandler<R> {
                     })
                     .collect(),
                 multi_select: question.multi_select,
+                session_id,
                 timeout_ms,
             },
         );
@@ -182,8 +192,15 @@ pub fn register_for_state<R: tauri::Runtime>(
 /// hits the `None` branch: logged, `Ok` — idempotent. Unknown ids (already
 /// timed out, stale window, stray call) are the same silent `Ok` rather
 /// than an error the UI would have to special-case.
+///
+/// Settings R3 followup F2 — on the success path a `ask-user-resolved`
+/// (`timed_out: false`) is broadcast AFTER the entry is removed + the
+/// answer delivered, so cards in OTHER windows clear instead of lingering
+/// until their next repaint; the timeout path keeps emitting the same
+/// event with `timed_out: true`.
 #[tauri::command]
-pub async fn respond_ask_user(
+pub async fn respond_ask_user<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
     request_id: String,
     answers: Vec<String>,
@@ -194,6 +211,15 @@ pub async fn respond_ask_user(
             // Receiver gone (the timeout raced this click) — the answer is
             // simply dropped; the tool already continued.
             let _ = tx.send(answers);
+            // F2: broadcast resolution to every window. Best-effort — a
+            // failed emit never fails the command (the answer landed).
+            let _ = app.emit(
+                event_names::ASK_USER_RESOLVED,
+                events::AskUserResolved {
+                    request_id: request_id.clone(),
+                    timed_out: false,
+                },
+            );
             Ok(())
         }
         None => {
@@ -264,6 +290,180 @@ mod tests {
             .chat_ask_user_auto_continue = on;
     }
 
+    /// Capture `ask-user-request` payloads as raw JSON strings.
+    async fn capture_requests<R: tauri::Runtime>(
+        app: &tauri::AppHandle<R>,
+    ) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+        let captured: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        {
+            let captured = captured.clone();
+            use tauri::Listener;
+            app.listen(event_names::ASK_USER_REQUEST, move |event| {
+                captured
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(event.payload().to_string());
+            });
+        }
+        captured
+    }
+
+    #[tokio::test]
+    async fn request_payload_scopes_to_the_sole_active_run_session() {
+        let (handle, _app) = mock_app_with_state();
+        let captured = capture_requests(&handle).await;
+
+        // Exactly one live run → its session id rides on the payload.
+        let guard = {
+            let state = handle.state::<AppState>();
+            crate::commands::ActiveSessionRunGuard::register(
+                &state.active_run_sessions,
+                "sess-solo".to_string(),
+            )
+        };
+
+        let handler = DesktopQuestionHandler::new(handle.clone(), 60);
+        let q = sample_question();
+        let ask = tokio::spawn(async move { handler.ask_question(&q).await });
+        let request_id = wait_pending(&handle).await;
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id.clone(),
+            vec!["Yes".to_string()],
+        )
+        .await
+        .unwrap();
+        ask.await.unwrap().unwrap();
+
+        let events = captured.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        assert_eq!(events.len(), 1, "exactly one request event: {events:?}");
+        let payload: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        assert_eq!(payload["session_id"], "sess-solo");
+
+        // The guard RAII-drops → the run unregisters → the next question is
+        // unscoped again.
+        drop(guard);
+        let handler2 = DesktopQuestionHandler::new(handle.clone(), 60);
+        let q2 = sample_question();
+        let ask2 = tokio::spawn(async move { handler2.ask_question(&q2).await });
+        let request_id2 = wait_pending(&handle).await;
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id2,
+            vec!["No".to_string()],
+        )
+        .await
+        .unwrap();
+        ask2.await.unwrap().unwrap();
+        let events = captured.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        assert_eq!(events.len(), 2);
+        let payload: serde_json::Value = serde_json::from_str(&events[1]).unwrap();
+        assert!(
+            payload.get("session_id").is_none(),
+            "no live run → the field is omitted: {payload}"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_payload_omits_session_when_several_runs_are_active() {
+        let (handle, _app) = mock_app_with_state();
+        let captured = capture_requests(&handle).await;
+
+        // Two concurrent runs (e.g. an interactive turn + a goal run) — the
+        // run is ambiguous → None → the field stays off the wire and the
+        // card keeps the every-window fallback.
+        {
+            let state = handle.state::<AppState>();
+            let _g1 = crate::commands::ActiveSessionRunGuard::register(
+                &state.active_run_sessions,
+                "sess-a".to_string(),
+            );
+            let _g2 = crate::commands::ActiveSessionRunGuard::register(
+                &state.active_run_sessions,
+                "sess-b".to_string(),
+            );
+            assert!(state.sole_active_run_session().is_none());
+        }
+
+        let handler = DesktopQuestionHandler::new(handle.clone(), 60);
+        let q = sample_question();
+        let ask = tokio::spawn(async move { handler.ask_question(&q).await });
+        let request_id = wait_pending(&handle).await;
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id,
+            vec!["Yes".to_string()],
+        )
+        .await
+        .unwrap();
+        ask.await.unwrap().unwrap();
+
+        let events = captured.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        assert_eq!(events.len(), 1);
+        let payload: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        assert!(
+            payload.get("session_id").is_none(),
+            "ambiguous run → no session on the payload: {payload}"
+        );
+    }
+
+    #[tokio::test]
+    async fn answered_path_broadcasts_resolved_not_timed_out() {
+        let (handle, _app) = mock_app_with_state();
+
+        let resolved: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        {
+            let resolved = resolved.clone();
+            use tauri::Listener;
+            handle.listen(event_names::ASK_USER_RESOLVED, move |event| {
+                resolved
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(event.payload().to_string());
+            });
+        }
+
+        let handler = DesktopQuestionHandler::new(handle.clone(), 60);
+        let q = sample_question();
+        let ask = tokio::spawn(async move { handler.ask_question(&q).await });
+        let request_id = wait_pending(&handle).await;
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id.clone(),
+            vec!["Yes".to_string()],
+        )
+        .await
+        .unwrap();
+        ask.await.unwrap().unwrap();
+
+        // F2: the answering window's click clears the card in EVERY window
+        // — exactly one resolved event, `timed_out: false`.
+        let events = resolved.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        assert_eq!(events.len(), 1, "exactly one resolved event: {events:?}");
+        let payload: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        assert_eq!(payload["request_id"], request_id);
+        assert_eq!(payload["timed_out"], false);
+
+        // The idempotent unknown-id path stays SILENT: no second broadcast.
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            "ghost-id".to_string(),
+            vec!["x".to_string()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            resolved.lock().unwrap_or_else(|p| p.into_inner()).len(),
+            1,
+            "unknown id must not broadcast"
+        );
+    }
+
     #[tokio::test]
     async fn answered_question_returns_the_submitted_answers() {
         let (handle, _app) = mock_app_with_state();
@@ -276,9 +476,14 @@ mod tests {
 
         // Answer through the command body — the exact path `respond_ask_user`
         // runs in production.
-        respond_ask_user(handle.state(), request_id.clone(), vec!["Yes".to_string()])
-            .await
-            .unwrap();
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id.clone(),
+            vec!["Yes".to_string()],
+        )
+        .await
+        .unwrap();
 
         let answers = ask.await.unwrap().unwrap();
         assert_eq!(answers, vec!["Yes".to_string()]);
@@ -298,15 +503,26 @@ mod tests {
         let ask = tokio::spawn(async move { handler.ask_question(&q).await });
         let request_id = wait_pending(&handle).await;
 
-        respond_ask_user(handle.state(), request_id.clone(), vec!["No".to_string()])
-            .await
-            .unwrap();
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id.clone(),
+            vec!["No".to_string()],
+        )
+        .await
+        .unwrap();
         // Second click / stale window: no entry → logged Ok, never an error.
-        respond_ask_user(handle.state(), request_id.clone(), vec!["Yes".to_string()])
-            .await
-            .unwrap();
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id.clone(),
+            vec!["Yes".to_string()],
+        )
+        .await
+        .unwrap();
         // Fully unknown id: same idempotent Ok.
         respond_ask_user(
+            handle.clone(),
             handle.state(),
             "ghost-id".to_string(),
             vec!["x".to_string()],
@@ -353,9 +569,14 @@ mod tests {
             let state = handle.state::<AppState>();
             assert!(!state.pending_questions.contains_key(&request_id));
         }
-        respond_ask_user(handle.state(), request_id.clone(), vec!["late".to_string()])
-            .await
-            .unwrap();
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id.clone(),
+            vec!["late".to_string()],
+        )
+        .await
+        .unwrap();
 
         // The card's timeout cue: exactly one resolved event, this id,
         // timed_out=true.
@@ -371,12 +592,15 @@ mod tests {
         let (handle, _app) = mock_app_with_state();
         set_auto_continue(&handle, false).await; // default posture — wait forever
 
-        let resolved: std::sync::Arc<std::sync::Mutex<usize>> = Default::default();
+        let resolved: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
         {
             let resolved = resolved.clone();
             use tauri::Listener;
-            handle.listen(event_names::ASK_USER_RESOLVED, move |_| {
-                *resolved.lock().unwrap_or_else(|p| p.into_inner()) += 1;
+            handle.listen(event_names::ASK_USER_RESOLVED, move |event| {
+                resolved
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(event.payload().to_string());
             });
         }
 
@@ -389,6 +613,7 @@ mod tests {
 
         tokio::time::sleep(std::time::Duration::from_millis(1400)).await;
         respond_ask_user(
+            handle.clone(),
             handle.state(),
             request_id.clone(),
             vec!["finally".to_string()],
@@ -403,9 +628,14 @@ mod tests {
             .unwrap();
         assert_eq!(answers, vec!["finally".to_string()]);
 
-        // No auto-continue → no resolved event, ever.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        assert_eq!(*resolved.lock().unwrap_or_else(|p| p.into_inner()), 0);
+        // F2: no timeout fired, but the ANSWERED path now broadcasts
+        // resolution — exactly one event, `timed_out: false`, so cross-
+        // window cards clear without any auto-continue in play.
+        let events = resolved.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        assert_eq!(events.len(), 1, "exactly one resolved event: {events:?}");
+        let payload: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        assert_eq!(payload["request_id"], request_id);
+        assert_eq!(payload["timed_out"], false);
     }
 
     #[tokio::test]
@@ -457,9 +687,14 @@ mod tests {
         });
         let exec = tokio::spawn(async move { registry.execute(ASK_USER_TOOL_NAME, input).await });
         let request_id = wait_pending(&handle).await;
-        respond_ask_user(handle.state(), request_id, vec!["Ok".to_string()])
-            .await
-            .unwrap();
+        respond_ask_user(
+            handle.clone(),
+            handle.state(),
+            request_id,
+            vec!["Ok".to_string()],
+        )
+        .await
+        .unwrap();
 
         let output = tokio::time::timeout(std::time::Duration::from_secs(5), exec)
             .await
