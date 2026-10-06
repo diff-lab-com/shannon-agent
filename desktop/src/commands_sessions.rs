@@ -837,19 +837,57 @@ fn pending_inbox_session_ids(inbox: &shannon_core::inbox_store::InboxStore) -> H
     }
 }
 
+/// Live running-set source behind the auto-archive scan (the T7 seam's
+/// injectable slot). The scan asks "is this session running right now" at
+/// two distinct moments — the lock-free adjudication and the pre-archive
+/// re-verification — so a session that starts running mid-scan is caught
+/// before the flip. Production injects the session registry (a live
+/// `is_querying` lookup per call); tests inject a static set or a stateful
+/// double. The returned future must be `Send`: the scan runs inside the
+/// spawned scheduler task.
+pub(crate) trait AutoArchiveRunningCheck: Send + Sync {
+    /// Whether `session_id` currently has a live query.
+    fn is_running(&self, session_id: uuid::Uuid) -> impl std::future::Future<Output = bool> + Send;
+}
+
+impl AutoArchiveRunningCheck for HashSet<uuid::Uuid> {
+    fn is_running(&self, session_id: uuid::Uuid) -> impl std::future::Future<Output = bool> + Send {
+        std::future::ready(self.contains(&session_id))
+    }
+}
+
+impl AutoArchiveRunningCheck for SessionRegistry {
+    fn is_running(&self, session_id: uuid::Uuid) -> impl std::future::Future<Output = bool> + Send {
+        self.is_querying(session_id)
+    }
+}
+
 /// One auto-archive scan over injected state — the hermetic seam behind
-/// [`run_auto_archive_scan`]. R6 adjudication: a session is "已完成" when it
-/// is `!running && 无未读 inbox 条目`; combined with the brief's other two
-/// exemptions, a session is archived when it is active (not already
-/// archived), not running, not pinned, carries no pending inbox entry, and
-/// its last activity (`events.jsonl` mtime) is older than the retention
-/// window. Unknown mtimes skip (fail closed). Returns the archived rows so
-/// the caller emits `session-auto-archived` per session.
+/// [`run_auto_archive_scan`], restructured (F1) so the display-list mutex is
+/// never held across fs I/O: it guards an in-memory snapshot, then one
+/// `apply_archived_flag` flip at a time, and nothing else.
+///
+/// R6 adjudication: a session is "已完成" when it is `!running && 无未读
+/// inbox 条目`. Three phases:
+///
+/// 1. **Snapshot** (brief lock): clone the active rail — the sessions the
+///    sidebar shows as live (not archived), ids plus the display fields.
+/// 2. **Adjudication** (no lock): per candidate, read the curation sidecar
+///    (pinned / archived re-check against the persisted truth), stat
+///    `events.jsonl`, consult the pending-inbox set and the running check,
+///    and compare the mtime against the retention window.
+/// 3. **Archive** (brief lock per flip): re-verify every exemption — not
+///    archived, not pinned, not running (live), retention still holds (the
+///    phase-2 mtime is reused) — then `apply_archived_flag` under the same
+///    lock the display mutation needs. Any change skips the session.
+///
+/// Unknown mtimes skip (fail closed). Returns the archived rows so the
+/// caller emits `session-auto-archived` per session.
 pub(crate) async fn run_auto_archive_scan_with(
     desktop_config: &tokio::sync::RwLock<config::DesktopConfig>,
     sessions: &tokio::sync::Mutex<Vec<SessionMeta>>,
     store: &shannon_core::session_log::SessionStore,
-    running_ids: &HashSet<uuid::Uuid>,
+    running: &impl AutoArchiveRunningCheck,
     inbox: Option<&shannon_core::inbox_store::InboxStore>,
     now: std::time::SystemTime,
 ) -> Result<Vec<SessionAutoArchived>, String> {
@@ -865,28 +903,43 @@ pub(crate) async fn run_auto_archive_scan_with(
         ))
         .unwrap_or(now);
 
+    // Phase 1 — snapshot the active rail under a brief lock. Pure in-memory
+    // clone: nothing here touches the fs, so the sidebar's lock never waits
+    // on disk regardless of library size.
+    let snapshot: Vec<SessionMeta> = sessions.lock().await.clone();
+
     let pending: HashSet<String> = match inbox {
         Some(inbox) => pending_inbox_session_ids(inbox),
         None => HashSet::new(),
     };
 
-    let mut archived = Vec::new();
-    // Lock the display list once for the whole pass — every mutation under
-    // it is `apply_archived_flag`, which is sync and infallible-at-lock.
-    let mut rail = sessions.lock().await;
-    for info in store.list().map_err(|e| e.to_string())? {
-        let curation = store.curation(&info.session_id);
-        // Only ACTIVE sessions are candidates; the pinned exemption is the
-        // user's explicit "never auto-archive this one" (R5).
-        if curation.archived || curation.pinned || running_ids.contains(&info.session_id) {
-            continue;
-        }
-        if pending.contains(&info.session_id.to_string()) {
-            continue;
-        }
-        let Some(mtime) = session_events_mtime(store.container(), &info.session_id) else {
+    // Phase 2 — lock-free adjudication. Every per-candidate read (curation
+    // sidecar, events.jsonl stat) and the inbox query run with no lock held.
+    let mut to_archive: Vec<(uuid::Uuid, String, std::time::SystemTime)> = Vec::new();
+    for row in snapshot {
+        let Ok(session_id) = uuid::Uuid::parse_str(&row.id) else {
             tracing::debug!(
-                session_id = %info.session_id,
+                session_id = %row.id,
+                "auto-archive: rail id is not a UUID; skipping (fail closed)"
+            );
+            continue;
+        };
+        // Re-check against the persisted sidecar: the rail mirrors curation,
+        // but the sidecar is the source of archived/pinned truth. The pinned
+        // exemption is the user's explicit "never auto-archive this one" (R5).
+        let curation = store.curation(&session_id);
+        if curation.archived || curation.pinned {
+            continue;
+        }
+        if running.is_running(session_id).await {
+            continue;
+        }
+        if pending.contains(&row.id) {
+            continue;
+        }
+        let Some(mtime) = session_events_mtime(store.container(), &session_id) else {
+            tracing::debug!(
+                session_id = %session_id,
                 "auto-archive: events.jsonl mtime unknown; skipping session (fail closed)"
             );
             continue;
@@ -894,40 +947,53 @@ pub(crate) async fn run_auto_archive_scan_with(
         if mtime >= cutoff {
             continue;
         }
-        if apply_archived_flag(store, &mut rail, &info.session_id, true)? {
+        to_archive.push((session_id, row.title, mtime));
+    }
+
+    // Phase 3 — re-verify, then archive one at a time. The checks run before
+    // the lock (no await ever holds it); the flip itself takes the display
+    // mutex just long enough for `apply_archived_flag`.
+    let mut archived = Vec::new();
+    for (session_id, title, mtime) in to_archive {
+        let curation = store.curation(&session_id);
+        if curation.archived || curation.pinned {
+            continue;
+        }
+        if running.is_running(session_id).await {
+            continue;
+        }
+        if mtime >= cutoff {
+            continue; // retention re-check, reusing the phase-2 mtime
+        }
+        let mut rail = sessions.lock().await;
+        if apply_archived_flag(store, &mut rail, &session_id, true)? {
             archived.push(SessionAutoArchived {
-                session_id: info.session_id.to_string(),
-                title: info.title.clone().unwrap_or_default(),
+                session_id: session_id.to_string(),
+                title,
             });
         }
     }
     Ok(archived)
 }
 
-/// Production wrapper behind the scheduler: resolves the live running set
-/// from the session registry and the shared inbox store, runs one scan, and
+/// Production wrapper behind the scheduler: runs one scan with the live
+/// session registry as the running source and the shared inbox store, then
 /// emits `sessions-updated` + one `session-auto-archived` per archived
 /// session (the frontend toasts; both events also drive list refreshes).
 async fn run_auto_archive_scan(state: &AppState, app_handle: &tauri::AppHandle) {
     let store = state.l0_store();
-    // Resolve the live query set once per pass — a session that starts
-    // running mid-scan is still skipped here because `apply_archived_flag`
-    // only flips curation flags; the live conversation itself is untouched.
-    let mut running_ids = HashSet::new();
-    if let Ok(infos) = store.list() {
-        for info in infos {
-            if state.registry.is_querying(info.session_id).await {
-                running_ids.insert(info.session_id);
-            }
-        }
-    }
+    // The registry is the running source itself: both decision points
+    // (adjudication and the pre-archive re-verification) query
+    // `is_querying` live, so a session that starts running mid-scan is
+    // still skipped — no pass-start snapshot of running ids, and no
+    // store-wide listing pass just to build one.
     let inbox = state.inbox_store();
     let now = std::time::SystemTime::now();
     let archived = match run_auto_archive_scan_with(
         &state.desktop_config,
         &state.sessions,
         &store,
-        &running_ids,
+        state.registry.as_ref(),
         Some(inbox.as_ref()),
         now,
     )
@@ -2752,6 +2818,23 @@ mod pin_and_auto_archive_tests {
             .collect()
     }
 
+    /// Same rail shape with per-row titles — the scan's report rows carry
+    /// the snapshot's title (F1: the phase-1 rail snapshot is what the
+    /// archived-row report is built from).
+    fn display_list_titled(rows: &[(&uuid::Uuid, &str)]) -> Vec<SessionMeta> {
+        rows.iter()
+            .map(|(id, title)| SessionMeta {
+                id: id.to_string(),
+                title: (*title).into(),
+                created_at: 1,
+                message_count: 1,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            })
+            .collect()
+    }
+
     fn config_lock(enabled: bool, days: u32) -> tokio::sync::RwLock<config::DesktopConfig> {
         tokio::sync::RwLock::new(config::DesktopConfig {
             session_auto_archive_enabled: enabled,
@@ -2846,7 +2929,13 @@ mod pin_and_auto_archive_tests {
         let fresh = uuid::Uuid::new_v4();
         seed_session(&store, &old, Some("Old chat"));
         seed_session(&store, &fresh, Some("Fresh chat"));
-        let sessions = tokio::sync::Mutex::new(display_list(&[&old, &fresh]));
+        // The rail rows carry the titles the report must repeat: F1 builds
+        // the archived-row payload from the phase-1 snapshot, not a sidecar
+        // listing pass.
+        let sessions = tokio::sync::Mutex::new(display_list_titled(&[
+            (&old, "Old chat"),
+            (&fresh, "Fresh chat"),
+        ]));
         let cfg = config_lock(true, 7);
 
         // A brand-new session's events.jsonl mtime is "now": with the clock
@@ -3038,6 +3127,79 @@ mod pin_and_auto_archive_tests {
                 .unwrap();
         assert!(archived.is_empty(), "default-off gates every pass");
         assert!(!store.curation(&a).archived);
+        assert_eq!(sessions.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn scan_reverification_skips_a_session_that_turns_running_mid_scan() {
+        // F1 phase 3: a session idle during the lock-free adjudication but
+        // running by the time the archive flip is due must be skipped. The
+        // injected double models the race with mutable state: its target
+        // reads idle on the first lookup (adjudication), then flips to
+        // running for every later lookup (re-verification) — the same
+        // live-query semantics the production registry injects.
+        struct TurnsRunningMidScan {
+            session_id: uuid::Uuid,
+            running: std::sync::Mutex<bool>,
+        }
+        impl AutoArchiveRunningCheck for TurnsRunningMidScan {
+            fn is_running(
+                &self,
+                session_id: uuid::Uuid,
+            ) -> impl std::future::Future<Output = bool> + Send {
+                let target = session_id == self.session_id;
+                async move {
+                    if !target {
+                        return false;
+                    }
+                    let mut running = self.running.lock().unwrap();
+                    if *running {
+                        return true;
+                    }
+                    *running = true; // it started running after adjudication
+                    false
+                }
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let turns = uuid::Uuid::new_v4();
+        let stays = uuid::Uuid::new_v4();
+        seed_session(&store, &turns, Some("Turns running mid-scan"));
+        seed_session(&store, &stays, Some("Stays idle"));
+        let sessions = tokio::sync::Mutex::new(display_list(&[&turns, &stays]));
+        let cfg = config_lock(true, 7);
+        let mtime = session_events_mtime(store.container(), &turns).unwrap();
+        let now = mtime + std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+        let running = TurnsRunningMidScan {
+            session_id: turns,
+            running: std::sync::Mutex::new(false),
+        };
+        let archived = run_auto_archive_scan_with(&cfg, &sessions, &store, &running, None, now)
+            .await
+            .unwrap();
+
+        assert!(
+            !archived.iter().any(|r| r.session_id == turns.to_string()),
+            "a session that starts running between adjudication and the flip is skipped"
+        );
+        assert!(!store.curation(&turns).archived);
+        assert_eq!(
+            sessions.lock().await.len(),
+            1,
+            "the skipped session's rail row stays"
+        );
+
+        assert_eq!(
+            archived.len(),
+            1,
+            "the always-idle session still archives on the same pass"
+        );
+        assert_eq!(archived[0].session_id, stays.to_string());
+        assert!(store.curation(&stays).archived);
+        // Only the stays-idle row left the rail; the skipped one is intact.
         assert_eq!(sessions.lock().await.len(), 1);
     }
 
