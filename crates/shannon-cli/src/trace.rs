@@ -31,6 +31,9 @@ use shannon_types::session_event::{SessionEvent, SessionEventBody};
 /// Precedence mirrors the persistence stack: `--dir` wins, then
 /// `SHANNON_SESSIONS_DIR`, then `SHANNON_HOME/sessions`, else
 /// `~/.shannon/sessions`.
+// KEEP: only the bin target calls this; dead when tests/trace_commands.rs
+// compiles this file via `#[path]`, so allow it there (not in the bin).
+#[cfg_attr(test, allow(dead_code))]
 pub fn resolve_container(dir: Option<&Path>) -> PathBuf {
     if let Some(d) = dir {
         return d.to_path_buf();
@@ -50,12 +53,15 @@ pub fn resolve_container(dir: Option<&Path>) -> PathBuf {
 pub fn resolve_session(container: &Path, reference: &str) -> anyhow::Result<(String, PathBuf)> {
     let store = SessionStore::new(container);
     let id: String = match reference {
-        "latest" | "-" => store
-            .list()?
-            .into_iter()
-            .next()
-            .map(|info| info.session_id.to_string())
-            .ok_or_else(|| anyhow::anyhow!("no sessions found in {}", container.display()))?,
+        "latest" | "-" => {
+            // WP-15: `list()` fully parses every session's events.jsonl just
+            // to pick the newest — 30s+ of silent CPU on real containers. The
+            // mtime-ordered directory scan answers "latest" without reading
+            // any log content.
+            store
+                .latest_id()
+                .ok_or_else(|| anyhow::anyhow!("no sessions found in {}", container.display()))?
+        }
         other => {
             // Accept any prefix long enough to be unambiguous.
             uuid::Uuid::parse_str(other)
@@ -637,6 +643,7 @@ mod tests {
                 cost_usd: Some(0.01),
             }),
             error: None,
+            llm_steps: None,
         }));
         w.close().unwrap();
 
@@ -668,7 +675,7 @@ mod tests {
             },
         ));
         folded.close().unwrap();
-        let more = SessionLogReader::open(&session_log_container_path(&container, "second"))
+        let more = SessionLogReader::open(session_log_container_path(&container, "second"))
             .and_then(|r| r.read_events(true))
             .unwrap();
 

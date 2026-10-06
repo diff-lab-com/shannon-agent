@@ -22,7 +22,7 @@ export default function DiagList({
 }: DiagListProps) {
   if (diags.length === 0) return null
   return (
-    <div className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-sm">
+    <div className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-e1">
       <h3 className="font-label-md text-on-surface mb-sm">{t('editor.diagnosticsList')}</h3>
       <ul className="flex flex-col gap-xs">
         {diags.map((d, i) => (
@@ -36,7 +36,7 @@ export default function DiagList({
               )}
             >
               <span
-                className="font-label-sm uppercase text-[10px] mt-0.5 tracking-wider"
+                className="font-label-sm uppercase text-label-2xs mt-0.5 tracking-wider"
                 style={{
                   color:
                     d.severity === 'error'
@@ -56,7 +56,7 @@ export default function DiagList({
               </span>
               {d.kind === 'auto' ? (
                 <span
-                  className="font-label-sm uppercase text-[10px] tracking-wider text-on-surface-variant"
+                  className="font-label-sm uppercase text-label-2xs tracking-wider text-on-surface-variant"
                   title={
                     d.source
                       ? (d.code
@@ -68,11 +68,11 @@ export default function DiagList({
                   {d.source ?? t('editor.source')}
                 </span>
               ) : (
-                <span className="font-label-sm uppercase text-[10px] tracking-wider text-on-surface-variant">
+                <span className="font-label-sm uppercase text-label-2xs tracking-wider text-on-surface-variant">
                   {t('editor.manual')}
                 </span>
               )}
-              <span className="material-symbols-outlined text-[14px] text-primary">
+              <span className="material-symbols-outlined icon-sm text-primary">
                 build
               </span>
             </Button>
@@ -84,7 +84,7 @@ export default function DiagList({
               title={t('editor.askAi')}
               className="flex items-center gap-xs px-xs py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[14px] text-primary">
+              <span className="material-symbols-outlined icon-sm text-primary">
                 chat
               </span>
               <span className="font-label-sm">{t('editor.askAi')}</span>

@@ -51,6 +51,9 @@ pub struct ToolApprovalRequest {
     pub detail: Option<String>,
     /// URL/domain for network tools (shown prominently in approval)
     pub domain: Option<String>,
+    /// P3-1: why this prompt fired — the deciding rule / classifier verdict
+    /// (`DecisionReason::explain()`), shown under the risk line.
+    pub why: Option<String>,
 }
 
 /// Auto-approval rule
@@ -222,6 +225,14 @@ impl ToolApprovalWidget {
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
+
+        // P3-1: rule / classifier why-line
+        if let Some(why) = &req.why {
+            lines.push(Line::from(vec![
+                Span::styled("Why: ", Style::default().fg(theme.text_dim)),
+                Span::styled(why.clone(), Style::default().fg(theme.text)),
+            ]));
+        }
 
         lines.push(Line::from(""));
 
@@ -445,6 +456,7 @@ mod tests {
                 risk_level: RiskLevel::High,
                 detail: None,
                 domain: None,
+                why: None,
             },
             None,
         );
@@ -463,6 +475,7 @@ mod tests {
                 risk_level: RiskLevel::Low,
                 detail: None,
                 domain: None,
+                why: None,
             },
             None,
         );
@@ -487,6 +500,7 @@ mod tests {
                 risk_level: RiskLevel::Low,
                 detail: None,
                 domain: None,
+                why: None,
             },
             None,
         );
@@ -508,6 +522,7 @@ mod tests {
                 risk_level: RiskLevel::Medium,
                 detail: None,
                 domain: None,
+                why: None,
             },
             None,
         );
@@ -574,6 +589,7 @@ mod tests {
                 risk_level: RiskLevel::Low,
                 detail: None,
                 domain: None,
+                why: None,
             },
             None,
         );

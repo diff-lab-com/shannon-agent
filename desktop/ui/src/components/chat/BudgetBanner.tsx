@@ -2,10 +2,13 @@
 //
 // Rendered inside the chat page, directly under the header area. The
 // warning bar is dismissible; the exceeded bar offers the frozen three
-// actions — continue once (resends the last user message with the
-// budget-bypass flag), raise the budget (opens BudgetDialog), stop.
+// actions — continue once (R2 W2-4: labeled by what it actually delivers —
+// the held blocked payload, or the recorded last user turn as the explicit
+// fallback — and sent with the budget-bypass flag), raise the budget
+// (opens BudgetDialog), stop.
 
 import { useState } from 'react'
+import { useIntl } from 'react-intl'
 import { Banner } from '@/components/ui/banner'
 import { Button } from '@/components/ui/button'
 import BudgetDialog from '@/components/chat/BudgetDialog'
@@ -17,8 +20,19 @@ export interface BudgetBannerProps {
   exceeded: BudgetStatusPayload | null
   clearWarning: () => void
   clearExceeded: () => void
-  /** Resend the last user message with the budget-bypass flag. */
+  /** Deliver one budget-exempt send (the continue target held by the page). */
   onContinueOnce: () => void
+  /**
+   * R2 W2-4: what "Continue once" will actually send —
+   *   - 'blocked': the payload the pre-turn guard refused (held by the page);
+   *   - 'last-message': the recorded last user turn (labeled fallback);
+   *   - 'none': nothing to deliver — the action hides instead of staying a
+   *     clickable no-op. Required (chat-testing 裁定 2026-10-03): the old
+   *     `null`-with-optional-slot contract let a JS caller omit the prop and
+   *     slip the `!== null` gate into a bogus continueLast button — the
+   *     sentinel removes undefined from the type surface entirely.
+   */
+  continueTarget: 'blocked' | 'last-message' | 'none'
   sessionId: string | null
 }
 
@@ -28,12 +42,17 @@ export default function BudgetBanner({
   clearWarning,
   clearExceeded,
   onContinueOnce,
+  continueTarget,
   sessionId,
 }: BudgetBannerProps) {
   const t = useT()
+  const intl = useIntl()
   const [raiseOpen, setRaiseOpen] = useState(false)
 
-  const fmt = (n: number) => `$${n.toFixed(2)}`
+  // B4 P2-11: USD via Intl (same approach as SlashResultCard) — localized
+  // grouping/decimal separators instead of a hardcoded `$x.xx`.
+  const fmt = (n: number) =>
+    new Intl.NumberFormat(intl.locale, { style: 'currency', currency: 'USD' }).format(n)
 
   return (
     <>
@@ -57,12 +76,19 @@ export default function BudgetBanner({
               {t('budget.exceeded.body', { spent: fmt(exceeded.spentUsd), budget: fmt(exceeded.budgetUsd) })}
             </p>
             <div className="flex flex-wrap gap-sm mt-sm">
-              <Button
-                className="px-md py-xs rounded-full bg-primary text-on-primary font-label-md hover:bg-primary/90"
-                onClick={() => { clearExceeded(); onContinueOnce() }}
-              >
-                {t('budget.exceeded.continue')}
-              </Button>
+              {/* Positive allowlist, not `!== 'none'`: a JS caller bypassing
+                  the type (missing prop → undefined) must also get the hidden
+                  action, not the old continueLast mis-render. */}
+              {(continueTarget === 'blocked' || continueTarget === 'last-message') && (
+                <Button
+                  className="px-md py-xs rounded-full bg-primary text-on-primary font-label-md hover:bg-primary/90"
+                  onClick={() => { clearExceeded(); onContinueOnce() }}
+                >
+                  {continueTarget === 'blocked'
+                    ? t('budget.exceeded.continue')
+                    : t('budget.exceeded.continueLast')}
+                </Button>
+              )}
               <Button
                 variant="outline"
                 className="px-md py-xs rounded-full font-label-md border-outline-variant/40 bg-surface-container-lowest/70"

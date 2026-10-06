@@ -71,6 +71,12 @@ pub struct AgentDefinition {
     /// Temperature for AI responses (0.0 - 1.0)
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// Maximum tool-loop turns for this agent (P0-7: previously the
+    /// `max_concurrent_tasks` field was repurposed as a turn budget, giving
+    /// e.g. the builtin `explorer` (`max_concurrent_tasks = 1`) a single-turn
+    /// agent loop). `None` = engine default (50).
+    #[serde(default)]
+    pub max_turns: Option<u32>,
 }
 
 fn default_max_concurrent() -> usize {
@@ -83,6 +89,7 @@ struct FrontMatter {
     temperature: Option<f32>,
     description: Option<String>,
     capabilities: Option<Vec<String>>,
+    max_turns: Option<u32>,
 }
 
 /// Parse optional YAML front matter from markdown content.
@@ -99,6 +106,7 @@ fn parse_front_matter(content: &str) -> (FrontMatter, String) {
                 temperature: None,
                 description: None,
                 capabilities: None,
+                max_turns: None,
             },
             content.to_string(),
         );
@@ -115,6 +123,7 @@ fn parse_front_matter(content: &str) -> (FrontMatter, String) {
             temperature: None,
             description: None,
             capabilities: None,
+            max_turns: None,
         };
 
         for line in yaml.lines() {
@@ -129,6 +138,7 @@ fn parse_front_matter(content: &str) -> (FrontMatter, String) {
                     "model" => fm.model = Some(value.to_string()),
                     "temperature" => fm.temperature = value.parse().ok(),
                     "description" => fm.description = Some(value.to_string()),
+                    "max_turns" => fm.max_turns = value.parse().ok(),
                     "capabilities" => {
                         // Parse comma-separated or bracket-enclosed list
                         let cleaned = value.trim_start_matches('[').trim_end_matches(']');
@@ -156,6 +166,7 @@ fn parse_front_matter(content: &str) -> (FrontMatter, String) {
             temperature: None,
             description: None,
             capabilities: None,
+            max_turns: None,
         },
         content.to_string(),
     )
@@ -247,6 +258,7 @@ impl AgentDefinition {
             max_concurrent_tasks: 3,
             plan_mode_required: false,
             temperature: front_matter.temperature,
+            max_turns: front_matter.max_turns,
         };
 
         // Parse capabilities from front matter if present
@@ -470,6 +482,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
         // Planning agent — produces step-by-step implementation plans
         AgentDefinition {
@@ -490,6 +503,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: Some(0.3),
+            max_turns: None,
         },
         // Code reviewer — static analysis and review
         AgentDefinition {
@@ -512,6 +526,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: Some(0.2),
+            max_turns: None,
         },
         // Security reviewer — OWASP-aligned security audit
         AgentDefinition {
@@ -534,6 +549,51 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: Some(0.1),
+            max_turns: None,
+        },
+        // Oracle — read-only senior staff-engineer reviewer. Invoked through
+        // the normal Agent tool: {"operation": "Spawn", "agent_type":
+        // "oracle", "task": "<what to review>"} — no special-casing beyond
+        // this definition; its read-only allowlist + generous turn budget
+        // ride the standard definition plumbing.
+        AgentDefinition {
+            name: "oracle".into(),
+            description: "Read-only senior staff engineer reviewing work: plan, review, \
+                 analyze, debug, advise. Invoke via the Agent tool with agent_type \"oracle\" \
+                 and a task describing what to review."
+                .into(),
+            system_prompt: Some(
+                "You are Oracle, a senior staff engineer reviewing work. You plan, review, \
+                 analyze, debug, and advise. You do not modify files. Be specific: cite \
+                 file:line, rank findings by severity, say what you'd do differently and why."
+                    .into(),
+            ),
+            model: None,
+            capabilities: vec![
+                "code-review".into(),
+                "architecture".into(),
+                "analysis".into(),
+                "debugging".into(),
+                "advisory".into(),
+            ],
+            allowed_tools: vec![
+                "Read".into(),
+                "Grep".into(),
+                "Glob".into(),
+                "GoToDefinition".into(),
+                "FindReferences".into(),
+                "Hover".into(),
+                "DocumentSymbol".into(),
+                "WorkspaceSymbol".into(),
+                "WebFetch".into(),
+            ],
+            max_concurrent_tasks: 1,
+            plan_mode_required: false,
+            temperature: Some(0.2),
+            // Reviews chain evidence (read → follow reference → read again),
+            // so give a generous budget rather than the single-turn explorer
+            // shape.
+            max_turns: Some(30),
         },
         // Backend architect — server-side design and implementation
         AgentDefinition {
@@ -556,6 +616,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
         // Frontend architect — UI/UX design and implementation
         AgentDefinition {
@@ -577,6 +638,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
         // Test engineer — testing strategy and test writing
         AgentDefinition {
@@ -598,6 +660,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
         // Performance engineer — optimization and profiling
         AgentDefinition {
@@ -620,6 +683,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
         // Technical writer — documentation
         AgentDefinition {
@@ -640,6 +704,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: Some(0.5),
+            max_turns: None,
         },
         // DevOps — deployment and infrastructure
         AgentDefinition {
@@ -661,6 +726,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
     ]
 }
@@ -726,6 +792,7 @@ temperature = 0.7
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: Some(0.3),
+            max_turns: None,
         };
 
         let config = def.to_teammate_config();
@@ -838,6 +905,7 @@ capabilities = ["test"]
                 max_concurrent_tasks: 3,
                 plan_mode_required: false,
                 temperature: None,
+                max_turns: None,
             },
         );
 
@@ -956,13 +1024,70 @@ capabilities = ["test"]
         assert!(registry.get("planner").is_some());
         assert!(registry.get("code-reviewer").is_some());
         assert!(registry.get("security-reviewer").is_some());
+        assert!(registry.get("oracle").is_some());
         assert!(registry.get("backend-architect").is_some());
         assert!(registry.get("frontend-architect").is_some());
         assert!(registry.get("test-engineer").is_some());
         assert!(registry.get("performance-engineer").is_some());
         assert!(registry.get("technical-writer").is_some());
         assert!(registry.get("devops").is_some());
-        assert_eq!(registry.list_names().len(), 10);
+        assert_eq!(registry.list_names().len(), 11);
+    }
+
+    /// The oracle def must work through the normal `Agent` tool with no
+    /// special-casing: read-only tool surface, a generous turn budget, and a
+    /// description that documents its own invocation.
+    #[test]
+    fn builtin_oracle_is_read_only_staff_reviewer() {
+        let mut registry = AgentDefinitionRegistry::new();
+        registry.with_builtin_defaults();
+
+        let oracle = registry.get("oracle").unwrap();
+        assert!(
+            oracle
+                .system_prompt
+                .as_deref()
+                .unwrap_or("")
+                .contains("You are Oracle")
+        );
+        assert!(
+            oracle
+                .system_prompt
+                .as_deref()
+                .unwrap_or("")
+                .contains("You do not modify files")
+        );
+
+        // Read-only allowlist: no write/edit/shell escape hatches.
+        for write_tool in [
+            "Write",
+            "Edit",
+            "MultiEdit",
+            "Bash",
+            "PowerShell",
+            "NotebookEdit",
+        ] {
+            assert!(
+                !oracle.allowed_tools.iter().any(|t| t == write_tool),
+                "oracle must not carry {write_tool}"
+            );
+        }
+        for read_tool in ["Read", "Grep", "Glob", "WebFetch"] {
+            assert!(oracle.allowed_tools.iter().any(|t| t == read_tool));
+        }
+        assert!(
+            oracle
+                .allowed_tools
+                .iter()
+                .any(|t| t == "GoToDefinition" || t == "FindReferences"),
+            "LSP read tools belong in the oracle's surface"
+        );
+
+        // Generous budget: reviews chase evidence across files.
+        assert_eq!(oracle.max_turns, Some(30));
+
+        // Invocable via the normal Agent tool: the description documents it.
+        assert!(oracle.description.contains("agent_type \"oracle\""));
     }
 
     #[test]
@@ -981,6 +1106,7 @@ capabilities = ["test"]
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         };
         registry.definitions.insert("explorer".into(), custom);
 

@@ -22,6 +22,10 @@ interface TaskListProps {
   onRunNow: (id: string) => void
   onCancelTask: (id: string) => void
   onCreateTask?: () => void
+  /** R2-P1-4: ids that back a real routine. Cards outside this set are
+   *  catalog tasks and hide the RunNow entry (running one used to feed the
+   *  card title to the engine as a fake "Execute task: X" prompt). */
+  runnableIds?: Set<string>
 }
 
 export default function TaskList({
@@ -35,6 +39,7 @@ export default function TaskList({
   onRunNow,
   onCancelTask,
   onCreateTask,
+  runnableIds,
 }: TaskListProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -57,6 +62,7 @@ export default function TaskList({
           key={task.id}
           task={task}
           isRunning={runningId === task.id}
+          showRunNow={runnableIds ? runnableIds.has(task.id) : true}
           onSelect={() => onSelectTask(task.id)}
           onRunNow={() => onRunNow(task.id)}
           onCancel={() => onCancelTask(task.id)}

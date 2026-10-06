@@ -66,10 +66,11 @@ As a user, I want to attach files to my message.
 **Status**: Button exists but has NO onClick handler. Non-functional.
 **Test coverage**: NONE
 
-### US-CHAT-09: Message Recall
+### US-CHAT-09: Message Recall ⚠️ REMOVED
 As a user, I want to recall my last message.
 - Alt+Up arrow when input is empty fills last user message
-**Test coverage**: Covered in Chat.test.tsx ✅
+**Status**: Never implemented — the WelcomeState ad advertised Alt+Up history recall but no handler exists (the only ArrowUp bindings are mention/slash menu navigation); ad removed by D9-a ruling (2026-10-03, see docs/plans/2026-10-02-chat-testing-plan.md §8). Input history recall (A-22) remains a product gap in the backlog, not staffed.
+**Test coverage**: NONE
 
 ### US-CHAT-10: Error Display
 As a user, I want to see error messages when things go wrong.

@@ -38,6 +38,19 @@ pub struct ConversationProjection {
     /// event range it was derived from. Used by branch cut-off (`/branch`)
     /// and by trace tooling to attribute a message to log rows.
     pub message_origin_seqs: Vec<(u64, u64)>,
+    /// D6: for every projected message, whether it is an assistant step the
+    /// log finalized as interrupted (`assistant/message.interrupted: true`) —
+    /// a cancelled run's partial answer. Parallel to `messages`; user
+    /// messages and unmarked steps are `false`. The desktop wire surfaces
+    /// this as `ChatMessage.interrupted` (the "stopped" bubble marker).
+    pub message_interrupted: Vec<bool>,
+    /// OBS1: for every projected message, WHY an interrupted step was cut
+    /// short (`assistant/message.reason`: `"cancelled"` — a user stop — or
+    /// `"failed"` — a turn failure mid-step). Parallel to `messages` and
+    /// `message_interrupted`; user messages, unmarked steps, and pre-reason
+    /// logs (the original D6 finalizes wrote no reason) are `None`, which
+    /// hosts read as "cancelled".
+    pub message_interrupt_reason: Vec<Option<String>>,
     /// Number of started turns (`turn/start` events).
     pub turn_count: usize,
     /// Summed token usage across all `turn/end` (and finalized-step)
@@ -59,6 +72,8 @@ impl Default for ConversationProjection {
         Self {
             messages: Vec::new(),
             message_origin_seqs: Vec::new(),
+            message_interrupted: Vec::new(),
+            message_interrupt_reason: Vec::new(),
             turn_count: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
@@ -95,6 +110,13 @@ struct AssistantStep {
     last_seq: u64,
     text: String,
     tool_uses: Vec<shannon_engine::api::ContentBlock>,
+    /// D6: the log finalized this step as interrupted
+    /// (`assistant/message.interrupted: true`) — a cancelled run's partial.
+    interrupted: bool,
+    /// OBS1: why the finalized step was cut short
+    /// (`assistant/message.reason`: `"cancelled"` | `"failed"`); `None` for
+    /// unmarked steps and pre-reason logs (read as "cancelled").
+    interrupt_reason: Option<String>,
 }
 
 impl AssistantStep {
@@ -104,6 +126,8 @@ impl AssistantStep {
             last_seq: first_seq,
             text: String::new(),
             tool_uses: Vec::new(),
+            interrupted: false,
+            interrupt_reason: None,
         }
     }
 
@@ -153,6 +177,10 @@ impl ConversationFolder {
         self.out
             .message_origin_seqs
             .push((step.first_seq, step.last_seq));
+        self.out.message_interrupted.push(step.interrupted);
+        self.out
+            .message_interrupt_reason
+            .push(step.interrupt_reason.clone());
     }
 
     fn push_user_text(&mut self, seq: u64, content: &str) {
@@ -161,6 +189,8 @@ impl ConversationFolder {
             content: shannon_engine::api::MessageContent::Text(content.to_string()),
         });
         self.out.message_origin_seqs.push((seq, seq));
+        self.out.message_interrupted.push(false);
+        self.out.message_interrupt_reason.push(None);
     }
 
     /// Fold one durable event body into the conversation state.
@@ -186,11 +216,18 @@ impl ConversationFolder {
             }
             SessionEventBody::AssistantMessage(p) => {
                 // Authoritative finalize (interrupt coalescing): replaces any
-                // partially streamed text for this step.
+                // partially streamed text for this step. D6: an interrupted
+                // finalize also MARKS the step so the reloaded message keeps
+                // its "stopped" status. OBS1: the finalize's `reason`
+                // distinguishes a cancelled run's partial from a FAILED
+                // turn's — a failure-side finalize surfaces the same marker
+                // family with a failed tone.
                 let first_seq = self.step.as_ref().map_or(event.seq, |s| s.first_seq);
                 let mut step = AssistantStep::new(first_seq);
                 step.last_seq = event.seq;
                 step.text = p.content.clone();
+                step.interrupted = p.interrupted;
+                step.interrupt_reason = p.reason.clone();
                 self.step = Some(step);
             }
             SessionEventBody::ToolCall(p) => {
@@ -244,6 +281,8 @@ impl ConversationFolder {
             ]),
         });
         self.out.message_origin_seqs.push((seq, seq));
+        self.out.message_interrupted.push(false);
+        self.out.message_interrupt_reason.push(None);
     }
 
     fn finish(mut self) -> ConversationProjection {
@@ -500,9 +539,11 @@ pub fn project_turn_timeline(events: &[SessionEvent]) -> TurnTimeline {
                 }
             }
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason,
                 usage,
                 error,
+                ..
             }) => {
                 let acc = timeline_slot(&mut accs, event.turn, event.ts_ns);
                 acc.end_ts_ns = event.ts_ns.max(acc.start_ts_ns);
@@ -759,9 +800,11 @@ pub fn project_session_analytics(events: &[SessionEvent]) -> SessionAnalytics {
                 }
             }
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason,
                 usage,
                 error,
+                ..
             }) => {
                 if reason == TurnEndPayload::REASON_COMPLETED {
                     view.turns_completed += 1;
@@ -1017,6 +1060,7 @@ mod tests {
             seq,
             100 + seq,
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage,
                 error: None,
@@ -1062,6 +1106,7 @@ mod tests {
             seq,
             turn,
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: Some(TokenUsage {
                     input_tokens: 5,
@@ -1266,7 +1311,7 @@ mod tests {
         assert_eq!(value["content"][0]["input"], serde_json::Value::Null);
         assert_eq!(value["content"].as_array().unwrap().len(), 1);
         // Thinking chunk contributed nothing.
-        assert!(serde_json::to_string(&value).unwrap().find("hmm").is_none());
+        assert!(!serde_json::to_string(&value).unwrap().contains("hmm"));
     }
 
     #[test]
@@ -1281,6 +1326,7 @@ mod tests {
                         content: "authoritative full text".into(),
                         usage: None,
                         interrupted: true,
+                        reason: None,
                     },
                 ),
             ),
@@ -1293,6 +1339,75 @@ mod tests {
         assert_eq!(proj.messages.len(), 2);
         let value = serde_json::to_value(&proj.messages[1]).unwrap();
         assert_eq!(value["content"][0]["text"], "authoritative full text");
+    }
+
+    /// D6: an interrupted finalize marks the message so the reloaded
+    /// conversation can distinguish a cancelled run's partial answer from a
+    /// completed one; unmarked steps and user messages stay false.
+    #[test]
+    fn test_interrupted_finalize_flags_only_the_marked_message() {
+        let events = [
+            user(0, "q"),
+            chunk(1, "par"),
+            chunk(2, "tial"),
+            ev(
+                3,
+                103,
+                SessionEventBody::AssistantMessage(
+                    shannon_types::session_event::AssistantMessagePayload {
+                        content: "partial".into(),
+                        usage: None,
+                        interrupted: true,
+                        reason: None,
+                    },
+                ),
+            ),
+            turn_end(4, None),
+        ];
+        let proj = project_conversation(&events);
+        assert_eq!(proj.messages.len(), 2);
+        assert_eq!(proj.message_interrupted, vec![false, true]);
+        // OBS1: a pre-reason log (no `reason` field) reads as "cancelled".
+        assert_eq!(proj.message_interrupt_reason, vec![None, None]);
+        let value = serde_json::to_value(&proj.messages[1]).unwrap();
+        assert_eq!(value["content"][0]["text"], "partial");
+    }
+
+    /// OBS1: a failed finalize marks its message the same way a cancelled
+    /// one does, and the parallel reason array carries the distinction
+    /// (`"failed"` vs `"cancelled"`) for hosts to render a different tone.
+    #[test]
+    fn test_failed_finalize_carries_the_failed_reason() {
+        let events = [
+            user(0, "q"),
+            chunk(1, "从前有一片海，"),
+            chunk(2, "海面上…"),
+            ev(
+                3,
+                103,
+                SessionEventBody::AssistantMessage(
+                    shannon_types::session_event::AssistantMessagePayload {
+                        content: "从前有一片海，海面上…".into(),
+                        usage: None,
+                        interrupted: true,
+                        reason: Some(
+                            shannon_types::session_event::AssistantMessagePayload::REASON_FAILED
+                                .into(),
+                        ),
+                    },
+                ),
+            ),
+            turn_end(4, None),
+        ];
+        let proj = project_conversation(&events);
+        assert_eq!(proj.messages.len(), 2);
+        assert_eq!(proj.message_interrupted, vec![false, true]);
+        assert_eq!(
+            proj.message_interrupt_reason,
+            vec![None, Some("failed".into())]
+        );
+        let value = serde_json::to_value(&proj.messages[1]).unwrap();
+        assert_eq!(value["content"][0]["text"], "从前有一片海，海面上…");
     }
 
     #[test]
@@ -1463,7 +1578,7 @@ mod tests {
         let read = view.tools.get("Read").expect("read aggregate");
         assert_eq!((read.calls, read.successes), (1, 1));
         assert_eq!(view.file_operations.get("read"), Some(&1));
-        assert!(view.file_operations.get("write").is_none());
+        assert!(!view.file_operations.contains_key("write"));
         assert_eq!(view.permission_requests_total, 1);
         assert_eq!(view.permission_requests_approved, 1);
         assert_eq!(view.errors.get("rate_limit"), Some(&1));

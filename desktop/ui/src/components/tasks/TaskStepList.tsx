@@ -42,7 +42,7 @@ export default function TaskStepList({ taskId, active = true }: TaskStepListProp
   return (
     <div className="flex flex-col gap-xs">
       {state.latestRetry && (
-        <div className="flex items-center gap-sm p-sm bg-warning/10 border border-warning/20 rounded-lg font-label-sm text-warning">
+        <div className="flex items-center gap-sm p-sm bg-warning-container border border-warning/20 rounded-lg font-label-sm text-on-warning-container">
           <span className="material-symbols-outlined icon-sm">replay</span>
           <span>
             {intl.formatMessage(
@@ -64,7 +64,7 @@ export default function TaskStepList({ taskId, active = true }: TaskStepListProp
             key={`${step.stepIndex}-${idx}`}
             className="flex items-start gap-sm p-sm bg-surface-container-low rounded-lg"
           >
-            <span className={cn('material-symbols-outlined text-[18px]', STATUS_COLOR[step.status])}>
+            <span className={cn('material-symbols-outlined icon-md', STATUS_COLOR[step.status])}>
               {step.status === 'started' ? 'progress_activity' : STATUS_ICON[step.status]}
             </span>
             <div className="flex-1 min-w-0">

@@ -87,7 +87,7 @@ export function MemoryEditor({ initial, onCancel, onSave }: MemoryEditorProps) {
             size="icon-sm"
             type="button"
             onClick={attemptCancel}
-            className="rounded hover:bg-surface-container-high"
+            className="rounded-sm hover:bg-surface-container-high"
             aria-label={t('memory.action.close')}
           >
             <span className="material-symbols-outlined icon-md text-on-surface-variant">close</span>
@@ -181,9 +181,9 @@ export function MemoryEditor({ initial, onCancel, onSave }: MemoryEditorProps) {
             className="absolute inset-0 z-raised bg-black/40 flex items-center justify-center p-md"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full">
+            <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-e4 border border-outline-variant/30 max-w-sm w-full">
               <div className="flex items-center gap-sm mb-md">
-                <span className="material-symbols-outlined text-error text-[24px]">warning</span>
+                <span className="material-symbols-outlined text-error icon-lg">warning</span>
                 <h3 className="font-headline-md text-on-surface">{t('memory.editor.discard.title')}</h3>
               </div>
               <p className="text-body-md text-on-surface-variant mb-lg">

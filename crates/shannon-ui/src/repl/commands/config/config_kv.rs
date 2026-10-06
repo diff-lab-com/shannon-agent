@@ -42,6 +42,22 @@ pub(crate) fn handle_init(repl: &mut Repl) -> Result<()> {
     Ok(())
 }
 
+/// Decision A1 refusal for `/config set` — `Some(message)` when `key` must
+/// never be written to a config file.
+///
+/// Mirrors the `shannon config` CLI chokepoint (#154): the writable-key
+/// allowlist is consulted FIRST so the engine-readable flat keys keep working
+/// — `max_tokens` contains the substring "token" and is therefore
+/// secret-shaped by the coarse predicate, but it is allowlisted, so it passes.
+/// Everything else that looks secret-shaped is refused outright: secrets
+/// belong in the credential store (`/credentials`), not in config files.
+/// Pure — unit-tested below.
+fn secret_key_refusal(key: &str) -> Option<String> {
+    (!shannon_core::config_persist::is_writable_key(key)
+        && shannon_core::config_persist::is_secret_shaped_key(key))
+    .then(|| t!("commands.config.refused_secret", key = key).to_string())
+}
+
 pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_commands::config_utils;
     use shannon_tools::config::ConfigManager;
@@ -97,6 +113,11 @@ pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
             let value_str = parts.get(2).copied().unwrap_or("");
             if key.is_empty() || value_str.is_empty() {
                 "Usage: /config set <key> <value>".to_string()
+            } else if let Some(refusal) = secret_key_refusal(key) {
+                // Aligned with the `shannon config` CLI (#154): secret-shaped
+                // keys are refused outright instead of being written into the
+                // engine-blind config.json store (decision A1).
+                refusal
             } else {
                 let value: serde_json::Value = if value_str == "true" {
                     serde_json::json!(true)
@@ -182,10 +203,30 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
             let permissions = recover_lock(query_engine.permissions().read());
             permissions.approval_mode()
         };
-        let mut msg = format!("Current approval mode: {current}\n\nAvailable modes:\n");
-        for name in ApprovalMode::all_names() {
-            let mode = ApprovalMode::from_str_ci(name)
-                .expect("from_str_ci should return valid mode for all_names()");
+        // Design §7.1: the listing mirrors the UI model — the 3-stop autonomy
+        // ladder plus the plan workflow tier, then expert modes separately.
+        let mut msg = format!(
+            "Current approval mode: {current} [{}]\n\n",
+            current.short_label()
+        );
+        msg.push_str("Autonomy ladder (Shift+Tab cycles):\n");
+        for name in ["ask", "auto-edit", "full-auto"] {
+            let mode = ApprovalMode::from_str_ci(name).expect("ladder token parses");
+            let marker = if mode == current { " *" } else { "" };
+            msg.push_str(&format!("  {name}{marker} — {}\n", mode.description()));
+        }
+        let plan_marker = if current == ApprovalMode::Plan {
+            " *"
+        } else {
+            ""
+        };
+        msg.push_str(&format!(
+            "  plan{plan_marker} — {} (workflow tier: enter via /plan)\n",
+            ApprovalMode::Plan.description()
+        ));
+        msg.push_str("\nExpert modes (/mode <name>):\n");
+        for name in ["readonly", "dontAsk", "bypassPermissions"] {
+            let mode = ApprovalMode::from_str_ci(name).expect("expert token parses");
             let marker = if mode == current { " *" } else { "" };
             msg.push_str(&format!("  {name}{marker} — {}\n", mode.description()));
         }
@@ -196,6 +237,32 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     match ApprovalMode::from_str_ci(trimmed) {
+        Some(ApprovalMode::Plan) => {
+            // D-3: plan is a workflow tier entered via /plan (which snapshots
+            // the ladder mode and arms the write gate) — not a bare mode set.
+            repl.chat.add_message(
+                ChatRole::System,
+                "Plan is a workflow tier — enter it with `/plan <description>`; \
+                 approve with `/plan approve`; exit with `/plan off` (restores your previous mode)."
+                    .to_string(),
+            );
+            Ok(())
+        }
+        Some(ApprovalMode::BypassPermissions) => {
+            // P2-4: entering bypass from the REPL always confirms, and honors
+            // the root refusal / SHANNON_DISABLE_BYPASS kill switch.
+            if let Err(e) = shannon_engine::permissions::ensure_bypass_allowed() {
+                repl.chat
+                    .add_message(ChatRole::System, format!("Bypass refused: {e}"));
+                return Ok(());
+            }
+            repl.show_confirm_dialog(
+                "Bypass Permissions",
+                "This will skip ALL permission checks. Only use in trusted environments.\n\nAre you sure?",
+                "set_bypass_mode",
+            );
+            Ok(())
+        }
         Some(mode) => {
             let query_engine = match repl.query_engine.as_ref() {
                 Some(e) => e,
@@ -208,7 +275,7 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
                 }
             };
             recover_lock(query_engine.permissions().write()).set_approval_mode(mode);
-            repl.state.approval_mode_label = mode.short_label().to_string();
+            repl.state.approval_mode = mode;
             {
                 repl.chat.add_message(
                     ChatRole::System,
@@ -248,6 +315,21 @@ pub(crate) fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
                         return Ok(());
                     }
                 };
+                // Dedup guard: append_system_prompt is cumulative, so re-running
+                // /context reload with unchanged files would stack duplicate
+                // copies of the instructions into the system prompt. Skip when
+                // the exact payload is already present.
+                if query_engine
+                    .system_prompt()
+                    .is_some_and(|prompt| prompt.contains(&instructions.content))
+                {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        "Project instructions already reloaded in this session; start a new session to pick up further changes."
+                            .to_string(),
+                    );
+                    return Ok(());
+                }
                 query_engine.append_system_prompt(&instructions.content);
                 let files = instructions.loaded_files.join(", ");
                 {
@@ -508,4 +590,114 @@ pub(crate) fn handle_local_models(repl: &mut Repl) -> Result<()> {
 
     repl.chat.add_message(ChatRole::System, output);
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::repl::commands::submit_input;
+
+    // ── /config set secret-key refusal (R1-4: TUI/CLI alignment, A1) ──
+
+    /// `max_tokens` contains the substring "token" and is therefore
+    /// secret-shaped by the coarse predicate, but the writable-key allowlist
+    /// wins exactly like the CLI chokepoint (#154): allowlisted keys always
+    /// pass, every other secret-shaped key is refused.
+    #[test]
+    fn secret_refusal_allowlist_wins_for_max_tokens() {
+        assert!(shannon_core::config_persist::is_secret_shaped_key(
+            "max_tokens"
+        ));
+        assert_eq!(secret_key_refusal("max_tokens"), None);
+
+        // Plain writable and unknown non-secret keys pass.
+        assert_eq!(secret_key_refusal("model"), None);
+        assert_eq!(secret_key_refusal("temperature"), None);
+        assert_eq!(secret_key_refusal("editor.theme"), None);
+
+        for key in [
+            "api_key",
+            "anthropic_api_key",
+            "github_token",
+            "db_password",
+        ] {
+            assert!(secret_key_refusal(key).is_some(), "{key} must be refused");
+        }
+    }
+
+    /// The `/config set` path itself refuses a secret-shaped key with the A1
+    /// rationale instead of writing it into the engine-unread config.json.
+    #[test]
+    fn config_set_refuses_secret_shaped_key() {
+        let mut repl = Repl::new().expect("repl should construct");
+        repl.prompt
+            .set_input("/config set anthropic_api_key sk-test".to_string());
+        submit_input(&mut repl, None).unwrap();
+
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(
+            last_msg.contains("Refused"),
+            "secret-shaped key must be refused, got: {last_msg}"
+        );
+        assert!(
+            last_msg.contains("anthropic_api_key"),
+            "refusal must name the key, got: {last_msg}"
+        );
+        assert!(
+            last_msg.contains("/credentials"),
+            "refusal must point at the credential store, got: {last_msg}"
+        );
+        // The success output ("Set ...") must not appear.
+        assert!(
+            !last_msg.contains("Set anthropic_api_key"),
+            "refused key must not be reported as set, got: {last_msg}"
+        );
+    }
+
+    /// `/context reload` must not stack duplicate instruction payloads into
+    /// the system prompt: the first reload appends, a second reload with
+    /// unchanged files is refused with a hint instead of appending again.
+    #[test]
+    fn test_context_reload_does_not_duplicate_instructions() {
+        let mut repl = Repl::new().expect("repl should construct");
+        assert!(repl.query_engine.is_some());
+
+        repl.prompt.set_input("/context reload".to_string());
+        submit_input(&mut repl, None).unwrap();
+
+        let prompt_after_first = repl
+            .query_engine
+            .as_ref()
+            .and_then(|e| e.system_prompt())
+            .expect("first reload should append project instructions");
+        assert!(
+            prompt_after_first.contains("scope:"),
+            "appended prompt should carry instruction scope headers, got: {prompt_after_first}"
+        );
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(
+            last_msg.contains("Project context reloaded"),
+            "first reload should confirm, got: {last_msg}"
+        );
+
+        // Second reload with unchanged files: prompt must not grow.
+        repl.prompt.set_input("/context reload".to_string());
+        submit_input(&mut repl, None).unwrap();
+
+        let prompt_after_second = repl
+            .query_engine
+            .as_ref()
+            .and_then(|e| e.system_prompt())
+            .expect("system prompt should persist across reloads");
+        assert_eq!(
+            prompt_after_first, prompt_after_second,
+            "second reload must not append the same instructions again"
+        );
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(
+            last_msg.contains("already reloaded in this session"),
+            "second reload should be refused with a hint, got: {last_msg}"
+        );
+    }
 }

@@ -308,7 +308,12 @@ impl<T: Transport> McpClient<T> {
         params: Option<serde_json::Value>,
     ) -> McpResult<serde_json::Value> {
         let id = uuid::Uuid::new_v4().to_string();
-        let request = JsonRpcRequest::new(method, params);
+        // review §P1-10: must use with_id() so the wire id matches the
+        // pending_requests key. JsonRpcRequest::new() generates a fresh
+        // id internally, so the response was always routed against a
+        // different id than the one we just registered — every request
+        // timed out at 30s with "Received response for unknown request ID".
+        let request = JsonRpcRequest::with_id(id.clone(), method, params);
 
         debug!(id = %id, method = %method, "Sending request");
 
@@ -659,6 +664,25 @@ mod tests {
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("\"jsonrpc\":\"2.0\""));
         assert!(json.contains("\"method\":\"test_method\""));
+    }
+
+    // review §P1-10: with_id() round-trips the supplied id so the wire id
+    // matches the pending_requests map key the caller registered. new()
+    // mints its own id and silently breaks response routing.
+    #[test]
+    fn jsonrpc_request_with_id_round_trips_supplied_id() {
+        let request = JsonRpcRequest::with_id("my-caller-id", "tools/list", None);
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(
+            json.contains("\"id\":\"my-caller-id\""),
+            "wire id must match caller-supplied id; got: {json}"
+        );
+        // Round-trip: parse the wire back into a request and confirm the id
+        // is preserved. The response router looks up pending_requests by
+        // exactly this string, so any drift here would break routing.
+        let parsed: JsonRpcRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, "my-caller-id");
+        assert_eq!(parsed.method, "tools/list");
     }
 
     #[test]

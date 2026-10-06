@@ -127,10 +127,10 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
 
   if (tasks.length === 0) {
     return (
-      <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
-        <div className="flex items-center gap-2 mb-md">
+      <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1">
+        <div className="flex items-center gap-sm mb-md">
           <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
-          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.dag.title')}</h3>
+          <h3 className="font-headline-md text-body-lg font-bold text-on-surface">{t('tasks.dag.title')}</h3>
         </div>
         <p className="text-body-sm text-on-surface-variant text-center py-lg">
           {t('tasks.dag.empty')}
@@ -140,11 +140,11 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
   }
 
   return (
-    <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
+    <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1">
       <div className="flex items-center justify-between mb-md">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-sm">
           <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
-          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.dag.title')}</h3>
+          <h3 className="font-headline-md text-body-lg font-bold text-on-surface">{t('tasks.dag.title')}</h3>
         </div>
         <span className="text-label-sm text-on-surface-variant">
           {intl.formatMessage({ id: 'tasks.dag.tasksEdges' }, { tasks: tasks.length, edges: edges.length })}
@@ -211,22 +211,22 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
                   variant="ghost"
                   type="button"
                   onClick={() => onSelectTask?.(n.task.id)}
-                  className="w-full h-full justify-start text-left bg-surface-container-lowest rounded-lg border-l-4 px-md py-xs shadow-sm hover:shadow-md hover:-translate-y-0.5"
+                  className="w-full h-full justify-start text-left bg-surface-container-lowest rounded-lg border-l-4 px-md py-xs shadow-e1 hover:shadow-e2 hover:-translate-y-0.5"
                   style={{ borderLeftColor: fill }}
                   title={n.task.title}
                 >
-                  <div className="font-label-md text-[13px] font-bold text-on-surface truncate">
+                  <div className="font-label-md text-label-sm font-bold text-on-surface truncate">
                     {n.task.title}
                   </div>
                   <div className="flex items-center gap-xs mt-0.5">
                     <span
-                      className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded text-white"
+                      className="text-label-2xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-sm text-white"
                       style={{ backgroundColor: fill }}
                     >
                       {n.task.status}
                     </span>
                     {n.task.assignee ? (
-                      <span className="text-[11px] text-on-surface-variant truncate">
+                      <span className="text-label-xs text-on-surface-variant truncate">
                         @ {n.task.assignee}
                       </span>
                     ) : null}
@@ -252,7 +252,7 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
           <span className="w-2 h-2 rounded-full" style={{ backgroundColor: statusFill('pending') }} />
           {t('tasks.dag.legendPending')}
         </span>
-        <span className="ml-auto text-[11px]">{t('tasks.dag.clickHint')}</span>
+        <span className="ml-auto text-label-xs">{t('tasks.dag.clickHint')}</span>
       </div>
     </div>
   )

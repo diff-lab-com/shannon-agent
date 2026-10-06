@@ -1,13 +1,18 @@
 //! Slash-command backends — the desktop counterparts of the REPL's session
 //! commands that have no other Tauri surface yet:
-//!   /context → [`get_session_context_stats`] (tokens used vs context window)
-//!   /diff    → [`get_session_git_diff`] (working-tree diff of the session's
-//!              working directory)
+//!   /context       → [`get_session_context_stats`] (tokens used vs context
+//!                    window)
+//!   /diff          → [`get_session_git_diff`] (working-tree diff of the
+//!                    session's working directory)
+//!   /dream `days`  → [`dream_slash`] (one dream pass; default 3-day window)
+//!   /detect-skills → [`detect_slash`] (heuristic candidate detection)
 //! /cost lives in `commands_usage` (it owns the ledger), /export and the
 //! navigation commands are pure frontend.
 //!
-//! These are read-only diagnostics: nothing here mutates the session, the
-//! L0 log, or the working tree.
+//! `/context` and `/diff` are read-only diagnostics. `/dream` and
+//! `/detect-skills` deliberately write review-gated artifacts only (shadow
+//! proposals / reports / candidate queue entries) — nothing lands in the
+//! memory store or the skill catalog without explicit user approval.
 
 use std::path::Path;
 use std::process::Command;
@@ -38,6 +43,16 @@ pub struct SessionContextStats {
 /// already carries the resolved system prompt / context-window overrides);
 /// otherwise constructs a minimal one — the client is never contacted, the
 /// engine is only consulted for its local estimators.
+///
+/// Settings R3 followup F4 sweep verdict — deliberately NOT wired to
+/// `context_auto_compact` (`with_defaults_arc_and_config`): this engine
+/// never runs `process_query`, and the auto-compaction ladder is gated
+/// inside that loop only (`agent_loop.rs`, `config.auto_compact_enabled` —
+/// the toggle's sole read site), so the field would be dead here. Its two
+/// consumers are `/context` (pure token estimate) and `/compact` (a MANUAL
+/// compaction driven by a separate `CompactEngine`, which must work
+/// regardless of the auto-compact switch). This is the "纯本地估算器" case
+/// the F4 plan keeps on `with_defaults_arc`.
 pub(crate) async fn restored_engine(
     state: &AppState,
     session_id: uuid::Uuid,
@@ -48,9 +63,16 @@ pub(crate) async fn restored_engine(
         .ok_or_else(|| format!("unknown session {session_id}"))?;
 
     let stashed = session.query_engine.lock().await.clone();
+    // P2-5 fix: honor the session's "temporary chat" flag on the cold path
+    // too. Before this, a session whose engine was no longer stashed
+    // (restart, eviction) got a freshly memory-attached engine, so the
+    // introspection surfaces (context breakdown, injected memories) started
+    // reporting memory content again while the composer banner still said
+    // "this session doesn't use memory". The registry is authoritative: the
+    // sidecar hydrates into it at startup.
     let mut engine = match stashed {
         Some(engine) => engine,
-        None => crate::commands_memory::attach_shared_memory(
+        None => crate::commands_memory::attach_shared_memory_if(
             QueryEngine::with_defaults_arc(
                 LlmClient::new(state.client_config.read().await.clone()),
                 state.tools.clone(),
@@ -58,6 +80,10 @@ pub(crate) async fn restored_engine(
                 StateManager::new(),
             ),
             &state.memory_store,
+            session.memory_disabled_snapshot(),
+            // B2-2: introspection engines are throwaway estimators — keep
+            // the process-cwd freeze (pre-B2-2 behavior).
+            None,
         ),
     };
     engine.set_session_id(session_id);
@@ -276,6 +302,15 @@ fn build_turns(messages: &[shannon_engine::api::Message]) -> Vec<(String, String
     turns
 }
 
+/// Slot-first summarizer client for the manual `/compact` (legacy ②): a
+/// configured compaction utility slot (`auxiliary.compression`) wins;
+/// `None` (unconfigured, or dangling — the resolver has already warned)
+/// keeps the historical behavior of riding the session's own client. Same
+/// semantics the interactive send path wires into its engine.
+fn compact_summarizer_client(slot: Option<LlmClient>, engine: &QueryEngine) -> LlmClient {
+    slot.unwrap_or_else(|| engine.client().clone())
+}
+
 #[tauri::command]
 pub async fn compact_session(
     state: tauri::State<'_, AppState>,
@@ -314,11 +349,21 @@ pub async fn compact_session(
     }
 
     // LLM summarizer on the current runtime (mirrors the REPL), falling back
-    // to the extractive summarizer when the client can't serve one.
-    let client = engine.client().clone();
-    let mut compact_engine = shannon_engine::compact::CompactEngine::with_llm_summarizer(client)
-        .or_else(|_| shannon_engine::compact::CompactEngine::with_defaults())
-        .map_err(|e| format!("compact engine error: {e}"))?;
+    // to the extractive summarizer when the client can't serve one. Legacy ②:
+    // slot-first — the compaction utility slot is preferred when configured,
+    // the session's own client otherwise.
+    let summarizer = compact_summarizer_client(
+        crate::utility_tier::resolve_auxiliary_client(
+            state.inner(),
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await,
+        &engine,
+    );
+    let mut compact_engine =
+        shannon_engine::compact::CompactEngine::with_llm_summarizer(summarizer)
+            .or_else(|_| shannon_engine::compact::CompactEngine::with_defaults())
+            .map_err(|e| format!("compact engine error: {e}"))?;
 
     let mut messages = history.clone();
     let result = compact_engine
@@ -353,6 +398,8 @@ pub async fn compact_session(
                         content: user.clone(),
                         timestamp: now,
                         file_attachments: None,
+                        interrupted: None,
+                        interrupted_reason: None,
                     });
                 }
                 if !assistant.is_empty() {
@@ -361,6 +408,8 @@ pub async fn compact_session(
                         content: assistant.clone(),
                         timestamp: now,
                         file_attachments: None,
+                        interrupted: None,
+                        interrupted_reason: None,
                     });
                 }
             }
@@ -381,6 +430,61 @@ pub async fn compact_session(
         },
         messages,
     })
+}
+
+// ── /dream and /detect-skills backends ──────────────────────────────────
+
+/// Parse the optional `/dream [days]` argument: `None` or blank → the manual
+/// default of [`crate::commands_dream::DEFAULT_MANUAL_DAYS_BACK`] (3), an
+/// integer → clamped to [`crate::commands_dream::DREAM_MAX_DAYS_BACK`] (30)
+/// (`execute_dream_pass` re-clamps centrally), anything else → `Err` so the
+/// UI can surface the typo instead of silently running the wrong window.
+fn parse_days_arg(args: Option<&str>) -> Result<u32, String> {
+    let Some(raw) = args.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(crate::commands_dream::DEFAULT_MANUAL_DAYS_BACK);
+    };
+    let days: u32 = raw
+        .parse()
+        .map_err(|_| format!("invalid days argument {raw:?} — usage: /dream [days]"))?;
+    Ok(days.min(crate::commands_dream::DREAM_MAX_DAYS_BACK))
+}
+
+/// `/dream [days]` — run one dream pass through the same orchestration as
+/// the Memory panel button and the nightly scheduler (privacy gates, 6h
+/// throttle and single-flight lock included). Produces review-gated shadow
+/// proposals + a report; nothing is applied without user approval.
+#[tauri::command]
+pub async fn dream_slash(
+    // Injected by Tauri; `execute_dream_pass` resolves state from the app
+    // handle so every entry point shares one body.
+    _state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    args: Option<String>,
+) -> Result<crate::commands_dream::DreamPassResult, String> {
+    let days = parse_days_arg(args.as_deref())?;
+    crate::commands_dream::execute_dream_pass(app, days, Vec::new()).await
+}
+
+/// `/detect-skills` — run the heuristic skill-pattern detector on demand,
+/// bypassing the dream pass's throttles by design (detection is purely
+/// local: zero LLM cost, no proposals). New candidates land in the review
+/// queue + inbox only; `skill_detection_enabled` (the privacy main switch)
+/// still applies.
+#[tauri::command]
+pub async fn detect_slash(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<usize, String> {
+    let dir = crate::skill_pattern_detection::default_sessions_dir()?;
+    let inbox = state.inbox_store();
+    let appended = crate::skill_pattern_detection::detect_and_record(
+        &app,
+        &inbox,
+        &dir,
+        crate::skill_pattern_detection::DEFAULT_DETECT_DAYS_BACK,
+    )
+    .await?;
+    Ok(appended.len())
 }
 
 #[cfg(test)]
@@ -514,5 +618,201 @@ mod tests {
     async fn get_session_git_diff_inner(dir: &Path) -> GitDiffSummary {
         let working_dir = dir.to_string_lossy().into_owned();
         super::get_session_git_diff(working_dir).await.unwrap()
+    }
+
+    #[test]
+    fn dream_days_arg_defaults_when_missing_or_blank() {
+        assert_eq!(parse_days_arg(None).unwrap(), 3);
+        assert_eq!(parse_days_arg(Some("")).unwrap(), 3);
+        assert_eq!(parse_days_arg(Some("   ")).unwrap(), 3);
+    }
+
+    #[test]
+    fn dream_days_arg_parses_and_caps_integers() {
+        assert_eq!(parse_days_arg(Some("7")).unwrap(), 7);
+        assert_eq!(parse_days_arg(Some(" 14 ")).unwrap(), 14);
+        assert_eq!(parse_days_arg(Some("0")).unwrap(), 0);
+        assert_eq!(parse_days_arg(Some("30")).unwrap(), 30);
+        assert_eq!(parse_days_arg(Some("999")).unwrap(), 30, "capped at 30");
+    }
+
+    #[test]
+    fn dream_days_arg_rejects_garbage() {
+        for bad in ["abc", "-1", "7.5", "3 days"] {
+            assert!(
+                parse_days_arg(Some(bad)).is_err(),
+                "{bad:?} must be invalid"
+            );
+        }
+    }
+
+    // === P2-5 fix (I1): the cold-start engine honors the bypass flag ===
+
+    /// The restart story: no engine stashed on the session (fresh
+    /// `AppState`, nothing sent yet) + the flag hydrated from the sidecar
+    /// (set directly here). `restored_engine` must build a memory-less
+    /// engine, so the introspection surfaces report an EMPTY memory
+    /// segment — same as the live path (`send_message`), same as the
+    /// composer banner promises. A control session without the flag still
+    /// sees the shared store.
+    #[tokio::test]
+    async fn restored_engine_skips_memory_for_bypassed_session_on_cold_start() {
+        use shannon_core::memory::MemoryCategory;
+
+        let temp = std::env::temp_dir().join(format!(
+            "shannon-slash-restore-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let mut state = AppState::new();
+        // Redirect the stores the test touches off the real HOME.
+        state.memory_store = crate::commands_memory::open_shared_store_at(temp.join("memories"));
+        state.state_manager = std::sync::Arc::new(
+            shannon_engine::state::StateManager::with_sessions_dir(temp.join("sessions"))
+                .expect("temp sessions dir"),
+        );
+
+        // A memory entry keyed to the engine's project key (the process cwd,
+        // the same freeze `attach_shared_memory` performs) so the CONTROL
+        // session has something to inject; the bypassed one must not.
+        let project = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "default".to_string());
+        {
+            let mut store_guard = state.memory_store.write().unwrap();
+            store_guard
+                .add(shannon_core::memory::MemoryEntry::new(
+                    &project,
+                    MemoryCategory::Preference,
+                    "restart-visible memory fact",
+                ))
+                .unwrap();
+        }
+
+        // Two sessions with an L0 log each (the restore input); one carries
+        // the bypass flag as a post-restart hydrate would leave it.
+        let bypassed = uuid::Uuid::new_v4();
+        let control = uuid::Uuid::new_v4();
+        for id in [bypassed, control] {
+            shannon_core::session_log::SessionTee::open_in_container(
+                state.state_manager.sessions_dir(),
+                &id.to_string(),
+                "test-model",
+                None,
+            )
+            .close();
+            state.registry.insert(id);
+        }
+        state
+            .registry
+            .get(crate::session_registry::SessionKey(bypassed))
+            .unwrap()
+            .set_memory_disabled(true);
+
+        // Cold start: neither session has a stashed engine.
+        let restored_bypassed = restored_engine(&state, bypassed).await.unwrap();
+        assert!(
+            restored_bypassed.memory().is_none(),
+            "the bypassed session's cold engine carries no memory store"
+        );
+        let breakdown = restored_bypassed.context_breakdown();
+        let memory_tokens = breakdown
+            .categories
+            .iter()
+            .find(|c| c.key == "memory")
+            .map(|c| c.tokens)
+            .unwrap_or(0);
+        assert_eq!(
+            memory_tokens, 0,
+            "context breakdown reports an empty memory segment for the bypassed session"
+        );
+        assert!(
+            restored_bypassed.injected_memories(None).is_empty(),
+            "no injected memories are reported for the bypassed session"
+        );
+
+        // Control: same state, no flag — the shared store is attached and
+        // the seeded entry shows up in the memory segment.
+        let restored_control = restored_engine(&state, control).await.unwrap();
+        assert!(restored_control.memory().is_some());
+        let breakdown = restored_control.context_breakdown();
+        let memory_tokens = breakdown
+            .categories
+            .iter()
+            .find(|c| c.key == "memory")
+            .map(|c| c.tokens)
+            .unwrap_or(0);
+        assert!(
+            memory_tokens > 0,
+            "the control session still sees memory: {breakdown:?}"
+        );
+
+        std::fs::remove_dir_all(&temp).ok();
+    }
+
+    // ── Legacy ②: manual /compact prefers the compaction utility slot ────
+
+    /// A minimal engine whose client carries `fallback-model` — the
+    /// historical `/compact` summarizer source.
+    fn fallback_engine() -> QueryEngine {
+        let config = shannon_engine::api::types::LlmClientConfig {
+            model: "fallback-model".to_string(),
+            ..shannon_engine::api::types::LlmClientConfig::default()
+        };
+        QueryEngine::with_defaults(
+            LlmClient::new(config),
+            shannon_core::tools::ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+        )
+    }
+
+    /// Wire pin (slot-first): with a configured `auxiliary.compression`
+    /// slot, the manual `/compact` summarizer is the SLOT client — the
+    /// exact client `resolve_auxiliary_client` resolves — not the
+    /// session's own.
+    #[tokio::test]
+    async fn configured_slot_wins_over_the_session_client_for_compact() {
+        use crate::utility_tier::test_support::{compression_slot_config, install_config};
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", true)).await;
+        let slot = crate::utility_tier::resolve_auxiliary_client(
+            &state,
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await
+        .expect("slot resolves");
+
+        let engine = fallback_engine();
+        let summarizer = compact_summarizer_client(Some(slot), &engine);
+        assert_eq!(summarizer.model(), "compact-model-1");
+        assert_eq!(summarizer.base_url(), "http://127.0.0.1:1");
+    }
+
+    /// Wire pin (fallback): unconfigured slot resolves `None` and the
+    /// summarizer is the session's own client — byte-identical to the
+    /// pre-slot `/compact` behavior.
+    #[tokio::test]
+    async fn unconfigured_slot_falls_back_to_the_session_client_for_compact() {
+        use crate::utility_tier::test_support::{compression_slot_config, install_config};
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", false)).await;
+        let slot = crate::utility_tier::resolve_auxiliary_client(
+            &state,
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await;
+        assert!(slot.is_none(), "unconfigured slot → None");
+
+        let engine = fallback_engine();
+        let summarizer = compact_summarizer_client(slot, &engine);
+        assert_eq!(summarizer.model(), "fallback-model");
+        assert_eq!(
+            summarizer.model(),
+            engine.client().model(),
+            "fallback = the session's own client"
+        );
     }
 }

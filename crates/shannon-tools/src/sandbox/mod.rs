@@ -152,6 +152,16 @@ impl FileSystemProvider for SandboxedFs {
         self.inner.create_dir_all_blocking(path)
     }
 
+    fn rename_blocking(&self, from: &Path, to: &Path) -> io::Result<()> {
+        // Atomic temp-file commit: enforce the write policy on the
+        // destination path (not the source — it's the *target* the rename
+        // writes into).
+        if !self.policy.allows_write(to) {
+            return Err(self.deny("rename", to));
+        }
+        self.inner.rename_blocking(from, to)
+    }
+
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
         if !self.policy.allows_write(path) {
             return Err(self.deny("remove", path));
@@ -663,8 +673,13 @@ pub fn plugin_spawn_world(
     workspace: &Path,
 ) -> Result<PluginSpawnWorld, SandboxError> {
     // The Linux fork-init world is fully determined by the policy; the
-    // workspace parameter exists for the macOS Seatbelt config.
-    #[cfg(target_os = "linux")]
+    // workspace parameter exists for the macOS Seatbelt config. The two
+    // #[cfg(target_os = "linux")] let _ =  lines below keep every host
+    // (incl. Windows builds of shannon-tools) using both parameters in
+    // some arm, so `-D warnings` doesn't fire `unused variables`.
+    #[cfg(not(target_os = "linux"))]
+    let _ = policy;
+    #[cfg(not(target_os = "macos"))]
     let _ = workspace;
     #[cfg(target_os = "linux")]
     {
@@ -1084,6 +1099,10 @@ executable = ["/usr/local"]
     /// can be a silent fake restriction.
     #[test]
     fn manifest_helper_matches_host_capability_for_write_files() {
+        // The helper derives the plugin workspace from the process cwd; hold
+        // the shared cwd lock so concurrent chdir tests can't yank it away.
+        let _cwd = crate::test_support::lock_cwd();
+
         let dir = tempdir();
         let manifest = dir.path().join("plugin.toml");
         std::fs::write(&manifest, "# fixture\n").expect("manifest fixture");
@@ -1102,10 +1121,14 @@ executable = ["/usr/local"]
                 assert_eq!(guard.kind(), expected);
             }
             None => {
-                // Degrade path: only legitimate when the platform lacks any
-                // execution-world backend.
+                // Degrade path. On macOS a Docker install shadows Seatbelt
+                // in the executor's auto-detection, and the plugin argv-
+                // bridge deliberately refuses Docker worlds — so None there
+                // reflects host shape, not silent loss (roadmap E7).
+                let docker_shadows_seatbelt = cfg!(target_os = "macos")
+                    && shannon_core::sandbox::DockerSandbox::docker_available();
                 assert!(
-                    !cfg!(any(target_os = "linux", target_os = "macos")),
+                    docker_shadows_seatbelt,
                     "degradation on Linux/macOS would mean a backend-capable host silently \
                      lost enforcement"
                 );

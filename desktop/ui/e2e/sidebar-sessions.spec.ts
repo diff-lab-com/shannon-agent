@@ -1,12 +1,45 @@
 // U1 — the app sidebar's session rail is the app's single session list
 // (the Chat-page session rail was removed). Runs against the mock build
 // (`pnpm demo` webServer, 8 seeded sessions from MOCK_SESSIONS).
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
+
+/** Click → postcondition as ONE atomic, retried unit: the rail re-renders
+ *  in batches under load, so a click can be swallowed or displaced onto a
+ *  neighbouring row/group menu mid-dispatch (nightly R3/G5/G6 flake). Same
+ *  shape as R3's openRaceSession (chat-script.session-switch.spec.ts). */
+async function clickToPostcondition(
+  page: Page,
+  click: () => Promise<void>,
+  postcondition: () => Promise<void>,
+): Promise<void> {
+  await expect(async () => {
+    await click()
+    await postcondition()
+  }).toPass({ timeout: 30_000 })
+}
 
 test.describe('Sidebar sessions rail (U1)', () => {
   test('has exactly one New Chat button', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByTestId('desktop-session-row-sess-008')
+    ).toBeVisible({ timeout: 15000 })    // CI only: slow CI hydrates the sidebar's CSS variables asynchronously,
+    // so the session button stays under the aside for the first click. Wait
+    // for the sidebar to report a non-zero width and for the layout to
+    // settle before interacting.
+    await page.waitForFunction(() => {
+      const aside = document.querySelector('aside[data-sidebar]')
+      if (!aside) return false
+      // aside must be sized AND the main column must be offset
+      return aside.getBoundingClientRect().width > 0 &&
+             getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w').trim().endsWith('px')
+    }, { timeout: 15000 })
+
     await expect(
       page.getByRole('button', { name: 'New Chat' })
     ).toHaveCount(1)
@@ -14,42 +47,81 @@ test.describe('Sidebar sessions rail (U1)', () => {
 
   test('switches session from the rail and marks it current', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByTestId('desktop-session-row-sess-008')
+    ).toBeVisible({ timeout: 15000 })
     // exact: true — otherwise the substring also matches the row's
     // "Actions for …" ⋯ button.
-    const row = page.getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
+    const row = page.getByTestId('desktop-session-row-sess-001')
     await expect(row).toBeVisible()
-    await row.click()
-    await expect(page).toHaveURL(/\/chat/)
-    await expect(
-      page.getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
-    ).toHaveAttribute('aria-current', 'page')
+    // A click swallowed by a mid-dispatch re-render leaves the row
+    // unmarked — retry click→mark as one atomic unit (postconditions
+    // unchanged).
+    await clickToPostcondition(
+      page,
+      () => row.click(),
+      async () => {
+        await expect(page).toHaveURL(/\/chat/)
+        await expect(
+          page.getByTestId('desktop-session-row-sess-001')
+        ).toHaveAttribute('aria-current', 'page')
+      },
+    )
   })
 
   test('filters the rail by search', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByTestId('desktop-session-row-sess-008')
+    ).toBeVisible({ timeout: 15000 })
     // getByRole filters the CSS-hidden mobile-drawer copy of the sidebar
     // that getByLabel would also match (Layout mounts both variants).
     const search = page.getByRole('searchbox', { name: 'Search chats' })
     await search.fill('pricing')
 
     await expect(
-      page.getByRole('button', { name: 'Chat: Pricing page copy review', exact: true })
+      page.getByTestId('desktop-session-row-sess-003')
     ).toBeVisible()
     await expect(
-      page.getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
+      page.getByTestId('desktop-session-row-sess-001')
     ).toBeHidden()
     await expect(
-      page.getByRole('button', { name: 'Chat: Investor update draft', exact: true })
+      page.getByTestId('desktop-session-row-sess-005')
     ).toBeHidden()
   })
 
   test('delete asks for confirmation and removes the row', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByTestId('desktop-session-row-sess-008')
+    ).toBeVisible({ timeout: 15000 })
     // The ⋯ button is hover-only (opacity-0); force-click past the hover gate.
-    await page
-      .getByRole('button', { name: 'Actions for Investor update draft' })
-      .click({ force: true })
-    await page.getByRole('menuitem', { name: 'Delete' }).click()
+    // A displaced click can land on a project group's menu button (or be
+    // swallowed) — scope the postcondition to THIS row's menu: the
+    // DropdownMenu carries the same "Actions for <title>" aria-label as its
+    // ⋯ button, which project group menus ("Project actions: …") do not.
+    const actionsButton = page.getByRole('button', { name: 'Actions for Investor update draft' })
+    const deleteItem = page
+      .getByRole('menu', { name: 'Actions for Investor update draft' })
+      .getByRole('menuitem', { name: 'Delete' })
+    await clickToPostcondition(
+      page,
+      () => actionsButton.click({ force: true }),
+      () => expect(deleteItem).toBeVisible({ timeout: 5_000 }),
+    )
+    await deleteItem.click()
 
     const dialog = page.getByRole('alertdialog')
     await expect(dialog).toBeVisible()
@@ -64,12 +136,24 @@ test.describe('Sidebar sessions rail (U1)', () => {
 
   test('Alt+ArrowDown moves the focused row (U5 keyboard reorder)', async ({ page }) => {
     await page.goto('/chat')
-    const rows = page.getByRole('listitem')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByTestId('desktop-session-row-sess-008')
+    ).toBeVisible({ timeout: 15000 })
+    // Scope to session rows, not every listitem on the rail: project
+    // groups (P-U1/P-U2) are listitem wrappers too, and their first button
+    // is the header/menu control — `getByRole('listitem')` would resolve
+    // rows through it and read a null aria-label.
+    const rows = page.locator('[data-testid^="desktop-session-row-"]')
     await expect(rows.first()).toBeVisible()
     // Compare by the row button's aria-label ("Chat: <title>") — innerText
     // also drags in the icon-font glyphs (drag_indicator / more_horiz).
-    const nameOf = (i: number) =>
-      rows.nth(i).locator('button').first().getAttribute('aria-label')
+    // The row itself IS the button (role=listitem sits on its wrapper), so
+    // read the attribute off the matched element directly.
+    const nameOf = (i: number) => rows.nth(i).getAttribute('aria-label')
     const before0 = await nameOf(0)
     const before1 = await nameOf(1)
     expect(before0 && before1 && before0 !== before1).toBeTruthy()
@@ -77,17 +161,24 @@ test.describe('Sidebar sessions rail (U1)', () => {
     await page.getByRole('button', { name: before0!, exact: true }).focus()
     await page.keyboard.press('Alt+ArrowDown')
 
-    await expect(rows.nth(0).locator('button').first()).toHaveAttribute('aria-label', before1!)
-    await expect(rows.nth(1).locator('button').first()).toHaveAttribute('aria-label', before0!)
+    await expect(rows.nth(0)).toHaveAttribute('aria-label', before1!)
+    await expect(rows.nth(1)).toHaveAttribute('aria-label', before0!)
     // Persisted: the reorder survives a reload.
     await page.reload()
     await expect(rows.first()).toBeVisible()
-    await expect(rows.nth(0).locator('button').first()).toHaveAttribute('aria-label', before1!)
+    await expect(rows.nth(0)).toHaveAttribute('aria-label', before1!)
   })
 
   test('session rail has no critical axe violations (U5)', async ({ page }) => {
     await page.goto('/chat')
-    await expect(page.getByRole('listitem').first()).toBeVisible()
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByTestId('desktop-session-row-sess-008')
+    ).toBeVisible({ timeout: 15000 })
+    await expect(page.locator('[data-testid^="desktop-session-row-"]').first()).toBeVisible()
     const results = await new AxeBuilder({ page })
       .include('[data-sidebar]')
       .analyze()

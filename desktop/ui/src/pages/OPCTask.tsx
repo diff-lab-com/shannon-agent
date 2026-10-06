@@ -1,36 +1,102 @@
 import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
+import { useSessions } from '@/context/SessionContext'
 import { useParams, Link } from 'react-router-dom'
 import { useState } from 'react'
 import { useIntl, type PrimitiveType } from 'react-intl'
 import { toast } from 'sonner'
 import AgentMessagesPanel from '@/components/tasks/AgentMessagesPanel'
 import AgentLoadPanel from '@/components/tasks/AgentLoadPanel'
+import { statusBadge } from '@/components/tasks/shared'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { toastError } from '@/lib/errorToast'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 
+// B3 P1-27: localized status chip for raw task-status codes (shared mapping
+// with TaskCard / TaskExecutionLog / the calendar view).
+function StatusBadge({ status }: { status: string }) {
+  const intl = useIntl()
+  const badge = statusBadge(status)
+  return (
+    <span
+      title={intl.formatMessage({ id: badge.tipId }, badge.values)}
+      className={cn('inline-flex items-center gap-xs px-xs py-0.5 rounded-full border', badge.bg)}
+    >
+      <span className={cn('w-1.5 h-1.5 rounded-full', badge.dot)} />
+      <span className="font-label-sm text-label-xs font-bold uppercase tracking-wider">
+        {intl.formatMessage({ id: badge.labelId }, badge.values)}
+      </span>
+    </span>
+  )
+}
+
 export default function OPCTask() {
   const intl = useIntl()
-  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
+  // B3 P1-27: the helper accepts an explicit defaultMessage — dynamic keys
+  // like `opcTask.status.${task.status}` used to render as the raw key
+  // string (the descriptor field was silently dropped into ICU `values`).
+  const t = (
+    id: string,
+    values?: Record<string, PrimitiveType>,
+    defaultMessage?: string,
+  ) => intl.formatMessage({ id, defaultMessage }, values)
   const { usage } = useChat()
   const { tasks, agents, permissionRequest, respondPermission } = useCatalog()
+  const { sessions, goalRunsBySession } = useSessions()
   const [revisionNote, setRevisionNote] = useState('')
   const [showRevisionInput, setShowRevisionInput] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<'approve' | 'rollback' | null>(null)
+  const [responding, setResponding] = useState(false)
   const { id } = useParams()
 
   // Find the task by URL param, or the first in-progress task
   const task = (id ? tasks.find(t => t.id === id) : null) ?? tasks.find(t => t.status === 'in_progress' || t.status === 'running')
   const taskId = task?.id ?? ''
 
+  // R1-1: the main window receives every session's permission events, so a
+  // plain chat session's pending request can show up on this page and be
+  // mistaken for the OPC task's. Show the owning session's title and only
+  // allow approval when the request provably belongs to an agent-run
+  // session (OPC workflow / goal run); anything else must be answered in
+  // its own conversation.
+  const requestSession = permissionRequest?.session_id
+    ? sessions.find(s => s.id === permissionRequest.session_id) ?? null
+    : null
+  const requestSessionLabel = requestSession?.title ?? permissionRequest?.session_id ?? ''
+  const requestOwnedByAgentRun = permissionRequest != null && (
+    (requestSession?.is_agent_run ?? false) ||
+    (permissionRequest.session_id != null && permissionRequest.session_id in goalRunsBySession)
+  )
+  const ownershipMismatch = !requestOwnedByAgentRun
+
+  const respond = async (allow: boolean, options?: { note?: string }) => {
+    if (!permissionRequest || responding) return
+    const requestId = permissionRequest.request_id
+    setResponding(true)
+    try {
+      await respondPermission(requestId, allow, options)
+      if (allow) {
+        toast.success(t('opcTask.approvedExecution'))
+      } else if (options?.note) {
+        toast.success(t('opcTask.revisionSubmitted'))
+      } else {
+        toast.info(t('opcTask.rollbackRequested'))
+      }
+    } catch (e) {
+      toastError(t('opcTask.respondFailed'), e)
+    } finally {
+      setResponding(false)
+    }
+  }
+
   return (
     <div className="flex-1 w-full bg-background overflow-y-auto h-full px-lg py-xl">
       <nav aria-label={t('opcTask.breadcrumb.aria')} className="flex items-center gap-xs text-label-sm text-on-surface-variant mb-lg">
         <Link to="/opc" className="hover:text-primary transition-colors">{t('opcTask.opcBoard')}</Link>
-        <span className="material-symbols-outlined text-[14px]">chevron_right</span>
+        <span className="material-symbols-outlined icon-sm">chevron_right</span>
         <span className="text-on-surface">{t('opcTask.taskDetail')}</span>
       </nav>
       <div className="max-w-[1400px] mx-auto">
@@ -38,34 +104,34 @@ export default function OPCTask() {
           {/* Left Column */}
           <div className="xl:col-span-8 flex flex-col gap-lg">
             {/* Agent Workflow */}
-            <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
-              <div className="flex items-center gap-2 mb-8">
+            <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1">
+              <div className="flex items-center gap-sm mb-xl">
                 <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
-                <h3 className="font-headline-md text-[20px] font-bold text-on-surface">{t('opcTask.agentWorkflow')}</h3>
+                <h3 className="font-headline-md text-headline-sm font-bold text-on-surface">{t('opcTask.agentWorkflow')}</h3>
               </div>
 
               {agents.length === 0 ? (
                 <p className="text-body-sm text-on-surface-variant text-center py-lg">{t('opcTask.noAgentsWorkflow')}</p>
               ) : (
                 <>
-                  <div className="relative flex items-center justify-between mb-10 px-4 md:px-10 overflow-x-auto">
+                  <div className="relative flex items-center justify-between mb-10 px-md md:px-10 overflow-x-auto">
                     <div className="absolute left-10 md:left-16 right-10 md:right-16 top-6 h-0.5 bg-outline-variant/20 z-0" />
                     {agents.map((agent) => {
                       const isActive = agent.status === 'active' || agent.status === 'running'
                       return (
-                        <div key={agent.id} className="relative z-raised flex flex-col items-center gap-2 shrink-0">
+                        <div key={agent.id} className="relative z-raised flex flex-col items-center gap-sm shrink-0">
                           <div className={cn('w-12 h-12 rounded-full flex items-center justify-center shrink-0',
                             isActive ? 'bg-primary/10' : 'border border-outline-variant bg-surface-container-lowest'
                           )}>
                             {isActive ? (
-                              <div className="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-md">
+                              <div className="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-e2">
                                 <span className="material-symbols-outlined icon-md">smart_toy</span>
                               </div>
                             ) : (
                               <span className="material-symbols-outlined icon-md text-on-surface-variant">smart_toy</span>
                             )}
                           </div>
-                          <span className={cn('font-label-sm text-[12px]', isActive ? 'text-primary font-bold' : 'text-on-surface-variant')}>{agent.name}</span>
+                          <span className={cn('font-label-sm text-label-sm', isActive ? 'text-primary font-bold' : 'text-on-surface-variant')}>{agent.name}</span>
                         </div>
                       )
                     })}
@@ -76,10 +142,10 @@ export default function OPCTask() {
 
             {/* Task Description */}
             {task ? (
-              <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
-                <div className="flex items-center gap-2 mb-6">
+              <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1">
+                <div className="flex items-center gap-sm mb-lg">
                   <span className="material-symbols-outlined icon-md text-on-surface">description</span>
-                  <h3 className="font-headline-md text-[20px] font-bold text-on-surface">{t('opcTask.taskDescription')}</h3>
+                  <h3 className="font-headline-md text-headline-sm font-bold text-on-surface">{t('opcTask.taskDescription')}</h3>
                 </div>
                 <div className="space-y-sm">
                   <h4 className="font-body-lg font-bold text-on-surface">{task.title}</h4>
@@ -90,49 +156,49 @@ export default function OPCTask() {
                       task.status === 'running' || task.status === 'in_progress' ? 'primary' :
                       task.status === 'failed' ? 'error' :
                       'neutral'
-                    }>{task.status}</Badge>
+                    }>{t(`opcTask.status.${task.status}`, undefined, task.status)}</Badge>
                     {task.assignee ? <span className="font-label-sm text-on-surface-variant">{t('opcTask.assignedTo', { assignee: task.assignee })}</span> : null}
                     {task.priority ? <span className="font-label-sm text-on-surface-variant">{t('opcTask.priority', { priority: task.priority })}</span> : null}
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm text-center">
+              <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1 text-center">
                 <span className="material-symbols-outlined icon-2xl text-outline-variant">task_alt</span>
                 <p className="font-body-md text-on-surface-variant mt-md">{t('opcTask.noTaskSelected')}</p>
               </div>
             )}
 
             {/* Execution Log */}
-            <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
-              <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center gap-2">
+            <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1">
+              <div className="flex items-center justify-between mb-xl">
+                <div className="flex items-center gap-sm">
                   <span className="material-symbols-outlined icon-md text-on-surface">receipt_long</span>
-                  <h3 className="font-headline-md text-[20px] font-bold text-on-surface">{t('opcTask.executionLog')}</h3>
+                  <h3 className="font-headline-md text-headline-sm font-bold text-on-surface">{t('opcTask.executionLog')}</h3>
                 </div>
-                <span className="bg-surface-container-low text-on-surface-variant font-label-sm text-[11px] px-3 py-1 rounded-full border border-outline-variant/20">{t('opcTask.agentsCount', { count: agents.length })}</span>
+                <span className="bg-surface-container-low text-on-surface-variant font-label-sm text-label-xs px-3 py-xs rounded-full border border-outline-variant/20">{t('opcTask.agentsCount', { count: agents.length })}</span>
               </div>
 
               {agents.length === 0 ? (
                 <p className="text-body-sm text-on-surface-variant text-center py-lg">{t('opcTask.noExecutionEvents')}</p>
               ) : (
-                <div className="relative pl-0 md:pl-2 space-y-10">
+                <div className="relative pl-0 md:pl-sm space-y-10">
                   <div className="absolute left-[15px] md:left-[23px] top-4 bottom-8 w-px bg-outline-variant/30" />
                   {agents.map((agent) => {
                     const isActive = agent.status === 'active' || agent.status === 'running'
                     return (
-                    <div key={agent.id} className="relative flex items-start gap-4">
-                      <div className={cn('w-8 h-8 rounded-full flex items-center justify-center shrink-0 relative z-raised md:ml-2',
-                        isActive ? 'bg-primary text-on-primary shadow-sm ring-4 ring-primary/10' : 'border-2 border-outline-variant/40 bg-surface-container-lowest text-on-surface-variant'
+                    <div key={agent.id} className="relative flex items-start gap-md">
+                      <div className={cn('w-8 h-8 rounded-full flex items-center justify-center shrink-0 relative z-raised md:ml-sm',
+                        isActive ? 'bg-primary text-on-primary shadow-e1 ring-4 ring-primary/10' : 'border-2 border-outline-variant/40 bg-surface-container-lowest text-on-surface-variant'
                       )}>
                         <span className="material-symbols-outlined icon-sm">smart_toy</span>
                       </div>
-                      <div className="flex-1 -mt-1">
-                        <div className="flex justify-between items-start mb-1">
-                          <h4 className={cn('font-label-md text-[14px]', isActive ? 'text-primary font-bold' : 'text-on-surface')}>{agent.name}</h4>
-                          <span className={cn('font-label-sm text-[10px] uppercase tracking-wider', isActive ? 'text-primary font-bold' : 'text-on-surface-variant')}>{agent.status}</span>
+                      <div className="flex-1 -mt-xs">
+                        <div className="flex justify-between items-start mb-xs">
+                          <h4 className={cn('font-label-md text-body-sm', isActive ? 'text-primary font-bold' : 'text-on-surface')}>{agent.name}</h4>
+                          <span className={cn('font-label-sm text-label-2xs uppercase tracking-wider', isActive ? 'text-primary font-bold' : 'text-on-surface-variant')}>{agent.status}</span>
                         </div>
-                        {agent.task ? <p className="text-body-sm text-[14px] mt-1 text-on-surface-variant">{agent.task}</p> : null}
+                        {agent.task ? <p className="text-body-sm text-body-sm mt-xs text-on-surface-variant">{agent.task}</p> : null}
                       </div>
                     </div>
                     )
@@ -146,10 +212,10 @@ export default function OPCTask() {
 
             {/* Human-in-the-Loop Review — only render when a permission request is actually pending */}
             {permissionRequest !== null && (
-              <div className="glass-card bg-surface-container-lowest/80 rounded-2xl p-xl border border-outline-variant/40 shadow-sm">
-                <div className="flex items-center gap-2 mb-6">
+              <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/40 shadow-e1">
+                <div className="flex items-center gap-sm mb-lg">
                   <span className="material-symbols-outlined icon-md text-on-surface-variant">verified_user</span>
-                  <h3 className="font-headline-md text-[20px] font-bold text-on-surface">{t('opcTask.humanInTheLoopReview')}</h3>
+                  <h3 className="font-headline-md text-headline-sm font-bold text-on-surface">{t('opcTask.humanInTheLoopReview')}</h3>
                   <span className="ml-auto w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
                 </div>
 
@@ -162,7 +228,7 @@ export default function OPCTask() {
                     className="w-full px-md py-sm rounded-xl bg-primary text-on-primary font-label-md hover:brightness-110 transition-all flex items-center justify-center gap-sm"
                     onClick={() => setPendingAction('approve')}
                   >
-                    <span className="material-symbols-outlined text-[18px]">check_circle</span>
+                    <span className="material-symbols-outlined icon-md">check_circle</span>
                     {t('opcTask.approveFinalMerge')}
                   </Button>
                   <Button
@@ -170,7 +236,7 @@ export default function OPCTask() {
                     className="w-full px-md py-sm rounded-xl border border-error/30 text-error font-label-md hover:bg-error/10 transition-all flex items-center justify-center gap-sm"
                     onClick={() => setPendingAction('rollback')}
                   >
-                    <span className="material-symbols-outlined text-[18px]">undo</span>
+                    <span className="material-symbols-outlined icon-md">undo</span>
                     {t('opcTask.rollback')}
                   </Button>
                   <Button
@@ -178,7 +244,7 @@ export default function OPCTask() {
                     className="w-full px-md py-sm rounded-xl border border-outline-variant/50 text-on-surface-variant font-label-md hover:bg-surface-container-high/60 transition-all flex items-center justify-center gap-sm"
                     onClick={() => setShowRevisionInput(showRevisionInput === taskId ? null : taskId)}
                   >
-                    <span className="material-symbols-outlined text-[18px]">rate_review</span>
+                    <span className="material-symbols-outlined icon-md">rate_review</span>
                     {t('opcTask.requestRevision')}
                   </Button>
 
@@ -192,11 +258,12 @@ export default function OPCTask() {
                         onChange={e => setRevisionNote(e.target.value)}
                       />
                       <Button
-                        className="self-end px-md py-xs rounded-lg bg-primary/10 text-primary font-label-sm hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled={!revisionNote.trim()}
+                        className="self-end px-md py-xs rounded-lg bg-primary-container text-on-primary-container font-label-sm hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={!revisionNote.trim() || responding}
                         onClick={() => {
-                          respondPermission(taskId, false, { note: revisionNote.trim() })
-                          toast.success(t('opcTask.revisionSubmitted'))
+                          // P0-1: keyed by the pending request's id, awaited
+                          // so the toast only fires on real success.
+                          void respond(false, { note: revisionNote.trim() })
                           setRevisionNote('')
                           setShowRevisionInput(null)
                         }}
@@ -216,10 +283,10 @@ export default function OPCTask() {
             <AgentLoadPanel agents={agents} />
 
             {/* Efficiency Metrics */}
-            <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm flex flex-col gap-md">
-              <div className="flex items-center gap-2 mb-2">
+            <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1 flex flex-col gap-md">
+              <div className="flex items-center gap-sm mb-sm">
                 <span className="material-symbols-outlined icon-md text-primary">monitoring</span>
-                <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('opcTask.efficiencyMetrics')}</h3>
+                <h3 className="font-headline-md text-body-lg font-bold text-on-surface">{t('opcTask.efficiencyMetrics')}</h3>
               </div>
 
               {/* Task Completion Rate */}
@@ -230,36 +297,36 @@ export default function OPCTask() {
                     <span className="font-headline-md text-primary font-bold">{tasks.length > 0 ? Math.round((tasks.filter(t => t.status === 'completed').length / tasks.length) * 100) : 0}%</span>
                   </div>
                   <div className="w-full h-2 bg-primary/10 rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-primary/60 to-primary rounded-full transition-all duration-700" style={{ width: `${tasks.length > 0 ? Math.round((tasks.filter(t => t.status === 'completed').length / tasks.length) * 100) : 0}%` }} />
+                    <div className="h-full bg-gradient-to-r from-primary/60 to-primary rounded-full transition-all duration-(--duration-slower)" style={{ width: `${tasks.length > 0 ? Math.round((tasks.filter(t => t.status === 'completed').length / tasks.length) * 100) : 0}%` }} />
                   </div>
                 </div>
               )}
 
               <div className="grid grid-cols-2 gap-sm">
                 <div className="bg-surface-container-lowest rounded-xl p-md border border-outline-variant/20">
-                  <div className="font-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider mb-2">{t('opcTask.sessionCost')}</div>
-                  <div className="font-headline-md text-[18px] font-bold text-on-surface mb-1">${(usage?.cost_usd ?? 0).toFixed(4)}</div>
+                  <div className="font-label-sm text-label-2xs text-on-surface-variant uppercase tracking-wider mb-sm">{t('opcTask.sessionCost')}</div>
+                  <div className="font-headline-md text-body-lg font-bold text-on-surface mb-xs">${(usage?.cost_usd ?? 0).toFixed(4)}</div>
                 </div>
                 <div className="bg-surface-container-lowest rounded-xl p-md border border-outline-variant/20">
-                  <div className="font-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider mb-2">{t('opcTask.tokenUsage')}</div>
-                  <div className="font-headline-md text-[18px] font-bold text-on-surface mb-1">{((usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0)).toLocaleString()}</div>
+                  <div className="font-label-sm text-label-2xs text-on-surface-variant uppercase tracking-wider mb-sm">{t('opcTask.tokenUsage')}</div>
+                  <div className="font-headline-md text-body-lg font-bold text-on-surface mb-xs">{((usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0)).toLocaleString()}</div>
                 </div>
                 <div className="bg-surface-container-lowest rounded-xl p-md border border-outline-variant/20">
-                  <div className="font-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider mb-2">{t('opcTask.agents')}</div>
-                  <div className="font-headline-md text-[18px] font-bold text-on-surface mb-1">{agents.length}</div>
+                  <div className="font-label-sm text-label-2xs text-on-surface-variant uppercase tracking-wider mb-sm">{t('opcTask.agents')}</div>
+                  <div className="font-headline-md text-body-lg font-bold text-on-surface mb-xs">{agents.length}</div>
                 </div>
                 <div className="bg-surface-container-lowest rounded-xl p-md border border-outline-variant/20">
-                  <div className="font-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider mb-2">{t('opcTask.tasks')}</div>
-                  <div className="font-headline-md text-[18px] font-bold text-on-surface mb-1">{tasks.length}</div>
+                  <div className="font-label-sm text-label-2xs text-on-surface-variant uppercase tracking-wider mb-sm">{t('opcTask.tasks')}</div>
+                  <div className="font-headline-md text-body-lg font-bold text-on-surface mb-xs">{tasks.length}</div>
                 </div>
               </div>
             </div>
 
             {/* Active Tasks */}
-            <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm flex flex-col gap-md">
-              <div className="flex items-center gap-2 mb-2">
+            <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1 flex flex-col gap-md">
+              <div className="flex items-center gap-sm mb-sm">
                 <span className="material-symbols-outlined icon-md text-primary">inventory_2</span>
-                <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('opcTask.relatedTasks')}</h3>
+                <h3 className="font-headline-md text-body-lg font-bold text-on-surface">{t('opcTask.relatedTasks')}</h3>
               </div>
               {tasks.slice(0, 5).map(t => (
                 <Link key={t.id} to={`/opc/task/${t.id}`} className="border border-outline-variant/30 rounded-xl p-md flex items-start gap-md hover:border-primary/40 hover:bg-surface-container-lowest transition-colors cursor-pointer group focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none">
@@ -267,12 +334,10 @@ export default function OPCTask() {
                     <span className="material-symbols-outlined icon-md">task_alt</span>
                   </div>
                   <div>
-                    <div className="font-label-md text-[14px] font-bold text-on-surface mb-0.5 group-hover:text-primary transition-colors">{t.title}</div>
-                    <Badge variant={
-                      t.status === 'completed' ? 'tertiary' :
-                      t.status === 'in_progress' || t.status === 'running' ? 'primary' :
-                      'neutral'
-                    } size="sm">{t.status}</Badge>
+                    <div className="font-label-md text-body-sm font-bold text-on-surface mb-0.5 group-hover:text-primary transition-colors">{t.title}</div>
+                    {/* B3 P1-27: the status code was rendered raw here — reuse
+                        the shared badge mapping so labels are localized. */}
+                    <StatusBadge status={t.status} />
                   </div>
                 </Link>
               ))}
@@ -284,21 +349,32 @@ export default function OPCTask() {
       <ConfirmDialog
         open={pendingAction !== null}
         title={pendingAction === 'approve' ? t('opcTask.approveConfirm.title') : t('opcTask.rollbackConfirm.title')}
-        message={pendingAction === 'approve'
-          ? t('opcTask.approveConfirm.message', { title: task?.title ?? '', count: agents.length })
-          : t('opcTask.rollbackConfirm.message', { title: task?.title ?? '' })}
+        message={(() => {
+          const base = pendingAction === 'approve'
+            ? t('opcTask.approveConfirm.message', { title: task?.title ?? '', count: agents.length })
+            : t('opcTask.rollbackConfirm.message', { title: task?.title ?? '' })
+          // R1-1: surface the pending request's owner so the operator can
+          // spot a borrowed (chat-session) prompt before confirming.
+          if (requestSessionLabel) {
+            return ownershipMismatch
+              ? `${base} ${t('opcTask.approveConfirm.ownershipMismatch', { session: requestSessionLabel })}`
+              : `${base} ${t('opcTask.approveConfirm.ownership', { session: requestSessionLabel })}`
+          }
+          return `${base} ${t('opcTask.approveConfirm.ownershipUnknown')}`
+        })()}
         confirmLabel={pendingAction === 'approve' ? t('opcTask.approveConfirm.confirm') : t('opcTask.rollbackConfirm.confirm')}
         cancelLabel={pendingAction === 'approve' ? t('opcTask.approveConfirm.cancel') : t('opcTask.rollbackConfirm.cancel')}
         destructive={pendingAction === 'rollback'}
+        busy={responding}
+        confirmDisabled={ownershipMismatch}
         onConfirm={() => {
-          if (pendingAction === 'approve') {
-            respondPermission(taskId, true)
-            toast.success(t('opcTask.approvedExecution'))
-          } else if (pendingAction === 'rollback') {
-            respondPermission(taskId, false)
-            toast.info(t('opcTask.rollbackRequested'))
-          }
+          const action = pendingAction
           setPendingAction(null)
+          if (action === 'approve') {
+            void respond(true)
+          } else if (action === 'rollback') {
+            void respond(false)
+          }
         }}
         onCancel={() => setPendingAction(null)}
       />

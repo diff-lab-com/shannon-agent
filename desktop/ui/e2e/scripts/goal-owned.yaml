@@ -1,0 +1,22 @@
+# ChatScript: goal-owned — wave-2 journey #5/G13 扩展（errors spec 补洞）。
+#
+# goal 守卫的端到端面：demo list_goal_runs（脚本化时同样返回）在 sess-002
+# 上有一个 running 目标 → AppContext 的 goalOwnedSessionIds 含 sess-002 →
+# 绑定该会话时任何发送在客户端被拦（goal.composer.blocked 错误横幅）：
+# composer 文本退回、乐观气泡不入列、send_message 根本不发出（snapshot
+# sentTurns 0）、无历史消息 → Retry 按钮不渲染（ComposerRetryButton 无
+# lastUser 即隐藏）。断言在 spec（chat-script.errors.spec.ts）。
+name: goal-owned
+description: goal 守卫 — running 目标会话上的发送被客户端拦截，无 Retry 按钮
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: sess-002
+      title: Goal owned
+      messages: []
+turns:
+  # 发送被 goal 守卫拦截，永远不会到达 player —— 保留一个空形状 turn
+  # 以满足 schema（若守卫失效，该轮会自动完成并产生气泡，断言即翻红）。
+  - user: "这条会被 goal 守卫拦截"
+    script: []

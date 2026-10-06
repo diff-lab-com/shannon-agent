@@ -3,6 +3,7 @@
 // import them without dragging the orchestrator along.
 
 import type { useIntl } from 'react-intl'
+import type { ModelInfo } from '@/types'
 
 export interface KindInfo {
   labelKey: string
@@ -24,6 +25,20 @@ export function kindLabel(intl: ReturnType<typeof useIntl>, kind: string): strin
   return intl.formatMessage({ id: KIND_INFO[kind]?.labelKey ?? 'settings.models.providers.kinds.openaiCompatible' })
 }
 
+// === Probe support (S4 / P-N25) ===
+//
+// Mirror of the desktop's `NON_PROBEABLE_PROVIDER_KINDS`
+// (desktop/src/commands_config.rs): kinds with NO shared list-models
+// endpoint, so `test_provider_credentials` / `fetch_provider_models`
+// honestly refuse them (`is_probeable_kind` is an allowlist — its Rust
+// pin test keeps the two lists equal). The Add Provider modal surfaces a
+// pre-submit hint on these kinds instead of letting users walk into the
+// silent dead-end of an always-"Unknown" verdict. Typed `readonly
+// string[]` on purpose: `azure` is not yet a KIND_INFO row (S2-6 adds
+// it) but the Rust side already refuses probing it, and the hint must
+// be live the day the kind appears.
+export const NON_PROBEABLE_PROVIDER_KINDS: readonly string[] = ['azure', 'gemini']
+
 /**
  * Format a per-million-token USD price for the model list. Returns the
  * i18n "unknown" placeholder for null / non-finite values so the UI
@@ -36,6 +51,20 @@ export function formatPrice(value: number | null | undefined): string {
     return '—'
   }
   return value.toFixed(2)
+}
+
+/**
+ * R2-3 — compact single-line meta suffix for the composer picker's model
+ * rows: context window ("200k") + per-million-token prices ("$3.00/$15.00"),
+ * reusing `formatPrice` so the picker and the Settings catalog list render
+ * identically. Unknown values render as "—" on their side — never fabricated
+ * (ADR-0005 P0-2 honest cost/context). Pure — vitest-covered.
+ */
+export function modelPickerMeta(
+  m: Pick<ModelInfo, 'context_window' | 'price_in' | 'price_out'>,
+): string {
+  const context = m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : '—'
+  return `${context} · $${formatPrice(m.price_in)}/$${formatPrice(m.price_out)}`
 }
 
 // === Provider visibility (ADR-0005 P4.9) ===

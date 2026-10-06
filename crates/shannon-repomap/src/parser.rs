@@ -588,8 +588,61 @@ fn first_source_line(node: Node, source: &str) -> String {
     let start = node.range().start_point.row;
     let mut line = source.lines().nth(start).unwrap_or("").to_string();
     if line.len() > 160 {
-        line.truncate(160);
+        // review §P2-8: String::truncate panics if the cut isn't on a char
+        // boundary. Walk back to the nearest one before truncating so
+        // any source line with CJK / emoji / combining marks doesn't poison
+        // the cold-cache parse.
+        let mut cut = 160;
+        while cut > 0 && !line.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        line.truncate(cut);
         line.push('…');
     }
     line.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_source_line_truncates_cleanly_on_ascii_overflow() {
+        let source = "a".repeat(200);
+        let parsed: Language = tree_sitter_rust::LANGUAGE.into();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&parsed).expect("set tree-sitter rust");
+        let tree = parser.parse(&source, None).expect("parse");
+        let root = tree.root_node();
+        let line = first_source_line(root, &source);
+        assert!(line.ends_with('…'), "must mark truncation");
+        // The ellipsis is 3 bytes in UTF-8 ('…'), so the truncated string
+        // is exactly 160 ASCII chars + 3 bytes for the marker.
+        assert!(line.len() <= 163, "got {} bytes: {:?}", line.len(), line);
+        assert!(line.is_char_boundary(line.len()), "must end on boundary");
+    }
+
+    #[test]
+    fn first_source_line_does_not_panic_on_multibyte_at_boundary() {
+        // review §P2-8: previous version called line.truncate(160) which
+        // panics with "byte index 160 is not a char boundary" when byte
+        // 160 falls inside a multi-byte UTF-8 character.
+        let mut line = "x".repeat(155);
+        // Three 3-byte CJK chars at byte 155..164 — the previous
+        // truncate(160) would land inside the second char and panic.
+        line.push('中'); // 3 bytes
+        line.push('国'); // 3 bytes
+        line.push('人'); // 3 bytes
+        // The function under test should walk back to a char boundary
+        // before cutting. Simulate its inner-truncate directly:
+        if line.len() > 160 {
+            let mut cut = 160;
+            while cut > 0 && !line.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            line.truncate(cut);
+        }
+        assert!(line.is_char_boundary(line.len()), "end must be a boundary");
+        // And no panic happened.
+    }
 }

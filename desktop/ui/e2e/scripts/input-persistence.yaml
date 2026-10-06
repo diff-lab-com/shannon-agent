@@ -1,0 +1,32 @@
+# ChatScript: input-persistence — §4.2 输入缓存锚点（R3 §D）。
+#
+# 两个 seed 会话，专供草稿/队列的跨会话与重启断言：
+#   - 草稿：跨会话隔离（A 草稿不出现在 B）、300ms 防抖窗口内切换同步
+#     flush、发送清空、重启（reload）恢复、>64KB 仅内存（A-21 已修复：
+#     仍不落盘，但 warn + 一次性 toast 提示——spec 断言已翻转）。
+#   - 队列：跨会话 parked 返回续发（chips 属于所属会话）、重启丢失
+#     （knownIssue A-20 —— 队列纯内存，AppContext.tsx PROMPT_QUEUE_*）。
+#
+# A-22（输入历史回溯，已实施）：全局环 shannon.inputHistory（cap 50，
+# MRU），发送/排队被接受后由 Chat.tsx 录入；spec 里 ArrowUp 调出最近
+# 一条 + Down 恢复现场 + reload 后仍可回溯。
+name: input-persistence
+description: 输入缓存锚点 — 双会话草稿隔离/flush/清空/重启恢复 + >64KB warn+toast（A-21 已修复） + 队列 parked/重启丢失（A-20 锚点）
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-draft-a
+      title: Drafts A
+      messages: []
+    - id: script-sess-draft-b
+      title: Drafts B
+      messages: []
+turns:
+  # 发送清空草稿 / 队列 drain 消费的一轮（短回复）。
+  - user: 发出去的一条
+    script:
+      - event: query:text
+        chunks:
+          - "已发送。"
+      - event: query:completed

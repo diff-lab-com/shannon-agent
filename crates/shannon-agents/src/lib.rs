@@ -71,7 +71,8 @@ pub use remote_tools::{
 };
 pub use sub_agent::{
     AgentConfig, AgentSpawnInput, AgentSpawnTool, AgentStatus, SendMessageInput, SendMessageTool,
-    SubAgent, SubAgentRegistry, TeamCreateInput, TeamCreateTool,
+    SubAgent, SubAgentLifecycle, SubAgentLifecycleObserver, SubAgentRegistry, TeamCreateInput,
+    TeamCreateTool,
 };
 pub use summary::{AgentExecutionSummary, SuccessMetrics, SummaryGenerator, SummaryStatus};
 pub use task::{AgentTask, DependencyType, TaskDependency, TaskPriority, TaskStatus};

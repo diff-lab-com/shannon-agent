@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import net from "node:net";
 import { type AddressInfo, WebSocketServer, type WebSocket } from "ws";
 
-import { EngineWsClient } from "../wsClient.js";
+import { EngineWsClient, parseFrame } from "../wsClient.js";
 import { type EngineEvent } from "../runtime.js";
+import { PROTOCOL_VERSION } from "../types.gen.js";
 
 /**
  * The client is exercised against a real `ws` server speaking the engine's
@@ -156,6 +158,279 @@ describe("EngineWsClient", () => {
     await client.connect();
     await client.connect();
     expect(client.isConnected).toBe(true);
+    await client.close();
+  });
+
+  // review §P2-23: a wedged engine accept (TCP connects, upgrade never
+  // completes) must surface as a normal error so reconnect logic takes over,
+  // not a forever-pending connect().
+  it("connect() rejects after the handshake timeout against a silent server", async () => {
+    // Raw TCP server: accepts connections but never speaks WebSocket.
+    const server = net.createServer((socket) => {
+      // Swallow everything; never respond.
+      socket.on("data", () => {});
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const addr = server.address() as AddressInfo;
+
+    const client = new EngineWsClient({
+      url: `ws://127.0.0.1:${addr.port}`,
+      handshakeTimeoutMs: 100,
+    });
+    await expect(client.connect()).rejects.toThrow(/handshake timed out/);
+    expect(client.isConnected).toBe(false);
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("connect() succeeds well within the default handshake budget", async () => {
+    const server = await startMockServer(() => {
+      /* unused */
+    });
+    const client = new EngineWsClient({ url: server.url });
+    await expect(client.connect()).resolves.toBeUndefined();
+    await client.close();
+  });
+});
+
+// ── review F44: malformed frames must be dropped, never thrown ───────────
+
+describe("parseFrame (review F44)", () => {
+  it("returns null for non-JSON text instead of throwing", () => {
+    const garbage = Buffer.from("not json", "utf8");
+    expect(() => parseFrame(garbage)).not.toThrow();
+    expect(parseFrame(garbage)).toBeNull();
+  });
+
+  it("returns null for binary garbage and empty payloads", () => {
+    expect(parseFrame(Buffer.from([0xff, 0xfe, 0x00, 0x01]))).toBeNull();
+    expect(parseFrame(Buffer.from("", "utf8"))).toBeNull();
+    expect(parseFrame(Buffer.from("{\"type\": trunc", "utf8"))).toBeNull();
+  });
+
+  it("still parses valid JSON in all raw-data shapes", () => {
+    expect(parseFrame(Buffer.from('{"type":"text","content":"hi"}', "utf8"))).toEqual({
+      type: "text",
+      content: "hi",
+    });
+    expect(parseFrame(Buffer.from('{"type":"completed"}', "utf8"))).toEqual({
+      type: "completed",
+    });
+  });
+
+  it("keeps the connection usable after a malformed frame mid-query", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      onQuery(ws, () => {
+        ws.send("<<binary garbage not json>>");
+        send(ws, { type: "text", content: "still alive" });
+        send(ws, { type: "completed", model: "gpt-test" });
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    const types: string[] = [];
+    for await (const ev of client.runQuery("hi")) types.push(ev.type);
+
+    expect(types).toEqual(["text", "completed"]);
+    await client.close();
+  });
+});
+
+// ── §P2-24: greeting / protocol-version negotiation ─────────────────────
+
+/**
+ * Wait until `probe()` stops returning `null` (the greeting arrives
+ * asynchronously after the WS handshake completes).
+ */
+async function waitForVersion(client: EngineWsClient): Promise<string | null> {
+  for (let i = 0; i < 100; i++) {
+    const version = client.protocolVersion;
+    if (version !== null) return version;
+    await new Promise((r) => setImmediate(r));
+  }
+  return client.protocolVersion;
+}
+
+/** Wait until `mock` has observed at least one call (bounded). */
+async function waitForWarnCall(mock: {
+  mock: { calls: unknown[][] };
+}): Promise<void> {
+  for (let i = 0; i < 100 && mock.mock.calls.length === 0; i++) {
+    await new Promise((r) => setImmediate(r));
+  }
+}
+
+describe("EngineWsClient greeting consumption (§P2-24)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("captures protocol_version from the unsolicited greeting frame", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      send(ws, {
+        type: "session_info",
+        message_count: 0,
+        model: null,
+        protocol_version: PROTOCOL_VERSION,
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    expect(await waitForVersion(client)).toBe(PROTOCOL_VERSION);
+    await client.close();
+  });
+
+  it("does not warn when the engine's major version matches", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      // Same major (0), different minor/patch — additive, no warning.
+      send(ws, {
+        type: "session_info",
+        message_count: 0,
+        model: null,
+        protocol_version: "0.999.0",
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    expect(await waitForVersion(client)).toBe("0.999.0");
+    expect(warn).not.toHaveBeenCalled();
+    await client.close();
+  });
+
+  it("warns on a major-version mismatch without dropping the connection", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      send(ws, {
+        type: "session_info",
+        message_count: 0,
+        model: null,
+        protocol_version: "1.0.0",
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    expect(await waitForVersion(client)).toBe("1.0.0");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0] ?? "")).toMatch(/major version mismatch/);
+    // Policy: warn, never hard-fail (minor-cycle compatibility).
+    expect(client.isConnected).toBe(true);
+    await client.close();
+  });
+
+  it("warns when a legacy engine omits protocol_version from the greeting", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      send(ws, { type: "session_info", message_count: 0, model: null });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    await waitForWarnCall(warn);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0] ?? "")).toMatch(/no protocol_version/);
+    await client.close();
+  });
+
+  it("routes a mid-query session_info response to the consumer AND updates the version", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      onQuery(ws, () => {
+        send(ws, {
+          type: "session_info",
+          message_count: 3,
+          model: "gpt-test",
+          protocol_version: "1.0.0",
+        });
+        send(ws, { type: "completed", model: "gpt-test" });
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    const events: EngineEvent[] = [];
+    for await (const ev of client.runQuery("hi")) events.push(ev);
+
+    expect(events.map((e) => e.type)).toEqual(["session_info", "completed"]);
+    expect(client.protocolVersion).toBe("1.0.0");
+    expect(warn).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
+  // ── one-shot call() (§J session RPCs) ────────────────────────────────────
+
+  it("call() auto-connects, skips the greeting, and resolves the matched frame", async () => {
+    const received: any[] = [];
+    const server = await startMockServer((ws) => {
+      // The engine greets on connect — a call must not mistake it for the
+      // response.
+      send(ws, { type: "session_info", message_count: 0, protocol_version: "0.8.0" });
+      ws.on("message", (data) => {
+        const msg = JSON.parse(data.toString("utf8"));
+        received.push(msg);
+        if (msg?.type === "sessions.list") {
+          send(ws, {
+            type: "sessions.snapshot",
+            sessions: [{ session_id: "s1", title: "t", updated_at: "2026-06-28T14:21:00Z" }],
+          });
+        }
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    const snapshot = await client.call(
+      { type: "sessions.list" },
+      (frame) =>
+        frame && typeof frame === "object" && (frame as any).type === "sessions.snapshot"
+          ? (frame as any)
+          : null,
+    );
+    expect(snapshot.sessions).toHaveLength(1);
+    expect(received).toEqual([{ type: "sessions.list" }]);
+    await client.close();
+  });
+
+  it("call() rejects on timeout when the response never arrives", async () => {
+    const server = await startMockServer(() => {});
+    const client = new EngineWsClient({ url: server.url });
+    await expect(
+      client.call({ type: "sessions.list" }, () => null, { timeoutMs: 50 }),
+    ).rejects.toThrow(/timed out after 50ms/);
+    await client.close();
+  });
+
+  it("call() rejects when the socket closes before the response", async () => {
+    const server = await startMockServer((ws) => {
+      ws.on("message", () => {
+        // Reply to the handshake then slam the door mid-call.
+        setTimeout(() => ws.close(), 10);
+      });
+    });
+    const client = new EngineWsClient({ url: server.url });
+    await expect(
+      client.call({ type: "sessions.list" }, () => null, { timeoutMs: 2_000 }),
+    ).rejects.toThrow(/closed before the call response/);
+    await client.close();
+  });
+
+  it("a second call while one is in flight is refused (single slot)", async () => {
+    const server = await startMockServer(() => {});
+    const client = new EngineWsClient({ url: server.url });
+    const first = client.call({ type: "sessions.list" }, () => null, { timeoutMs: 500 });
+    await expect(client.call({ type: "sessions.list" }, () => null, { timeoutMs: 50 })).rejects.toThrow(
+      /already in flight/,
+    );
+    await expect(first).rejects.toThrow(/timed out/);
     await client.close();
   });
 });

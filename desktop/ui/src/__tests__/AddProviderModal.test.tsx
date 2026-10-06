@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { ThemeProvider } from '@/context/ThemeContext'
 import { AppProvider } from '@/context/AppContext'
 import { MemoryRouter } from 'react-router-dom'
 import AddProviderModal from '@/components/settings/AddProviderModal'
 import * as api from '@/lib/tauri-api'
-import type { ProvidersFile } from '@/types'
+import type { ProviderConnection, ProvidersFile } from '@/types'
 
 function wrap(ui: React.ReactElement) {
   return (
@@ -245,5 +245,352 @@ describe('AddProviderModal — Advanced disclosure (Phase 2 task 3)', () => {
     expect((screen.getByTestId('tier-pro-input') as HTMLInputElement).value).toBe('opus-4-8')
     // Clear button hides on empty rows.
     expect(screen.queryByTestId('tier-fast-clear')).not.toBeInTheDocument()
+  })
+})
+
+// === 2026-09-29 provider review §2-9 / §2-12 — fetch model list + in-modal
+// connection test. Both are wired through `canProbe` (base URL present, and
+// a key for key-needing kinds), and both stay purely in-memory. ===
+describe('AddProviderModal — fetch models + test connection', () => {
+  beforeEach(() => {
+    vi.mocked(api.fetchProviderModels).mockReset()
+    vi.mocked(api.fetchProviderModels).mockResolvedValue([])
+    vi.mocked(api.testProviderCredentials).mockReset()
+    vi.mocked(api.testProviderCredentials).mockResolvedValue({ kind: 'success' })
+  })
+
+  it('disables both probe buttons until base URL AND key are present', () => {
+    renderModal()
+    // openai-compatible needs key AND base URL.
+    expect(screen.getByTestId('fetch-models')).toBeDisabled()
+    expect(screen.getByTestId('test-provider-connection')).toBeDisabled()
+    // Base URL alone is not enough for a key-needing kind.
+    fillRequiredFields()
+    expect(screen.getByTestId('fetch-models')).toBeDisabled()
+    expect(screen.getByTestId('test-provider-connection')).toBeDisabled()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    expect(screen.getByTestId('fetch-models')).toBeEnabled()
+    expect(screen.getByTestId('test-provider-connection')).toBeEnabled()
+  })
+
+  it('disables the probe buttons for key-needing kinds without a key', () => {
+    renderModal()
+    // Base URL filled, but the default openai-compatible kind needs a key.
+    fireEvent.change(screen.getByPlaceholderText('https://api.example.com/v1'), {
+      target: { value: 'https://api.example.com/v1' },
+    })
+    expect(screen.getByTestId('fetch-models')).toBeDisabled()
+    // Enter a key → enabled.
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    expect(screen.getByTestId('fetch-models')).toBeEnabled()
+    expect(screen.getByTestId('test-provider-connection')).toBeEnabled()
+  })
+
+  it('fetches models and offers them as suggestions while keeping free text', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-b', 'model-a'])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    expect(screen.getByTestId('models-found').textContent).toContain('2')
+    // Suggestions ride the input's datalist.
+    const input = screen.getByTestId('provider-model-input') as HTMLInputElement
+    expect(input.getAttribute('list')).toBeTruthy()
+    expect(document.querySelector(`datalist#${CSS.escape(input.getAttribute('list')!)} option[value="model-a"]`)).not.toBeNull()
+    // Wire shape: null provider id (add mode), kind, trimmed base URL, key.
+    expect(vi.mocked(api.fetchProviderModels)).toHaveBeenCalledWith(
+      null, 'openai-compatible', 'https://api.example.com/v1', 'sk-test',
+    )
+    // Free text still works.
+    fireEvent.change(input, { target: { value: 'my-custom-model' } })
+    expect(input.value).toBe('my-custom-model')
+  })
+
+  // S2-1 (模型仓固化): fetch → curate → save persists the selection via
+  // setProviderModels. Default selection is ZERO (裁定⑥) — a save without
+  // any ticks never writes a vault for a new provider.
+  it('fetch → curate → save 固化s the selection for a new provider', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-a', 'model-b', 'model-c'])
+    vi.mocked(api.setProviderModels).mockResolvedValue({
+      provider_id: 'acme', model_profile: 'default', models: [{ id: 'model-b' }],
+    })
+    vi.mocked(api.saveProvider).mockResolvedValue({
+      active_provider_id: 'acme', providers: [],
+    })
+    const onSaved = vi.fn()
+    render(
+      wrap(<AddProviderModal editing={null} onClose={vi.fn()} onSaved={onSaved} />),
+    )
+    fillRequiredFields('Acme')
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('model-curation')).toBeInTheDocument())
+
+    // Zero selected by default.
+    expect(screen.getByTestId('model-curation').textContent).toContain('0')
+    // Tick model-b only.
+    const boxes = screen.getAllByTestId('curation-item') as HTMLInputElement[]
+    expect(boxes).toHaveLength(3)
+    fireEvent.click(boxes[1])
+    expect(boxes[1].checked).toBe(true)
+    expect((screen.getAllByTestId('curation-item')[0] as HTMLInputElement).checked).toBe(false)
+
+    // Save → vault written with exactly the ticked model, keyed by the
+    // active slot the backend echoed back.
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(vi.mocked(api.setProviderModels)).toHaveBeenCalledWith('acme', [{ id: 'model-b' }])
+  })
+
+  // 裁定⑥: select-all within the soft cap requires a second confirmation.
+  it('select-all asks for confirmation before curating everything', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-a', 'model-b'])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('model-curation')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('curation-select-all'))
+    // Nothing selected until the confirm dialog's confirm is clicked.
+    expect((screen.getAllByTestId('curation-item')[0] as HTMLInputElement).checked).toBe(false)
+    // The dialog's own confirm button (same label as the trigger) closes
+    // the loop.
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByText('Select all'),
+    )
+    expect((screen.getAllByTestId('curation-item')[0] as HTMLInputElement).checked).toBe(true)
+    expect((screen.getAllByTestId('curation-item')[1] as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('shows a categorized inline error when the fetch fails', async () => {
+    vi.mocked(api.fetchProviderModels).mockRejectedValue('invalid_key')
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('fetch-models-error')).toBeInTheDocument())
+    expect(screen.getByTestId('fetch-models-error').textContent).toContain('Invalid API key')
+    expect(screen.queryByTestId('models-found')).not.toBeInTheDocument()
+  })
+
+  it('passes the editing id for the stored-key fallback in edit mode', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['glm-4.7'])
+    render(
+      wrap(
+        <AddProviderModal
+          editing={{
+            id: 'glm-key', display_name: 'GLM', kind: 'openai-compatible',
+            has_api_key: true, base_url: 'https://open.bigmodel.cn/api/paas/v4',
+          }}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+        />,
+      ),
+    )
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    expect(vi.mocked(api.fetchProviderModels)).toHaveBeenCalledWith(
+      'glm-key', 'openai-compatible', 'https://open.bigmodel.cn/api/paas/v4', null,
+    )
+  })
+
+  it('tests credentials in place without saving', async () => {
+    vi.mocked(api.testProviderCredentials).mockResolvedValue({ kind: 'success' })
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('test-provider-connection'))
+    const status = await waitFor(() => screen.getByTestId('provider-test-status'))
+    expect(status.textContent).toMatch(/Connected \(\d+ ms\)/)
+    expect(vi.mocked(api.testProviderCredentials)).toHaveBeenCalledWith(
+      'openai-compatible', 'https://api.example.com/v1', 'sk-test', null,
+    )
+    // Testing must NOT save.
+    expect(vi.mocked(api.saveProvider)).not.toHaveBeenCalled()
+  })
+
+  it('renders the categorized verdict for an invalid key', async () => {
+    vi.mocked(api.testProviderCredentials).mockResolvedValue({ kind: 'invalid_key' })
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-bad' } })
+    fireEvent.click(screen.getByTestId('test-provider-connection'))
+    const status = await waitFor(() => screen.getByTestId('provider-test-status'))
+    expect(status.textContent).toContain('Invalid API key')
+  })
+
+  it('renders the categorized verdict for an exhausted quota (HTTP 402, R2-P1-10)', async () => {
+    vi.mocked(api.testProviderCredentials).mockResolvedValue({ kind: 'quota_exhausted' })
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('test-provider-connection'))
+    const status = await waitFor(() => screen.getByTestId('provider-test-status'))
+    expect(status.textContent).toContain('Quota exhausted')
+  })
+
+  it('clears stale fetch results when the base URL changes', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-a'])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('https://api.example.com/v1'), {
+      target: { value: 'https://other.example.com/v1' },
+    })
+    expect(screen.queryByTestId('models-found')).not.toBeInTheDocument()
+    const input = screen.getByTestId('provider-model-input') as HTMLInputElement
+    expect(input.getAttribute('list')).toBeNull()
+  })
+})
+
+// === S1-4c (2026-10 review P-N5): a successful Fetch models pins the first
+// real id into the model field — but ONLY while the field still holds the
+// initial value / a quick-fill guess (no user edit). A user-typed id is
+// never overwritten. ===
+describe('AddProviderModal — fetch → model prefill linkage (S1-4c)', () => {
+  beforeEach(() => {
+    vi.mocked(api.fetchProviderModels).mockReset()
+    vi.mocked(api.fetchProviderModels).mockResolvedValue([])
+  })
+
+  it('prefills the first fetched id when the user has not typed a model', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-b', 'model-a'])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    const input = screen.getByTestId('provider-model-input') as HTMLInputElement
+    expect(input.value).toBe('')
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    expect(input.value).toBe('model-b')
+  })
+
+  it('never overwrites a model id the user typed', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-b', 'model-a'])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    const input = screen.getByTestId('provider-model-input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'my-custom-model' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    expect(input.value).toBe('my-custom-model')
+  })
+
+  it('replaces a quick-fill guess with the fetched first id (a chip prefill is not a user edit)', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue(['llama3.3:latest', 'qwen3:8b'])
+    renderModal()
+    // The Ollama chip needs no key, so the probe buttons arm immediately.
+    fireEvent.click(screen.getByRole('button', { name: /Ollama/ }))
+    const input = screen.getByTestId('provider-model-input') as HTMLInputElement
+    expect(input.value).toBe('llama3.2')
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-found')).toBeInTheDocument())
+    expect(vi.mocked(api.fetchProviderModels)).toHaveBeenCalledWith(
+      null, 'ollama', 'http://localhost:11434', null,
+    )
+    expect(input.value).toBe('llama3.3:latest')
+  })
+
+  it('leaves the field alone when the endpoint serves an empty list', async () => {
+    vi.mocked(api.fetchProviderModels).mockResolvedValue([])
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('fetch-models'))
+    await waitFor(() => expect(screen.getByTestId('models-empty')).toBeInTheDocument())
+    expect((screen.getByTestId('provider-model-input') as HTMLInputElement).value).toBe('')
+  })
+})
+// === S4 hygiene batch — models_url input (P2-23 残留) + the non-probeable
+// pre-submit hint (P-N25). ===
+describe('AddProviderModal — models_url input (S4 / P2-23 残留)', () => {
+  it('hides the field until the Advanced disclosure opens', () => {
+    renderModal()
+    expect(screen.queryByLabelText('Models URL (optional)')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('add-provider-advanced-toggle'))
+    expect(screen.getByLabelText('Models URL (optional)')).toBeInTheDocument()
+  })
+
+  it('carries a filled models_url into the saved payload', async () => {
+    const { onSaved } = renderModal()
+    fillRequiredFields()
+    fireEvent.click(screen.getByTestId('add-provider-advanced-toggle'))
+    fireEvent.change(screen.getByTestId('provider-models-url-input'), {
+      target: { value: 'https://api.example.com/v1/models' },
+    })
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    const [input] = vi.mocked(api.saveProvider).mock.calls[0]
+    expect(input.models_url).toBe('https://api.example.com/v1/models')
+  })
+
+  it('omits models_url when the input stays blank (A1: no empty-string overrides)', async () => {
+    const { onSaved } = renderModal()
+    fillRequiredFields()
+    fireEvent.click(screen.getByTestId('add-provider-advanced-toggle'))
+    fireEvent.change(screen.getByTestId('provider-models-url-input'), { target: { value: '  ' } })
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    const [input] = vi.mocked(api.saveProvider).mock.calls[0]
+    expect(input.models_url).toBeUndefined()
+  })
+
+  it('prefills from the edited connection and keeps the value on save', async () => {
+    const editing: ProviderConnection = {
+      id: 'prov-glm',
+      display_name: 'GLM (Zhipu)',
+      kind: 'openai-compatible',
+      has_api_key: true,
+      base_url: 'https://open.bigmodel.cn/api/paas/v4',
+      models_url: 'https://open.bigmodel.cn/api/paas/v4/models',
+    }
+    const onSaved = vi.fn()
+    render(
+      wrap(
+        <AddProviderModal
+          editing={editing}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+        />,
+      ),
+    )
+    fireEvent.click(screen.getByTestId('add-provider-advanced-toggle'))
+    const field = screen.getByTestId('provider-models-url-input') as HTMLInputElement
+    expect(field.value).toBe('https://open.bigmodel.cn/api/paas/v4/models')
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    const [input] = vi.mocked(api.saveProvider).mock.calls[0]
+    expect(input.id).toBe('prov-glm')
+    expect(input.models_url).toBe('https://open.bigmodel.cn/api/paas/v4/models')
+  })
+})
+
+describe('AddProviderModal — non-probeable kinds (S4 / P-N25)', () => {
+  it('shows no hint for probeable kinds', () => {
+    renderModal()
+    expect(screen.queryByTestId('probe-unsupported-hint')).not.toBeInTheDocument()
+  })
+
+  it('pre-warns on gemini (no connection probing, Fetch models may be unavailable)', () => {
+    renderModal()
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'gemini' } })
+    const hint = screen.getByTestId('probe-unsupported-hint')
+    expect(hint).toBeInTheDocument()
+    expect(hint).toHaveTextContent(/does not support connection probing/)
+    expect(hint).toHaveTextContent(/Fetch model list may be unavailable/)
+  })
+
+  it('retires the hint when the kind switches back to a probeable one', () => {
+    renderModal()
+    const select = screen.getByLabelText('Type')
+    fireEvent.change(select, { target: { value: 'gemini' } })
+    expect(screen.getByTestId('probe-unsupported-hint')).toBeInTheDocument()
+    fireEvent.change(select, { target: { value: 'anthropic' } })
+    expect(screen.queryByTestId('probe-unsupported-hint')).not.toBeInTheDocument()
   })
 })

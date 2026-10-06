@@ -26,10 +26,12 @@
  *    signature over `${request_id}:${choice}`.
  */
 
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import type { Logger } from "../adapters/types.js";
+import { sharedPushSeq, GAP_WINDOW, type SeqCounter } from "./seq.js";
+import type { PushReplayBuffer } from "./pushReplay.js";
 import {
   deviceIdFromPublicKey,
   generatePairToken,
@@ -44,6 +46,10 @@ import {
   type PairParams,
 } from "./protocol.js";
 import type { MethodContext, MethodHandlers } from "./server.js";
+import {
+  approvalWireItem,
+  type ApprovalRegistry,
+} from "./approvalRegistry.js";
 import {
   createEngineHandlers,
   type DeviceSignatureVerifier,
@@ -73,6 +79,32 @@ export interface PairTokenStoreOptions {
   filePath?: string;
 }
 
+/**
+ * Parse one JSONL token record. Canonical keys are camelCase (what `issue`
+ * writes and what the gateway consumes); older desktop builds wrote snake_case
+ * (`issued_at`/`expires_at`) which the strict camelCase read silently dropped —
+ * desktop-minted QR tokens then never validated. Accept both on read.
+ */
+function parseTokenRecord(line: string): PairTokenRecord | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const token = r.token;
+  const issuedAt = r.issuedAt ?? r.issued_at;
+  const expiresAt = r.expiresAt ?? r.expires_at;
+  if (typeof token !== "string" || typeof expiresAt !== "number") return null;
+  return {
+    token,
+    issuedAt: typeof issuedAt === "number" ? issuedAt : 0,
+    expiresAt,
+  };
+}
+
 export class PairTokenStore {
   /** Used only in memory mode (no `filePath`). */
   private readonly pending = new Map<string, PairTokenRecord>();
@@ -90,19 +122,28 @@ export class PairTokenStore {
    * Mint a fresh one-time token. The desktop QR (P1.3) displays it. In file mode
    * the record is appended to disk so a separate consumer process (the gateway)
    * can validate it; in memory mode it lives in the `pending` map.
+   *
+   * `opts.issuedAt` overrides the clock for THIS mint (dev boot prints several
+   * tokens that must share one expiry ms; normal callers omit it). Purely a
+   * timestamp choice — no rate limiting or single-issue constraint exists
+   * here; consecutive `issue()` calls are always fine (single-use applies to
+   * `consume` only).
    */
-  issue(): PairTokenRecord {
-    if (!this.filePath) this.pruneExpired();
-    const issuedAt = this.now();
+  issue(opts?: { issuedAt?: number }): PairTokenRecord {
+    const issuedAt = opts?.issuedAt ?? this.now();
     const record: PairTokenRecord = {
       token: generatePairToken(),
       issuedAt,
       expiresAt: issuedAt + this.ttlMs,
     };
     if (this.filePath) {
+      // WP-15 P2-6: prune expired siblings before appending, so a desktop that
+      // mints QR tokens nobody consumes doesn't grow the JSONL forever.
+      this.pruneExpiredFromFile();
       mkdirSync(dirname(this.filePath), { recursive: true });
       appendFileSync(this.filePath, JSON.stringify(record) + "\n", "utf8");
     } else {
+      this.pruneExpired();
       this.pending.set(record.token, record);
     }
     return record;
@@ -131,6 +172,70 @@ export class PairTokenStore {
     return this.consumeFromFile(token);
   }
 
+  /**
+   * T9: validate a token WITHOUT consuming it. The desktop proves ownership
+   * with a freshly minted token on the read-only `shannon/pairing.pending`
+   * RPC — burning a single-use token on every list refresh would make the
+   * desktop mint one per poll, so reads verify and only the mutating
+   * `shannon/pairing.approve` consumes. File mode reads the JSONL and checks
+   * presence + expiry without rewriting (same tolerance of malformed lines as
+   * `consumeFromFile`); memory mode is a plain map lookup.
+   */
+  verify(token: string): PairTokenRecord | null {
+    if (!this.filePath) {
+      const record = this.pending.get(token);
+      if (!record) return null;
+      if (this.now() >= record.expiresAt) return null;
+      return record;
+    }
+    let raw: string;
+    try {
+      raw = readFileSync(this.filePath, "utf8");
+    } catch {
+      return null; // no file yet → no tokens
+    }
+    const now = this.now();
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      const rec = parseTokenRecord(trimmed);
+      if (!rec) continue;
+      if (rec.token === token && now < rec.expiresAt) return rec;
+    }
+    return null;
+  }
+
+  /**
+   * Freshest live (unexpired) token without consuming it — a peek, unlike
+   * `consume`. Serves the v0.13 direct-link pairing flavor: the sealed
+   * handshake needs the token the phone scanned while `shannon/pair` (later,
+   * on the sealed channel) is what actually consumes it single-use.
+   */
+  latest(): PairTokenRecord | null {
+    const now = this.now();
+    let best: PairTokenRecord | null = null;
+    const consider = (rec: PairTokenRecord | null): void => {
+      if (!rec || now >= rec.expiresAt) return;
+      if (!best || rec.issuedAt > best.issuedAt) best = rec;
+    };
+    if (!this.filePath) {
+      for (const rec of this.pending.values()) consider(rec);
+    } else {
+      let raw: string;
+      try {
+        raw = readFileSync(this.filePath, "utf8");
+      } catch {
+        return null; // no file yet → no tokens
+      }
+      for (const line of raw.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.length === 0) continue;
+        consider(parseTokenRecord(trimmed));
+      }
+    }
+    return best;
+  }
+
   private consumeFromFile(token: string): PairTokenRecord | null {
     let raw: string;
     try {
@@ -144,13 +249,8 @@ export class PairTokenStore {
     for (const line of raw.split("\n")) {
       const trimmed = line.trim();
       if (trimmed.length === 0) continue;
-      let rec: PairTokenRecord;
-      try {
-        rec = JSON.parse(trimmed) as PairTokenRecord;
-      } catch {
-        continue; // tolerate a malformed line rather than failing the pair
-      }
-      if (typeof rec.token !== "string" || typeof rec.expiresAt !== "number") continue;
+      const rec = parseTokenRecord(trimmed);
+      if (!rec) continue; // tolerate a malformed line rather than failing the pair
       if (rec.token === token) {
         // Match: consume unconditionally (single-use). Valid only if not expired.
         consumed = now < rec.expiresAt ? rec : null;
@@ -178,6 +278,38 @@ export class PairTokenStore {
     renameSync(tmp, path);
   }
 
+  /**
+   * WP-15 P2-6: file-mode prune, called from `issue()` before it appends.
+   * Rewrites the JSONL without expired (and malformed) lines only when at
+   * least one line is actually dropped — the same tmp+rename atomicity and
+   * the same accepted concurrency window as `consumeFromFile` (a desktop
+   * append landing in the read→rename window is lost; the user can always
+   * mint a fresh token). No file yet → no-op.
+   */
+  private pruneExpiredFromFile(): void {
+    let raw: string;
+    try {
+      raw = readFileSync(this.filePath!, "utf8");
+    } catch {
+      return; // no file yet → nothing to prune
+    }
+    const now = this.now();
+    const survivors: PairTokenRecord[] = [];
+    let removed = false;
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      const rec = parseTokenRecord(trimmed);
+      if (!rec) {
+        removed = true; // malformed line: dropped, matching consume()'s rewrite
+        continue;
+      }
+      if (now < rec.expiresAt) survivors.push(rec);
+      else removed = true;
+    }
+    if (removed) this.rewriteFile(this.filePath!, survivors);
+  }
+
   /** Number of outstanding tokens — meaningful in memory mode only. */
   get size(): number {
     return this.pending.size;
@@ -202,6 +334,31 @@ export interface DeviceEntry {
   last_seen_at: number;
 }
 
+/**
+ * Canonical on-disk/wire entry keys are snake_case (the desktop's Rust struct
+ * mirrors this file). Older desktop builds wrote camelCase; those entries used
+ * to be silently dropped here — under wholesale-replace semantics that un-trusted
+ * every device. Accept both on read; `persist` always writes snake_case.
+ */
+function normalizeDeviceEntry(e: unknown): DeviceEntry | null {
+  if (typeof e !== "object" || e === null) return null;
+  const r = e as Record<string, unknown>;
+  const deviceId = r.device_id ?? r.deviceId;
+  const publicKey = r.public_key ?? r.publicKey;
+  const addedAt = r.added_at ?? r.addedAt;
+  const lastSeenAt = r.last_seen_at ?? r.lastSeenAt;
+  if (typeof deviceId !== "string" || typeof publicKey !== "string") return null;
+  if (typeof addedAt !== "number" || typeof lastSeenAt !== "number") return null;
+  const label = r.label;
+  return {
+    device_id: deviceId,
+    public_key: publicKey,
+    label: typeof label === "string" ? label : null,
+    added_at: addedAt,
+    last_seen_at: lastSeenAt,
+  };
+}
+
 interface DeviceRegistryFile {
   entries: DeviceEntry[];
 }
@@ -220,10 +377,30 @@ export class DeviceRegistry {
   private readonly filePath?: string;
   private readonly now: () => number;
 
+  /** mtime of the registry file at last read — drives `refreshIfChanged`. */
+  private lastMtimeMs = 0;
+
   constructor(opts: DeviceRegistryOptions = {}) {
     this.filePath = opts.filePath;
     this.now = opts.now ?? Date.now;
     if (this.filePath) this.load();
+  }
+
+  /**
+   * WP-15 T3: re-read the registry file when its mtime moved. The desktop's
+   * revoke path (mobile_revoke_device) rewrites this file out-of-band — an
+   * external revoke must take effect on a LIVE gateway without a restart,
+   * otherwise a stolen phone stays trusted. Cheap: one stat per call.
+   */
+  refreshIfChanged(): void {
+    if (!this.filePath) return;
+    let mtime = 0;
+    try {
+      mtime = statSync(this.filePath).mtimeMs;
+    } catch {
+      return; // no file yet — nothing to refresh
+    }
+    if (mtime !== this.lastMtimeMs) this.load();
   }
 
   /**
@@ -247,21 +424,25 @@ export class DeviceRegistry {
   }
 
   get(deviceId: string): DeviceEntry | null {
+    this.refreshIfChanged();
     return this.entries.get(deviceId) ?? null;
   }
 
   has(deviceId: string): boolean {
+    this.refreshIfChanged();
     return this.entries.has(deviceId);
   }
 
   /** Remove a device. Subsequent signatures from it are rejected. Returns false if absent. */
   revoke(deviceId: string): boolean {
+    this.refreshIfChanged();
     const removed = this.entries.delete(deviceId);
     if (removed) this.persist();
     return removed;
   }
 
   list(): DeviceEntry[] {
+    this.refreshIfChanged();
     return [...this.entries.values()];
   }
 
@@ -279,15 +460,21 @@ export class DeviceRegistry {
     }
     try {
       const parsed = JSON.parse(raw) as DeviceRegistryFile;
+      // Replace wholesale (WP-15 T3): a re-read must reflect external
+      // revocations — merging into the existing map resurrected devices the
+      // desktop had just removed from the file.
+      const fresh = new Map<string, DeviceEntry>();
       if (parsed?.entries && Array.isArray(parsed.entries)) {
         for (const e of parsed.entries) {
-          if (e && typeof e.device_id === "string" && typeof e.public_key === "string") {
-            this.entries.set(e.device_id, e);
-          }
+          const entry = normalizeDeviceEntry(e);
+          if (entry) fresh.set(entry.device_id, entry);
         }
       }
+      this.entries.clear();
+      for (const [k, v] of fresh) this.entries.set(k, v);
+      this.lastMtimeMs = statSync(this.filePath).mtimeMs;
     } catch {
-      // Corrupt file — start empty rather than crashing the gateway.
+      // Corrupt file — keep the in-memory registry rather than crashing.
     }
   }
 
@@ -303,6 +490,28 @@ export class DeviceRegistry {
 
 // ── pairing handlers ────────────────────────────────────────────────────────
 
+/**
+ * §M1 wire shape for one `shannon/device.list` entry: camelCase keys, epoch
+ * numbers as ISO-8601 UTC strings, no label key when unlabeled — and NEVER the
+ * `public_key` (the disk `DeviceEntry` is the desktop Rust mirror's format and
+ * stays snake_case; only this RPC response is reshaped). The phone skips
+ * entries without a usable `deviceId`, so that key is always emitted.
+ */
+function toWireDeviceEntry(e: DeviceEntry): {
+  deviceId: string;
+  label?: string;
+  pairedAt?: string;
+  lastSeenAt?: string;
+} {
+  const wire: { deviceId: string; label?: string; pairedAt?: string; lastSeenAt?: string } = {
+    deviceId: e.device_id,
+  };
+  if (e.label != null && e.label.length > 0) wire.label = e.label;
+  if (Number.isFinite(e.added_at)) wire.pairedAt = new Date(e.added_at).toISOString();
+  if (Number.isFinite(e.last_seen_at)) wire.lastSeenAt = new Date(e.last_seen_at).toISOString();
+  return wire;
+}
+
 export interface PairingHandlersOptions {
   tokens: PairTokenStore;
   registry: DeviceRegistry;
@@ -311,6 +520,28 @@ export interface PairingHandlersOptions {
   resumeClockSkewMs?: number;
   /** Clock injection for tests. */
   now?: () => number;
+  /** WP-15 T4: push cursor (defaults to the process-wide counter). */
+  seq?: SeqCounter;
+  /**
+   * §M2: called after a device was successfully revoked, so the bootstrap can
+   * broadcast `shannon/event {type:"device.revoked"}` to the OTHER online
+   * devices (their settings screens drop the row; the revoked device itself is
+   * excluded — it finds out via PAIRING_REQUIRED on its next call).
+   */
+  onDeviceRevoked?: (deviceId: string) => void;
+  /**
+   * §L2: the process-wide pending-approval registry. When set, `shannon/snapshot`
+   * serves the real pending queue (the phone's reconnect-recovery path) instead
+   * of an empty array.
+   */
+  approvals?: ApprovalRegistry;
+  /**
+   * §O4: the process-wide replay ring (same instance the hub and the server
+   * hold). When set, `shannon/resume` answers `replayed` with the device's
+   * buffered events after `sinceSeq`; a hole in the buffered stream answers
+   * GAP_TOO_LARGE so the phone re-snapshots.
+   */
+  replayBuffer?: PushReplayBuffer;
 }
 
 /** Generic, non-revealing rejection so pair/resume can't act as an oracle. */
@@ -323,6 +554,31 @@ const PAIR_REJECTED = {
 export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandlers {
   const skewMs = opts.resumeClockSkewMs ?? 60_000;
   const now = opts.now ?? Date.now;
+  const seq = opts.seq ?? sharedPushSeq;
+
+  // Anti-replay state (per process, per device):
+  //  - resumeWatermarks: nonce-less (legacy) resumes must carry a strictly
+  //    newer timestamp than the last successful one — a captured resume can't
+  //    be replayed after its device has legitimately resumed again.
+  //  - usedNonces: nonce-bearing resumes are single-use within the skew window
+  //    (nonce → watermark ts, pruned once outside the window).
+  const resumeWatermarks = new Map<string, number>();
+  const usedNonces = new Map<string, Map<string, number>>();
+
+  function claimNonce(deviceId: string, nonce: string, timestamp: number): boolean {
+    let seen = usedNonces.get(deviceId);
+    if (!seen) {
+      seen = new Map();
+      usedNonces.set(deviceId, seen);
+    }
+    // Prune expired siblings opportunistically.
+    for (const [n, ts] of seen) {
+      if (now() - ts > skewMs) seen.delete(n);
+    }
+    if (seen.has(nonce)) return false;
+    seen.set(nonce, timestamp);
+    return true;
+  }
 
   return {
     "shannon/pair": async (raw, ctx) => {
@@ -364,11 +620,16 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
 
     "shannon/device.resume": async (raw, ctx) => {
       const params = (raw ?? {}) as Partial<DeviceResumeParams>;
+      const nonce =
+        typeof params.nonce === "string" && params.nonce.length > 0 && params.nonce.length <= 128
+          ? params.nonce
+          : undefined;
       if (
         typeof params.device_id !== "string" ||
         typeof params.signature !== "string" ||
         typeof params.timestamp !== "number" ||
-        !Number.isFinite(params.timestamp)
+        !Number.isFinite(params.timestamp) ||
+        (params.nonce !== undefined && nonce === undefined)
       ) {
         return {
           kind: "error",
@@ -382,19 +643,178 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
       }
       const age = Math.abs(now() - params.timestamp);
       if (age > skewMs) {
-        return { kind: "error", code: ShannonError.BAD_PARAMS, message: "timestamp outside skew window" };
+        return {
+          kind: "error",
+          code: ShannonError.CLOCK_SKEW,
+          message: "timestamp outside skew window",
+        };
       }
       const ok = verifyMessage(
         entry.public_key,
-        resumeMessage(params.device_id, params.timestamp),
+        resumeMessage(params.device_id, params.timestamp, nonce),
         params.signature,
       );
       if (!ok) {
         return { kind: "error", code: ShannonError.BAD_PARAMS, message: "invalid device signature" };
       }
+      // Replay defense, after the signature check so only well-signed resumes
+      // consume the single-use slots.
+      if (nonce !== undefined) {
+        if (!claimNonce(params.device_id, nonce, params.timestamp)) {
+          return {
+            kind: "error",
+            code: ShannonError.CLOCK_SKEW,
+            message: "resume replayed (nonce already used)",
+          };
+        }
+      } else {
+        // Legacy (no nonce) fallback: the timestamp must strictly advance past
+        // this device's last successful resume.
+        const watermark = resumeWatermarks.get(params.device_id) ?? Number.NEGATIVE_INFINITY;
+        if (params.timestamp <= watermark) {
+          return {
+            kind: "error",
+            code: ShannonError.CLOCK_SKEW,
+            message: "stale resume timestamp (replayed?)",
+          };
+        }
+        resumeWatermarks.set(params.device_id, params.timestamp);
+      }
       bindSession(ctx, params.device_id);
-      const result: DeviceSessionResult = { device_id: params.device_id, session_id: params.device_id };
+      const result = {
+        device_id: params.device_id,
+        session_id: params.device_id,
+        // WP-15 T4: the resume payload carries the push cursor (mobile
+        // device_resume.dart seeds its live-sync cursor from it).
+        lastSeq: seq.current(),
+      };
       return { kind: "result", result };
+    },
+
+    // ── WP-15 T4: live-sync snapshot / gap-resume ─────────────────────────
+    //
+    // Contract (shannon-mobile live_sync.dart + mock_server.dart): the phone
+    // reads ONLY `lastSeq` from the snapshot; `resume` returns
+    // `{sinceSeq, lastSeq, replayed}` and must fail with GAP_TOO_LARGE when
+    // the cursor is beyond the retained window (the phone then re-snapshots).
+
+    "shannon/snapshot": async (_raw, ctx) => {
+      if (ctx.sessionId == null || !opts.registry.has(ctx.sessionId)) {
+        return { kind: "error", code: ShannonError.PAIRING_REQUIRED, message: "pair a device first" };
+      }
+      return {
+        kind: "result",
+        result: {
+          agents: [],
+          // §L2 reconnect recovery: the phone rebuilds its approval queue from
+          // this array (same item shape as `shannon/approval.list`).
+          pendingApprovals: (opts.approvals?.listPending() ?? []).map(approvalWireItem),
+          activeSessions: [],
+          lastSeq: seq.current(),
+        },
+      };
+    },
+
+    "shannon/resume": async (raw, ctx) => {
+      if (ctx.sessionId == null || !opts.registry.has(ctx.sessionId)) {
+        return { kind: "error", code: ShannonError.PAIRING_REQUIRED, message: "pair a device first" };
+      }
+      const params = (raw ?? {}) as { sinceSeq?: unknown };
+      const sinceSeq =
+        typeof params.sinceSeq === "number" && Number.isFinite(params.sinceSeq)
+          ? Math.floor(params.sinceSeq)
+          : 0;
+      const lastSeq = seq.current();
+      if (lastSeq - sinceSeq > GAP_WINDOW) {
+        return {
+          kind: "error",
+          code: ShannonError.GAP_TOO_LARGE,
+          message: "gap exceeds retained window; use snapshot",
+        };
+      }
+      // §O4: replay the device's own buffered stream after the cursor. A hole
+      // (cursor predates the ring's oldest entry) is the same contract as the
+      // global window check — the phone re-snapshots. Without a buffer wired
+      // (or a device with no buffered pushes) `replayed: []` keeps the exact
+      // pre-buffer semantics: "cursor at head", converge via re-fetch.
+      const replay = opts.replayBuffer?.replay(ctx.sessionId, sinceSeq);
+      if (replay && !replay.complete) {
+        return {
+          kind: "error",
+          code: ShannonError.GAP_TOO_LARGE,
+          message: "gap exceeds retained window; use snapshot",
+        };
+      }
+      return {
+        kind: "result",
+        result: {
+          sinceSeq,
+          lastSeq,
+          replayed: (replay?.entries ?? []).map((e) => ({ seq: e.seq, ...e.event })),
+        },
+      };
+    },
+
+    // ── WP-15 T3: device management RPCs (the desktop revoke path also
+    // rewrites the registry file out-of-band; `refreshIfChanged` picks that
+    // up on the next read). Wire shapes are the §M contract (cross-repo spec):
+    // camelCase response keys + ISO-8601 timestamps; `device.revoke` takes
+    // `deviceId` and may revoke ANY registered device (2026-10-03 ruling —
+    // the double-confirm lives in the phone's UI, not in a gateway gate).
+
+    "shannon/device.list": async (_raw, ctx) => {
+      if (ctx.sessionId == null || !opts.registry.has(ctx.sessionId)) {
+        return { kind: "error", code: ShannonError.PAIRING_REQUIRED, message: "pair a device first" };
+      }
+      return { kind: "result", result: { devices: opts.registry.list().map(toWireDeviceEntry) } };
+    },
+
+    "shannon/device.revoke": async (raw, ctx) => {
+      // §M2 requests are camelCase (`deviceId`); the snake_case `device_id`
+      // fallback keeps the pre-§M phone builds working.
+      const params = (raw ?? {}) as { deviceId?: unknown; device_id?: unknown };
+      const target =
+        typeof params.deviceId === "string"
+          ? params.deviceId
+          : typeof params.device_id === "string"
+            ? params.device_id
+            : undefined;
+      if (typeof target !== "string" || target.length === 0) {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: "deviceId is required",
+        };
+      }
+      // Trust gate: only an already-paired device may revoke at all. (The
+      // previous self-only restriction is gone by ruling — a paired session is
+      // the trust boundary, and revoking another device is the "lost phone"
+      // scenario the face exists for.)
+      if (ctx.sessionId == null || !opts.registry.has(ctx.sessionId)) {
+        return { kind: "error", code: ShannonError.PAIRING_REQUIRED, message: "pair a device first" };
+      }
+      const removed = opts.registry.revoke(target);
+      if (removed) {
+        opts.logger.info(`device revoked via RPC: ${target} (by ${ctx.sessionId})`);
+        // §O4 hygiene: a revoked device's buffered stream is dead weight —
+        // it can never resume to read it.
+        opts.replayBuffer?.forget(target);
+        // Fan out to the surviving devices (the bootstrap wires this to the
+        // dispatch hub's broadcast; the revoked device is excluded there).
+        try {
+          opts.onDeviceRevoked?.(target);
+        } catch (err) {
+          // A broken broadcast must never fail an already-successful revoke.
+          opts.logger.warn(`device.revoked broadcast failed: ${(err as Error).message}`);
+        }
+      }
+      return {
+        kind: "result",
+        // Honest no-ops stay successes with `revoked: false` (the phone keeps
+        // its list as-is on a miss rather than phantom-revoking); a hit echoes
+        // the revoked deviceId per the §M2 mock shape, plus the boolean.
+        result: { revoked: removed ? target : false, removed },
+      };
     },
   };
 }
@@ -433,6 +853,32 @@ export interface MobileHandlersOptions {
    * self-gate on the bound session.
    */
   tasks?: MethodHandlers;
+  /**
+   * T9: the pairing-access handlers (`shannon/pairing.pending` +
+   * `shannon/pairing.approve`), built by bootstrap via `createPairingAccess`.
+   * They self-gate on a trusted device session or a valid pair token.
+   */
+  access?: MethodHandlers;
+  /**
+   * §L2: the process-wide pending-approval registry. Wired into the engine
+   * bridge (record on `approval.request`, resolve after `approval/decide`),
+   * the task-dispatch hub (resolve on timeout/text answer), and the snapshot
+   * handler (pendingApprovals recovery array).
+   */
+  approvalRegistry?: ApprovalRegistry;
+  /** §M2: post-revoke broadcast hook (bootstrap → dispatch hub fan-out). */
+  onDeviceRevoked?: (deviceId: string) => void;
+  /**
+   * Test seam: push cursor (defaults to the process-wide `sharedPushSeq`).
+   * Forwarded to the pairing handlers so resume's `lastSeq` agrees with a
+   * hub built on the same injected counter.
+   */
+  seq?: SeqCounter;
+  /**
+   * §O4: the process-wide replay ring (same instance the hub and the server
+   * hold). Forwarded to the pairing handlers — `shannon/resume` replays it.
+   */
+  replayBuffer?: PushReplayBuffer;
 }
 
 /**
@@ -449,11 +895,19 @@ export function createMobileHandlers(opts: MobileHandlersOptions): MethodHandler
     logger: opts.logger,
     resumeClockSkewMs: opts.resumeClockSkewMs,
     now: opts.now,
+    onDeviceRevoked: opts.onDeviceRevoked,
+    approvals: opts.approvalRegistry,
+    seq: opts.seq,
+    replayBuffer: opts.replayBuffer,
   });
   const engine = createEngineHandlers({
     ...opts.engine,
     requireSession: true,
     verifyDeviceSignature: createRegistryVerifier(opts.registry),
+    // WP-15 T3: revocation must bite on live sessions — every gated RPC
+    // re-checks the registry (which refreshes from disk on read).
+    isDeviceTrusted: (deviceId) => opts.registry.has(deviceId),
+    approvalRegistry: opts.approvalRegistry,
   });
-  return { ...engine, ...pairing, ...opts.tasks };
+  return { ...engine, ...pairing, ...opts.tasks, ...opts.access };
 }

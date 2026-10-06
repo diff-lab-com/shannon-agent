@@ -20,6 +20,22 @@ even without `openpyxl`.
 Follow the steps in order. Never claim the file exists unless the Step 5
 verification passed.
 
+## Prefer the native `write_xlsx` tool when available
+
+If the `write_xlsx` tool is in your tool list, prefer it over this runbook:
+it generates the workbook in-engine (no Python involved) and supports
+formulas, multiple sheets, and number typing. Call it with
+`{"path": "output/<topic>-table-<YYYYMMDD>.xlsx", "sheets": [{"name":
+"Data", "rows": [["Region", "Revenue"], ["North", "125000"], ["=SUM(B2:B2)",
+"223000"]]}]}` — every cell is a string; values starting with `=` become
+live formulas, numeric-looking values become number cells, everything else
+stays text. It does not support styling, merged cells, or charts either.
+
+Only fall back to the stdlib runbook below when the tool is unavailable
+(engine build without xlsx generation, CLI host, MCP host). Say which path
+you took in the final report — the honest-degradation rules in Step 6 apply
+to both paths.
+
 ## Step 1: Collect inputs
 
 Ask the user (skip any question they already answered; if they said "just do

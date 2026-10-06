@@ -1,0 +1,473 @@
+// B1 batch — AppContext-level behavior:
+//   * P1-5  per-session query state (background runs must not disable the
+//           visible session's composer; cancelQuery targets the visible run)
+//   * P2-13 throttled streaming projection (coalescing + final integrity)
+//   * P1-13 contextPanelOpen persistence (shannon.dock.open)
+//   * §4-9  prompt queue (cap / FIFO / remove / drain take)
+//
+// Harness mirrors AppContextStreaming.test.tsx: a real AppProvider whose
+// only replacement is a capturing @tauri-apps/api/event fake.
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { renderHook, act, waitFor } from '@testing-library/react'
+import { AppProvider, useApp } from '@/context/AppContext'
+import { EVENT_NAMES } from '@/types'
+import * as api from '@/lib/tauri-api'
+import { writeDraft } from '@/lib/composerDraft'
+
+const SESSION_A = 'aaaa1111-0000-4000-8000-00000000000a'
+const SESSION_B = 'bbbb2222-0000-4000-8000-00000000000b'
+
+const { captured, flush } = vi.hoisted(() => {
+  const captured: Record<string, ((e: { payload: unknown }) => void)[]> = {}
+  const flush = (event: string, payload: unknown) => {
+    for (const h of captured[event] ?? []) h(payload)
+  }
+  return { captured, flush }
+})
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn((event: string, handler: (e: { payload: unknown }) => void) => {
+    captured[event] ??= []
+    captured[event].push((payload) => handler({ payload }))
+    return Promise.resolve(() => {
+      captured[event] = (captured[event] ?? []).filter(h => h !== handler)
+    })
+  }),
+  emit: vi.fn(),
+}))
+
+function wrapper({ children }: { children: React.ReactNode }) {
+  return <AppProvider>{children}</AppProvider>
+}
+
+async function flushUntilRegistered() {
+  await waitFor(() => {
+    expect((captured[EVENT_NAMES.QUERY_TEXT] ?? []).length).toBeGreaterThan(0)
+  })
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  localStorage.clear()
+  for (const key of Object.keys(captured)) delete captured[key]
+  vi.mocked(api.listSessions).mockResolvedValue([])
+  vi.mocked(api.newSession).mockResolvedValue(SESSION_A)
+  vi.mocked(api.sendMessage).mockResolvedValue({ query_id: 'q1' })
+  vi.mocked(api.switchSession).mockResolvedValue([])
+})
+
+describe('B1 P1-5 — isQuerying is per session', () => {
+  it('a background run does not disable the foreground composer', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    expect(result.current.currentSessionId).toBe(SESSION_A)
+
+    // Start a run on session B, then go back to A: B keeps streaming in the
+    // background while A is on screen.
+    await act(async () => { await result.current.switchSession(SESSION_B) })
+    await act(async () => { await result.current.sendMessage('bg prompt') })
+    act(() => { flush(EVENT_NAMES.QUERY_TEXT, { content: 'B1', session_id: SESSION_B }) })
+    expect(result.current.isQuerying).toBe(true) // B is the visible session here
+
+    await act(async () => { await result.current.switchSession(SESSION_A) })
+    // B is still running — but A is visible, so ITS composer stays free.
+    expect(result.current.isQuerying).toBe(false)
+    act(() => { flush(EVENT_NAMES.QUERY_TEXT, { content: 'B2', session_id: SESSION_B }) })
+    expect(result.current.isQuerying).toBe(false)
+
+    // When A itself starts, the composer gates on ITS OWN run.
+    await act(async () => { await result.current.sendMessage('hello') })
+    expect(result.current.isQuerying).toBe(true)
+
+    // B completing in the background must not settle A's composer state.
+    act(() => { flush(EVENT_NAMES.QUERY_COMPLETED, { session_id: SESSION_B }) })
+    expect(result.current.isQuerying).toBe(true)
+
+    act(() => { flush(EVENT_NAMES.QUERY_COMPLETED, { session_id: SESSION_A }) })
+    expect(result.current.isQuerying).toBe(false)
+  })
+
+  it('a completed background run leaves the visible session querying', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('visible run') })
+    expect(result.current.isQuerying).toBe(true)
+
+    // B (background) finishing must not settle A's composer state.
+    act(() => { flush(EVENT_NAMES.QUERY_COMPLETED, { session_id: SESSION_B }) })
+    expect(result.current.isQuerying).toBe(true)
+
+    act(() => { flush(EVENT_NAMES.QUERY_COMPLETED, { session_id: SESSION_A }) })
+    expect(result.current.isQuerying).toBe(false)
+  })
+
+  it('a failed background run does not surface its error in the foreground', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('visible run') })
+
+    act(() => { flush(EVENT_NAMES.QUERY_FAILED, { error: 'boom-bg', session_id: SESSION_B }) })
+    expect(result.current.error).toBeNull()
+    expect(result.current.isQuerying).toBe(true)
+
+    act(() => { flush(EVENT_NAMES.QUERY_FAILED, { error: 'boom-visible', session_id: SESSION_A }) })
+    expect(result.current.error).toBe('boom-visible')
+    expect(result.current.isQuerying).toBe(false)
+  })
+
+  it('cancelQuery targets the visible session', async () => {
+    const cancelSpy = vi.spyOn(api, 'cancelQuery').mockResolvedValue(undefined)
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('run in A') })
+    await act(async () => { await result.current.cancelQuery() })
+    expect(cancelSpy).toHaveBeenLastCalledWith(SESSION_A)
+    cancelSpy.mockRestore()
+  })
+})
+
+describe('S-3/A-18 companion (R4 group 7) — cancel-in-flight feedback state', () => {
+  it('marks the session while the cancel tears the run down and clears on the settle', async () => {
+    // Deferred IPC: the marker must be observable while cancelQuery is in
+    // flight (the real backend's cancel returns before the loop unwinds).
+    let resolveCancel: () => void = () => {}
+    const cancelSpy = vi.spyOn(api, 'cancelQuery').mockImplementation(
+      () => new Promise<void>((resolve) => { resolveCancel = resolve }),
+    )
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('run in A') })
+    expect(result.current.isQuerying).toBe(true)
+    expect(result.current.isCancelInFlight).toBe(false)
+
+    // Hold the IPC open and let cancelQuery run to its await inside act —
+    // the marker is a plain state flip visible the moment act flushes.
+    let cancelPromise: Promise<void> = Promise.resolve()
+    await act(async () => { cancelPromise = result.current.cancelQuery() })
+    expect(result.current.isCancelInFlight).toBe(true)
+
+    // The run settles (query:cancelled) — the marker clears with the latch
+    // even though the deferred IPC promise is still pending. The stop
+    // button flips back to enabled/hidden state here, not at IPC-return.
+    act(() => { flush(EVENT_NAMES.QUERY_CANCELLED, { query_id: 'q1', session_id: SESSION_A }) })
+    expect(result.current.isCancelInFlight).toBe(false)
+    expect(result.current.isQuerying).toBe(false)
+
+    resolveCancel()
+    await act(async () => { await cancelPromise })
+    cancelSpy.mockRestore()
+  })
+
+  it('a failed cancel IPC clears the marker so the stop button does not wedge', async () => {
+    const cancelSpy = vi.spyOn(api, 'cancelQuery').mockRejectedValue(new Error('ipc down'))
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('run in A') })
+
+    await act(async () => { await result.current.cancelQuery() })
+    expect(result.current.isCancelInFlight).toBe(false)
+    expect(result.current.isQuerying).toBe(true) // the run is still live
+    cancelSpy.mockRestore()
+  })
+
+  it('a fresh send clears a marker left behind before the run started (no wedge on the next stop)', async () => {
+    // Pathological sequence: the marker got set while the session was NOT
+    // querying (the only setter is cancelQuery, UI-guarded, but the latch
+    // edge must self-heal regardless) — starting a run clears it.
+    const cancelSpy = vi.spyOn(api, 'cancelQuery').mockImplementation(
+      () => new Promise<void>(() => { /* never settles */ }),
+    )
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { void result.current.cancelQuery() })
+    expect(result.current.isCancelInFlight).toBe(true)
+
+    // A new run turns the latch ON — the stale marker must not survive it
+    // (it would render the next stop button permanently disabled).
+    await act(async () => { await result.current.sendMessage('next run') })
+    expect(result.current.isCancelInFlight).toBe(false)
+    expect(result.current.isQuerying).toBe(true)
+    cancelSpy.mockRestore()
+  })
+})
+
+describe('B1 P2-13 — throttled streaming projection', () => {
+  it('coalesces rapid tokens into one flush and never loses the tail', async () => {
+    vi.useFakeTimers()
+    try {
+      const { result } = renderHook(() => useApp(), { wrapper })
+      // Drain microtasks (all initial loads are resolved promises) without
+      // real timers — RTL waitFor would stall under fake timers here.
+      const spin = async () => {
+        for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve() })
+      }
+      await spin()
+      expect(result.current.loading).toBe(false)
+      expect((captured[EVENT_NAMES.QUERY_TEXT] ?? []).length).toBeGreaterThan(0)
+
+      await act(async () => { await result.current.createSession() })
+      await act(async () => { await result.current.sendMessage('Hello') })
+
+      // Tokens land in the bucket; nothing is projected before the flush
+      // window elapses.
+      act(() => {
+        flush(EVENT_NAMES.QUERY_TEXT, { content: 'a', session_id: SESSION_A })
+        flush(EVENT_NAMES.QUERY_TEXT, { content: 'b', session_id: SESSION_A })
+        flush(EVENT_NAMES.QUERY_TEXT, { content: 'c', session_id: SESSION_A })
+      })
+      expect(result.current.streamingText).toBe('')
+
+      // Half the window: still coalescing.
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+      expect(result.current.streamingText).toBe('')
+
+      // Window elapsed: exactly one flush with ALL buffered tokens.
+      await act(async () => { await vi.advanceTimersByTimeAsync(30) })
+      expect(result.current.streamingText).toBe('abc')
+
+      // Tail tokens + an immediate COMPLETED: the final commit reads the
+      // bucket, so no tail can be lost to a pending flush.
+      act(() => {
+        flush(EVENT_NAMES.QUERY_TEXT, { content: 'def', session_id: SESSION_A })
+        flush(EVENT_NAMES.QUERY_COMPLETED, { session_id: SESSION_A })
+      })
+      expect(result.current.streamingText).toBe('')
+      const assistants = result.current.messages.filter(m => m.role === 'assistant')
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0].content).toBe('abcdef')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('B1 P1-13 — contextPanelOpen persistence', () => {
+  it('restores the persisted dock state and persists every toggle', async () => {
+    localStorage.setItem('shannon.dock.open', '1')
+    const first = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(first.result.current.loading).toBe(false))
+    expect(first.result.current.contextPanelOpen).toBe(true)
+
+    act(() => { first.result.current.toggleContextPanel() })
+    expect(first.result.current.contextPanelOpen).toBe(false)
+    expect(localStorage.getItem('shannon.dock.open')).toBe('0')
+
+    act(() => { first.result.current.setContextPanelOpen(true) })
+    expect(localStorage.getItem('shannon.dock.open')).toBe('1')
+    first.unmount()
+
+    // A fresh provider re-reads the persisted value.
+    localStorage.setItem('shannon.dock.open', '0')
+    const second = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(second.result.current.loading).toBe(false))
+    expect(second.result.current.contextPanelOpen).toBe(false)
+  })
+})
+
+describe('B1 §4-9 — prompt queue primitives', () => {
+  it('enqueues FIFO, caps at 3 (overflow rejected), removes by id', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+    await act(async () => { await result.current.createSession() })
+
+    const results: boolean[] = []
+    await act(async () => {
+      results.push(result.current.enqueuePrompt('one', []))
+      results.push(result.current.enqueuePrompt('two', ['f1']))
+      results.push(result.current.enqueuePrompt('three', []))
+      results.push(result.current.enqueuePrompt('four', []))
+    })
+    expect(results).toEqual([true, true, true, false])
+    expect(result.current.promptQueue.map(q => q.text)).toEqual(['one', 'two', 'three'])
+
+    // FIFO drain takes the head.
+    let head: { id: number; text: string } | null = null
+    await act(async () => {
+      head = result.current.dequeuePrompt()
+    })
+    expect(head?.text).toBe('one')
+    expect(result.current.promptQueue.map(q => q.text)).toEqual(['two', 'three'])
+
+    // Remove by id.
+    const twoId = result.current.promptQueue[0].id
+    await act(async () => { result.current.removeQueuedPrompt(twoId) })
+    expect(result.current.promptQueue.map(q => q.text)).toEqual(['three'])
+
+    // The cap is per session: another session's queue is independent.
+    await act(async () => { await result.current.switchSession(SESSION_B) })
+    await act(async () => {
+      expect(result.current.enqueuePrompt('b-one', [])).toBe(true)
+    })
+    expect(result.current.promptQueue.map(q => q.text)).toEqual(['b-one'])
+  })
+
+  // B3-1 (P1-2, R9-②): the rail's 「队列 N」badge reads this projection —
+  // a background session's parked queue must stay visible (the drain only
+  // runs for the session on screen), and depth 0 must drop out entirely so
+  // the chip unmounts instead of rendering 「队列 0」.
+  it('projects a per-session queue depth for the sidebar badge', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+    await act(async () => { await result.current.createSession() })
+
+    // Park two prompts on A, then switch away: A's backlog stays in the
+    // projection (the rail badge keeps counting) and B — no queue — is
+    // absent rather than mapped to 0.
+    await act(async () => {
+      expect(result.current.enqueuePrompt('a-one', [])).toBe(true)
+      expect(result.current.enqueuePrompt('a-two', [])).toBe(true)
+    })
+    expect(result.current.queueDepthsBySession).toEqual({ [SESSION_A]: 2 })
+    await act(async () => { await result.current.switchSession(SESSION_B) })
+    expect(result.current.queueDepthsBySession).toEqual({ [SESSION_A]: 2 })
+
+    // Back on A the drain takes the head; the depth follows down to empty,
+    // where the session leaves the record.
+    await act(async () => { await result.current.switchSession(SESSION_A) })
+    await act(async () => { result.current.dequeuePrompt() })
+    expect(result.current.queueDepthsBySession).toEqual({ [SESSION_A]: 1 })
+    await act(async () => { result.current.dequeuePrompt() })
+    expect(result.current.queueDepthsBySession).toEqual({})
+  })
+})
+
+describe('B1-3 (P1-4) — deleteSessionAction cleans up session-scoped state', () => {
+  it('clears the deleted session\'s persisted draft, and only its own', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    // Seed directly under the storage contract's key format — the cleanup
+    // must target the same key the composer writes (`shannon.draft.<id>`).
+    localStorage.setItem(
+      `shannon.draft.${SESSION_A}`,
+      JSON.stringify({ text: 'half-typed', attachments: [], updatedAt: 1 }),
+    )
+    localStorage.setItem(
+      `shannon.draft.${SESSION_B}`,
+      JSON.stringify({ text: 'other session', attachments: [], updatedAt: 1 }),
+    )
+
+    await act(async () => { await result.current.deleteSession(SESSION_A) })
+
+    expect(localStorage.getItem(`shannon.draft.${SESSION_A}`)).toBeNull()
+    expect(
+      JSON.parse(localStorage.getItem(`shannon.draft.${SESSION_B}`)!).text,
+    ).toBe('other session')
+  })
+
+  // B1-3-RESIDUE: deleting the OPEN session must not just clear the draft —
+  // the id must become unwritable, or Chat's switch-flush (this layer can't
+  // see it; no Chat is mounted here) re-persists the composer text under the
+  // deleted id right after the pointer flips to null. The tombstone the
+  // delete leaves behind is what the flush's writeDraft hits — assert the
+  // straggler write is refused and the key stays gone.
+  it('deleting the OPEN session bars the deleted id from every later draft write', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    // SESSION_A becomes the open session…
+    await act(async () => { await result.current.createSession() })
+    expect(result.current.currentSessionId).toBe(SESSION_A)
+    writeDraft(SESSION_A, 'typed, never sent', [])
+
+    // …and dies while on screen.
+    await act(async () => { await result.current.deleteSession(SESSION_A) })
+    expect(localStorage.getItem(`shannon.draft.${SESSION_A}`)).toBeNull()
+
+    // The switch-flush straggler (same writeDraft the page routes through)
+    // finds the tombstone: refused, the key does not come back.
+    expect(writeDraft(SESSION_A, 'resurrected by the flush', [])).toBe('failed')
+    expect(localStorage.getItem(`shannon.draft.${SESSION_A}`)).toBeNull()
+  })
+
+  it('drops the run and cancel-in-flight latches with the deleted session', async () => {
+    // Deferred cancel IPC + no terminal event: the ONLY thing that can
+    // clear the latches is the delete itself. (The hook's projections are
+    // visible-session-only — the deleted session is the current one here,
+    // so both projections must read idle the moment the delete lands.)
+    let releaseCancel: () => void = () => {}
+    const cancelSpy = vi.spyOn(api, 'cancelQuery').mockImplementation(
+      () => new Promise<void>((resolve) => { releaseCancel = resolve }),
+    )
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('run in A') })
+    // Hold the IPC open (same pattern as the S-3 test above): cancelQuery
+    // starts, but its promise stays pending for the rest of the test — so
+    // nothing but the delete can clear the latches.
+    let cancelPromise: Promise<void> = Promise.resolve()
+    await act(async () => { cancelPromise = result.current.cancelQuery() })
+    expect(result.current.isCancelInFlight).toBe(true)
+    expect(result.current.isQuerying).toBe(true)
+
+    await act(async () => { await result.current.deleteSession(SESSION_A) })
+    expect(result.current.isQuerying).toBe(false)
+    expect(result.current.isCancelInFlight).toBe(false)
+
+    releaseCancel()
+    await act(async () => { await cancelPromise })
+    cancelSpy.mockRestore()
+  })
+
+  it('drops the deleted session\'s Context-tab sources, keeps other sessions\'', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    act(() => { result.current.addSessionSource(SESSION_A, 'https://a.example') })
+    act(() => { result.current.addSessionSource(SESSION_B, 'https://b.example') })
+
+    await act(async () => { await result.current.deleteSession(SESSION_A) })
+
+    expect(result.current.sessionSources[SESSION_A]).toBeUndefined()
+    expect(result.current.sessionSources[SESSION_B]).toEqual(['https://b.example'])
+  })
+
+  it('dismisses a permission prompt aimed at the deleted session, keeps others', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+
+    const prompt = (session: string) => ({
+      tool: 'bash', input: {}, risk: 'low',
+      request_id: `req-${session}`, session_id: session,
+    })
+    act(() => flush(EVENT_NAMES.PERMISSION_REQUEST, prompt(SESSION_A)))
+    expect(result.current.permissionRequest?.request_id).toBe(`req-${SESSION_A}`)
+
+    // A prompt for ANOTHER session must survive deleting an unrelated one.
+    await act(async () => { await result.current.deleteSession(SESSION_B) })
+    expect(result.current.permissionRequest?.request_id).toBe(`req-${SESSION_A}`)
+
+    // Deleting the prompt's own session dismisses it (unanswerable — the
+    // backend denied it when the session died).
+    await act(async () => { await result.current.deleteSession(SESSION_A) })
+    expect(result.current.permissionRequest).toBeNull()
+  })
+})

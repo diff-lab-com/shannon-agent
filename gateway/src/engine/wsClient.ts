@@ -6,7 +6,12 @@ import {
   type EngineEventType,
   isTerminalEvent,
 } from "./runtime.js";
-import { type MessageAttachment, type WsClientMessageQuery } from "./types.gen.js";
+import {
+  type MessageAttachment,
+  PROTOCOL_VERSION,
+  type WsClientMessageQuery,
+  type WsServerMessageSessionInfo,
+} from "./types.gen.js";
 
 /**
  * Typed WebSocket client for the Shannon engine's `/api/ws`.
@@ -30,10 +35,26 @@ export interface EngineWsClientOptions {
   model?: string | null;
   /** Default session id (UUID string) for conversation continuity. */
   sessionId?: string | null;
+  /** Extra handshake headers (e.g. `authorization` for the engine bearer). */
+  headers?: Record<string, string>;
+  /**
+   * review §P2-23: how long to wait for the WS handshake (TCP+upgrade)
+   * before giving up, in ms. A hung engine accept must not wedge `connect()`
+   * forever — the rejection surfaces as a normal error so the caller's
+   * reconnect/backoff logic takes over. Default 10s.
+   */
+  handshakeTimeoutMs?: number;
 }
+
+/** Default WS handshake budget (review §P2-23). */
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
+
+/** Default budget for a one-shot `call()` request/response round-trip. */
+const DEFAULT_CALL_TIMEOUT_MS = 10_000;
 
 const KNOWN_EVENT_TYPES: ReadonlySet<EngineEventType> = new Set([
   "text",
+  "thinking",
   "tool_use",
   "tool_result",
   "usage",
@@ -44,6 +65,18 @@ const KNOWN_EVENT_TYPES: ReadonlySet<EngineEventType> = new Set([
   "session_info",
   "error",
 ]);
+
+/**
+ * One awaited request/response round-trip on the socket. The matcher decides
+ * which decoded frame is the response (the engine's request RPCs carry no
+ * correlation id, so matching is by frame shape — e.g. the `sessions.*`
+ * response types); non-matching frames fall through to normal event routing.
+ */
+interface PendingCall {
+  match: (frame: unknown) => unknown;
+  resolve: (value: unknown) => void;
+  reject: (err: Error) => void;
+}
 
 /**
  * Parse one wire frame. Returns `null` for anything that isn't a recognized
@@ -63,8 +96,13 @@ function parseEngineEvent(raw: unknown): EngineEvent | null {
   return raw as EngineEvent;
 }
 
-/** Decode a `ws` RawData payload to parsed JSON. Returns null if unrecognized. */
-function parseFrame(data: RawData): unknown {
+/**
+ * Decode a `ws` RawData payload to parsed JSON. Returns null if unrecognized
+ * OR not valid JSON (review F44: a malformed frame must be dropped, never
+ * thrown — parseFrame runs inside the socket's "message" EventEmitter
+ * callback, where a throw would crash the whole gateway process).
+ */
+export function parseFrame(data: RawData): unknown {
   let text: string;
   if (typeof data === "string") {
     text = data;
@@ -80,34 +118,100 @@ function parseFrame(data: RawData): unknown {
   } else {
     return null;
   }
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** Leading major component of a semver-ish string (`"0.8.0"` → `0`). */
+function majorVersionOf(version: string): number {
+  const major = Number.parseInt(version.split(".", 1)[0] ?? "", 10);
+  return Number.isNaN(major) ? -1 : major;
 }
 
 export class EngineWsClient {
   private socket: WebSocket | null = null;
   private activeQueue: PushQueue<EngineEvent> | null = null;
+  private engineProtocolVersion: string | null = null;
+  private versionObserved = false;
+  // review F44: malformed-frame accounting for the rate-limited warn below.
+  private malformedFrames = 0;
+  /** The in-flight one-shot `call()`, if any (single slot — the engine
+   *  answers request/response frames in order on this socket). */
+  private pendingCall: PendingCall | null = null;
+  /** Shared handshake promise so concurrent connect() callers (e.g. two
+   *  `call()`s racing on a cold client) share ONE socket instead of each
+   *  opening their own — `this.socket` is only assigned once the handshake
+   *  completes, so the null check alone cannot dedupe in-flight connects. */
+  private connecting: Promise<void> | null = null;
   private readonly url: string;
   private readonly defaultModel: string | null;
   private readonly defaultSessionId: string | null;
+  private readonly headers: Record<string, string>;
+  private readonly handshakeTimeoutMs: number;
 
   constructor(options: EngineWsClientOptions) {
     this.url = options.url;
     this.defaultModel = options.model ?? null;
     this.defaultSessionId = options.sessionId ?? null;
+    this.headers = options.headers ?? {};
+    this.handshakeTimeoutMs =
+      options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
   }
 
   get isConnected(): boolean {
     return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
   }
 
-  /** Open the socket and wait for it to be ready. Idempotent. */
+  /**
+   * review §P2-24: the wire protocol version reported by the engine's
+   * greeting frame (`WsServerMessage::SessionInfo.protocol_version`), or
+   * `null` until a greeting arrived / when talking to a pre-versioning
+   * engine that omits the field.
+   */
+  get protocolVersion(): string | null {
+    return this.engineProtocolVersion;
+  }
+
+  /** Open the socket and wait for it to be ready. Idempotent — including
+   *  across concurrent calls (a handshake in flight is shared, not duplicated). */
   async connect(): Promise<void> {
     if (this.socket) return;
-    const socket = new WebSocket(this.url);
-    await waitForOpen(socket);
+    if (this.connecting) return this.connecting;
+    this.connecting = this.doConnect();
+    try {
+      await this.connecting;
+    } finally {
+      this.connecting = null;
+    }
+  }
+
+  private async doConnect(): Promise<void> {
+    const socket =
+      Object.keys(this.headers).length > 0
+        ? new WebSocket(this.url, { headers: this.headers })
+        : new WebSocket(this.url);
+    // Attach frame routing BEFORE the handshake wait resolves: the engine
+    // sends its greeting as soon as it accepts the connection, so the frame
+    // can land between the upgrade completing and the `open` event's
+    // continuation running — an EventEmitter silently drops it (review
+    // §P2-24). Until the socket is stored below, the handlers are harmless
+    // no-ops (`activeQueue` is null, `socket` stays null).
     socket.on("message", (data) => this.onMessage(data));
     socket.on("close", () => this.onSocketClosed());
     socket.on("error", (err) => this.onSocketError(err));
+    try {
+      await waitForOpen(socket, this.handshakeTimeoutMs);
+    } catch (err) {
+      // Don't leak a half-open socket; the caller's reconnect path retries
+      // with a fresh one. ws emits "error" if the socket is torn down while
+      // CONNECTING — swallow it (the original failure is what propagates).
+      socket.on("error", () => {});
+      socket.terminate();
+      throw err;
+    }
     this.socket = socket;
   }
 
@@ -166,6 +270,53 @@ export class EngineWsClient {
     socket.send(JSON.stringify({ type: "cancel" }));
   }
 
+  /**
+   * One-shot request/response: send one client message and wait for the first
+   * frame the `match` predicate accepts (the engine's RPC-style messages —
+   * e.g. the §J `sessions.list` / `session.history` pair — carry no correlation
+   * id, so the response is identified by shape). The greeting and any
+   * non-matching frames fall through to normal event routing.
+   *
+   * Connects first when the socket isn't open. One call at a time per client
+   * (the engine answers in order; callers wanting concurrency create a client
+   * each — the same convention as `runQuery`). Rejects on the ~10s timeout, a
+   * socket error, or a close before the response arrives.
+   */
+  async call<T>(
+    message: unknown,
+    match: (frame: unknown) => T | null,
+    opts: { timeoutMs?: number } = {},
+  ): Promise<T> {
+    if (!this.isConnected) await this.connect();
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      throw new Error("EngineWsClient not connected; call() could not open the socket");
+    }
+    if (this.pendingCall) {
+      throw new Error("another one-shot call is already in flight on this client");
+    }
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingCall = null;
+        reject(new Error(`engine call timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      timer.unref?.();
+      this.pendingCall = {
+        match: (frame) => match(frame),
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value as T);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      };
+      socket.send(JSON.stringify(message));
+    });
+  }
+
   /** Close the socket. Resolves once the underlying socket has closed. */
   async close(): Promise<void> {
     const socket = this.socket;
@@ -180,8 +331,40 @@ export class EngineWsClient {
   // ── frame routing ──────────────────────────────────────────────────
 
   private onMessage(data: RawData): void {
-    const parsed = parseEngineEvent(parseFrame(data));
+    const decoded = parseFrame(data);
+    if (decoded === null) {
+      // review F44: not decodable JSON — count + drop (rate-limited log) so a
+      // pathological/binary frame can neither crash the process nor spam it.
+      this.noteMalformedFrame();
+      return;
+    }
+    // A pending one-shot call gets first crack at the frame — RPC responses
+    // are not engine events and would be dropped by the known-type filter
+    // below. A matcher that throws (or returns null/undefined) passes the
+    // frame through to normal routing.
+    const pending = this.pendingCall;
+    if (pending) {
+      let matched: unknown = null;
+      try {
+        matched = pending.match(decoded);
+      } catch {
+        matched = null;
+      }
+      if (matched !== null && matched !== undefined) {
+        this.pendingCall = null;
+        pending.resolve(matched);
+        return;
+      }
+    }
+    const parsed = parseEngineEvent(decoded);
     if (!parsed) return; // unknown / malformed — ignore for now
+    // review §P2-24: the greeting (unsolicited `session_info`) used to be
+    // dropped here because no query consumer is active yet. Consume its
+    // protocol version first; a `session_info` that arrives mid-query (a
+    // response to an `info` frame) is still routed to the consumer below.
+    if (parsed.type === "session_info") {
+      this.observeProtocolVersion(parsed);
+    }
     const queue = this.activeQueue;
     if (!queue) return; // no active consumer (e.g. unsolicited session_info)
     queue.push(parsed);
@@ -190,7 +373,51 @@ export class EngineWsClient {
     }
   }
 
+  /**
+   * Capture the engine's protocol version from a `session_info` frame, log
+   * it once, and warn on a *major*-version mismatch. Policy (§P2-24): the
+   * mismatch is a warning, never a hard failure — minor-cycle differences
+   * are additive by contract.
+   */
+  private observeProtocolVersion(frame: WsServerMessageSessionInfo): void {
+    const version = frame.protocol_version ?? null;
+    // Announce each distinct observation once — a mid-query `session_info`
+    // echoing the same version must not re-log.
+    if (this.versionObserved && version === this.engineProtocolVersion) return;
+    this.versionObserved = true;
+    this.engineProtocolVersion = version;
+    if (!version) {
+      console.warn(
+        `[engine-ws] engine greeting carries no protocol_version (pre-versioning engine, gateway speaks ${PROTOCOL_VERSION}); continuing`,
+      );
+      return;
+    }
+    console.info(
+      `[engine-ws] engine protocol version ${version} (gateway ${PROTOCOL_VERSION})`,
+    );
+    if (majorVersionOf(version) !== majorVersionOf(PROTOCOL_VERSION)) {
+      console.warn(
+        `[engine-ws] engine protocol major version mismatch: engine ${version} vs gateway ${PROTOCOL_VERSION}; continuing, wire compatibility is not guaranteed`,
+      );
+    }
+  }
+
+  /**
+   * review F44: log undecodable frames sparingly — the first few (a real
+   * protocol mismatch needs visibility), then one line per hundred so a
+   * garbage-spewing peer can't flood the log. The frame payload is never
+   * logged (it can carry conversation content).
+   */
+  private noteMalformedFrame(): void {
+    this.malformedFrames += 1;
+    const n = this.malformedFrames;
+    if (n <= 5 || n % 100 === 0) {
+      console.warn(`[engine-ws] dropped malformed frame #${n} (not valid JSON)`);
+    }
+  }
+
   private onSocketError(err: Error): void {
+    this.failPendingCall(new Error(`engine socket error: ${err.message}`));
     this.activeQueue?.close({
       kind: "error",
       error: new Error(`engine socket error: ${err.message}`),
@@ -201,26 +428,48 @@ export class EngineWsClient {
     // An unexpected close mid-stream surfaces as an error so a truncated turn
     // isn't silently swallowed. After a normal terminal frame the queue is
     // already cleared, so this is a no-op.
+    this.failPendingCall(new Error("engine socket closed before the call response arrived"));
     this.activeQueue?.close({
       kind: "error",
       error: new Error("engine socket closed before terminal event"),
     } satisfies CloseReason);
     this.socket = null;
   }
+
+  /** Reject the in-flight one-shot call, if any (socket error / close). */
+  private failPendingCall(err: Error): void {
+    const pending = this.pendingCall;
+    if (!pending) return;
+    this.pendingCall = null;
+    pending.reject(err);
+  }
 }
 
-function waitForOpen(socket: WebSocket): Promise<void> {
+function waitForOpen(socket: WebSocket, timeoutMs: number): Promise<void> {
   if (socket.readyState === WebSocket.OPEN) return Promise.resolve();
   return new Promise<void>((resolve, reject) => {
+    // review §P2-23: bound the handshake so a wedged engine accept can't
+    // hang `connect()` forever. On timeout the socket is terminated (by the
+    // caller) and the rejection flows into the normal reconnect path.
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error(`engine WS handshake timed out after ${timeoutMs}ms`),
+      );
+    }, timeoutMs);
+    timer.unref?.();
     const onOpen = (): void => {
-      socket.off("open", onOpen);
-      socket.off("error", onError);
+      cleanup();
       resolve();
     };
     const onError = (err: Error): void => {
+      cleanup();
+      reject(err);
+    };
+    const cleanup = (): void => {
+      clearTimeout(timer);
       socket.off("open", onOpen);
       socket.off("error", onError);
-      reject(err);
     };
     socket.on("open", onOpen);
     socket.on("error", onError);

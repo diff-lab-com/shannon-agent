@@ -17,6 +17,10 @@ export function ProviderCard({
   onActivate,
   onEdit,
   onDelete,
+  onKeys,
+  keysOpen = false,
+  onFallback,
+  fallbackOpen = false,
 }: {
   conn: ProviderConnection
   isActive: boolean
@@ -28,11 +32,20 @@ export function ProviderCard({
   onActivate: () => void
   onEdit: () => void
   onDelete: () => void
+  /** R4-3: open/close the inline API-keys management panel. */
+  onKeys: () => void
+  keysOpen?: boolean
+  /** S3-4: open/close the inline recommended-fallback-chain panel. */
+  onFallback: () => void
+  fallbackOpen?: boolean
 }) {
   const hasKey = conn.has_api_key
   const info = KIND_INFO[conn.kind]
   return (
     <div
+      // S4 (P-N20): roster-card anchor for the journey specs — the id is
+      // generated at save time, so tests locate the card by label text.
+      data-testid="provider-card"
       className={cn(
         "p-md rounded-xl border flex items-center justify-between transition-colors",
         isActive ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50',
@@ -50,15 +63,15 @@ export function ProviderCard({
             ) : null}
           </div>
           <div className="flex items-center gap-xs flex-wrap">
-            <span className="font-label-xs text-[11px] text-on-surface-variant">{kindLabel(intl, conn.kind)}</span>
+            <span className="font-label-xs text-label-xs text-on-surface-variant">{kindLabel(intl, conn.kind)}</span>
             {conn.base_url ? (
-              <span className="font-label-xs text-[11px] text-on-surface-variant font-mono truncate max-w-[260px]" title={conn.base_url ?? undefined}>{conn.base_url}</span>
+              <span className="font-label-xs text-label-xs text-on-surface-variant font-mono truncate max-w-[260px]" title={conn.base_url ?? undefined}>{conn.base_url}</span>
             ) : null}
             <span
-              className={cn("inline-flex items-center gap-[2px] font-label-xs text-[10px]", hasKey ? 'text-primary' : 'text-on-surface-variant opacity-60')}
+              className={cn("inline-flex items-center gap-[2px] font-label-xs text-label-2xs", hasKey ? 'text-primary' : 'text-on-surface-variant opacity-60')}
               title={hasKey ? t('settings.models.providers.keySet') : t('settings.models.providers.keyMissing')}
             >
-              <span className="material-symbols-outlined text-[12px]">{hasKey ? 'key' : 'key_off'}</span>
+              <span className="material-symbols-outlined icon-xs">{hasKey ? 'key' : 'key_off'}</span>
               {hasKey ? t('settings.models.providers.keySet') : t('settings.models.providers.keyMissing')}
             </span>
           </div>
@@ -66,12 +79,43 @@ export function ProviderCard({
       </div>
       <div className="flex items-center gap-xs shrink-0">
         {testingId === conn.id ? (
-          <Spinner className="text-primary text-[18px]" />
+          <Spinner className="text-primary text-body-lg" />
         ) : (
           <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-primary cursor-pointer" onClick={onTest} aria-label={t('settings.models.providers.test')}>
-            <span className="material-symbols-outlined text-[18px]">cable</span>
+            <span className="material-symbols-outlined icon-md">cable</span>
           </Button>
         )}
+        {/* R4-3: per-provider multi-key management affordance. Open state is
+            color + aria-expanded only — an accent-tint bg chip here fails
+            AA on non-default themes (design-token chip rule). */}
+        <Button
+          variant="ghost"
+          className={cn(
+            'px-sm py-xs cursor-pointer',
+            keysOpen ? 'text-primary font-bold' : 'text-on-surface-variant hover:text-primary',
+          )}
+          onClick={onKeys}
+          aria-label={t('settings.models.providers.manageKeys')}
+          data-testid={`provider-keys-toggle-${conn.id}`}
+          aria-expanded={keysOpen}
+        >
+          <span className="material-symbols-outlined icon-md">vpn_key</span>
+        </Button>
+        {/* S3-4: one-click recommended fallback chain. Same affordance
+            convention as the keys toggle (open state = color + aria). */}
+        <Button
+          variant="ghost"
+          className={cn(
+            'px-sm py-xs cursor-pointer',
+            fallbackOpen ? 'text-primary font-bold' : 'text-on-surface-variant hover:text-primary',
+          )}
+          onClick={onFallback}
+          aria-label={t('settings.models.providers.recommendFallback')}
+          data-testid={`provider-fallback-toggle-${conn.id}`}
+          aria-expanded={fallbackOpen}
+        >
+          <span className="material-symbols-outlined icon-md">alt_route</span>
+        </Button>
         {!isActive ? (
           <Button
             variant="ghost"
@@ -80,15 +124,15 @@ export function ProviderCard({
             disabled={activatingId !== null}
           >
             {activatingId === conn.id ? (
-              <Spinner className="text-[16px] align-middle" />
+              <Spinner className="text-body-md align-middle" />
             ) : t('settings.models.providers.activate')}
           </Button>
         ) : null}
         <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-primary cursor-pointer" onClick={onEdit} aria-label={t('settings.models.providers.edit')}>
-          <span className="material-symbols-outlined text-[18px]">edit</span>
+          <span className="material-symbols-outlined icon-md">edit</span>
         </Button>
         <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-error cursor-pointer" onClick={onDelete} aria-label={t('settings.models.providers.delete')}>
-          <span className="material-symbols-outlined text-[18px]">delete</span>
+          <span className="material-symbols-outlined icon-md">delete</span>
         </Button>
       </div>
     </div>

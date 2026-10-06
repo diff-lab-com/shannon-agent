@@ -23,6 +23,8 @@ export function GatewayProcessCard({ procState, onProcStateChange }: GatewayProc
   const procManaged = procState?.managed ?? true
   const procStatus: GatewaySupervisorStatus = procState?.status ?? 'stopped'
 
+  // Review 2026-09-16: state-driven enablement for the Start/Stop buttons.
+  const procIsRunning = typeof procStatus === 'object' && 'running' in procStatus
   const procBadge = (() => {
     const s = procStatus
     if (s === 'stopped')
@@ -47,7 +49,7 @@ export function GatewayProcessCard({ procState, onProcStateChange }: GatewayProc
       onProcStateChange(s)
       toast.success(t('settings.connections.process.started'))
     } catch (e) {
-      toastError('gateway supervisor: start failed', e)
+      toastError(t('settings.connections.process.startFailed'), e)
     } finally {
       setProcBusy(null)
     }
@@ -60,7 +62,7 @@ export function GatewayProcessCard({ procState, onProcStateChange }: GatewayProc
       onProcStateChange(s)
       toast.success(t('settings.connections.process.stopped'))
     } catch (e) {
-      toastError('gateway supervisor: stop failed', e)
+      toastError(t('settings.connections.process.stopFailed'), e)
     } finally {
       setProcBusy(null)
     }
@@ -73,7 +75,7 @@ export function GatewayProcessCard({ procState, onProcStateChange }: GatewayProc
       onProcStateChange(s)
       toast.success(t('settings.connections.process.managedSaved'))
     } catch (e) {
-      toastError('gateway supervisor: set managed failed', e)
+      toastError(t('settings.connections.process.managedSaveFailed'), e)
     } finally {
       setProcBusy(null)
     }
@@ -115,17 +117,20 @@ export function GatewayProcessCard({ procState, onProcStateChange }: GatewayProc
               </Badge>
             </div>
             <div className="flex items-center gap-sm">
+              {/* Review 2026-09-16: each action disables while its target state
+                  holds — "Stop" is meaningless (and looked broken) on a stopped
+                  gateway, same for "Start" on a running one. */}
               <Button
                 variant="secondary"
                 onClick={startGateway}
-                disabled={procBusy !== null}
+                disabled={procBusy !== null || procIsRunning}
               >
                 {t('settings.connections.process.start')}
               </Button>
               <Button
                 variant="secondary"
                 onClick={stopGateway}
-                disabled={procBusy !== null}
+                disabled={procBusy !== null || procStatus === 'stopped'}
               >
                 {t('settings.connections.process.stop')}
               </Button>

@@ -4,8 +4,27 @@
 // split components. Pure functions only — no React state.
 
 import type { PrimitiveType } from 'react-intl'
+import type { ExecutionPolicy } from '@/types'
 
 export type FilterStatus = 'all' | 'pending' | 'running' | 'completed'
+
+/**
+ * Shared default execution policy (B3 顺带): the single source of truth for
+ * "what a routine without a stored policy behaves like". ScheduleForm seeds
+ * its fields from it, and OffpeakWindowEditor builds a full policy object
+ * from it when the routine's `policy` is null — the previous ad-hoc fallback
+ * there (max_retries 0, auto-archive on, notifications off) was silently
+ * harsher than what the create form promises.
+ */
+export const DEFAULT_POLICY: ExecutionPolicy = {
+  max_retries: 2,
+  timeout_secs: 600,
+  worktree: null,
+  notify_on_failure: true,
+  budget_usd: null,
+  auto_archive_when_empty: false,
+  // email/notification routing: deferred, needs ExecutionPolicy + SMTP (backlog)
+}
 
 export interface StatusBadge {
   bg: string
@@ -25,19 +44,19 @@ export interface StatusBadge {
 export function statusBadge(status: string): StatusBadge {
   switch (status) {
     case 'completed':
-      return { bg: 'bg-tertiary/10 text-tertiary border-tertiary/20', dot: 'bg-tertiary', icon: 'check_circle', labelId: 'tasks.status.completed.label', tipId: 'tasks.status.completed.tip' }
+      return { bg: 'bg-tertiary-container text-on-tertiary-container border-tertiary/20', dot: 'bg-tertiary', icon: 'check_circle', labelId: 'tasks.status.completed.label', tipId: 'tasks.status.completed.tip' }
     case 'running':
     case 'in_progress':
-      return { bg: 'bg-primary/10 text-primary border-primary/20', dot: 'bg-primary animate-pulse', icon: 'autorenew', labelId: 'tasks.status.running.label', tipId: 'tasks.status.running.tip' }
+      return { bg: 'bg-primary-container text-on-primary-container border-primary/20', dot: 'bg-primary animate-pulse', icon: 'autorenew', labelId: 'tasks.status.running.label', tipId: 'tasks.status.running.tip' }
     case 'failed':
     case 'error':
-      return { bg: 'bg-error/10 text-error border-error/20', dot: 'bg-error', icon: 'error', labelId: 'tasks.status.failed.label', tipId: 'tasks.status.failed.tip' }
+      return { bg: 'bg-error-container text-on-error-container border-error/20', dot: 'bg-error', icon: 'error', labelId: 'tasks.status.failed.label', tipId: 'tasks.status.failed.tip' }
     case 'pending':
       return { bg: 'bg-surface-container-highest text-on-surface-variant border-outline-variant/30', dot: 'bg-outline', icon: 'schedule', labelId: 'tasks.status.pending.label', tipId: 'tasks.status.pending.tip' }
     case 'queued':
       // P2-5: due but outside the routine's off-peak execution window —
       // waiting for the window to open; never executes under this record.
-      return { bg: 'bg-secondary/10 text-secondary border-secondary/20', dot: 'bg-secondary animate-pulse', icon: 'bedtime', labelId: 'tasks.status.queued.label', tipId: 'tasks.status.queued.tip' }
+      return { bg: 'bg-secondary-container text-on-secondary-container border-secondary/20', dot: 'bg-secondary animate-pulse', icon: 'bedtime', labelId: 'tasks.status.queued.label', tipId: 'tasks.status.queued.tip' }
     default:
       return { bg: 'bg-surface-container-high text-on-surface-variant border-outline-variant/30', dot: 'bg-outline-variant', icon: 'task_alt', labelId: 'tasks.status.unknown.label', tipId: 'tasks.status.unknown.tip', values: { status } }
   }

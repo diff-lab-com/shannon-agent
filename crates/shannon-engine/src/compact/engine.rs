@@ -28,6 +28,12 @@ pub struct CompactEngine {
 }
 
 impl CompactEngine {
+    /// Access the engine's summarizer (used by `/handoff` to distill a
+    /// thread through the same LLM/rule pipeline as compaction).
+    pub fn summarizer(&self) -> &dyn Summarizer {
+        self.summarizer.as_ref()
+    }
+
     /// Create a new compact engine with the given config and summarizer
     pub fn new(
         config: CompactConfig,
@@ -265,7 +271,14 @@ impl CompactEngine {
 
     fn do_compact(&self, messages: &mut Vec<Message>) -> Result<CompactResult, CompactError> {
         let keep_count = self.config.keep_recent_count;
-        let split_point = messages.len().saturating_sub(keep_count);
+        // F4a: the raw boundary (`len - keep_recent_count`) can land between
+        // an assistant tool_use and its matching user tool_result — the older
+        // half gets summarized away and the recent half reaches the wire with
+        // an orphaned result (or vice versa), which strict providers reject
+        // with a 400. Align the split with [`safe_split_point`] so a pair is
+        // always summarized (or kept) together.
+        let raw_split = messages.len().saturating_sub(keep_count);
+        let split_point = super::safe_split_point(messages, raw_split).min(messages.len());
 
         // Prune stale tool results from older messages before summarizing
         let mut old_messages: Vec<Message> = messages[..split_point].to_vec();
@@ -360,11 +373,16 @@ impl CompactEngine {
                         }
                         if let Some(ToolResultContent::Single(text)) = content {
                             if text.len() > preview_limit * 2 {
-                                *text = format!(
-                                    "{}...[truncated, {} chars]",
-                                    &text[..preview_limit],
-                                    text.len()
-                                );
+                                // Back up to the nearest UTF-8 char boundary: tool
+                                // output is frequently CJK/emoji, where the byte
+                                // offset `preview_limit` can land mid-character and
+                                // a bare `&text[..preview_limit]` would panic.
+                                let mut end = preview_limit.min(text.len());
+                                while !text.is_char_boundary(end) {
+                                    end -= 1;
+                                }
+                                *text =
+                                    format!("{}...[truncated, {} chars]", &text[..end], text.len());
                             }
                         }
                     }
@@ -999,6 +1017,47 @@ mod tests {
             } = &blocks[0]
             {
                 assert_eq!(t.len(), 1000); // unchanged
+            }
+        }
+    }
+
+    #[test]
+    fn test_prune_truncates_multibyte_tool_result_on_char_boundary() {
+        // Regression: the preview used to slice at the raw byte offset
+        // `preview_limit` (200). CJK chars are 3 bytes and emoji 4, so byte
+        // 200 of this content lands mid-character and `&text[..200]` PANICKED
+        // ("byte index 200 is not a char boundary").
+        let original = format!("{}{}", "你好世界".repeat(60), "🦀🎉".repeat(30));
+        assert!(original.len() > 400, "must exceed the truncation threshold");
+        assert!(
+            !original.is_char_boundary(200),
+            "test precondition: byte 200 must land mid-character"
+        );
+        let mut msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: Some(ToolResultContent::Single(original.clone())),
+                is_error: Some(false),
+            }]),
+        }];
+        CompactEngine::prune_stale_tool_results(&mut msgs);
+        if let MessageContent::Blocks(blocks) = &msgs[0].content {
+            if let ContentBlock::ToolResult {
+                content: Some(ToolResultContent::Single(t)),
+                ..
+            } = &blocks[0]
+            {
+                assert!(t.contains("[truncated"), "should be truncated: {t}");
+                assert!(t.contains(&original.len().to_string()));
+                // The preview prefix must be a real prefix of the original
+                // string (no mojibake from a mid-character slice).
+                let prefix = t.split("...[truncated").next().unwrap();
+                assert!(
+                    original.starts_with(prefix),
+                    "truncated preview must be a char-boundary prefix of the original"
+                );
+                assert!(!prefix.is_empty());
             }
         }
     }

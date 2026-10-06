@@ -16,7 +16,7 @@ mod tool_use_tests {
     };
     use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
     use shannon_engine::api::{LlmClientConfig, LlmProvider};
-    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::permissions::{ApprovalMode, PermissionManager};
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use uuid::Uuid;
@@ -120,6 +120,8 @@ mod tool_use_tests {
 
     fn create_engine(mock_url: &str, registry: ToolRegistry) -> QueryEngine {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
@@ -137,10 +139,17 @@ mod tool_use_tests {
             enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
+        // Pipeline tests drive tools headlessly with no permission channel;
+        // the engine's fail-closed gate (R2/N-1) would deny every
+        // non-read-only tool before execution. Use the production headless
+        // approval posture (shannon-cli headless default: FullAuto) — the
+        // permission gate itself has dedicated tests elsewhere.
+        let mut permissions = PermissionManager::new();
+        permissions.set_approval_mode(ApprovalMode::FullAuto);
         QueryEngine::new(
             client,
             registry,
-            PermissionManager::new(),
+            permissions,
             StateManager::new(),
             QueryEngineConfig::default(),
         )
@@ -687,6 +696,8 @@ mod openai_trailing_usage_tests {
                 .create();
         }
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
             model: "test-model".to_string(),
@@ -866,6 +877,8 @@ mod openai_truncation_continuation_tests {
             );
         }
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
             model: "test-model".to_string(),
@@ -1000,8 +1013,16 @@ mod openai_truncation_continuation_tests {
         });
         assert_eq!(cost, Some((700, 4216)));
 
-        // Conversation keeps the truncated reasoning for context, the
-        // continuation re-prompt, and the final answer.
+        // WP-15 P0-2: the truncated `<think>` reasoning is routed to Thinking
+        // events (still observable), NOT persisted into the conversation —
+        // reasoning is never re-fed to the provider.
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                QueryEvent::Thinking { content, .. } if content.contains("Now I have a complete picture")
+            )),
+            "truncated reasoning must surface as Thinking events"
+        );
         let history: Vec<_> = events
             .iter()
             .rev()
@@ -1011,10 +1032,10 @@ mod openai_truncation_continuation_tests {
             })
             .expect("at least one ConversationUpdate event");
         assert!(
-            history
+            !history
                 .iter()
                 .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("<think>"))),
-            "truncated reasoning must stay in context"
+            "reasoning markup must not be re-fed into the conversation"
         );
         assert!(
             history
@@ -1081,7 +1102,7 @@ mod zhipu_tool_use_broadcast_tests {
     };
     use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
     use shannon_engine::api::{LlmClientConfig, LlmProvider};
-    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::permissions::{ApprovalMode, PermissionManager};
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use uuid::Uuid;
@@ -1152,6 +1173,8 @@ mod zhipu_tool_use_broadcast_tests {
                 .create();
         }
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
             model: "glm-5.3-flash".to_string(),
@@ -1170,10 +1193,15 @@ mod zhipu_tool_use_broadcast_tests {
         };
         let registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool)).unwrap();
+        // Headless regression test: run the tool turn under the production
+        // headless approval posture (FullAuto) so the echo tool actually
+        // executes instead of being denied by the fail-closed gate (R2/N-1).
+        let mut permissions = PermissionManager::new();
+        permissions.set_approval_mode(ApprovalMode::FullAuto);
         let engine = QueryEngine::new(
             shannon_engine::api::LlmClient::new(config),
             registry,
-            PermissionManager::new(),
+            permissions,
             StateManager::new(),
             QueryEngineConfig::default(),
         );

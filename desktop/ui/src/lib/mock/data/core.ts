@@ -355,14 +355,20 @@ export const MOCK_AGENT_DEFINITIONS = [
 ]
 
 export const MOCK_SESSIONS: SessionInfo[] = [
-  { id: 'sess-001', title: 'Q3 roadmap brainstorm', created_at: now - 2 * 3600_000, message_count: 14 },
-  { id: 'sess-002', title: 'Fix billing webhook timeout', created_at: now - 5 * 3600_000, message_count: 28 },
-  { id: 'sess-003', title: 'Pricing page copy review', created_at: now - dayMs, message_count: 9 },
-  { id: 'sess-004', title: 'Customer feedback synthesis', created_at: now - 2 * dayMs, message_count: 22 },
-  { id: 'sess-005', title: 'Investor update draft', created_at: now - 3 * dayMs, message_count: 7 },
-  { id: 'sess-006', title: 'A/B test analysis — onboarding', created_at: now - 4 * dayMs, message_count: 31 },
-  { id: 'sess-007', title: 'SOC2 questionnaire — Acme Corp', created_at: now - 5 * dayMs, message_count: 18 },
-  { id: 'sess-008', title: 'Refactor: extract billing service', created_at: now - 6 * dayMs, message_count: 45 },
+  // P0 sidebar telemetry demo: updated_at mirrors created spread; sess-002
+  // poses as a live run so the rail shows the running dot + elapsed badge.
+  // P-U3 demo: working_dir values align with the demoProjects registry rows
+  // in handlers.ts ('/home/demo/workspace/{shannon,website}') so the rail
+  // tree and the /tasks,/triage?project= deep links resolve end-to-end;
+  // some sessions stay unhoused (no dir) on purpose.
+  { id: 'sess-001', title: 'Q3 roadmap brainstorm', created_at: now - 2 * 3600_000, message_count: 14, updated_at: now - 30 * 60_000, working_dir: '/home/demo/workspace/shannon' },
+  { id: 'sess-002', title: 'Fix billing webhook timeout', created_at: now - 5 * 3600_000, message_count: 28, updated_at: now - 60_000, running: true, working_dir: '/home/demo/workspace/shannon' },
+  { id: 'sess-003', title: 'Pricing page copy review', created_at: now - dayMs, message_count: 9, updated_at: now - dayMs + 3600_000, working_dir: '/home/demo/workspace/website' },
+  { id: 'sess-004', title: 'Customer feedback synthesis', created_at: now - 2 * dayMs, message_count: 22, updated_at: now - 2 * dayMs + 2 * 3600_000 },
+  { id: 'sess-005', title: 'Investor update draft', created_at: now - 3 * dayMs, message_count: 7, updated_at: now - 3 * dayMs + 3600_000, working_dir: '/home/demo/workspace/shannon' },
+  { id: 'sess-006', title: 'A/B test analysis — onboarding', created_at: now - 4 * dayMs, message_count: 31, updated_at: now - 4 * dayMs + 2 * 3600_000, working_dir: '/home/demo/workspace/website' },
+  { id: 'sess-007', title: 'SOC2 questionnaire — Acme Corp', created_at: now - 5 * dayMs, message_count: 18, updated_at: now - 5 * dayMs + 3600_000 },
+  { id: 'sess-008', title: 'Refactor: extract billing service', created_at: now - 6 * dayMs, message_count: 45, updated_at: now - 6 * dayMs + 3 * 3600_000, working_dir: '/home/demo/workspace/shannon' },
 ]
 
 export const MOCK_MESSAGES: ChatMessage[] = [
@@ -402,6 +408,44 @@ export const MOCK_MESSAGES: ChatMessage[] = [
     role: 'assistant',
     content: "Updated. Added **Risks** and **Timeline** sections:\n\n## Risks\n- **R1 — Hiring delay.** Eng hires slip → billing migration slips → Theme 1 & 2 both blocked. *Mitigation:* contractor bridge for 6 weeks.\n- **R2 — Schema migration regression.** Big-bang migration risk. *Mitigation:* dual-write shadow period (2 weeks).\n- **R3 — Partner readiness.** OAuth gallery needs 5 launch partners; 3 confirmed. *Mitigation:* downgrade success metric to 3 launch partners if needed.\n\n## Timeline\n| Month | Theme 1 (Partnerships) | Theme 2 (Onboarding) | Theme 3 (Foundation) |\n|---|---|---|---|\n| Jul | OAuth scaffolding | Tour design | Schema v2 dual-write |\n| Aug | Webhook SLA work | Tour ship | Migration cutover |\n| Sep | Partner gallery launch | Templates v1 | Audit log migration |\n\nThe three themes have **staggered peaks** so the shared design resource is never double-booked. Want this as a PDF?",
     timestamp: now - 880_000,
+    tool_calls: [
+      {
+        tool_use_id: 'tu-002b',
+        tool_name: 'bash',
+        tool_input: { command: 'curl -m 5 https://api.internal/health' },
+        result: 'curl: (28) Connection timed out after 5001 milliseconds',
+        is_error: true,
+        status: 'error',
+      },
+      {
+        tool_use_id: 'tu-002c',
+        tool_name: 'bash',
+        tool_input: { command: 'curl -m 5 https://api.internal/health' },
+        result: 'curl: (28) Connection timed out after 5001 milliseconds',
+        is_error: true,
+        status: 'error',
+      },
+      {
+        tool_use_id: 'tu-002d',
+        tool_name: 'bash',
+        tool_input: { command: 'curl -m 15 --retry https://api.internal/health' },
+        result: '{"status":"ok"}',
+        status: 'completed',
+      },
+      {
+        tool_use_id: 'tu-003',
+        tool_name: 'agent_spawn',
+        tool_input: {
+          name: 'research-analyst',
+          model: 'claude-haiku-4-5',
+          team: 'q3-roadmap',
+          max_turns: 6,
+          system_prompt: 'You are a research analyst. Summarize partner API docs and onboarding metrics into bullet points.',
+        },
+        result: 'Agent spawned and added to team q3-roadmap. First task assigned: summarize partner API surface.',
+        status: 'completed',
+      },
+    ],
   },
 ]
 
@@ -424,12 +468,13 @@ export const MOCK_MCP_SERVERS: McpServerInfo[] = [
     connected: true,
     tool_count: 4,
     tools: [
-      { name: 'read_file', description: 'Read a file from the filesystem', enabled: true },
-      { name: 'write_file', description: 'Write content to a file', enabled: true },
-      { name: 'list_directory', description: 'List directory contents', enabled: true },
-      { name: 'search_files', description: 'Search files by pattern', enabled: true },
+      { name: 'read_file', description: 'Read a file from the filesystem', enabled: true, read_only: true },
+      { name: 'write_file', description: 'Write content to a file', enabled: true, read_only: false },
+      { name: 'list_directory', description: 'List directory contents', enabled: true, read_only: true },
+      { name: 'search_files', description: 'Search files by pattern', enabled: true, read_only: true },
     ],
-    last_connected: new Date(now - 60_000).toISOString(),
+    last_connected: now - 60_000,
+    has_auth_headers: false,
   },
   {
     name: 'github',
@@ -438,12 +483,13 @@ export const MOCK_MCP_SERVERS: McpServerInfo[] = [
     connected: true,
     tool_count: 8,
     tools: [
-      { name: 'create_issue', description: 'Open a GitHub issue', enabled: true },
-      { name: 'create_pr', description: 'Open a pull request', enabled: true },
-      { name: 'search_repos', description: 'Search public repositories', enabled: true },
-      { name: 'get_file_contents', description: 'Fetch a file from a repo', enabled: true },
+      { name: 'create_issue', description: 'Open a GitHub issue', enabled: true, read_only: false },
+      { name: 'create_pr', description: 'Open a pull request', enabled: true, read_only: false },
+      { name: 'search_repos', description: 'Search public repositories', enabled: true, read_only: true },
+      { name: 'get_file_contents', description: 'Fetch a file from a repo', enabled: true, read_only: true },
     ],
-    last_connected: new Date(now - 120_000).toISOString(),
+    last_connected: now - 120_000,
+    has_auth_headers: false,
   },
   {
     name: 'playwright',
@@ -452,11 +498,12 @@ export const MOCK_MCP_SERVERS: McpServerInfo[] = [
     connected: false,
     tool_count: 6,
     tools: [
-      { name: 'navigate', description: 'Navigate to a URL', enabled: true },
-      { name: 'click', description: 'Click an element', enabled: true },
-      { name: 'fill', description: 'Fill a form field', enabled: true },
+      { name: 'navigate', description: 'Navigate to a URL', enabled: true, read_only: true },
+      { name: 'click', description: 'Click an element', enabled: true, read_only: false },
+      { name: 'fill', description: 'Fill a form field', enabled: true, read_only: false },
     ],
     last_connected: null,
+    has_auth_headers: false,
   },
   {
     name: 'slack',
@@ -466,6 +513,37 @@ export const MOCK_MCP_SERVERS: McpServerInfo[] = [
     tool_count: 5,
     tools: [],
     last_connected: null,
+    has_auth_headers: false,
+  },
+  {
+    // W3-B (A2): an OAuth remote entry in the NeedsAuth state — the row
+    // keeps its endpoint context and offers Re-authenticate.
+    name: 'notion-oauth',
+    command: '',
+    enabled: true,
+    connected: false,
+    tool_count: 0,
+    tools: [],
+    last_connected: null,
+    url: 'https://mcp.notion.com/mcp',
+    has_auth_headers: true,
+    failure_kind: 'needs_auth',
+  },
+  {
+    // W3-B (A2): an OAuth remote entry connected through its stored token.
+    name: 'linear-oauth',
+    command: '',
+    enabled: true,
+    connected: true,
+    tool_count: 3,
+    tools: [
+      { name: 'create_issue', description: 'Create a Linear issue', enabled: true, read_only: false },
+      { name: 'list_projects', description: 'List Linear projects', enabled: true, read_only: true },
+      { name: 'search_issues', description: 'Search Linear issues', enabled: true, read_only: true },
+    ],
+    last_connected: now - 30_000,
+    url: 'https://mcp.linear.app/sse',
+    has_auth_headers: true,
   },
 ]
 
@@ -479,6 +557,8 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: true,
     path: '~/.shannon/plugins/web-clip',
     source_format: 'shannon-toml',
+    source: 'local',
+    migration_imported: false,
   },
   {
     name: 'gmail-triage',
@@ -489,6 +569,8 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: true,
     path: '~/.shannon/plugins/gmail-triage',
     source_format: 'shannon-toml',
+    source: 'git',
+    migration_imported: false,
   },
   {
     name: 'gcal-brief',
@@ -499,6 +581,21 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: false,
     path: '~/.shannon/plugins/gcal-brief',
     source_format: 'claude-json',
+    source: 'local',
+    migration_imported: false,
+  },
+  {
+    // X5 thin migration record — UI suppresses uninstall/enable/disable.
+    name: 'imported-claude-code',
+    version: '1.0.0',
+    description: 'Migration import from claude-code — 3 skills, 2 MCP servers, 5 commands.',
+    author: 'migration',
+    plugin_type: 'command',
+    enabled: true,
+    path: '~/.config/shannon/plugins/imported-claude-code',
+    source_format: 'claude-json',
+    source: 'migration',
+    migration_imported: true,
   },
 ]
 

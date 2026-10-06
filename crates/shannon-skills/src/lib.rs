@@ -66,6 +66,7 @@ pub mod executor;
 pub mod frontmatter;
 pub mod loader;
 pub mod registry;
+pub mod security;
 pub mod template;
 pub mod watcher;
 

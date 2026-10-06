@@ -130,6 +130,98 @@ pub struct ProviderTiers {
     pub pro: Option<String>,
 }
 
+/// R2-4: a single per-model capability flag. Same bit semantics as the
+/// engine's `ModelCapabilities` catalog bitset, expressed as named variants so
+/// the TOML/JSON schema stays human-editable. An unknown name is a schema
+/// error (serde rejects it with the full accepted list).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ModelCapability {
+    Reasoning,
+    Coding,
+    Speed,
+    Cheap,
+    Vision,
+    // S2-4b: the model supports native tool calling. Schema/wire only in
+    // this batch — no gating behavior consumes the flag yet (a follow-up PR
+    // wires tool-path prechecks). Old `providers.toml` files without the
+    // variant keep parsing unchanged (a new enum variant is purely additive
+    // to the accepted name set).
+    //
+    // NOTE: keep this a plain `//` comment, not a `///` doc comment — a
+    // variant doc comment becomes a schemars `description`, which makes the
+    // regenerated schema split the enum into oneOf description groups and
+    // structurally drift from the comment-free build.rs redeclaration
+    // (schema_stability gate).
+    ToolUse,
+}
+
+/// R2-4: user-declared metadata for one model on a provider profile.
+///
+/// Declared values are **authoritative** for pricing, context window and tier
+/// classification: the engine consults them before the catalog, the built-in
+/// pricing tables and the LiteLLM overlay. Every field is optional — declare
+/// only what the endpoint actually documents. Costs are USD per million
+/// tokens; a pricing override takes effect when *both* input and output
+/// prices are declared (a lone half is ignored so billing never mixes a
+/// declared price with a guessed one).
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSpec {
+    /// The model id exactly as sent to the API (matching is exact — this is
+    /// what kills the substring-collision class of pricing drift).
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Total context window in tokens (drives compaction budgets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    /// Maximum output tokens per request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u32>,
+    /// Input price in USD per million tokens (≥ 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_per_m_input: Option<f64>,
+    /// Output price in USD per million tokens (≥ 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_per_m_output: Option<f64>,
+    /// Capability flags (fed to tier classification and capability gating).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<ModelCapability>,
+}
+
+impl ModelSpec {
+    /// Semantic validation beyond the serde schema: non-empty id, positive
+    /// token limits, finite non-negative prices. Returns a human-readable
+    /// error naming the offending field.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id.trim().is_empty() {
+            return Err("model declaration is missing `id`".to_string());
+        }
+        if self.context_window == Some(0) {
+            return Err(format!("model '{}': `context_window` must be > 0", self.id));
+        }
+        if self.max_output == Some(0) {
+            return Err(format!("model '{}': `max_output` must be > 0", self.id));
+        }
+        for (field, value) in [
+            ("cost_per_m_input", self.cost_per_m_input),
+            ("cost_per_m_output", self.cost_per_m_output),
+        ] {
+            if let Some(v) = value {
+                if !v.is_finite() || v < 0.0 {
+                    return Err(format!(
+                        "model '{}': `{field}` must be a finite number ≥ 0 (got {v})",
+                        self.id
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderProfile {
@@ -150,6 +242,32 @@ pub struct ProviderProfile {
     pub quirks: ProviderQuirks,
     #[serde(default)]
     pub tiers: ProviderTiers,
+    /// R2-4: per-model metadata declarations (pricing / context window /
+    /// max output / capabilities). Authoritative over catalog + pricing
+    /// overlays for the declared ids. Absent = no declarations (the
+    /// historical behavior).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelSpec>,
+}
+
+impl ProviderProfile {
+    /// Validate the profile's `models` declarations: every spec individually
+    /// valid, ids unique within the profile. Returns a human-readable error
+    /// naming the first offender.
+    pub fn validate_models(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for spec in &self.models {
+            spec.validate()
+                .map_err(|e| format!("provider '{}': {e}", self.id))?;
+            if !seen.insert(spec.id.as_str()) {
+                return Err(format!(
+                    "provider '{}': duplicate model declaration for id '{}'",
+                    self.id, spec.id
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Provider 注册的模型目录条目（context 限制、工具支持、来源标签）。
@@ -199,15 +317,111 @@ pub struct ModelProfile {
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct ProviderModelConfig {
     pub version: u32, // = VERSION
+    /// R3-2: which named profile (a key into `profiles`) in-process
+    /// resolution uses (engine launch, `/model`, `/connect`, credentials).
+    /// Empty (or absent) means [`Self::DEFAULT_PROFILE`] — B3 phase-1 files
+    /// round-trip byte-identically because the key is skipped when default.
+    /// Must appear **before** `profiles` in field order: TOML requires
+    /// scalar values ahead of the `[profiles.*]` tables.
+    #[serde(default, skip_serializing_if = "is_default_active_profile")]
+    pub active_profile: String,
     pub profiles: HashMap<String, ModelProfile>,
     /// B3 契约：网关多 profile 路由（默认 off，字节级等同单 profile）
     #[serde(default)]
     pub gateway: GatewayConfig,
 }
 
+/// `skip_serializing_if` predicate for [`ProviderModelConfig::active_profile`]:
+/// the key is omitted when unset or pointed at `"default"`, so v2 files
+/// written before R3-2 (and single-profile users) keep their exact shape.
+fn is_default_active_profile(s: &String) -> bool {
+    s.is_empty() || s == ProviderModelConfig::DEFAULT_PROFILE
+}
+
+/// Validate a user-supplied profile name (R3-2 `/profiles new|rename`). The
+/// name is the `profiles` map key (a TOML table key and the `/profiles use`
+/// argument), so it must be a single friendly token. Returns the trimmed
+/// name or a human-readable error. Shared by the service, the REPL command
+/// and the desktop so every front-end rejects the same input.
+pub fn validate_profile_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("profile name must not be empty".to_string());
+    }
+    if trimmed.len() > 64 {
+        return Err(format!(
+            "profile name is too long ({} chars; max 64): '{}'",
+            trimmed.len(),
+            trimmed
+        ));
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err(format!(
+            "profile name must not contain whitespace: '{trimmed}'"
+        ));
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err(format!(
+            "profile name must not contain control characters: '{trimmed}'"
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
 impl ProviderModelConfig {
-    /// 当前 schema version。`ProviderModelConfig::version` 字段必须等于此常量。
+    /// Current schema version. `ProviderModelConfig::version` 字段必须等于此常量。
     pub const VERSION: u32 = 2;
+
+    /// The profile key used when [`Self::active_profile`] is empty — the B3
+    /// phase-1 single-profile name every pre-R3-2 file implicitly targets.
+    pub const DEFAULT_PROFILE: &'static str = "default";
+
+    /// The profile key in-process resolution uses: `active_profile` when
+    /// set, else [`Self::DEFAULT_PROFILE`]. Never empty — callers can index
+    /// `profiles` with it directly.
+    pub fn active_profile_key(&self) -> &str {
+        if self.active_profile.is_empty() {
+            Self::DEFAULT_PROFILE
+        } else {
+            &self.active_profile
+        }
+    }
+
+    /// Borrow the active [`ModelProfile`] (per [`Self::active_profile_key`]).
+    /// `None` when the pointer dangles (the named profile was deleted by a
+    /// hand edit / another writer) — callers fall back to synthesis.
+    pub fn active_model_profile(&self) -> Option<&ModelProfile> {
+        self.profiles.get(self.active_profile_key())
+    }
+
+    /// Mutable twin of [`Self::active_model_profile`].
+    pub fn active_model_profile_mut(&mut self) -> Option<&mut ModelProfile> {
+        let key = self.active_profile_key().to_string();
+        self.profiles.get_mut(&key)
+    }
+
+    /// All profile names, sorted. HashMap iteration order is nondeterministic,
+    /// so every listing surface (REPL `/profiles`, CLI, desktop) goes through
+    /// this to render a stable order.
+    pub fn profile_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.profiles.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Validate every profile's per-model declarations (R2-4). The store's
+    /// `load` refuses files that fail this — same graceful-degradation
+    /// contract as a parse error.
+    pub fn validate_models(&self) -> Result<(), String> {
+        for (name, profile) in &self.profiles {
+            for provider in &profile.providers {
+                provider
+                    .validate_models()
+                    .map_err(|e| format!("profile '{name}': {e}"))?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// N1: a `Default` so `ShannonConfig` (which embeds this via `#[serde(default)]`)
@@ -218,6 +432,7 @@ impl Default for ProviderModelConfig {
     fn default() -> Self {
         Self {
             version: Self::VERSION,
+            active_profile: String::new(),
             profiles: HashMap::new(),
             gateway: Default::default(),
         }
@@ -452,6 +667,7 @@ mod tier_name_tests {
                 standard: Some("claude-sonnet-4-20250514".to_string()),
                 pro: Some("claude-opus-4".to_string()),
             },
+            models: Vec::new(),
         };
 
         let toml_str = toml::to_string(&profile).expect("serialize");
@@ -477,5 +693,394 @@ mod tier_name_tests {
         "#;
         let parsed: ProviderProfile = toml::from_str(minimal_toml).expect("deserialize");
         assert_eq!(parsed.tiers, ProviderTiers::default());
+    }
+
+    // ── R2-4: per-model metadata declarations ────────────────────────────
+
+    fn openai_compat_profile_with(models: Vec<ModelSpec>) -> ProviderProfile {
+        ProviderProfile {
+            id: "glm".to_string(),
+            kind: ProviderKind::OpenAiCompatible,
+            display_name: "GLM".to_string(),
+            base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
+            models_url: None,
+            credential: CredentialRef::Env {
+                var: "ZHIPU_API_KEY".to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: vec![],
+            quirks: ProviderQuirks::default(),
+            tiers: ProviderTiers::default(),
+            models,
+        }
+    }
+
+    #[test]
+    fn model_spec_round_trips_through_toml() {
+        let profile = openai_compat_profile_with(vec![ModelSpec {
+            id: "glm-5.3-flash".to_string(),
+            display_name: Some("GLM-5.3 Flash".to_string()),
+            context_window: Some(198_000),
+            max_output: Some(32_768),
+            cost_per_m_input: Some(0.5),
+            cost_per_m_output: Some(2.0),
+            capabilities: vec![ModelCapability::Vision, ModelCapability::Reasoning],
+        }]);
+
+        let toml_str = toml::to_string(&profile).expect("serialize");
+        assert!(
+            toml_str.contains("[[models]]"),
+            "array-of-tables form:\n{toml_str}"
+        );
+        for needle in [
+            "id = \"glm-5.3-flash\"",
+            "context_window = 198000",
+            "max_output = 32768",
+            "cost_per_m_input = 0.5",
+            "cost_per_m_output = 2.0",
+        ] {
+            assert!(
+                toml_str.contains(needle),
+                "missing `{needle}` in:\n{toml_str}"
+            );
+        }
+
+        let parsed: ProviderProfile = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(parsed.models, profile.models);
+        assert_eq!(
+            parsed.models[0].capabilities,
+            vec![ModelCapability::Vision, ModelCapability::Reasoning]
+        );
+    }
+
+    #[test]
+    fn profile_without_models_omits_field_and_parses() {
+        // Backward compat: existing providers.toml files (and the canonical
+        // writer, which skips the empty Vec) must keep parsing.
+        let minimal_toml = r#"
+            id = "glm"
+            kind = "openai-compatible"
+            display_name = "GLM"
+            base_url = "https://open.bigmodel.cn/api/paas/v4"
+            credential = { backend = "env", var = "ZHIPU_API_KEY" }
+        "#;
+        let parsed: ProviderProfile = toml::from_str(minimal_toml).expect("deserialize");
+        assert!(parsed.models.is_empty());
+        // And the round-trip omits the key entirely.
+        let out = toml::to_string(&parsed).expect("serialize");
+        assert!(
+            !out.contains("models"),
+            "empty models must be skipped:\n{out}"
+        );
+    }
+
+    #[test]
+    fn hand_written_models_block_parses() {
+        let toml_str = r#"
+            id = "glm"
+            kind = "openai-compatible"
+            display_name = "GLM"
+            base_url = "https://open.bigmodel.cn/api/paas/v4"
+            credential = { backend = "env", var = "ZHIPU_API_KEY" }
+
+            [[models]]
+            id = "glm-5.3-flash"
+            context_window = 198000
+            cost_per_m_input = 0.5
+            cost_per_m_output = 2.0
+            capabilities = ["vision", "reasoning"]
+
+            [[models]]
+            id = "glm-4.5-air"
+        "#;
+        let parsed: ProviderProfile = toml::from_str(toml_str).expect("deserialize");
+        assert_eq!(parsed.models.len(), 2);
+        assert_eq!(parsed.models[0].id, "glm-5.3-flash");
+        assert_eq!(parsed.models[0].context_window, Some(198_000));
+        assert!(parsed.models[1].context_window.is_none());
+    }
+
+    #[test]
+    fn unknown_capability_name_is_rejected() {
+        let toml_str = r#"
+            id = "glm"
+            kind = "openai-compatible"
+            display_name = "GLM"
+            base_url = "https://open.bigmodel.cn/api/paas/v4"
+            credential = { backend = "env", var = "ZHIPU_API_KEY" }
+
+            [[models]]
+            id = "glm-5.3-flash"
+            capabilities = ["visionn"]
+        "#;
+        let err = toml::from_str::<ProviderProfile>(toml_str)
+            .expect_err("unknown capability must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("visionn") && msg.contains("unknown variant"),
+            "error must name the bad capability and the accepted set: {msg}"
+        );
+    }
+
+    // ── S2-4b: the tool_use capability bit ──────────────────────────────
+
+    #[test]
+    fn tool_use_capability_round_trips_through_toml() {
+        let toml_str = r#"
+            id = "glm"
+            kind = "openai-compatible"
+            display_name = "GLM"
+            base_url = "https://open.bigmodel.cn/api/paas/v4"
+            credential = { backend = "env", var = "ZHIPU_API_KEY" }
+
+            [[models]]
+            id = "glm-5.3-flash"
+            capabilities = ["tool_use", "vision"]
+        "#;
+        let parsed: ProviderProfile = toml::from_str(toml_str).expect("tool_use parses");
+        assert_eq!(
+            parsed.models[0].capabilities,
+            vec![ModelCapability::ToolUse, ModelCapability::Vision]
+        );
+
+        // And the variant serializes back to the canonical snake_case name.
+        let out = toml::to_string(&parsed).expect("serialize");
+        assert!(out.contains("\"tool_use\""), "{out}");
+    }
+
+    #[test]
+    fn old_files_without_the_tool_use_bit_keep_parsing() {
+        // A pre-S2-4b declaration (no tool_use anywhere) must parse
+        // unchanged — the new variant is purely additive to the accepted
+        // capability name set.
+        let legacy = r#"
+            id = "glm"
+            kind = "openai-compatible"
+            display_name = "GLM"
+            base_url = "https://open.bigmodel.cn/api/paas/v4"
+            credential = { backend = "env", var = "ZHIPU_API_KEY" }
+
+            [[models]]
+            id = "glm-5.3-flash"
+            context_window = 198000
+            capabilities = ["vision", "reasoning"]
+        "#;
+        let parsed: ProviderProfile = toml::from_str(legacy).expect("legacy file parses");
+        assert_eq!(
+            parsed.models[0].capabilities,
+            vec![ModelCapability::Vision, ModelCapability::Reasoning]
+        );
+    }
+
+    #[test]
+    fn unknown_field_in_model_spec_is_rejected() {
+        let toml_str = r#"
+            id = "glm"
+            kind = "openai-compatible"
+            display_name = "GLM"
+            base_url = "https://open.bigmodel.cn/api/paas/v4"
+            credential = { backend = "env", var = "ZHIPU_API_KEY" }
+
+            [[models]]
+            id = "glm-5.3-flash"
+            env_key = "X"
+        "#;
+        assert!(toml::from_str::<ProviderProfile>(toml_str).is_err());
+    }
+
+    #[test]
+    fn validate_models_accepts_valid_specs() {
+        let profile = openai_compat_profile_with(vec![ModelSpec {
+            id: "m".to_string(),
+            display_name: None,
+            context_window: Some(1),
+            max_output: None,
+            cost_per_m_input: Some(0.0), // free local models are legal
+            cost_per_m_output: Some(0.0),
+            capabilities: vec![],
+        }]);
+        assert!(profile.validate_models().is_ok());
+    }
+
+    #[test]
+    fn validate_models_rejects_duplicate_ids() {
+        let dup = || ModelSpec {
+            id: "same".to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: None,
+            cost_per_m_output: None,
+            capabilities: vec![],
+        };
+        let profile = openai_compat_profile_with(vec![dup(), dup()]);
+        let err = profile.validate_models().expect_err("dup must fail");
+        assert!(err.contains("duplicate") && err.contains("same"), "{err}");
+    }
+
+    // ── R3-2: active_profile key + helpers ──────────────────────────────
+
+    fn pm_config_with(profiles: &[(&str, ModelProfile)]) -> ProviderModelConfig {
+        let mut map = HashMap::new();
+        for (name, mp) in profiles {
+            map.insert((*name).to_string(), mp.clone());
+        }
+        ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
+            profiles: map,
+            gateway: Default::default(),
+        }
+    }
+
+    fn empty_model_profile(name: &str) -> ModelProfile {
+        ModelProfile {
+            name: name.to_string(),
+            active_target: ActiveTarget {
+                provider_id: String::new(),
+                model_id: String::new(),
+                scope: Scope::Global,
+            },
+            providers: Vec::new(),
+            auxiliary: HashMap::new(),
+            credential_scope: CredentialScope::Shared,
+        }
+    }
+
+    #[test]
+    fn active_profile_key_defaults_to_default_when_unset() {
+        let pm = pm_config_with(&[]);
+        assert_eq!(pm.active_profile_key(), "default");
+        assert!(pm.active_model_profile().is_none());
+    }
+
+    #[test]
+    fn active_profile_key_honors_explicit_pointer() {
+        let mut pm = pm_config_with(&[("work", empty_model_profile("work"))]);
+        pm.active_profile = "work".to_string();
+        assert_eq!(pm.active_profile_key(), "work");
+        assert!(pm.active_model_profile().is_some());
+        assert_eq!(pm.active_model_profile().unwrap().name, "work");
+        // Mutable twin sees the same entry.
+        pm.active_model_profile_mut().unwrap().name = "renamed".into();
+        assert_eq!(pm.profiles["work"].name, "renamed");
+    }
+
+    #[test]
+    fn active_profile_key_dangling_pointer_is_none() {
+        let mut pm = pm_config_with(&[]);
+        pm.active_profile = "ghost".to_string();
+        assert_eq!(pm.active_profile_key(), "ghost");
+        assert!(pm.active_model_profile().is_none());
+    }
+
+    #[test]
+    fn profile_names_are_sorted_and_stable() {
+        let pm = pm_config_with(&[
+            ("zeta", empty_model_profile("zeta")),
+            ("alpha", empty_model_profile("alpha")),
+            ("mid", empty_model_profile("mid")),
+        ]);
+        assert_eq!(pm.profile_names(), vec!["alpha", "mid", "zeta"]);
+    }
+
+    #[test]
+    fn active_profile_toml_round_trips_and_is_skipped_when_default() {
+        let mut pm = pm_config_with(&[("default", empty_model_profile("default"))]);
+        // Unset → the key is omitted entirely (byte-compat with pre-R3-2 files).
+        let toml_str = toml::to_string(&pm).expect("serialize");
+        assert!(
+            !toml_str.contains("active_profile"),
+            "default/unset active_profile must be skipped:\n{toml_str}"
+        );
+        let parsed: ProviderModelConfig = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(parsed.active_profile, "");
+        assert_eq!(parsed, pm);
+
+        // Explicit non-default → the key survives a round-trip, and an old
+        // reader-free hand-written file without the key still parses.
+        pm.active_profile = "work".to_string();
+        let toml_str = toml::to_string(&pm).expect("serialize");
+        assert!(toml_str.contains("active_profile = \"work\""), "{toml_str}");
+        let parsed: ProviderModelConfig = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(parsed.active_profile_key(), "work");
+
+        let legacy = r#"version = 2
+
+[profiles.default]
+name = "default"
+
+[profiles.default.active_target]
+provider_id = "anthropic"
+model_id = "claude-sonnet-4-20250514"
+scope = "global"
+"#;
+        let parsed: ProviderModelConfig = toml::from_str(legacy).expect("legacy file parses");
+        assert_eq!(parsed.active_profile_key(), "default");
+    }
+
+    #[test]
+    fn validate_profile_name_trims_and_rejects_bad_input() {
+        assert_eq!(
+            validate_profile_name("  work  ").unwrap(),
+            "work".to_string()
+        );
+        assert!(validate_profile_name("").is_err());
+        assert!(validate_profile_name("   ").is_err());
+        assert!(validate_profile_name("two words").is_err());
+        assert!(validate_profile_name("tab\tname").is_err());
+        assert!(validate_profile_name(&"x".repeat(65)).is_err());
+        assert_eq!(validate_profile_name(&"x".repeat(64)).unwrap().len(), 64);
+    }
+
+    #[test]
+    fn validate_models_rejects_zero_context_and_bad_prices() {
+        let zero_ctx = ModelSpec {
+            id: "m".to_string(),
+            display_name: None,
+            context_window: Some(0),
+            max_output: None,
+            cost_per_m_input: None,
+            cost_per_m_output: None,
+            capabilities: vec![],
+        };
+        assert!(
+            openai_compat_profile_with(vec![zero_ctx])
+                .validate_models()
+                .expect_err("zero context must fail")
+                .contains("context_window")
+        );
+
+        let negative = ModelSpec {
+            id: "m".to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: Some(-0.5),
+            cost_per_m_output: None,
+            capabilities: vec![],
+        };
+        assert!(
+            openai_compat_profile_with(vec![negative])
+                .validate_models()
+                .expect_err("negative price must fail")
+                .contains("cost_per_m_input")
+        );
+
+        let empty_id = ModelSpec {
+            id: "  ".to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: None,
+            cost_per_m_output: None,
+            capabilities: vec![],
+        };
+        assert!(
+            openai_compat_profile_with(vec![empty_id])
+                .validate_models()
+                .is_err()
+        );
     }
 }

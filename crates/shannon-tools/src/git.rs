@@ -1719,6 +1719,8 @@ impl Tool for AutoCommitTool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use crate::test_support::CwdGuard;
+
     use super::*;
     // Fixture-only: existing tests build real repositories with real spawns;
     // production paths spawn exclusively through `ProcessProvider` (§4.11).
@@ -1779,7 +1781,7 @@ mod tests {
     async fn test_git_branch_not_a_repo() {
         // Change to a temp directory that is not a git repo
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd_guard = CwdGuard::acquire(tmp.path());
 
         let tool = GitBranchTool::new();
         let result = tool.execute(json!({"action": "list"})).await;
@@ -2616,7 +2618,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitBranchTool::new();
         let result = tool.execute(json!({"action": "create"})).await;
@@ -2660,7 +2662,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitBranchTool::new();
         let result = tool.execute(json!({"action": "switch"})).await;
@@ -2704,7 +2706,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitBranchTool::new();
         let result = tool.execute(json!({"action": "delete"})).await;
@@ -2768,7 +2770,7 @@ mod tests {
             .expect("git commit");
 
         let branch = current_branch(Some(cwd.to_str().unwrap())).unwrap();
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitBranchTool::new();
         let result = tool
@@ -2815,7 +2817,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitBranchTool::new();
         let result = tool.execute(json!({"action": "list"})).await.unwrap();
@@ -2855,7 +2857,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitBranchTool::new();
         let result = tool
@@ -2912,7 +2914,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitBranchTool::new();
         let result = tool
@@ -2961,7 +2963,7 @@ mod tests {
             .output()
             .expect("git branch");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitBranchTool::new();
         let result = tool
@@ -3060,7 +3062,7 @@ mod tests {
     #[tokio::test]
     async fn test_git_diff_not_in_repo() {
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd_guard = CwdGuard::acquire(tmp.path());
 
         let tool = GitDiffTool::new();
         let result = tool.execute(json!({})).await;
@@ -3099,7 +3101,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitDiffTool::new();
         let result = tool.execute(json!({})).await.unwrap();
@@ -3142,7 +3144,7 @@ mod tests {
 
         std::fs::write(cwd.join("file.txt"), "modified content").unwrap();
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitDiffTool::new();
         let result = tool.execute(json!({})).await.unwrap();
@@ -3237,7 +3239,7 @@ mod tests {
     #[tokio::test]
     async fn test_git_log_not_in_repo() {
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd_guard = CwdGuard::acquire(tmp.path());
 
         let tool = GitLogTool::new();
         let result = tool.execute(json!({"count": 5})).await;
@@ -3255,7 +3257,7 @@ mod tests {
             .output()
             .expect("git init");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitLogTool::new();
         let result = tool.execute(json!({"count": 5})).await.unwrap();
@@ -3295,7 +3297,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitLogTool::new();
         let result = tool
@@ -3338,7 +3340,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitLogTool::new();
         let result = tool
@@ -3381,7 +3383,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitLogTool::new();
         let result = tool
@@ -3397,7 +3399,7 @@ mod tests {
     #[tokio::test]
     async fn test_git_stash_not_in_repo() {
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd_guard = CwdGuard::acquire(tmp.path());
 
         let tool = GitStashTool::new();
         let result = tool.execute(json!({"action": "list"})).await;
@@ -3436,7 +3438,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitStashTool::new();
         let result = tool.execute(json!({"action": "list"})).await.unwrap();
@@ -3477,7 +3479,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitStashTool::new();
         let result = tool.execute(json!({"action": "push"})).await.unwrap();
@@ -3519,7 +3521,7 @@ mod tests {
 
         std::fs::write(cwd.join("file.txt"), "modified").unwrap();
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitStashTool::new();
         let result = tool
@@ -3567,7 +3569,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitStashTool::new();
         let result = tool
@@ -3610,7 +3612,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitStashTool::new();
         let result = tool
@@ -3652,7 +3654,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitStashTool::new();
         let result = tool
@@ -3696,7 +3698,7 @@ mod tests {
 
         std::fs::write(cwd.join("untracked.txt"), "new").unwrap();
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitStashTool::new();
         let result = tool
@@ -3929,7 +3931,7 @@ mod tests {
     #[tokio::test]
     async fn test_auto_commit_not_in_repo() {
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd_guard = CwdGuard::acquire(tmp.path());
 
         let tool = AutoCommitTool::new();
         let result = tool.execute(json!({})).await;
@@ -3968,7 +3970,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = AutoCommitTool::new();
         let result = tool.execute(json!({})).await.unwrap();
@@ -4010,7 +4012,7 @@ mod tests {
 
         std::fs::write(cwd.join("file.txt"), "modified").unwrap();
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = AutoCommitTool::new();
         let result = tool
@@ -4061,7 +4063,7 @@ mod tests {
 
         std::fs::write(cwd.join("file.txt"), "modified again").unwrap();
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = AutoCommitTool::new();
         let result = tool
@@ -4115,7 +4117,7 @@ mod tests {
         std::fs::write(cwd.join("a.txt"), "a modified").unwrap();
         std::fs::write(cwd.join("b.txt"), "b modified").unwrap();
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = AutoCommitTool::new();
         let result = tool
@@ -4198,7 +4200,7 @@ mod tests {
             .output()
             .expect("git commit");
 
-        std::env::set_current_dir(cwd).unwrap();
+        let _cwd_guard = CwdGuard::acquire(cwd);
 
         let tool = GitBranchTool::new();
         let result = tool

@@ -1,4 +1,5 @@
 //! Sandbox boundary enforcement tests
+#![cfg(unix)] // uses std::os::unix::fs::symlink for symlink-jail scenarios.
 //!
 //! Tests that verify the sandbox correctly enforces boundaries across
 //! multiple attack vectors:

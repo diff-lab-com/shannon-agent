@@ -1,20 +1,23 @@
 /**
- * P1-5 D — `terminal:output` subscription.
+ * P1-5 D — `terminal:output` / `terminal:exit` subscriptions.
  *
  * Production: the Rust pump coalesces PTY bytes (≤16 ms per emit) and
  * emits the Tauri event `terminal:output` with `{ terminalId, data }`
  * where `data` is base64 of the raw byte stream (byte-preserving — a pty
  * is not UTF-8; escape sequences and partial multi-byte sequences must
  * survive). Subscribers decode with `atob` before feeding xterm.js.
+ * `terminal:exit` (`{ terminalId }`) is the authoritative process-exit
+ * signal (P3-6) — the in-stream "[shannon: process exited …" text is for
+ * humans and is never parsed.
  *
  * Demo/mock mode (`VITE_MOCK_MODE=1`): there is no Tauri runtime, so the
- * mock terminal in `lib/mock/handlers.ts` re-dispatches the same payload
- * as a window CustomEvent (`MOCK_TERMINAL_OUTPUT_EVENT`). This module is
- * the single place that knows about both transports — components stay
+ * mock terminal in `lib/mock/handlers.ts` re-dispatches the same payloads
+ * as window CustomEvents (`MOCK_TERMINAL_*_EVENT`). This module is the
+ * single place that knows about both transports — components stay
  * transport-agnostic and tests can drive either path.
  */
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { EVENT_NAMES, type TerminalOutputPayload } from '@/types';
+import { EVENT_NAMES, type TerminalExitPayload, type TerminalOutputPayload } from '@/types';
 
 /**
  * Window CustomEvent name carrying `{ terminalId, data }` in demo mode.
@@ -23,7 +26,12 @@ import { EVENT_NAMES, type TerminalOutputPayload } from '@/types';
  */
 export const MOCK_TERMINAL_OUTPUT_EVENT = 'shannon:mock-terminal-output';
 
+/** Window CustomEvent name carrying `{ terminalId }` in demo mode. */
+export const MOCK_TERMINAL_EXIT_EVENT = 'shannon:mock-terminal-exit';
+
 export type TerminalOutputHandler = (payload: TerminalOutputPayload) => void;
+
+export type TerminalExitHandler = (payload: TerminalExitPayload) => void;
 
 function isMockMode(): boolean {
   if (typeof import.meta !== 'undefined' && (import.meta as { env?: Record<string, string> }).env) {
@@ -42,31 +50,22 @@ function isMockMode(): boolean {
  * U+FFFD. xterm's write buffer accepts Uint8Array and decodes UTF-8
  * incrementally, keeping an incomplete trailing sequence buffered until
  * the next write completes it, so bytes must reach it untouched.
+ *
+ * P3-5: a malformed payload (invalid base64 — `atob` throws) must not
+ * break the handler invocation; it degrades to zero bytes with a warning.
  */
 export function decodeTerminalOutput(base64: string): Uint8Array {
-  const binary = atob(base64);
+  let binary: string;
+  try {
+    binary = atob(base64);
+  } catch (e) {
+    console.warn('terminal:output payload is not valid base64 — dropped', e);
+    return new Uint8Array(0);
+  }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   return bytes;
 }
-
-/**
- * ASCII-marker search over raw pty bytes (the backend's in-stream notices
- * — exit/truncation — are pure ASCII and always emitted contiguously
- * within a single event, so a per-event byte search is exact).
- */
-export function bytesContainAscii(bytes: Uint8Array, marker: string): boolean {
-  const needle = new TextEncoder().encode(marker);
-  if (needle.length === 0 || bytes.length < needle.length) return false;
-  outer: for (let i = 0; i <= bytes.length - needle.length; i += 1) {
-    for (let j = 0; j < needle.length; j += 1) {
-      if (bytes[i + j] !== needle[j]) continue outer;
-    }
-    return true;
-  }
-  return false;
-}
-
 
 /** Encode raw bytes the same way the Rust side does (test/demo helper). */
 export function encodeTerminalOutput(raw: string): string {
@@ -98,6 +97,44 @@ export async function listenTerminalOutput(
   let unlisten: UnlistenFn | undefined;
   try {
     unlisten = await listen<TerminalOutputPayload>(EVENT_NAMES.TERMINAL_OUTPUT, (e) => {
+      handler(e.payload);
+    });
+  } catch {
+    // No Tauri runtime (plain-browser dev): stay silent like useTauriEvent.
+    return () => {};
+  }
+  return () => {
+    try {
+      unlisten?.();
+    } catch {
+      // listener occasionally throws on teardown — nothing to do
+    }
+  };
+}
+
+/**
+ * Subscribe to terminal process exit (`terminal:exit`, P3-6) — the
+ * authoritative "this tab ended" signal. Same transports and failure
+ * semantics as `listenTerminalOutput`; the backend emission itself lands
+ * with the Task-4 pump change, so until then this simply never fires.
+ */
+export async function listenTerminalExit(
+  handler: TerminalExitHandler,
+  opts: { mock?: boolean } = {},
+): Promise<() => void> {
+  const mock = opts.mock ?? isMockMode();
+  if (mock || typeof window === 'undefined') {
+    if (typeof window === 'undefined') return () => {};
+    const windowHandler = (event: Event) => {
+      const detail = (event as CustomEvent<TerminalExitPayload>).detail;
+      if (detail) handler(detail);
+    };
+    window.addEventListener(MOCK_TERMINAL_EXIT_EVENT, windowHandler);
+    return () => window.removeEventListener(MOCK_TERMINAL_EXIT_EVENT, windowHandler);
+  }
+  let unlisten: UnlistenFn | undefined;
+  try {
+    unlisten = await listen<TerminalExitPayload>(EVENT_NAMES.TERMINAL_EXIT, (e) => {
       handler(e.payload);
     });
   } catch {

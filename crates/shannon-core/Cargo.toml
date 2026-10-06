@@ -33,6 +33,7 @@ shannon-api-protocol = { path = "../shannon-api-protocol" }
 
 # Engine (extracted modules — api/, testing/record_replay)
 shannon-engine = { path = "../shannon-engine" }
+shannon-plugin-api = { path = "../shannon-plugin-api" }
 
 # Repo map (P1-4): tree-sitter based symbol map injected into the system
 # prompt. Always built — the integration is gated by a config toggle on
@@ -114,11 +115,30 @@ croner = "3.0"
 
 # Filesystem watcher for `.shannon.toml` (P1-2 ConfigChange hook).
 # v7 matches what shannon-ui uses for the SourceWatcher; we keep them
-# aligned to avoid two copies of differing notify ABI.
-notify = { version = "7", features = ["macos_kqueue"] }
+# aligned to avoid two copies of differing notify ABI. Do NOT re-add
+# `macos_kqueue`: kqueue can only watch file vnodes, not directory
+# contents, so with that feature every directory watch silently never
+# fires on macOS (config_watcher, shannon-ui SourceWatcher, desktop
+# agent-message watcher). The default FSEvents backend watches dirs.
+notify = "7"
 opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio", "testing"] }
 opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
+
+# Windows Job Object baseline sandbox (`sandbox::windows_job`). Compiled on
+# every Windows build — Job Objects are always available, no external binary.
+# `Win32_System_Power` (Settings R3 T3): process-domain PowerRequest wake
+# lock for prevent_sleep (fix round 1 — `SetThreadExecutionState` is
+# per-thread and leaked the lock on cross-thread release) — a feature flip
+# on the existing dependency, no new crate.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_Power",
+] }
 
 [features]
 default = []

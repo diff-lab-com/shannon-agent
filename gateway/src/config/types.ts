@@ -15,6 +15,13 @@ export interface EngineConfig {
   httpBaseUrl: string;
   /** Default model for queries that don't specify one. */
   model?: string;
+  /**
+   * Keyring/env key holding the engine api_server bearer token (F14: the raw
+   * token never lives in this file — only the name of its secret entry). Set
+   * when the engine runs with `auth_token` (e.g. non-loopback binds); the
+   * gateway sends it as `Authorization: Bearer …` on engine WS + HTTP calls.
+   */
+  authTokenKey?: string;
 }
 
 export interface AdapterConfig {
@@ -129,6 +136,13 @@ export interface MobileGatewayConfig {
    * mode logs the payload to the console instead).
    */
   qrPayloadFile?: string;
+  /**
+   * v0.12 LAN hardening: serve the face over TLS (wss://) with a persisted
+   * self-signed cert (`~/.shannon/mobile-tls/`). The QR then carries the
+   * cert's SHA-256 fingerprint and phones pin it. Default false (plaintext
+   * ws, legacy) — flip on after phones shipping pinning are widespread.
+   */
+  tls?: { enabled?: boolean };
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";

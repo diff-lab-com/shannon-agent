@@ -38,6 +38,7 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 pub mod ai_limits;
 pub mod api_services;
+pub mod attachments;
 pub mod away_summary;
 pub mod bridge_service;
 pub mod bus;
@@ -46,6 +47,13 @@ pub mod compact;
 pub mod config_dump;
 pub mod config_persist;
 pub mod config_watcher;
+/// Data-directory version marker + downgrade gate (Phase 1) — meta.json,
+/// startup compatibility check, and the migration-backup primitive.
+pub mod data_meta;
+/// R2-4 — runtime registry of per-model metadata declarations from the
+/// active `providers.toml` v2 profile (pricing / context window / tier
+/// overrides). Consulted by the engine's existing lookup boundaries.
+pub mod declared_models;
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;
@@ -75,6 +83,7 @@ pub mod query_engine;
 pub mod rate_limit;
 pub mod rate_limit_messages;
 pub mod remote_settings;
+pub mod secret_guard;
 pub mod settings;
 pub mod settings_sync;
 pub mod signals;
@@ -108,6 +117,7 @@ pub mod lsp;
 pub mod mcp_server_approval;
 pub mod plugin;
 pub mod preference_memory;
+pub mod project_registry;
 pub mod providers;
 pub mod sandbox;
 pub mod scheduled_budget;
@@ -117,6 +127,7 @@ pub mod scheduled_runs;
 pub mod scheduled_task_store;
 pub mod scheduled_worktree;
 pub mod session_log;
+pub mod session_search_tool;
 pub mod skill_loop;
 pub mod team_memory_sync;
 pub mod telemetry;
@@ -176,7 +187,7 @@ pub use oauth::{OAuthClient, OAuthError, OAuthService, OAuthToken, TokenEncrypti
 pub use output_format::{OutputEvent, StructuredOutputConfig, StructuredOutputError};
 pub use policy_limits::{PolicyCheckResult, PolicyError, PolicyLimits, PolicyLimitsManager};
 pub use query_engine::{
-    ProviderHealth, ProviderHealthStatus, QueryContext, QueryEngine, QueryEvent,
+    ProviderHealth, ProviderHealthStatus, QueryContext, QueryEngine, QueryEvent, QueryOutcome,
     browser_control_prompt, teammate_instructions,
 };
 pub use rate_limit::{
@@ -187,6 +198,7 @@ pub use remote_settings::{
     RemoteManagedSettings, RemoteSettingsError, RemoteSettingsProvider, SettingOverride,
     SettingSource,
 };
+pub use session_search_tool::SessionSearchTool;
 pub use settings::{Settings, SettingsError, SettingsManager};
 pub use settings_sync::{
     DeviceInfo, DeviceRegistry, SettingsSyncService, SyncError, SyncRecord, SyncStatus,
@@ -227,15 +239,11 @@ pub use shannon_engine::permissions::{
     ApprovalMode, Permission, PermissionLevel, PermissionManager,
 };
 pub use shannon_engine::state::{SessionState, StateManager};
-pub use shannon_engine::streaming_tool_executor::{StreamingToolExecutor, ToolStatus, TrackedTool};
 pub use suggestions::{
     Suggestion, SuggestionCategory, SuggestionContext, SuggestionEngine, SuggestionRule,
 };
 pub use tips::{Tip, TipCategory, TipCondition, TipContext, TipError, TipManager};
 pub use tool_cache::{ToolCacheConfig, ToolResultCache};
-pub use tool_execution::{
-    ToolExecutionResult, ToolExecutionService, ToolProgress, ToolProgressStatus,
-};
 pub use tools::{Tool, ToolInfo, ToolOutput, ToolRegistry, ToolResult};
 pub use unified_config::{ConfigBuilder, ShannonConfig};
 pub use updater::{AutoUpdater, ReleaseInfo, UpdateError, UpdateStatus, UpdaterConfig};
@@ -258,8 +266,10 @@ pub use credential_manager::{
     CredentialSummary, ImportResult, PortableCredential, PortableCredentialBundle,
 };
 pub use housekeeping::{
-    CacheRefreshTask, Housekeeper, HousekeepingConfig, HousekeepingError, HousekeepingTask,
-    LogRotationTask, OldSessionPruneTask, TaskResult, TempFileCleanupTask,
+    ArchivedPruneReport, CacheRefreshTask, Housekeeper, HousekeepingConfig, HousekeepingError,
+    HousekeepingTask, LogRotationTask, OldSessionPruneTask, SessionLogRetentionTask,
+    SessionRetentionConfig, SessionUsage, TaskResult, TempFileCleanupTask, plan_session_retention,
+    prune_archived_sessions, scan_session_usage,
 };
 pub use lsp::{
     DiscoveredServer, LspClient, LspClientError, LspConfig, LspManager, LspResult, ServerConfig,
@@ -328,7 +338,6 @@ pub mod error {
     pub use crate::settings_sync::SyncError;
     pub use crate::team_memory_sync::TeamMemorySyncError;
     pub use crate::tips::TipError;
-    pub use crate::tool_execution::ToolExecutionError;
     pub use crate::tools::ToolError;
     pub use crate::ui_adapter::UiError;
     pub use crate::updater::UpdateError;
@@ -339,7 +348,6 @@ pub mod error {
     pub use shannon_engine::permission_classifier::PermissionClassifierError;
     pub use shannon_engine::permissions::PermissionError;
     pub use shannon_engine::state::StateError;
-    pub use shannon_engine::streaming_tool_executor::ExecutorError;
 }
 
 /// Version information

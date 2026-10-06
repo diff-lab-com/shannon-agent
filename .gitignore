@@ -1,5 +1,12 @@
 # Rust 编译产物
 /target/
+# Nested cargo workspaces (dogfood fixtures, tests) build into their own
+# target/ dirs — a 13MB scratch-clean/target with two 6MB ELF binaries was
+# previously committed by accident (review F51). Keep the root-anchored line
+# above for the main workspace.
+**/target/
+# CI feature-leg builds use CARGO_TARGET_DIR=target-feature (see ci.yml test-features)
+/target-feature/
 **/*.rs.bk
 *.pdb
 
@@ -57,6 +64,8 @@ temp/
 config/local.toml
 config/production.toml
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 
@@ -141,6 +150,7 @@ docs-mdbook/book/
 
 .astro/
 node_modules/
+node_modules
 
 # Staged Tauri externalBin CLI binaries (release.yml downloads the matching
 # shannon-<target-triple> here right before `tauri build`; never committed).
@@ -155,25 +165,31 @@ __pycache__/
 .eval-bin/
 .eval-bin/
 
-# ── Security: never commit credentials / secrets / session artifacts ────
-# ZCode session plan files (may contain command lines and local paths)
+test-results/
+
+# ZCode 会话级计划文件（不属仓库内容）
 .zcode/
-# Credential stores (mirrors ~/.shannon/credentials layout)
-credentials*.json
-credentials*.toml
-# Key material
-*.pem
-*.key
-*.p12
-*.jks
-id_rsa*
-id_ed25519*
-.netrc
-# Secret-bearing env variants (.env.example stays tracked)
-.env.*
-!.env.example
-# Generic secret containers
-secrets.*
-*secrets.yaml
-*secrets.yml
-target-feature/
+
+# review §P3: AI session artefacts that must not enter the repo. Several
+# ZCode / Claude-Code sessions have previously committed hello.txt,
+# findings.md, screenshot-test tools, and similar — these are not repo
+# content and pollute the diff. Block future adds here; existing tracked
+# copies are left in place to avoid rewriting history.
+hello.txt
+notes.txt
+findings.md
+.playwright-mcp/
+.serena/
+.reference/
+reference/
+.claudedocs/
+
+# review §P3: gateway package manager is pnpm. The npm package-lock.json
+# was previously committed by mistake and now produces a second, unverified
+# resolution tree (CI uses pnpm install --frozen-lockfile). Block future
+# npm lockfile commits.
+gateway/package-lock.json
+
+# Stray artifacts from unexpanded "~" paths (historical bug, keep out of git)
+/~
+.pnpm-store/

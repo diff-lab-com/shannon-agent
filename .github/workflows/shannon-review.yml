@@ -3,23 +3,54 @@ name: Shannon Code Review
 on:
   pull_request:
     types: [opened, synchronize]
+    # R6 of the round-2 CI plan (2026-10-01): the review costs a runner for
+    # its release build (cold: ~40 min; warm: ~7-10 min) on EVERY PR push.
+    # Docs/website/locale-only PRs get no review value out of a Rust agent
+    # — skip them. Workflow-level filtering is safe here: this check is NOT
+    # a required context on any branch, so a skipped run cannot wedge a
+    # merge (unlike ci.yml, which must use job-level conditions for exactly
+    # that reason).
+    paths-ignore:
+      - 'website/**'
+      - 'docs/**'
+      - 'locales/**'
+      - '**/*.md'
+
+# The paid-model review is expensive (40-min release build per push) — run
+# once per PR head, supersede superseded pushes.
+concurrency:
+  group: shannon-review-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   review:
     runs-on: ubuntu-latest
+    # Skip fork PRs and untrusted authors entirely:
+    #   - Fork PRs receive no secrets, so the paid review would just be a
+    #     guaranteed-red check for first-time contributors.
+    #   - The membership/authorship filter bounds the paid-API cost-abuse
+    #     surface (every push to a PR triggers a 40-min paid build).
+    #   - PR-controlled build.rs runs with SHANNON_API_KEY in the process
+    #     env below, so untrusted authors must not reach this job.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]'), github.event.pull_request.author_association)
+    timeout-minutes: 40
     permissions:
+      # Output goes to the artifact below; the review bot never comments.
       contents: read
-      pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
             ~/.cargo/registry
@@ -32,20 +63,46 @@ jobs:
       - name: Build Shannon
         run: cargo build --release -p shannon-cli
 
+      # Precompute the diff so the agent no longer needs a shell to see
+      # it (fetch-depth: 0 above means the base commit is available).
+      - name: Extract PR diff
+        run: |
+          git diff "${{ github.event.pull_request.base.sha }}...HEAD" > /tmp/pr.diff
+          wc -l /tmp/pr.diff
+
+      # Bash was removed from the tool allowlist — PR text is untrusted
+      # input, and an agent with shell access is a prompt-injection
+      # exfiltration path (this step's env contains SHANNON_API_KEY).
       - name: Run Review
         env:
           SHANNON_API_KEY: ${{ secrets.SHANNON_API_KEY }}
         run: |
-          target/release/shannon --prompt "Review this PR for bugs, security issues, and code quality. Be concise. Focus on the diff." \
+          # The paid review is a no-op without the repo secret. Until an
+          # admin configures SHANNON_API_KEY, skip loudly instead of
+          # failing every PR. (The historical shape of this step proved
+          # why the guard is needed: `| tee` swallowed the agent's exit
+          # code, so with the key missing the check stayed green while
+          # uploading a 154-byte error artifact — it never actually
+          # reviewed anything. pipefail stays so a REAL agent failure
+          # fails the check once the key exists.)
+          if [ -z "$SHANNON_API_KEY" ]; then
+            echo "::notice title=review skipped::SHANNON_API_KEY secret is not configured on this repo — the paid review ran nothing. Configure it (repo settings → secrets) to enable this check."
+            echo '{"type":"result","skipped":"SHANNON_API_KEY not configured"}' > review-output.jsonl
+            exit 0
+          fi
+          # Without pipefail the pipe through tee masks the agent's exit
+          # code and --exit-on-error is defeated.
+          set -o pipefail
+          target/release/shannon --prompt "Review this PR for bugs, security issues, and code quality. Be concise. The full PR diff is at /tmp/pr.diff — read it first, then inspect surrounding code as needed." \
             --output-format json-stream \
             --exit-on-error \
             --max-turns 5 \
-            --allowed-tools Read,Grep,Glob,Bash \
+            --allowed-tools Read,Grep,Glob \
             | tee review-output.jsonl
 
       - name: Upload review output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: review-output
           path: review-output.jsonl

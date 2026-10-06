@@ -3,6 +3,912 @@
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
+## [Unreleased] — Approval transparency + mobile approval scope (2026-10-05 follow-up)
+
+Follow-up to the permission-mode convergence (#278), implementing plan items P3-1 and P3-3.
+
+### Added
+
+- **P3-1 approval transparency**: the deciding rule / classifier verdict now shows on every approval surface — TUI permission dialog and the `tool_approval` overlay render `DecisionReason::explain()` ("matched rule \`Bash(git *)\`" / "LLM safety classifier (87% confidence)"), the desktop `PERMISSION_REQUEST` payload carries the engine's free-text `riskReason` (additive field) under the rule line, and a new `/permissions history` subcommand lists the session's permission-decision audit rows (tool — decision — mode — reason) read from the session log.
+- **P3-3 mobile approval scope**: `shannon/approval/decide` accepts `scope: "session"` — the engine maps it to a new `always_allow_session` wire choice that is remembered in the per-session memory and **never persisted**; a session scope is bound into the decision signature (`...:session` suffix in v1/v2 messages) so a captured once-decision cannot be replayed as a session grant. New RPCs `shannon/approval.state` (read the session's current approval token) and `shannon/approval.set` (tighten-only — the gateway forwards nothing but `readonly`; the engine route rejects escalation and upserts the clamp so it survives to the session's next turn). Protocol schema regenerated.
+
+## [Unreleased] — Permission-mode convergence (2026-10-05)
+
+Permission modes converge to a 4+3 model ([design](docs/plans/2026-10-04-permission-mode-naming-design.md), [plan](docs/plans/2026-10-04-permission-modes-improvement-plan.md)). **Read the breaking notes before upgrading.**
+
+### Breaking / behavior changes
+
+- **`ApprovalMode` shrinks 9 → 7 variants.** Removed: `Suggest` (renamed **`Ask`**, token `ask`), `Auto` (the classifier mode is now the decision engine inside auto modes; `auto-classifier`/`classifier` inputs map conservatively to `ask`), `PlanReadonly` (folded into `readonly`). Old serde values deserialize via aliases.
+- **`auto-edit` is the canonical token for the file-edit tier** (Display was `auto`); `auto` remains an alias of it, so existing `--permission-mode auto` / desktop configs keep their meaning. Claude Code's `acceptEdits` / `default` parse as before.
+- **`dontAsk` now means "never waits"**: pre-approved tools and reads pass, everything else is **denied** (previously it was identical to bypass). Aligns with Claude Code; CI users pairing it with `--allowed-tools` get the documented behavior.
+- **Desktop default `approval_mode` moves `confirm` → `auto-edit`** (K1: the engine default, matching the TUI; `confirm` still parses as `ask`).
+- **Team agents error on unknown `--permission-mode`** (previously silently degraded to full-auto — a coordinator typo handed agents *more* power).
+- **`--yes` / bypass guardrails**: refused as root (override `SHANNON_ALLOW_ROOT_BYPASS=1` for containers) and killed by `SHANNON_DISABLE_BYPASS=1`.
+- **The breaker takes exit code 8**, not 7 as the plan first specced — rc 7 was already `NoProgress` and CI harnesses branch on it.
+
+### Fixed (Phase 0)
+
+- Status-bar labels no longer silently mutate the active mode (label round-trip loss: `Auto`→`FullAuto`, `Readonly`→`Suggest`, …). The REPL stores the enum; labels are display-only and bijective (ASK/EDIT/FULL/PLAN/RO/CI/BYPASS).
+- `Plan` mode is real: `/plan approve` promotes the session to the full-auto floor (deny rules + critical denial still bind) and lifts the write gate; `/plan off` / reject / first Shift+Tab restore the snapshotted ladder mode.
+- Deny rules are effective in **every** mode including `bypassPermissions` (the global deny gate runs before mode overrides).
+- `/perms mode plan` now means `Plan` (was mapped to `readonly`); `/perms mode` and `/mode` share one token vocabulary.
+- Destructive MCP tools (`destructiveHint`) are registered on headless / team / served surfaces, not just the REPL — the always-confirm guard is no longer TUI-only.
+
+### Added
+
+- **Rule layer (P1-1)**: `settings.json` `permissions.ask` is honored (forced prompts in every mode; denied under `dontAsk`); all three lists also feed the rule checker (`Bash(cmd *)` patterns work).
+- **`permissions.defaultMode` (P1-2)** seeds the startup mode; project-level files cannot set bypass/dontAsk (poisoning guard).
+- **`permission_profile` / `SHANNON_PERMISSION_PROFILE` (P1-3) now actually applies** (built-ins + `custom:<name>` from `.shannon/profiles/*.toml`), before any explicit mode choice.
+- **Audit rows record the full mode token** (e.g. `full-auto`), not the lossy status-bar label (P1-4).
+- **`--max-auto-approvals N` / `permissions.max_auto_approvals` (K5/P3-2)**: breaker, default off; interactive prompt carries `limit_triggered`, headless exits 8.
+- **Protocol (K4/P2-3)**: `POST /v1/sessions` and `/api/query` accept an optional `approval_mode` (400 on unknown tokens); WS gains `approval.mode` request/ack frames. Served engines bootstrap from settings/profile instead of a bare manager; REST `/api/query` can pin a mode per call.
+- **UI convergence (P2-2)**: TUI Shift+Tab cycles the 3-stop ladder (ASK → EDIT → FULL), `/mode` lists daily vs expert groups; desktop switcher shows the same 3 tiers with expert modes in Settings → General → "Advanced"; `ExecutionModeSwitcher` stays profile-scoped (rule presets).
+- **Dual `ApprovalMode` (shannon-commands `Auto|Manual|Smart`) removed** — one vocabulary across the codebase.
+
+
+
+### Desktop — MCP OAuth tokens and data-source credentials move into the OS keyring (2026-10-02)
+
+R7-④ batch 2 (adversarial-review A8): the three plaintext credential
+surfaces shrink to one OS-controlled store. **Breaking / migration
+notes — read before upgrading:**
+
+- **What moved**: MCP OAuth token blocks (`settings.json#mcpServers`
+  `shannonOAuth` blocks and the `Authorization: Bearer` headers derived
+  from them) and data-source credential fields (IMAP password, Notion
+  integration token, GitHub/Slack/Telegram tokens, Jira API tokens — the
+  catalog's password-kind fields) now live in the **OS keyring**, keyed
+  `shannon/mcp-oauth/<server>` and `shannon/datasource/<slug>`. On the
+  first launch after upgrading, an idempotent migration moves existing
+  credentials into the keyring and deletes the plaintext copies from the
+  files. User-configured non-OAuth custom headers and stdio `env` blocks
+  are deliberately **not** migrated and stay in `settings.json` /
+  `data-sources/*.toml` (owner-only 0600) with their fail-safe semantics
+  unchanged.
+- **Keyring machine binding**: OS-keychain entries are bound to the
+  user/machine that created them. **Backups do not carry your
+  credentials, and moving to a new machine (or restoring `settings.json`
+  / `data-sources/*.toml` from a backup) requires re-authenticating** the
+  affected MCP servers (Extensions → MCP Servers → Re-authenticate) and
+  re-entering the affected data-source credentials.
+- **Downgrade**: an older app version reading post-migration data shows
+  the MCP server as unauthenticated (the honest state — re-authenticate
+  from the newer app) and data sources report authentication failure.
+  There is no dual-write: the plaintext copy is deleted on a successful
+  migration.
+- **Fallback, never silent**: when no OS keyring is available (e.g. a
+  Linux session without a Secret Service), credentials stay in the local
+  files at owner-only `0600` — the process logs one warning per affected
+  domain at startup, and the MCP Servers and Data Sources settings pages
+  show a "credential storage" line stating whether credentials live in
+  the OS keychain or a restricted local file. Deleting an MCP server or
+  data source also deletes its keyring entry (no orphans).
+
+### macOS real-machine verification batch (2026-09-30)
+
+Full-workspace verification on macOS 15.5 arm64 (CI only runs `cargo check`
+there; nightly covers just core+tools) — spec + results in
+[docs/qa/2026-09-30-macos-verification-spec.md](docs/qa/2026-09-30-macos-verification-spec.md).
+Four product-level defects found and fixed, all invisible to Linux CI:
+
+- **Directory watchers were silently dead on macOS**: `notify`'s
+  `macos_kqueue` feature (core/ui/desktop) swaps FSEvents for kqueue, which
+  cannot watch directory contents — `.shannon.toml` change hooks, the REPL
+  SourceWatcher and the desktop agent-message watcher never fired. Feature
+  removed; default FSEvents backend restored.
+- **Engine queries could hang forever**: `DockerSandbox::docker_available`
+  probed `docker info` with no timeout; a wedged Docker Desktop CLI blocks
+  indefinitely and the probe runs on every query. Now bounded (2 s, kill +
+  treat as unavailable).
+- **`-c`/`--continue` could resume the wrong session on macOS**: session
+  selection compared recorded cwd as a raw string; macOS reports the
+  physical `/private/var/...` spelling while recorded paths carry the
+  `/var/...` alias. Selection now compares canonicalized paths
+  (`same_cwd`, shared with the mismatch guard).
+- **repomap cache updates silently missed on macOS**: the cache canonicalizes
+  its root at construction but `update_file`/`remove_file`/lookups accepted raw
+  spellings, so `/tmp`-alias paths never matched stored keys. `absolutize` now
+  resolves to the cache's canonical spelling (missing files resolve through the
+  canonical root).
+- **desktop path-scope checks rejected `/tmp` and `/var` spellings**:
+  `allowed_path_bases` kept only canonicalized bases (`/private/...`), so
+  lexical probes of not-yet-existing `/tmp`-alias paths failed. Bases now
+  admit both spellings.
+
+Test-infrastructure fixes (nextest's per-process isolation hid them all from
+CI, they break shared-process `cargo test` and/or real machines): desktop/ui
+vitest on Node ≥ 25 (experimental global `localStorage` shadows the jsdom
+injection — setup shim), `pages/Editor.tsx`+`editor/` and `pages/Chat.tsx`+
+`chat/` case-collisions that self-import on case-insensitive filesystems
+(renamed/ disambiguated, plus a new `check-import-case-collisions` lint
+guard), gateway Ed25519 interop tests migrated off the `{x: "", d}` JWK form
+Node ≥ 24 rejects (RFC 8410 PKCS#8 derivation), `session_window_acl` duplicate
+`_EMBED_INFO_PLIST` link symbols (single `generate_context!` expansion),
+terminal-test `process_gone` treating unreaped zombies as alive on macOS
+(`WNOHANG` waitpid), a bash-only prompt-glyph assertion, secret_guard's
+`ENABLED` latch made test-resettable (AtomicU8), `routine_run` engine tests
+pinned to a fixture `SHANNON_HOME` (they read/wrote the real `~/.shannon`),
+`/bin/true` and `/private`-alias assumptions in providers tests.
+
+### Office Wave 3 — differentiation pass (2026-09-29)
+
+- **C2** batch table runs: CSV file cards gain "Batch run" — a per-row
+  instruction dialog that drafts a structured row-by-row prompt (results land
+  in `<name>-enriched.<ext>`).
+- **C3** companion window (Quick Capture): tray-menu-launched always-on-top
+  420x320 window; prompts cross to the main window via targeted Tauri events
+  and land as composer drafts. Minimal capability (`core:event`) for the
+  companion window; ACL coverage extended. Global hotkey wiring left for the
+  existing shortcuts system.
+- **C4** session sources: RightDock context tab gains a per-session source
+  list (paths/URLs) with one-click cited references into the composer.
+- **C5** `style-extract` bundled skill: extracts theme fonts / color scheme /
+  layouts / header-footer facts from an existing .pptx or .docx into brand
+  notes (python-stdlib read-only, honest degradation; v1 extracts, does not
+  restyle).
+- **C6** timeline HTML export: self-contained standalone export of a turn
+  timeline (inline styles, escaped content) via the save dialog.
+- **C7** Extensions skills page: Productivity grouping pinned to the top of
+  the catalog grid.
+- **C8** citation pills: `[Source: name] (ref)` lines render as clickable
+  pills (path → open, URL → browser), quote/code contexts untouched.
+- **C1** product narrative: `docs/product/office-agent-story.md` plus a
+  website feature entry and README office sections (no email-sending claims).
+- Per review decision, per-page PPT regeneration (C9) remains future work.
+
+### Office Wave 2 — delivery loop: generation, data sources, routing, files (2026-09-29)
+
+- **B1** native `write_xlsx` tool (rust_xlsxwriter 0.99, pure-Rust deflate):
+  model writes real spreadsheets with formulas and typed cells — no host
+  Python required. `xlsx-table` skill now prefers the tool and keeps the
+  stdlib runbook as fallback.
+- **B2 v1** PPT outline builder: composer "+" menu dialog (editable outline,
+  one slide per line) that drops a structured draft into the composer for
+  the user to send — generation itself stays with the ppt skill.
+- **B3 v1** data sources go live: real Obsidian fetcher (vault walk,
+  keyword/recency ranking, hidden-dir/symlink guards) and IMAP fetcher
+  (rustls via rustls-connector on the workspace rustls 0.23 line, timeouts
+  at the socket layer, mailparse body decoding, draft RFC822 builder).
+  Query dispatch now reads `kind` from the `[data_source]` section —
+  previously it read `[config]`, so every data-source query failed with
+  "missing kind" (pre-existing bug, all kinds). Badges: Obsidian/IMAP are
+  genuinely "Verified" again; results gain "Add to chat" (context block
+  into the composer draft) and installed cards a "Fetch now" action.
+- **B4'** `meeting-minutes` bundled skill: .srt/.vtt/.txt transcripts →
+  minutes with decisions/action items (recording pipelines explicitly out
+  of scope).
+- **B5** three productivity routine templates: weekly-report,
+  daily-news-briefing, meeting-notes-archive.
+- **B6'** scheduled routines can notify a configured webhook on completion
+  (`notify_webhook` flag, reuses the desktop webhook config; skipped with
+  a run-log note when unconfigured).
+- **B7'** generated-file cards gain a "Review changes" action wired to the
+  existing RightDock diff view.
+- **B9'** reference-style file library: `/files` page over an append-only
+  index (`~/.shannon/desktop/file-index.json`, scoped + atomic), favorite
+  toggles, missing-file detection, zero data duplication.
+
+### Office Wave 1.5 — minimal document parsing + paginated injection + PDF preview (2026-09-29)
+
+- **A2'** new `document_parse` module: extracts sectioned text from
+  docx/pptx (zip + roxmltree), xlsx/ods (calamine 0.26, formula cache
+  values), csv (csv crate). Extracted text is cached at
+  `~/.shannon/cache/extracted/<hash>.txt`; `send_message` injects a bounded
+  summary block with explicit truncation ranges and the cache path so the
+  model can page through with Read/Grep — no new tools. Guardrails: zip
+  entry/count/ratio bombs, XML/container/csv size caps, all failure paths
+  return placeholder blocks.
+- **PDF injection fixed**: the media-type filter never matched PDFs
+  (detect_media_type only knew images), so the whole PDF text-injection
+  path was dead code — switched to extension matching and added page-count
+  metadata (pdfinfo) to the injected block.
+- **B8b** PDF inline preview: `pdfjs-dist` 4.10.38 in a lazy-loaded
+  `PdfPreview` modal (worker via `?url` import), page navigation with a
+  200-page cap and an "open externally" escape hatch; FileCard gains a
+  Preview action for .pdf attachments.
+
+### Office Wave 1 — honest office-document surface (2026-09-29)
+
+Plan: `docs/research/2026-09-29-office-scenario-competitive-research.md` §10 v2
+(reviewed in `docs/reviews/2026-09-29-office-plan-adversarial-review.md`).
+
+- **A1a** chat: dragging an office file (doc/xls/ppt/odt/rtf family) now shows a
+  dismissible composer notice that its content is NOT sent to the model (the
+  attachment used to disappear into a display-only chip silently); MIME table
+  covers the office types.
+- **A5/B8a** chat: new `FileCard` for non-image attachments and for completed
+  file-mutating tool calls — open / reveal-in-folder / save-as (new
+  `copy_file` command, `$HOME`/`$TEMP`-scoped).
+- **A3'** Welcome: the fake "install document skills" section (unpublished
+  repos) is replaced by a self-probing capabilities card — lists the built-in
+  `/docx-report` `/xlsx-table` `/ppt-outline` when the host has python3,
+  shows an install hint otherwise, renders nothing if the probe fails
+  (new `probe_host_runtime` command).
+- **A4'** honesty: Obsidian/IMAP data sources no longer claim "Verified"
+  (query is still in development — badge now says so); six native skill
+  catalog entries with stub runbooks are marked "[In development]";
+  `inbox-triage-hourly` template annotated as preview; desktop README no
+  longer claims email drafting.
+
+
+
+### Terminal (desktop + CLI) (2026-09-29)
+
+The 2026-09-29 terminal deep-review delivery
+(`docs/plans/2026-09-29-terminal-review-and-improvement-plan.md`): the two
+UI-freezing CLI bugs are fixed, the desktop integrated terminal is completed
+(settings, accessibility, agent integration) and the retired workspace-grid
+leftovers are gone. The PTY terminal item in `ROADMAP.md` moves from
+"genuinely-pending" to partially delivered. (The `### Terminal UI` section
+under v0.1.0 below covers the CLI REPL only — that naming predates the
+desktop terminal.)
+
+**Added — desktop integrated terminal** (PTY backend shipped 2026-09-06;
+this entry is its first changelog appearance plus this branch's completion
+work):
+
+- The chat page has a bottom-drawer terminal (``Ctrl+` `` toggles it; the
+  shortcut is listed in Keyboard Shortcuts Help): a portable-pty session
+  with byte-faithful xterm.js output, at most 4 concurrent terminals, a
+  theme that follows the app, and a confirmation before a multi-line paste
+  (a pasted newline executes in a shell).
+- **Settings → Advanced** gains a Terminal card over the new `[terminal]`
+  table in `~/.shannon/config.toml` (`shell`, `fontSize`, `scrollback`,
+  `drawerHeight`, `screenReaderMode`). A failed settings load now blocks
+  saving instead of silently overwriting the file with defaults.
+- Agent integration: fenced code blocks in chat get a "Run in terminal"
+  button, and a terminal selection can be sent to the composer as a
+  prefill ("send to agent").
+- Lifecycle: process exits emit a machine-readable `terminal:exit` event
+  (the frontend no longer infers exit from output); the last 1 MiB of raw
+  output per terminal is kept in memory and replayed when the panel
+  remounts or reconnects (`terminal_history`); PTYs spawned by a session
+  window are reaped when that window closes; the per-terminal base64
+  decode is guarded; tabs are filtered to the current project; the tablist
+  is keyboard navigable with live-region announcements.
+
+**Fixed — CLI TUI**
+
+- `!shell` no longer runs on the UI thread: it executes in the background
+  with a 30 s timeout (`SHANNON_INLINE_SHELL_TIMEOUT` overrides, bad values
+  fall back to the default) and Esc cancels a running job — open overlays
+  take Esc precedence first. `!sleep infinity` no longer freezes the
+  interface.
+- A statusline script can no longer deadlock the UI (wait-then-read
+  replaced with a concurrent read, 2 s timeout, 32 KiB capture cap); the
+  agent-board summary `block_on` is throttled off the per-frame path; idle
+  frames skip redraws via a dirty flag + heartbeat.
+- Reduced motion is decoupled from `NO_COLOR`: opt in via
+  `SHANNON_REDUCED_MOTION` or the session-scoped `/accessibility` toggle.
+- Previously hardcoded paste/diagnostics/pipe/exit strings are i18n'd.
+
+**Removed**
+
+- The retired workspace-grid feature: panel variant, workspace layout
+  commands + persistence, ACL entries, mocks, and 2 i18n keys.
+### Followups S1-S3 (2026-09-28)
+
+All 15 approved followup tasks from the comprehensive review roadmap landed:
+clippy `--all-targets` gate (180+21 warnings → 0, CI tightened), DiffReviewBody
+flaky test stabilized, graceful server shutdown with drain window + terminal
+SSE frame + 30-min stream cap, `SHANNON_SERVE_EXTRA_HOSTS`, one-time
+secret-guard redact suggestion, tee durable sync off the executor, cooldown
+bounds, MCP approval source-path binding, repomap render memoization, unified
+headless NDJSON envelope (legacy vocabulary behind `--emit-legacy-output-events`),
+gateway pairing approval from the desktop, 25 command strings migrated to i18n,
+all 10 locales at 100% key coverage, metrics weekly job fixed (missing system
+deps), libspa/pipewire environment docs + `just check` fallback. See
+[docs/plans/2026-09-28-followups-roadmap.md](docs/plans/2026-09-28-followups-roadmap.md).
+
+Note: workspace versions 0.11.0 and 0.12.0 were internal bumps — no `v0.11.0`
+tag/release exists (releases stop at v0.10.0), which is what allowed the
+five-source version drift fixed in PR #148; the v0.12.0 section below covers
+that whole cycle.
+
+### Comprehensive review hardening (2026-09-28)
+
+40+ fixes across engine streaming/compaction, session log integrity, MCP
+approval security, gateway reliability, and plugin containment — see
+[docs/plans/2026-09-28-comprehensive-review-and-hardening.md](docs/plans/2026-09-28-comprehensive-review-and-hardening.md)
+for the findings and the batched fix plan.
+
+### Export diagnostics bundle (desktop Settings) (2026-09-27)
+
+Batch-3 follow-up: an in-app way to hand support the data that batch 3
+started keeping.
+
+- **Settings → Advanced → Developer options** gains an "Export diagnostics…"
+  button next to "Open log directory". A save dialog picks the destination
+  (`shannon-diagnostics-<date>.zip`); the backend bundles:
+  - everything in `~/.shannon/logs/` (rotated desktop logs + crash reports,
+    capped at 20 MB — truncation is reported in the manifest and summary),
+  - a fresh `shannon doctor --json --deep` report from the bundled CLI
+    (best-effort: if the sidecar is missing or times out after 4 minutes,
+    the manifest says so and names the command to run by hand),
+  - a `manifest.txt` with versions, platform, counts, and the privacy note.
+- **Privacy contract**: sessions/conversation transcripts, provider config
+  and credentials are never included; log lines and the doctor report pass
+  the session-log redaction policy (doctor output can embed `*_URL`s from
+  the environment). Nothing uploads — attaching the zip is a manual user
+  act.
+- Wiring: `commands_diagnostics::export_diagnostics` command (ACL entry +
+  `app-platform` set membership; the coverage test guards the pairing),
+  `api.exportDiagnostics` wrapper, en/zh-CN strings plus the 8 other
+  locales the i18n-check gate requires.
+- Bundle logic (`build_bundle`) is a pure fn over explicit paths — 3 unit
+  tests cover the happy path, the size cap/truncation, and a missing logs
+  dir — and was compile-verified against the real `shannon-core` and `zip`
+  in a standalone crate (the desktop crate itself still needs system
+  WebKit/PipeWire headers this audit machine lacks).
+
+### Batch 3 — data version gate (Phase 1) + desktop local logging (2026-09-27)
+
+Implements the two approved items from the 2026-09-27 release/productization
+audit's batch 3.
+
+**Added — data directory version marker & downgrade gate (Phase 1)**
+
+- New `~/.shannon/meta.json` marker (`shannon_core::data_meta`) recording the
+  version that last wrote the data directory plus a per-store schema map
+  (seeded with `events`). The stamp never moves backwards: a downgrade does
+  not clobber a newer marker, so the gate keeps protecting across a
+  downgrade + re-upgrade cycle.
+- CLI and `shannon serve` now **refuse to run** when the marker was written
+  by a newer version (clear error, `SHANNON_ALLOW_DOWNGRADE=1` overrides).
+  `doctor` and `update` are exempt on purpose — they are the tools you reach
+  for on a gated install. The desktop logs the mismatch loudly (tracing
+  error) and continues; the marker still records the running version only
+  when it is not a downgrade.
+- Comparison rules: `(major, minor, patch)` triples, with release-data vs
+  prerelease-binary of the same triple counted as a downgrade; unparseable
+  versions never gate (an unknown scheme must not brick an install).
+- `backup_before_migration`: copies store files/dirs into
+  `~/.shannon/backups/<from>-to-<to>-<ts>/`. No migration calls it yet — it
+  exists so the first schema migration wires a backup instead of inventing
+  one. **Wiring the marker into any future breaking store change is now a
+  release requirement.**
+- `shannon doctor --deep`: sweeps data-directory integrity — meta.json
+  state (with downgrade detection), a line-by-line JSON parse of every
+  session's `events.jsonl` (capped at 2000 files, cap reported), and
+  inbox.db `PRAGMA integrity_check` (new `InboxStore::integrity_check`).
+  Reported in both the human and `--json` output; `deep` is only present in
+  JSON when requested.
+
+**Added — desktop local file logging + panic hook**
+
+- The desktop now writes a daily-rotated `~/.shannon/logs/shannon-desktop.log`
+  (WARN and above) in addition to stderr — `shannon desktop` detaches from
+  its terminal, so stderr alone meant production runs left nothing behind
+  for support. Every line passes through the session-log redaction policy
+  before touching disk; rotated files older than 7 days are pruned on
+  startup (crash reports: 30 days).
+- A global panic hook writes a redacted
+  `~/.shannon/logs/crash-<ts>-<pid>.log` (version, platform, panic message,
+  forced backtrace) before delegating to the previous hook. Everything
+  stays local; nothing is uploaded — sharing a log or crash file with
+  support remains an explicit user action.
+
+### Memory / docs / retrieval hardening (2026-09-25)
+
+Follow-ups from the 2026-09-25 memory / document-management / retrieval
+review (see `docs/plans/2026-09-25-memory-doc-rag-review.md` for the audit and
+competitor analysis).
+
+**Fixed — memory correctness**
+
+- Compaction and `/memory cleanup` were store-wide: merging project A's
+  near-duplicates could delete project B's similar-but-distinct entries, and
+  cleanup deleted every project's aged-out history. All consolidation phases
+  (`merge_duplicates` / `remove_stale` / `enforce_category_caps` /
+  `resolve_conflicts` / `cleanup`) are now scoped to the active project.
+- Deletions are now durable across processes: `delete` appends a tombstone
+  line to the project JSONL, so a fresh `load` honors it without waiting for
+  a rewrite, and a long-running REPL's next `save` no longer resurrects an
+  entry deleted by the desktop (or vice versa). Tombstones older than 30 days
+  are garbage-collected on rewrite; a re-added id after its tombstone revives.
+- Automatic memory extraction is now actually switchable
+  (`SHANNON_FEATURE_AUTO_MEMORY` / `settings.json` features / `auto_memory`
+  in `settings.json` config — previously both knobs had zero consumers and
+  extraction ran unconditionally). Extraction failures are logged instead of
+  silently swallowed, run on the blocking pool (no longer cancellable
+  mid-extraction by runtime shutdown), and the extraction cursor only
+  advances on success so a failed batch is retried.
+- Memory write paths redact secret-shaped content (`SecretScanner` rules
+  shared with team-memory sync): saying "my api key is sk-..." no longer
+  persists the key into every future prompt.
+- The memory project key is the session's pinned working directory
+  (`QueryEngineConfig::working_directory`) instead of the process cwd, which
+  the desktop flipped per session switch, racing concurrent engines.
+- `compaction-state.json` is written atomically (temp + rename); a brand-new
+  project's first query no longer triggers a full compaction rewrite (the
+  schedule is seeded on first sight; first real compaction comes from the
+  ≥5-session threshold or the 24 h clock).
+- TUI clipboard paste uses a unique per-process temp file, and `/copy`'s
+  fallback file is per-process and 0600 (was a fixed world-readable name).
+- `extract_memories` (LLM pipeline, currently unwired) no longer points at
+  the canonical `memories/` directory, which it littered with orphan
+  per-fact files the store never read.
+
+**Fixed — CJK + injection quality**
+
+- CJK memory content no longer bypasses dedup and budget: the similarity
+  tokenizer splits CJK characters individually (plain whitespace splitting
+  made whole Chinese sentences one token, pinning similarity at 0-or-1), and
+  the injection budget uses a CJK-aware token estimate (chars/4
+  underestimated CJK ~4×, letting a 2000-token budget inject ~8000).
+- When memories exceed the injection cap, candidates are ranked by relevance
+  to the current query (previously raw recency — the 51st-most-recent entry
+  was unreachable even if it was the only relevant one).
+
+**Fixed — cross-project / global memory layer**
+
+- New `global` memory scope (`MemorySave` tool `global: true`, `/remember
+  --global`): cross-project preferences live in their own JSONL and inject
+  alongside every project's memories (capped at 10 entries), closing the
+  gap where Claude Code / Codex / Copilot all have a user-level layer.
+
+**Fixed — bi-temporal invalidation**
+
+- TTL expiry, budget pruning, and conflict resolution now *invalidate*
+  (new `valid_until` field, serde-compatible) instead of deleting: expired
+  entries stay on disk and are surfaced by `/recall --all` (marked), while
+  injection / listings / search only show live facts. `resolve_conflicts`
+  is wired into compaction so "prefer X" vs "never use X" contradictions
+  actually resolve (newer fact wins; previously the resolver had no
+  callers). Duplicate merging prefers the hand-saved entry over an
+  auto-extracted paraphrase.
+
+**Fixed — docs & retrieval hygiene**
+
+- The built-in `/memory` prompt-command no longer teaches a different
+  on-disk schema (`~/.shannon/memory/*.json`) that the engine never read;
+  it now documents the real `MemorySave`/`MemoryForget` contract, and its
+  `remember` alias no longer collides with the REPL command. `/remember` no
+  longer double-writes a read-never markdown copy.
+- Instruction files: per-file 1 MiB cap (a giant CLAUDE.md used to be read
+  whole into the cached prompt prefix), the watcher actually preheats its
+  cache (first turn no longer re-scans the whole instruction hierarchy
+  twice), User-scope now also checks `~/.shannon/` (not only `~/.claude/`),
+  and a `@import` whose path cannot be canonicalized is kept as literal
+  text instead of being read anyway (TOCTOU).
+- Repo map: disk caches validate file mtimes on load (a refactored repo no
+  longer serves a stale symbol map on the first query), and `update_file`
+  honors its documented mtime fast path (unchanged files are not re-parsed).
+- The `Grep` tool runs under a 30 s timeout (`SHANNON_GREP_TIMEOUT_SECS`)
+  and degrades to a truncated result instead of hanging the turn;
+  smart-context's external grep skips `.git`/`node_modules`/`target`/`dist`;
+  `/context reload` no longer stacks a second copy of the instructions into
+  the system prompt.
+
+**Added**
+
+- `SessionSearch` tool: the model can finally search past session
+  transcripts (previously history was a black box to the model — only the
+  REPL `/search` could scan, and the server exposed no search endpoint).
+- `/memory doctor` (REPL): live/expired counts, per-category distribution,
+  near-duplicate pair warnings, and cleanup suggestions.
+- `promote_memory_to_instruction` (desktop command): promote a stable
+  memory into the project's `CLAUDE.md` (`## Memories` section) and remove
+  it from the store, so stable facts graduate into version-controlled
+  instructions instead of churning in the curated store.
+- Desktop memory CRUD now goes through the dedup + redaction write path and
+  reloads from disk before update, so entries written by the CLI after app
+  start are editable without a restart.
+
+**Attachment safety**
+
+- Shared attachment validation (`shannon-core::attachments`): one 10 MiB
+  per-image / 8-image rule across REST, desktop, TUI, and headless instead
+  of four ad-hoc paths; REST size checks happen before base64 decoding and
+  the request body limit now actually admits the documented 10 MiB rule
+  (previously axum's default 2 MiB body limit rejected large images first).
+- The desktop send path enforces the size gate it previously only applied
+  to previews; desktop PDF extraction failure injects an explicit
+  placeholder instead of raw lossy-decoded binary noise.
+
+### Windows desktop-control bring-up (2026-09-21)
+
+Phase 0/1/2 of the Windows computer-use/browser improvement plan (evaluation +
+competitive analysis in the 2026-09-21 review; roadmap item A3). Windows moves
+from "compiles, never verified, features off" to a supported desktop-control
+platform.
+
+**Fixed (Phase 0)**
+
+- `browser_screenshot` captured a PNG but returned only the byte count — the
+  pixels were dropped and the model could not see the page. It now returns
+  `type:"image"` + base64 `data` (same contract as `computer`/`preview_screenshot`).
+- Windows browser detection never looked for Microsoft Edge (Linux/macOS paths
+  did) — stock Windows 10/11 installs were told "no browser found". Edge is now
+  on the candidate list (all three install roots) and in the install hint.
+- `browser_navigate` derived the new tab id from `list_tabs().last()` (HashMap
+  iteration order) and could grab an unrelated tab; it now uses the id returned
+  by `open_page`.
+- `ToolExecutionResult::extract_attachments` matched legacy tool names
+  (`Screenshot`/`TakeScreenshot`) — and was even called with the tool *id* in
+  the name slot — so nothing ever matched. It now tracks real tool names
+  (`computer`, `browser_screenshot`, `preview_screenshot`) and receives the
+  tool name.
+- `browser_console` had no permission-policy entry (7/8 browser tools did).
+- CI: the Windows leg only compiled default features — `computer-use` /
+  `local-browser` had never been compiled on Windows. New Windows CI step
+  checks both shapes on shannon-tools and shannon-cli.
+
+**Enabled by default on Windows releases (Phase 1)**
+
+- Windows CLI archives and desktop NSIS bundles are now built with
+  `--features computer-use,local-browser` (both compile clean on Windows;
+  verified locally and now CI-gated). Linux keeps plain defaults (libxdo);
+  macOS unchanged until its QA matrix lands.
+- Feature-off stub errors rewritten from "Rebuild with --features …" to
+  actionable copy (release bundles ship enabled / source-build flag), and
+  `/browser doctor` reports build capability status first (built-in browser
+  tools, desktop control) before the per-browser diagnostics.
+- Multi-monitor + DPI: `computer` gained a 0-based `monitor` parameter
+  (screenshot + every coordinate action; out-of-range errors list the display
+  count) and Windows declares per-monitor-v2 DPI awareness before the first
+  capture/click so xcap pixels and enigo's `SetCursorPos` share one physical
+  coordinate space (no more scaled-display drift).
+- Tool-result images now reach non-Anthropic models: OpenAI-compatible wires
+  emit a follow-up user vision turn (`image_url` data parts; Ollama gets its
+  native `images` array), Gemini gets a follow-up `inline_data` turn. Pixel
+  computer-use previously only worked on Anthropic.
+- Browser tooling reaches parity with the Playwright-MCP core loop:
+  `browser_snapshot` now returns an interactive-element index with stable refs,
+  `browser_click` accepts a `ref` (real mouse events at the element center) or
+  coordinates, and new `browser_fill` (native setter + input/change events),
+  `browser_press_key` (real VK codes — the old session helper sent vk=0),
+  `browser_scroll`, `browser_evaluate`, `browser_text` tools. All registered
+  in the High-risk permission family.
+
+**New Windows surfaces (Phase 2)**
+
+- UIA (UI Automation): `computer` gained `ui_tree` (structured control tree of
+  the foreground or a named window — roles/names/refs/rects, depth- and
+  token-capped) and `ui_click` (click an element by name substring + match
+  index via its bounding-rect center). Semantic alternative to pixel clicking;
+  the `platform_adapter` Windows slot is no longer just a comment.
+- New tools: `window_list` (Low risk, read-only inventory of visible windows),
+  `window_focus` (restore + foreground via the synthetic-ALT preamble),
+  `clipboard_read` / `clipboard_write` (CF_UNICODETEXT, retry-on-busy),
+  `app_open` (ShellExecuteW / `open` / `xdg-open`). All register
+  unconditionally with honest errors off-Windows (applescript pattern); all
+  but `window_list` are High risk.
+- Foreground-window provenance: every `computer` action (and screenshots)
+  attaches `window_title` + `window_process` to tool-output metadata, so
+  event-sourced sessions record which application each action hit.
+- Windows sandbox baseline: `SandboxType::WindowsJob` — sandboxed spawns are
+  assigned to a Job Object with kill-on-close, so children and their
+  descendants cannot outlive the Shannon process (previously: warned no-op,
+  fully unsandboxed). Lifecycle confinement only; fs/net still governed by the
+  permission system. Wired into all `LocalProcess` spawn paths (std + tokio).
+- Terminal layer: the Bash tool's spawn failure on Windows now explains the
+  Git-Bash requirement and points at the PowerShell tool; the shared
+  command-security analyzer recognizes PowerShell read-only cmdlets
+  (`Get-*`, `Test-Path`, `Select-String`, …) instead of scoring every PS
+  command as risky.
+
+**QA / verification**
+
+- New real-machine harness `crates/shannon-tools/tests/windows_real_machine.rs`
+  (`#[ignore]`, mirrors `macos_real_machine.rs`): screenshots (PNG magic,
+  per-monitor, window-context metadata), UIA tree/click-error paths,
+  window/clipboard/app tools, Edge detection, and a full launch→snapshot→
+  click-by-ref→DOM-verify browser loop. Run:
+  `cargo test -p shannon-tools --features computer-use,local-browser --test windows_real_machine -- --ignored`.
+- Roadmap A3 updated: Windows compile verification closed (CI leg + local
+  `cargo check` of both features); QA checklist "known non-goal" for Windows
+  real-machine regression replaced by the harness + the remaining manual
+  input-simulation checklist.
+
+### ZCode competitive delta (2026-09-18, PR #89)
+
+Comparison work vs ZCode v3.11.2 / ZCode 计划-dock screenshots (see
+`docs/design/ui-audit-2026-09/ZCODE-DELTA-ANALYSIS-2026-09.md`). Closes
+several gaps from the UI review (no behaviour removed; all changes are
+additive). Two CI fixes were also needed along the way (both follow
+existing patterns documented in the workflow):
+
+- **Sidebar = run monitor.** Each session row now carries a live running
+  dot (event-stream driven from `query:*`) and a "3/12" elapsed badge
+  plus a goal-run flag with iteration count for sessions a goal owns.
+  Goal-card cost / iterations / stall-strikes now reach the sidebar so
+  users can spot a stuck run without opening the Tasks page.
+- **Project vs time grouping, user toggle.** Top of the sidebar adds a
+  project/time switch that persists to `localStorage`. Time mode groups
+  Today / Yesterday / This week / Earlier (the ZCode mental model); the
+  default stays project mode (the Codex / Claude model). Pin / drag-reorder
+  is disabled in time mode (reordering across buckets is ambiguous).
+- **Plan dock is a first-class panel.** A new right-dock `Plan` tab
+  surfaces the engine's persisted plan doc (`<workingDir>/.shannon/plans/*.md`,
+  newest by mtime) with a live "N/M steps" progress bar parsed from the
+  markdown checklist. Entering Plan mode auto-docks the tab.
+- **Composer model chip.** Replaces the U2 decision to keep model
+  switching in the Header only — the Header model selector stays in sync
+  (both write `model` + `provider` to engine config), but the chip
+  restores the per-message model switch.
+- **Right dock is unified.** ContextPanel / ArtifactPanel / Diff
+  dialog now collapse into a single tabbed dock (`Context | Plan |
+  Artifact | Diff`). Diff "Review All" (multi-file) stays in its modal;
+  single-file diff clicks dock into the `Diff` tab via a shared
+  `DiffReviewBody` extracted from `DiffDialog`. Artifact detection and
+  a `Diff` click auto-open the dock and switch to the matching tab.
+- **Tool call telemetry.** Each tool card shows wall-clock duration
+  (live `started_at`/`finished_at`, plus L0 trace timeline durations for
+  historical messages), an approximate per-tool token attribution
+  collapsed by the desktop forwarder, and a `sandbox_denied` badge
+  surfaced from the engine's restored `ToolResult.meta`. Errors default
+  open.
+- **Subagent first-class block.** `agent_spawn` tool calls render as a
+  collapsible card (name / model / team / system prompt + result) instead
+  of the generic tool view. The crates-side `SubAgentRegistry` now
+  publishes `SubagentStart`/`SubagentStop` lifecycle events and writes
+  the run outcome back to the registry (fixes a long-standing stale-status
+  bug where a spawned entry stayed `Idle` forever). Desktop wiring is
+  gated on the product decision to inject `TeamContext` and make
+  agent_spawn a real subprocess (one-line observer registration once
+  approved).
+- **P2 batch.** Settings → General adds a Comfortable / Compact display
+  density toggle that rescales the shared MD3 type/spacing tokens via
+  `html[data-density]`; consecutive same-tool failures in a message
+  are prefaced by a "N attempts in a row → View timeline" banner; the
+  Sidebar's "New Chat" button is now a split button with quick-create
+  Goal / Routine entries (kept chat as the primary action).
+- **e2e guard.** New `zcode-delta-features.spec.ts` covers the four
+  user-facing behaviors (grouping persistence / plan tab / model chip
+  sync / subagent block) — passes 4/4 in demo mode.
+- **Wire additions.** `SessionInfo` gained optional `running` /
+  `updated_at` (serde-default, additive — wire-compatible with older
+  clients); `ToolResultPayload` gained optional `meta` and
+  `tokens_used`. `shannon-types` schema + build.rs mirror updated.
+  Semver baseline moved to `semver-baseline-2026-09-5` per the
+  documented "minor-cycle has intentional breaks" precedent.
+
+### Known issue (carry-forward, not this branch)
+
+Base UI `Select`'s anti-misclick pointer-tracker rejects regular
+mouse `click` on options unless the pointer first produced a `pointerdown`
+on the option. jsdom-based vitest never exposed it; Playwright
+`page.mouse.click` and several synthetic event paths exhibit it in
+real Chromium too. Result: every Select in the app (permission mode,
+reasoning effort, execution mode, model chip, voice providers) fails to
+commit. The ZCode-delta e2e spec carries an inline `KNOWN PRE-EXISTING
+BUG` comment with a failing-case block ready to be un-skipped once a
+fix lands (recommended path: wait for upstream Base UI fix or migrate
+the app off `@base-ui/react/select`). Filed as a separate follow-up.
+
+### Full-surface UI review fixes (2026-09-16)
+
+Playwright sweep of all 24 routes (desktop + mobile viewport) with PM/user
+dual-persona review and 7 journey walkthroughs
+(`docs/design/ui-review-2026-09-16.md`):
+
+- **Installed page crashed** (`reading 'push'`) — mock addon used
+  `kind:'mcp_server'` against a 5-key grouping table; grouping is now
+  defensive against unknown kinds and the mock matches `AddonKind`.
+- **Command palette collapsed to an 8px sliver** — our MD3 token
+  `--spacing-sm: 8px` hijacked Tailwind v4's `max-w-sm` resolution
+  (`--max-width → --spacing → --container`), so every default-size dialog
+  was 8px wide. Container scale restored in `@theme`, `--max-width-sm`
+  pinned, palette carries an explicit width.
+- **Phones rendered a 95px-wide app** — mobile mode never zeroed
+  `--sidebar-w` (280px margin on `main`), plus an unshrinkable 579px header
+  cluster (now hidden under `md`; mode/model pickers live in the composer).
+- **Numbers that contradicted each other** — command-board completion rate
+  (27%) vs task page (19%): OPC metrics mock now derives from MOCK_TASKS;
+  the "In progress" stat renamed "Active" (it sums in_progress+running+
+  pending).
+- Linear vendor icon rendered as giant raw text (not a Material Symbols
+  glyph → `segment`); `<code>` tags leaking into copy; a truncated
+  datasources subtitle; `IN_PROGRESS` badge untranslated; language chips
+  overflowing (now wrap); chat send not anchoring to bottom (virtualizer
+  race); chat bubbles clipping rich content at phone width (now
+  horizontally scrollable); gateway Start/Stop enabled in the wrong states;
+  dead-end empty states on datasources (added Featured link); two missing
+  mock handlers logging on every page; welcome flow's duplicate-looking
+  primary CTA demoted to a scroll anchor.
+
+### Linux packaging hardening (2026-09-15)
+
+Since preview-capture shipped (0.11), the desktop binary hard-links
+libpipewire-0.3 / libspa-0.2 / libgbm / libEGL / libwayland-client — Tauri's
+default deb Depends only cover the GTK/webkit trio, so on systems without
+PipeWire the package installed fine and died at launch.
+
+- **Explicit Linux package depends** — `bundle.linux.deb.depends` now lists the
+  Tauri defaults plus the capture stack (`libpipewire-0.3-0`, `libspa-0.2-0`,
+  `libgbm1`, `libegl1`, `libwayland-client0`); `rpm.depends` mirrors it with
+  Fedora names (`pipewire-libs`, `mesa-libgbm`, `mesa-libEGL`,
+  `libwayland-client`).
+- **Release artifact gate** — `scripts/check-deb-runtime-deps.sh` installs the
+  built .deb in a pristine `ubuntu:22.04` container (the distro floor) and
+  `ldd -r`s every packaged binary: any "not found" library or "undefined
+  symbol" fails the release (wired into release.yml after the deb build; the
+  rpm leg logs its NEEDED list for drift review). Verified against the
+  released v0.10.0 deb (pass) and a deliberately corrupted package (fail).
+
+### Mobile joint-debug fixes (2026-09-15, WP-15 handover)
+
+Fixes for the issues found pairing shannon-mobile against the real desktop
+stack (`docs/handover-to-shannon-mono-2026-09-15.md`):
+
+- **P0-1 tool calls as markdown blocks** — reasoning-family models on the
+  OpenAI wire (MiniMax M-series) answered tool-worthy prompts with a bare
+  ```bash block instead of a native tool call, stalling the turn loop and
+  blocking the whole approval chain. The engine now (a) instructs models to
+  invoke tools only via the native API, and (b) converts a single bare shell
+  code block into a real Bash tool call — through the normal permission gate
+  — when no native call arrives (`markdown_tool_fallback`, opt-out via
+  `SHANNON_MARKDOWN_TOOL_FALLBACK=false`).
+- **P0-2 inline `<think>` leaked as text** — the engine re-splits inline
+  `<think>…</think>` reasoning out of the content-delta stream into the
+  existing Thinking channel (desktop `query:thinking`). New additive WS
+  variant `thinking` (protocol 0.6.0 → 0.7.0) replaces the previous drop,
+  so clients can render collapsible reasoning; the gateway does not forward
+  it to phones yet (their render-side filter stays as legacy defense).
+- **P1-3 gateway argv** — `tsx src/index.ts --config X` no longer misreads
+  the flag as an unknown subcommand; flag-led argv falls through to run.
+- **P1-4 `shannon gateway run` guidance** — the missing-binary error now
+  lists the install one-liner and the dev alternatives instead of a dead end.
+- **P1-5 unreachable mobile bind** — `gateway_read_config` migrates the
+  legacy machine-written `mobile.host: "127.0.0.1"` to the §A8b wildcard
+  `0.0.0.0` (human-looking values are left alone); the service health probe
+  dials the loopback form of a wildcard bind.
+- **P2-6 pair-token growth** — file-mode `PairTokenStore.issue()` prunes
+  expired (and malformed) lines before appending, so unclaimed QR tokens no
+  longer grow `mobile-pair-tokens.jsonl` forever.
+- **P2-7 approval signature typing** — `ApprovalDecideParams.signature` is
+  now required, matching the runtime enforcement under `requireSession`.
+- **P2-8 progress routing key** — `task.progress` frames now carry the
+  turn's `turn_id` (additive, backward compatible).
+
+#### Second joint-debug round (journey-driven, same day)
+
+- **P0-1 upgraded — `tools=[]` root cause fixed** — the API server's query
+  handlers (REST / SSE / WS) each built a *fresh empty* `ToolRegistry`
+  instead of using the server's registered one, so every gateway-originated
+  session went to the model with zero tool definitions — the real reason
+  tool calls arrived as text and the mobile approval chain was unreachable.
+  All three handlers now serve the registered registry.
+- **P0-1 upgraded — vendor-text tool calls recovered** — new
+  `parse_text_tool_calls` recovers GLM/MiniMax-style
+  `<tool_call><invoke name="…"><parameter …>` blocks (including the
+  vendor-token garbage prefix) into real tool calls through the permission
+  gate; bare-bash blocks remain the lower-priority fallback.
+- **P0-1 upgraded — think-only nudge tightened** — the shipped
+  `SHANNON_THINK_ONLY_MIN_ANSWER_CHARS` default dropped 200 → 0: nudge only
+  when the visible answer is *blank*. A terse-but-real reply ("cli-ok") no
+  longer triggers the "no final answer" loop that burned 7k–21k tokens per
+  Q&A on MiniMax M3.
+- **`shannon trace show latest` no longer hangs** — it parsed *every*
+  session's full event log just to pick the newest; `SessionStore::latest_id`
+  now answers from directory mtimes alone.
+- **`shannon doctor` reflects running services** — when the gateway/desktop
+  binary is off PATH but the service is listening (33430 / 33420), doctor
+  reports it as running instead of "not found" (AppImage/portable installs).
+- **Device revoke entry confirmed present** — the mobile paired-device list
+  with per-device revoke already exists (Settings → Connections → Mobile
+  dispatch card); no gap to fix.
+- **AppImage joins the release matrix** — universal Linux artifact for
+  non-deb/rpm distros (`APPIMAGE_EXTRACT_AND_RUN`/`NO_STRIP` for the
+  runner), complementing the gated deb/rpm pair.
+
+### Desktop UI: competitive-parity overhaul (2026-09-10/11)
+
+Terminology, onboarding, visual system and workflow gaps from
+`docs/design/ui-audit-2026-09` (vs Claude Desktop/Code, Codex app, ZCode):
+
+- **Composer always visible** — replaced the fragile absolute-positioned
+  composer (it escaped the viewport when the panel scrolled) with flex flow;
+  glass material; mode + thought-level chips (ZCode composer pattern).
+- **Unified terminology** (zh + en): 已排程→任务, 分流队列→收件箱, 扩展→连接,
+  单人公司→指挥台, 并行方案→多方案对比, 聚焦聊天/评审/构建→对话/Diff/预览.
+- **Dark-first default** (`tokyo-night` when no stored preference).
+- **2-step onboarding** (was 4): task + provider on one screen, tools
+  prefilled from the task recommendation.
+- **Goal creation entry** — `start_goal_run` was unreachable from the UI;
+  NewGoalDialog adds title/objective/max-turns/budget-cap.
+- **Usage: current-session context panel** — six-category breakdown +
+  window fill + session budget cap (`set_session_budget` was UI-dead).
+- **Connectors catalog**: 8 → 12 vendors (Rust registry + mock), install-time
+  injection-scan/signature badge surfaced.
+- **Editor page retired** — `/editor` redirects; mod+5, palette and slash
+  open the chat-inline panel.
+- **Design-token guardrails** — `check:tokens` CI script (retired terms +
+  raw colors); `--color-success/--color-warning` tokens added (were silently
+  missing); Modal overlay glassed; Playwright visual baselines for key pages;
+  e2e selectors synced to the new terms.
+
+### Follow-up batch (2026-09-13/14)
+
+- **ModelsSettings**: searchable model quick-switch (ComboboxSelect over the
+  full catalog) in the Active Model card.
+- **Composer trio documented**: the (?) help panel now explains permission
+  mode / reasoning effort / model — all three are live-wired to engine config.
+- **Usage panel explainer**: what the six context categories mean and what a
+  session budget cap does.
+- **i18n**: 8 new locales (es/fr/de/ja/ko/pt-BR/ru/zh-TW) now carry real
+  translations for core UI (nav, status badges, composer controls); the rest
+  falls back to English. zh-TW available in the language switcher.
+- **CI Desktop E2E root cause fixed**: Layout rendered TWO full Sidebar trees
+  (mobile + desktop copies) — deduplicated to a single instance with runtime
+  drawer/rail switch; e2e selectors moved to `desktop-session-row-*` testids;
+  viewport locked to 1440×900; visual baselines regenerated with a 5%
+  font-metric tolerance. CI 19/19 green.
+- **Theme gallery**: 12-theme screenshot contact sheet
+  (`docs/design/ui-audit-2026-09/THEME-GALLERY.md`).
+
+### macOS real-machine verification, first batch (2026-09-10)
+
+- **xcap 0.0.13 → 0.9.8**: 0.0.13 fails to compile on macOS with the pinned
+  rustc 1.88 (E0282 in the macOS backend) — invisible to CI because the
+  `computer-use` feature build gate only runs on the Linux leg. One API
+  adaptation (`Monitor::width/height` now return `XCapResult<u32>`; semantics
+  unchanged — CGDisplayBounds logical points, matching enigo's CGEvent space).
+  Applied to `shannon-tools` and the desktop `preview-capture` feature.
+- **macOS real-machine QA harness** `crates/shannon-tools/tests/macos_real_machine.rs`
+  (cfg-gated to macOS + computer-use, `#[ignore]`d): AppleScript pure/JXA/timeout,
+  Notes Automation TCC, deny-path, Shortcuts, screenshot payload checks, and an
+  enigo→TextEdit input-chain test that doubles as the Accessibility-gap probe.
+- **Fixes surfaced by the first real runs**: `browser_e2e` skip-probe was
+  Linux-only and never ran on macOS (now reuses the session's own
+  detection; e2e passes against local Chrome); a `#[cfg(not(target_os =
+  "linux"))]` sandbox test had never been compiled anywhere and broke on
+  macOS (let-else rewrite). CI-parity `--lib computer` tests: 45 passed on
+  macOS. Evidence and remaining manual steps (TCC prompts, Accessibility
+  grant, provider-backed REPL checks):
+  `docs/qa/2026-09-10-macos-real-machine-qa-results.md`.
+- **macOS Accessibility preflight (E3)**: the `computer` tool's input
+  actions (click/type/scroll/key/move/drag) now probe the Accessibility
+  TCC grant (`AXIsProcessTrusted`, no new dependencies) and fail with an
+  actionable message instead of reporting success while the window server
+  silently drops the synthetic events. `MacosEnigoAdapter::available()`
+  reports the grant honestly.
+- **macOS /private path-alias fixes (E6/F11)**: canonicalization renders
+  /etc, /tmp and /var as /private/… on macOS, which (a) let denied
+  patterns written as /etc/** miss the resolved /private/etc/… path and
+  (b) broke bind-alias display matching, leaking host paths in sandbox
+  errors and rewriting temp-dir paths to /workspace. Denied patterns now
+  match the visible spelling, alias display matches canonical+raw root
+  spellings, and the temp root renders as the sandbox-visible /tmp on
+  every platform. Fixes 4 pre-existing macOS test failures.
+- **Policy/path-spelling hardening (E7)**: `PathSandboxAdapter` denied/
+  allowed/read-only checks match both raw and canonical spellings — on macOS
+  a configured `denied_paths: ["/etc"]` never matched the resolved
+  `/private/etc/...`, so denials silently did not enforce. `FileHistory`
+  keys its cache canonically and tolerates either spelling on lookup, so
+  snapshot history is addressable no matter how the model spells the path.
+  Tests that retarget the process cwd (git/edit) now run under a shared
+  serialized RAII guard, and notebook cell ids mix an atomic sequence into
+  the timestamp to avoid same-tick collisions. Full lib suite: 0 failures
+  in both feature shapes on macOS (was 25 pre-existing failures at batch
+  start).
+- **shannon-ui test-suite stabilization (E7 QA batch 3)**: fixed all 9
+  pre-existing macOS failures. `/etc/hostname` fixture swapped for the
+  cross-platform `/etc/hosts`; `/ci help` and no-arg usage branches render
+  before the gh-CLI check (help is now readable without gh installed);
+  HOME-swapping test guards restore the original home instead of "/" and
+  share one serialized env lock with the HOME/cwd-sensitive tests
+  (rewind, permission rules, tilde completion). Full shannon-ui suite:
+  1447 passed / 0 failed, stable across repeated runs; clippy clean.
+- **REPL pipe-mode slash commands + --permission-mode wiring (E7 QA batch 2)**:
+  piping `/command` into `shannon repl` leaked the text to the model as chat
+  input — main.rs intercepted piped stdin into the noninteractive query
+  before the REPL could dispatch, and the REPL's pipe path read an always-
+  empty TUI prompt box. Slash input now routes through the real command
+  dispatcher (`/browser doctor` on macOS renders the structured report:
+  `✓ System browser (macos-app): /Applications/Google Chrome.app/...`).
+  The global `--permission-mode` flag was silently ignored by query mode
+  (only --team-agent consumed it); it now overrides the noninteractive
+  FullAuto/`--yes` defaults. `/browser doctor` no longer prints install
+  guidance when a working browser (or CDP attach) is already present.
+- **Honest screen-size failure (E1): `screen_size()` no longer silently
+  falls back to the 1024x768 reference frame when display enumeration
+  fails (e.g. displays asleep) — that turned model coordinates into
+  unscaled screen coordinates; the error now propagates. The AppleScript
+  timeout error names the TCC-prompt case (E5). CI's macOS leg gained a
+  `cargo check -p shannon-tools --features computer-use` gate (E2), and
+  the computer-use feature shape is clippy-clean (E4).
 
 ### P3 follow-ups: backend selection, AppleScript, browser toolset, foundations (feat/p3-follow-ups)
 
@@ -205,7 +1111,36 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
   + Grafana (:3300) stack for accepting the span tree visually; usage in
   the telemetry module docs.
 
-## [Unreleased] — §4.10 W3-2 · manifest v2 + install-time validation + `--dump-config` + ecosystem conventions
+### Release productization hardening (2026-09-27)
+
+Findings from the 2026-09-27 release/productization audit, batch 1+2 fixes.
+
+**Security**
+
+- `GET /api/ws` now rejects cross-site browser `Origin`s with 403 before upgrading. A visited web page could previously complete a `ws://127.0.0.1:33420/api/ws` handshake (WebSocket handshakes are not subject to CORS) and drive the local engine with the user's full tool permissions. Non-browser clients (the gateway's ws client, scripts — which send no `Origin`) and local/webview origins (`tauri://localhost`, `http(s)://tauri.localhost`, loopback on any port) are unaffected.
+- `SECURITY.md`: replaced the placeholder contact address with GitHub private vulnerability reporting, and corrected the claim that secrets are stored "in the OS keyring" — LLM provider credentials are `0600` files under `~/.shannon/credentials/`; only IM channel credentials use the keyring.
+
+**Changed — defaults & claims**
+
+- `secret-guard` now installs in `audit` mode when neither `$SHANNON_SECRET_GUARD` nor `[secret_guard] mode` is set (previously: off) — and only when no other outbound context transform is already installed, so a plugin-provided transform is never clobbered by the built-in guard. Explicit `"off"` in either source still disables it entirely; `redact` is unchanged. Audit mode only logs secret-shaped hits — outgoing prompts are untouched.
+- The CLI REPL background update check: points at the correct repository (`diff-lab-com/shannon-agent` — it queried the nonexistent `shannon-code/shannon`), is gated by the new `update_check` feature flag (`SHANNON_FEATURE_UPDATE_CHECK=0` / `settings.json` `features.update_check`), and persists its last-check timestamp to `~/.shannon/update-check.json` so the 24h throttle actually survives restarts instead of hitting GitHub on every launch.
+- README (EN/zh-CN) claims aligned with reality: the desktop "auto-update" feature is described as an update checker (the Tauri updater remains unconfigured — no signed auto-update channel ships yet); the keyring claim is scoped to IM credentials; the telemetry bullet now discloses the release-availability check; "8 themes" corrected to 12; the two broken quickstart commands (`shannon <path>` treating a path as a prompt, and the nonexistent `--budget` CLI flag) fixed; the comparison table no longer claims default outbound redaction.
+- Desktop packaging: `beforeBuildCommand`/`beforeDevCommand` in `tauri.conf.json` fixed to `pnpm --dir ui build|dev` — the previous `pnpm build` ran from `desktop/`, where no such script exists, breaking monorepo-local `tauri build`.
+- `desktop/ui/package.json` version realigned to the workspace (0.6.0 → 0.11.0) and added as a fifth source in `just release-prep` and the release.yml version guard.
+- Removed the never-wired `packaging/` manifests (winget/homebrew/scoop/AUR): all pinned 0.7.0 with placeholder checksums, none were referenced by CI or published upstream (the documented Homebrew tap never received a commit). Documented in CONTRIBUTING.md that third-party channels are not published.
+- Website: `astro.config.mjs` `site`/`base` now match the actual deployment target (`diff-lab-com.github.io/shannon-agent/`); getting-started docs no longer reference the nonexistent Homebrew tap or the misnamed Windows asset, and the `cargo install --git` line now selects the `shannon-cli` member.
+
+**Fixed — release engineering**
+
+- `release.yml` publish job now waits for the tag's full `ci.yml` run to conclude successfully before flipping the draft to published (previously only the build jobs gated it — a red test/clippy/semver gate still shipped the release). Manual dispatches skip the wait.
+- `SHA256SUMS` now covers `install.sh`/`install.ps1` (previously attached after the manifest was generated — the scripts people `curl | sh` were checksummed by nothing), and both installer scripts hard-fail when no checksum source is reachable instead of "skipping verification".
+- Release assets get SLSA build provenance via `actions/attest-build-provenance` (verify at the repo's attestations page).
+- CLI release matrix gained `aarch64-unknown-linux-gnu` (native arm64 runner); `install.sh` maps Linux/arm64 to the new CLI archive instead of silently skipping the CLI.
+- Gateway release builds now install dependencies with pnpm from the committed `pnpm-lock.yaml` (Bun cannot read a pnpm lockfile, so `bun install --frozen-lockfile` resolved at build time and the binary was not reproducible). Bun remains the bundler.
+- Publish smoke-test asserts the full matrix (18 assets incl. rpm, AppImage, aarch64 dmg, arm64 CLI/gateway) instead of 10.
+- `CHANGELOG.md`: the three stacked `## [Unreleased]` sections are consolidated under one; `install.sh`'s broken `releases/latest` fallback URL fixed.
+
+### §4.10 W3-2 · manifest v2 + install-time validation + `--dump-config` + ecosystem conventions
 
 ### Added
 
@@ -247,7 +1182,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 - MCP references accept `stdio` transport rows without an explicit
   `type = "stdio"` (inferred default), matching hand-written shorthand.
 
-## [Unreleased] — §4.6 W1-P1 · L0 becomes the only authoritative session record (breaking, DP4)
+### §4.6 W1-P1 · L0 becomes the only authoritative session record (breaking, DP4)
 
 ### ⚠️ Breaking changes
 
@@ -298,6 +1233,61 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 - Headless runs no longer checkpoint per-turn JSON snapshots; the continuous
   event log makes crash-window tail recovery the resumption mechanism.
+
+## v0.12.0 (2026-09-28) — cycle highlights (0.11.0 → 0.12.0)
+
+Curated highlights of the 0.11/0.12 cycle. The full, detailed record for
+everything below lives in the [Unreleased] section above (this release was
+cut from it without reordering that history).
+
+- **Unified `shannon` CLI.** The former `shannon-code` product identity is
+  retired in favor of a single `shannon` CLI/TUI across the binary, desktop
+  window title, installers, and docs (historical `shannon-code` references
+  in old release notes are intentional).
+- **Remote execution worlds (`shannon-remote`).** SSH hosts and Docker
+  containers as first-class targets — tools route through the provider seam;
+  `/remote` TUI command, `--target` CLI flag, and a Settings→Remotes desktop
+  page (design: `docs/plans/2026-09-04-remote-connections-design.md`).
+- **Single-source protocol codegen.** `shannon-api-protocol` is the one wire
+  contract for the REST/SSE/WS API surface — gateway TS types + OpenAPI are
+  generated from it (`just gen-protocol`, part of `just ci`), with gateway
+  protocol-schema tests pinning the drift guard.
+- **Memory / docs / retrieval hardening (PR #116).** Project-scoped
+  consolidation and cleanup (no more cross-project deletion), durable
+  JSONL tombstones for deletions, plus the retrieval-quality fixes from the
+  2026-09-25 memory review.
+- **Desktop projects/plugins polish (PR #129).** Plugin materialization and
+  command-plugin management reworked with regression coverage
+  (`Installed`/`Plugins`/`Triage` suites).
+- **Honest outcome accounting (PR #142).** `QueryEvent::Completed` carries a
+  serde-defaulted `outcome`; recovery turns re-emit `TurnCompleted`;
+  headless no-progress runs exit non-zero — the break that required the
+  0.11.0 → 0.12.0 minor bump.
+- **Malformed tool-call recovery hardening (PRs #140/#143/#144/#146).**
+  Stray `</think>` absorption tightened to the leading region, recovery-gate
+  consecutive-count cap, command-guard pipe detection made quote/escape-aware
+  (incl. `$(…)`/backtick segments), and wire-level streaming trace logs for
+  OpenAI-compatible providers.
+- **Release productization hardening.** `GET /api/ws` rejects cross-site
+  browser `Origin`s before upgrade; `secret-guard` defaults to audit mode;
+  release publishing waits for the tag's full CI run; SLSA build provenance
+  on release assets; `SHA256SUMS` covers the installer scripts (which now
+  hard-fail without a checksum source); native Linux arm64 CLI in the
+  release matrix.
+- **CI review P0–P2 (PR #139).** Dependabot config revived, workflow
+  hardening across ci/coverage/benchmarks/deploy (pinned actions, tightened
+  permissions), and the semver baseline procedure documented at the gate.
+- **Test-suite hygiene.** tempfile RAII stopped ~3k leaked `/tmp` dirs per
+  run and made `cli_e2e` hermetic; a CI tripwire now fails on fresh `/tmp`
+  leaks.
+- **OTLP telemetry bridge.** `shannon-core::telemetry` exports traces via
+  OTLP gRPC with batch processing, plus a one-command Jaeger/Grafana demo
+  stack (`scripts/otel-demo`).
+- **Desktop Turn Timeline + diagnostics export.** Turn-level activity view
+  and a Settings→Advanced "Export diagnostics…" bundle (logs + doctor
+  report, session-log redaction policy applied).
+- **Windows desktop-control bring-up.** Computer-use input backends extended
+  for Windows alongside the Linux X11/Wayland matrix.
 
 ## v0.10.0 (2026-08-13) — memory curated layer (ADR-0010), ADR-0005 provider tail closed
 

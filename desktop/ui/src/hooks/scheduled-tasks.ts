@@ -44,7 +44,12 @@ export function useScheduledTasks() {
   const create = useCallback(async (payload: CreateTaskPayload): Promise<ScheduledRoutine | null> => {
     try {
       const task = await api.createScheduledTask(payload)
-      toast.success(t('tasks.toast.created'))
+      // R2-P1-4: no success toast here — the creating page owns the single
+      // announcement (Tasks.tsx distinguishes webhook-ready vs scheduled),
+      // so the user no longer gets two stacked success toasts for one
+      // routine. The error toast stays: the hook swallows the rejection,
+      // so this is the only failure signal a caller that ignores `null`
+      // will ever see.
       await refresh()
       return task
     } catch (e) {
@@ -83,12 +88,15 @@ export function useScheduledTasks() {
     }
   }, [refresh, t])
 
-  const toggle = useCallback(async (id: string, enabled: boolean): Promise<ScheduledRoutine | null> => {
+  // P1-1: the backend persists the requested state and returns the persisted
+  // bool — the toast (and the caller's follow-up) keys off the persisted
+  // truth, not the requested value.
+  const toggle = useCallback(async (id: string, enabled: boolean): Promise<boolean | null> => {
     try {
-      const task = await api.toggleScheduledTask(id, enabled)
-      toast.success(t(enabled ? 'tasks.toast.enabled' : 'tasks.toast.disabled'))
+      const persisted = await api.toggleScheduledTask(id, enabled)
+      toast.success(t(persisted ? 'tasks.toast.enabled' : 'tasks.toast.disabled'))
       await refresh()
-      return task
+      return persisted
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.toggle')
       setError(msg)

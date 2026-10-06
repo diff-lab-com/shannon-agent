@@ -173,6 +173,13 @@ impl ConfigManager {
     }
 
     /// Save the current config to disk.
+    ///
+    /// review §P2-15: previous version called `write_bytes_blocking` directly,
+    /// which would leave a half-written JSON file if the process was killed
+    /// mid-write or the disk filled up; the next `load()` would then fail and
+    /// the user would lose their config. Now writes to a sibling temp file
+    /// and atomically renames it into place — the same pattern as
+    /// `RemoteTarget::save` in shannon-remote.
     pub fn save(&self) -> Result<(), String> {
         if let Some(parent) = self.config_path.parent() {
             self.fs
@@ -188,9 +195,15 @@ impl ConfigManager {
         let serialized = serde_json::to_string_pretty(&data)
             .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
+        let tmp = self.config_path.with_extension("json.tmp");
         self.fs
-            .write_bytes_blocking(&self.config_path, serialized.as_bytes())
-            .map_err(|e| format!("Failed to write config file: {e}"))?;
+            .write_bytes_blocking(&tmp, serialized.as_bytes())
+            .map_err(|e| format!("Failed to write config temp file: {e}"))?;
+        if let Err(e) = self.fs.rename_blocking(&tmp, &self.config_path) {
+            // Best-effort cleanup of the orphan temp file.
+            let _ = self.fs.remove_file_blocking(&tmp);
+            return Err(format!("Failed to atomically replace config file: {e}"));
+        }
 
         Ok(())
     }
@@ -232,6 +245,18 @@ impl ConfigManager {
 impl Default for ConfigManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ConfigAction {
+    /// The config key a mutating action targets, if any (set/delete only).
+    fn mutating_key(&self) -> Option<String> {
+        match self {
+            ConfigAction::Set { key, .. } | ConfigAction::Delete { key } => Some(key.clone()),
+            ConfigAction::Get { .. } | ConfigAction::List { .. } | ConfigAction::Reset { .. } => {
+                None
+            }
+        }
     }
 }
 
@@ -279,6 +304,21 @@ impl ConfigTool {
         &self,
         action: ConfigAction,
     ) -> Result<(String, HashMap<String, Value>), ToolError> {
+        // Decision A1 parity with the human paths (`/config set`, `shannon
+        // config`): an agent must not be able to park a plaintext secret in
+        // `~/.shannon/config.json`. Set/Delete on a secret-shaped key are
+        // refused up front; secrets belong in the credential store
+        // (`~/.shannon/credentials/<service>.json`, written by /connect).
+        if let Some(key) = action.mutating_key() {
+            if shannon_core::config_persist::is_secret_shaped_key(&key) {
+                return Err(ToolError::InvalidInput(format!(
+                    "Refused: config key '{key}' looks like a secret — secrets belong in the \
+                     credential store, not config files (decision A1). Store it with \
+                     /credentials store <service> <value> instead."
+                )));
+            }
+        }
+
         let mut manager = self.manager.lock().map_err(|e| {
             ToolError::ExecutionFailed(format!("Failed to acquire config lock: {e}"))
         })?;
@@ -745,6 +785,106 @@ mod tests {
         assert!(!result.is_error);
         assert!(result.content.contains("Set app.name"));
         assert_eq!(result.metadata.get("key"), Some(&json!("app.name")));
+    }
+
+    #[tokio::test]
+    async fn test_tool_set_refuses_secret_shaped_keys() {
+        // Decision A1 parity with the human write paths: the agent-facing
+        // Config tool must not park plaintext secrets in config.json.
+        let tool = make_tool();
+        for key in [
+            "api_key",
+            "anthropic_api_key",
+            "GitHubToken",
+            "db_password",
+            "auth-token",
+        ] {
+            let outcome = tool
+                .execute(json!({
+                    "action": { "set": { "key": key, "value": "sk-LEAK" } }
+                }))
+                .await;
+            match outcome {
+                Ok(_) => panic!("set on secret-shaped key '{key}' must be refused"),
+                Err(ToolError::InvalidInput(msg)) => {
+                    assert!(msg.contains("A1"), "refusal must cite A1: {msg}");
+                    assert!(
+                        msg.contains("credential store"),
+                        "refusal must point at the credential store: {msg}"
+                    );
+                    // The secret itself must never be echoed back.
+                    assert!(!msg.contains("sk-LEAK"));
+                }
+                Err(e) => panic!("unexpected error for '{key}': {e:?}"),
+            }
+            // Nothing was written.
+            assert_eq!(
+                tool.manager
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(key),
+                None
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_delete_refuses_secret_shaped_keys() {
+        let tool = make_tool();
+        // Seed a secret-shaped key directly (e.g. written by an older build).
+        {
+            let mut manager = tool.manager.lock().unwrap_or_else(|e| e.into_inner());
+            manager.set("api_key".to_string(), json!("sk-old"));
+        }
+        let outcome = tool
+            .execute(json!({
+                "action": { "delete": { "key": "api_key" } }
+            }))
+            .await;
+        match outcome {
+            Ok(_) => panic!("delete on a secret-shaped key must be refused"),
+            Err(ToolError::InvalidInput(msg)) => {
+                assert!(msg.contains("A1"), "refusal must cite A1: {msg}");
+            }
+            Err(e) => panic!("unexpected error: {e:?}"),
+        }
+        // The key is still there (the agent cannot erase evidence either way —
+        // it must go through the human path).
+        assert_eq!(
+            tool.manager
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get("api_key"),
+            Some(json!("sk-old"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tool_non_secret_keys_still_set_and_delete() {
+        // The guard must not over-reject: ordinary keys keep working.
+        let tool = make_tool();
+        let result = tool
+            .execute(json!({
+                "action": { "set": { "key": "app.name", "value": "shannon" } }
+            }))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+
+        let result = tool
+            .execute(json!({
+                "action": { "delete": { "key": "app.name" } }
+            }))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert_eq!(
+            tool.manager
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get("app.name"),
+            None
+        );
     }
 
     #[tokio::test]

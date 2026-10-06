@@ -11,7 +11,7 @@ export default function DiagBanner({ t, diagError, diagTimedOut }: DiagBannerPro
   if (!diagError && !diagTimedOut) return null
   return (
     <div
-      className="bg-error/10 border border-error/30 rounded-lg p-sm font-label-sm text-error flex items-start gap-sm"
+      className="bg-error-container border border-error/30 rounded-lg p-sm font-label-sm text-on-error-container flex items-start gap-sm"
       role="status"
     >
       <span className="material-symbols-outlined icon-sm mt-0.5">

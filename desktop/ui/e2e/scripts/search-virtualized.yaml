@@ -1,0 +1,85 @@
+# ChatScript: search-virtualized — wave-2 G11 扩展（multi-turn-stream spec 的 Ctrl+F 长会话路径）。
+#
+# 32 条 seed 消息 > VIRTUALIZE_THRESHOLD(30) → MessageArea 走虚拟化列表。
+# 稀有 token "needle-42" 放在 index 5（assistant）与 index 28（user），供
+# 搜索命中计数 / Enter / Shift+Enter 环游 / 虚拟化跳转断言。断言在 spec
+# （chat-script.multi-turn-stream.spec.ts）。
+name: search-virtualized
+description: 32 条历史消息的虚拟化长会话 — Ctrl+F 搜索跳转与环游
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-search
+      title: Search haystack
+      messages:
+        - role: user
+          content: "第01轮：常规历史提问 01。"
+        - role: assistant
+          content: "第01轮回复：常规历史回复 01，长度适中用于撑起列表。"
+        - role: user
+          content: "第02轮：常规历史提问 02。"
+        - role: assistant
+          content: "第02轮回复：常规历史回复 02，长度适中用于撑起列表。"
+        - role: user
+          content: "第03轮：常规历史提问 03。"
+        - role: assistant
+          content: "第03轮回复：回复里埋着 needle-42 这个稀有 token。"
+        - role: user
+          content: "第04轮：常规历史提问 04。"
+        - role: assistant
+          content: "第04轮回复：常规历史回复 04，长度适中用于撑起列表。"
+        - role: user
+          content: "第05轮：常规历史提问 05。"
+        - role: assistant
+          content: "第05轮回复：常规历史回复 05，长度适中用于撑起列表。"
+        - role: user
+          content: "第06轮：常规历史提问 06。"
+        - role: assistant
+          content: "第06轮回复：常规历史回复 06，长度适中用于撑起列表。"
+        - role: user
+          content: "第07轮：常规历史提问 07。"
+        - role: assistant
+          content: "第07轮回复：常规历史回复 07，长度适中用于撑起列表。"
+        - role: user
+          content: "第08轮：常规历史提问 08。"
+        - role: assistant
+          content: "第08轮回复：常规历史回复 08，长度适中用于撑起列表。"
+        - role: user
+          content: "第09轮：常规历史提问 09。"
+        - role: assistant
+          content: "第09轮回复：常规历史回复 09，长度适中用于撑起列表。"
+        - role: user
+          content: "第10轮：常规历史提问 10。"
+        - role: assistant
+          content: "第10轮回复：常规历史回复 10，长度适中用于撑起列表。"
+        - role: user
+          content: "第11轮：常规历史提问 11。"
+        - role: assistant
+          content: "第11轮回复：常规历史回复 11，长度适中用于撑起列表。"
+        - role: user
+          content: "第12轮：常规历史提问 12。"
+        - role: assistant
+          content: "第12轮回复：常规历史回复 12，长度适中用于撑起列表。"
+        - role: user
+          content: "第13轮：常规历史提问 13。"
+        - role: assistant
+          content: "第13轮回复：常规历史回复 13，长度适中用于撑起列表。"
+        - role: user
+          content: "第14轮：常规历史提问 14。"
+        - role: assistant
+          content: "第14轮回复：常规历史回复 14，长度适中用于撑起列表。"
+        - role: user
+          content: "第15轮：提到 needle-42 的提问。"
+        - role: assistant
+          content: "第15轮回复：常规历史回复 15，长度适中用于撑起列表。"
+        - role: user
+          content: "第16轮：常规历史提问 16。"
+        - role: assistant
+          content: "第16轮回复：常规历史回复 16，长度适中用于撑起列表。"
+turns:
+  - user: "搜索前的一条新消息"
+    script:
+      - event: query:text
+        chunks:
+        - "新消息的回复"

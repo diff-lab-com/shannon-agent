@@ -342,6 +342,101 @@ mod compact_tests {
         assert!(result.messages_compacted > 0);
     }
 
+    // -- F4a: compaction keeps tool_use/tool_result pairs together --
+
+    /// Count ToolUse + ToolResult blocks carrying `id` across the list.
+    fn occurrences_of_tool_id(messages: &[Message], id: &str) -> usize {
+        messages
+            .iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Blocks(blocks) => Some(blocks),
+                _ => None,
+            })
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter(|b| match b {
+                        ContentBlock::ToolUse { id: use_id, .. } => use_id == id,
+                        ContentBlock::ToolResult { tool_use_id, .. } => tool_use_id == id,
+                        _ => false,
+                    })
+                    .count()
+            })
+            .sum()
+    }
+
+    /// F4a regression: `do_compact` used to split at a raw
+    /// `len - keep_recent_count` boundary with no pair alignment. With the
+    /// split landing between `call_1`'s tool_use (idx 6) and its
+    /// tool_result (idx 7), the kept recent tail started with an orphaned
+    /// tool_result — a 400 from strict providers. The split must move onto
+    /// a pair-safe boundary so the pair is summarized (or kept) together.
+    #[test]
+    fn test_compact_split_landing_mid_pair_keeps_pair_together() {
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 4,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = vec![system_msg("You are helpful.")];
+        messages.push(user_msg("Request 0"));
+        messages.push(tool_use_msg("call_0", "bash", "ls"));
+        messages.push(tool_result_msg("call_0", "files"));
+        messages.push(assistant_msg("Response 0"));
+        messages.push(user_msg("Request 1"));
+        messages.push(tool_use_msg("call_1", "bash", "ls -la"));
+        messages.push(tool_result_msg("call_1", "more files"));
+        messages.push(assistant_msg("Response 1"));
+        messages.push(user_msg("Request 2"));
+        messages.push(assistant_msg("Response 2"));
+        assert_eq!(messages.len(), 11); // raw split = 11 - 4 = 7 → mid-pair
+
+        engine.compact(&mut messages).unwrap();
+
+        // The pair straddling the raw split must survive together — both
+        // halves or neither — never an orphaned tool_result at the head of
+        // the kept tail.
+        assert_eq!(
+            occurrences_of_tool_id(&messages, "call_1"),
+            2,
+            "call_1's tool_use/tool_result pair must stay together: {messages:#?}"
+        );
+        // call_0 sat wholly in the summarized region and must be gone.
+        assert_eq!(
+            occurrences_of_tool_id(&messages, "call_0"),
+            0,
+            "fully summarized pairs must not leak into the kept tail"
+        );
+
+        // Wire-shape invariant: every surviving result has its declaring
+        // use, and every surviving use its result.
+        let mut declared: Vec<String> = Vec::new();
+        let mut matched: Vec<String> = Vec::new();
+        for m in &messages {
+            if let MessageContent::Blocks(blocks) = &m.content {
+                for b in blocks {
+                    match b {
+                        ContentBlock::ToolUse { id, .. } => declared.push(id.clone()),
+                        ContentBlock::ToolResult { tool_use_id, .. } => {
+                            matched.push(tool_use_id.clone())
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        for id in &matched {
+            assert!(declared.contains(id), "orphaned tool_result {id} kept");
+        }
+        for id in &declared {
+            assert!(matched.contains(id), "dangling tool_use {id} kept");
+        }
+    }
+
     // -- Micro compaction --
 
     #[test]

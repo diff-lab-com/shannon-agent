@@ -157,35 +157,21 @@ fn convert_status(status: &shannon_core::doctor::CheckStatus) -> CheckStatus {
 
 // ── Fallback local checks (used when core Doctor is unavailable) ──
 
-/// Fallback: Check for API key environment variables
+/// Fallback: Check for API key environment variables.
+///
+/// Provider-aware (review P1-14): reuses the core Doctor's `check_api_key` —
+/// the same active-provider detection and canonical env resolution the
+/// primary path uses — instead of the historical hardcoded
+/// ANTHROPIC/OPENAI/SHANNON trio, so e.g. a Zhipu user is pointed at
+/// `ZHIPU_API_KEY` rather than `ANTHROPIC_API_KEY`. Only runs when the core
+/// Doctor itself failed; output format is unchanged.
 fn check_api_keys() -> CheckResult {
-    let keys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "SHANNON_API_KEY"];
-    let mut found = Vec::new();
-
-    for key in &keys {
-        if let Ok(val) = std::env::var(key) {
-            if !val.is_empty() {
-                found.push(*key);
-            }
-        }
-    }
-
-    if !found.is_empty() {
-        CheckResult {
-            name: "API Keys".to_string(),
-            status: CheckStatus::Pass,
-            message: format!("Found: {}", found.join(", ")),
-            fix_hint: None,
-        }
-    } else {
-        CheckResult {
-            name: "API Keys".to_string(),
-            status: CheckStatus::Fail,
-            message: "No API keys found in environment".to_string(),
-            fix_hint: Some(
-                "Set ANTHROPIC_API_KEY or OPENAI_API_KEY in your shell profile".to_string(),
-            ),
-        }
+    let check = shannon_core::doctor::Doctor::new().check_api_key();
+    CheckResult {
+        name: "API Keys".to_string(),
+        status: convert_status(&check.status),
+        message: check.message,
+        fix_hint: check.fix_suggestion,
     }
 }
 
@@ -327,7 +313,9 @@ pub fn check_rust_toolchain() -> CheckResult {
 
 /// Format all check results into a human-readable report
 pub fn format_doctor_report(results: &[CheckResult]) -> String {
-    let mut report = String::from("Shannon Code Diagnostics\n");
+    use rust_i18n::t;
+
+    let mut report = t!("commands.doctor.title").to_string();
     report.push_str(&"─".repeat(40));
     report.push('\n');
 
@@ -362,9 +350,15 @@ pub fn format_doctor_report(results: &[CheckResult]) -> String {
 
     report.push_str(&"─".repeat(40));
     report.push('\n');
-    report.push_str(&format!(
-        "Results: {pass_count} passed, {warn_count} warnings, {fail_count} failed\n"
-    ));
+    report.push_str(
+        t!(
+            "commands.doctor.results_summary",
+            passed = pass_count,
+            warnings = warn_count,
+            failed = fail_count
+        )
+        .as_ref(),
+    );
 
     report
 }
@@ -521,13 +515,62 @@ mod tests {
 
     #[test]
     fn test_fallback_api_keys_check() {
-        // The fallback check should produce a valid result
+        // The fallback check should produce a valid result. It is
+        // environment-dependent by design (it reports the active provider's
+        // key state), so any core Doctor status is acceptable here.
         let result = check_api_keys();
         assert_eq!(result.name, "API Keys");
         assert!(matches!(
             result.status,
-            CheckStatus::Pass | CheckStatus::Fail
+            CheckStatus::Pass | CheckStatus::Warn | CheckStatus::Fail | CheckStatus::Skip
         ));
+    }
+
+    // ── Provider-aware fallback (review P1-14) ──────────────────────────
+
+    /// Serializes tests that mutate the process environment.
+    static DOCTOR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_fallback_api_keys_check_is_provider_aware() {
+        // The fallback must target the ACTIVE provider's canonical env var,
+        // not the historical ANTHROPIC/OPENAI/SHANNON trio. `SHANNON_PROVIDER`
+        // wins core's detection, so pinning it makes the test deterministic
+        // regardless of which provider keys the developer's shell exports.
+        let _guard = DOCTOR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_provider = std::env::var("SHANNON_PROVIDER").ok();
+        let prev_key = std::env::var("DEEPSEEK_API_KEY").ok();
+        // SAFETY: single-threaded under DOCTOR_ENV_LOCK; the previous values
+        // are restored before the lock is released.
+        unsafe {
+            std::env::set_var("SHANNON_PROVIDER", "deepseek");
+            std::env::set_var("DEEPSEEK_API_KEY", "sk-hermetic-test-key-0123456789");
+        }
+
+        let result = check_api_keys();
+
+        // SAFETY: see above.
+        unsafe {
+            match prev_provider {
+                Some(v) => std::env::set_var("SHANNON_PROVIDER", v),
+                None => std::env::remove_var("SHANNON_PROVIDER"),
+            }
+            match prev_key {
+                Some(v) => std::env::set_var("DEEPSEEK_API_KEY", v),
+                None => std::env::remove_var("DEEPSEEK_API_KEY"),
+            }
+        }
+
+        assert_eq!(result.name, "API Keys");
+        assert_eq!(result.status, CheckStatus::Pass, "got: {result:?}");
+        assert!(
+            result.message.contains("DEEPSEEK_API_KEY"),
+            "message must name the active provider's canonical env var, got: {result:?}"
+        );
+        assert!(
+            !result.message.contains("ANTHROPIC"),
+            "Anthropic-centric wording must be gone, got: {result:?}"
+        );
     }
 
     #[test]

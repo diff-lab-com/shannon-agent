@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { CodeBlock } from '@/components/code/CodeBlock'
 
@@ -37,6 +37,16 @@ describe('CodeBlock — chrome', () => {
     render(<CodeBlock code="copy-me" language="text" />)
     fireEvent.click(screen.getByRole('button', { name: /copy code/i }))
     expect(writeText).toHaveBeenCalledWith('copy-me')
+  })
+
+  it('shows a failure state instead of failing silently (review §5)', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard blocked'))
+    Object.assign(navigator, { clipboard: { writeText } })
+    render(<CodeBlock code="copy-me" language="text" />)
+    fireEvent.click(screen.getByRole('button', { name: /copy code/i }))
+    // The label flips to a visible failure; the 1.5 s reset shares the
+    // success path's timer (and its act-scope constraints in jsdom).
+    expect(await screen.findByText('Failed')).toBeInTheDocument()
   })
 
   it('shows the line-number toggle only past 5 lines', () => {

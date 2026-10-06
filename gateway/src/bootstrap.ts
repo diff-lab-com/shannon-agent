@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { type AdapterContext, type ChannelAdapter, type Logger } from "./adapters/types.js";
@@ -7,6 +7,7 @@ import { AdapterRegistry } from "./adapters/registry.js";
 import { EngineWsClient } from "./engine/wsClient.js";
 import { SessionRouter, type EngineClientFactory } from "./router/router.js";
 import { type TurnHandler } from "./router/types.js";
+import { ActiveQueryRegistry } from "./router/activeQueries.js";
 import { createApprovalTurnHandler } from "./router/approvalTurnHandler.js";
 import { type AdapterConfig, type GatewayConfig, type LogLevel } from "./config/types.js";
 import { type SecretProvider } from "./secrets/types.js";
@@ -16,21 +17,40 @@ import { createChainedSecretProvider } from "./secrets/chain.js";
 import { createConsoleLogger } from "./logger.js";
 import { GATEWAY_VERSION } from "./version.js";
 import { MobileServer } from "./mobile/server.js";
+import { ensureTlsMaterial } from "./mobile/mobileTls.js";
+import { directE2EPaths, ensureDirectE2EKey } from "./mobile/directE2E.js";
 import { advertiseMobileServer, type MdnsHandle } from "./mobile/mdns.js";
 import {
   createMobileHandlers,
   DeviceRegistry,
   PairTokenStore,
 } from "./mobile/pairing.js";
+import { createPairingAccess } from "./mobile/accessRpc.js";
 import type { EngineClientFactory as MobileEngineClientFactory } from "./mobile/engineBridge.js";
+import { ApprovalRegistry } from "./mobile/approvalRegistry.js";
+import { PushReplayBuffer } from "./mobile/pushReplay.js";
 import { MobileDispatchHub } from "./mobile/hub.js";
 import { createMobileChannelAdapter } from "./mobile/channel.js";
 import { createTaskHandlers } from "./mobile/taskHandlers.js";
-import { deriveSessionKey } from "./mobile/relay/e2e.js";
+import { createMobileTaskTurnHandler } from "./mobile/taskTurnHandler.js";
+import {
+  deriveRelayAuthTag,
+  deriveSessionKey,
+  generateHostE2EKeyPair,
+} from "./mobile/relay/e2e.js";
 import { startRelayHost, type RelayHostHandle } from "./mobile/relay/relayHost.js";
+import { PushRelayBinding } from "./mobile/relay/pushRelayBinding.js";
+import {
+  createPushWiring,
+  pushExpectedStatePaths,
+  PushExpectedStateStore,
+} from "./mobile/relay/pushExpectedState.js";
 import { generateQrV2Payload, generateRelaySessionId } from "./mobile/relay/qrV2.js";
 import { evaluateTrigger, resolveTriggerConfig } from "./router/trigger.js";
 import { withTaskLifecycle } from "./router/lifecycle.js";
+import { AllowlistGuard, pairingChallengeMessage, type InboundGuard } from "./access/guard.js";
+import { Allowlist, resolveAllowlistPath } from "./access/allowlist.js";
+import { PairingStore } from "./access/pairing.js";
 
 /**
  * Turns an `AdapterConfig` + secret-backed `AdapterContext` into a live
@@ -42,6 +62,13 @@ export type AdapterFactory = (
   cfg: AdapterConfig,
   ctx: AdapterContext,
 ) => ChannelAdapter | Promise<ChannelAdapter>;
+
+/**
+ * Review F42: `approve <code>` — the pairing-approval command an
+ * already-allowed sender sends in any chat. Six digits matches
+ * PairingStore.generateCode().
+ */
+const APPROVE_PAIRING_RE = /^approve\s+(\d{6})$/i;
 
 export interface BootstrapOptions {
   /** platform id → factory. Real adapters register here (Slack in P1-g, others in T6). */
@@ -61,6 +88,31 @@ export interface BootstrapOptions {
    */
   mobileEngineClientFactory?: MobileEngineClientFactory;
   mobileFetchImpl?: typeof fetch;
+  /**
+   * Override the directory holding the direct-link E2E identity (default
+   * `~/.shannon/mobile-direct-e2e/`). Tests inject a tmpdir so a test boot
+   * never writes to the real HOME.
+   */
+  mobileDirectE2EDir?: string;
+  /**
+   * 修正1: override the directory holding the push expected-state store
+   * (default `~/.shannon/mobile-push-state/`). Tests inject a tmpdir so a
+   * test boot never writes to the real HOME.
+   */
+  mobilePushStateDir?: string;
+  /**
+   * Access-control seam (review §P0-7). Production defaults to an
+   * `AllowlistGuard` over a persisted allowlist — any IM sender that has not
+   * been paired/allowlisted receives a pairing challenge on DM and is denied
+   * in group chats. Tests inject a mock guard.
+   */
+  accessGuard?: InboundGuard;
+  /**
+   * Review F42: where the allowlist persists. Undefined (default) resolves to
+   * `$SHANNON_GATEWAY_ALLOWLIST` > `~/.shannon/gateway/allowlist.json`; pass
+   * `null` to force the in-memory store (tests), or an explicit path.
+   */
+  allowlistPath?: string | null;
 }
 
 export interface BootstrapHandle {
@@ -115,61 +167,215 @@ export async function bootstrap(
     registry.register(adapter);
   }
 
+  // Engine api_server bearer (F14): config names the secret entry, the raw
+  // token resolves from the keyring/env once at boot and stays in memory.
+  const engineAuthToken = config.engine.authTokenKey
+    ? await secretProvider.get(config.engine.authTokenKey)
+    : null;
+  if (config.engine.authTokenKey && !engineAuthToken) {
+    logger.warn(
+      `engine.authTokenKey "${config.engine.authTokenKey}" resolved to no secret — ` +
+        "engine calls may 401 if the engine enforces its bearer",
+    );
+  }
+
   // P2-1 mobile dispatch: when the mobile channel is enabled, the paired-phone
   // channel becomes a first-class platform adapter ("mobile") so dispatched
   // tasks ride the same lane/approval/lifecycle pipeline as the IM adapters.
-  const dispatchHub = config.mobile?.enabled
-    ? new MobileDispatchHub({ logger })
+  // §L2: the pending-approval registry is created ONCE and shared by the hub
+  // (record on requestApproval, resolve on settle) and the shannon/* handlers
+  // (shannon/approval.list / snapshot pendingApprovals) so both faces see the
+  // same queue.
+  const mobileEnabled = config.mobile?.enabled === true;
+  const approvalRegistry = mobileEnabled ? new ApprovalRegistry() : null;
+  // §O4: one replay ring shared three ways — the hub records its pushes into
+  // it, the server's MethodContext lets the direct-query stream record, and
+  // the pairing handlers replay it on `shannon/resume` (same
+  // instance-injection pattern as the approval registry above).
+  const pushReplay = mobileEnabled ? new PushReplayBuffer() : null;
+  const dispatchHub = mobileEnabled
+    ? new MobileDispatchHub({ logger, approvals: approvalRegistry ?? undefined, replay: pushReplay ?? undefined })
     : null;
+  // Shared in-flight query registry: the engine bridge (shannon/query +
+  // shannon/cancel) and the router's per-lane clients register against ONE
+  // instance, so cancel reaches a dispatched task's engine turn too —
+  // the same instance-injection pattern as the approval registry above.
+  const activeQueries = mobileEnabled ? new ActiveQueryRegistry() : null;
   if (dispatchHub) {
     registry.register(createMobileChannelAdapter({ hub: dispatchHub }));
   }
 
   const clientFactory: EngineClientFactory =
-    opts.engineClientFactory ?? ((sessionKey: string) => createEngineClient(config, sessionKey));
+    opts.engineClientFactory ?? ((sessionKey: string) => createEngineClient(config, sessionKey, engineAuthToken));
 
   // P1-4: report 任务开始/完成/失败 back to the IM channel around every
-  // adapter-routed turn (opt-out via config.im.taskLifecycle = false). The
-  // mobile shannon/* path keeps its own engine bridge and is unaffected.
+  // adapter-routed turn (opt-out via config.im.taskLifecycle = false).
+  //
+  // §K3: dispatched mobile tasks do NOT ride the IM text pipeline — their
+  // engine events stream back to the initiating phone as structured
+  // `shannon/event`s keyed by the task id (query.started / task.progress /
+  // task.message / query.failed), so platform "mobile" turns get the
+  // mobile-specific handler and every IM platform keeps the lifecycle-wrapped
+  // approval-aware one.
   const baseTurnHandler: TurnHandler =
-    opts.turnHandler ?? createApprovalTurnHandler({ engineBaseUrl: config.engine.httpBaseUrl });
-  const turnHandler: TurnHandler =
+    opts.turnHandler ??
+    createApprovalTurnHandler({
+      engineBaseUrl: config.engine.httpBaseUrl,
+      // review §P1-13: forward the engine bearer to the approval POST so IM
+      // approvals reach a non-loopback-bound engine without 401ing.
+      authToken: engineAuthToken,
+    });
+  const imTurnHandler: TurnHandler =
     config.im?.taskLifecycle === false ? baseTurnHandler : withTaskLifecycle(baseTurnHandler);
+  const mobileTaskTurnHandler = dispatchHub
+    ? createMobileTaskTurnHandler({
+        hub: dispatchHub,
+        engineBaseUrl: config.engine.httpBaseUrl,
+        authToken: engineAuthToken,
+      })
+    : null;
+  const turnHandler: TurnHandler = {
+    handle(ctx) {
+      if (ctx.inbound.platform === "mobile" && mobileTaskTurnHandler) {
+        return mobileTaskTurnHandler.handle(ctx);
+      }
+      return imTurnHandler.handle(ctx);
+    },
+  };
 
-  const router = new SessionRouter({ registry, clientFactory, turnHandler, logger });
+  const router = new SessionRouter({ registry, clientFactory, turnHandler, logger, activeQueries: activeQueries ?? undefined });
 
   // P2-1: dispatched tasks enter the router here — the same trigger-free,
   // lane-serialized, lifecycle-wrapped pipeline the IM adapters feed.
   dispatchHub?.setSubmit((inbound) => router.handleInbound(inbound));
 
-  // Inbound → trigger gate (P1-4) → router. The lane serializes per session;
-  // turn errors are logged in the router. onMessage is sync-void by contract,
-  // so handleInbound is fire-and-forget here. The trigger gate implements the
-  // v1 policy — DMs answer directly, group chats need @mention or /shannon —
-  // and rewrites the text so trigger syntax never reaches the engine prompt.
+  // Inbound → access guard (review §P0-7) → trigger gate (P1-4) → router.
+  // The guard ensures only paired/allowlisted senders can drive the engine;
+  // unpaired DMs receive a pairing challenge, group mentions by strangers
+  // are denied with a hint. Access control was previously implemented but
+  // never wired in — fix closes that gap so strangers cannot drive tools.
+  //
+  // Review F42: the allowlist now persists by default (previously the guard
+  // was built over empty in-memory state with NO approval path — every
+  // unpaired DM got an endless challenge loop pointing at a desktop approval
+  // UI that doesn't exist). Approval works today: a paired sender replies
+  // `approve <code>` in any chat; entries survive restarts via the file.
+  const allowlistPath = resolveAllowlistPath(opts.allowlistPath);
+  const allowlist = new Allowlist(allowlistPath);
+  const accessPairing = new PairingStore();
+  const accessGuard: InboundGuard =
+    opts.accessGuard ?? new AllowlistGuard(allowlist, accessPairing);
+  // The `approve <code>` interception only exists on the concrete guard —
+  // injected mock guards (tests) skip it.
+  const allowlistGuard = accessGuard instanceof AllowlistGuard ? accessGuard : null;
+  if (allowlistGuard && allowlist.size === 0) {
+    logger.warn(
+      "IM access control is enabled with an EMPTY allowlist — nobody is paired " +
+        "and nobody can approve pairings yet. Bootstrap the first user by adding " +
+        `an entry to ${allowlistPath ?? "the gateway allowlist file"} ` +
+        '(format: {"entries":[{"platform":"slack","senderId":"U…","addedAt":0}]}) ' +
+        "and restarting; from then on `approve <code>` self-serves new users.",
+    );
+  }
   const triggerByPlatform = new Map(
     config.adapters.map((cfg) => [cfg.platform, resolveTriggerConfig(cfg.options)]),
   );
   for (const adapter of registry.all()) {
     const triggerCfg = triggerByPlatform.get(adapter.platform) ?? {};
     adapter.onMessage((m) => {
-      const verdict = evaluateTrigger(m, triggerCfg);
-      if (!verdict.triggered) {
-        logger.debug(
-          `inbound on ${m.platform}:${m.chatId} ignored by trigger policy (${verdict.via})`,
-        );
-        return;
-      }
-      const routed = verdict.text === m.text ? m : { ...m, text: verdict.text };
-      void router.handleInbound(routed);
+      void (async () => {
+        const replyTarget = {
+          platform: m.platform,
+          chatId: m.chatId,
+          threadId: m.threadId,
+        };
+        // 1) access guard: deny/challenge before any further work.
+        const decision = await accessGuard.check(m);
+        if (decision.decision !== "allow") {
+          if (decision.decision === "challenge") {
+            logger.info(`pairing challenge issued for ${m.platform}:${m.senderId}`);
+            void adapter.send(replyTarget, pairingChallengeMessage(decision.code, allowlistPath));
+          } else {
+            logger.info(`denied inbound from ${m.platform}:${m.senderId} (not paired)`);
+            void adapter.send(replyTarget, decision.reason);
+          }
+          return;
+        }
+        // 1b) review F42: an already-allowed sender can approve a pending
+        // pairing with `approve <code>`. Intercepted BEFORE the trigger gate
+        // so it works in DMs and groups alike; the command never reaches the
+        // engine.
+        if (allowlistGuard) {
+          const approve = APPROVE_PAIRING_RE.exec(m.text.trim());
+          if (approve?.[1]) {
+            const outcome = allowlistGuard.approve(m, approve[1]);
+            if (outcome.ok) {
+              logger.info(
+                `pairing approved by ${m.platform}:${m.senderId} — ` +
+                  `${outcome.record.platform}:${outcome.record.senderId} allowlisted`,
+              );
+              void adapter.send(
+                replyTarget,
+                `Paired — ${outcome.record.platform}:${outcome.record.senderId} is now ` +
+                  "allowed to talk to the agent.",
+              );
+            } else {
+              logger.info(
+                `pairing approval from ${m.platform}:${m.senderId} rejected: ${outcome.reason}`,
+              );
+              void adapter.send(replyTarget, outcome.reason);
+            }
+            return;
+          }
+        }
+        // 2) trigger gate: DMs reply directly; group chats need @mention or /shannon.
+        const verdict = evaluateTrigger(m, triggerCfg);
+        if (!verdict.triggered) {
+          logger.debug(
+            `inbound on ${m.platform}:${m.chatId} ignored by trigger policy (${verdict.via})`,
+          );
+          return;
+        }
+        const routed = verdict.text === m.text ? m : { ...m, text: verdict.text };
+        // Review F40: handleInbound rejects when the engine is down or the
+        // turn throws mid-stream. An escaping rejection here used to crash
+        // the whole gateway (unhandled promise rejection) — exactly when the
+        // engine is restarting. Log with channel context and keep serving.
+        router.handleInbound(routed).catch((err: unknown) => {
+          logger.error(
+            `inbound turn failed on ${routed.platform}:${routed.chatId} ` +
+              `from ${routed.senderId}: ${(err as Error)?.message ?? String(err)}`,
+          );
+        });
+      })();
     });
   }
 
   await registry.startAll(ctx);
   logger.info(`shannon-gateway up: ${registry.size} adapter(s) started`);
 
-  const mobile = config.mobile?.enabled
-    ? await startMobileServer(config, logger, opts, dispatchHub!)
+  // §O3: late-bound push-relay leg — the relay host connection (and with it
+  // the push.bind/wake carrier) assembles BELOW, after startMobileServer has
+  // built the handlers; the sink reads this cell per call. Null = relay host
+  // mode off → push.register keeps its honest NOT_IMPLEMENTED degradation.
+  const pushRelayRef: { current: PushRelayBinding | null } = { current: null };
+
+  const mobile = mobileEnabled
+    ? await startMobileServer(
+        config,
+        logger,
+        opts,
+        dispatchHub!,
+        approvalRegistry!,
+        activeQueries!,
+        engineAuthToken,
+        {
+          allowlist,
+          pairing: accessPairing,
+        },
+        pushReplay!,
+        pushRelayRef,
+      )
     : null;
   if (mobile) {
     logger.info(
@@ -216,6 +422,21 @@ async function startMobileServer(
   logger: Logger,
   opts: BootstrapOptions,
   dispatchHub: MobileDispatchHub,
+  /** §L2: shared pending-approval registry (also wired into the hub). */
+  approvals: ApprovalRegistry,
+  /** Shared in-flight query registry (also wired into the SessionRouter). */
+  activeQueries: ActiveQueryRegistry,
+  engineAuthToken: string | null,
+  /** T9: the IM access stores the desktop pairing-approval RPC serves. */
+  access: { allowlist: Allowlist; pairing: PairingStore },
+  /** §O4: shared replay ring (also wired into the hub + server ctx). */
+  pushReplay: PushReplayBuffer,
+  /**
+   * §O3: late-bound push-relay leg (the relay host connection assembles after
+   * this function returns). Null = relay host mode off → push.register stays
+   * in its honest NOT_IMPLEMENTED degradation.
+   */
+  pushRelayRef: { current: PushRelayBinding | null },
 ): Promise<{ handle: { stop(): Promise<void> }; port: number }> {
   const mobileCfg = config.mobile!;
   const host = mobileCfg.host ?? "0.0.0.0";
@@ -225,6 +446,52 @@ async function startMobileServer(
 
   const tokens = new PairTokenStore({ filePath: tokensFile });
   const registry = new DeviceRegistry({ filePath: devicesFile });
+  // 修正1 (frame contract review 2026-10-05): the push EXPECTED STATE lives
+  // outside the relay connection — bind/unbind intents persist (encrypted,
+  // 0600) so every control-link establishment reconciles them (expected on →
+  // push.bind, off → push.unbind; 末态制胜, no action queue). The sinks read
+  // the late-bound pushRelayRef cell, so relay host mode staying off simply
+  // defers the relay leg to the reconcile.
+  const pushWiring = createPushWiring({
+    pushRelayRef,
+    store: new PushExpectedStateStore({
+      logger,
+      ...pushExpectedStatePaths(opts.mobilePushStateDir),
+    }),
+    logger,
+  });
+  // v0.12 LAN hardening: TLS with the persisted self-signed cert. Phones pin
+  // the cert fingerprint carried in the QR (out-of-band trust, same model as
+  // the pair token). Fail loud on cert trouble — silent plaintext fallback
+  // would defeat the hardening.
+  const tlsEnabled = mobileCfg.tls?.enabled === true;
+  const tlsMaterial = tlsEnabled ? ensureTlsMaterial() : null;
+  if (tlsMaterial) {
+    logger.info(
+      `mobile TLS enabled — cert fingerprint ${tlsMaterial.fingerprint} ` +
+        `(phones pin it from the QR)`,
+    );
+  }
+  // T9: desktop pairing approval — same stores the IM `approve <code>` reply
+  // uses (access/guard.ts), served as `shannon/pairing.*` JSON-RPC over the WS
+  // dispatch AND over the HTTP POST skin the Rust desktop calls.
+  const pairingAccess = createPairingAccess({
+    allowlist: access.allowlist,
+    pairing: access.pairing,
+    tokens,
+    registry,
+    logger,
+  });
+  // v0.13 direct-link E2E seal (cross-repo-adaptation-spec §I): the host's
+  // static X25519 identity, generated once and persisted (~/.shannon/
+  // mobile-direct-e2e/, 0600; the pub also lands in direct-e2e-info.json for
+  // the desktop's direct-QR composer). Phones that scanned a direct QR offer
+  // the sealed handshake; everyone else sees unchanged plaintext behavior.
+  const directE2EKey = ensureDirectE2EKey(
+    opts.mobileDirectE2EDir ? directE2EPaths(opts.mobileDirectE2EDir) : undefined,
+  );
+  const directLinkKeys = new Map<string, Buffer>(); // kid → K0, filled on sealed pairs
+
   const handlers = createMobileHandlers({
     engine: {
       engineWsUrl: config.engine.wsUrl,
@@ -234,11 +501,53 @@ async function startMobileServer(
       logger,
       engineClientFactory: opts.mobileEngineClientFactory,
       fetchImpl: opts.mobileFetchImpl,
+      engineAuthToken,
+      approvalRegistry: approvals,
+      // §O2/§O3 + 修正1: forward push bindings to the relay over its control
+      // side channel (late-bound — the relay host leg connects below), with
+      // the expected-state store recording every intent for the link-reconnect
+      // reconciliation. Relay host mode off → the honest NOT_IMPLEMENTED
+      // degradation (§O2 tri-state); the intent still lands for the reconcile.
+      pushBindingSink: pushWiring.pushBindingSink,
+      pushUnbindSink: pushWiring.pushUnbindSink,
+      // Shared in-flight query registry: shannon/cancel can interrupt a
+      // dispatched task's lane turn (the router registers its clients on the
+      // same instance for the duration of each turn).
+      activeQueries,
+      // §K: a signed shannon/approval/decide unblocks the dispatched task's
+      // parked approval lane (the Y/N-text settle left the RPC face).
+      approvalDecisionSink: (requestId, choice) => dispatchHub.settleApproval(requestId, choice),
+      // r2-w2d: shannon/cancel that reaches an in-flight turn also deny-settles
+      // the device's parked approvals, so a cancel landing inside the approval
+      // window delivers the task stream's query.failed terminal immediately
+      // instead of after the parked ask's 300s timeout.
+      cancelPendingApprovals: (deviceId: string) => dispatchHub.cancelPendingApprovals(deviceId),
     },
     tokens,
     registry,
     logger,
-    tasks: createTaskHandlers({ hub: dispatchHub }),
+    // §L2: the same registry the hub feeds — snapshot/approval.list read it.
+    approvalRegistry: approvals,
+    // §O4: the same ring the hub and the server feed — resume replays it.
+    replayBuffer: pushReplay ?? undefined,
+    // §M2: a successful revoke fans a `device.revoked` event out to every
+    // OTHER online device (the revoked one is excluded — it learns from the
+    // PAIRING_REQUIRED on its next signed call). 修正1 adds the push cascade:
+    // forget the revoked device's expected state and best-effort unbind its
+    // relay binding (the reconcile covers a link-down revoke).
+    onDeviceRevoked: (deviceId: string) => {
+      dispatchHub.broadcastEvent({ type: "device.revoked", device_id: deviceId }, deviceId);
+      pushWiring.onDeviceRevoked(deviceId);
+    },
+    tasks: createTaskHandlers({
+      hub: dispatchHub,
+      // review §P1-13: revoked devices must not be able to dispatch tasks
+      // through their still-open WS connection. Bootstrap closes the loop
+      // so a device removed from devices.json loses all gateways —
+      // shannon/* RPC (engineBridge) and shannon/task.* alike.
+      isDeviceTrusted: (deviceId: string) => registry.has(deviceId),
+    }),
+    access: pairingAccess.handlers,
   });
 
   const server = new MobileServer({
@@ -246,9 +555,25 @@ async function startMobileServer(
     port,
     logger,
     handlers,
+    httpApi: pairingAccess.http,
     onContext: (ctx) => dispatchHub.registerConnection(ctx),
+    // §O4: the MethodContext carries the ring so the direct-query stream
+    // records its seq-stamped frames (same instance as hub/handlers).
+    replayBuffer: pushReplay ?? undefined,
+    directE2E: {
+      privateKey: directE2EKey.privateKey,
+      // The pairing flavor mixes the token the phone scanned; it is consumed
+      // later by shannon/pair on the sealed channel, so this is a peek.
+      livePairToken: () => tokens.latest()?.token ?? null,
+      linkKeys: directLinkKeys,
+    },
+    ...(tlsMaterial ? { tls: { key: tlsMaterial.key, cert: tlsMaterial.cert } } : {}),
   });
   const handle = await server.start();
+  logger.info(
+    `direct-link E2E seal ready — hostE2EPubKey ${directE2EKey.pubB64} ` +
+      `(direct QR field / resume rekeys enabled)`,
+  );
 
   // §A8/§A8b (cross-repo-adaptation-spec): advertise _shannon._tcp while the
   // pairing server is up. iOS ATS rejects raw-IP ws:// endpoints outright, so
@@ -277,7 +602,13 @@ async function startMobileServer(
     const relayUrl = mobileCfg.relay.url;
     const relaySid = generateRelaySessionId();
     const pairRecord = tokens.issue();
+    // Legacy (token-only) key — kept as the fallback for pre-v0.3 phones.
     const sessionKey = deriveSessionKey(pairRecord.token);
+    // v0.3: per-session ephemeral X25519 keypair (forward secrecy) — the pub
+    // travels in the QR, the handshake completes via the phone's `e2e_hello`.
+    const hostE2E = generateHostE2EKeyPair();
+    // Relay handshake auth tag (pins the session to this pairing secret).
+    const relayAuthTag = deriveRelayAuthTag(pairRecord.token);
 
     const relayHandle: RelayHostHandle = startRelayHost({
       relayUrl,
@@ -285,11 +616,42 @@ async function startMobileServer(
       sessionKey,
       handlers,
       logger,
+      relayAuthTag,
+      hostE2E: { privateKey: hostE2E.privateKey, pairToken: pairRecord.token },
       onContext: (ctx) => dispatchHub.registerConnection(ctx),
+      // 修正1: every control-link (re)establishment re-asserts the persisted
+      // push expected state (expected on → push.bind, off → push.unbind).
+      onRegistered: pushWiring.reconcile,
+    });
+    // Nobody awaits `paired` — without a handler here the 75s pair timeout
+    // rejection would surface as an unhandled rejection and take the
+    // gateway down (Node's default is to throw). A phone that never joins is
+    // a normal condition, not a crash.
+    relayHandle.paired.catch((err: Error) => {
+      logger.info(`relay host: initial pair window closed (${err.message}); ` +
+        "host stays registered for late joins via auto-reconnect/re-pair");
     });
 
-    // Generate the QR v2 payload for the phone to scan.
-    const scheme = relayUrl.startsWith("wss") ? "wss" : "ws";
+    // §O3/§T6: the Push-to-Wake leg rides this same relay connection —
+    // pushBindingSink forwards shannon/push.register over it, and the hub's
+    // wake seam fires push.wake on approval asks / turn terminals. Frames per
+    // docs/protocol/relay-push-wake-frames.md; a relay that advertised no
+    // caps:["push"] (v1.1 §6.1) degrades push to not_configured instead of
+    // burning a 5s ack timeout per bind.
+    const pushRelay = new PushRelayBinding(
+      {
+        send: (frame) => relayHandle.sendControl(frame),
+        onFrame: (handler) => relayHandle.onControl(handler),
+      },
+      { logger, capable: () => relayHandle.pushCapable() },
+    );
+    pushRelayRef.current = pushRelay;
+    dispatchHub.setWake((deviceId, seq) => pushRelay.wake(deviceId, seq));
+
+    // Generate the QR v2 payload for the phone to scan. The LAN-endpoint
+    // scheme reflects TLS, not the relay scheme: with mobile.tls the phone
+    // dials wss and pins the cert fingerprint from this payload.
+    const scheme = tlsMaterial ? "wss" : relayUrl.startsWith("wss") ? "wss" : "ws";
     const qrPayload = generateQrV2Payload({
       scheme,
       host,
@@ -298,15 +660,28 @@ async function startMobileServer(
       expiresAt: pairRecord.expiresAt,
       relayUrl,
       relaySessionId: relaySid,
+      hostE2EPubKey: hostE2E.pubB64,
+      certFingerprint: tlsMaterial?.fingerprint ?? null,
     });
 
     const qrJson = JSON.stringify(qrPayload);
-    logger.info(`relay host: QR v2 payload: ${qrJson}`);
+    // The payload embeds the pair token, which IS the E2E session key material
+    // (e2e.ts): anyone who reads it can decrypt/forge the whole relay session.
+    // Never log it at info — it's available via the 0600 payload file (rendered
+    // by the desktop) or by enabling debug logs.
+    logger.info(
+      `relay host: session ${relaySid} at ${relayUrl} — pair token valid for ` +
+        `${Math.max(0, pairRecord.expiresAt - Date.now())}ms; QR available via ` +
+        `${mobileCfg.qrPayloadFile ?? "debug logging (mobile.qrPayloadFile unset)"}`,
+    );
 
     if (mobileCfg.qrPayloadFile) {
       mkdirSync(dirname(mobileCfg.qrPayloadFile), { recursive: true });
-      writeFileSync(mobileCfg.qrPayloadFile, qrJson, "utf8");
-      logger.info(`relay host: QR payload written to ${mobileCfg.qrPayloadFile}`);
+      writeFileSync(mobileCfg.qrPayloadFile, qrJson, { encoding: "utf8", mode: 0o600 });
+      chmodSync(mobileCfg.qrPayloadFile, 0o600);
+      logger.info(`relay host: QR payload written to ${mobileCfg.qrPayloadFile} (0600)`);
+    } else {
+      logger.debug(`relay host: QR v2 payload: ${qrJson}`);
     }
 
     // Extend the stop handle to also stop the relay host (and the mDNS
@@ -325,10 +700,15 @@ async function startMobileServer(
   return { handle: { stop: stopServerAndMdns }, port: handle.port };
 }
 
-function createEngineClient(config: GatewayConfig, sessionKey: string): EngineWsClient {
+function createEngineClient(
+  config: GatewayConfig,
+  sessionKey: string,
+  authToken: string | null,
+): EngineWsClient {
   return new EngineWsClient({
     url: config.engine.wsUrl,
     model: config.engine.model ?? null,
     sessionId: sessionKey,
+    headers: authToken ? { authorization: `Bearer ${authToken}` } : undefined,
   });
 }

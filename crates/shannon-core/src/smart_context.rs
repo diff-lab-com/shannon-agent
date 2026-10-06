@@ -314,25 +314,40 @@ fn extract_keywords(query: &str) -> Vec<String> {
     keywords
 }
 
+/// Directory names the external `grep -r` sweep must never descend into:
+/// VCS internals, vendored dependencies and build output. Uses GNU/BSD grep
+/// `--exclude-dir` (the loader assumes a `grep` binary is on PATH already,
+/// matching the pre-existing call sites; there is no non-grep fallback).
+const GREP_EXCLUDE_DIRS: &[&str] = &[".git", "node_modules", "target", "dist"];
+
+/// Build the base argument vector for the external `grep -r` sweep:
+/// recursive fixed-string list-matching (`-rl -F`), restricted to
+/// `include_globs`, skipping the junk directories in [`GREP_EXCLUDE_DIRS`].
+/// Callers append their `-e <pattern>` arguments and the search root after
+/// this prefix, so exclusions are always in effect regardless of pattern.
+fn grep_base_args(include_globs: &[&str]) -> Vec<String> {
+    let mut args: Vec<String> = vec!["-rl".to_string(), "-F".to_string()];
+    args.extend(
+        GREP_EXCLUDE_DIRS
+            .iter()
+            .map(|dir| format!("--exclude-dir={dir}")),
+    );
+    args.extend(include_globs.iter().map(|glob| format!("--include={glob}")));
+    args
+}
+
 /// Search for files containing identifiers using grep.
 fn search_identifiers(identifiers: &[String], working_dir: &Path) -> Vec<String> {
     let mut results = Vec::new();
 
     for ident in identifiers {
+        let mut args =
+            grep_base_args(&["*.rs", "*.py", "*.ts", "*.js", "*.go", "*.java", "*.toml"]);
+        args.push((*ident).to_string());
+        args.push(".".to_string());
+
         let output = std::process::Command::new("grep")
-            .args([
-                "-rl",
-                "-F",
-                "--include=*.rs",
-                "--include=*.py",
-                "--include=*.ts",
-                "--include=*.js",
-                "--include=*.go",
-                "--include=*.java",
-                "--include=*.toml",
-                ident,
-                ".",
-            ])
+            .args(&args)
             .current_dir(working_dir)
             .output();
 
@@ -355,16 +370,8 @@ fn search_identifiers(identifiers: &[String], working_dir: &Path) -> Vec<String>
 
 /// Search for files containing keywords.
 fn search_keywords(keywords: &[String], working_dir: &Path) -> Vec<String> {
-    // Build fixed-string patterns with multiple -e flags to avoid regex injection
-    let mut base_args: Vec<String> = vec![
-        "-rl".to_string(),
-        "-F".to_string(),
-        "--include=*.rs".to_string(),
-        "--include=*.py".to_string(),
-        "--include=*.ts".to_string(),
-        "--include=*.js".to_string(),
-        "--include=*.toml".to_string(),
-    ];
+    // Multiple `-e` fixed-string patterns avoid regex injection
+    let mut base_args = grep_base_args(&["*.rs", "*.py", "*.ts", "*.js", "*.toml"]);
     for kw in keywords {
         base_args.push("-e".to_string());
         base_args.push(kw.clone());
@@ -541,5 +548,22 @@ mod tests {
         let snippets = read_snippets(&["long.rs".to_string()], dir.path());
         assert_eq!(snippets.len(), 1);
         assert!(snippets[0].content.contains("... (50 more lines)"));
+    }
+
+    #[test]
+    fn test_grep_base_args_exclude_junk_dirs() {
+        // The external grep sweep must skip VCS/vendored/build directories.
+        let args = grep_base_args(&["*.rs"]);
+        for dir in [".git", "node_modules", "target", "dist"] {
+            let flag = format!("--exclude-dir={dir}");
+            assert!(
+                args.contains(&flag),
+                "grep args must exclude '{dir}', got: {args:?}"
+            );
+        }
+        // Include globs and the recursive fixed-string flags stay intact.
+        assert!(args.contains(&"--include=*.rs".to_string()));
+        assert!(args.contains(&"-rl".to_string()));
+        assert!(args.contains(&"-F".to_string()));
     }
 }

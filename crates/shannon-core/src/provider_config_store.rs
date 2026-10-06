@@ -32,13 +32,37 @@ use std::os::unix::fs::PermissionsExt;
 use fs2::FileExt;
 use shannon_engine::api::LlmProvider;
 use shannon_types::provider_config::{
-    CredentialRef, ProviderKind, ProviderModelConfig, ProviderProfile, ProviderTiers,
+    CredentialRef, GatewayConfig, ProviderKind, ProviderModelConfig, ProviderProfile, ProviderTiers,
 };
 use tracing::{debug, warn};
 
 /// `~/.shannon/providers.toml`; `None` if the home directory is unknowable.
 pub fn default_path() -> Option<PathBuf> {
     Some(dirs::home_dir()?.join(".shannon").join("providers.toml"))
+}
+
+/// R4-2: one provider slot a snapshot import would overwrite —
+/// `(profile name, provider id)`. Sorted by `Self::import_conflicts` so
+/// conflict listings are deterministic.
+pub type ImportConflict = (String, String);
+
+/// R4-2: in-memory result of [`ProviderConfigStore::apply_import_snapshot`].
+/// Counts and the resulting active-profile pointer; persistence is the
+/// caller's (service) job.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImportSummary {
+    /// Model profiles created wholesale by the import (sorted).
+    pub profiles_added: Vec<String>,
+    /// Provider slots appended (new ids, plus every slot of a created profile).
+    pub providers_added: usize,
+    /// Provider slots replaced wholesale (`--force` over an existing id).
+    pub providers_replaced: usize,
+    /// The active-profile pointer after the import (never empty: `"default"`
+    /// when unset).
+    pub active_profile: String,
+    /// Whether the import moved the active-profile pointer (`--set-active`,
+    /// or the fresh-machine adoption of the snapshot's pointer).
+    pub active_pointer_applied: bool,
 }
 
 /// Sibling sidecar lockfile for cross-process `flock(LOCK_EX)` on
@@ -124,6 +148,20 @@ pub fn load(path: Option<&Path>) -> Option<ProviderModelConfig> {
     let content = fs::read_to_string(&path).ok()?;
     match toml::from_str::<ProviderModelConfig>(&content) {
         Ok(cfg) => {
+            // R2-4: semantic validation of the per-model declarations beyond
+            // what serde checks (duplicate ids, zero limits, bad prices).
+            // Same graceful-degradation contract as a parse error: the file
+            // is ignored for reads and refuses writes until fixed.
+            if let Err(e) = cfg.validate_models() {
+                warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "providers.toml has invalid per-model metadata declarations; \
+                     ignoring the file (reads fall back to synthesis, writes are \
+                     refused) until the declarations are fixed"
+                );
+                return None;
+            }
             debug!(path = %path.display(), "loaded v2 provider config");
             Some(cfg)
         }
@@ -224,7 +262,25 @@ fn ensure_safe_to_overwrite(path: &Path) -> io::Result<()> {
         return Ok(());
     }
     match toml::from_str::<ProviderModelConfig>(&existing) {
-        Ok(_) => Ok(()),
+        Ok(cfg) => {
+            // R2-4: parseable but semantically invalid model declarations get
+            // the same protection — `load` ignores such a file, so a write
+            // would rebuild from an empty config and silently drop the user's
+            // (nearly-valid) hand edit.
+            if let Err(e) = cfg.validate_models() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "refusing to overwrite {}: the file's per-model metadata \
+                         declarations are invalid, and rewriting it would silently \
+                         destroy user content. Validation error: {e}. Fix the file \
+                         (or rename/remove it) and retry; it was left untouched.",
+                        path.display()
+                    ),
+                ));
+            }
+            Ok(())
+        }
         Err(e) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
@@ -471,24 +527,22 @@ impl ProviderConfigStore {
         Ok(())
     }
 
-    /// Get-or-create the profile for the given provider, mutating the
-    /// `"default"` [`shannon_types::provider_config::ModelProfile`] in place.
+    /// Get-or-create the provider slot on the **active** model profile
+    /// (`config.active_profile`, R3-2 — `"default"` when unset, so
+    /// single-profile behavior is unchanged).
     ///
     /// Returns `&mut ProviderProfile` so callers can set per-tier overrides
     /// (e.g. `/model --tier fast gpt-4o --save` writes
-    /// `providers[0].tiers.fast = "gpt-4o"`). If no `default` profile exists
-    /// yet, creates one with a single synthetic provider slot.
+    /// `providers[0].tiers.fast = "gpt-4o"`). If the active profile does not
+    /// exist yet, creates one (empty scaffold under its name) so the write
+    /// lands in the profile resolution actually reads.
     ///
     /// `ProviderProfile` has no `Default` impl (required fields like
     /// `base_url` and `credential` have no universal default), so we
     /// synthesize the slot from the provider's known canonical base URL.
     pub fn ensure_provider(&mut self, provider: &LlmProvider) -> &mut ProviderProfile {
         let id = crate::provider_resolver::llm_provider_id(provider);
-        let profile = self
-            .config
-            .profiles
-            .entry("default".to_string())
-            .or_insert_with(default_model_profile);
+        let profile = self.active_model_profile_or_insert();
 
         if let Some(idx) = profile.providers.iter().position(|p| p.id == id) {
             return &mut profile.providers[idx];
@@ -499,6 +553,20 @@ impl ProviderConfigStore {
             provider.default_base_url(),
         ));
         profile.providers.last_mut().expect("just pushed")
+    }
+
+    /// Get-or-create the **active** [`ModelProfile`] (the
+    /// `config.active_profile` entry; `"default"` when unset). The scaffold
+    /// is named after the key so `ModelProfile.name` and the map key never
+    /// drift.
+    fn active_model_profile_or_insert(
+        &mut self,
+    ) -> &mut shannon_types::provider_config::ModelProfile {
+        let key = self.config.active_profile_key().to_string();
+        self.config
+            .profiles
+            .entry(key.clone())
+            .or_insert_with(|| default_model_profile(&key))
     }
 
     /// Set a per-tier model override on the given provider. Writes through
@@ -532,8 +600,9 @@ impl ProviderConfigStore {
         self
     }
 
-    /// Set the active provider + model on the `"default"` profile. The engine
-    /// read-back ([`crate::provider_resolver::resolve_active_target`]) reads
+    /// Set the active provider + model on the **active** model profile
+    /// (`config.active_profile`, R3-2). The engine read-back
+    /// ([`crate::provider_resolver::resolve_active_target`]) reads
     /// `active_target` — **not** the per-tier overrides written by `set_tier`
     /// — so calling this is what makes a `/model --tier ... --save` choice
     /// actually survive a restart (ADR-0005 Phase 4). Reuses `ensure_provider`
@@ -542,7 +611,7 @@ impl ProviderConfigStore {
     pub fn set_active(&mut self, provider: &LlmProvider, model_id: &str) -> &mut Self {
         let id = crate::provider_resolver::llm_provider_id(provider);
         self.ensure_provider(provider);
-        if let Some(profile) = self.config.profiles.get_mut("default") {
+        if let Some(profile) = self.config.active_model_profile_mut() {
             profile.active_target.provider_id = id;
             profile.active_target.model_id = model_id.to_string();
         }
@@ -570,8 +639,254 @@ impl ProviderConfigStore {
         self
     }
 
+    /// Insert or replace one per-model metadata declaration (R2-4) on the
+    /// provider slot whose stored id is `provider_id` (the raw
+    /// `ProviderProfile.id` string — an openai-compatible slot may carry a
+    /// custom slug like `glm`). Existing entries with the same model id are
+    /// replaced wholesale, so ids stay unique by construction; other entries
+    /// are preserved.
+    ///
+    /// Errors (`NotFound`) when no provider slot with that id exists — model
+    /// metadata hangs off a real provider profile, unlike `ensure_provider`,
+    /// which would synthesize one from an [`LlmProvider`]. The spec itself is
+    /// validated here (`InvalidData`) so an invalid entry can never reach
+    /// disk through this path.
+    pub fn set_model_meta(
+        &mut self,
+        provider_id: &str,
+        spec: shannon_types::provider_config::ModelSpec,
+    ) -> io::Result<()> {
+        if let Err(e) = spec.validate() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, e));
+        }
+        let profile = self
+            .config
+            .active_model_profile_mut()
+            .and_then(|mp| mp.providers.iter_mut().find(|p| p.id == provider_id))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "no provider slot with id '{provider_id}' in the active profile of \
+                         providers.toml; run `shannon list-providers` to see configured ids"
+                    ),
+                )
+            })?;
+        if let Some(existing) = profile.models.iter_mut().find(|m| m.id == spec.id) {
+            *existing = spec;
+        } else {
+            profile.models.push(spec);
+        }
+        Ok(())
+    }
+
+    /// S2-1 (模型仓固化): replace the whole per-model declaration list of the
+    /// provider slot whose stored id is `provider_id` with `models`
+    /// (overwrite semantics — the UI's curated selection is authoritative).
+    /// Every spec is validated here (`InvalidData`) and ids must be unique,
+    /// so an invalid batch can never reach disk through this path; an empty
+    /// list clears the declarations (the picker falls back to the unfiltered
+    /// catalog). `model_profile` names the model profile to write into —
+    /// `None` targets the **active** one (the same slot every other
+    /// store mutator drives). Errors (`NotFound`) when no provider slot with
+    /// that id exists in that profile.
+    pub fn set_provider_models(
+        &mut self,
+        provider_id: &str,
+        models: Vec<shannon_types::provider_config::ModelSpec>,
+        model_profile: Option<&str>,
+    ) -> io::Result<()> {
+        for spec in &models {
+            if let Err(e) = spec.validate() {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, e));
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for spec in &models {
+            if !seen.insert(spec.id.as_str()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "duplicate model declaration for id '{}' on provider '{provider_id}'",
+                        spec.id
+                    ),
+                ));
+            }
+        }
+        let model_profile = match model_profile {
+            Some(name) => self.config.profiles.get_mut(name).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("no model profile named '{name}' in providers.toml"),
+                )
+            })?,
+            None => self.config.active_model_profile_mut().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "no active model profile in providers.toml",
+                )
+            })?,
+        };
+        let profile = model_profile
+            .providers
+            .iter_mut()
+            .find(|p| p.id == provider_id)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "no provider slot with id '{provider_id}' in the target profile of \
+                         providers.toml; run `shannon list-providers` to see configured ids"
+                    ),
+                )
+            })?;
+        profile.models = models;
+        Ok(())
+    }
+
+    /// S3-4 (推荐降级链): replace the `fallback_models` list of the provider
+    /// slot whose stored id is `provider_id`. **Surgical field write** —
+    /// unlike [`Self::upsert_profile`] (which repoints
+    /// `active_target` as a side effect) this only touches the one field,
+    /// so recommending/applying a fallback chain can never move the user's
+    /// active provider or model. Entries are stored trimmed and in the
+    /// given order; empties must be dropped by the caller (the desktop
+    /// command sanitizes before calling). An empty list clears the chain
+    /// (failover stays opt-in — nothing is enabled implicitly).
+    /// `model_profile` names the model profile to write into — `None`
+    /// targets the **active** one. Errors (`NotFound`) when no provider
+    /// slot with that id exists in that profile.
+    pub fn set_provider_fallback_models(
+        &mut self,
+        provider_id: &str,
+        fallback_models: Vec<String>,
+        model_profile: Option<&str>,
+    ) -> io::Result<()> {
+        let model_profile = match model_profile {
+            Some(name) => self.config.profiles.get_mut(name).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("no model profile named '{name}' in providers.toml"),
+                )
+            })?,
+            None => self.config.active_model_profile_mut().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "no active model profile in providers.toml",
+                )
+            })?,
+        };
+        let profile = model_profile
+            .providers
+            .iter_mut()
+            .find(|p| p.id == provider_id)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "no provider slot with id '{provider_id}' in the target profile of \
+                         providers.toml; run `shannon list-providers` to see configured ids"
+                    ),
+                )
+            })?;
+        profile.fallback_models = fallback_models;
+        Ok(())
+    }
+
+    /// S3-3 (utility tier 槽位化): set the auxiliary target for `role` on the
+    /// **active** model profile — providers.toml v2's
+    /// `auxiliary.<role>` map, the schema slot that had zero consumers until
+    /// this chain. **Surgical field write** in the [`Self::set_provider_fallback_models`]
+    /// mold: the `active_target` pointer (and every other field) is never
+    /// touched, so assigning a utility slot can never move the user's active
+    /// provider or model.
+    ///
+    /// The `provider_id` must name an existing slot in the active profile's
+    /// roster — a utility target that could never resolve is rejected at
+    /// write time instead of silently falling back at consume time (the same
+    /// write-time-validation contract `set_session_model` holds on the
+    /// interactive side). Errors (`NotFound`) for a missing active profile or
+    /// a missing provider slot.
+    pub fn set_auxiliary_target(
+        &mut self,
+        role: shannon_types::provider_config::AuxRole,
+        provider_id: &str,
+        model_id: &str,
+    ) -> io::Result<()> {
+        let provider_id = provider_id.trim();
+        let model_id = model_id.trim();
+        if provider_id.is_empty() || model_id.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "auxiliary target needs a non-empty provider id and model id",
+            ));
+        }
+        let mp = self.config.active_model_profile_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "no active model profile in providers.toml",
+            )
+        })?;
+        if !mp.providers.iter().any(|p| p.id == provider_id) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "no provider slot with id '{provider_id}' in the active profile of \
+                     providers.toml; run `shannon list-providers` to see configured ids"
+                ),
+            ));
+        }
+        mp.auxiliary.insert(
+            role,
+            shannon_types::provider_config::ActiveTarget {
+                provider_id: provider_id.to_string(),
+                model_id: model_id.to_string(),
+                scope: shannon_types::provider_config::Scope::Global,
+            },
+        );
+        Ok(())
+    }
+
+    /// S3-3 twin of [`Self::set_auxiliary_target`]: clear the auxiliary
+    /// target for `role` so the slot falls back to the default behavior
+    /// (the consumer rides the session's own model). Returns whether an
+    /// entry was actually removed (idempotent otherwise). Never touches the
+    /// `active_target` pointer.
+    pub fn clear_auxiliary_target(
+        &mut self,
+        role: shannon_types::provider_config::AuxRole,
+    ) -> io::Result<bool> {
+        let mp = self.config.active_model_profile_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "no active model profile in providers.toml",
+            )
+        })?;
+        Ok(mp.auxiliary.remove(&role).is_some())
+    }
+
+    /// Remove the per-model declaration `model_id` from provider slot
+    /// `provider_id`. Returns whether an entry was removed (idempotent
+    /// otherwise, matching [`Self::remove_profile`]'s contract).
+    pub fn remove_model_meta(&mut self, provider_id: &str, model_id: &str) -> io::Result<bool> {
+        let profile = self
+            .config
+            .active_model_profile_mut()
+            .and_then(|mp| mp.providers.iter_mut().find(|p| p.id == provider_id))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("no provider slot with id '{provider_id}' in the active profile"),
+                )
+            })?;
+        let before = profile.models.len();
+        profile.models.retain(|m| m.id != model_id);
+        Ok(profile.models.len() != before)
+    }
+
     /// Insert or replace a fully-built [`ProviderProfile`] under the
-    /// `"default"` model profile, keyed by `profile.id`. The desktop uses
+    /// **active** model profile (`config.active_profile`, R3-2 — `"default"`
+    /// when unset), keyed by `profile.id`. The desktop uses
     /// this to land managed connections (e.g. two distinct
     /// `openai-compatible` endpoints like `glm` and `kimi`) without
     /// collapsing them to the engine's `OpenAI` slot — unlike
@@ -586,7 +901,7 @@ impl ProviderConfigStore {
     ///   existing fields must read them out first.
     /// - If absent, the profile is appended and `active_target` is
     ///   repointed at the new id with `model_id`.
-    /// - Other slots in `default.providers` are left untouched.
+    /// - Other slots in the active model profile are left untouched.
     ///
     /// This is the write path the desktop shell uses for managed
     /// provider connections (ADR-0005 Phase 2 task 4 — full
@@ -596,11 +911,7 @@ impl ProviderConfigStore {
     /// semantics.
     pub fn upsert_profile(&mut self, profile: ProviderProfile, model_id: &str) -> &mut Self {
         let profile_id = profile.id.clone();
-        let model_profile = self
-            .config
-            .profiles
-            .entry("default".to_string())
-            .or_insert_with(default_model_profile);
+        let model_profile = self.active_model_profile_or_insert();
 
         if let Some(idx) = model_profile
             .providers
@@ -618,13 +929,13 @@ impl ProviderConfigStore {
     }
 
     /// Remove the provider slot whose `id` matches `profile_id` from the
-    /// `"default"` model profile. If that slot was the active target, the
-    /// active pointer is cleared to `""` (the resolver will then fall
-    /// back to synthesis on the next request). No-op if no slot matches
-    /// — the desktop's `delete_provider` flow needs idempotence, not a
-    /// 404.
+    /// **active** model profile (`config.active_profile`, R3-2). If that slot
+    /// was the active target, the active pointer is cleared to `""` (the
+    /// resolver will then fall back to synthesis on the next request). No-op
+    /// if no slot matches — the desktop's `delete_provider` flow needs
+    /// idempotence, not a 404.
     pub fn remove_profile(&mut self, profile_id: &str) -> &mut Self {
-        if let Some(model_profile) = self.config.profiles.get_mut("default") {
+        if let Some(model_profile) = self.config.active_model_profile_mut() {
             model_profile.providers.retain(|p| p.id != profile_id);
             if model_profile.active_target.provider_id == profile_id {
                 model_profile.active_target.provider_id = String::new();
@@ -632,6 +943,324 @@ impl ProviderConfigStore {
             }
         }
         self
+    }
+
+    // ── R3-2: named model-profile management (store-level mutators) ─────
+    //
+    // In-memory primitives behind `ProviderConfigService`'s persisted
+    // `create` / `rename` / `delete` / `set-active` flows. They mutate
+    // `self.config` only — persistence is the caller's (locked) job, same
+    // split as `ensure_provider` vs `save_locked`.
+
+    /// Insert an empty named model profile scaffold (no providers, no active
+    /// target — the same starting point `default_model_profile` gives a fresh
+    /// store). Errors (`AlreadyExists`) when the name is taken; the name is
+    /// validated by the service layer before reaching here.
+    pub fn insert_model_profile(&mut self, name: &str) -> io::Result<()> {
+        if self.config.profiles.contains_key(name) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("profile '{name}' already exists"),
+            ));
+        }
+        self.config
+            .profiles
+            .insert(name.to_string(), default_model_profile(name));
+        Ok(())
+    }
+
+    /// Rename a model profile: moves the map entry, rewrites the profile's
+    /// own `name` field, and **follows the active pointer** when the renamed
+    /// profile was the active one (a rename must never change which profile
+    /// is live). Errors: `NotFound` (unknown `old`, message lists what
+    /// exists), `AlreadyExists` (`new` taken).
+    pub fn rename_model_profile(&mut self, old: &str, new: &str) -> io::Result<()> {
+        if !self.config.profiles.contains_key(old) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "profile '{old}' not found; available profiles: {}",
+                    self.config.profile_names().join(", ")
+                ),
+            ));
+        }
+        if self.config.profiles.contains_key(new) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("profile '{new}' already exists"),
+            ));
+        }
+        // HashMap::rename is not a thing — remove + reinsert preserves the
+        // value wholesale (providers, tiers, auxiliary, credential_scope).
+        let mut mp = self.config.profiles.remove(old).expect("checked above");
+        mp.name = new.to_string();
+        self.config.profiles.insert(new.to_string(), mp);
+        if self.config.active_profile_key() == old {
+            self.set_active_profile_key(new);
+        }
+        Ok(())
+    }
+
+    /// Delete a named model profile. Guards:
+    /// - `NotFound` when the name is unknown (message lists what exists).
+    /// - `InvalidData` when it is the **last** profile — a config must keep
+    ///   at least one.
+    /// - `InvalidData` when it is the **active** profile and `force` is
+    ///   false — the caller decides (REPL: "pass --force").
+    ///
+    /// With `force`, the active pointer falls back to `"default"` when that
+    /// profile exists and is not the one being deleted, else to the first
+    /// remaining profile (sorted), else the pointer is cleared (resolution
+    /// degrades to synthesis — the same contract as a dangling pointer).
+    /// Returns the fallback profile name when the pointer moved, `None` when
+    /// the deleted profile was not active.
+    pub fn remove_model_profile(&mut self, name: &str, force: bool) -> io::Result<Option<String>> {
+        if !self.config.profiles.contains_key(name) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "profile '{name}' not found; available profiles: {}",
+                    self.config.profile_names().join(", ")
+                ),
+            ));
+        }
+        if self.config.profiles.len() == 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "cannot delete profile '{name}': it is the only profile; \
+                     create another one first (/profiles new <name>)"
+                ),
+            ));
+        }
+        let was_active = self.config.active_profile_key() == name;
+        if was_active && !force {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "refusing to delete the active profile '{name}'; switch first \
+                     (/profiles use <name>) or pass --force"
+                ),
+            ));
+        }
+        self.config.profiles.remove(name);
+        if !was_active {
+            return Ok(None);
+        }
+        let fallback = if name != ProviderModelConfig::DEFAULT_PROFILE
+            && self
+                .config
+                .profiles
+                .contains_key(ProviderModelConfig::DEFAULT_PROFILE)
+        {
+            Some(ProviderModelConfig::DEFAULT_PROFILE.to_string())
+        } else {
+            self.config.profile_names().into_iter().next()
+        };
+        match &fallback {
+            Some(fb) => self.set_active_profile_key(fb),
+            None => self.config.active_profile.clear(),
+        }
+        Ok(fallback)
+    }
+
+    /// Point `active_profile` at `name`. No switchability validation here —
+    /// the store is the in-memory mutator; the service layers the
+    /// exists/has-providers checks on before calling this. The persisted
+    /// key is cleared (not written as `"default"`) when `name` **is**
+    /// `"default"`, keeping the file shape canonical.
+    pub fn set_active_profile_key(&mut self, name: &str) {
+        if name == ProviderModelConfig::DEFAULT_PROFILE {
+            self.config.active_profile.clear();
+        } else {
+            self.config.active_profile = name.to_string();
+        }
+    }
+
+    /// The current active profile key, sorted list of all profile names, and
+    /// per-name slot counts — the raw material every `/profiles`-style
+    /// listing renders. Read-only.
+    pub fn model_profile_names(&self) -> Vec<String> {
+        self.config.profile_names()
+    }
+
+    // ── R4-2: config export/import (portable provider snapshots) ─────────
+
+    /// Provider slots an import of `incoming` would overwrite: sorted
+    /// `(profile name, provider id)` pairs. Empty when the import is purely
+    /// additive. Read-only; callers refuse on a non-empty list unless the
+    /// user opted into replacement (`--force`).
+    pub fn import_conflicts(&self, incoming: &ProviderModelConfig) -> Vec<ImportConflict> {
+        let mut out = Vec::new();
+        for (name, mp) in &incoming.profiles {
+            if let Some(live_mp) = self.config.profiles.get(name) {
+                for provider in &mp.providers {
+                    if live_mp.providers.iter().any(|p| p.id == provider.id) {
+                        out.push((name.clone(), provider.id.clone()));
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Overlay the portable snapshot `incoming` onto this store (R4-2
+    /// `shannon providers import`). **Pure in-memory** — nothing is
+    /// persisted; the caller saves through
+    /// [`crate::provider_config_service::ProviderConfigService`], the single
+    /// semantic write path for `providers.toml`.
+    ///
+    /// Merge policy (additive by default):
+    /// - a profile missing here is inserted **verbatim** (providers, active
+    ///   target, auxiliary roles, credential scope — the whole
+    ///   [`shannon_types::provider_config::ModelProfile`]);
+    /// - an existing profile is merged per provider slot: snapshot providers
+    ///   with an absent id are appended, ones whose id already exists replace
+    ///   the slot wholesale. Replacement is the explicit `--force` contract:
+    ///   with `force = false` any conflict (see `Self::import_conflicts`)
+    ///   is refused with `AlreadyExists` before anything is touched;
+    /// - an existing profile's **blank** `active_target` is filled from the
+    ///   snapshot's (fresh-machine fidelity); an already-set target is never
+    ///   repointed by the merge itself;
+    /// - auxiliary roles from the snapshot override same-role entries;
+    /// - the active-profile pointer: `set_active` wins when given (validated
+    ///   up front: the merged config must contain that profile with at least
+    ///   one provider slot); otherwise the snapshot's pointer is adopted only
+    ///   when this store had no connected provider before the import (the
+    ///   fresh-machine round-trip) — an established machine keeps its own
+    ///   pointer;
+    /// - `[gateway]` routing (B3) is adopted when this store still carries
+    ///   the default-off config, and never overwritten otherwise.
+    ///
+    /// Credentials are untouched by definition: a snapshot carries only
+    /// [`CredentialRef`] references (decision A1), and this method writes
+    /// `providers.toml` only — never the credential store.
+    pub fn apply_import_snapshot(
+        &mut self,
+        incoming: &ProviderModelConfig,
+        force: bool,
+        set_active: Option<&str>,
+    ) -> io::Result<ImportSummary> {
+        let conflicts = self.import_conflicts(incoming);
+        if !force && !conflicts.is_empty() {
+            let list = conflicts
+                .iter()
+                .map(|(profile, id)| format!("{profile}/{id}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "refusing to import: these provider ids already exist: {list}; \
+                     re-run with --force to replace them"
+                ),
+            ));
+        }
+
+        // `--set-active` pre-validation: the name must resolve to a profile
+        // with at least one provider slot once the merge lands (in `incoming`
+        // or already here). Checking before mutating keeps the refusal clean.
+        if let Some(name) = set_active {
+            let incoming_ok = incoming
+                .profiles
+                .get(name)
+                .is_some_and(|mp| !mp.providers.is_empty());
+            let live_ok = self
+                .config
+                .profiles
+                .get(name)
+                .is_some_and(|mp| !mp.providers.is_empty());
+            if !incoming_ok && !live_ok {
+                let mut names = self.config.profile_names();
+                for n in incoming.profile_names() {
+                    if !names.contains(&n) {
+                        names.push(n);
+                    }
+                }
+                names.sort();
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "--set-active '{name}': no such profile in the merged configuration, \
+                         or it has no provider slots; available: {}",
+                        names.join(", ")
+                    ),
+                ));
+            }
+        }
+
+        let pre_pointer = self.config.active_profile_key().to_string();
+        let live_had_providers = self
+            .config
+            .profiles
+            .values()
+            .any(|mp| !mp.providers.is_empty());
+
+        let mut summary = ImportSummary::default();
+        // `profile_names()` is sorted — deterministic file shape regardless of
+        // the snapshot's HashMap iteration order.
+        for name in incoming.profile_names() {
+            let Some(mp) = incoming.profiles.get(&name) else {
+                continue;
+            };
+            if let Some(live_mp) = self.config.profiles.get_mut(&name) {
+                // Set when a force-replaced slot is the one the live
+                // active_target points at: the selection's slot was swapped
+                // wholesale, so the target follows the snapshot's own
+                // selection instead of naming a model the new slot no longer
+                // declares.
+                let mut replaced_live_target = false;
+                for provider in &mp.providers {
+                    if let Some(slot) = live_mp.providers.iter_mut().find(|p| p.id == provider.id) {
+                        replaced_live_target |= live_mp.active_target.provider_id == provider.id;
+                        *slot = provider.clone();
+                        summary.providers_replaced += 1;
+                    } else {
+                        live_mp.providers.push(provider.clone());
+                        summary.providers_added += 1;
+                    }
+                }
+                // Adopt the snapshot's selection when the live target is
+                // blank (fresh-machine fidelity), or when the slot the live
+                // target points at was just force-replaced (otherwise the
+                // selection would name a model the new slot no longer
+                // declares). A live target on an untouched slot is never
+                // repointed.
+                let blank_target = live_mp.active_target.provider_id.is_empty()
+                    && live_mp.active_target.model_id.is_empty();
+                if (blank_target || replaced_live_target)
+                    && !mp.active_target.provider_id.is_empty()
+                {
+                    live_mp.active_target = mp.active_target.clone();
+                }
+                for (role, target) in &mp.auxiliary {
+                    live_mp.auxiliary.insert(*role, target.clone());
+                }
+            } else {
+                self.config.profiles.insert(name.clone(), mp.clone());
+                summary.profiles_added.push(name);
+                summary.providers_added += mp.providers.len();
+            }
+        }
+
+        if self.config.gateway == GatewayConfig::default()
+            && incoming.gateway != GatewayConfig::default()
+        {
+            self.config.gateway = incoming.gateway.clone();
+        }
+
+        if let Some(name) = set_active {
+            self.set_active_profile_key(name);
+        } else if !live_had_providers {
+            // Fresh machine: reproduce the snapshot's active profile so the
+            // import round-trips (modulo credential availability).
+            self.set_active_profile_key(incoming.active_profile_key());
+        }
+
+        summary.active_profile = self.config.active_profile_key().to_string();
+        summary.active_pointer_applied = summary.active_profile != pre_pointer;
+        Ok(summary)
     }
 
     /// Atomically persist to the cached path (or [`default_path`]).
@@ -719,17 +1348,20 @@ fn synthesize_provider_profile(
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers: ProviderTiers::default(),
+        models: Vec::new(),
     }
 }
 
-/// Empty `ModelProfile` scaffold used when `ensure_provider` boots a fresh
-/// store. The caller fills `active_target` and `providers` via
-/// `ensure_provider` / direct mutation; leaving the active target blank is
-/// intentional (the engine falls back to synthesis).
-fn default_model_profile() -> shannon_types::provider_config::ModelProfile {
+/// Empty `ModelProfile` scaffold used when `ensure_provider` / the R3-2
+/// profile-management ops boot a fresh (or newly named) profile. The caller
+/// fills `active_target` and `providers` via `ensure_provider` / direct
+/// mutation; leaving the active target blank is intentional (the engine
+/// falls back to synthesis). `name` keeps the map key and `ModelProfile.name`
+/// in lockstep.
+fn default_model_profile(name: &str) -> shannon_types::provider_config::ModelProfile {
     use shannon_types::provider_config::{ActiveTarget, CredentialScope, Scope};
     shannon_types::provider_config::ModelProfile {
-        name: "default".to_string(),
+        name: name.to_string(),
         active_target: ActiveTarget {
             provider_id: String::new(),
             model_id: String::new(),
@@ -751,15 +1383,6 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    /// A unique temp path so parallel nextest processes never collide.
-    fn tmp_path() -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!("shannon_pcs_{}_{}.toml", std::process::id(), nanos))
-    }
-
     fn anthropic_connect_config() -> ProviderModelConfig {
         let profile = ProviderProfile {
             id: "anthropic".to_string(),
@@ -775,6 +1398,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         let mut profiles = HashMap::new();
         profiles.insert(
@@ -793,6 +1417,7 @@ mod tests {
         );
         ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
             profiles,
             gateway: Default::default(),
         }
@@ -800,7 +1425,8 @@ mod tests {
 
     #[test]
     fn save_then_load_round_trips_store_credential() {
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         let original = anthropic_connect_config();
 
         save(&original, Some(&path)).unwrap();
@@ -826,7 +1452,8 @@ mod tests {
 
     #[test]
     fn save_sets_owner_only_permissions_on_unix() {
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         save(&anthropic_connect_config(), Some(&path)).unwrap();
         #[cfg(unix)]
         {
@@ -842,7 +1469,8 @@ mod tests {
 
     #[test]
     fn load_returns_none_when_file_absent() {
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         assert!(load(Some(&path)).is_none());
     }
 
@@ -850,7 +1478,8 @@ mod tests {
     fn load_returns_none_and_logs_on_corrupt_file() {
         // A corrupt file must never block launch — load degrades to None so
         // the engine falls back to synthesis.
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         fs::write(&path, "this is = not = valid toml").unwrap();
         assert!(load(Some(&path)).is_none());
         let _ = fs::remove_file(&path);
@@ -858,18 +1487,11 @@ mod tests {
 
     #[test]
     fn save_creates_parent_directory() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_dir_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let path = dir.join("nested/providers.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/providers.toml");
         save(&anthropic_connect_config(), Some(&path)).unwrap();
         assert!(path.exists());
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     #[test]
@@ -951,7 +1573,8 @@ mod tests {
     #[test]
     fn store_save_then_load_round_trips_tier_override() {
         use shannon_types::provider_config::TierName as ProviderTier;
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
 
         let mut store = ProviderConfigStore::load_or_default();
         store.set_tier(
@@ -1014,7 +1637,8 @@ mod tests {
         // End-to-end "survives restart": persist → reload → resolve_active_target
         // returns the set_active model.
         use crate::provider_resolver::resolve_active_target;
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         let mut store = ProviderConfigStore::load_or_default();
         store.set_active(&LlmProvider::OpenAI, "gpt-4o");
         store.save_at(&path).unwrap();
@@ -1060,7 +1684,8 @@ mod tests {
         // The save/load cycle must round-trip default_max_tokens — same
         // contract as the other mutators. Without this the REPL `/model
         // --max-tokens N --save` change is silently lost on restart.
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         let mut store = ProviderConfigStore::load_or_default();
         store.set_default_max_tokens(&LlmProvider::OpenAI, Some(16384));
         store.save_at(&path).unwrap();
@@ -1072,6 +1697,532 @@ mod tests {
             .expect("openai slot persisted");
         assert_eq!(profile.default_max_tokens, Some(16384));
         let _ = fs::remove_file(&path);
+    }
+
+    // ---- Per-model metadata declarations (R2-4) ----
+
+    fn meta_spec(id: &str) -> shannon_types::provider_config::ModelSpec {
+        shannon_types::provider_config::ModelSpec {
+            id: id.to_string(),
+            display_name: Some(id.to_string()),
+            context_window: Some(65_536),
+            max_output: Some(8_192),
+            cost_per_m_input: Some(0.5),
+            cost_per_m_output: Some(2.0),
+            capabilities: vec![shannon_types::provider_config::ModelCapability::Vision],
+        }
+    }
+
+    #[test]
+    fn set_model_meta_round_trips_through_save_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        store
+            .set_model_meta("glm", meta_spec("glm-5.3-flash"))
+            .unwrap();
+        store.save_at(&path).unwrap();
+
+        let loaded = load(Some(&path)).expect("should parse back");
+        let glm = loaded.profiles["default"]
+            .providers
+            .iter()
+            .find(|p| p.id == "glm")
+            .unwrap();
+        assert_eq!(glm.models.len(), 1);
+        assert_eq!(glm.models[0].id, "glm-5.3-flash");
+        assert_eq!(glm.models[0].context_window, Some(65_536));
+        assert_eq!(glm.models[0].cost_per_m_input, Some(0.5));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn set_model_meta_replaces_matching_id_and_keeps_others() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        store.set_model_meta("glm", meta_spec("a")).unwrap();
+        store.set_model_meta("glm", meta_spec("b")).unwrap();
+        // Replace "a" with different numbers — ids must stay unique.
+        let mut replaced = meta_spec("a");
+        replaced.context_window = Some(1_000);
+        store.set_model_meta("glm", replaced).unwrap();
+
+        let glm = &store.config().profiles["default"].providers[0];
+        assert_eq!(glm.models.len(), 2, "replace, not append");
+        let a = glm.models.iter().find(|m| m.id == "a").unwrap();
+        assert_eq!(a.context_window, Some(1_000));
+        assert_eq!(
+            glm.models.iter().filter(|m| m.id == "a").count(),
+            1,
+            "ids must stay unique"
+        );
+    }
+
+    #[test]
+    fn set_model_meta_unknown_provider_errors_without_mutation() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        let err = store.set_model_meta("ghost", meta_spec("m")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(err.to_string().contains("ghost"));
+        let glm = &store.config().profiles["default"].providers[0];
+        assert!(glm.models.is_empty(), "failed set must not mutate");
+    }
+
+    #[test]
+    fn set_model_meta_rejects_invalid_spec() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        let mut bad = meta_spec("m");
+        bad.context_window = Some(0);
+        let err = store.set_model_meta("glm", bad).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let glm = &store.config().profiles["default"].providers[0];
+        assert!(glm.models.is_empty(), "invalid spec must not be stored");
+    }
+
+    // ---- S2-1: curated model vault (set_provider_models) ----
+
+    fn glm_store() -> ProviderConfigStore {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        store
+    }
+
+    #[test]
+    fn set_provider_models_overwrites_the_whole_list() {
+        let mut store = glm_store();
+        store
+            .set_provider_models("glm", vec![meta_spec("a"), meta_spec("b")], None)
+            .unwrap();
+        // Overwrite semantics: the curated selection is authoritative.
+        store
+            .set_provider_models("glm", vec![meta_spec("c")], None)
+            .unwrap();
+        let glm = &store.config().profiles["default"].providers[0];
+        assert_eq!(glm.models.len(), 1);
+        assert_eq!(glm.models[0].id, "c");
+
+        // Empty list clears the vault (picker falls back to unfiltered).
+        store.set_provider_models("glm", Vec::new(), None).unwrap();
+        let glm = &store.config().profiles["default"].providers[0];
+        assert!(glm.models.is_empty());
+    }
+
+    #[test]
+    fn set_provider_models_rejects_invalid_and_duplicate_batches() {
+        let mut store = glm_store();
+        store
+            .set_provider_models("glm", vec![meta_spec("a")], None)
+            .unwrap();
+
+        let mut bad = meta_spec("bad");
+        bad.max_output = Some(0);
+        let err = store
+            .set_provider_models("glm", vec![meta_spec("ok"), bad], None)
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            store.config().profiles["default"].providers[0]
+                .models
+                .iter()
+                .all(|m| m.id == "a"),
+            "a failed batch must leave the existing vault untouched"
+        );
+
+        let err = store
+            .set_provider_models("glm", vec![meta_spec("dup"), meta_spec("dup")], None)
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn set_provider_models_unknown_provider_errors() {
+        let mut store = glm_store();
+        let err = store
+            .set_provider_models("ghost", vec![meta_spec("m")], None)
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn set_provider_models_targets_the_named_profile_when_given() {
+        let mut store = glm_store();
+        store.insert_model_profile("work").unwrap();
+        // The named profile starts empty — the slot only exists in "default".
+        let err = store
+            .set_provider_models("glm", vec![meta_spec("m")], Some("work"))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+
+        // Seed the slot in "work" and write there; "default" stays untouched.
+        store
+            .config
+            .profiles
+            .get_mut("work")
+            .unwrap()
+            .providers
+            .push(sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ));
+        store
+            .set_provider_models("glm", vec![meta_spec("m")], Some("work"))
+            .unwrap();
+        assert_eq!(store.config.profiles["work"].providers[0].models.len(), 1);
+        assert!(
+            store.config.profiles["default"].providers[0]
+                .models
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn set_provider_models_round_trips_through_save_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
+        let mut store = glm_store();
+        store
+            .set_provider_models("glm", vec![meta_spec("glm-5.3-flash")], None)
+            .unwrap();
+        store.save_at(&path).unwrap();
+        let loaded = load(Some(&path)).expect("should parse back");
+        let glm = loaded.profiles["default"]
+            .providers
+            .iter()
+            .find(|p| p.id == "glm")
+            .unwrap();
+        assert_eq!(glm.models.len(), 1);
+        assert_eq!(glm.models[0].id, "glm-5.3-flash");
+    }
+
+    // ---- S3-4: recommended fallback chain (set_provider_fallback_models) ----
+
+    #[test]
+    fn set_provider_fallback_models_is_a_surgical_field_write() {
+        // Two slots, "glm" active with a concrete model, "anthropic"
+        // inactive. The mutator hits the NON-active slot: the active target
+        // must survive untouched — exactly why the desktop's recommend/apply
+        // flow cannot go through `upsert_profile` (which repoints the active
+        // target as a side effect).
+        let mut store = glm_store();
+        store
+            .config
+            .profiles
+            .get_mut("default")
+            .unwrap()
+            .providers
+            .push(sample_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+            ));
+
+        store
+            .set_provider_fallback_models("anthropic", vec!["claude-haiku-4-5".to_string()], None)
+            .unwrap();
+
+        let mp = store.config().active_model_profile().unwrap();
+        assert_eq!(mp.active_target.provider_id, "glm");
+        assert_eq!(mp.active_target.model_id, "glm-5.3-flash");
+        let anthropic = mp.providers.iter().find(|p| p.id == "anthropic").unwrap();
+        assert_eq!(anthropic.fallback_models, vec!["claude-haiku-4-5"]);
+        // Only the named slot is touched — glm's chain stays empty.
+        let glm = mp.providers.iter().find(|p| p.id == "glm").unwrap();
+        assert!(glm.fallback_models.is_empty());
+
+        // Entries are stored verbatim, in order (trimming/dedupe is the
+        // caller's job — the desktop command sanitizes before writing).
+        store
+            .set_provider_fallback_models("anthropic", vec!["b".to_string(), "a".to_string()], None)
+            .unwrap();
+        let anthropic = store
+            .config
+            .active_model_profile()
+            .unwrap()
+            .providers
+            .iter()
+            .find(|p| p.id == "anthropic")
+            .unwrap();
+        assert_eq!(anthropic.fallback_models, vec!["b", "a"]);
+
+        // Empty list clears the chain (failover stays opt-in).
+        store
+            .set_provider_fallback_models("anthropic", Vec::new(), None)
+            .unwrap();
+        let anthropic = store
+            .config
+            .active_model_profile()
+            .unwrap()
+            .providers
+            .iter()
+            .find(|p| p.id == "anthropic")
+            .unwrap();
+        assert!(anthropic.fallback_models.is_empty());
+        // Surgical through the clear, too.
+        assert_eq!(
+            store
+                .config()
+                .active_model_profile()
+                .unwrap()
+                .active_target
+                .provider_id,
+            "glm"
+        );
+    }
+
+    #[test]
+    fn set_provider_fallback_models_unknown_provider_or_profile_errors() {
+        let mut store = glm_store();
+        let err = store
+            .set_provider_fallback_models("ghost", vec!["m".to_string()], None)
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+
+        let err = store
+            .set_provider_fallback_models("glm", vec!["m".to_string()], Some("ghost"))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    // ---- S3-3: utility tier slots (set/clear_auxiliary_target) ----
+
+    use shannon_types::provider_config::AuxRole;
+
+    #[test]
+    fn set_auxiliary_target_is_a_surgical_field_write() {
+        // The whole point of the S3-3 write path: assigning a utility slot
+        // lands in `auxiliary` and NEVER repoints `active_target` (the
+        // behavioral red line — the interactive chain is untouchable from
+        // here).
+        let mut store = glm_store();
+        store
+            .set_auxiliary_target(AuxRole::Compression, "glm", "glm-5.3-air")
+            .unwrap();
+
+        let mp = store.config().active_model_profile().unwrap();
+        assert_eq!(mp.active_target.provider_id, "glm");
+        assert_eq!(mp.active_target.model_id, "glm-5.3-flash");
+        let target = mp.auxiliary.get(&AuxRole::Compression).unwrap();
+        assert_eq!(target.provider_id, "glm");
+        assert_eq!(target.model_id, "glm-5.3-air");
+        assert_eq!(target.scope, Scope::Global);
+        // Other roles are untouched by a per-role write.
+        assert!(!mp.auxiliary.contains_key(&AuxRole::TitleGeneration));
+
+        // Overwrite semantics: a second write replaces the same role only.
+        store
+            .set_auxiliary_target(AuxRole::Compression, "glm", "glm-5.3-flash")
+            .unwrap();
+        let mp = store.config().active_model_profile().unwrap();
+        assert_eq!(
+            mp.auxiliary[&AuxRole::Compression].model_id,
+            "glm-5.3-flash"
+        );
+        assert_eq!(mp.active_target.model_id, "glm-5.3-flash");
+    }
+
+    #[test]
+    fn set_auxiliary_target_rejects_empty_or_unknown_provider() {
+        let mut store = glm_store();
+        // Unknown roster id → NotFound (write-time validation, mirroring
+        // `set_session_model`'s contract on the interactive side).
+        let err = store
+            .set_auxiliary_target(AuxRole::Compression, "ghost", "m")
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        // Empty inputs → InvalidInput.
+        for (provider, model) in [("", "m"), ("glm", ""), (" ", " ")] {
+            let err = store
+                .set_auxiliary_target(AuxRole::Compression, provider, model)
+                .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        }
+        // Nothing was written by any of the failed calls.
+        assert!(
+            store
+                .config()
+                .active_model_profile()
+                .unwrap()
+                .auxiliary
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn clear_auxiliary_target_is_idempotent_and_reports() {
+        let mut store = glm_store();
+        // Clearing an unset slot reports false and stays error-free.
+        assert!(!store.clear_auxiliary_target(AuxRole::Compression).unwrap());
+        store
+            .set_auxiliary_target(AuxRole::Compression, "glm", "glm-5.3-air")
+            .unwrap();
+        assert!(store.clear_auxiliary_target(AuxRole::Compression).unwrap());
+        let mp = store.config().active_model_profile().unwrap();
+        assert!(mp.auxiliary.is_empty());
+        // The active target pointer survives the clear, too.
+        assert_eq!(mp.active_target.model_id, "glm-5.3-flash");
+        // Second clear: still false.
+        assert!(!store.clear_auxiliary_target(AuxRole::Compression).unwrap());
+    }
+
+    #[test]
+    fn auxiliary_target_round_trips_through_disk() {
+        // The v2 file must carry the auxiliary map: write through the store,
+        // reload from disk, read the slot back.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
+        let mut store = ProviderConfigStore::from_config(anthropic_connect_config());
+        store
+            .set_auxiliary_target(AuxRole::Compression, "anthropic", "claude-haiku-4-5")
+            .unwrap();
+        store.save_at(&path).unwrap();
+
+        let reloaded = ProviderConfigStore::load_or_default_at(&path);
+        let target = reloaded
+            .config()
+            .active_model_profile()
+            .unwrap()
+            .auxiliary
+            .get(&AuxRole::Compression)
+            .unwrap()
+            .clone();
+        assert_eq!(target.provider_id, "anthropic");
+        assert_eq!(target.model_id, "claude-haiku-4-5");
+        // And a file WITHOUT the auxiliary key still parses (pre-S3-3 files).
+        let legacy = ProviderConfigStore::from_config(anthropic_connect_config());
+        legacy.save_at(&path).unwrap();
+        let reloaded = ProviderConfigStore::load_or_default_at(&path);
+        assert!(
+            reloaded
+                .config()
+                .active_model_profile()
+                .unwrap()
+                .auxiliary
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn remove_model_meta_is_idempotent_and_reports() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        store.set_model_meta("glm", meta_spec("m")).unwrap();
+        assert!(store.remove_model_meta("glm", "m").unwrap());
+        assert!(!store.remove_model_meta("glm", "m").unwrap(), "idempotent");
+        assert!(store.remove_model_meta("ghost", "m").is_err());
+        let glm = &store.config().profiles["default"].providers[0];
+        assert!(glm.models.is_empty());
+    }
+
+    /// A file whose declarations parse but fail semantic validation (dup
+    /// ids) must degrade reads to None AND refuse writes — byte-identical
+    /// preservation, same contract as a parse error.
+    #[test]
+    fn invalid_model_declarations_degrade_reads_and_refuse_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
+        fs::write(
+            &path,
+            r#"version = 2
+
+[profiles.default]
+name = "default"
+credential_scope = "shared"
+
+[profiles.default.active_target]
+provider_id = "glm"
+model_id = "glm-5.3-flash"
+scope = "global"
+
+[[profiles.default.providers]]
+id = "glm"
+kind = "openai-compatible"
+display_name = "glm"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "glm"
+
+[[profiles.default.providers.models]]
+id = "dup"
+context_window = 1000
+
+[[profiles.default.providers.models]]
+id = "dup"
+context_window = 2000
+"#,
+        )
+        .unwrap();
+
+        assert!(
+            load(Some(&path)).is_none(),
+            "duplicate model ids must degrade the file to None"
+        );
+
+        // And the write side must refuse, preserving the bytes.
+        let mut store = ProviderConfigStore::load_or_default_at(&path);
+        store.upsert_profile(
+            sample_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+            ),
+            "claude-sonnet-4-20250514",
+        );
+        let result = store.save();
+        assert!(result.is_err(), "write must be refused");
+        assert!(result.unwrap_err().to_string().contains("duplicate"));
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("id = \"dup\""), "file left untouched");
+
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     // ---- ProviderConfigStore::upsert_profile + remove_profile (Phase 2 task 4) ----
@@ -1100,6 +2251,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         }
     }
 
@@ -1221,7 +2373,8 @@ mod tests {
 
     #[test]
     fn upsert_profile_survives_save_load_cycle() {
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         let mut store = ProviderConfigStore::default();
         store.upsert_profile(
             sample_profile(
@@ -1332,17 +2485,9 @@ mod tests {
     /// `NotFound` error escapes.
     #[test]
     fn load_or_default_does_not_panic_when_lockfile_missing() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_lockmiss_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("providers.toml");
-        let lock_path = dir.join("providers.toml.lock");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
+        let lock_path = dir.path().join("providers.toml.lock");
         assert!(!lock_path.exists(), "lockfile must not pre-exist");
 
         // save() is the production entry point that touches the flock —
@@ -1380,7 +2525,7 @@ mod tests {
         );
         store.save().expect("second save on same path must succeed");
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     /// Two consecutive `save()` calls in the same process must both
@@ -1389,16 +2534,8 @@ mod tests {
     /// "save_acquires_and_releases_flock" contract.
     #[test]
     fn save_acquires_and_releases_flock() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_lockrel_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("providers.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
 
         let mut store = ProviderConfigStore::load_or_default_at(&path);
         store.upsert_profile(
@@ -1432,7 +2569,7 @@ mod tests {
         assert!(ids.contains(&"anthropic"));
         assert!(ids.contains(&"openai"));
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     /// Two threads, each doing the canonical load-mutate-save sequence
@@ -1450,16 +2587,8 @@ mod tests {
         use std::sync::Arc;
         use std::thread;
 
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_lock2t_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = Arc::new(dir.join("providers.toml"));
+        let dir = tempfile::tempdir().unwrap();
+        let path = Arc::new(dir.path().join("providers.toml"));
 
         // Seed the file so both threads start from the same baseline.
         {
@@ -1530,7 +2659,7 @@ mod tests {
             );
         }
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     // ---- Hand-appended block preservation (providers.toml data integrity) ----
@@ -1638,16 +2767,8 @@ service = "glm-plan"
     /// minimax slot and the hand-appended glm-plan slot.
     #[test]
     fn semantic_write_preserves_valid_hand_appended_block_after_gateway() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_handok_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("providers.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         fs::write(&path, HAND_APPENDED_VALID).unwrap();
 
         // The append must load cleanly (the layout itself is legal for the
@@ -1683,7 +2804,7 @@ service = "glm-plan"
             "hand-appended glm-plan must survive a semantic write; got {ids:?}"
         );
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     /// The defect: one schema-invalid detail in the hand block (here: an
@@ -1696,16 +2817,8 @@ service = "glm-plan"
     /// returned, the on-disk bytes are left byte-identical.
     #[test]
     fn semantic_write_refuses_to_destroy_unparseable_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_handbad_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("providers.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         fs::write(&path, HAND_APPENDED_UNKNOWN_FIELD).unwrap();
 
         // Read side: graceful degradation (the whole file is ignored —
@@ -1747,40 +2860,32 @@ service = "glm-plan"
             "a refused write must leave the file byte-identical"
         );
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     /// No false positives: a save over an ABSENT, EMPTY, or VALID existing
     /// file must proceed exactly as before.
     #[test]
     fn save_still_allows_overwrite_of_absent_empty_or_valid_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_handok3_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = tempfile::tempdir().unwrap();
 
         // Absent target.
-        let absent = dir.join("absent.toml");
+        let absent = dir.path().join("absent.toml");
         save(&anthropic_connect_config(), Some(&absent)).expect("save to absent path");
         assert!(absent.exists());
 
         // Empty (degenerate) target — nothing to destroy.
-        let empty = dir.join("empty.toml");
+        let empty = dir.path().join("empty.toml");
         fs::write(&empty, "").unwrap();
         save(&anthropic_connect_config(), Some(&empty)).expect("save over empty file");
 
         // Valid target (the normal load-mutate-save flow).
-        let valid = dir.join("valid.toml");
+        let valid = dir.path().join("valid.toml");
         fs::write(&valid, HAND_APPENDED_VALID).unwrap();
         save(&anthropic_connect_config(), Some(&valid))
             .expect("save over a parseable file must proceed");
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     /// `save_locked` from inside an outer `acquire_exclusive_lock` scope
@@ -1791,16 +2896,8 @@ service = "glm-plan"
     /// re-lock the same fd.
     #[test]
     fn save_locked_does_not_deadlock_inside_outer_lock() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_locked_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("providers.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
 
         let mut store = ProviderConfigStore::load_or_default_at(&path);
         store.upsert_profile(
@@ -1832,6 +2929,230 @@ service = "glm-plan"
                 .any(|p| p.id == "anthropic")
         );
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
+    }
+
+    // ── R4-2: config export/import ───────────────────────────────────────
+
+    fn import_profile(id: &str, base_url: &str, model: &str) -> ProviderProfile {
+        ProviderProfile {
+            id: id.to_string(),
+            kind: ProviderKind::OpenAiCompatible,
+            display_name: id.to_string(),
+            base_url: base_url.to_string(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: id.to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers {
+                standard: Some(model.to_string()),
+                ..Default::default()
+            },
+            models: Vec::new(),
+        }
+    }
+
+    fn import_config(
+        active: &str,
+        profiles: &[(&str, Vec<ProviderProfile>, &str)],
+    ) -> ProviderModelConfig {
+        let mut map = HashMap::new();
+        for (name, providers, model) in profiles {
+            map.insert(
+                name.to_string(),
+                ModelProfile {
+                    name: name.to_string(),
+                    active_target: ActiveTarget {
+                        provider_id: providers[0].id.clone(),
+                        model_id: model.to_string(),
+                        scope: Scope::Global,
+                    },
+                    providers: providers.clone(),
+                    auxiliary: HashMap::new(),
+                    credential_scope: CredentialScope::Shared,
+                },
+            );
+        }
+        ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: active.to_string(),
+            profiles: map,
+            gateway: Default::default(),
+        }
+    }
+
+    #[test]
+    fn import_conflicts_list_is_sorted_and_deterministic() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(import_profile("zeta", "https://z", "m"), "m");
+        store.upsert_profile(import_profile("alpha", "https://a", "m"), "m");
+        let incoming = import_config(
+            "",
+            &[
+                (
+                    "default",
+                    vec![
+                        import_profile("zeta", "https://z2", "m2"),
+                        import_profile("alpha", "https://a2", "m2"),
+                        import_profile("new", "https://n", "m"),
+                    ],
+                    "m2",
+                ),
+                (
+                    "brand-new",
+                    vec![import_profile("x", "https://x", "m")],
+                    "m",
+                ),
+            ],
+        );
+        let conflicts = store.import_conflicts(&incoming);
+        assert_eq!(
+            conflicts,
+            vec![
+                ("default".to_string(), "alpha".to_string()),
+                ("default".to_string(), "zeta".to_string()),
+            ],
+            "sorted (profile, id) pairs; new ids and new profiles never conflict"
+        );
+    }
+
+    #[test]
+    fn import_refuses_conflicts_without_force_then_replaces_with_force() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(import_profile("glm", "https://old", "old"), "old");
+        let incoming = import_config(
+            "",
+            &[(
+                "default",
+                vec![import_profile("glm", "https://new", "new")],
+                "new",
+            )],
+        );
+
+        let err = store
+            .apply_import_snapshot(&incoming, false, None)
+            .expect_err("conflict refuses without force");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(
+            err.to_string().contains("default/glm") && err.to_string().contains("--force"),
+            "{err}"
+        );
+        assert_eq!(
+            store.config().profiles["default"].providers[0].base_url,
+            "https://old",
+            "refusal leaves the store untouched"
+        );
+
+        store
+            .apply_import_snapshot(&incoming, true, None)
+            .expect("force replaces");
+        let default = &store.config().profiles["default"];
+        assert_eq!(default.providers[0].base_url, "https://new");
+        assert_eq!(
+            default.active_target.model_id, "new",
+            "target follows force replace"
+        );
+    }
+
+    #[test]
+    fn import_additive_merge_keeps_existing_selection_and_fills_blanks() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(import_profile("glm", "https://glm", "glm-4.6"), "glm-4.6");
+        let incoming = import_config(
+            "",
+            &[(
+                "default",
+                vec![import_profile("kimi", "https://kimi", "k2")],
+                "k2",
+            )],
+        );
+        let summary = store
+            .apply_import_snapshot(&incoming, false, None)
+            .expect("additive merge");
+        assert_eq!(summary.profiles_added, Vec::<String>::new());
+        assert_eq!(summary.providers_added, 1);
+        assert_eq!(summary.providers_replaced, 0);
+        assert!(
+            !summary.active_pointer_applied,
+            "established machine keeps its active pointer/target"
+        );
+        let default = &store.config().profiles["default"];
+        assert_eq!(default.active_target.provider_id, "glm");
+        assert_eq!(
+            default.active_target.model_id, "glm-4.6",
+            "existing selection is never repointed by the merge"
+        );
+
+        // A profile whose active target is blank gets the snapshot's filled in.
+        store.insert_model_profile("empty").expect("scaffold");
+        let incoming2 = import_config(
+            "",
+            &[(
+                "empty",
+                vec![import_profile("deep", "https://deep", "d1")],
+                "d1",
+            )],
+        );
+        let summary2 = store
+            .apply_import_snapshot(&incoming2, false, None)
+            .expect("merge into empty profile");
+        assert_eq!(summary2.providers_added, 1);
+        let empty = &store.config().profiles["empty"];
+        assert_eq!(empty.providers.len(), 1);
+        assert_eq!(
+            empty.active_target.model_id, "d1",
+            "blank target filled from the snapshot"
+        );
+    }
+
+    #[test]
+    fn import_on_fresh_store_adopts_snapshot_pointer_and_verbatim_profile() {
+        let mut store = ProviderConfigStore::default();
+        let incoming = import_config(
+            "work",
+            &[("work", vec![import_profile("glm", "https://glm", "m")], "m")],
+        );
+        let summary = store
+            .apply_import_snapshot(&incoming, false, None)
+            .expect("fresh-machine import");
+        assert_eq!(summary.profiles_added, vec!["work".to_string()]);
+        assert!(summary.active_pointer_applied);
+        assert_eq!(store.config().active_profile_key(), "work");
+        assert_eq!(
+            store.config().profiles["work"].providers[0].credential,
+            CredentialRef::Store {
+                service: "glm".to_string()
+            },
+            "profile lands verbatim (credential ref included)"
+        );
+    }
+
+    #[test]
+    fn import_set_active_validates_and_switches() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(import_profile("glm", "https://glm", "m"), "m");
+        let incoming = import_config(
+            "",
+            &[(
+                "work",
+                vec![import_profile("kimi", "https://kimi", "k")],
+                "k",
+            )],
+        );
+
+        let err = store
+            .apply_import_snapshot(&incoming, false, Some("ghost"))
+            .expect_err("unknown --set-active refuses");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("ghost"), "{err}");
+
+        store
+            .apply_import_snapshot(&incoming, false, Some("work"))
+            .expect("valid --set-active");
+        assert_eq!(store.config().active_profile_key(), "work");
     }
 }

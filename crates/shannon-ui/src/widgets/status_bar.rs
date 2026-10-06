@@ -226,10 +226,10 @@ impl StatusBarWidget {
         if let Some(mode_label) = approval_mode {
             left.push(Span::raw(" "));
             let mode_style = match mode_label {
-                "ASK" | "PLAN" => Style::default().fg(theme.warning),
+                "ASK" | "CI" => Style::default().fg(theme.warning),
                 "EDIT" => Style::default().fg(theme.success),
-                "AUTO" => Style::default().fg(theme.primary),
-                "FULL" => Style::default().fg(theme.error),
+                "FULL" | "BYPASS" => Style::default().fg(theme.error),
+                "PLAN" | "RO" => Style::default().fg(theme.primary),
                 _ => Style::default().fg(theme.text_dim),
             };
             left.push(Span::styled(

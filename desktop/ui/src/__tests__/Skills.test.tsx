@@ -39,7 +39,9 @@ function renderWithRouter() {
 const nativeSkill = {
   id: 'native:pdf',
   kind: 'skill' as const,
-  name: 'PDF Toolkit',
+  // B0 P0-6: names must satisfy ^[a-z0-9][a-z0-9._-]*$ — the old fixture
+  // ('PDF Toolkit') is now rejected client-side by design.
+  name: 'pdf-toolkit',
   description: 'Read, search, and extract content from PDF documents.',
   author: 'Shannon',
   version: '0.1.0',
@@ -70,9 +72,30 @@ const repoSkill = {
   tags: ['discovery'],
 }
 
+// G1 P0-2.3: a native entry flagged in_development — rendered as "Planned"
+// with NO install button (the runtime does not exist yet).
+const plannedSkill = {
+  ...nativeSkill,
+  id: 'native:plotly-charts',
+  name: 'plotly-charts',
+  description: 'Generate Plotly figures from data.',
+  metadata: { in_development: true },
+  tags: ['python', 'plotly', 'data-analysis'],
+}
+
+// office Wave 3 C7: a research/dev skill with no office tags — must stay in
+// the ungrouped list, not under the Productivity heading.
+const devSkill = {
+  ...repoSkill,
+  id: 'gh:anthropics/skills/main/repomap',
+  name: 'repomap',
+  description: 'Repo map generation for large codebases.',
+  tags: ['code', 'rust'],
+}
+
 const installedSkill = {
-  name: 'PDF Toolkit',
-  path: '/home/user/.shannon/skills/PDF Toolkit',
+  name: 'pdf-toolkit',
+  path: '/home/user/.shannon/skills/pdf-toolkit',
   installed_at: '2026-06-15T00:00:00Z',
 }
 
@@ -119,7 +142,7 @@ describe('Skills (P3 federated catalog)', () => {
     listInstalledSkillPlugins.mockResolvedValue([])
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('PDF Toolkit')).toBeInTheDocument()
+      expect(screen.getByText('pdf-toolkit')).toBeInTheDocument()
     })
     expect(screen.getByText('brainstorming')).toBeInTheDocument()
     expect(screen.getAllByText('Verified').length).toBeGreaterThan(0)
@@ -143,22 +166,56 @@ describe('Skills (P3 federated catalog)', () => {
     listInstalledSkillPlugins.mockResolvedValue([])
     installNativeSkill.mockResolvedValue({
       id: 'native:pdf',
-      name: 'PDF Toolkit',
-      install_path: '/home/user/.shannon/skills/PDF Toolkit/SKILL.md',
+      name: 'pdf-toolkit',
+      install_path: '/home/user/.shannon/skills/pdf-toolkit/SKILL.md',
     })
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('PDF Toolkit')).toBeInTheDocument()
+      expect(screen.getByText('pdf-toolkit')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByText('Install'))
     await waitFor(() => {
       expect(installNativeSkill).toHaveBeenCalled()
     })
-    expect(installNativeSkill.mock.calls[0][0]).toBe('PDF Toolkit')
+    expect(installNativeSkill.mock.calls[0][0]).toBe('pdf-toolkit')
     // Body should be a SKILL.md stub with frontmatter and description.
     const body = installNativeSkill.mock.calls[0][1] as string
-    expect(body).toContain('name: PDF Toolkit')
+    expect(body).toContain('name: pdf-toolkit')
     expect(body).toContain('Read, search, and extract content from PDF')
+    // P1-22: the frontmatter description must be a single line even when the
+    // catalog description carries newlines.
+    expect(body.split('\n').filter(l => l.startsWith('description:'))).toHaveLength(1)
+  })
+
+  it('blocks installing a skill whose name fails the safe-name whitelist', async () => {
+    listSkillCatalog.mockResolvedValue([{ ...nativeSkill, name: '../pwned' }])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('../pwned')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('Install'))
+    await waitFor(() => {
+      expect(screen.getByText(/unsafe skill name/i)).toBeInTheDocument()
+    })
+    expect(installNativeSkill).not.toHaveBeenCalled()
+  })
+
+  it('renders planned (in-development) skills as non-installable', async () => {
+    listSkillCatalog.mockResolvedValue([plannedSkill, nativeSkill])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('plotly-charts')).toBeInTheDocument()
+    })
+    // Badge + honest hint instead of an Install button.
+    expect(screen.getByText('Planned')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Planned — the runtime for this skill is not implemented yet/),
+    ).toBeInTheDocument()
+    // Only the installable entry still offers Install.
+    expect(screen.getAllByText('Install')).toHaveLength(1)
+    expect(screen.queryByText('Installed')).not.toBeInTheDocument()
   })
 
   it('installs repo skill via installSkillFromRepo', async () => {
@@ -190,7 +247,7 @@ describe('Skills (P3 federated catalog)', () => {
     await waitFor(() => {
       expect(screen.getByText(/Installed · 1/)).toBeInTheDocument()
     })
-    expect(screen.getByText('PDF Toolkit')).toBeInTheDocument()
+    expect(screen.getByText('pdf-toolkit')).toBeInTheDocument()
     expect(screen.getByText('Remove')).toBeInTheDocument()
   })
 
@@ -206,7 +263,7 @@ describe('Skills (P3 federated catalog)', () => {
     const dialog = await screen.findByRole('alertdialog', { name: /Remove skill\?/i })
     fireEvent.click(within(dialog).getByRole('button', { name: /^Remove$/ }))
     await waitFor(() => {
-      expect(uninstallSkillPlugin).toHaveBeenCalledWith('PDF Toolkit')
+      expect(uninstallSkillPlugin).toHaveBeenCalledWith('pdf-toolkit')
     })
   })
 
@@ -288,5 +345,45 @@ describe('Skills (P3 federated catalog)', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Agent-authored · 1/ }))
     expect(screen.queryByText('Human-skill')).not.toBeInTheDocument()
     expect(screen.getByText('Auto-skill')).toBeInTheDocument()
+  })
+})
+
+// ─── office Wave 3 C7: Productivity group pinned atop the catalog ───
+
+describe('Skills — Productivity grouping (office Wave 3 C7)', () => {
+  it('shows the Productivity heading with the office-tagged skill under it', async () => {
+    listSkillCatalog.mockResolvedValue([nativeSkill, devSkill])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    const { container } = renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('pdf-toolkit')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('skills-productivity-group')).toBeInTheDocument()
+    expect(screen.getByText('Productivity')).toBeInTheDocument()
+
+    // Pinned: the productivity card renders before the dev card in DOM order.
+    const cards = container.textContent ?? ''
+    expect(cards.indexOf('pdf-toolkit')).toBeLessThan(cards.indexOf('repomap'))
+  })
+
+  it('keeps non-office skills out of the group', async () => {
+    listSkillCatalog.mockResolvedValue([devSkill])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('repomap')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('skills-productivity-group')).not.toBeInTheDocument()
+    expect(screen.queryByText('Productivity')).not.toBeInTheDocument()
+  })
+
+  it('shows no heading when the catalog is empty', async () => {
+    listSkillCatalog.mockResolvedValue([])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('No skills found.')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('skills-productivity-group')).not.toBeInTheDocument()
   })
 })

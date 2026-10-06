@@ -11,7 +11,7 @@
 //! P0-3 adds `POST /api/routines/:id/trigger` to the same listener (merged
 //! into the router via `ShannonApiServer::with_extra_routes`). It fires a
 //! scheduled task through the shared unattended execution path
-//! ([`crate::inbox_commands::spawn_routine_run`]) and records the run in the
+//! (`crate::inbox_commands::spawn_routine_run`) and records the run in the
 //! SQLite inbox (`source=trigger`).
 //!
 //! ## Auth contract (HMAC, shared with the notifier webhook signing)
@@ -77,9 +77,16 @@ pub(crate) struct TriggerState<R: tauri::Runtime = tauri::Wry> {
     pub(crate) tools: Arc<ToolRegistry>,
     /// Shared memory store handle (P2-4b) for the runner's engine.
     pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
+    /// Base sessions directory for the run's engine (P-E1), resolved through
+    /// `effective_log_container` so the working-dir stamp and the engine's
+    /// L0 tee agree on one container.
+    pub(crate) sessions_dir: std::path::PathBuf,
     /// `[notifications.webhook] secret` resolved once at spawn time.
     /// `None` disables the endpoint (403) — safe default.
     pub(crate) secret: Option<String>,
+    /// Shared notifier (W2-3): the budget-abort notification routes through
+    /// the same pipeline as query notifications.
+    pub(crate) notifier: Arc<shannon_core::notifier::Notifier>,
 }
 
 // Manual impl: `derive(Clone)` would add an unnecessary `R: Clone` bound
@@ -96,7 +103,9 @@ impl<R: tauri::Runtime> Clone for TriggerState<R> {
             desktop_config: self.desktop_config.clone(),
             tools: self.tools.clone(),
             memory_store: self.memory_store.clone(),
+            sessions_dir: self.sessions_dir.clone(),
             secret: self.secret.clone(),
+            notifier: self.notifier.clone(),
         }
     }
 }
@@ -118,7 +127,11 @@ impl<R: tauri::Runtime> TriggerState<R> {
             desktop_config: state.desktop_config.clone(),
             tools: state.tools.clone(),
             memory_store: state.memory_store.clone(),
+            sessions_dir: shannon_core::session_log::effective_log_container(
+                state.state_manager.sessions_dir(),
+            ),
             secret,
+            notifier: state.notifier.clone(),
         }
     }
 
@@ -126,11 +139,17 @@ impl<R: tauri::Runtime> TriggerState<R> {
         RoutineRunDeps {
             inbox: self.inbox.clone(),
             runs_store: self.runs_store.clone(),
+            webhook: std::sync::Arc::new(crate::inbox_commands::DesktopWebhookPort),
+            notify: std::sync::Arc::new(crate::inbox_commands::DesktopRunNotifier(
+                self.notifier.clone(),
+            )),
             usage_store: self.usage_store.clone(),
             client_config: self.client_config.clone(),
             desktop_config: self.desktop_config.clone(),
             tools: self.tools.clone(),
             memory_store: self.memory_store.clone(),
+            scheduled_tasks: self.task_store.clone(),
+            sessions_dir: self.sessions_dir.clone(),
         }
     }
 }
@@ -205,13 +224,15 @@ pub(crate) async fn trigger_routine<R: tauri::Runtime>(
 
     // 5. Fire through the shared unattended execution path. The run record
     //    (`running`) is written synchronously; completion + the inbox item
-    //    (source=`trigger`) land asynchronously.
+    //    (source=`trigger`) land asynchronously. Tagged `run_now` (R7-①) —
+    //    a user-initiated trigger, never counted by the auto-pause streak.
     let run_id = crate::inbox_commands::spawn_routine_run(
         &ts.run_deps(),
         ts.app.clone(),
         routine,
         SOURCE_TRIGGER,
         payload.note,
+        crate::inbox_commands::RunTrigger::RunNow,
     )
     .await
     .map_err(|e| {
@@ -265,10 +286,38 @@ fn loopback_sandbox_providers(
 /// (T9) and mobile-dispatch (T14) turns execute through this registry via
 /// the gateway, so the execution-mode switcher must hold on this path too —
 /// not only on the interactive (`AppState::new`) and goal-runner seams.
+///
+/// When `state` carries an injected agent-teams context (B2, see
+/// `crate::agent_teams::enable`), the loopback `AgentTool` is re-pointed at
+/// the chat session's context handle and `team_task_*` tools are registered
+/// — so an IM/mobile turn that calls `agent_spawn` / `team_task_*` lands on
+/// the same coordinator the interactive chat uses.
+///
+/// The handle (not a snapshot of its value) is shared: the `AgentTool`
+/// consults it on every call, so enabling agent teams AFTER the loopback
+/// server has started takes effect on the next loopback turn, same as it
+/// does for chat. Lifecycle events flow too — the `subagent:start|stop`
+/// observer lives on the shared registry, so sub-agents spawned through a
+/// loopback turn surface in the desktop UI with no extra wiring here.
 pub fn build_server(
     client_config: LlmClientConfig,
     desktop_config: &DesktopConfig,
+    state: &crate::commands::AppState,
 ) -> ShannonApiServer {
+    let tools = build_loopback_tools(desktop_config, state);
+    ShannonApiServer::new(client_config)
+        .with_tools(tools)
+        .host(LOOPBACK_HOST)
+        .port(LOOPBACK_PORT)
+}
+
+/// Build the loopback tool registry: sandboxed default tools + the B2-4
+/// team-state wiring. Split from [`build_server`] so tests can inspect the
+/// registry (`ShannonApiServer` keeps its tools private).
+fn build_loopback_tools(
+    desktop_config: &DesktopConfig,
+    state: &crate::commands::AppState,
+) -> ToolRegistry {
     let mut tools = ToolRegistry::new();
     let assembly = shannon_remote::assembly::assemble_dynamic();
     let sandboxed_providers = match loopback_sandbox_providers(desktop_config, &assembly.providers)
@@ -287,10 +336,28 @@ pub fn build_server(
     ) {
         tracing::warn!("loopback engine API server: default tool registration failed: {e}");
     }
-    ShannonApiServer::new(client_config)
-        .with_tools(tools)
-        .host(LOOPBACK_HOST)
-        .port(LOOPBACK_PORT)
+    // B2-4 — share the chat session's team state with the loopback
+    // registry: swap the fresh `AgentTool`'s empty context handle for the
+    // AppState handle, then register `team_task_*` bound to the same
+    // coordinator when teams are on. Swapping the handle (vs. snapshotting
+    // the coordinator at build time, the PR #93 shape this replaces) means
+    // a later `agent_teams::enable` is picked up by the NEXT loopback turn's
+    // `agent_spawn` — the tool consults the handle on every call.
+    // Known asymmetry: `team_task_*` registration itself is build-time (the
+    // coordinator value must exist to bind the tools), so toggling teams on
+    // mid-session makes loopback `agent_spawn` live immediately but its
+    // `team_task_*` tools only after an app restart. Documented in the
+    // surfaces audit.
+    let agent_ctx = state.agent_tool_context.clone();
+    if !shannon_tools::swap_agent_tool_context(&mut tools, agent_ctx.clone()) {
+        tracing::warn!(
+            "loopback engine API server: Agent tool swap failed — agent_spawn stays placeholder"
+        );
+    }
+    if let Err(e) = shannon_tools::register_team_tools_when_enabled(&mut tools, &agent_ctx) {
+        tracing::warn!("loopback engine API server: team_task tool registration failed: {e}");
+    }
+    tools
 }
 
 /// Spawn the loopback engine API server on a detached background task.
@@ -310,7 +377,7 @@ pub async fn spawn(state: &AppState, app: tauri::AppHandle) {
         crate::commands_notifications::load_desktop_webhook_config().and_then(|c| c.secret);
     let trigger_enabled = secret.is_some();
     let trigger = trigger_router(TriggerState::from_state(state, app, secret));
-    let server = build_server(client_config, &desktop_config).with_extra_routes(trigger);
+    let server = build_server(client_config, &desktop_config, state).with_extra_routes(trigger);
     tracing::info!(
         "Spawning loopback engine API server on {LOOPBACK_HOST}:{LOOPBACK_PORT} \
          (POST /api/routines/:id/trigger {})",
@@ -417,7 +484,9 @@ mod tests {
             desktop_config: Arc::new(RwLock::new(DesktopConfig::default())),
             tools: Arc::new(ToolRegistry::new()),
             memory_store: crate::commands_memory::open_shared_store_at(tmp.join("memories")),
+            sessions_dir: tmp.join("sessions"),
             secret,
+            notifier: Arc::new(shannon_core::notifier::Notifier::new()),
         }
     }
 
@@ -558,7 +627,18 @@ mod tests {
         drop(probe);
 
         // Same construction as `build_server`, overridden to the free port.
-        let server = build_server(LlmClientConfig::default(), &DesktopConfig::default()).port(port);
+        // Build a throwaway `AppState` so we can pass the `&state` arg that
+        // `build_server` now takes (B2 follow-up — picks up the chat's
+        // coordinator for `team_task_*` registration when agent teams is
+        // enabled). The test only exercises the health endpoint, so a
+        // default-constructed state is sufficient.
+        let state = crate::commands::AppState::new();
+        let server = build_server(
+            LlmClientConfig::default(),
+            &DesktopConfig::default(),
+            &state,
+        )
+        .port(port);
         tokio::spawn(async move {
             let _ = server.serve().await;
         });
@@ -572,5 +652,85 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let body: serde_json::Value = resp.json().await.expect("health json");
         assert_eq!(body["status"], "ok");
+    }
+
+    /// B2-4 — the loopback registry shares the chat session's team state:
+    /// the `Agent` tool is re-pointed at `state.agent_tool_context` (handle,
+    /// not a snapshot), and `team_task_*` tools are gated on the handle being
+    /// populated at build time.
+    ///
+    /// The later-injection property is asserted end-to-end: a registry built
+    /// while teams were OFF executes `SendMessage` as the placeholder (Ok)
+    /// before the toggle, and as the coordinator-backed path (Err — agent
+    /// not found) after the context is injected into the shared handle. The
+    /// accepted asymmetry — `team_task_*` registration stays build-time — is
+    /// documented in the surfaces audit.
+    #[test]
+    fn loopback_build_wires_chat_team_state_and_later_injection_is_live() {
+        let state = crate::commands::AppState::new();
+
+        // Teams off (default): swap succeeded (Agent present), no team_task.
+        let tools = build_loopback_tools(&DesktopConfig::default(), &state);
+        assert!(
+            tools.get("Agent").is_some(),
+            "Agent tool must be registered"
+        );
+        assert!(
+            tools.get("team_task_create").is_none(),
+            "empty handle must not register team_task tools"
+        );
+
+        // Placeholder path: SendMessage to a nonexistent agent is Ok.
+        let placeholder = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(tools.execute(
+                "Agent",
+                serde_json::json!({
+                    "operation": "SendMessage",
+                    "agent_id": "nobody",
+                    "message": "ping"
+                }),
+            ))
+            .expect("placeholder SendMessage must not error");
+        assert!(!placeholder.is_error);
+        assert!(
+            placeholder.content.contains("delivered"),
+            "{}",
+            placeholder.content
+        );
+
+        // Simulate the user toggling teams ON after the server started:
+        // inject a context into the SAME handle the loopback registry shares.
+        let ctx = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(shannon_agents::TeamContext::new_unchecked(
+                shannon_engine::api::LlmClientConfig::default(),
+            ))
+            .expect("TeamContext::new_unchecked");
+        *state.agent_tool_context.lock().expect("handle poisoned") = Some(ctx);
+
+        // Same registry, same call: now the coordinator-backed path runs and
+        // rejects the unknown agent — later injection is live.
+        let live = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(tools.execute(
+                "Agent",
+                serde_json::json!({
+                    "operation": "SendMessage",
+                    "agent_id": "nobody",
+                    "message": "ping"
+                }),
+            ));
+        let err = live.expect_err("post-injection SendMessage must hit the coordinator path");
+        assert!(
+            err.to_string().contains("Failed to send message"),
+            "unexpected error: {err}"
+        );
+
+        // A registry built AFTER the toggle registers the team_task trio.
+        let tools_after = build_loopback_tools(&DesktopConfig::default(), &state);
+        assert!(tools_after.get("team_task_create").is_some());
+        assert!(tools_after.get("team_task_update").is_some());
+        assert!(tools_after.get("team_task_list").is_some());
     }
 }

@@ -309,7 +309,6 @@ impl Default for PolicyLimitsManager {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
-
 /// Serializes every env-mutating test in this module: `set_var` /
 /// `remove_var` are process-global, so parallel siblings observe (and
 /// restore over) each other's values without this lock.

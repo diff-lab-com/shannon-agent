@@ -281,6 +281,25 @@ impl Default for SkillPermissions {
     }
 }
 
+impl SkillPermissions {
+    /// F26: source-aware default permissions.
+    ///
+    /// Skills coming from the user's own domain (built-in, user directory,
+    /// managed policy, legacy commands, plugins) keep shell execution enabled.
+    /// PROJECT-sourced skills (repo `.shannon/skills`, `.claude/skills`, …)
+    /// are third-party input and default to `allow_shell = false` so a
+    /// checked-in SKILL.md cannot turn prompt injection into arbitrary
+    /// command execution. The executor leaves their `!`cmd`` blocks as
+    /// literal text and warns once.
+    pub fn for_source(source: &SkillSource) -> Self {
+        Self {
+            allowed_tools: Vec::new(),
+            allow_shell: !matches!(source, SkillSource::Project),
+            allow_file_ops: true,
+        }
+    }
+}
+
 /// Result of executing a skill
 #[derive(Debug, Clone)]
 pub struct SkillResult {
@@ -429,5 +448,17 @@ mod tests {
         );
         let full: SkillFull = skill.into();
         assert_eq!(full.as_skill().id, "review");
+    }
+
+    /// F26: project-sourced skills deny shell by default; user-domain
+    /// sources keep it enabled.
+    #[test]
+    fn test_skill_permissions_for_source() {
+        assert!(!SkillPermissions::for_source(&SkillSource::Project).allow_shell);
+        assert!(SkillPermissions::for_source(&SkillSource::User).allow_shell);
+        assert!(SkillPermissions::for_source(&SkillSource::Bundled).allow_shell);
+        assert!(SkillPermissions::for_source(&SkillSource::Managed).allow_shell);
+        // The blanket default is unchanged (opt-in users keep shell).
+        assert!(SkillPermissions::default().allow_shell);
     }
 }

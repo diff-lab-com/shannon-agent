@@ -1,32 +1,48 @@
 # Introduction
 
-**Shannon Code** is a high-performance, open-source AI-assisted coding tool written in Rust. It provides a terminal-based interface for interacting with large language models with tool orchestration, multi-agent coordination, session management, and MCP extensibility.
+**Shannon** is a fully open-source (Apache-2.0), Rust-based **AI agent workspace**. It runs on your machine, works with **any LLM provider** — Anthropic, OpenAI, DeepSeek, Z.ai (GLM), Ollama, or any OpenAI-compatible endpoint — and ships as one engine with four surfaces: an interactive terminal UI, headless mode, a local engine server, and a desktop app.
 
-## Why Shannon Code?
+Two commitments shape every design decision:
 
-| Feature | Shannon Code |
+1. **Open source, total control** — every line auditable, every agent action replayable (`shannon trace`), every cost visible (budget caps, context breakdown), no vendor lock-in (BYOK, Claude Code ecosystem compatible).
+2. **Keys never leave your machine** — API keys talk directly to your chosen provider, the `secret-guard` plugin redacts secrets from outbound messages, integration credentials live in the OS keyring, and there is no telemetry by default.
+
+## At a Glance
+
+| Feature | Shannon |
 |---------|-------------|
 | Language | Rust (memory-safe, zero-cost abstractions) |
-| LLM Support | Multi-provider (Anthropic, OpenAI, Ollama, any OpenAI-compatible) |
-| Extensions | MCP (Model Context Protocol) — Claude Code compatible |
-| Tools | Read, Edit, Write, Bash, Grep, Glob + MCP tools |
-| Agents | Multi-agent orchestration with per-agent model/tool config |
-| UI | Terminal UI with vim mode, diff viewer, markdown rendering |
-| Tests | 8,600+ tests across 12 crates |
+| Surfaces | Terminal TUI · headless (`shannon -p`) · engine server (`shannon serve`) · desktop app (`shannon desktop`) |
+| LLM Support | Multi-provider BYOK (Anthropic, OpenAI, DeepSeek, Z.ai/GLM, Ollama, any OpenAI-compatible) |
+| Extensions | MCP (Model Context Protocol) — Claude Code compatible; skills; plugins (`shannon-plugin-api`) |
+| Agents | Multi-agent teams with worktree isolation; `/batch` best-of-N |
+| Autonomy | `/goal`, `/loop`, `/ralph` with budget caps, anti-spin and stall-strike guards |
+| Automation | Routines with cron / API-endpoint / GitHub-event triggers; IM channels; mobile dispatch |
+| Auditability | Event-sourced sessions (`events.jsonl`), `shannon trace show / replay / diff / export` |
+| Security | OS keyring, secret-guard outbound redaction, Landlock/Seatbelt sandbox, permission profiles, prompt-injection scanning |
+| Tests | 11,752+ automated tests across 20 workspace members |
 | i18n | 10 languages |
+
+## Getting Around This Book
+
+- **Getting Started** — install, configure, first run (terminal and desktop).
+- **User Guide** — desktop app, goals, automations, agent teams, IM channels, mobile dispatch, cost control, trace, security & privacy, and migration from other tools.
+- **Configuration** — every config knob.
+- **Features** — deep dives into tools, MCP, permissions, memory, caching, i18n.
+- **Developer Reference** — architecture, crate reference, testing, contributing.
 
 ## Design Principles
 
-- **Memory Safety** — Guaranteed at compile time via Rust's ownership system
-- **High Performance** — Zero-cost abstractions, async I/O with tokio
-- **Type Safety** — Strong type system catches bugs before runtime
-- **Extensibility** — MCP protocol, skill framework, hook system
-- **Composability** — 12 modular crates with clean separation of concerns
+- **Local first** — state lives in `~/.shannon/`; nothing leaves your machine except the model API calls you configure.
+- **Auditability by construction** — sessions are append-only event logs; every capability is a projection of that log.
+- **Provider neutrality** — the engine is BYOK and provider-agnostic; switching models or providers is a config change, not a migration.
+- **Memory safety and performance** — guaranteed at compile time via Rust; Tauri (not Electron) on the desktop.
+- **Extensibility** — MCP protocol, skill framework, hook system, and the `shannon-plugin-api` content-transform contract.
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0 at your option.
+Apache-2.0. See [LICENSE](https://github.com/diff-lab-com/shannon-agent/blob/main/LICENSE) in the repository.
 
 ## Project Status
 
-Shannon Code is in active development. See the [Roadmap](roadmap.md) for planned features.
+Shannon is in active development. See the [Roadmap](roadmap.md) for planned features.

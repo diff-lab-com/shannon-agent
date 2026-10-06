@@ -1080,6 +1080,47 @@ pub(crate) fn handle_status(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
+    let parts: Vec<&str> = args.splitn(2, ' ').collect();
+    let subcommand = parts.first().copied().unwrap_or("");
+
+    // Pure-usage branches need no `gh` — keep them reachable on hosts
+    // without the GitHub CLI installed (the help/usage text is the only
+    // thing a gh-less user can meaningfully get from /ci).
+    match (subcommand, parts.get(1).copied().unwrap_or("")) {
+        ("help", _) => {
+            repl.chat.add_message(
+                ChatRole::System,
+                "\
+CI/GitHub Actions Commands:
+  /ci            — Show recent workflow runs (default: 10)
+  /ci status     — Same as above
+  /ci runs [N]   — List recent N workflow runs
+  /ci workflows  — List all workflows
+  /ci view <id>  — View details of a specific run
+  /ci trigger <name> — Trigger a workflow
+  /ci help       — Show this help
+
+Requires GitHub CLI (gh) to be installed."
+                    .to_string(),
+            );
+            return Ok(());
+        }
+        ("view", "") => {
+            repl.chat
+                .add_message(ChatRole::System, "Usage: /ci view <run-id>".to_string());
+            return Ok(());
+        }
+        ("trigger", "") => {
+            repl.chat.add_message(
+                ChatRole::System,
+                "Usage: /ci trigger <workflow-name>\nUse /ci workflows to see available workflows."
+                    .to_string(),
+            );
+            return Ok(());
+        }
+        _ => {}
+    }
+
     // Check if gh CLI is available
     let gh_check = std::process::Command::new("gh").arg("--version").output();
 
@@ -1091,9 +1132,6 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
         );
         return Ok(());
     }
-
-    let parts: Vec<&str> = args.splitn(2, ' ').collect();
-    let subcommand = parts.first().copied().unwrap_or("");
 
     match subcommand {
         "" | "status" => {

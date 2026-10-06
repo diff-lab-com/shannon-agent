@@ -120,7 +120,7 @@ export function SearchTab({
 
       {error && (
         <div className="border border-error/30 rounded-xl p-md bg-error-container/10 text-label-sm text-error flex items-start gap-sm">
-          <span className="material-symbols-outlined text-error text-[18px] shrink-0">error</span>
+          <span className="material-symbols-outlined text-error icon-md shrink-0">error</span>
           <span>
             {t("extensions.mcp.registryError")}{" "}
             <span className="font-mono">{error}</span>

@@ -32,6 +32,7 @@ use std::time::Instant;
 use thiserror::Error;
 
 use crate::settings::Settings;
+use shannon_engine::api::LlmProvider;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -324,6 +325,9 @@ impl DoctorReport {
 pub struct Doctor {
     /// Optional configuration to validate against.
     config: Option<Settings>,
+    /// Active provider for the API-key check. `None` auto-detects from the
+    /// environment (see [`detect_active_provider`]).
+    provider: Option<LlmProvider>,
 }
 
 impl Default for Doctor {
@@ -335,13 +339,26 @@ impl Default for Doctor {
 impl Doctor {
     /// Create a new Doctor instance with no configuration.
     pub fn new() -> Self {
-        Self { config: None }
+        Self {
+            config: None,
+            provider: None,
+        }
     }
 
     /// Create a Doctor with a specific configuration to validate.
     pub fn with_config(config: Settings) -> Self {
         Self {
             config: Some(config),
+            provider: None,
+        }
+    }
+
+    /// Create a Doctor whose API-key check targets a specific provider
+    /// instead of auto-detecting the active one from the environment.
+    pub fn with_provider(provider: LlmProvider) -> Self {
+        Self {
+            config: None,
+            provider: Some(provider),
         }
     }
 
@@ -399,13 +416,87 @@ impl Doctor {
     // Individual checks
     // -----------------------------------------------------------------------
 
-    /// Check whether the API key is configured and has a valid format.
+    /// Check whether the API key for the active provider is configured and
+    /// plausibly valid.
     ///
-    /// Validates that the `ANTHROPIC_API_KEY` environment variable is set
-    /// and follows the expected `sk-ant-...` format.
+    /// Provider-aware (review 2026-09-29 P1-14): the Anthropic check honours
+    /// the full env chain (`ANTHROPIC_API_KEY` → `CLAUDE_API_KEY` →
+    /// `ANTHROPIC_AUTH_TOKEN` → `SHANNON_API_KEY`, matching
+    /// `LlmProvider::resolve_api_key_from_env`) and keeps the historical
+    /// `sk-ant-` prefix validation. Every other provider only requires a
+    /// non-empty canonical key — no Anthropic prefix demands — and warns on
+    /// obviously truncated values instead.
     pub fn check_api_key(&self) -> DiagnosticCheck {
+        let provider = self.provider.clone().unwrap_or_else(detect_active_provider);
+
+        // Ollama runs without credentials — nothing to check.
+        if provider == LlmProvider::Ollama {
+            return DiagnosticCheck::skip(
+                "API Key",
+                DiagnosticCategory::ApiKey,
+                "Ollama requires no API key".to_string(),
+            );
+        }
+
+        if provider == LlmProvider::Anthropic {
+            return Self::check_anthropic_api_key();
+        }
+
+        // Non-Anthropic provider: presence + sanity only, no prefix demands.
+        let display = crate::model_registry::provider_display_name(&provider);
+        let Some(env_var) = provider.canonical_api_key_env() else {
+            // Custom / Bedrock / Cloudflare / Replicate have no canonical env
+            // var — their key lives in providers.toml / the credential store.
+            return DiagnosticCheck::skip(
+                "API Key",
+                DiagnosticCategory::ApiKey,
+                format!("{display} is configured via /connect (no canonical env var)"),
+            );
+        };
+
+        let key = std::env::var(env_var).or_else(|_| std::env::var("SHANNON_API_KEY"));
+        match key {
+            Ok(ref key) if !key.is_empty() && key.len() < MIN_PLAUSIBLE_KEY_LEN => {
+                DiagnosticCheck::warn(
+                    "API Key",
+                    DiagnosticCategory::ApiKey,
+                    format!(
+                        "{display} API key looks truncated ({env_var}, {} chars)",
+                        key.len()
+                    ),
+                    Some(format!(
+                        "A {display} key is usually longer — verify it with /connect {provider} <key>."
+                    )),
+                )
+            }
+            Ok(ref key) if !key.is_empty() => DiagnosticCheck::pass(
+                "API Key",
+                DiagnosticCategory::ApiKey,
+                format!("{display} API key found ({env_var}, {} chars)", key.len()),
+            ),
+            Ok(_) => DiagnosticCheck::fail(
+                "API Key",
+                DiagnosticCategory::ApiKey,
+                format!("{env_var} is set but empty"),
+                Some(format!("Set {env_var} to a valid {display} API key.")),
+            ),
+            Err(_) => DiagnosticCheck::fail(
+                "API Key",
+                DiagnosticCategory::ApiKey,
+                format!("No API key found in environment for {display}"),
+                Some(format!(
+                    "Set {env_var}, or connect with /connect {provider} <key>."
+                )),
+            ),
+        }
+    }
+
+    /// Anthropic-specific key check: the full env chain plus the historical
+    /// `sk-ant-` format validation.
+    fn check_anthropic_api_key() -> DiagnosticCheck {
         let key = std::env::var("ANTHROPIC_API_KEY")
             .or_else(|_| std::env::var("CLAUDE_API_KEY"))
+            .or_else(|_| std::env::var("ANTHROPIC_AUTH_TOKEN"))
             .or_else(|_| std::env::var("SHANNON_API_KEY"));
 
         match key {
@@ -424,13 +515,13 @@ impl Doctor {
                 "API Key",
                 DiagnosticCategory::ApiKey,
                 "API key is set but empty".to_string(),
-                Some("Set ANTHROPIC_API_KEY to a valid Anthropic API key.".to_string()),
+                Some("Set ANTHROPIC_API_KEY (or CLAUDE_API_KEY / ANTHROPIC_AUTH_TOKEN / SHANNON_API_KEY) to a valid Anthropic API key.".to_string()),
             ),
             Err(_) => DiagnosticCheck::fail(
                 "API Key",
                 DiagnosticCategory::ApiKey,
                 "No API key found in environment".to_string(),
-                Some("Set ANTHROPIC_API_KEY, CLAUDE_API_KEY, or SHANNON_API_KEY environment variable.".to_string()),
+                Some("Set ANTHROPIC_API_KEY, CLAUDE_API_KEY, ANTHROPIC_AUTH_TOKEN, or SHANNON_API_KEY environment variable.".to_string()),
             ),
         }
     }
@@ -804,6 +895,60 @@ impl Doctor {
 // Helper functions
 // ---------------------------------------------------------------------------
 
+/// Keys shorter than this are treated as obviously truncated for non-Anthropic
+/// providers (no prefix is demanded — only a sanity floor).
+const MIN_PLAUSIBLE_KEY_LEN: usize = 20;
+
+/// Providers the doctor auto-detects via their canonical key env var, in scan
+/// order (Anthropic first as the historical default). Providers without a
+/// canonical env var (Ollama/Custom/Bedrock/Cloudflare/Replicate) are absent
+/// — they can only be selected explicitly via `SHANNON_PROVIDER`.
+const ENV_DETECT_PROVIDERS: &[LlmProvider] = &[
+    LlmProvider::Anthropic,
+    LlmProvider::OpenAI,
+    LlmProvider::Gemini,
+    LlmProvider::Azure,
+    LlmProvider::Mistral,
+    LlmProvider::DeepSeek,
+    LlmProvider::Groq,
+    LlmProvider::Together,
+    LlmProvider::OpenRouter,
+    LlmProvider::Cohere,
+    LlmProvider::Fireworks,
+    LlmProvider::Perplexity,
+    LlmProvider::Xai,
+    LlmProvider::Ai21,
+    LlmProvider::SiliconFlow,
+    LlmProvider::Zhipu,
+    LlmProvider::ZhipuInternational,
+    LlmProvider::ZhipuCoding,
+    LlmProvider::ZhipuCodingPlan,
+    LlmProvider::Moonshot,
+    LlmProvider::Minimax,
+    LlmProvider::DashScope,
+];
+
+/// Best-effort detection of the active provider from the environment:
+/// `SHANNON_PROVIDER` (the provider slug, as accepted by `/provider`) wins,
+/// then the first provider whose canonical key env var is set non-empty,
+/// then Anthropic — the historical default, preserving the pre-provider-aware
+/// doctor behaviour.
+fn detect_active_provider() -> LlmProvider {
+    if let Ok(slug) = std::env::var("SHANNON_PROVIDER") {
+        if let Some(provider) = crate::provider_resolver::llm_provider_from_slug(&slug) {
+            return provider;
+        }
+    }
+    for provider in ENV_DETECT_PROVIDERS {
+        if let Some(env_var) = provider.canonical_api_key_env() {
+            if std::env::var(env_var).is_ok_and(|v| !v.is_empty()) {
+                return provider.clone();
+            }
+        }
+    }
+    LlmProvider::Anthropic
+}
+
 /// Search for an executable on PATH.
 fn which_tool(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
@@ -914,6 +1059,7 @@ impl HomeGuard {
 pub struct ApiKeyGuard {
     anthropic: Option<std::ffi::OsString>,
     claude: Option<std::ffi::OsString>,
+    anthropic_auth_token: Option<std::ffi::OsString>,
     shannon: Option<std::ffi::OsString>,
 }
 
@@ -922,15 +1068,18 @@ impl ApiKeyGuard {
     pub fn remove() -> Self {
         let anthropic = std::env::var_os("ANTHROPIC_API_KEY");
         let claude = std::env::var_os("CLAUDE_API_KEY");
+        let anthropic_auth_token = std::env::var_os("ANTHROPIC_AUTH_TOKEN");
         let shannon = std::env::var_os("SHANNON_API_KEY");
         unsafe {
             std::env::remove_var("ANTHROPIC_API_KEY");
             std::env::remove_var("CLAUDE_API_KEY");
+            std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
             std::env::remove_var("SHANNON_API_KEY");
         }
         Self {
             anthropic,
             claude,
+            anthropic_auth_token,
             shannon,
         }
     }
@@ -947,6 +1096,10 @@ impl Drop for ApiKeyGuard {
         match &self.claude {
             Some(val) => unsafe { std::env::set_var("CLAUDE_API_KEY", val) },
             None => unsafe { std::env::remove_var("CLAUDE_API_KEY") },
+        }
+        match &self.anthropic_auth_token {
+            Some(val) => unsafe { std::env::set_var("ANTHROPIC_AUTH_TOKEN", val) },
+            None => unsafe { std::env::remove_var("ANTHROPIC_AUTH_TOKEN") },
         }
         match &self.shannon {
             Some(val) => unsafe { std::env::set_var("SHANNON_API_KEY", val) },
@@ -1199,15 +1352,181 @@ mod tests {
     fn test_check_api_key_no_key() {
         // Ensure the env vars are not set for this test, then restore on drop
         let _guard = ApiKeyGuard::remove();
+        unsafe { std::env::remove_var("SHANNON_PROVIDER") };
 
         let doctor = Doctor::new();
         let check = doctor.check_api_key();
-        // In CI, API keys might be set; we just verify it returns a valid status
-        assert!(matches!(
-            check.status,
-            CheckStatus::Pass | CheckStatus::Fail | CheckStatus::Warn
-        ));
+        // Nothing set → the Anthropic default path fails.
+        assert_eq!(check.status, CheckStatus::Fail);
         assert!(!check.name.is_empty());
+    }
+
+    // ---- Provider-aware API key check (review 2026-09-29 P1-14) ----------
+
+    /// Serializes tests that mutate the shared API-key environment so they
+    /// cannot observe each other's mid-flight state. Poisoning is ignored —
+    /// a panicking test must not cascade failures into its peers.
+    static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Remove every env var that influences the API-key check (Anthropic
+    /// chain, SHANNON override, provider slug). The returned guard restores
+    /// the Anthropic chain on drop, so hold it for the whole test.
+    fn clear_key_check_env() -> ApiKeyGuard {
+        let guard = ApiKeyGuard::remove();
+        unsafe { std::env::remove_var("SHANNON_PROVIDER") };
+        guard
+    }
+
+    #[test]
+    fn anthropic_sk_ant_key_passes() {
+        let _env = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = clear_key_check_env();
+        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-api03-abcdefghijklmnop") };
+
+        let check = Doctor::with_provider(LlmProvider::Anthropic).check_api_key();
+        assert_eq!(check.status, CheckStatus::Pass);
+        assert!(check.message.contains("sk-ant-api"), "{}", check.message);
+    }
+
+    #[test]
+    fn anthropic_non_sk_ant_key_warns() {
+        let _env = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = clear_key_check_env();
+        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "totally-not-anthropic") };
+
+        let check = Doctor::with_provider(LlmProvider::Anthropic).check_api_key();
+        assert_eq!(check.status, CheckStatus::Warn);
+    }
+
+    /// CLAUDE_API_KEY is a valid Anthropic source (Claude Code migrants).
+    #[test]
+    fn claude_api_key_counts_as_anthropic_source() {
+        let _env = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = clear_key_check_env();
+        unsafe { std::env::set_var("CLAUDE_API_KEY", "sk-ant-api03-abcdefghijklmnop") };
+
+        let check = Doctor::new().check_api_key();
+        assert_eq!(check.status, CheckStatus::Pass);
+    }
+
+    /// ANTHROPIC_AUTH_TOKEN is a valid Anthropic source too (non-`sk-ant`
+    /// bearer values warn on format but are accepted as present).
+    #[test]
+    fn anthropic_auth_token_counts_as_anthropic_source() {
+        let _env = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = clear_key_check_env();
+        unsafe { std::env::set_var("ANTHROPIC_AUTH_TOKEN", "bearer-token-value-123456") };
+
+        let check = Doctor::new().check_api_key();
+        assert_eq!(check.status, CheckStatus::Warn);
+    }
+
+    #[test]
+    fn ollama_skips_key_check() {
+        let check = Doctor::with_provider(LlmProvider::Ollama).check_api_key();
+        assert_eq!(check.status, CheckStatus::Skip);
+    }
+
+    /// A Zhipu-format key (`{id}.{secret}`, no `sk-ant-` prefix) must pass
+    /// without any format warning — the old Anthropic-chauvinistic check
+    /// warned "unexpected format" for every non-Anthropic key shape.
+    #[test]
+    fn zhipu_key_has_no_format_warning() {
+        let _env = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = clear_key_check_env();
+        unsafe { std::env::set_var("ZHIPU_API_KEY", "1a2b3c4d5e6f7089.abcdEF0123456789fedcba") };
+
+        let check = Doctor::with_provider(LlmProvider::Zhipu).check_api_key();
+        assert_eq!(check.status, CheckStatus::Pass, "{}", check.message);
+        assert!(
+            !check.message.contains("unexpected format"),
+            "{}",
+            check.message
+        );
+        assert!(check.fix_suggestion.is_none());
+
+        unsafe { std::env::remove_var("ZHIPU_API_KEY") };
+    }
+
+    /// A short key for a non-Anthropic provider warns as truncated instead
+    /// of demanding an Anthropic prefix.
+    #[test]
+    fn zhipu_truncated_key_warns_without_prefix_demand() {
+        let _env = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = clear_key_check_env();
+        unsafe { std::env::set_var("ZHIPU_API_KEY", "short") };
+
+        let check = Doctor::with_provider(LlmProvider::Zhipu).check_api_key();
+        assert_eq!(check.status, CheckStatus::Warn);
+        let suggestion = check.fix_suggestion.unwrap_or_default();
+        assert!(!suggestion.contains("sk-ant"), "{suggestion}");
+        assert!(suggestion.contains("/connect zhipu"), "{suggestion}");
+
+        unsafe { std::env::remove_var("ZHIPU_API_KEY") };
+    }
+
+    #[test]
+    fn zhipu_missing_key_fails_with_provider_hint() {
+        let _env = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = clear_key_check_env();
+        unsafe { std::env::remove_var("ZHIPU_API_KEY") };
+
+        let check = Doctor::with_provider(LlmProvider::Zhipu).check_api_key();
+        assert_eq!(check.status, CheckStatus::Fail);
+        let suggestion = check.fix_suggestion.unwrap_or_default();
+        assert!(suggestion.contains("ZHIPU_API_KEY"), "{suggestion}");
+    }
+
+    /// Providers without a canonical env var (e.g. Custom) are skipped.
+    #[test]
+    fn custom_provider_skips_key_check() {
+        let check = Doctor::with_provider(LlmProvider::Custom).check_api_key();
+        assert_eq!(check.status, CheckStatus::Skip);
+    }
+
+    // ---- Active-provider detection ----------------------------------------
+
+    /// Clear the full detection surface (SHANNON_PROVIDER + every canonical
+    /// key env var in [`ENV_DETECT_PROVIDERS`] scan order).
+    fn clear_env_detection_vars() {
+        unsafe { std::env::remove_var("SHANNON_PROVIDER") };
+        for provider in ENV_DETECT_PROVIDERS {
+            if let Some(var) = provider.canonical_api_key_env() {
+                unsafe { std::env::remove_var(var) };
+            }
+        }
+        for var in ["SHANNON_API_KEY", "CLAUDE_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
+            unsafe { std::env::remove_var(var) };
+        }
+    }
+
+    #[test]
+    fn detect_active_provider_via_canonical_env_var() {
+        let _env = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_env_detection_vars();
+        unsafe { std::env::set_var("ZHIPU_API_KEY", "1a2b3c4d5e6f7089.abcdEF0123456789") };
+
+        assert_eq!(detect_active_provider(), LlmProvider::Zhipu);
+
+        unsafe { std::env::remove_var("ZHIPU_API_KEY") };
+    }
+
+    #[test]
+    fn detect_active_provider_via_shannon_provider_slug() {
+        let _env = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_env_detection_vars();
+        unsafe { std::env::set_var("SHANNON_PROVIDER", "deepseek") };
+
+        assert_eq!(detect_active_provider(), LlmProvider::DeepSeek);
+
+        unsafe { std::env::remove_var("SHANNON_PROVIDER") };
+    }
+
+    #[test]
+    fn detect_active_provider_defaults_to_anthropic() {
+        let _env = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_env_detection_vars();
+        assert_eq!(detect_active_provider(), LlmProvider::Anthropic);
     }
 
     #[test]
@@ -1334,20 +1653,24 @@ mod tests {
 
     #[test]
     fn test_api_key_guard_remove_and_restore() {
+        let _env = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Save original values
         let orig_anthropic = std::env::var_os("ANTHROPIC_API_KEY");
         let orig_claude = std::env::var_os("CLAUDE_API_KEY");
+        let orig_auth_token = std::env::var_os("ANTHROPIC_AUTH_TOKEN");
         let orig_shannon = std::env::var_os("SHANNON_API_KEY");
 
         {
             let _guard = ApiKeyGuard::remove();
             assert!(std::env::var_os("ANTHROPIC_API_KEY").is_none());
             assert!(std::env::var_os("CLAUDE_API_KEY").is_none());
+            assert!(std::env::var_os("ANTHROPIC_AUTH_TOKEN").is_none());
             assert!(std::env::var_os("SHANNON_API_KEY").is_none());
         }
         // Restored after drop
         assert_eq!(std::env::var_os("ANTHROPIC_API_KEY"), orig_anthropic);
         assert_eq!(std::env::var_os("CLAUDE_API_KEY"), orig_claude);
+        assert_eq!(std::env::var_os("ANTHROPIC_AUTH_TOKEN"), orig_auth_token);
         assert_eq!(std::env::var_os("SHANNON_API_KEY"), orig_shannon);
     }
 }

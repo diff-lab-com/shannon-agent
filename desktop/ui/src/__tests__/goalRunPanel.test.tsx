@@ -117,10 +117,13 @@ describe('GoalRunPanel', () => {
     expect(screen.getByText(/interrupted|已中断/i)).toBeTruthy()
   })
 
-  it('renders nothing without runs (empty state stays on the task list)', async () => {
+  it('shows the empty state with a creation entry when there are no runs (audit C11)', async () => {
     vi.mocked(api.listGoalRuns).mockResolvedValue([])
     const { container } = render(<GoalRunPanel onViewSession={() => {}} />, { wrapper })
     await waitFor(() => expect(api.listGoalRuns).toHaveBeenCalled())
-    expect(container.querySelector('[data-testid="goal-run-panel"]')).toBeNull()
+    // The panel no longer disappears when empty — that was the zero-entry
+    // dead loop: no goal → no panel → nowhere to create one.
+    expect(container.querySelector('[data-testid="goal-run-panel"]')).not.toBeNull()
+    expect(screen.getByTestId('goal-new-button')).toBeInTheDocument()
   })
 })

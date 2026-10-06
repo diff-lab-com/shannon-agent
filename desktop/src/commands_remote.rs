@@ -97,16 +97,27 @@ pub struct RemoteHealthDto {
     pub error: Option<String>,
 }
 
+/// P1-16 / decision #2: the list response carries the persisted default
+/// target alongside the targets, so the UI can reflect it without a
+/// write-then-read guess (the previous surface was read-only + a no-op).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteTargetsDto {
+    pub targets: Vec<RemoteTargetDto>,
+    pub default_target: Option<String>,
+}
+
 // ── Commands ─────────────────────────────────────────────────────────────
 
-/// List saved targets from `~/.shannon/remotes.toml`.
+/// List saved targets from `~/.shannon/remotes.toml` together with the
+/// persisted default target.
 #[tauri::command]
-pub fn remote_list_targets(_state: tauri::State<'_, AppState>) -> Vec<RemoteTargetDto> {
-    RemotesFile::load_default()
-        .targets
-        .iter()
-        .map(RemoteTargetDto::from)
-        .collect()
+pub fn remote_list_targets(_state: tauri::State<'_, AppState>) -> RemoteTargetsDto {
+    let file = RemotesFile::load_default();
+    RemoteTargetsDto {
+        targets: file.targets.iter().map(RemoteTargetDto::from).collect(),
+        default_target: file.default_target,
+    }
 }
 
 /// Discover candidate hosts from `~/.ssh/config` (read-only, no secrets).
@@ -313,5 +324,35 @@ mod tests {
         let json = serde_json::to_string(&sample()).unwrap();
         assert!(json.contains("workspaceDir"));
         assert!(!json.contains("workspace_dir"));
+    }
+
+    #[test]
+    fn list_response_carries_default_target() {
+        // P1-16: the list payload surfaces the persisted default so the UI
+        // can render the badge after a plain reload.
+        let file = RemotesFile {
+            default_target: Some("build-box".into()),
+            targets: vec![RemoteTarget::from(sample())],
+        };
+        let dto = RemoteTargetsDto {
+            targets: file.targets.iter().map(RemoteTargetDto::from).collect(),
+            default_target: file.default_target,
+        };
+        assert_eq!(dto.targets.len(), 1);
+        assert_eq!(dto.default_target.as_deref(), Some("build-box"));
+
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("defaultTarget"));
+        assert!(!json.contains("default_target"));
+    }
+
+    #[test]
+    fn list_response_allows_no_default() {
+        let dto = RemoteTargetsDto {
+            targets: Vec::new(),
+            default_target: None,
+        };
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("defaultTarget\":null"));
     }
 }

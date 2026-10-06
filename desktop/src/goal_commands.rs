@@ -9,7 +9,7 @@
 //! the pure decision in [`shannon_core::goal_loop`] (shared verbatim with
 //! the TUI) decides: continue, or finish.
 //!
-//! Architecture mirrors the P0-3 [`crate::inbox_commands::spawn_routine_run`]
+//! Architecture mirrors the P0-3 `crate::inbox_commands::spawn_routine_run`
 //! executor, including its final-state discipline:
 //!
 //! - a single `finalize` choke point writes the terminal status (sidecar +
@@ -42,10 +42,10 @@ use shannon_core::inbox_store::{InboxItemNew, SOURCE_GOAL};
 use shannon_core::query_engine::{GoalSpec, QueryContext, QueryEngine, QueryEvent, QueryMetadata};
 use shannon_core::session_log::{SessionStore, StoredGoal};
 use shannon_engine::api::client::LlmClient;
-use shannon_engine::permissions::{ApprovalMode, PermissionManager, PermissionRuleChecker};
+use shannon_engine::permissions::{PermissionManager, PermissionRuleChecker};
 use shannon_engine::state::StateManager;
 use shannon_tools::register_default_tools_with_providers;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -106,6 +106,11 @@ pub struct GoalRunDto {
     pub last_error: Option<String>,
     pub started_at_ms: i64,
     pub updated_at_ms: i64,
+    /// Project directory the run inherited from its originating session
+    /// (P-E2). `None` when the session had none — and always `None` on
+    /// restart-reconciled `interrupted` cards (the session sidecar cannot
+    /// round-trip a working dir without a semver-major core change).
+    pub working_dir: Option<String>,
 }
 
 /// `start_goal_run` response — `{ sessionId }`.
@@ -134,6 +139,8 @@ pub(crate) struct GoalRunState {
     pub last_error: Option<String>,
     pub started_at_ms: i64,
     pub updated_at_ms: i64,
+    /// Project directory inherited from the originating session (P-E2).
+    pub working_dir: Option<String>,
 }
 
 impl GoalRunState {
@@ -151,6 +158,7 @@ impl GoalRunState {
             last_error: self.last_error.clone(),
             started_at_ms: self.started_at_ms,
             updated_at_ms: self.updated_at_ms,
+            working_dir: self.working_dir.clone(),
         }
     }
 
@@ -365,6 +373,22 @@ pub(crate) struct GoalRunDeps {
     pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
     /// Session container (`~/.shannon/sessions`) for sidecar persistence.
     pub(crate) sessions_dir: PathBuf,
+    /// B2-2 — handle shared with the chat session's `AgentTool`. When agent
+    /// teams are enabled, the goal runner swaps this into its per-run tool
+    /// registry so `Agent`-tool operations (agent_spawn / send_message /
+    /// shutdown) and `team_task_*` land on the same coordinator the chat
+    /// (and the Tasks page) see. Empty handle = placeholder behaviour,
+    /// identical to pre-B2 runs.
+    pub(crate) agent_tool_context: Arc<std::sync::Mutex<Option<shannon_tools::AgentToolContext>>>,
+    /// Legacy ② — the compaction utility slot (providers.toml v2
+    /// `auxiliary.compression`), resolved into a client at run-spawn time by
+    /// [`GoalRunDeps::from_state_for_run`] and pinned onto the run's engine.
+    /// `None` (slot unconfigured/dangling, the default) keeps the historical
+    /// behavior byte-identical: background compaction rides the session's
+    /// own client. The main client is unaffected — the unattended
+    /// constructors still read the global `client_config` Arc directly
+    /// (裁定⑦ orthogonality; `unattended_paths_pin_global_config`).
+    pub(crate) aux_compaction: Option<shannon_engine::api::LlmClient>,
 }
 
 impl GoalRunDeps {
@@ -376,7 +400,29 @@ impl GoalRunDeps {
             desktop_config: state.desktop_config.clone(),
             memory_store: state.memory_store.clone(),
             sessions_dir: state.state_manager.sessions_dir().to_path_buf(),
+            agent_tool_context: state.agent_tool_context.clone(),
+            // Run-spawning entries resolve the slot through
+            // [`GoalRunDeps::from_state_for_run`]; the status/sidecar-only
+            // entries (list/get/stop/pause/objective) never build an engine,
+            // so the default `None` is final for them.
+            aux_compaction: None,
         }
+    }
+
+    /// [`GoalRunDeps::from_state`] plus the compaction utility slot resolved
+    /// (legacy ②). The entries that spawn a run loop use this so the slot is
+    /// snapshotted at spawn time — the same timing the run's `client_config`
+    /// read uses. A dangling slot has already fallen back to `None` inside
+    /// the resolver (with its warn); a spawned run never fails because of
+    /// the utility slot.
+    pub(crate) async fn from_state_for_run(state: &AppState) -> Self {
+        let mut deps = Self::from_state(state);
+        deps.aux_compaction = crate::utility_tier::resolve_auxiliary_client(
+            state,
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await;
+        deps
     }
 
     fn session_store(&self) -> SessionStore {
@@ -410,6 +456,12 @@ pub async fn start_goal_run(
         }
     };
 
+    // P-E2: inherit the originating session's project directory. The origin
+    // is the session the run targets; when a dedicated goal session is
+    // created instead, the ACTIVE session (where the user started the goal)
+    // donates its working dir so the new session joins the same project.
+    let inherited_working_dir = goal_inherited_working_dir(&state, session_id.as_deref()).await;
+
     // Resolve / create the session.
     let (session_uuid, created_session) = match session_id
         .as_deref()
@@ -421,12 +473,18 @@ pub async fn start_goal_run(
             false,
         ),
         None => (
-            create_goal_session(&state, &app_handle, &title).await?,
+            create_goal_session(
+                state.inner(),
+                &app_handle,
+                &title,
+                inherited_working_dir.clone(),
+            )
+            .await?,
             true,
         ),
     };
 
-    let deps = GoalRunDeps::from_state(&state);
+    let deps = GoalRunDeps::from_state_for_run(&state).await;
     let started = now_ms();
     let run_state = GoalRunState {
         session_id: session_uuid,
@@ -442,6 +500,7 @@ pub async fn start_goal_run(
         last_error: None,
         started_at_ms: started,
         updated_at_ms: started,
+        working_dir: inherited_working_dir,
     };
     let handle = Arc::new(GoalRunHandle::new(run_state));
     state
@@ -586,7 +645,9 @@ pub async fn resume_goal_run(
     session_id: String,
 ) -> Result<(), String> {
     let uuid = Uuid::parse_str(session_id.trim()).map_err(|e| format!("invalid sessionId: {e}"))?;
-    let deps = GoalRunDeps::from_state(&state);
+    // Resume re-spawns the run loop → resolve the compaction utility slot
+    // (legacy ②), same as `start_goal_run`.
+    let deps = GoalRunDeps::from_state_for_run(&state).await;
     if let Some(handle) = state.goal_runs.get(&uuid) {
         handle.resume().await?;
         // Sidecar anchor back to active while the loop runs again.
@@ -639,6 +700,10 @@ pub async fn resume_goal_run(
         last_error: None,
         started_at_ms: started,
         updated_at_ms: started,
+        // The sidecar cannot round-trip a working dir (no field — adding one
+        // to the non-`non_exhaustive` core struct is semver-major), so a
+        // restarted run reports no project until it re-earns one.
+        working_dir: None,
     };
     let handle = Arc::new(GoalRunHandle::new(run_state));
     state
@@ -721,12 +786,39 @@ pub async fn update_goal_objective(
 
 // ── Session creation (new-session branch of start_goal_run) ─────────────
 
+/// The working dir a goal run inherits (P-E2): the target session's
+/// `SessionMeta.working_dir`; when no target is given, the ACTIVE session's
+/// (where the user started the goal). Normalized to the project registry
+/// key; `None` when neither session has a project. Runtime-free over
+/// [`AppState`] so tests can drive it directly.
+pub(crate) async fn goal_inherited_working_dir(
+    state: &AppState,
+    origin: Option<&str>,
+) -> Option<String> {
+    let origin_id = origin
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| state.registry.active_key().map(|key| key.0.to_string()))?;
+    let sessions = state.sessions.lock().await;
+    sessions
+        .iter()
+        .find(|s| s.id == origin_id)
+        .and_then(|m| m.working_dir.as_deref())
+        .map(crate::commands_projects::normalize_path)
+        .filter(|dir| !dir.is_empty())
+        .map(str::to_string)
+}
+
 /// Create a fresh L0 session for a goal run, mirroring `new_session` but
-/// without stealing the user's active session.
-async fn create_goal_session(
-    state: &tauri::State<'_, AppState>,
-    app_handle: &tauri::AppHandle,
+/// without stealing the user's active session. `working_dir` is the
+/// originating session's project (P-E2) — stamped on the new rail row so
+/// the goal session joins that project.
+async fn create_goal_session<R: tauri::Runtime>(
+    state: &AppState,
+    app_handle: &tauri::AppHandle<R>,
     title: &str,
+    working_dir: Option<String>,
 ) -> Result<Uuid, String> {
     let id = Uuid::new_v4();
     let id_str = id.to_string();
@@ -749,7 +841,7 @@ async fn create_goal_session(
             title: title.to_string(),
             created_at: now,
             message_count: 0,
-            working_dir: None,
+            working_dir,
             parent_id: None,
             branch_point: None,
         });
@@ -869,6 +961,9 @@ fn interrupted_dto(
         last_error: None,
         started_at_ms: at_ms,
         updated_at_ms: at_ms,
+        // Same sidecar limit as resume: no working dir survives a restart,
+        // so interrupted cards report `None` (live DTO only, P-E2 scope).
+        working_dir: None,
     }
 }
 
@@ -1008,16 +1103,8 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
         let provider = client_config.provider.to_string();
 
         let mut permissions = PermissionManager::new();
-        let mode = approval_mode_str
-            .as_deref()
-            .and_then(|s| match s {
-                "full_auto" => Some(ApprovalMode::FullAuto),
-                "auto_edit" => Some(ApprovalMode::AutoEdit),
-                "auto" => Some(ApprovalMode::Auto),
-                "plan" => Some(ApprovalMode::Plan),
-                _ => None,
-            })
-            .unwrap_or(ApprovalMode::FullAuto);
+        // review §P1-2: default to Suggest (require explicit opt-in for FullAuto)
+        let mode = crate::commands::unattended_approval_mode(approval_mode_str.as_deref());
         permissions.set_approval_mode(mode);
         let mut settings = shannon_core::settings::SettingsManager::new();
         if settings.load_from_files().is_ok() {
@@ -1051,6 +1138,10 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
         // P1-3: honour the persisted `sandbox.mode` on the unattended path
         // too — same assembly-time seam as AppState::new.
         let desktop_cfg = deps.desktop_config.read().await;
+        // Settings R3 T6: the goal run's engine honors the same
+        // auto-compaction switch as interactive turns (read under the same
+        // guard the sandbox mode uses).
+        let context_auto_compact = desktop_cfg.context_auto_compact;
         let sandboxed_providers = match crate::sandbox_assembly::effective_sandbox_providers(
             desktop_cfg.sandbox.as_ref().and_then(|s| s.mode.as_deref()),
             desktop_cfg.working_dir.as_deref(),
@@ -1067,6 +1158,21 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
             sandboxed_providers.as_ref().unwrap_or(&assembly.providers),
         )
         .map_err(|e| format!("goal tool registry init failed: {e}"))?;
+        // B2-2 — share the chat session's team state with this per-run
+        // registry: the fresh `AgentTool` starts with an empty context
+        // handle, so without this swap `agent_spawn` inside a goal run
+        // always hit the placeholder path even when the user had agent
+        // teams enabled. `register_team_tools_when_enabled` then adds the
+        // `team_task_*` trio bound to the SAME coordinator, so tasks created
+        // by the goal run show up on the chat session's board (and the
+        // Tasks page panel reads one consistent registry).
+        let agent_ctx = deps.agent_tool_context.clone();
+        if !shannon_tools::swap_agent_tool_context(&mut tools, agent_ctx.clone()) {
+            tracing::warn!("goal run: Agent tool swap failed — agent_spawn stays placeholder");
+        }
+        if let Err(e) = shannon_tools::register_team_tools_when_enabled(&mut tools, &agent_ctx) {
+            tracing::warn!("goal run: team_task tools registration failed: {e}");
+        }
         shannon_tools::goal::register_goal_tools(
             &mut tools,
             Arc::new(RunnerGoalAccess {
@@ -1076,13 +1182,23 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
         .map_err(|e| format!("registering goal tools failed: {e}"))?;
 
         let mut engine = crate::commands_memory::attach_shared_memory(
-            QueryEngine::with_defaults_arc(
+            QueryEngine::with_defaults_arc_and_config(
                 LlmClient::new(client_config),
                 Arc::new(tools),
                 permissions,
                 StateManager::new(),
-            ),
+                // Settings R3 T6: goal runs honor the auto-compaction switch.
+                |config| config.auto_compact_enabled = context_auto_compact,
+            )
+            // Legacy ②: pin the compaction utility slot resolved at spawn
+            // time (`from_state_for_run`). `None` (the default) keeps the
+            // historical behavior — background compaction rides this run's
+            // own client.
+            .with_auxiliary_compaction_client(deps.aux_compaction.clone()),
             &deps.memory_store,
+            // B2-2: goal runs keep their pre-B2-2 directory behavior (the
+            // process-cwd freeze).
+            None,
         );
         engine.set_session_id(session_id);
         match engine.restore_session(session_id) {
@@ -1207,8 +1323,12 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                         tool_name,
                         result,
                         is_error,
+                        meta,
                         ..
                     } => {
+                        // P1-⑤: forward the engine's tool metadata alongside
+                        // the result (additive, serde-default on the wire).
+                        let meta_val = if meta.is_null() { None } else { Some(*meta) };
                         let _ = self.app.emit(
                             event_names::QUERY_TOOL_RESULT,
                             crate::events::ToolResultPayload {
@@ -1218,6 +1338,8 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                                 result,
                                 is_error,
                                 session_id: Some(self.session_id.to_string()),
+                                meta: meta_val,
+                                tokens_used: None,
                             },
                         );
                     }
@@ -1290,14 +1412,18 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                         completed = true;
                         break;
                     }
-                    QueryEvent::Failed { error, .. } => {
+                    QueryEvent::Failed {
+                        error, error_kind, ..
+                    } => {
                         let _ = self.app.emit(
                             event_names::QUERY_FAILED,
-                            crate::events::QueryFailedPayload {
-                                query_id: qid.clone(),
-                                error: error.clone(),
-                                session_id: Some(self.session_id.to_string()),
-                            },
+                            crate::events::query_failed_payload(
+                                &qid,
+                                &error,
+                                Some(self.session_id.to_string()),
+                                // S1-1: structured engine classification wins.
+                                error_kind.as_deref(),
+                            ),
                         );
                         observation.failure = Some(error);
                         break;
@@ -1308,11 +1434,14 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                     let err = e.to_string();
                     let _ = self.app.emit(
                         event_names::QUERY_FAILED,
-                        crate::events::QueryFailedPayload {
-                            query_id: qid.clone(),
-                            error: err.clone(),
-                            session_id: Some(self.session_id.to_string()),
-                        },
+                        // Stream-level error: no typed ApiError — transitional
+                        // text fallback classifies (see events.rs).
+                        crate::events::query_failed_payload(
+                            &qid,
+                            &err,
+                            Some(self.session_id.to_string()),
+                            None,
+                        ),
                     );
                     observation.failure = Some(err);
                     break;
@@ -1370,6 +1499,21 @@ async fn run_goal_loop<R: tauri::Runtime>(
     let app_for_runner = app.clone();
     let handle_for_runner = handle.clone();
     let engine_future = async move {
+        // Settings R3 followup F2 — the goal run's session is the live run
+        // for the whole loop (registered before anything can raise an
+        // ask_user question; RAII — unregistered on every exit path).
+        // `try_state`: absent only under mock runtimes whose tests never
+        // manage `AppState` (they drive the loop through stub runners).
+        let goal_session_id = handle_for_runner.state.lock().await.session_id.to_string();
+        let _active_run_guard =
+            app_for_runner
+                .try_state::<crate::commands::AppState>()
+                .map(|state| {
+                    crate::commands::ActiveSessionRunGuard::register(
+                        &state.active_run_sessions,
+                        goal_session_id,
+                    )
+                });
         let mut runner = match EngineGoalTurnRunner::new(
             &deps_for_runner,
             app_for_runner.clone(),
@@ -1380,6 +1524,17 @@ async fn run_goal_loop<R: tauri::Runtime>(
             Ok(runner) => runner,
             Err(e) => return GoalTerminal::Paused { reason: Some(e) },
         };
+        // Settings R3 T3 — hold the prevent-sleep refcount for the WHOLE
+        // goal run (turn after turn), not per turn: the run is the task
+        // the user expects to keep the machine awake. RAII — released on
+        // every exit incl. the join-panic path below.
+        let block_sleep = deps_for_runner
+            .desktop_config
+            .read()
+            .await
+            .power_block_sleep_during_tasks;
+        let _prevent_sleep_guard =
+            block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
         let terminal = run_turn_loop(
             &deps_for_runner,
             &app_for_runner,
@@ -1792,6 +1947,8 @@ mod tests {
                 shannon_core::MemoryStore::new(dir.join("memories")),
             )),
             sessions_dir: dir.join("sessions"),
+            agent_tool_context: Arc::new(std::sync::Mutex::new(None)),
+            aux_compaction: None,
         }
     }
 
@@ -1810,6 +1967,7 @@ mod tests {
             last_error: None,
             started_at_ms: 1_000,
             updated_at_ms: 2_000,
+            working_dir: Some("/work/goal-proj".into()),
         }))
     }
 
@@ -1844,6 +2002,122 @@ mod tests {
             assert!(json.get(key).is_some(), "missing frozen field {key}");
         }
         assert!(json.get("session_id").is_none(), "no snake_case leakage");
+        // P-E2 addition rides the camelCase contract.
+        assert_eq!(json["workingDir"], "/work/goal-proj");
+    }
+
+    // ── P-E2: working_dir inheritance ───────────────────────────────────
+
+    fn goal_app_state(dir: &std::path::Path) -> AppState {
+        let mut state = AppState::new();
+        state.state_manager = std::sync::Arc::new(
+            shannon_engine::state::StateManager::with_sessions_dir(dir.join("sessions"))
+                .expect("temp sessions dir"),
+        );
+        state
+    }
+
+    async fn rail_row(state: &AppState, id: Uuid, working_dir: Option<&str>) {
+        let now = crate::commands::chrono_timestamp();
+        state
+            .sessions
+            .lock()
+            .await
+            .push(crate::commands::SessionMeta {
+                id: id.to_string(),
+                title: "Origin".into(),
+                created_at: now,
+                message_count: 0,
+                working_dir: working_dir.map(str::to_string),
+                parent_id: None,
+                branch_point: None,
+            });
+    }
+
+    #[tokio::test]
+    async fn inherited_working_dir_follows_the_target_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = goal_app_state(tmp.path());
+        let with_dir = Uuid::new_v4();
+        let without = Uuid::new_v4();
+        rail_row(&state, with_dir, Some("/work/goal-origin/")).await;
+        rail_row(&state, without, None).await;
+
+        assert_eq!(
+            goal_inherited_working_dir(&state, Some(&with_dir.to_string())).await,
+            Some("/work/goal-origin".into()),
+            "target session's dir wins"
+        );
+        assert_eq!(
+            goal_inherited_working_dir(&state, Some(&without.to_string())).await,
+            None,
+            "session without a project donates none"
+        );
+        assert_eq!(
+            goal_inherited_working_dir(&state, Some("   ")).await,
+            None,
+            "blank session id is no origin"
+        );
+        assert_eq!(
+            goal_inherited_working_dir(&state, Some(&Uuid::new_v4().to_string())).await,
+            None,
+            "unknown session donates none"
+        );
+    }
+
+    #[tokio::test]
+    async fn created_goal_session_inherits_active_session_working_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        let state = goal_app_state(tmp.path());
+
+        // The active session carries a project — the donation source when
+        // the goal creates its own dedicated session.
+        let active = Uuid::new_v4();
+        rail_row(&state, active, Some("/work/active-proj")).await;
+        state.registry.insert(active);
+        state
+            .registry
+            .set_active(crate::session_registry::SessionKey(active));
+
+        let inherited = goal_inherited_working_dir(&state, None).await;
+        assert_eq!(
+            inherited.as_deref(),
+            Some("/work/active-proj"),
+            "no target → the active session donates its dir"
+        );
+
+        let created = create_goal_session(&state, &app.handle().clone(), "Goal session", inherited)
+            .await
+            .unwrap();
+        let sessions = state.sessions.lock().await;
+        let meta = sessions
+            .iter()
+            .find(|s| s.id == created.to_string())
+            .expect("created session on the rail");
+        assert_eq!(
+            meta.working_dir.as_deref(),
+            Some("/work/active-proj"),
+            "SessionMeta.working_dir stamped (was a hardcoded None)"
+        );
+    }
+
+    #[tokio::test]
+    async fn created_goal_session_without_an_origin_keeps_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        let state = goal_app_state(tmp.path());
+        // No active session → no donation source.
+
+        let created = create_goal_session(&state, &app.handle().clone(), "Goal", None)
+            .await
+            .unwrap();
+        let sessions = state.sessions.lock().await;
+        let meta = sessions
+            .iter()
+            .find(|s| s.id == created.to_string())
+            .expect("created session on the rail");
+        assert_eq!(meta.working_dir, None);
     }
 
     // ── finalize: decision → terminal → sidecar + inbox ─────────────────
@@ -2177,6 +2451,7 @@ mod tests {
             last_error: None,
             started_at_ms: 1_000,
             updated_at_ms: 2_000,
+            working_dir: None,
         }))
     }
 
@@ -2530,5 +2805,65 @@ mod tests {
             .expect("waiter must wake on resume")
             .unwrap();
         assert!(parked, "observing a paused state must report parked=true");
+    }
+
+    // ── Legacy ②: the compaction utility slot rides the goal engine ────
+
+    /// A configured `auxiliary.compression` slot resolved at run-spawn time
+    /// (`from_state_for_run`) is pinned onto the engine the goal runner
+    /// builds — and the target is the SLOT, not the profile's active model.
+    #[tokio::test]
+    async fn configured_compaction_slot_rides_the_goal_engine() {
+        use crate::utility_tier::test_support::{
+            SLOT_MODEL_ID, compression_slot_config, install_config,
+        };
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", true)).await;
+        let mut deps = GoalRunDeps::from_state_for_run(&state).await;
+        assert_eq!(
+            deps.aux_compaction
+                .as_ref()
+                .expect("slot resolves into deps")
+                .model(),
+            SLOT_MODEL_ID
+        );
+
+        // Keep the engine's session restore off the real sessions dir.
+        let tmp = tempfile::tempdir().unwrap();
+        deps.sessions_dir = tmp.path().join("sessions");
+        let handle = handle_for(Uuid::new_v4(), GoalRunStatus::Running);
+        let runner = EngineGoalTurnRunner::new(&deps, mock_app(), &handle)
+            .await
+            .expect("runner builds");
+        let pinned = runner
+            .engine
+            .auxiliary_compaction_client()
+            .expect("the goal engine carries the slot client");
+        assert_eq!(pinned.model(), SLOT_MODEL_ID);
+        assert_eq!(pinned.base_url(), "http://127.0.0.1:1");
+    }
+
+    /// Unconfigured slot (the default): `from_state_for_run` resolves `None`
+    /// and the engine stays byte-identical to the pre-slot build.
+    #[tokio::test]
+    async fn unconfigured_slot_leaves_the_goal_engine_default() {
+        use crate::utility_tier::test_support::{compression_slot_config, install_config};
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", false)).await;
+        let mut deps = GoalRunDeps::from_state_for_run(&state).await;
+        assert!(deps.aux_compaction.is_none(), "unconfigured slot → None");
+
+        let tmp = tempfile::tempdir().unwrap();
+        deps.sessions_dir = tmp.path().join("sessions");
+        let handle = handle_for(Uuid::new_v4(), GoalRunStatus::Running);
+        let runner = EngineGoalTurnRunner::new(&deps, mock_app(), &handle)
+            .await
+            .expect("runner builds");
+        assert!(
+            runner.engine.auxiliary_compaction_client().is_none(),
+            "None pin = the pre-slot behavior"
+        );
     }
 }

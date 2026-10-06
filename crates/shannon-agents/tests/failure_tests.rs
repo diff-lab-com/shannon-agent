@@ -296,15 +296,15 @@ async fn test_coordinator_failure_handling() {
     };
 
     coordinator
-        .add_teammate("fail-team", "agent-1".into(), cfg.clone())
+        .add_teammate("fail-team", "agent-1".into(), cfg.clone(), None)
         .await
         .unwrap();
     coordinator
-        .add_teammate("fail-team", "agent-2".into(), cfg.clone())
+        .add_teammate("fail-team", "agent-2".into(), cfg.clone(), None)
         .await
         .unwrap();
     coordinator
-        .add_teammate("fail-team", "agent-3".into(), cfg.clone())
+        .add_teammate("fail-team", "agent-3".into(), cfg.clone(), None)
         .await
         .unwrap();
 
@@ -573,7 +573,7 @@ async fn test_agent_communication_failure() {
         ..Default::default()
     };
     coordinator
-        .add_teammate("comm-team", "sender".into(), cfg.clone())
+        .add_teammate("comm-team", "sender".into(), cfg.clone(), None)
         .await
         .unwrap();
 

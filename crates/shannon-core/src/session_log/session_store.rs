@@ -12,11 +12,20 @@
 //! ```text
 //! <container>/<uuid>/events.jsonl   # authoritative log (L0)
 //! <container>/<uuid>/meta.json      # optional sidecar: title / lineage
+//! <container>/<uuid>/index.json     # optional cache: projection stats (E-9)
+//! <container>/<uuid>/curation.json  # optional sidecar: lifecycle flags
 //! ```
+//!
+//! `list()` consults the E-9 index sidecar first: when it validates against
+//! the log's current length/mtime, the listing is O(sessions) instead of
+//! O(total log bytes). A missing/stale index falls back to the full
+//! projection and opportunistically rebuilds the cache — see
+//! [`super::session_index`].
 //!
 //! Breaking change (DP4): legacy `sessions/<uuid>.json` snapshots are not
 //! read or migrated. Delete them once upgraded.
 
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -29,6 +38,7 @@ use shannon_types::session_event::{
     SessionEventBody, TurnEndPayload, TurnStartPayload, UserMessagePayload,
 };
 
+use super::session_index::{SessionIndex, SessionIndexAccumulator, index_path_for, stat_len_mtime};
 use super::{
     SessionLogReader, SessionLogWriter, projections, scan_session_summaries, search_events,
     session_log_container_path, session_meta_container_path,
@@ -80,6 +90,72 @@ pub struct SessionSidecar {
     /// sidecar never touches) fully backward-compatible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_usd: Option<f64>,
+}
+
+/// User-curation lifecycle flags for one session, persisted as its own
+/// `<container>/<id>/curation.json` sidecar (see
+/// [`session_curation_path`](super::session_curation_path)).
+///
+/// Kept out of [`SessionSidecar`] on purpose: that struct is not
+/// `#[non_exhaustive]`, so adding a field to it would break every external
+/// struct-literal constructor (a semver-major change). A dedicated file is
+/// also the natural home for lifecycle curation as it grows (Task 2's
+/// archive MVP writes `archived` through this type). A missing or unparsable
+/// file always loads as the default — nothing is archived unless the file
+/// says so.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionCuration {
+    /// True once the user archived the session. Archived sessions stay on
+    /// disk and listable, but cross-session input layers (skill-pattern
+    /// detection, dream excerpts) exclude them unless explicitly asked not
+    /// to (see [`session_query`](super::session_query)).
+    #[serde(default)]
+    pub archived: bool,
+    /// True once the user pinned the session (Settings R3 T7). Pinned
+    /// sessions sort first on the rail and are exempt from the auto-archive
+    /// scan. `serde(default)` keeps older curation.json files (which carry
+    /// only `archived`) fully backward-compatible — unpinned unless the
+    /// file says otherwise.
+    #[serde(default)]
+    pub pinned: bool,
+}
+
+impl SessionCuration {
+    /// Load the sidecar from `path`. A missing or unparsable file yields the
+    /// default (`archived = false`) — logged, never fatal.
+    pub fn load(path: &Path) -> Self {
+        match std::fs::read_to_string(path) {
+            Ok(text) => serde_json::from_str(&text)
+                .inspect_err(|e| {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "unparsable session curation sidecar ignored"
+                    );
+                })
+                .unwrap_or_default(),
+            Err(_) => Self::default(),
+        }
+    }
+
+    /// Persist the sidecar to `path` (atomic tmp-write + rename, mirroring
+    /// the `SessionSidecar` writer).
+    pub fn store(&self, path: &Path) -> Result<(), SessionStoreError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| SessionStoreError::Serialization(e.to_string()))?;
+        let tmp = path.with_extension("json.tmp");
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(json.as_bytes())?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
 }
 
 /// Persistence DTO for an active `/loop`. The kind discriminates "task
@@ -230,6 +306,18 @@ pub struct StoredSession {
     pub metadata: StoredSessionMeta,
     /// Rebuilt conversation history (see [`projections::project_conversation`]).
     pub messages: Vec<shannon_engine::api::Message>,
+    /// D6: per-message interrupted flags (parallel to `messages`) — an
+    /// assistant step the log finalized with
+    /// `assistant/message.interrupted: true` (a cancelled run's partial
+    /// answer). Hosts surface this on the wire as the message's "stopped"
+    /// marker; absent entries mean `false`.
+    pub message_interrupted: Vec<bool>,
+    /// OBS1: per-message interrupt reasons (parallel to `messages` and
+    /// `message_interrupted`) — `"cancelled"` (user stop, D6) or `"failed"`
+    /// (a turn failed mid-step, whose streamed prefix the log now keeps the
+    /// same way). `None` for unmarked messages and pre-reason logs; hosts
+    /// read a bare interrupted flag as "cancelled".
+    pub message_interrupt_reason: Vec<Option<String>>,
 }
 
 /// Listing summary ([`SessionStore::list`]).
@@ -252,7 +340,10 @@ pub struct StoredSessionInfo {
     pub project_path: Option<String>,
 }
 
-fn ns_to_datetime(ns: u64) -> chrono::DateTime<chrono::Utc> {
+/// Event-log nanoseconds → UTC timestamp (`u64::MAX`-era overflow falls back
+/// to now, matching the projection path). Crate-visible so the session-query
+/// adapter can project single-session reads with the same convention.
+pub(crate) fn ns_to_datetime(ns: u64) -> chrono::DateTime<chrono::Utc> {
     chrono::Utc
         .timestamp_opt(ns as i64 / 1_000_000_000, (ns % 1_000_000_000) as u32)
         .single()
@@ -386,24 +477,97 @@ impl SessionStore {
                 project_path,
             },
             messages: proj.messages,
+            message_interrupted: proj.message_interrupted,
+            message_interrupt_reason: proj.message_interrupt_reason,
         }
     }
 
     /// List all sessions in the container, most recently active first.
+    ///
+    /// Served from the per-session `index.json` sidecars when they validate
+    /// against the logs (the common case — the writer refreshes them on
+    /// close), which keeps this O(number of sessions) instead of
+    /// O(total bytes of all logs) (audit E-9: pickers on large containers
+    /// used to re-decode and re-project every log per open). Any session
+    /// whose index is missing or stale takes the full-projection path and
+    /// rebuilds its cache opportunistically, so the two paths can never
+    /// disagree: both are answers to the same projection.
     pub fn list(&self) -> Result<Vec<StoredSessionInfo>, SessionStoreError> {
         let mut infos = Vec::new();
         for entry in scan_session_summaries(&self.container) {
             let Ok(id) = Uuid::parse_str(&entry.session_id) else {
                 continue; // foreign directories sharing the container
             };
+            if let Some(info) = Self::info_from_index(&entry, &id) {
+                infos.push(info);
+                continue;
+            }
+            // Slow path: project the whole log, then refresh the cache.
+            // Stat BEFORE reading — if the log grows underneath us the
+            // recorded (pre-read) length mismatches at the next validation
+            // and the fresh cache is discarded rather than trusted.
+            let pre_stat = stat_len_mtime(&entry.events_path);
             let Some(events) = self.read_events(&id)? else {
                 continue;
             };
             let stored = self.assemble(id, &events);
+            Self::rebuild_index(&entry.events_path, pre_stat, &events);
             infos.push(Self::to_info(stored));
         }
         infos.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(infos)
+    }
+
+    /// Fast-path listing for one session from its `index.json`, or `None`
+    /// when the cache is absent, unparsable, or stale (log length/mtime
+    /// drift). Curation fields still come from `meta.json` — the index only
+    /// caches the projection-derived numbers.
+    fn info_from_index(entry: &super::SessionScanEntry, id: &Uuid) -> Option<StoredSessionInfo> {
+        let index_path = index_path_for(&entry.events_path);
+        let index = SessionIndex::load_if_valid(&entry.events_path, &index_path)?;
+        let sidecar = SessionSidecar::load(&entry.meta_path);
+        Some(StoredSessionInfo {
+            session_id: *id,
+            preview: index.first_preview_text().map(|t| truncate_preview(t, 80)),
+            last_user_preview: index.last_preview_text().map(|t| truncate_preview(t, 80)),
+            title: sidecar.title,
+            model: index.model,
+            created_at: ns_to_datetime(index.created_at_ns),
+            updated_at: ns_to_datetime(index.updated_at_ns),
+            turn_count: index.turn_count,
+            total_input_tokens: index.total_input_tokens,
+            total_output_tokens: index.total_output_tokens,
+            parent_session_id: sidecar.parent_session_id,
+            branch_point_message_index: sidecar.branch_point_message_index,
+            project_path: index.project_path,
+        })
+    }
+
+    /// Rebuild a session's index sidecar from a fully-read event slice.
+    /// Best-effort: a failed write costs one rebuild on the next `list`.
+    fn rebuild_index(events_path: &Path, pre_stat: Option<(u64, u64)>, events: &[SessionEvent]) {
+        let mut acc = SessionIndexAccumulator::fresh();
+        for event in events {
+            acc.observe(event);
+        }
+        if let Some(index) = acc.finish(pre_stat) {
+            let _ = index.store(&index_path_for(events_path));
+        }
+    }
+
+    /// The most recently active session id, WITHOUT parsing any event logs.
+    ///
+    /// `list()` decodes and projects every session's full `events.jsonl` —
+    /// O(total bytes of all sessions) — which made `shannon trace show
+    /// latest` appear to hang on containers with large/many logs (WP-15:
+    /// 30s+ with zero output). Directory mtimes already give the same
+    /// "most recent" answer, so callers that only need the newest id should
+    /// use this.
+    pub fn latest_id(&self) -> Option<String> {
+        scan_session_summaries(&self.container)
+            .into_iter()
+            .find(|entry| Uuid::parse_str(&entry.session_id).is_ok())
+            .map(|entry| entry.session_id)
     }
 
     fn to_info(stored: StoredSession) -> StoredSessionInfo {
@@ -453,6 +617,26 @@ impl SessionStore {
     /// Read the sidecar as-is.
     pub fn sidecar(&self, session_id: &Uuid) -> SessionSidecar {
         SessionSidecar::load(&self.meta_path(session_id))
+    }
+
+    fn curation_path(&self, session_id: &Uuid) -> PathBuf {
+        super::session_curation_path(&self.container, &session_id.to_string())
+    }
+
+    /// Read the curation sidecar (the lifecycle flags, e.g. `archived`).
+    /// A missing file means "nothing curated" — the default is returned.
+    pub fn curation(&self, session_id: &Uuid) -> SessionCuration {
+        SessionCuration::load(&self.curation_path(session_id))
+    }
+
+    /// Persist the curation sidecar with replace semantics (the caller is
+    /// authoritative, matching [`SessionStore::save_sidecar_replace`]).
+    pub fn save_curation(
+        &self,
+        session_id: &Uuid,
+        curation: &SessionCuration,
+    ) -> Result<(), SessionStoreError> {
+        curation.store(&self.curation_path(session_id))
     }
 
     /// Append an end-seed marker naming `parent` (fork/resume provenance).
@@ -530,15 +714,135 @@ impl SessionStore {
         Ok(search_events(&events, pattern))
     }
 
+    /// Cross-session full-text search over the whole container (audit:
+    /// nothing between "one session" and "open every picker" existed).
+    ///
+    /// Every session's `events.jsonl` is skimmed line-by-line with a
+    /// [`BufReader`] (never loaded whole); lines over
+    /// `SEARCH_MAX_LINE_BYTES` are skipped (they are almost always one
+    /// embedded blob — pasted file, base64 dump — whose processing cost
+    /// outweighs its recall). The query is a case-insensitive substring;
+    /// each hit carries the best identifying metadata available without a
+    /// full projection: the sidecar title, the E-9 index's first-user
+    /// summary, and the matched line's `ts_ns` when parseable.
+    ///
+    /// Sessions are visited most-recently-modified first (the
+    /// [`scan_session_summaries`] order) and the scan stops as soon as
+    /// `limit` hits are collected.
+    pub fn search_all(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionSearchHit>, SessionStoreError> {
+        Ok(self.search_all_with_stats(query, limit)?.hits)
+    }
+
+    /// [`SessionStore::search_all`] plus scan coverage, so callers can say
+    /// "searched N sessions" honestly even when the limit stopped the scan
+    /// early.
+    pub fn search_all_with_stats(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<SessionSearchOutcome, SessionStoreError> {
+        let query = query.trim();
+        let total = self.session_count();
+        if query.is_empty() {
+            return Ok(SessionSearchOutcome {
+                hits: Vec::new(),
+                sessions_scanned: 0,
+                sessions_total: total,
+            });
+        }
+
+        let entries = scan_session_summaries(&self.container);
+        let mut hits = Vec::new();
+        let mut scanned = 0usize;
+        for entry in &entries {
+            if hits.len() >= limit {
+                break;
+            }
+            scanned += 1;
+            // Identify the session from the sidecars before touching the
+            // log: title from meta.json, summary from the E-9 index when it
+            // still validates (never re-project the log for a search hit).
+            let sidecar = SessionSidecar::load(&entry.meta_path);
+            let index = SessionIndex::load_if_valid(
+                &entry.events_path,
+                &index_path_for(&entry.events_path),
+            );
+            let title = sidecar.title.clone();
+            let summary = index
+                .as_ref()
+                .and_then(|i| i.first_preview_text())
+                .map(|t| truncate_preview(t, 80));
+
+            let Ok(file) = std::fs::File::open(&entry.events_path) else {
+                continue;
+            };
+            let mut reader = BufReader::new(file);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                if line.len() > SEARCH_MAX_LINE_BYTES {
+                    continue;
+                }
+                let Some((match_start, match_end)) = find_case_insensitive(&line, query) else {
+                    continue;
+                };
+                let timestamp =
+                    ts_ns_from_raw_line(&line).map(|ns| ns_to_datetime(ns).to_rfc3339());
+                hits.push(SessionSearchHit {
+                    session_id: entry.session_id.clone(),
+                    title: title.clone(),
+                    summary: summary.clone(),
+                    timestamp,
+                    snippet: snippet_around(&line, match_start, match_end),
+                });
+                if hits.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(SessionSearchOutcome {
+            hits,
+            sessions_scanned: scanned,
+            sessions_total: total,
+        })
+    }
+
+    /// Number of sessions in the container (directory walk only, no log
+    /// reads) — cheap context for search/UI surfaces.
+    pub fn session_count(&self) -> usize {
+        scan_session_summaries(&self.container).len()
+    }
+
     /// Delete a session: removes its whole `<container>/<uuid>/` directory.
     ///
     /// Returns `Ok(false)` when nothing existed. Only UUID-shaped direct
     /// children are touched, so sibling name snapshots (*.toml) stay safe.
+    ///
+    /// Fails with [`SessionStoreError::Log`] (`AlreadyLocked`) when a live
+    /// [`SessionLogWriter`] holds the log: removing the directory would
+    /// unlink the events file out from under the writer, whose further
+    /// appends would vanish into the unlinked inode.
     pub fn delete(&self, session_id: &Uuid) -> Result<bool, SessionStoreError> {
         let dir = self.container.join(session_id.to_string());
         if !dir.exists() {
             return Ok(false);
         }
+        // Hold the writer's flock while unlinking so a live writer fails us
+        // loudly instead of losing events. No log file (sidecars only) —
+        // nothing to orphan.
+        let log = self.log_path(session_id);
+        let _lock = log
+            .exists()
+            .then(|| ExclusiveLogLock::acquire(&log))
+            .transpose()?;
         std::fs::remove_dir_all(dir)?;
         Ok(true)
     }
@@ -556,6 +860,12 @@ impl SessionStore {
     /// Returns `Ok(None)` when no log exists, otherwise `Ok(Some(dropped))`
     /// with the number of event lines removed. `keep_turns` past the end of
     /// the session is a no-op returning `Some(0)`.
+    ///
+    /// The rewrite takes the same exclusive `flock` a live
+    /// [`SessionLogWriter`] holds; when the lock is held the truncate fails
+    /// with `AlreadyLocked` instead of racing the writer (whose appends would
+    /// otherwise keep landing in the unlinked inode). Callers treat failures
+    /// as warn-only, so the rewrite simply does not happen.
     pub fn truncate_to_turn(
         &self,
         session_id: &Uuid,
@@ -565,6 +875,8 @@ impl SessionStore {
         if !path.exists() {
             return Ok(None);
         }
+        // Raw rewrite under the writer's flock — see the doc comment.
+        let _lock = ExclusiveLogLock::acquire(&path)?;
         let raw = std::fs::read_to_string(&path)?;
 
         let mut kept_lines = String::with_capacity(raw.len());
@@ -615,11 +927,15 @@ impl SessionStore {
             return Ok(Some(0));
         }
 
-        // Atomic-ish rewrite: temp file in the same directory, then rename.
-        let tmp = path.with_extension("jsonl.rewind-tmp");
+        // Atomic-ish rewrite: uniquely-named temp file in the same directory,
+        // then rename.
+        let tmp = unique_tmp_path(&path, "rewind-tmp");
         let dropped = total_lines - kept_lines.lines().count();
         std::fs::write(&tmp, &kept_lines)?;
         std::fs::rename(&tmp, &path)?;
+        // The raw rewrite bypasses the writer's index accumulator: drop the
+        // cache so the next list() rebuilds it from the surviving log.
+        let _ = std::fs::remove_file(index_path_for(&path));
         Ok(Some(dropped))
     }
 
@@ -630,6 +946,10 @@ impl SessionStore {
     /// is fully replaced via the same temp-file + rename rewrite as
     /// [`SessionStore::truncate_to_turn`], with seq restarting at 0 — the
     /// file contract (`SessionLogWriter` resumes from the last seq) holds.
+    ///
+    /// Like [`SessionStore::truncate_to_turn`], the rewrite takes the
+    /// writer's exclusive flock first and fails with `AlreadyLocked` when a
+    /// live writer holds the log.
     ///
     /// Returns the number of event lines written.
     pub fn rewrite_with_conversation(
@@ -686,29 +1006,219 @@ impl SessionStore {
                     content: assistant.clone(),
                     usage: None,
                     interrupted: false,
+                    reason: None,
                 },
             ))?;
             push(SessionEventBody::TurnEnd(TurnEndPayload {
                 reason: "compact".into(),
                 usage: None,
                 error: None,
+                llm_steps: None,
             }))?;
         }
 
-        // Atomic-ish rewrite: temp file in the same directory, then rename.
+        // Atomic-ish rewrite under the writer's flock: uniquely-named temp
+        // file in the same directory, then rename.
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = path.with_extension("jsonl.compact-tmp");
+        let _lock = ExclusiveLogLock::acquire(&path)?;
+        let tmp = unique_tmp_path(&path, "compact-tmp");
         std::fs::write(&tmp, &out)?;
         std::fs::rename(&tmp, &path)?;
+        // The raw rewrite bypasses the writer's index accumulator: drop the
+        // cache so the next list() rebuilds it from the rewritten log.
+        let _ = std::fs::remove_file(index_path_for(&path));
         Ok(seq as usize)
     }
+}
+
+/// Exclusive advisory lock over one session's event log for raw rewrites.
+///
+/// Raw rewrites (`truncate_to_turn` / `rewrite_with_conversation` / `delete`)
+/// replace or unlink the log file; without the writer's flock a live
+/// [`SessionLogWriter`] would keep appending into the unlinked inode and the
+/// events would be silently lost (`failures == 0`). This guard takes the same
+/// `try_lock_exclusive` the writer uses at open, so a live writer makes the
+/// rewrite fail loudly with `SessionLogError::AlreadyLocked` instead.
+struct ExclusiveLogLock {
+    // The lock lives as long as this handle; dropping it releases.
+    _file: std::fs::File,
+}
+
+impl ExclusiveLogLock {
+    fn acquire(path: &Path) -> Result<Self, SessionStoreError> {
+        // Mirror the writer's open mode (read+append+create) so a missing log
+        // is created and the lock targets the same inode a writer would take.
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open(path)?;
+        use fs2::FileExt;
+        file.try_lock_exclusive().map_err(|source| {
+            SessionStoreError::Log(super::SessionLogError::AlreadyLocked {
+                path: path.to_path_buf(),
+                source,
+            })
+        })?;
+        Ok(Self { _file: file })
+    }
+}
+
+/// A collision-free temp name next to `path`: `<file>.<tag>-<pid>-<nanos>`.
+///
+/// The old fixed names (`events.jsonl.rewind-tmp`) made two racing rewrites
+/// of the same session clobber each other's temp file.
+fn unique_tmp_path(path: &Path, tag: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut name = path
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_default();
+    name.push(format!(".{tag}-{}-{}", std::process::id(), nanos));
+    path.with_file_name(name)
 }
 
 /// Convenience: an shared handle rooted at the default container.
 pub fn default_store() -> Arc<SessionStore> {
     Arc::new(SessionStore::new(SessionStore::default_container()))
+}
+
+// ============================================================================
+// Cross-session search (search_all)
+// ============================================================================
+
+/// Default hit cap for [`SessionStore::search_all`] when the caller has no
+/// stronger opinion.
+pub const DEFAULT_SEARCH_LIMIT: usize = 50;
+
+/// Raw lines larger than this are skipped by cross-session search: a single
+/// `events.jsonl` row approaching 1 MB is almost always one embedded blob
+/// (pasted file, base64 dump) whose scan cost outweighs its recall value.
+const SEARCH_MAX_LINE_BYTES: usize = 1024 * 1024;
+
+/// Chars of context kept on each side of a search-hit snippet.
+const SEARCH_SNIPPET_CONTEXT_CHARS: usize = 80;
+
+/// One match of a cross-session search ([`SessionStore::search_all`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SessionSearchHit {
+    /// Owning session id (string form of the directory name).
+    pub session_id: String,
+    /// Curated title from the `meta.json` sidecar, when present.
+    pub title: Option<String>,
+    /// Best-effort summary from the E-9 index (first user-message prefix)
+    /// when no curated title exists.
+    pub summary: Option<String>,
+    /// Timestamp of the matched event (RFC 3339) when its `ts_ns` parsed.
+    pub timestamp: Option<String>,
+    /// Single-line excerpt around the match.
+    pub snippet: String,
+}
+
+/// Search hits plus scan coverage, so callers can report "searched N
+/// sessions" honestly even when the limit stopped the scan early.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionSearchOutcome {
+    pub hits: Vec<SessionSearchHit>,
+    /// Sessions actually skimmed (the scan stops once `limit` is reached).
+    pub sessions_scanned: usize,
+    /// Sessions present in the container.
+    pub sessions_total: usize,
+}
+
+/// Case-insensitive char equality (full Unicode simple lowercase folding on
+/// both sides, so e.g. `Ä` matches `ä`).
+fn chars_eq_ignore_case(a: char, b: char) -> bool {
+    let mut la = a.to_lowercase();
+    let mut lb = b.to_lowercase();
+    loop {
+        match (la.next(), lb.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) if x == y => continue,
+            _ => return false,
+        }
+    }
+}
+
+/// Case-insensitive substring search that does NOT allocate a lowercased
+/// copy of the haystack (`search_all` runs this per log line; lines can be
+/// large). Returns the `(start, end)` byte span of the first match, or
+/// `None`. An empty needle matches at 0.
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<(usize, usize)> {
+    if needle.is_empty() {
+        return Some((0, 0));
+    }
+    let needle_chars: Vec<char> = needle.chars().collect();
+    let first = needle_chars[0];
+    'outer: for (idx, ch) in haystack.char_indices() {
+        if !chars_eq_ignore_case(ch, first) {
+            continue;
+        }
+        let mut consumed = 0usize;
+        for (n, h) in needle_chars.iter().zip(haystack[idx..].chars()) {
+            if !chars_eq_ignore_case(*n, h) {
+                continue 'outer;
+            }
+            consumed += 1;
+        }
+        if consumed == needle_chars.len() {
+            // Match end: byte offset just past the matched chars (char-count
+            // based, since case folding can change byte lengths).
+            let end = haystack[idx..]
+                .char_indices()
+                .nth(needle_chars.len())
+                .map(|(o, _)| idx + o)
+                .unwrap_or(haystack.len());
+            return Some((idx, end));
+        }
+    }
+    None
+}
+
+/// Single-line excerpt of ±[`SEARCH_SNIPPET_CONTEXT_CHARS`] chars around the
+/// match, with `…` ellipses where content was cut and control chars
+/// (newlines, tabs) flattened to spaces.
+fn snippet_around(line: &str, match_start: usize, match_end: usize) -> String {
+    let line = line.trim();
+    let mut start = match_start
+        .min(line.len())
+        .saturating_sub(SEARCH_SNIPPET_CONTEXT_CHARS);
+    while start > 0 && !line.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = (match_end + SEARCH_SNIPPET_CONTEXT_CHARS).min(line.len());
+    while end > match_start && !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut snippet: String = line[start..end]
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    if start > 0 {
+        snippet.insert(0, '…');
+    }
+    if end < line.len() {
+        snippet.push('…');
+    }
+    snippet
+}
+
+/// Extract `ts_ns` from a raw JSONL line without deserializing the whole
+/// event: serde renders the field as `"ts_ns":<integer>`, so a targeted
+/// digit scan recovers it (cheap, and never fails the search).
+fn ts_ns_from_raw_line(line: &str) -> Option<u64> {
+    const KEY: &str = "\"ts_ns\":";
+    let idx = line.find(KEY)?;
+    let rest = &line[idx + KEY.len()..];
+    let digits_end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..digits_end].parse().ok()
 }
 
 // ============================================================================
@@ -770,6 +1280,7 @@ mod tests {
             meta: serde_json::Value::Null,
         }));
         w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+            llm_steps: None,
             reason: TurnEndPayload::REASON_COMPLETED.into(),
             usage: Some(TokenUsage {
                 input_tokens: 11,
@@ -806,6 +1317,196 @@ mod tests {
         assert_eq!(res["content"][0]["type"], "tool_result");
     }
 
+    /// D6 (keep the partial output) — the reload contract behind the
+    /// desktop's `load_session`/`switch_session`: a turn cancelled mid-stream
+    /// (production shape: the tee sees user message → turn start → chunks,
+    /// then the producer abort drops it) reloads with the partial assistant
+    /// text AND its `interrupted` flag, while the surrounding completed turns
+    /// stay unflagged.
+    #[test]
+    fn cancelled_turn_reloads_with_partial_text_and_interrupted_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+
+        // Turn 1 completes normally (driven through the production tee API).
+        {
+            let tee = crate::session_log::TeeHandle::open_in_dir(
+                tmp.path(),
+                &id.to_string(),
+                "test-model",
+                None,
+            );
+            tee.record_turn_start(Some("q-done".into()));
+            tee.record_user_message("first question");
+            for input in crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Text {
+                query_id: uuid::Uuid::new_v4(),
+                content: "full answer".into(),
+            }) {
+                tee.record_bus_input(&input);
+            }
+            for input in
+                crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Completed {
+                    query_id: uuid::Uuid::new_v4(),
+                    outcome: Default::default(),
+                })
+            {
+                tee.record_bus_input(&input);
+            }
+            tee.close();
+        }
+        // Turn 2 is cancelled mid-stream: user message → chunks → drop.
+        {
+            let tee = crate::session_log::TeeHandle::open_in_dir(
+                tmp.path(),
+                &id.to_string(),
+                "test-model",
+                None,
+            );
+            tee.record_turn_start(Some("q-cancelled".into()));
+            tee.record_user_message("second question");
+            for chunk in ["海浪拍岸，", "月光洒落，"] {
+                for input in
+                    crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Text {
+                        query_id: uuid::Uuid::new_v4(),
+                        content: chunk.into(),
+                    })
+                {
+                    tee.record_bus_input(&input);
+                }
+            }
+            // Producer abort → last handle drops → interrupted close.
+            drop(tee);
+        }
+
+        let loaded = store.load(&id).unwrap().expect("session exists");
+        assert_eq!(loaded.messages.len(), 4); // user, assistant, user, partial assistant
+        assert_eq!(loaded.message_interrupted.len(), 4);
+        let rendered: Vec<serde_json::Value> = loaded
+            .messages
+            .iter()
+            .map(|m| serde_json::to_value(m).unwrap())
+            .collect();
+        assert_eq!(rendered[1]["role"], "assistant");
+        assert_eq!(rendered[1]["content"][0]["text"], "full answer");
+        assert!(
+            !loaded.message_interrupted[1],
+            "a completed turn is not marked"
+        );
+        assert_eq!(rendered[3]["role"], "assistant");
+        assert_eq!(
+            rendered[3]["content"][0]["text"], "海浪拍岸，月光洒落，",
+            "the reload projection carries the cancelled turn's partial text"
+        );
+        assert!(
+            loaded.message_interrupted[3],
+            "the partial assistant message keeps its interrupted (stopped) flag"
+        );
+        assert_eq!(
+            loaded.message_interrupt_reason[3].as_deref(),
+            Some(shannon_types::session_event::AssistantMessagePayload::REASON_CANCELLED),
+            "the cancelled partial carries its reason for the wire"
+        );
+    }
+
+    /// OBS1 (unify the failed half) — the reload contract for a FAILED turn:
+    /// the engine emits `QueryEvent::Failed` through the bus (error row +
+    /// failed boundary) after two streamed chunks. The reload carries the
+    /// partial assistant text flagged interrupted WITH the `"failed"`
+    /// reason, while the surrounding completed turn stays unmarked.
+    #[test]
+    fn failed_turn_reloads_with_partial_text_and_failed_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+
+        // Turn 1 completes normally (driven through the production tee API).
+        {
+            let tee = crate::session_log::TeeHandle::open_in_dir(
+                tmp.path(),
+                &id.to_string(),
+                "test-model",
+                None,
+            );
+            tee.record_turn_start(Some("q-done".into()));
+            tee.record_user_message("first question");
+            for input in crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Text {
+                query_id: uuid::Uuid::new_v4(),
+                content: "full answer".into(),
+            }) {
+                tee.record_bus_input(&input);
+            }
+            for input in
+                crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Completed {
+                    query_id: uuid::Uuid::new_v4(),
+                    outcome: Default::default(),
+                })
+            {
+                tee.record_bus_input(&input);
+            }
+            tee.close();
+        }
+        // Turn 2 fails mid-stream: user message → chunks → QueryEvent::Failed.
+        {
+            let tee = crate::session_log::TeeHandle::open_in_dir(
+                tmp.path(),
+                &id.to_string(),
+                "test-model",
+                None,
+            );
+            tee.record_turn_start(Some("q-failed".into()));
+            tee.record_user_message("second question");
+            for chunk in ["从前有一片海，", "海面上…"] {
+                for input in
+                    crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Text {
+                        query_id: uuid::Uuid::new_v4(),
+                        content: chunk.into(),
+                    })
+                {
+                    tee.record_bus_input(&input);
+                }
+            }
+            for input in crate::session_log::query_event_to_bus_inputs(&crate::QueryEvent::Failed {
+                query_id: uuid::Uuid::new_v4(),
+                error: "upstream connection reset while streaming".into(),
+                error_kind: None,
+            }) {
+                tee.record_bus_input(&input);
+            }
+            tee.close();
+        }
+
+        let loaded = store.load(&id).unwrap().expect("session exists");
+        assert_eq!(loaded.messages.len(), 4); // user, assistant, user, partial assistant
+        assert_eq!(loaded.message_interrupted.len(), 4);
+        assert_eq!(loaded.message_interrupt_reason.len(), 4);
+        let rendered: Vec<serde_json::Value> = loaded
+            .messages
+            .iter()
+            .map(|m| serde_json::to_value(m).unwrap())
+            .collect();
+        assert_eq!(rendered[1]["role"], "assistant");
+        assert!(
+            !loaded.message_interrupted[1],
+            "a completed turn is not marked"
+        );
+        assert_eq!(loaded.message_interrupt_reason[1], None);
+        assert_eq!(rendered[3]["role"], "assistant");
+        assert_eq!(
+            rendered[3]["content"][0]["text"], "从前有一片海，海面上…",
+            "the reload projection carries the failed turn's partial text"
+        );
+        assert!(
+            loaded.message_interrupted[3],
+            "the partial assistant message keeps its interrupted flag"
+        );
+        assert_eq!(
+            loaded.message_interrupt_reason[3].as_deref(),
+            Some(shannon_types::session_event::AssistantMessagePayload::REASON_FAILED),
+            "the failed partial is distinguishable from a cancelled one"
+        );
+    }
+
     /// Seed a 3-turn session through the real writer (one writer handle so
     /// seq/turn numbering behaves exactly like a live session).
     fn seed_three_turn_session(store: &SessionStore, id: &Uuid) {
@@ -833,6 +1534,7 @@ mod tests {
                 thinking: false,
             }));
             w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: None,
                 error: None,
@@ -937,13 +1639,39 @@ mod tests {
         assert!(store.load(&Uuid::new_v4()).unwrap().is_none());
     }
 
+    /// WP-15: `latest_id` must answer from directory mtimes alone — no event
+    /// parsing. Guards the `shannon trace show latest` 30s-hang fix.
+    #[test]
+    fn latest_id_picks_newest_by_mtime_without_parsing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let container = tmp.path().join("sessions"); // matches the store helper
+        assert!(store.latest_id().is_none());
+
+        let older = Uuid::new_v4().to_string();
+        let newer = Uuid::new_v4().to_string();
+        for id in [&older, &newer] {
+            let dir = container.join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("events.jsonl"), "").unwrap();
+            // Give the second directory a strictly newer mtime.
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        assert_eq!(store.latest_id().as_deref(), Some(newer.as_str()));
+
+        // Non-UUID directories (foreign/leftover) never win the scan.
+        let junk = container.join("not-a-uuid");
+        std::fs::create_dir_all(&junk).unwrap();
+        std::fs::write(junk.join("events.jsonl"), "").unwrap();
+        assert_eq!(store.latest_id().as_deref(), Some(newer.as_str()));
+    }
+
     #[test]
     fn test_sidecar_save_merge_and_title_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(&tmp);
         let id = Uuid::new_v4();
         seed_session(&store, &id);
-
         store
             .save_sidecar(
                 &id,
@@ -1178,7 +1906,7 @@ mod tests {
         std::fs::write(&sibling, "title = 'keep'").unwrap();
 
         assert!(store.delete(&id).unwrap());
-        assert!(!store.load(&id).unwrap().is_some());
+        assert!(store.load(&id).unwrap().is_none());
         assert!(!store.delete(&id).unwrap(), "second delete reports false");
         assert!(sibling.exists(), "non-session siblings survive");
     }
@@ -1197,6 +1925,184 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    // =========================================================================
+    // Cross-session search (search_all)
+    // =========================================================================
+
+    /// Seed a one-turn session whose prompt mentions `needle`.
+    fn seed_session_with_prompt(store: &SessionStore, id: &Uuid, prompt: &str) {
+        let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        w.record(SessionEventBody::SessionStart(
+            shannon_types::session_event::SessionStartPayload {
+                model: "search-model".into(),
+                provider: None,
+                cwd: Some("/proj".into()),
+                app_version: None,
+                ..Default::default()
+            },
+        ));
+        w.record(SessionEventBody::TurnStart(TurnStartPayload {
+            query_id: None,
+        }));
+        w.record(SessionEventBody::UserMessage(UserMessagePayload {
+            source: UserMessagePayload::SOURCE_USER.into(),
+            content: prompt.into(),
+            attachment_count: 0,
+        }));
+        w.record(SessionEventBody::AssistantChunk(AssistantChunkPayload {
+            delta: "working on it".into(),
+            thinking: false,
+        }));
+        w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+            llm_steps: None,
+            reason: TurnEndPayload::REASON_COMPLETED.into(),
+            usage: None,
+            error: None,
+        }));
+        w.close().unwrap();
+    }
+
+    #[test]
+    fn search_all_matches_case_insensitively_across_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let old = Uuid::new_v4();
+        seed_session_with_prompt(&store, &old, "the NEEDLE is buried here");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let new = Uuid::new_v4();
+        seed_session_with_prompt(&store, &new, "please find my needle, thanks");
+
+        let outcome = store
+            .search_all_with_stats("NeEdLe", DEFAULT_SEARCH_LIMIT)
+            .unwrap();
+        assert_eq!(outcome.sessions_total, 2);
+        assert_eq!(outcome.sessions_scanned, 2);
+        assert_eq!(outcome.hits.len(), 2);
+        // Most recently modified session first.
+        assert_eq!(outcome.hits[0].session_id, new.to_string());
+        assert_eq!(outcome.hits[1].session_id, old.to_string());
+        let hit = &outcome.hits[0];
+        assert!(hit.snippet.to_lowercase().contains("needle"));
+        assert!(!hit.snippet.contains('\n'), "snippet must be single-line");
+        // ts_ns parsed from the matched raw line → RFC 3339 timestamp.
+        assert!(hit.timestamp.is_some(), "matched line should carry ts_ns");
+    }
+
+    #[test]
+    fn search_all_reports_metadata_from_sidecars() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session_with_prompt(&store, &id, "the quokka habitat");
+        store
+            .save_sidecar(
+                &id,
+                &SessionSidecar {
+                    title: Some("Quokka research".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let hits = store.search_all("QUOKKA", DEFAULT_SEARCH_LIMIT).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title.as_deref(), Some("Quokka research"));
+        // Without a title the index's first-user message summarizes.
+        let bare = Uuid::new_v4();
+        seed_session_with_prompt(&store, &bare, "aardvark migration");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let hits = store.search_all("aardvark", DEFAULT_SEARCH_LIMIT).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].title.is_none());
+        assert_eq!(hits[0].summary.as_deref(), Some("aardvark migration"));
+    }
+
+    #[test]
+    fn search_all_respects_limit_and_stops_scanning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        for _ in 0..3 {
+            seed_session_with_prompt(&store, &Uuid::new_v4(), "find the zebra");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let outcome = store.search_all_with_stats("zebra", 2).unwrap();
+        assert_eq!(outcome.hits.len(), 2);
+        assert_eq!(outcome.sessions_total, 3);
+        assert_eq!(outcome.sessions_scanned, 2, "scan stops once limit is hit");
+    }
+
+    #[test]
+    fn search_all_skips_oversized_lines_and_empty_queries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session_with_prompt(&store, &id, "start");
+        // A >1MB raw line (a blob without real JSON semantics) must be
+        // skipped rather than matched or loaded wholesale.
+        let log = store.container().join(id.to_string()).join("events.jsonl");
+        let mut big = std::fs::read_to_string(&log).unwrap();
+        big.push_str(&format!(
+            "{{\"blob\":\"{}\"}}\n",
+            "x".repeat(1024 * 1024 + 16)
+        ));
+        std::fs::write(&log, big).unwrap();
+
+        assert!(
+            store
+                .search_all("xxxx", DEFAULT_SEARCH_LIMIT)
+                .unwrap()
+                .is_empty(),
+            "oversized lines are skipped"
+        );
+        // Normal content in the same container still matches ("start" hits
+        // the user/message line plus the session/start and turn/start kind
+        // strings — all from the one seeded session).
+        let hits = store.search_all("start", DEFAULT_SEARCH_LIMIT).unwrap();
+        assert!(!hits.is_empty(), "normal content still matches");
+        assert!(hits.iter().all(|h| h.session_id == id.to_string()));
+        // Empty/whitespace queries match nothing.
+        assert!(
+            store
+                .search_all("   ", DEFAULT_SEARCH_LIMIT)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .search_all("", DEFAULT_SEARCH_LIMIT)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn search_all_snippet_is_bounded_and_char_safe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        let filler = "é".repeat(400);
+        seed_session_with_prompt(&store, &id, &format!("{filler} TARGET {filler}"));
+
+        let hits = store.search_all("target", DEFAULT_SEARCH_LIMIT).unwrap();
+        assert_eq!(hits.len(), 1);
+        let snippet = &hits[0].snippet;
+        assert!(snippet.contains("TARGET"));
+        assert!(snippet.starts_with('…') && snippet.ends_with('…'));
+        assert!(snippet.chars().count() <= 2 * 80 + "TARGET".len() + 2);
+        assert!(!snippet.contains('\n'));
+    }
+
+    #[test]
+    fn search_all_on_empty_container_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let outcome = store
+            .search_all_with_stats("anything", DEFAULT_SEARCH_LIMIT)
+            .unwrap();
+        assert_eq!(outcome.sessions_total, 0);
+        assert!(outcome.hits.is_empty());
     }
 
     #[test]
@@ -1252,7 +2158,6 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
                 .join(""),
-            other => panic!("unexpected content: {other:?}"),
         };
         let texts: Vec<String> = loaded.messages.iter().map(text).collect();
         assert_eq!(
@@ -1309,5 +2214,416 @@ mod tests {
             .unwrap();
         assert_eq!(written, 5);
         assert!(store.load(&id).unwrap().is_some());
+    }
+
+    // =========================================================================
+    // E-9: index.json sidecar
+    // =========================================================================
+
+    fn strip_index_files(store: &SessionStore) {
+        for entry in scan_session_summaries(store.container()) {
+            let _ = std::fs::remove_file(index_path_for(&entry.events_path));
+        }
+    }
+
+    fn index_files(store: &SessionStore) -> Vec<PathBuf> {
+        scan_session_summaries(store.container())
+            .iter()
+            .map(|e| index_path_for(&e.events_path))
+            .filter(|p| p.exists())
+            .collect()
+    }
+
+    /// Seed a tool-calling turn: the projected LAST user-role message is the
+    /// tool result, so `last_user_preview` must be `None` on both paths.
+    fn seed_tool_turn_session(store: &SessionStore, id: &Uuid) {
+        let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        w.record(SessionEventBody::SessionStart(
+            shannon_types::session_event::SessionStartPayload {
+                model: "tool-model".into(),
+                provider: None,
+                cwd: Some("/tool/proj".into()),
+                app_version: None,
+                ..Default::default()
+            },
+        ));
+        w.record(SessionEventBody::TurnStart(TurnStartPayload {
+            query_id: None,
+        }));
+        w.record(SessionEventBody::UserMessage(UserMessagePayload {
+            source: UserMessagePayload::SOURCE_USER.into(),
+            content: "run something".into(),
+            attachment_count: 0,
+        }));
+        w.record(SessionEventBody::AssistantChunk(AssistantChunkPayload {
+            delta: "running".into(),
+            thinking: false,
+        }));
+        w.record(SessionEventBody::ToolCall(ToolCallPayload {
+            tool_use_id: "u9".into(),
+            tool_name: "Bash".into(),
+            arguments: r#"{"command":"ls"}"#.into(),
+        }));
+        w.record(SessionEventBody::ToolResult(ToolResultPayload {
+            tool_use_id: "u9".into(),
+            tool_name: "Bash".into(),
+            output: "out".into(),
+            is_error: false,
+            duration_ms: None,
+            meta: serde_json::Value::Null,
+        }));
+        w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+            llm_steps: None,
+            reason: TurnEndPayload::REASON_COMPLETED.into(),
+            usage: Some(shannon_types::session_event::TokenUsage {
+                input_tokens: 100,
+                output_tokens: 20,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+                cost_usd: None,
+            }),
+            error: None,
+        }));
+        w.close().unwrap();
+    }
+
+    /// The E-9 core contract: listing through the index sidecars answers
+    /// exactly what the full projection answers — for every session shape,
+    /// on both the writer-maintained caches and the rebuilt ones.
+    #[test]
+    fn indexed_list_equals_full_projection_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+
+        // Shape 1: tool session (last projected user-role message is a
+        // tool_result → last_user_preview None).
+        seed_tool_turn_session(&store, &Uuid::new_v4());
+        // Shape 2: plain three-turn session.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        seed_three_turn_session(&store, &Uuid::new_v4());
+        // Shape 3: metadata-only session (SessionStart, no conversation).
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let bare = Uuid::new_v4();
+        {
+            let mut w =
+                SessionLogWriter::open_layout(store.container(), &bare.to_string()).unwrap();
+            w.record(SessionEventBody::SessionStart(
+                shannon_types::session_event::SessionStartPayload {
+                    model: "bare-model".into(),
+                    provider: None,
+                    cwd: Some("/bare".into()),
+                    app_version: None,
+                    ..Default::default()
+                },
+            ));
+            w.close().unwrap();
+        }
+
+        // 1) writer-maintained caches.
+        let via_writer_index = store.list().unwrap();
+        assert_eq!(via_writer_index.len(), 3);
+
+        // 2) caches stripped → full projection (and in-contention rebuild).
+        strip_index_files(&store);
+        let via_full_projection = store.list().unwrap();
+        assert_eq!(via_writer_index, via_full_projection);
+
+        // The slow path rebuilt the caches; the next listing rides them to
+        // the same answer.
+        assert_eq!(index_files(&store).len(), 3, "rebuild republished caches");
+        assert_eq!(store.list().unwrap(), via_full_projection);
+
+        // Spot-check the tool session's quirks survived the fast path: its
+        // preview is the prompt and last_user_preview is the tool result.
+        let tool = via_full_projection
+            .iter()
+            .find(|i| i.model == "tool-model")
+            .unwrap();
+        assert_eq!(tool.preview.as_deref(), Some("run something"));
+        assert_eq!(tool.last_user_preview, None);
+        assert_eq!(tool.total_input_tokens, 100);
+        assert_eq!(tool.total_output_tokens, 20);
+        assert_eq!(tool.project_path.as_deref(), Some("/tool/proj"));
+    }
+
+    /// A writer episode that resumes without a valid prior index has a
+    /// partial base: it must stay silent (no index file) rather than publish
+    /// stats covering only its own episode. The next list() rebuilds.
+    #[test]
+    fn writer_with_partial_base_does_not_publish_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session(&store, &id);
+        let index_path = index_path_for(&store.log_path(&id));
+        assert!(index_path.exists(), "writer close published an index");
+
+        // Force the partial-base path: cache gone, log non-empty.
+        std::fs::remove_file(&index_path).unwrap();
+        {
+            let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+            w.set_turn(2);
+            w.record(SessionEventBody::TurnStart(TurnStartPayload {
+                query_id: None,
+            }));
+            w.record(SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: "episode two".into(),
+                attachment_count: 0,
+            }));
+            w.close().unwrap();
+        }
+        assert!(
+            !index_path.exists(),
+            "partial-base close must not publish an index"
+        );
+
+        // list() still answers correctly and rebuilds the cache.
+        let infos = store.list().unwrap();
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].preview.as_deref(), Some("hi"));
+        assert_eq!(
+            infos[0].last_user_preview.as_deref(),
+            Some("episode two"),
+            "last user message is a plain prompt (no trailing tool result)"
+        );
+        assert_eq!(infos[0].turn_count, 2);
+        assert!(index_path.exists(), "list() rebuilt the cache");
+
+        // And the rebuilt cache agrees with the full projection.
+        let via_index = infos;
+        strip_index_files(&store);
+        assert_eq!(store.list().unwrap(), via_index);
+    }
+
+    /// A tampered/stale index (e.g. hand-edited, or a same-name rewrite that
+    /// slipped past mtime) is discarded, the full projection answers, and
+    /// the cache is refreshed.
+    #[test]
+    fn stale_index_is_discarded_and_rebuilt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session(&store, &id);
+        let index_path = index_path_for(&store.log_path(&id));
+
+        let mut stale = store.list().unwrap().into_iter().next().unwrap();
+        // Tamper: claim stats over a different log length + a fake token sum.
+        let mut raw: SessionIndex =
+            serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
+        raw.log_len += 999;
+        raw.total_input_tokens += 4242;
+        raw.store(&index_path).unwrap();
+
+        let infos = store.list().unwrap();
+        assert_eq!(infos.len(), 1);
+        assert_ne!(
+            infos[0].total_input_tokens,
+            stale.total_input_tokens + 4242,
+            "tampered stats must not leak through"
+        );
+        stale = infos.into_iter().next().unwrap();
+
+        // The rebuild replaced the tampered file with a valid one; the next
+        // listing takes the fast path to the same answer.
+        let again = store.list().unwrap();
+        assert_eq!(again, vec![stale]);
+        let healed: SessionIndex =
+            serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
+        assert_ne!(healed.log_len, raw.log_len, "cache was rewritten");
+    }
+
+    /// Raw rewrites (desktop rewind/compact) bypass the writer's accumulator:
+    /// they must drop the cache, and the next list() must reflect the
+    /// rewritten log, not the pre-rewrite stats.
+    #[test]
+    fn raw_rewrites_invalidate_index_and_list_follows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_three_turn_session(&store, &id);
+        let index_path = index_path_for(&store.log_path(&id));
+        assert!(store.list().unwrap().iter().all(|i| i.turn_count == 3));
+        assert!(index_path.exists());
+
+        store.truncate_to_turn(&id, 1).unwrap();
+        assert!(
+            !index_path.exists(),
+            "truncate_to_turn must drop the stale cache"
+        );
+        let infos = store.list().unwrap();
+        assert_eq!(infos[0].turn_count, 1);
+        assert_eq!(infos[0].preview.as_deref(), Some("question 0"));
+
+        store
+            .rewrite_with_conversation(&id, &[("sum q".into(), "sum a".into())])
+            .unwrap();
+        assert!(!index_path.exists(), "compact must drop the cache");
+        let infos = store.list().unwrap();
+        assert_eq!(infos[0].turn_count, 1);
+        assert_eq!(infos[0].preview.as_deref(), Some("sum q"));
+        assert_eq!(infos[0].last_user_preview.as_deref(), Some("sum q"));
+
+        // Index-backed listing agrees with the projection after rewrites.
+        let via_index = infos;
+        strip_index_files(&store);
+        assert_eq!(store.list().unwrap(), via_index);
+    }
+
+    /// A second writer episode seeds from the published index: the refreshed
+    /// sidecar covers the whole log, not just the episode.
+    #[test]
+    fn writer_episode_seeds_from_index_and_covers_whole_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session(&store, &id);
+
+        {
+            let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+            w.set_turn(2);
+            w.record(SessionEventBody::TurnStart(TurnStartPayload {
+                query_id: None,
+            }));
+            w.record(SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: "follow-up".into(),
+                attachment_count: 0,
+            }));
+            w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
+                reason: TurnEndPayload::REASON_COMPLETED.into(),
+                usage: Some(shannon_types::session_event::TokenUsage {
+                    input_tokens: 5,
+                    output_tokens: 6,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                    cost_usd: None,
+                }),
+                error: None,
+            }));
+            w.close().unwrap();
+        }
+
+        let via_index = store.list().unwrap();
+        assert_eq!(via_index[0].turn_count, 2);
+        assert_eq!(via_index[0].total_input_tokens, 11 + 5);
+        assert_eq!(via_index[0].total_output_tokens, 7 + 6);
+        assert_eq!(via_index[0].preview.as_deref(), Some("hi"));
+        assert_eq!(via_index[0].last_user_preview.as_deref(), Some("follow-up"));
+
+        strip_index_files(&store);
+        assert_eq!(store.list().unwrap(), via_index);
+    }
+
+    // ── Raw-rewrite locking (flock) + unique tmp names ──────────────────────
+
+    /// A raw rewrite while a live writer holds the log must fail loudly with
+    /// `AlreadyLocked` instead of racing it: the old lock-free rewrite would
+    /// rename over the writer's file and every later append would vanish
+    /// into the unlinked inode with `failures == 0`.
+    #[test]
+    fn truncate_to_turn_fails_loudly_while_writer_holds_the_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_three_turn_session(&store, &id);
+
+        let live = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        let err = store.truncate_to_turn(&id, 1).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SessionStoreError::Log(crate::session_log::SessionLogError::AlreadyLocked { .. })
+            ),
+            "expected AlreadyLocked, got: {err:?}"
+        );
+        // The log is untouched while the writer holds it.
+        let loaded = store.load(&id).unwrap().expect("session survives");
+        assert_eq!(loaded.metadata.turn_count, 3);
+        drop(live);
+
+        // Once the writer is gone the truncate proceeds cleanly.
+        let dropped = store.truncate_to_turn(&id, 2).unwrap().expect("log exists");
+        assert!(dropped > 0);
+        let loaded = store.load(&id).unwrap().expect("session survives");
+        assert_eq!(loaded.metadata.turn_count, 2);
+    }
+
+    /// The compact rewrite honors the same flock — a second concurrent
+    /// rewrite (the live writer here stands in for any lock holder) must
+    /// error, never interleave two tmp+rename cycles on the same log.
+    #[test]
+    fn rewrite_with_conversation_fails_loudly_while_log_is_locked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_three_turn_session(&store, &id);
+
+        let live = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        let err = store
+            .rewrite_with_conversation(&id, &[("sum q".into(), "sum a".into())])
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SessionStoreError::Log(crate::session_log::SessionLogError::AlreadyLocked { .. })
+            ),
+            "expected AlreadyLocked, got: {err:?}"
+        );
+        let loaded = store.load(&id).unwrap().expect("session survives");
+        assert_eq!(loaded.metadata.turn_count, 3, "log must be untouched");
+        drop(live);
+
+        let written = store
+            .rewrite_with_conversation(&id, &[("sum q".into(), "sum a".into())])
+            .unwrap();
+        assert_eq!(written, 5); // one framed turn = 5 events
+        let loaded = store.load(&id).unwrap().expect("session survives");
+        assert_eq!(loaded.metadata.turn_count, 1);
+    }
+
+    /// `delete` must not unlink a live writer's log out from under it.
+    #[test]
+    fn delete_fails_while_writer_holds_the_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_three_turn_session(&store, &id);
+
+        let live = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        let err = store.delete(&id).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SessionStoreError::Log(crate::session_log::SessionLogError::AlreadyLocked { .. })
+            ),
+            "expected AlreadyLocked, got: {err:?}"
+        );
+        assert!(store.container.join(id.to_string()).exists());
+        drop(live);
+
+        assert!(store.delete(&id).unwrap());
+        assert!(!store.container.join(id.to_string()).exists());
+    }
+
+    /// Temp names must be collision-free: two racing rewrites of the same
+    /// session used to share one fixed `events.jsonl.rewind-tmp` name.
+    #[test]
+    fn unique_tmp_paths_never_collide() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("events.jsonl");
+        let a = unique_tmp_path(&log, "rewind-tmp");
+        let b = unique_tmp_path(&log, "rewind-tmp");
+        assert_ne!(a, b);
+        assert_eq!(a.parent(), log.parent(), "tmp must stay in the same dir");
+        assert!(
+            a.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("events.jsonl.rewind-tmp-"),
+            "unexpected tmp name: {}",
+            a.display()
+        );
     }
 }

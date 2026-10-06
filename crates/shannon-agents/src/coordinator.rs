@@ -4,6 +4,7 @@ use crate::{
     TaskBoard,
     custom_agent::{CustomAgentDef, CustomAgentError, CustomAgentLoader},
     error::{AgentError, CoordinationError},
+    executor::AgentExecutor,
     message::{AgentMessage, MessageContent, MessageType, ProtocolMessage},
     message_history::ContentKind,
     persistence::{FilePersistence, InboxMessage, TeamConfigFile},
@@ -176,6 +177,12 @@ pub enum CoordinatorEvent {
         summary: Option<String>,
     },
 }
+
+/// Grace period given to each tracked process-mode agent child to exit on
+/// its own during coordinator shutdown (review §P3-10) before the manager
+/// force-kills it. Matches the per-agent timeout the `disband_team` path
+/// uses.
+const PROCESS_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Main coordinator for managing multi-agent teams
 pub struct AgentCoordinator {
@@ -499,11 +506,18 @@ impl AgentCoordinator {
     }
 
     /// Add a teammate to a team
+    ///
+    /// `executor`: when `Some`, the teammate is constructed with this
+    /// executor and `handle_chat_message` runs the LLM via it; when `None`,
+    /// the teammate falls back to the placeholder reply (used by the
+    /// process-mode child subprocess path that runs its own LLM loop, and
+    /// by tests that don't care about LLM behaviour).
     pub async fn add_teammate(
         &self,
         team_name: &str,
         agent_name: String,
         config: TeammateConfig,
+        executor: Option<Arc<dyn AgentExecutor>>,
     ) -> Result<(), AgentError> {
         let mut teams = self.teams.write().await;
 
@@ -557,8 +571,12 @@ impl AgentCoordinator {
         };
         let config_disallowed_tools = config.disallowed_tools.clone();
         let config_isolation = config.isolation.clone();
+        let config_permission_mode = config.permission_mode.clone();
 
-        let teammate = Teammate::new(agent_name.clone(), config);
+        let teammate = match executor {
+            Some(exec) => Teammate::with_executor(agent_name.clone(), config, exec),
+            None => Teammate::new(agent_name.clone(), config),
+        };
         teammate.set_team_name(team_name.to_string());
         team.members.insert(agent_name.clone(), teammate);
 
@@ -649,7 +667,14 @@ impl AgentCoordinator {
                     model: config_model,
                     system_prompt: config_system_prompt,
                     agent_name: agent_name.clone(),
-                    permission_mode: Some("bypassPermissions".to_string()),
+                    // Honor the teammate's configured permission mode. The
+                    // previous hard-coded "bypassPermissions" granted
+                    // process-mode agents MORE authority than the lead
+                    // session, silently defeating permission inheritance.
+                    // Fall back to "auto" (auto-edit), never to bypass.
+                    permission_mode: Some(
+                        config_permission_mode.unwrap_or_else(|| "auto".to_string()),
+                    ),
                     allowed_tools: config_allowed_tools,
                     disallowed_tools: config_disallowed_tools,
                     startup_timeout_secs: 60,
@@ -924,6 +949,26 @@ impl AgentCoordinator {
         })?;
 
         Ok(team.members.keys().cloned().collect())
+    }
+
+    /// Whether the named teammate carries an LLM executor. Public
+    /// for tests + B2-1 wiring assertions — embedders should not need
+    /// to peek inside `Teammate` to know if `send_message` will return a
+    /// real reply vs the synthetic ack.
+    pub async fn teammate_has_executor(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+    ) -> Result<bool, AgentError> {
+        let teams = self.teams.read().await;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
+        Ok(team
+            .members
+            .get(agent_name)
+            .and_then(|t| t.executor())
+            .is_some())
     }
 
     /// Get agent by name
@@ -2263,7 +2308,8 @@ impl AgentCoordinator {
         def: &CustomAgentDef,
     ) -> Result<(), AgentError> {
         let config = def.to_teammate_config();
-        self.add_teammate(team_name, def.name.clone(), config).await
+        self.add_teammate(team_name, def.name.clone(), config, None)
+            .await
     }
 
     /// Discover and cache agent definitions from `.claude/agents/` directories.
@@ -2640,7 +2686,7 @@ impl AgentCoordinator {
                             ..Default::default()
                         };
                         match self
-                            .add_teammate(team_name, new_agent_name.to_string(), config)
+                            .add_teammate(team_name, new_agent_name.to_string(), config, None)
                             .await
                         {
                             Ok(()) => serde_json::json!({"status": "added"}),
@@ -2669,48 +2715,76 @@ impl AgentCoordinator {
             }
         }
 
-        let teams = self.teams.write().await;
-
         // Send shutdown requests to all teammates
-        for (team_name, team) in teams.iter() {
-            tracing::debug!("Shutting down team '{}'", team_name);
+        {
+            let teams = self.teams.write().await;
+            for (team_name, team) in teams.iter() {
+                tracing::debug!("Shutting down team '{}'", team_name);
 
-            for (agent_name, teammate) in team.members.iter() {
-                tracing::debug!(
-                    "Shutting down agent '{}' in team '{}'",
-                    agent_name,
-                    team_name
-                );
-
-                // Send shutdown protocol message
-                let shutdown_msg = AgentMessage::protocol(
-                    "coordinator".to_string(),
-                    agent_name.clone(),
-                    ProtocolMessage::ShutdownRequest {
-                        reason: "Coordinator shutting down".to_string(),
-                    },
-                );
-
-                if let Err(e) = teammate.handle_message(shutdown_msg).await {
-                    tracing::warn!(
-                        team = %team_name,
-                        agent = %agent_name,
-                        error = %e,
-                        "Failed to send shutdown message during coordinator shutdown"
+                for (agent_name, teammate) in team.members.iter() {
+                    tracing::debug!(
+                        "Shutting down agent '{}' in team '{}'",
+                        agent_name,
+                        team_name
                     );
+
+                    // Send shutdown protocol message
+                    let shutdown_msg = AgentMessage::protocol(
+                        "coordinator".to_string(),
+                        agent_name.clone(),
+                        ProtocolMessage::ShutdownRequest {
+                            reason: "Coordinator shutting down".to_string(),
+                        },
+                    );
+
+                    if let Err(e) = teammate.handle_message(shutdown_msg).await {
+                        tracing::warn!(
+                            team = %team_name,
+                            agent = %agent_name,
+                            error = %e,
+                            "Failed to send shutdown message during coordinator shutdown"
+                        );
+                    }
+                    if let Err(e) = self.event_sender.send(CoordinatorEvent::AgentLeft {
+                        team: team_name.clone(),
+                        agent: agent_name.clone(),
+                    }) {
+                        tracing::warn!(
+                            team = %team_name,
+                            agent = %agent_name,
+                            error = %e,
+                            "Failed to send AgentLeft event during shutdown - no active receivers"
+                        );
+                    }
                 }
-                if let Err(e) = self.event_sender.send(CoordinatorEvent::AgentLeft {
-                    team: team_name.clone(),
-                    agent: agent_name.clone(),
-                }) {
+            }
+        }
+
+        // Review §P3-10: the protocol shutdown above only reaches in-process
+        // teammates. Process-mode agents are OS child processes tracked by
+        // the process manager — without an explicit teardown they outlive
+        // the coordinator as orphans. Reuse the same kill path as
+        // `disband_team`: graceful shutdown notification with a bounded
+        // wait, then force-kill. `kill_agent` removes the handle under the
+        // write lock before killing, so a handle is killed exactly once even
+        // if the graceful wait races an exit.
+        if let Some(ref pm) = self.process_manager {
+            for name in pm.running_agents().await {
+                if let Err(e) = pm
+                    .graceful_shutdown_agent(&name, PROCESS_SHUTDOWN_GRACE)
+                    .await
+                {
                     tracing::warn!(
-                        team = %team_name,
-                        agent = %agent_name,
+                        agent = %name,
                         error = %e,
-                        "Failed to send AgentLeft event during shutdown - no active receivers"
+                        "Failed to terminate process agent during coordinator shutdown"
                     );
                 }
             }
+            // Backstop: drain any handles the graceful pass left behind
+            // (agents that exited on their own are removed here too, so the
+            // health monitor cannot "restart" a coordinator that is gone).
+            pm.shutdown_all().await;
         }
 
         // Cleanup worktrees if enabled
@@ -2920,11 +2994,23 @@ impl AgentCoordinator {
             background_tasks.write().await.remove(&task_key_for_cleanup);
         });
 
-        // Track the abort handle for cancellation
+        // Track the abort handle for cancellation. §P3-16: a duplicate spawn
+        // for the same team:agent key aborts the previous handle first — the
+        // old behavior overwrote the map entry and left the previous task
+        // running as an orphan that cancel/shutdown could no longer reach.
         let abort_handle = handle.abort_handle();
         // Use blocking lock since we're in a sync context (try_read above already succeeded)
         if let Ok(mut tasks) = self.background_tasks.try_write() {
-            tasks.insert(task_key.clone(), abort_handle);
+            if let Some(previous) = tasks.insert(task_key.clone(), abort_handle) {
+                if !previous.is_finished() {
+                    tracing::warn!(
+                        team = %team_name,
+                        agent = %agent_name,
+                        "Duplicate background task spawn; aborting the previous task"
+                    );
+                    previous.abort();
+                }
+            }
         }
 
         tracing::info!(
@@ -3331,5 +3417,281 @@ mod tests {
         );
         assert_eq!(list[0].priority, "high");
         assert!(list[0].content_preview.contains("key"));
+    }
+
+    /// B2-1: `add_teammate` with `Some(executor)` constructs the teammate
+    /// via `Teammate::with_executor`, so the executor is reachable on the
+    /// stored teammate. `None` keeps the placeholder path (the default
+    /// for tests + the process-mode subprocess path).
+    #[tokio::test]
+    async fn test_add_teammate_with_executor_propagates_to_teammate() {
+        use crate::executor::MockAgentExecutor;
+
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
+        coordinator
+            .create_team("exec-team".into(), "exec".into())
+            .await
+            .unwrap();
+
+        coordinator
+            .add_teammate(
+                "exec-team",
+                "with-exec".into(),
+                TeammateConfig::default(),
+                Some(Arc::new(MockAgentExecutor::new("mock"))),
+            )
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate(
+                "exec-team",
+                "without-exec".into(),
+                TeammateConfig::default(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let teams = coordinator.teams.read().await;
+        let team = teams.get("exec-team").expect("team exists");
+
+        assert!(
+            team.members
+                .get("with-exec")
+                .and_then(|t| t.executor())
+                .is_some(),
+            "Teammate built with executor must expose it"
+        );
+        assert!(
+            team.members
+                .get("without-exec")
+                .and_then(|t| t.executor())
+                .is_none(),
+            "Teammate built without executor must expose None"
+        );
+    }
+
+    // ── §P3-16: duplicate background-task spawn aborts the old task ────
+
+    /// An executor that takes long enough for the first spawned task to
+    /// still be in flight when the duplicate spawn happens.
+    struct SlowExecutor {
+        delay: std::time::Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::executor::AgentExecutor for SlowExecutor {
+        async fn execute(
+            &self,
+            _system_prompt: &str,
+            _task: &str,
+            _model: Option<&str>,
+            _tools: Option<&[String]>,
+        ) -> Result<shannon_core::tools::ToolOutput, String> {
+            tokio::time::sleep(self.delay).await;
+            Ok(shannon_core::tools::ToolOutput {
+                content: "slow done".to_string(),
+                is_error: false,
+                metadata: HashMap::new(),
+            })
+        }
+
+        async fn execute_with_history(
+            &self,
+            _system_prompt: &str,
+            _history: &[crate::executor::ChatTurn],
+            _task: &str,
+            _model: Option<&str>,
+            _tools: Option<&[String]>,
+        ) -> Result<shannon_core::tools::ToolOutput, String> {
+            self.execute("", "", None, None).await
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_background_task_spawn_aborts_previous() {
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
+        coordinator
+            .create_team("bg-team".into(), "bg".into())
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate(
+                "bg-team",
+                "worker".into(),
+                TeammateConfig::default(),
+                Some(Arc::new(SlowExecutor {
+                    delay: std::time::Duration::from_secs(30),
+                })),
+            )
+            .await
+            .unwrap();
+
+        // First task for the key: running and tracked.
+        let first = coordinator
+            .spawn_background_task("bg-team", "worker", "lead", "task one".to_string())
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let running = coordinator.running_background_tasks().await;
+        assert!(
+            running.contains(&"bg-team:worker".to_string()),
+            "first spawn must be tracked, got: {running:?}"
+        );
+
+        // Second spawn for the SAME key must abort the previous task instead
+        // of silently orphaning it (§P3-16).
+        let second = coordinator
+            .spawn_background_task("bg-team", "worker", "lead", "task two".to_string())
+            .unwrap();
+
+        let aborted = tokio::time::timeout(std::time::Duration::from_secs(2), first).await;
+        match aborted {
+            Err(_) => panic!("previous task must be aborted promptly on duplicate spawn"),
+            Ok(joined) => {
+                let err = joined.expect_err("aborted task must not complete normally");
+                assert!(err.is_cancelled(), "previous task must be cancelled");
+            }
+        }
+
+        // The replacement task is still tracked and can be cancelled cleanly.
+        let running = coordinator.running_background_tasks().await;
+        assert!(
+            running.contains(&"bg-team:worker".to_string()),
+            "replacement task stays tracked, got: {running:?}"
+        );
+        assert!(
+            coordinator
+                .cancel_background_task("bg-team", "worker")
+                .await
+        );
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), second).await;
+        assert!(coordinator.running_background_tasks().await.is_empty());
+    }
+
+    // ── §P3-10: coordinator shutdown terminates process-agent children ──
+
+    /// Write a dummy process-mode agent script: records its own PID, then
+    /// stays alive (ignoring stdin and the JSON-RPC flags `spawn_agent`
+    /// prepends) until it is killed. This is the orphan case — a child that
+    /// can only be stopped by an explicit kill.
+    #[cfg(unix)]
+    fn write_dummy_agent_script(dir: &std::path::Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let pid_file = dir.join("child.pid");
+        let script = dir.join("dummy-agent.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n# dummy process-mode agent (§P3-10 test): ignore all arguments,\n# record the PID, and sleep until killed.\necho $$ > {}\nexec sleep 30\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    /// True while the process `pid` still exists (`kill -0`).
+    #[cfg(unix)]
+    fn process_alive(pid: i32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn coordinator_shutdown_terminates_process_agent_children() {
+        use crate::process_manager::AgentProcessConfig;
+        use std::collections::HashMap;
+
+        let config = CoordinatorConfig {
+            agent_mode: AgentMode::Process,
+            ..Default::default()
+        };
+        let coordinator = AgentCoordinator::new(config).await.unwrap();
+        assert!(
+            coordinator.process_manager.is_some(),
+            "process mode must wire the process manager"
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_dummy_agent_script(tmp.path());
+
+        // Spawn through the coordinator's OWN process manager (the one
+        // `shutdown()` tears down), not a detached instance.
+        let pm = coordinator.process_manager.as_ref().unwrap();
+        pm.spawn_agent(AgentProcessConfig {
+            binary_path: script,
+            args: vec![],
+            env: HashMap::new(),
+            worktree_path: None,
+            model: None,
+            system_prompt: None,
+            agent_name: "dummy-worker".to_string(),
+            permission_mode: None,
+            allowed_tools: None,
+            disallowed_tools: None,
+            // Generous startup headroom: the dummy never speaks the
+            // protocol, so the Starting-state guard must not fire mid-test.
+            startup_timeout_secs: 300,
+        })
+        .await
+        .expect("dummy agent process must spawn");
+
+        // The tracked child is alive before shutdown.
+        let pid_file = tmp.path().join("child.pid");
+        let pid: i32 = loop {
+            if let Ok(s) = std::fs::read_to_string(&pid_file) {
+                if let Ok(p) = s.trim().parse() {
+                    break p;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !process_alive(pid) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "dummy child (pid {pid}) never came up"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            pm.running_agents()
+                .await
+                .contains(&"dummy-worker".to_string()),
+            "the manager must track the spawned child"
+        );
+
+        // Act: coordinator shutdown must terminate the tracked child.
+        coordinator.shutdown().await.unwrap();
+
+        // The OS process is gone (SIGKILL + reap) within the graceful-wait
+        // budget plus margin, and the manager no longer tracks it.
+        let deadline = tokio::time::Instant::now()
+            + PROCESS_SHUTDOWN_GRACE
+            + std::time::Duration::from_secs(10);
+        while process_alive(pid) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "dummy child (pid {pid}) was orphaned by coordinator shutdown"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let tracked = pm.running_agents().await;
+        assert!(
+            !tracked.contains(&"dummy-worker".to_string()),
+            "terminated child must no longer be tracked, got: {tracked:?}"
+        );
     }
 }

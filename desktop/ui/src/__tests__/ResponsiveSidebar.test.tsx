@@ -28,10 +28,14 @@ describe('Responsive sidebar', () => {
     expect(screen.getByLabelText('Toggle sidebar')).toBeInTheDocument()
   })
 
-  it('renders both mobile and desktop sidebars', () => {
+  it('renders exactly one Sidebar instance regardless of viewport', () => {
     render(wrap(<Layout />))
+    // Audit: Layout now mounts a single Sidebar (CSS controls visibility
+    // across breakpoints via internal mobileMode state). The old design
+    // mounted two full trees and caused a chain of CI flakes — this
+    // assertion enforces the new invariant.
     const shannonElements = screen.getAllByText('Shannon')
-    expect(shannonElements.length).toBe(2)
+    expect(shannonElements.length).toBe(1)
   })
 
   it('footer shows connection indicator when no usage', () => {

@@ -24,7 +24,7 @@ pub use agent_catalog::{
 };
 pub use agent_installers::{
     AgentMarkdownInstaller, AgentRepoInstaller, InstalledAgent, is_agent_installed,
-    list_installed_agents, remove_installed_agent,
+    list_installed_agents, migrate_legacy_agent_dirs, remove_installed_agent,
 };
 pub use aggregator::{InstalledAddonSummary, aggregate_installed};
 pub use catalog::{
@@ -37,7 +37,8 @@ pub use data_source_catalog::{
 };
 pub use data_source_installers::{
     InstalledDataSource, install_data_source, is_data_source_installed,
-    list_installed_data_sources, read_data_source_config, remove_installed_data_source,
+    list_installed_data_sources, migrate_data_source_secrets, read_data_source_config,
+    read_data_source_kind, remove_installed_data_source,
 };
 pub use installer::{AddonInstaller, InstallError};
 pub use mcp_installers::{

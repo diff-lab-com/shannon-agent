@@ -55,7 +55,8 @@ describe('Sidebar', () => {
   it('renders primary nav links', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Scheduled')).toBeInTheDocument()
+    // IA T1: /tasks 没有「任务」导航行 — 顶部「自动化」按钮是唯一侧栏入口。
+    expect(screen.getByText('Automations')).toBeInTheDocument()
   })
 
   it('renders Settings section', () => {
@@ -63,20 +64,14 @@ describe('Sidebar', () => {
     expect(screen.getByText('Settings')).toBeInTheDocument()
   })
 
-  it('expands Settings section on click', () => {
+  it('Settings is one flat entry — the section switcher lives on the page', () => {
     render(wrap(<Sidebar />))
-    // Settings sub-links are collapsed by default
+    // 单行入口直达 /settings;NavLink 对 /settings/* 子路由保持激活态。
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings')
+    // 旧 disclosure 的子项不再出现在 sidebar 里。
     expect(screen.queryByText('General')).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByText('Settings'))
-    expect(screen.getByText('General')).toBeInTheDocument()
-    expect(screen.getByText('Theme')).toBeInTheDocument()
-    expect(screen.getByText('Models')).toBeInTheDocument()
-    expect(screen.getByText('Notifications')).toBeInTheDocument()
-    // Billing was removed entirely (P0-4 decision D5); Advanced is dev-only
-    // (P3-2): both hidden in the default Simple mode.
-    expect(screen.queryByText('Usage & Billing')).not.toBeInTheDocument()
-    expect(screen.queryByText('Advanced')).not.toBeInTheDocument()
+    expect(screen.queryByText('Theme')).not.toBeInTheDocument()
+    expect(screen.queryByText('Models')).not.toBeInTheDocument()
   })
 })
 
@@ -91,7 +86,7 @@ describe('Sidebar — Simple mode (default)', () => {
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
 
-  it('shows flat Extensions entry in Simple mode (no dev sub-links)', () => {
+  it('shows flat Connectors entry in Simple mode (no dev sub-links)', () => {
     render(wrap(<Sidebar />))
     // P1-2: Simple mode surfaces a flat Extensions link to the Hub index so
     // general users can reach it without dev mode. The dev-mode collapsible
@@ -116,7 +111,7 @@ describe('Sidebar — Simple mode (default)', () => {
   it('still shows core nav in Simple mode', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Scheduled')).toBeInTheDocument()
+    expect(screen.getByText('Automations')).toBeInTheDocument()
   })
 
   it('toggles to Advanced mode on mode button click', () => {
@@ -155,60 +150,48 @@ describe('Sidebar — Advanced mode', () => {
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
   })
 
-  it('renders Extensions section', () => {
+  it('renders Connectors section', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Extensions')).toBeInTheDocument()
   })
 
-  it('renders OPC section', () => {
+  it('renders Mission Control section', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('OPC')).toBeInTheDocument()
+    expect(screen.getByText('Mission Control')).toBeInTheDocument()
   })
 
-  it('renders extension sub-links when expanded', () => {
+  it('keeps type-specific extension management OUT of the sidebar', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Skills')).toBeInTheDocument()
-    expect(screen.getByText('My Agents')).toBeInTheDocument()
-    expect(screen.getByText('Connections')).toBeInTheDocument()
+    // 2026-09 review: the Extensions disclosure was retired — Skills /
+    // My Agents / Data Sources now live in the Extensions page's 管理 menu,
+    // not in the app sidebar.
+    expect(screen.queryByText('Skills')).not.toBeInTheDocument()
+    expect(screen.queryByText('My Agents')).not.toBeInTheDocument()
+    expect(screen.queryByText('Data Sources')).not.toBeInTheDocument()
   })
 
-  it('renders OPC as a direct link in the Experiments group (U6 flatten)', () => {
+  it('renders Mission Control as a direct link in the Experiments group (U6 flatten)', () => {
     render(wrap(<Sidebar />))
     // U6 flattened the OPC disclosure (it held a single sub-link); the link
     // now lives directly inside the Experiments group.
-    expect(screen.queryByText('One Person Company')).not.toBeInTheDocument()
-    const opc = screen.getByText('OPC').closest('a')
+    const opc = screen.getByText('Mission Control').closest('a')
     expect(opc).toHaveAttribute('href', '/opc')
   })
 
-  it('shows dev-only Settings sub-links (Advanced) when expanded', () => {
+  it('Connectors is a flat link straight to the marketplace', () => {
     render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByText('Settings'))
-    // P0-4 (D5): the Billing tab no longer exists anywhere in the app.
-    expect(screen.queryByText('Usage & Billing')).not.toBeInTheDocument()
-    expect(screen.getByText('Advanced')).toBeInTheDocument()
+    // 2026-09 review: no collapsible Connectors group — a flat nav link to
+    // /extensions/featured (the marketplace index).
+    const connectors = screen.getByText('Extensions').closest('a')
+    expect(connectors).toHaveAttribute('href', '/extensions/featured')
   })
 
-  it('collapses and expands Extensions section', () => {
+  it('shows OPC without the experiment badge (dev mode)', () => {
     render(wrap(<Sidebar />))
-    // Extensions is open by default
-    expect(screen.getByText('Skills')).toBeInTheDocument()
-
-    // Click Extensions button to collapse
-    const integrationsButtons = screen.getAllByText('Extensions')
-    fireEvent.click(integrationsButtons[0])
-
-    // Sub-links should be gone
-    expect(screen.queryByText('Skills')).not.toBeInTheDocument()
-
-    // Click again to expand
-    fireEvent.click(screen.getByText('Extensions'))
-    expect(screen.getByText('Skills')).toBeInTheDocument()
-  })
-
-  it('shows experiment badge on OPC', () => {
-    render(wrap(<Sidebar />))
-    expect(screen.getByText('Experiment')).toBeInTheDocument()
+    // 2026-09 review: OPC is dev-only and the "Experimental" pill was
+    // dropped with the flat-nav simplification.
+    expect(screen.getByText('Mission Control')).toBeInTheDocument()
+    expect(screen.queryByText('Experimental')).not.toBeInTheDocument()
   })
 
   it('toggles back to Simple mode on click', () => {
@@ -227,7 +210,9 @@ describe('Sidebar — Navigation', () => {
     window.localStorage.clear()
   })
 
-  it('navigates to /tasks when clicking Scheduled', async () => {
+  // IA T1: the top 自动化 button is /tasks's single sidebar entry (the
+  // duplicate「任务」nav row was removed).
+  it('navigates to /tasks from the Automations button', async () => {
     render(
       wrap(
         <>
@@ -237,8 +222,7 @@ describe('Sidebar — Navigation', () => {
       )
     )
 
-    const scheduledLink = screen.getByText('Scheduled')
-    fireEvent.click(scheduledLink)
+    fireEvent.click(screen.getByRole('button', { name: 'Automations · Ctrl2' }))
 
     await waitFor(() => {
       const location = screen.getByTestId('current-location')
@@ -246,17 +230,24 @@ describe('Sidebar — Navigation', () => {
     })
   })
 
-  it('renders Triage button with badge when there are unread items', () => {
+  // IA T1: no「任务」nav row may reappear — the button is the only entry.
+  it('has no Tasks nav row in the main nav', () => {
+    render(wrap(<Sidebar />))
+    expect(screen.queryByRole('link', { name: /^Tasks/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Automations · Ctrl2' })).toBeInTheDocument()
+  })
+
+  it('renders Inbox button with badge when there are unread items', () => {
     render(wrap(<Sidebar />))
 
-    expect(screen.getByText('Triage')).toBeInTheDocument()
+    expect(screen.getByText('Inbox')).toBeInTheDocument()
     expect(screen.getByText('3')).toBeInTheDocument() // Badge shows unread count
   })
 
   it('Triage link has proper aria-label', () => {
     render(wrap(<Sidebar />))
 
-    const triageLink = screen.getByRole('link', { name: /Open Triage page/i })
+    const triageLink = screen.getByRole('link', { name: /Open Inbox/i })
     expect(triageLink).toBeInTheDocument()
   })
 })
@@ -375,19 +366,28 @@ describe('Sidebar — Sessions rail (U1)', () => {
     expect(api.renameSession).toHaveBeenCalledTimes(1)
   })
 
-  it('pins a session to the top and persists across remounts', async () => {
+  it('pins a session through the backend and re-derives the glyph from the DTO', async () => {
+    const api = await import('@/lib/tauri-api')
     await renderWithSessions()
     expect(row('Gamma Plan').closest('[role="listitem"]')).toBeTruthy()
     await openMenu('Gamma Plan')
     fireEvent.click(screen.getByRole('menuitem', { name: 'Pin' }))
-    // Pinned row sorts first and shows the pin glyph.
+    // Settings R3 T7: the pin call goes to the backend (curation sidecar),
+    // never to localStorage.
+    await waitFor(() => expect(api.setSessionPinned).toHaveBeenCalledWith('s3', true))
+    expect(window.localStorage.getItem('shannon-sessions-pinned')).toBeNull()
+    // Optimistic: the pinned row sorts first and shows the pin glyph.
     const first = screen.getAllByRole('listitem')[0]
     expect(within(first).getByText('Gamma Plan')).toBeInTheDocument()
     expect(within(first).getByText('push_pin')).toBeInTheDocument()
-    expect(JSON.parse(window.localStorage.getItem('shannon-sessions-pinned')!)).toEqual(['s3'])
-    // Unmount + remount — pin survives (was component state before U1).
+    // Unmount + remount — the pin survives via the list DTO's `pinned` flag
+    // (the backend is the source of truth; the rail re-derives from it).
     cleanup()
-    await renderWithSessions()
+    await renderWithSessions([
+      { ...mockSessions[0] },
+      { ...mockSessions[1] },
+      { ...mockSessions[2], pinned: true },
+    ] as any)
     const firstAfter = screen.getAllByRole('listitem')[0]
     expect(within(firstAfter).getByText('Gamma Plan')).toBeInTheDocument()
     // Menu now offers Unpin.
@@ -613,7 +613,10 @@ describe('Sidebar — resize handle (U5)', () => {
     handle().focus()
     await userEvent.setup().keyboard('{ArrowRight}')
     await waitFor(() => expect(handle()).toHaveAttribute('aria-valuenow', '296'))
-    expect(document.documentElement.style.getPropertyValue('--sidebar-w')).toBe('296px')
+    // B1-10: the Sidebar only persists its width — writing `--sidebar-w`
+    // moved to Layout (single writer, mobile/window 0px overrides). The
+    // reported-width contract is exercised through Layout in
+    // SessionWindowMode.test.tsx.
     expect(window.localStorage.getItem('shannon-sidebar-width')).toBe('296')
     // Clamped at the max.
     await userEvent.keyboard('{ArrowLeft>20}')
@@ -630,66 +633,33 @@ describe('Sidebar — resize handle (U5)', () => {
   })
 })
 
-describe('Sidebar — nav IA groups (U6)', () => {
+describe('Sidebar — flat nav (2026-09 ZCode-style simplification)', () => {
   beforeEach(() => {
     window.localStorage.clear()
   })
 
-  it('groups nav: Work visible, Resources folded in Simple mode', () => {
+  it('shows the four simple-mode nav rows + Automations button, NO group disclosures', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByRole('button', { name: /Work/ })).toHaveAttribute('aria-expanded', 'true')
-    const resources = screen.getByRole('button', { name: /Resources/ })
-    expect(resources).toHaveAttribute('aria-expanded', 'false')
-    // Work group is open: Chat / Scheduled / Triage visible.
+    // Flat rows: Chat / Inbox / Extensions / Memory, plus the top
+    // 自动化 button (IA T1 — /tasks has no nav row of its own).
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Scheduled')).toBeInTheDocument()
-    expect(screen.getByText('Triage')).toBeInTheDocument()
-    // Resources folded: Memory / Usage hidden; Extensions stays a flat entry.
-    expect(screen.queryByText('Memory')).not.toBeInTheDocument()
-    expect(screen.queryByText('Usage')).not.toBeInTheDocument()
+    expect(screen.getByText('Automations')).toBeInTheDocument()
+    expect(screen.getByText('Inbox')).toBeInTheDocument()
     expect(screen.getByText('Extensions')).toBeInTheDocument()
-  })
-
-  it('expanding Resources reveals Memory and Usage', () => {
-    render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByRole('button', { name: /Resources/ }))
     expect(screen.getByText('Memory')).toBeInTheDocument()
-    expect(screen.getByText('Usage')).toBeInTheDocument()
-  })
-
-  it('collapsing the Work group hides Chat/Scheduled', () => {
-    render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByRole('button', { name: /Work/ }))
-    expect(screen.queryByText('Chat')).not.toBeInTheDocument()
-    expect(screen.queryByText('Scheduled')).not.toBeInTheDocument()
-  })
-
-  it('Experiments group is dev-only and holds the OPC link', () => {
-    render(wrap(<Sidebar />))
+    // The old Work/Resources/Experiments disclosure buttons are gone.
+    expect(screen.queryByRole('button', { name: /^Work/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Resources/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Experiments/ })).not.toBeInTheDocument()
-    window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
-    const { unmount } = render(wrap(<Sidebar />))
-    expect(screen.getByRole('button', { name: /Experiments/ })).toBeInTheDocument()
-    expect(screen.getByText('OPC')).toBeInTheDocument()
-    unmount()
   })
 
-  it('persists group + settings expansion to shannon-nav-open across remounts', () => {
-    const { unmount } = render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByRole('button', { name: /Resources/ }))
-    fireEvent.click(screen.getByText('Settings'))
-    const stored = JSON.parse(window.localStorage.getItem('shannon-nav-open')!)
-    expect(stored).toMatchObject({ resources: true, settings: true, work: true })
-    unmount()
+  it('Usage and Mission Control are dev-only extras', () => {
     render(wrap(<Sidebar />))
-    // Remounted: Resources still open, Settings still expanded.
-    expect(screen.getByText('Memory')).toBeInTheDocument()
-    expect(screen.getByText('General')).toBeInTheDocument()
-    // Collapse Work, remount: still collapsed.
-    fireEvent.click(screen.getByRole('button', { name: /Work/ }))
-    cleanup()
-    render(wrap(<Sidebar />))
-    expect(screen.queryByText('Chat')).not.toBeInTheDocument()
+    expect(screen.queryByText('Usage')).not.toBeInTheDocument()
+    expect(screen.queryByText('Mission Control')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
+    expect(screen.getByText('Usage')).toBeInTheDocument()
+    expect(screen.getByText('Mission Control')).toBeInTheDocument()
   })
 })
 
@@ -741,6 +711,63 @@ describe('Sidebar — zero-session guide card (U7)', () => {
     ] as any)
     render(wrap(<Sidebar />))
     expect(await screen.findByRole('button', { name: 'Chat: Alpha Chat' })).toBeInTheDocument()
+    expect(screen.queryByText('Start your first chat')).not.toBeInTheDocument()
+  })
+})
+
+// 卡A 收尾 — archiving the last active session must not orphan the 已归档
+// section behind the onboarding EmptyState: with an empty active list and
+// archived sessions present, the rail renders with a light active-empty
+// hint and the archived section auto-expanded (restore is one click away).
+describe('Sidebar — all-archived rail (卡A 收尾)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    vi.clearAllMocks()
+  })
+
+  it('shows the rail (hint + auto-expanded archived section) instead of onboarding when only archived sessions exist', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSessions).mockResolvedValue([] as any)
+    vi.mocked(api.listArchivedSessions).mockResolvedValue([
+      { id: 'arch-1', title: 'Old project chat', updated_at: Date.now() - 3600_000 },
+    ] as any)
+    render(wrap(<Sidebar />))
+    // The rail (not the onboarding EmptyState) once the archived lens lands.
+    const toggle = await screen.findByTestId('sidebar-archived-toggle')
+    expect(screen.queryByText('Start your first chat')).not.toBeInTheDocument()
+    // The light active-area hint via the new i18n key.
+    expect(screen.getByTestId('sidebar-active-empty-hint')).toBeInTheDocument()
+    // The 已归档 section defaults to expanded in this scenario only.
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('archived-row-arch-1')).toBeInTheDocument()
+    // The collapse interaction still works (aria-expanded flips).
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('archived-row-arch-1')).not.toBeInTheDocument()
+  })
+
+  it('keeps the onboarding EmptyState when both the active and archived lists are empty', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSessions).mockResolvedValue([] as any)
+    vi.mocked(api.listArchivedSessions).mockResolvedValue([] as any)
+    render(wrap(<Sidebar />))
+    expect(await screen.findByText('Start your first chat')).toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-archived-section')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-active-empty-hint')).not.toBeInTheDocument()
+  })
+
+  it('keeps the archived section collapsed by default when active sessions exist', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSessions).mockResolvedValue([
+      { id: 's1', title: 'Alpha Chat', created_at: Date.now(), message_count: 0 },
+    ] as any)
+    vi.mocked(api.listArchivedSessions).mockResolvedValue([
+      { id: 'arch-1', title: 'Old project chat', updated_at: Date.now() - 3600_000 },
+    ] as any)
+    render(wrap(<Sidebar />))
+    const toggle = await screen.findByTestId('sidebar-archived-toggle')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('sidebar-active-empty-hint')).not.toBeInTheDocument()
     expect(screen.queryByText('Start your first chat')).not.toBeInTheDocument()
   })
 })

@@ -1,0 +1,109 @@
+{
+  "name": "multi-turn-stream",
+  "description": "两轮流式 — 60 分片长文本 + 气泡拼接断言 + 贴底 + 第二轮 q-id 递增",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-multiturn",
+        "title": "Long stream",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "给我讲一个关于海湾的长故事",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "The bay holds its breath at dawn, ",
+            "while fishing boats unfold ",
+            "their orange sails one by one. ",
+            "潮水退去，沙滩上留下",
+            "一条发光的弧线，",
+            "like a signature the ocean ",
+            "writes and erases daily. ",
+            "远处的灯塔眨了眨眼，",
+            "counting the waves so ",
+            "nobody gets lost at sea. ",
+            "Every tide brings ",
+            "The bay holds its breath at dawn, ",
+            "while fishing boats unfold ",
+            "their orange sails one by one. ",
+            "潮水退去，沙滩上留下",
+            "一条发光的弧线，",
+            "like a signature the ocean ",
+            "writes and erases daily. ",
+            "远处的灯塔眨了眨眼，",
+            "counting the waves so ",
+            "nobody gets lost at sea. ",
+            "Every tide brings ",
+            "The bay holds its breath at dawn, ",
+            "while fishing boats unfold ",
+            "their orange sails one by one. ",
+            "潮水退去，沙滩上留下",
+            "一条发光的弧线，",
+            "like a signature the ocean ",
+            "writes and erases daily. ",
+            "远处的灯塔眨了眨眼，",
+            "counting the waves so ",
+            "nobody gets lost at sea. ",
+            "Every tide brings ",
+            "The bay holds its breath at dawn, ",
+            "while fishing boats unfold ",
+            "their orange sails one by one. ",
+            "潮水退去，沙滩上留下",
+            "一条发光的弧线，",
+            "like a signature the ocean ",
+            "writes and erases daily. ",
+            "远处的灯塔眨了眨眼，",
+            "counting the waves so ",
+            "nobody gets lost at sea. ",
+            "Every tide brings ",
+            "The bay holds its breath at dawn, ",
+            "while fishing boats unfold ",
+            "their orange sails one by one. ",
+            "潮水退去，沙滩上留下",
+            "一条发光的弧线，",
+            "like a signature the ocean ",
+            "writes and erases daily. ",
+            "远处的灯塔眨了眨眼，",
+            "counting the waves so ",
+            "nobody gets lost at sea. ",
+            "Every tide brings ",
+            "The bay holds its breath at dawn, ",
+            "while fishing boats unfold ",
+            "their orange sails one by one. ",
+            "潮水退去，沙滩上留下",
+            "一条发光的弧线，"
+          ],
+          "chunkDelayMs": 30
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    },
+    {
+      "user": "把故事压缩成一句话",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "一句话版本：",
+            "海湾每天日出时",
+            "重新写下自己 🌊"
+          ],
+          "chunkDelayMs": 250
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

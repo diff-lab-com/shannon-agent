@@ -6,7 +6,8 @@ interface LoadingStateProps {
 }
 
 export default function LoadingState({ label, size = 'md' }: LoadingStateProps) {
-  const iconClass = size === 'lg' ? 'text-[48px]' : size === 'sm' ? 'text-[20px]' : 'text-[32px]'
+  // Icon scale classes (index.css): lg→icon-2xl(48) md→icon-xl(32) sm→icon-md(20)
+  const iconClass = size === 'lg' ? 'icon-2xl' : size === 'sm' ? 'icon-md' : 'icon-xl'
   const pyClass = size === 'lg' ? 'py-3xl' : size === 'sm' ? 'py-sm' : 'py-xl'
   return (
     <div

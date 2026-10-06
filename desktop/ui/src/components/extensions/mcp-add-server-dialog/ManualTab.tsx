@@ -76,7 +76,7 @@ export function ManualTab({ onInstalled }: { onInstalled: () => void }) {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={t('extensions.mcp.serverName.placeholder')}
-          className="w-full px-sm py-xs rounded border border-outline-variant text-label-sm bg-surface"
+          className="w-full px-sm py-xs rounded-sm border border-outline-variant text-label-sm bg-surface"
           disabled={busy}
         />
       </label>
@@ -89,7 +89,7 @@ export function ManualTab({ onInstalled }: { onInstalled: () => void }) {
           value={command}
           onChange={(e) => setCommand(e.target.value)}
           placeholder="npx"
-          className="w-full px-sm py-xs rounded border border-outline-variant text-label-sm bg-surface font-mono"
+          className="w-full px-sm py-xs rounded-sm border border-outline-variant text-label-sm bg-surface font-mono"
           disabled={busy}
         />
       </label>
@@ -102,7 +102,7 @@ export function ManualTab({ onInstalled }: { onInstalled: () => void }) {
           value={argsText}
           onChange={(e) => setArgsText(e.target.value)}
           placeholder="-y @modelcontextprotocol/server-filesystem /tmp"
-          className="w-full px-sm py-xs rounded border border-outline-variant text-label-sm bg-surface font-mono"
+          className="w-full px-sm py-xs rounded-sm border border-outline-variant text-label-sm bg-surface font-mono"
           disabled={busy}
         />
       </label>
@@ -115,7 +115,7 @@ export function ManualTab({ onInstalled }: { onInstalled: () => void }) {
           onChange={(e) => setEnvText(e.target.value)}
           rows={3}
           placeholder={"ROOT=/tmp\nLOG_LEVEL=info"}
-          className="w-full px-sm py-xs rounded border border-outline-variant text-label-sm bg-surface font-mono"
+          className="w-full px-sm py-xs rounded-sm border border-outline-variant text-label-sm bg-surface font-mono"
           disabled={busy}
         />
       </label>

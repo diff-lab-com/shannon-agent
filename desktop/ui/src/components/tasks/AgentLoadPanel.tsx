@@ -80,13 +80,13 @@ export default function AgentLoadPanel({ agents }: AgentLoadPanelProps) {
   }, [rows])
 
   return (
-    <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
+    <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1">
       <div className="flex items-center justify-between mb-md">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-sm">
           <span className="material-symbols-outlined icon-md text-on-surface">speed</span>
-          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.agentLoadPanel.title')}</h3>
+          <h3 className="font-headline-md text-body-lg font-bold text-on-surface">{t('tasks.agentLoadPanel.title')}</h3>
         </div>
-        <span className="text-label-sm text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full border border-outline-variant/20">
+        <span className="text-label-sm text-on-surface-variant bg-surface-container px-sm py-0.5 rounded-full border border-outline-variant/20">
           {intl.formatMessage({ id: 'tasks.agentLoadPanel.activeIdle' }, { active: stats.active, idle: stats.idle })}
         </span>
       </div>
@@ -100,16 +100,16 @@ export default function AgentLoadPanel({ agents }: AgentLoadPanelProps) {
           {/* Summary stats */}
           <div className="grid grid-cols-3 gap-sm mb-md">
             <div className="bg-surface-container-low rounded-xl p-sm border border-outline-variant/20 text-center">
-              <div className="text-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">{t('tasks.agentLoadPanel.active')}</div>
-              <div className="font-headline-md text-[18px] font-bold text-primary">{stats.active}</div>
+              <div className="text-label-sm text-label-2xs text-on-surface-variant uppercase tracking-wider">{t('tasks.agentLoadPanel.active')}</div>
+              <div className="font-headline-md text-body-lg font-bold text-primary">{stats.active}</div>
             </div>
             <div className="bg-surface-container-low rounded-xl p-sm border border-outline-variant/20 text-center">
-              <div className="text-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">{t('tasks.agentLoadPanel.avgLoad')}</div>
-              <div className="font-headline-md text-[18px] font-bold text-on-surface">{stats.avgLoad}%</div>
+              <div className="text-label-sm text-label-2xs text-on-surface-variant uppercase tracking-wider">{t('tasks.agentLoadPanel.avgLoad')}</div>
+              <div className="font-headline-md text-body-lg font-bold text-on-surface">{stats.avgLoad}%</div>
             </div>
             <div className="bg-surface-container-low rounded-xl p-sm border border-outline-variant/20 text-center">
-              <div className="text-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">{t('tasks.agentLoadPanel.peak')}</div>
-              <div className="font-headline-md text-[18px] font-bold text-tertiary">{stats.peakLoad}%</div>
+              <div className="text-label-sm text-label-2xs text-on-surface-variant uppercase tracking-wider">{t('tasks.agentLoadPanel.peak')}</div>
+              <div className="font-headline-md text-body-lg font-bold text-tertiary">{stats.peakLoad}%</div>
             </div>
           </div>
 
@@ -117,7 +117,7 @@ export default function AgentLoadPanel({ agents }: AgentLoadPanelProps) {
           <ol className="space-y-sm">
             {rows.map(r => (
               <li key={r.id}>
-                <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center justify-between mb-xs">
                   <div className="flex items-center gap-xs min-w-0">
                     <span className="w-2 h-2 rounded-full shrink-0" aria-hidden="true">
                       <span className={cn('block w-2 h-2 rounded-full', statusColor(r.status))} />
@@ -142,7 +142,7 @@ export default function AgentLoadPanel({ agents }: AgentLoadPanelProps) {
                   aria-label={intl.formatMessage({ id: 'tasks.agentLoadPanel.loadAria' }, { name: r.name })}
                 >
                   <div
-                    className={cn('h-full', statusColor(r.status), 'rounded-full transition-all duration-500', r.active ? 'animate-pulse' : '')}
+                    className={cn('h-full', statusColor(r.status), 'rounded-full transition-all duration-(--duration-slower)', r.active ? 'animate-pulse' : '')}
                     style={{ width: `${r.load}%` }}
                   />
                 </div>

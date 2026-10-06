@@ -49,20 +49,45 @@ gen-protocol:
     cargo run -p shannon-api-protocol --bin gen-ts
     cd gateway && pnpm typecheck
 
+# ---------- Check ----------
+
+# Fast type-check. On Linux hosts whose system libspa/pipewire headers are too
+# old for libspa-sys (e.g. Ubuntu 22.04 / pipewire 0.3.48), the xcap → pipewire
+# → libspa chain fails inside dependency source — an environment mismatch, not
+# a repo bug. Retries without shannon-desktop's `preview-capture` feature.
+# Docs: CONTRIBUTING.md → "Desktop build on Linux (libspa/pipewire)".
+check:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if out="$(cargo check --workspace 2>&1)"; then
+        exit 0
+    fi
+    if echo "$out" | grep -qE 'in crate .spa_sys.|registry/src/[^[:space:]]*/libspa-[0-9]'; then
+        echo "⚠ libspa/pipewire header skew — retrying without shannon-desktop's preview-capture (see CONTRIBUTING.md → 'Desktop build on Linux (libspa/pipewire)')"
+        cargo check --workspace --exclude shannon-desktop || exit 1
+        exec cargo check -p shannon-desktop --no-default-features --features tauri
+    fi
+    printf '%s\n' "$out"
+    exit 1
+
 # ---------- Lint / fmt ----------
 
 fmt:
     cargo fmt --all
 
-# Note: clippy runs against the workspace library + bin targets only (matches
-# the original shannon-code CI gate). Test targets are intentionally NOT
-# linted here -- the upstream test code uses `unwrap()` extensively and was
-# never subject to `clippy --all-targets` in the original justfile; re-linting
-# it would block CI for pre-existing patterns the migration does not own.
+# Clippy runs against EVERY target (lib, bins, tests, benches, examples) via
+# --all-targets, matching the CI Clippy job. All targets are clippy-clean —
+# including the shannon-core `unwrap_used` warn (tests use expect()/expect_err()
+# with reasons) — so any regression in any target fails this gate.
 lint:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
     cd desktop/ui && pnpm lint
     cd gateway && pnpm typecheck
+
+# C5: fast local guard — bare `#[allow(dead_code)]` added by the working
+# tree vs origin/dev (full baseline rule: architecture_invariants test, run
+# by CI's Test job). Implemented as a Node script for cross-platform use:
+#   node scripts/check-dead-code-keep.mjs
 
 # ── Dev experience (从 shannon-code justfile 恢复) ──
 #
@@ -73,13 +98,13 @@ lint:
 # scenarios  - YAML 声明式场景测试
 
 # 提交前快路径(跳过 doctest,跳过 release lint)
-dev:
+dev: version-check
     cargo check --workspace
-    cargo clippy --workspace
-    cargo nextest run --workspace || cargo test --workspace -- --test-threads=1
+    cargo clippy --workspace --all-targets
+    @cargo nextest run --workspace || (echo "✗ tests failed — reproduce CI behavior with: just test-ci (retries=2, fail-fast=false)" && exit 1)
 
-# 完整测试(nextest + doctests)
-test-all: test-rust
+# 完整测试(CI 同参 + doctests)
+test-all: test-ci
     cargo test --workspace --doc
 
 # 微基准
@@ -114,8 +139,18 @@ eval-diff a b:
 
 # ---------- Test ----------
 
+# 快路径:默认 profile(fail-fast,无重试)— 开发者日常快速反馈。
 test-rust:
-    cargo nextest run --workspace || cargo test --workspace -- --test-threads=1
+    @cargo nextest run --workspace || (echo "✗ tests failed — reproduce CI behavior with: just test-ci (retries=2, fail-fast=false)" && exit 1)
+
+# CI 同参复现（retries=2、fail-fast=false、core/commands 串行组，见 .config/nextest.toml）
+test-ci:
+    cargo nextest run --workspace --profile ci
+
+# 聊天 wire 级契约冒烟（R6）:fake SSE LLM + 真实 shannon-server（loopback TCP）,
+# 全离线秒级。防「装了→能用」最后一公里断裂——SSE 帧名/顺序/payload 即合同。
+test-contract:
+    @cargo nextest run -p shannon-server --test chat_contract_smoke
 
 test-ui:
     cd desktop/ui && pnpm test:ci
@@ -126,6 +161,14 @@ test-gateway:
 test: test-rust test-ui test-gateway
 
 # ---------- Supply chain ----------
+
+# Version lockstep guard (review F48): the six release-version sources (root
+# Cargo.toml + desktop/Cargo.toml + tauri.conf.json + gateway/package.json +
+# desktop/ui/package.json + shannon-plugin-api) must agree with the workspace
+# version. Wired into `just dev`; ci.yml's facade-facts job runs the same
+# script so drift can never reach release.yml's prep guard again.
+version-check:
+    @bash scripts/check-version-lockstep.sh
 
 deny:
     cargo deny check
@@ -147,7 +190,7 @@ ci: fmt lint deny gen-protocol test
 # CI regenerates this as an artifact on every run (ci.yml `Generate Metrics`);
 # this recipe refreshes the *committed* snapshot locally — e.g. before a
 # test-count-changing PR or a release. See .github/workflows/metrics-update.yml
-# for the (opt-in) automated weekly refresh.
+# for the automated weekly refresh (cron fires from `main`; PRs the result).
 metrics:
     bash scripts/gen-metrics.sh
 
@@ -295,13 +338,16 @@ kpi-clean-build:
 # ---------- Release prep: bump every version source, commit, tag ----------
 # Usage: just release-prep 0.7.0
 #   then: git push && git push origin v0.7.0   (triggers release.yml)
-# Bumps the 4 independent version sources so tauri + gateway
-# + `shannon --version` all agree with the tag:
+# Bumps the 5 version sources the release.yml guard checks, so tauri
+# + gateway + the desktop UI + `shannon --version` all agree with the tag:
 #   1) Cargo.toml workspace.package.version  (crates with version.workspace=true inherit)
-#   2) desktop/tauri.conf.json  "version"  (Tauri does NOT read the cargo workspace)
-#   3) gateway/package.json        "version"
-#   4) `shannon --version` display value is tied to the workspace version
-#      automatically via clap::crate_version!() in shannon-cli (see task C).
+#   2) desktop/Cargo.toml       [package] version (NOT workspace-inherited)
+#   3) desktop/tauri.conf.json  "version"  (Tauri does NOT read the cargo workspace)
+#   4) gateway/package.json     "version"
+#   5) desktop/ui/package.json  "version"  (left at 0.6.0 from 0.8→0.10 —
+#      now guarded by release.yml's prep job, so keep it in lockstep here)
+#   `shannon --version` itself is tied to the workspace version automatically
+#   via clap::crate_version!() in shannon-cli (see task C).
 release-prep version:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -321,9 +367,11 @@ release-prep version:
     sed -i 's/^    "version": ".*"/    "version": "{{version}}"/' desktop/tauri.conf.json
     # 4) gateway (independent TS package)
     sed -i 's/^  "version": ".*"/  "version": "{{version}}"/' gateway/package.json
+    # 5) desktop UI (independent TS package; guarded by release.yml since 2026-09)
+    sed -i 's/^  "version": ".*"/  "version": "{{version}}"/' desktop/ui/package.json
     # `shannon --version` is tied to the workspace version automatically via
     # env!("CARGO_PKG_VERSION") in shannon-cli (version.workspace=true) — no sed.
-    git add Cargo.toml desktop/Cargo.toml desktop/tauri.conf.json gateway/package.json
+    git add Cargo.toml desktop/Cargo.toml desktop/tauri.conf.json gateway/package.json desktop/ui/package.json
     git commit -m "chore(release): v{{version}}"
     git tag v{{version}}
     echo "✅ tagged v{{version}} — run: git push origin dev && git push origin v{{version}}"

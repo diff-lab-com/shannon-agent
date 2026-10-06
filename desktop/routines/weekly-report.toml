@@ -1,0 +1,17 @@
+id = "weekly-report"
+name = "Weekly report draft"
+description = "Every Friday at 17:00, read this week's session history and produced files and draft a weekly report document (Markdown in output/). Reads local data only — no integrations required."
+category = "productivity"
+trigger_type = "cron"
+cron_expr = "0 17 * * 5"
+timezone = ""
+prompt = """
+Draft this week's report. Read the local session history under ~/.shannon/sessions/
+(events.jsonl per session — filter to entries from the last 7 days) and list what was
+worked on, then walk the project's git log for commits merged this week and the files
+added to output/ (documents, tables, exports). Group the findings by theme, and write
+a weekly report draft to output/weekly-report-<YYYYMMDD>.md with these sections:
+Highlights, Progress by theme, Documents produced, Open threads / risks for next week.
+Cite concrete artifacts (session dates, commit subjects, output filenames) for every
+claim — if a section has nothing to cite, say so plainly instead of padding it.
+"""

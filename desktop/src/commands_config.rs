@@ -3,6 +3,9 @@
 //! Extracted from `commands.rs` as part of S2 P1.1 (commands.rs split).
 
 use serde::{Deserialize, Serialize};
+use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 
 use crate::commands::AppState;
@@ -126,11 +129,16 @@ async fn land_profile_in_engine_store(
 /// route write paths through the store without touching the legacy
 /// `DesktopConfig.{provider,api_key,base_url,model}` mirror fields
 /// (P1.2-A — the A1 fix).
+///
+/// R3-2: reads the **active** model profile (`active_profile_key()`,
+/// `"default"` when unset) — the same roster `resolve_active_target`
+/// builds the global client config from — so configure keeps hitting the
+/// profile the user switched to instead of a hardcoded key.
 fn active_provider_id_and_kind(
     store: &shannon_core::provider_config_store::ProviderConfigStore,
 ) -> Option<(String, String)> {
     let cfg = store.config();
-    let pf = cfg.profiles.get("default")?;
+    let pf = cfg.active_model_profile()?;
     let id = pf.active_target.provider_id.clone();
     if id.is_empty() {
         return None;
@@ -144,12 +152,14 @@ fn active_provider_id_and_kind(
 /// id is the current `active_target.model_id` (preserved across the
 /// switch so a `/model X` followed by `configure('provider', Y)`
 /// keeps the chosen model in the new provider's default slot).
+/// R3-2: searched in the ACTIVE model profile (see
+/// [`active_provider_id_and_kind`]).
 fn find_provider_by_kind(
     store: &shannon_core::provider_config_store::ProviderConfigStore,
     kind_str: &str,
 ) -> Option<(String, String)> {
     let cfg = store.config();
-    let pf = cfg.profiles.get("default")?;
+    let pf = cfg.active_model_profile()?;
     let profile = pf
         .providers
         .iter()
@@ -163,7 +173,11 @@ fn find_provider_by_kind(
 /// mirror in the reverse direction). The wire format is also kebab-case
 /// per `#[serde(rename_all = "kebab-case")]` on the enum, so this stays
 /// the one canonical mapping the desktop needs.
-fn provider_kind_slug(k: &shannon_types::provider_config::ProviderKind) -> &'static str {
+///
+/// `pub(crate)` so the R2-1 session-model override resolution
+/// (`commands_chat::apply_session_override`) matches provider profiles
+/// against the same slug vocabulary the UI sends.
+pub(crate) fn provider_kind_slug(k: &shannon_types::provider_config::ProviderKind) -> &'static str {
     use shannon_types::provider_config::ProviderKind as K;
     match k {
         K::Anthropic => "anthropic",
@@ -190,7 +204,10 @@ fn provider_kind_slug(k: &shannon_types::provider_config::ProviderKind) -> &'sta
 /// overrides, so this just locks, computes, and writes
 /// `state.client_config` in place. Drops both locks before
 /// returning.
-async fn rebuild_client_config_from_store(
+/// Rebuild `AppState::client_config` from the engine store's active target
+/// (`pub(crate)` so the R3-2 `set_active_provider_profile` command re-points
+/// the global default at the freshly-switched profile).
+pub(crate) async fn rebuild_client_config_from_store(
     state: &tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let overrides = {
@@ -239,6 +256,57 @@ async fn remove_profile_from_engine_store(
     .await
 }
 
+/// 卡A GC: parse the `session_retention_days` wire value into the stored
+/// window. Accepts a non-negative number of days — negatives are excluded
+/// by the `u32` parse — where `0` (the UI's 永不 gear) maps to `None`
+/// ("never auto-delete", the standing default) and anything above 3650
+/// clamps to 3650 so a stray value cannot park an effectively eternal
+/// window in the config.
+fn parse_session_retention_days(value: &str) -> Result<Option<u32>, String> {
+    let days: u32 = value
+        .trim()
+        .parse()
+        .map_err(|e| format!("Invalid session_retention_days `{value}`: {e}"))?;
+    Ok(if days == 0 {
+        None
+    } else {
+        Some(days.min(3650))
+    })
+}
+
+/// Settings R3 T7: parse the `session.auto_archive_days` wire value into the
+/// stored window. There is no 永不 gear — disabling is
+/// `session.auto_archive_enabled`'s job — so the value clamps into
+/// `1..=365`: the stored config always describes a scanable window, no
+/// matter what a stale client or hand edit sent.
+fn parse_auto_archive_days(value: &str) -> Result<u32, String> {
+    let days: u32 = value
+        .trim()
+        .parse()
+        .map_err(|e| format!("Invalid session.auto_archive_days `{value}`: {e}"))?;
+    Ok(days.clamp(1, 365))
+}
+
+/// P2-1: parse the `monthly_budget_usd` wire value into the stored budget.
+/// `""` / `"null"` / `"0"` (and any parsed non-positive or non-finite
+/// amount) clear the budget — `None` = no cap, the standing default; a
+/// non-numeric non-empty value is an error so a typo can't silently drop
+/// the user's budget.
+fn parse_monthly_budget_usd(value: &str) -> Result<Option<f64>, String> {
+    let raw = value.trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("null") {
+        return Ok(None);
+    }
+    let usd: f64 = raw
+        .parse()
+        .map_err(|e| format!("Invalid monthly_budget_usd `{raw}`: {e}"))?;
+    Ok(if usd.is_finite() && usd > 0.0 {
+        Some(usd)
+    } else {
+        None
+    })
+}
+
 /// Configuration update payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigUpdate {
@@ -263,6 +331,244 @@ pub(crate) fn validate_sandbox_mode(value: &str) -> Result<Option<String>, Strin
     }
 }
 
+// === Settings R3 T4 (B1) — `network.*` configure arms ===
+//
+// The corporate-network trio (HTTP proxy / NO_PROXY / custom CA). Validation
+// lives in pure functions below (home path injected, no process-state
+// mutation) so the round-trip / error tests run without touching `HOME`;
+// `configure`'s arm only adds persist + CONFIG_UPDATED on top.
+
+/// `~` expansion for user-typed CA paths. `home` is injected for tests
+/// (same resolution as `config::dirs_home` at call sites). A path that does
+/// not start with `~` passes through verbatim; a bare `~` (or `~/x` with no
+/// home available) comes back as-is so the caller's existence check gives
+/// the user an honest error instead of a silent mangle.
+fn expand_tilde(value: &str, home: Option<&std::path::Path>) -> String {
+    if value == "~" {
+        return home
+            .map(|h| h.to_string_lossy().into_owned())
+            .unwrap_or_else(|| value.to_string());
+    }
+    if let Some(rest) = value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
+        if let Some(h) = home {
+            return h.join(rest).to_string_lossy().into_owned();
+        }
+    }
+    value.to_string()
+}
+
+/// Validate + normalize `network.ca_cert_path`: trim, empty = None (clear),
+/// `~` expand, and the file MUST exist — the startup env injection points
+/// subprocesses at this path verbatim, so a dangling path has to be refused
+/// at write time, not discovered as TLS failures after a restart.
+pub(crate) fn validate_ca_cert_path(
+    value: &str,
+    home: Option<&std::path::Path>,
+) -> Result<Option<String>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let expanded = expand_tilde(trimmed, home);
+    let path = std::path::PathBuf::from(&expanded);
+    if !path.is_file() {
+        return Err(format!(
+            "CA certificate file not found: {expanded} — the path must point at an existing PEM bundle"
+        ));
+    }
+    Ok(Some(expanded))
+}
+
+/// Core of the three `network.*` configure arms: validate the value and
+/// write the matching in-memory field. Persist + emit stay with
+/// `configure`; `home` is injected so tests never mutate the process env.
+pub(crate) fn apply_network_config_arm(
+    cfg: &mut DesktopConfig,
+    key: &str,
+    value: &str,
+    home: Option<&std::path::Path>,
+) -> Result<(), String> {
+    match key {
+        "network.proxy_url" => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                // R1: empty = clear — the implicit env fallback keeps working.
+                cfg.network_proxy_url = None;
+            } else if trimmed.to_ascii_lowercase().starts_with("http://")
+                || trimmed.to_ascii_lowercase().starts_with("https://")
+            {
+                cfg.network_proxy_url = Some(trimmed.to_string());
+            } else {
+                return Err(format!(
+                    "Invalid {key}: `{trimmed}` — the proxy URL must start with http:// or https://"
+                ));
+            }
+        }
+        "network.no_proxy" => {
+            let trimmed = value.trim();
+            cfg.network_no_proxy = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+        "network.ca_cert_path" => {
+            cfg.network_ca_cert_path = validate_ca_cert_path(value, home)?;
+        }
+        other => return Err(format!("Unknown network config key: {other}")),
+    }
+    Ok(())
+}
+
+// === Grouped boolean toggles (`configure`) ===
+//
+// The key set here backs the Settings → Advanced switches. It used to live
+// only in `configure`'s match arms, and `dream_enabled` /
+// `dream_skill_distill_enabled` (plus the older `skill_loop_enabled` /
+// `skill_detection_enabled`) never got an arm at all — every one of those
+// toggles errored with "Unknown config key" and snapped back. The grouped
+// arm now routes on [`is_boolean_toggle_key`], which is defined in terms of
+// [`set_boolean_toggle`], so the arm and the applier cannot drift apart.
+
+/// Apply one recognized boolean toggle key to `cfg`. Unknown keys are an
+/// error — [`is_boolean_toggle_key`] is defined in terms of this function,
+/// so `configure`'s grouped arm can never route a key here that this
+/// function does not know.
+fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Result<(), String> {
+    match key {
+        "memory_enabled" => cfg.memory_enabled = Some(enabled),
+        "telemetry" => cfg.telemetry_enabled = Some(enabled),
+        "encryption" => cfg.encryption_enabled = Some(enabled),
+        "debug_console" => cfg.debug_console = Some(enabled),
+        "skill_loop_enabled" => cfg.skill_loop_enabled = enabled,
+        "skill_detection_enabled" => cfg.skill_detection_enabled = enabled,
+        "dream_enabled" => cfg.dream_enabled = enabled,
+        "dream_skill_distill_enabled" => cfg.dream_skill_distill_enabled = enabled,
+        // 卡A GC: the session archive auto-clean master switch. Default off,
+        // and (per the config docs) an enabled GC still only ever prunes
+        // **archived** sessions past the retention window.
+        "session_gc_enabled" => cfg.session_gc_enabled = enabled,
+        // Settings R3 T3: hardware-acceleration escape hatch. Persist-only
+        // here — the env injection happens once, before the webview is
+        // created, so a change needs an app restart (the UI shows the
+        // EffectBadge restart-app).
+        "hardware_acceleration" => cfg.hardware_acceleration = enabled,
+        // Settings R3 T3: block idle sleep while agent runs stream. Read
+        // live at the start of every run — no restart, no side effect here.
+        "power.block_sleep_during_tasks" => cfg.power_block_sleep_during_tasks = enabled,
+        // Settings R3 T6: master switch for the engine's automatic context
+        // compaction. Read when each message's engine is built — the engine
+        // is rebuilt per message, so a flip applies to the NEXT message.
+        "context.auto_compact" => cfg.context_auto_compact = enabled,
+        // Settings R3 T7: master switch for the timed auto-archive scan.
+        // Read live at the top of every scan pass (6h cadence), so a flip
+        // lands on the next pass — no restart.
+        "session.auto_archive_enabled" => cfg.session_auto_archive_enabled = enabled,
+        // Settings R3 T8: auto-continue for unanswered agent questions
+        // (`ask_user_question`). Read live by the ask_user handler before
+        // each question's wait — a flip applies to the NEXT question.
+        "chat.ask_user_auto_continue" => cfg.chat_ask_user_auto_continue = enabled,
+        // D5 方案①: 主动任务推荐 presentation toggle. The backend never
+        // gates anything on it — the UI reads it live for the completion
+        // chips + welcome-card refresh/filter, so a flip is immediate.
+        "suggestions.enabled" => cfg.suggestions_enabled = enabled,
+        other => return Err(format!("Unrecognized boolean key: {other}")),
+    }
+    Ok(())
+}
+
+/// True when `configure`'s grouped boolean arm handles `key` — by definition
+/// exactly the keys [`set_boolean_toggle`] accepts. Cheap: the probe writes
+/// into a throwaway default config.
+fn is_boolean_toggle_key(key: &str) -> bool {
+    set_boolean_toggle(&mut DesktopConfig::default(), key, false).is_ok()
+}
+
+/// Body of the grouped boolean-toggle arm of [`configure`], with the disk
+/// persist step injected: tests capture the snapshot instead of writing the
+/// real `~/.shannon/desktop/config.json` (tests never mutate the process
+/// `HOME`). Parses the value, applies it to the in-memory config — the same
+/// state [`get_config`] reads back — persists, then emits `CONFIG_UPDATED`
+/// so other windows and the tray follow.
+async fn apply_boolean_toggle_arm<R, P>(
+    state: &AppState,
+    app_handle: &tauri::AppHandle<R>,
+    update: &ConfigUpdate,
+    persist: P,
+) -> Result<(), String>
+where
+    R: tauri::Runtime,
+    P: FnOnce(DesktopConfig) -> Result<(), String>,
+{
+    let enabled = match update.value.to_ascii_lowercase().as_str() {
+        "true" => true,
+        "false" => false,
+        _ => {
+            return Err(format!(
+                "Invalid boolean for {}: {}",
+                update.key, update.value
+            ));
+        }
+    };
+    {
+        let mut desktop_cfg = state.desktop_config.write().await;
+        set_boolean_toggle(&mut desktop_cfg, &update.key, enabled)?;
+    }
+    persist(state.desktop_config.read().await.clone())?;
+
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: update.key.clone(),
+            value: update.value.clone(),
+        },
+    );
+
+    Ok(())
+}
+
+/// B1-8 [R1-4] (review decision 1): normalize a `configure('model')` value
+/// to the canonical catalog id for the given provider.
+///
+/// `pub(crate)` so the R2-1 `set_session_model` command applies the
+/// identical normalization to a session override — one legacy-name repair,
+/// two entry points.
+///
+/// The Header historically wrote the display NAME (`model.name`) into this
+/// key, so existing `providers.toml` files carry display names (or aliases)
+/// in `active_target.model_id` — and `provider_resolver` passes that stored
+/// string through as the API `model` parameter verbatim, which fails for
+/// every model whose display_name ≠ id. One normalization at the write
+/// entry repairs those legacy values:
+///
+/// - exact catalog id → unchanged;
+/// - display_name or alias (case-insensitive) of a model of the SAME
+///   provider → rewritten to that model's id;
+/// - anything else (unknown / custom ids, local ollama tags) → unchanged,
+///   preserving the resolver's passthrough contract.
+pub(crate) fn normalize_model_id(
+    provider: shannon_engine::api::LlmProvider,
+    value: &str,
+) -> String {
+    let models = shannon_core::model_registry::merged_models_for_provider(provider);
+    // Exact id: pass through untouched (the hot path post-decision-1).
+    if models.iter().any(|m| m.id == value) {
+        return value.to_string();
+    }
+    // Legacy display_name / alias spellings → the canonical id.
+    let lower = value.to_lowercase();
+    if let Some(m) = models.iter().find(|m| {
+        m.display_name.to_lowercase() == lower
+            || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(&lower))
+    }) {
+        return m.id.to_string();
+    }
+    value.to_string()
+}
+
 /// Update a single desktop config key. The frontend uses this for every
 /// settings panel mutation — model, api_key, theme, toggles, etc. Persists
 /// the new config to `~/.shannon/desktop/config.json` and emits
@@ -281,7 +587,10 @@ pub async fn configure(
             // it by `rebuild_client_config_from_store` so any reader
             // (`send_message`, `get_status`, etc.) sees the new model
             // on the next read.
-            let new_model_id = update.value.clone();
+            //
+            // B1-8 [R1-4]: the value is normalized to the catalog id here —
+            // legacy clients wrote the display name, and the resolver
+            // passes the stored string through verbatim.
             let kind_str = with_engine_store(&state, |svc| {
                 let (_, kind_str) = active_provider_id_and_kind(svc.store()).ok_or_else(|| {
                     "configure('model'): no active provider — add one in Settings → Models first"
@@ -290,6 +599,7 @@ pub async fn configure(
                 let provider = llm_provider_for_active_mirror(&kind_str).ok_or_else(|| {
                     format!("configure('model'): unsupported active kind `{kind_str}`")
                 })?;
+                let new_model_id = normalize_model_id(provider.clone(), &update.value);
                 let mut locked = svc
                     .lock()
                     .map_err(|e| format!("could not lock providers.toml: {e}"))?;
@@ -299,7 +609,7 @@ pub async fn configure(
                 locked
                     .set_active(&provider, &new_model_id)
                     .map_err(|e| format!("could not persist providers.toml: {e}"))?;
-                Ok(kind_str)
+                Ok((kind_str, new_model_id))
             })
             .await?;
             rebuild_client_config_from_store(&state).await?;
@@ -307,10 +617,10 @@ pub async fn configure(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
                     key: "model".into(),
-                    value: new_model_id,
+                    value: kind_str.1,
                 },
             );
-            let _ = kind_str;
+            let _ = kind_str.0;
             Ok(())
         }
         "api_key" => {
@@ -498,6 +808,35 @@ pub async fn configure(
 
             Ok(())
         }
+        // R3-3 — plan/act phase-tier preferences (frozen keys `plan_tier` /
+        // `act_tier`). `inherit` / empty clears the preference (stored as
+        // None); a canonical tier name stores canonically; anything else is
+        // rejected so a typo can never silently disable the feature.
+        // Consulted per query by `resolve_client_config_for_session`.
+        "plan_tier" | "act_tier" => {
+            let validated = crate::phase_tier::validate_tier_pref_value(&update.value)?;
+            let mut desktop_cfg = state.desktop_config.write().await;
+            let validated_write = validated.clone();
+            if update.key == "plan_tier" {
+                desktop_cfg.plan_tier = validated;
+            } else {
+                desktop_cfg.act_tier = validated;
+            }
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: update.key.clone(),
+                    value: validated_write.unwrap_or_else(|| "inherit".into()),
+                },
+            );
+
+            Ok(())
+        }
         "sandbox.mode" => {
             // P1-3: frozen config key `sandbox.mode` — engine sandbox
             // vocabulary (`off` | `local` | `landlock`). Takes effect on the
@@ -551,6 +890,33 @@ pub async fn configure(
 
             Ok(())
         }
+        // Settings R3 T4 (B1) — corporate-network trio. Validation in
+        // [`apply_network_config_arm`] (proxy scheme / trim-to-clear / CA
+        // `~`-expansion + existence); the env injection itself happens once
+        // at startup ([`config::apply_network_env`]), so a change takes
+        // effect on the next app launch (UI shows the restart-app badge).
+        "network.proxy_url" | "network.no_proxy" | "network.ca_cert_path" => {
+            {
+                let mut desktop_cfg = state.desktop_config.write().await;
+                apply_network_config_arm(
+                    &mut desktop_cfg,
+                    &update.key,
+                    &update.value,
+                    config::dirs_home().as_deref(),
+                )?;
+            }
+            config::save_config(&state.desktop_config.read().await.clone())?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: update.key.clone(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
         "strategic_focus" => {
             let mut desktop_cfg = state.desktop_config.write().await;
             desktop_cfg.strategic_focus = Some(update.value.clone());
@@ -591,7 +957,12 @@ pub async fn configure(
 
             Ok(())
         }
-        "memory_enabled" | "telemetry" | "encryption" | "debug_console" => {
+        "agent_teams_enabled" => {
+            // B2: real sub-agent execution toggle. Unlike `sandbox.mode`
+            // this takes effect immediately — the tool consults the shared
+            // handle on every call, so enable injects a fresh TeamContext
+            // (with a lifecycle observer bridging to `subagent:start|stop`)
+            // and disable revokes it. In-flight sub-agent runs finish.
             let enabled = match update.value.to_ascii_lowercase().as_str() {
                 "true" => true,
                 "false" => false,
@@ -602,20 +973,17 @@ pub async fn configure(
                     ));
                 }
             };
-            let mut desktop_cfg = state.desktop_config.write().await;
-            match update.key.as_str() {
-                "memory_enabled" => desktop_cfg.memory_enabled = Some(enabled),
-                "telemetry" => desktop_cfg.telemetry_enabled = Some(enabled),
-                "encryption" => desktop_cfg.encryption_enabled = Some(enabled),
-                "debug_console" => desktop_cfg.debug_console = Some(enabled),
-                other => {
-                    return Err(format!("Unrecognized boolean key: {other}"));
-                }
+            {
+                let mut desktop_cfg = state.desktop_config.write().await;
+                desktop_cfg.agent_teams_enabled = enabled;
             }
+            config::save_config(&state.desktop_config.read().await.clone())?;
 
-            drop(desktop_cfg);
-            let desktop_cfg = state.desktop_config.read().await;
-            config::save_config(&desktop_cfg)?;
+            if enabled {
+                crate::agent_teams::enable(&state, app_handle.clone()).await?;
+            } else {
+                crate::agent_teams::disable(&state);
+            }
 
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
@@ -626,6 +994,46 @@ pub async fn configure(
             );
 
             Ok(())
+        }
+        // Settings R3 T3 — always-on "keep computer awake" switch. A
+        // dedicated arm (not the grouped toggle) because flipping it has an
+        // immediate side effect: start/stop the process-global wake lock.
+        "power.keep_awake" => {
+            let enabled = match update.value.to_ascii_lowercase().as_str() {
+                "true" => true,
+                "false" => false,
+                _ => {
+                    return Err(format!(
+                        "Invalid boolean for {}: {}",
+                        update.key, update.value
+                    ));
+                }
+            };
+            {
+                let mut desktop_cfg = state.desktop_config.write().await;
+                desktop_cfg.power_keep_awake = enabled;
+            }
+            config::save_config(&state.desktop_config.read().await.clone())?;
+            state.inner().apply_keep_awake(enabled);
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: update.key.clone(),
+                    value: update.value,
+                },
+            );
+            Ok(())
+        }
+        // Grouped boolean toggles (the Settings switches). The guard routes
+        // on `is_boolean_toggle_key`, so the arm and `set_boolean_toggle`
+        // share one key list — a recognized key (`dream_enabled`,
+        // `dream_skill_distill_enabled`, `skill_*`, …) can never fall
+        // through to `_ => Err("Unknown config key: …")` again.
+        _ if is_boolean_toggle_key(&update.key) => {
+            apply_boolean_toggle_arm(state.inner(), &app_handle, &update, |cfg| {
+                config::save_config(&cfg)
+            })
+            .await
         }
         "temperature" => {
             let parsed: f32 = update
@@ -671,6 +1079,52 @@ pub async fn configure(
 
             Ok(())
         }
+        "session_retention_days" => {
+            // 卡A GC: retention window for archived sessions. `0` (永不)
+            // stores as `None`; see [`parse_session_retention_days`]. The
+            // GC consults this live (with `session_gc_enabled`) — no
+            // restart needed.
+            let days = parse_session_retention_days(&update.value)?;
+            let mut desktop_cfg = state.desktop_config.write().await;
+            desktop_cfg.session_retention_days = days;
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "session_retention_days".into(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
+        "session.auto_archive_days" => {
+            // Settings R3 T7: auto-archive retention window. Unlike the GC
+            // window there is no 永不 — disabled is the master switch's job
+            // (`session.auto_archive_enabled`), so the value itself clamps
+            // into `1..=365`: the stored config always stays scanable.
+            let days = parse_auto_archive_days(&update.value)?;
+            let mut desktop_cfg = state.desktop_config.write().await;
+            desktop_cfg.session_auto_archive_days = days;
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "session.auto_archive_days".into(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
         "plan" => {
             let mut desktop_cfg = state.desktop_config.write().await;
             desktop_cfg.plan = Some(update.value.clone());
@@ -689,12 +1143,70 @@ pub async fn configure(
 
             Ok(())
         }
+        "monthly_budget_usd" => {
+            // P2-1: the user-set monthly spend budget the sidebar % bar and
+            // the 80/100% threshold alerts key on (see
+            // `usage_governance::get_usage_governance`). Empty/`null`/`0`
+            // clears it — the sidebar then shows the trailing 7-day cost.
+            let parsed = parse_monthly_budget_usd(&update.value)?;
+            let mut desktop_cfg = state.desktop_config.write().await;
+            desktop_cfg.monthly_budget_usd = parsed;
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "monthly_budget_usd".into(),
+                    value: parsed.map(|b| b.to_string()).unwrap_or_default(),
+                },
+            );
+
+            Ok(())
+        }
         "clear_cache" => {
             // P0-4: clear the active session's message buffer instead of
             // the (removed) `state.messages` field.
             let session = state.registry.get_or_create_active();
             let mut messages = session.messages.lock().await;
             messages.clear();
+            Ok(())
+        }
+        "effort_level" => {
+            // S3-5 (P2-19): the composer's effort sub-tier — the same key
+            // vocabulary the CLI `/effort` / `--effort` surface speaks, with
+            // the engine's own parser (`EffortLevel::parse`) as the single
+            // validator: `low|medium|standard|high|max`, case-insensitive;
+            // `medium` normalizes to the canonical `standard` so what's
+            // persisted is always an engine `Display` form. Stored GLOBAL
+            // (like the CLI's persisted config), applied per turn in the
+            // send path via `QueryEngine::set_effort`.
+            let parsed =
+                shannon_core::query_engine::EffortLevel::parse(&update.value).ok_or_else(|| {
+                    format!(
+                        "Invalid effort level `{}` — expected low|medium|standard|high|max",
+                        update.value
+                    )
+                })?;
+            let canonical = parsed.to_string();
+            {
+                let mut desktop_cfg = state.desktop_config.write().await;
+                desktop_cfg.effort_level = Some(canonical.clone());
+            }
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+            drop(desktop_cfg);
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "effort_level".into(),
+                    value: canonical,
+                },
+            );
+
             Ok(())
         }
         "factory_reset" => {
@@ -782,25 +1294,51 @@ pub async fn get_config(state: tauri::State<'_, AppState>) -> Result<DesktopConf
 /// The Welcome wizard uses this on mount to pre-select a provider + skip the
 /// API key entry step when the user already has `ANTHROPIC_API_KEY` etc. set
 /// in their shell.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetectedProvider {
     pub provider: String,
     pub has_api_key: bool,
 }
 
-/// Scan env vars for a known provider API key. First match wins — the order
-/// mirrors the Welcome wizard's recommended-provider ranking.
-///
-/// Returns `None` if no provider env var is set. Ollama is handled separately
-/// (no API key; detected via `OLLAMA_HOST` or default `localhost:11434`).
-#[tauri::command]
-pub fn detect_provider_from_env() -> Option<DetectedProvider> {
-    let candidates: &[(&str, &str)] = &[
+/// TCP connect budget for the Ollama default-endpoint probe (S1-4a). Short
+/// on purpose: the probe runs on UI gating paths, and a dead endpoint must
+/// not stall them.
+const OLLAMA_PROBE_TIMEOUT: Duration = Duration::from_millis(150);
+
+/// How long a [`detect_env_provider`] result is memoized process-wide
+/// (S1-4a guardrail). The function sits on the `get_provider_status` gating
+/// hot path (ApiKeyBanner / Layout refresh), so without the cache every
+/// refresh would pay the [`OLLAMA_PROBE_TIMEOUT`] connect against a closed
+/// port.
+const ENV_PROVIDER_CACHE_TTL: Duration = Duration::from_secs(30);
+
+/// Ollama's out-of-the-box listen address. Only probed when `OLLAMA_HOST`
+/// is unset (review R2 P-N4: a bare `ollama serve` install must be detected
+/// with zero configuration).
+const OLLAMA_DEFAULT_ENDPOINT: SocketAddr =
+    SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 11434);
+
+/// One memoized [`detect_env_provider`] result: what was found, and when.
+#[derive(Debug, Clone)]
+struct CachedEnvProvider {
+    observed_at: Instant,
+    value: Option<DetectedProvider>,
+}
+
+static ENV_PROVIDER_CACHE: Mutex<Option<CachedEnvProvider>> = Mutex::new(None);
+
+/// Read the provider-relevant env vars only (no socket probing). First API
+/// key match wins — the order mirrors the Welcome wizard's
+/// recommended-provider ranking. An `OLLAMA_HOST` that is set at all (any
+/// value) counts as an Ollama configuration, matching the engine's own
+/// env handling.
+fn scan_env_provider() -> Option<DetectedProvider> {
+    const CANDIDATES: &[(&str, &str)] = &[
         ("ANTHROPIC_API_KEY", "anthropic"),
         ("OPENAI_API_KEY", "openai"),
         ("DEEPSEEK_API_KEY", "deepseek"),
     ];
-    for (env_var, provider) in candidates {
+    for (env_var, provider) in CANDIDATES {
         if let Ok(val) = std::env::var(env_var) {
             if !val.trim().is_empty() {
                 return Some(DetectedProvider {
@@ -819,6 +1357,151 @@ pub fn detect_provider_from_env() -> Option<DetectedProvider> {
     None
 }
 
+/// Probe an Ollama endpoint with a short TCP connect. `true` = something is
+/// listening. Parameterized over the address so tests can pin the
+/// closed-port and open-port paths without touching 11434.
+fn probe_ollama_endpoint(addr: SocketAddr) -> bool {
+    // connect_timeout requires a resolved SocketAddr and returns raw IO
+    // errors; both Refused and TimedOut simply mean "not detected".
+    std::net::TcpStream::connect_timeout(&addr, OLLAMA_PROBE_TIMEOUT).is_ok()
+}
+
+/// TTL-memoized detection core. `scan` reads the env vars; `probe` is the
+/// socket fallback (both injected so tests can pin ordering and probe
+/// counts without touching real env or ports). The env path wins and never
+/// probes; a cache hit short-circuits both.
+fn cached_env_provider(
+    cache: &mut Option<CachedEnvProvider>,
+    now: Instant,
+    scan: impl FnOnce() -> Option<DetectedProvider>,
+    probe: impl FnOnce() -> bool,
+) -> Option<DetectedProvider> {
+    if let Some(hit) = cache {
+        if now.duration_since(hit.observed_at) < ENV_PROVIDER_CACHE_TTL {
+            return hit.value.clone();
+        }
+    }
+    let value = scan().or_else(|| {
+        probe().then_some(DetectedProvider {
+            provider: "ollama".into(),
+            has_api_key: false,
+        })
+    });
+    *cache = Some(CachedEnvProvider {
+        observed_at: now,
+        value: value.clone(),
+    });
+    value
+}
+
+/// Scan the process environment (plus Ollama's default endpoint) for a
+/// pre-configured provider.
+///
+/// Ollama needs no API key: an explicit `OLLAMA_HOST` (set, whatever the
+/// value) counts as configured; when it is unset we fall back to one short
+/// ([`OLLAMA_PROBE_TIMEOUT`]) TCP probe of the out-of-the-box
+/// `127.0.0.1:11434` endpoint so a bare `ollama serve` install is detected
+/// with zero configuration (review R2 P-N4, keeping the old doc promise
+/// "or default `localhost:11434`" now actually true). Returns `None` when
+/// neither path hits.
+///
+/// Guardrail (review R2 §6 S1-4): the result is memoized process-wide for
+/// [`ENV_PROVIDER_CACHE_TTL`]. This function is shared by the
+/// `detect_provider_from_env` command (Welcome wizard) and
+/// `get_provider_status` (the chat/settings gating signal), so both
+/// surfaces agree on what counts as "configured via the environment" AND
+/// neither can hammer the socket — the probe fires at most once per TTL
+/// window. The env path takes priority and never probes; env vars are only
+/// re-read when the cache expires, which is an acceptable staleness window
+/// for a detection hint.
+fn detect_env_provider() -> Option<DetectedProvider> {
+    let now = Instant::now();
+    let mut cache = ENV_PROVIDER_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    cached_env_provider(&mut cache, now, scan_env_provider, || {
+        probe_ollama_endpoint(OLLAMA_DEFAULT_ENDPOINT)
+    })
+}
+
+#[tauri::command]
+pub fn detect_provider_from_env() -> Option<DetectedProvider> {
+    detect_env_provider()
+}
+
+/// Reliable provider-activation signal for the frontend (2026-09-29
+/// provider review §2-2): `DesktopConfig` no longer carries
+/// `provider`/`api_key` (ADR-0005), so the UI's `config.provider` gates
+/// were permanently false. This command reads the engine
+/// `ProviderConfigStore` through [`ProviderReadSnapshot`] instead —
+/// one lock, one projection, no key material on the wire (`has_api_key`
+/// is a credential-store presence boolean).
+///
+/// When the store has no active provider, `env_provider` reports the
+/// `detect_provider_from_env` fallback so the UI does not nag users who
+/// run with `ANTHROPIC_API_KEY`-style env configuration.
+///
+/// `model` is `None` both when unset and when it carries the `"default"`
+/// sentinel `save_provider`/`set_active_provider` store for
+/// "no explicit model" — the UI renders "—" only for a genuinely unset
+/// model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderStatus {
+    /// Id of the active managed provider, `None` when nothing is active.
+    pub active_provider_id: Option<String>,
+    /// Display name of the active provider (falls back to `None` when
+    /// the engine profile has an empty display name; UI falls back to
+    /// `active_provider_id`).
+    pub display_name: Option<String>,
+    /// Wire kind slug of the active provider (`anthropic` | `openai` |
+    /// `deepseek` | `ollama` | `openai-compatible` | `gemini`).
+    pub kind: Option<String>,
+    /// True when the credential store has a key for the active provider.
+    pub has_api_key: bool,
+    /// Active model id, `None` when unset (or the `"default"` sentinel).
+    pub model: Option<String>,
+    /// Provider detected purely from process env vars — only populated
+    /// when the store has no active provider. Slugs match `kind`.
+    pub env_provider: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_provider_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<ProviderStatus, String> {
+    // ADR-0009: snapshot-then-release; the credential-store read below is
+    // a cheap file read that must not hold the provider-store mutex.
+    let snapshot = ProviderReadSnapshot::capture(&state.provider_store).await;
+    match snapshot.active_profile() {
+        Some(active) => Ok(ProviderStatus {
+            has_api_key: shannon_core::credential_manager::read_credential_value_default(
+                &active.id,
+            )
+            .is_some(),
+            active_provider_id: snapshot.active_provider_id.clone(),
+            display_name: (!active.display_name.is_empty()).then(|| active.display_name.clone()),
+            kind: Some(config::kind_engine_to_slug(&active.kind).to_string()),
+            // `"default"` is the sentinel `save_provider`/`set_active_provider`
+            // land when the user picked no model — surface that as unset.
+            model: snapshot
+                .active_model_id
+                .clone()
+                .filter(|m| m != "default" && !m.is_empty()),
+            env_provider: None,
+        }),
+        // No active profile (empty store or a dangling active id): fall
+        // back to the env scan so env-configured users keep a usable signal.
+        None => Ok(ProviderStatus {
+            active_provider_id: None,
+            display_name: None,
+            kind: None,
+            has_api_key: false,
+            model: None,
+            env_provider: detect_env_provider().map(|d| d.provider),
+        }),
+    }
+}
+
 /// Categorized connection test result for the Welcome "Test connection" button.
 ///
 /// The frontend maps each variant to a specific toast message so the user
@@ -830,9 +1513,18 @@ pub enum TestConnectionResult {
     Success,
     InvalidKey,
     RateLimited,
-    ProviderError { status: u16 },
+    /// HTTP 402 from the provider: the account is out of credits / over its
+    /// plan quota (R2-P1-10). Kept distinct from [`TestConnectionResult::InvalidKey`]
+    /// (the key itself is fine — the billing isn't) and from
+    /// [`TestConnectionResult::RateLimited`] (no amount of waiting fixes it).
+    QuotaExhausted,
+    ProviderError {
+        status: u16,
+    },
     NetworkUnreachable,
-    Unknown { message: String },
+    Unknown {
+        message: String,
+    },
 }
 
 /// Validate + normalize a user-supplied provider base_url.
@@ -884,6 +1576,53 @@ fn resolve_base_url(raw: &Option<String>) -> Result<Option<String>, String> {
     }
 }
 
+/// Normalize an optional `models_url` from frontend input: trim, blank →
+/// `None`. Mirrors the modal's client-side normalization
+/// (`modelsUrl.trim() || undefined`) so a hand-rolled payload can never
+/// land an empty-string override. Unlike `resolve_base_url` this is
+/// infallible and scheme-agnostic — the engine consumes the URL verbatim
+/// as the models-list endpoint (S4-c).
+fn normalize_models_url(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Run the engine's list-models probe against a provider and map the
+/// outcome to the categorized [`TestConnectionResult`]. Shared by
+/// `test_provider_connection` (saved-connection test) and
+/// `test_provider_credentials` (in-modal raw-form test, review §3-B item
+/// 11) so both paths produce identical verdicts.
+async fn probe_and_map(
+    provider_kind: &str,
+    api_key: &str,
+    base_url: Option<&str>,
+) -> TestConnectionResult {
+    use shannon_engine::api::ApiError;
+    use shannon_engine::api::probe::probe_provider_endpoint;
+
+    match probe_provider_endpoint(provider_kind, api_key, base_url).await {
+        Ok(()) => TestConnectionResult::Success,
+        Err(ApiError::AuthenticationFailed) => TestConnectionResult::InvalidKey,
+        Err(ApiError::RateLimitExceeded { .. }) => TestConnectionResult::RateLimited,
+        // R2-P1-10: the engine probe surfaces every non-401/429/5xx status as
+        // `ApiError::ApiError { status }`, so 402 (Payment Required —
+        // out-of-credits / over-plan) lands here and used to fall through to
+        // `Unknown` with the raw English provider message.
+        Err(ApiError::ApiError { status: 402, .. }) => TestConnectionResult::QuotaExhausted,
+        Err(ApiError::ApiError { status, .. }) if (500..=599).contains(&status) => {
+            TestConnectionResult::ProviderError { status }
+        }
+        Err(ApiError::Timeout) => TestConnectionResult::NetworkUnreachable,
+        Err(ApiError::HttpError(e)) if e.is_connect() || e.is_timeout() => {
+            TestConnectionResult::NetworkUnreachable
+        }
+        Err(other) => TestConnectionResult::Unknown {
+            message: other.to_string(),
+        },
+    }
+}
+
 /// Ping a provider's "list models" endpoint to verify the API key works.
 ///
 /// Thin Tauri-command wrapper over `shannon_engine::api::probe::probe_provider_endpoint`
@@ -891,38 +1630,347 @@ fn resolve_base_url(raw: &Option<String>) -> Result<Option<String>, String> {
 /// adds desktop's stricter `validate_base_url` and the typed
 /// `TestConnectionResult` mapping so the frontend keeps its existing
 /// response shape). 200 → Success, 401/403 → InvalidKey, 429 → RateLimited,
-/// 5xx → ProviderError, network/timeout failure → NetworkUnreachable,
-/// anything else → Unknown.
+/// 402 → QuotaExhausted, 5xx → ProviderError, network/timeout failure →
+/// NetworkUnreachable, anything else → Unknown.
 #[tauri::command]
 pub async fn test_provider_connection(
     provider: String,
     api_key: String,
     base_url: Option<String>,
 ) -> Result<TestConnectionResult, String> {
-    use shannon_engine::api::ApiError;
-    use shannon_engine::api::probe::probe_provider_endpoint;
-
     // Desktop-side strict validation: no embedded credentials, requires a
     // host. The engine does its own defence-in-depth scheme check.
     if let Some(raw) = base_url.as_deref().filter(|s| !s.is_empty()) {
         validate_base_url(raw)?;
     }
 
-    match probe_provider_endpoint(&provider, &api_key, base_url.as_deref()).await {
-        Ok(()) => Ok(TestConnectionResult::Success),
-        Err(ApiError::AuthenticationFailed) => Ok(TestConnectionResult::InvalidKey),
-        Err(ApiError::RateLimitExceeded { .. }) => Ok(TestConnectionResult::RateLimited),
-        Err(ApiError::ApiError { status, .. }) if (500..=599).contains(&status) => {
-            Ok(TestConnectionResult::ProviderError { status })
-        }
-        Err(ApiError::Timeout) => Ok(TestConnectionResult::NetworkUnreachable),
-        Err(ApiError::HttpError(e)) if e.is_connect() || e.is_timeout() => {
-            Ok(TestConnectionResult::NetworkUnreachable)
-        }
-        Err(other) => Ok(TestConnectionResult::Unknown {
-            message: other.to_string(),
-        }),
+    Ok(probe_and_map(
+        &provider,
+        &api_key,
+        base_url.as_deref().filter(|s| !s.is_empty()),
+    )
+    .await)
+}
+
+/// Provider kinds the in-modal **Test connection** cannot cover: selectable,
+/// fully usable providers whose "list models" route has no shared probeable
+/// endpoint, so the probe refuses them with the typed "not supported"
+/// verdict instead of a misleading connectivity failure (review P-N25 — an
+/// honest refusal, but until the S4 batch the form gives no advance notice).
+///
+/// This constant is the single source of truth for "which kinds are not
+/// probeable", promoted from the implicit complement of
+/// [`is_probeable_kind`]'s allowlist so the S4 pre-submit hint ("this
+/// provider type does not support connection testing — save and use it
+/// directly") can consume it without re-deriving the list. Why each kind is
+/// here:
+/// - `azure`: speaks the OpenAI wire format for chat, but its list-models
+///   route (`/openai/models?api-version=…`) is not the shared `/models` the
+///   openai-compatible probe hits.
+/// - `gemini`: bespoke Gemini list-models API (`WireFormat::Gemini`).
+///
+/// Kept consistent with [`is_probeable_kind`] by
+/// `non_probeable_kinds_are_never_probeable` and pinned against the full
+/// selectable-kind set by `selectable_kinds_partition_into_probeable_and_not`
+/// (both below).
+pub(crate) const NON_PROBEABLE_PROVIDER_KINDS: &[&str] = &["azure", "gemini"];
+
+/// Kinds the engine can generically probe / list models for. Mirrors the
+/// allowlist `test_all_providers` uses; anything outside it — including the
+/// kinds in [`NON_PROBEABLE_PROVIDER_KINDS`] — has no shared list-models
+/// endpoint, so both test commands reject it with a typed "not supported"
+/// verdict instead of a misleading connectivity failure.
+fn is_probeable_kind(kind: &str) -> bool {
+    // Named non-probeable kinds are checked out first so the constant stays
+    // the authoritative deny-list even if the allowlist below ever grows
+    // onto one of them (partition-pinned by the tests).
+    if NON_PROBEABLE_PROVIDER_KINDS.contains(&kind) {
+        return false;
     }
+    matches!(
+        kind,
+        "anthropic" | "openai" | "deepseek" | "openai-compatible" | "ollama"
+    )
+}
+
+/// Kinds that authenticate with a stored/typed API key (everything except
+/// Ollama). Mirrors `test_all_providers` and the UI's `KIND_INFO.needsKey`.
+fn kind_needs_key(kind: &str) -> bool {
+    kind != "ollama"
+}
+
+/// Resolve the API key for an in-modal test/fetch: an explicitly supplied
+/// (non-empty, non-mask) value wins; otherwise fall back to the stored
+/// credential for `provider_id` (the edit-mode path — the modal never
+/// re-displays the stored key, so `None` means "use what's saved").
+fn resolve_probe_key(api_key: &Option<String>, provider_id: &Option<String>) -> Option<String> {
+    let explicit = api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "***");
+    if let Some(k) = explicit {
+        return Some(k.to_string());
+    }
+    provider_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(shannon_core::credential_manager::read_credential_value_default)
+}
+
+/// Test raw (unsaved) provider credentials from inside the Add/Edit
+/// Provider modal (review §2-12 / §3-B item 11): "save ≠ verify" — the
+/// user gets a verdict on the form values BEFORE anything is persisted.
+///
+/// Mirrors [`test_provider_connection`] internals (same engine probe,
+/// same categorization, same `validate_base_url`), but takes the modal's
+/// raw form state. `api_key: None` + a `provider_id` means "test with
+/// the stored credential" (edit mode). This command never writes — no
+/// config, no credential store, no engine store.
+#[tauri::command]
+pub async fn test_provider_credentials(
+    kind: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    provider_id: Option<String>,
+) -> Result<TestConnectionResult, String> {
+    if let Some(raw) = base_url.as_deref().filter(|s| !s.is_empty()) {
+        validate_base_url(raw)?;
+    }
+    if !is_probeable_kind(&kind) {
+        return Ok(TestConnectionResult::Unknown {
+            message: format!("provider kind `{kind}` is not supported"),
+        });
+    }
+    let key = resolve_probe_key(&api_key, &provider_id);
+    if kind_needs_key(&kind) && key.is_none() {
+        return Ok(TestConnectionResult::Unknown {
+            message: "no API key provided".to_string(),
+        });
+    }
+    Ok(probe_and_map(
+        &kind,
+        key.as_deref().unwrap_or(""),
+        base_url.as_deref().filter(|s| !s.is_empty()),
+    )
+    .await)
+}
+
+// ===== Fetch model list (review §2-9 / §3-B item 7) =====
+//
+// The Add/Edit Provider modal's "Fetch model list" button calls this to
+// pull the live `/models` catalog from the provider, so users pick real
+// ids instead of typing free text and discovering typos as provider 404s.
+//
+// Error taxonomy: the command returns `Err(String)` (spec wire shape),
+// but categorizable failures are prefixed with a stable machine token
+// (`invalid_key:`, `rate_limited:`, `provider_error:<status>`,
+// `network_unreachable`, `unsupported_kind:<kind>`, `missing_key`,
+// `invalid_base_url:`) that the frontend maps to localized inline
+// messages; anything else surfaces raw under "unknown".
+
+/// Stable error category tokens understood by the frontend's
+/// `parseFetchModelsError`. Kept next to the command so the wire contract
+/// has exactly one Rust-side definition.
+mod fetch_models_error {
+    pub const INVALID_KEY: &str = "invalid_key";
+    pub const RATE_LIMITED: &str = "rate_limited";
+    pub const NETWORK_UNREACHABLE: &str = "network_unreachable";
+    pub const MISSING_KEY: &str = "missing_key";
+    pub const PROVIDER_ERROR: &str = "provider_error";
+    pub const UNSUPPORTED_KIND: &str = "unsupported_kind";
+    pub const INVALID_BASE_URL: &str = "invalid_base_url";
+
+    /// Format a categorized error the way the frontend parser expects:
+    /// `token` for token-only categories, `token:detail` otherwise.
+    pub fn categorized(token: &str, detail: Option<String>) -> String {
+        match detail {
+            Some(d) => format!("{token}:{d}"),
+            None => token.to_string(),
+        }
+    }
+
+    /// Split a wire error back into `(category_token, raw_detail)`.
+    /// Unknown/uncategorized messages parse as `("", message)` so the
+    /// frontend renders them verbatim. Test-only: the production parser
+    /// of this wire shape is the frontend's `parseFetchModelsError`
+    /// (tauri-api.ts) — this mirror pins the contract from the Rust side.
+    #[cfg(test)]
+    pub fn split(error: &str) -> (&str, &str) {
+        const TOKENS: [&str; 7] = [
+            INVALID_KEY,
+            RATE_LIMITED,
+            NETWORK_UNREACHABLE,
+            MISSING_KEY,
+            PROVIDER_ERROR,
+            UNSUPPORTED_KIND,
+            INVALID_BASE_URL,
+        ];
+        // Token-only categories travel without a colon (`invalid_key`).
+        if TOKENS.contains(&error) {
+            return (error, "");
+        }
+        match error.split_once(':') {
+            Some((token, rest)) if TOKENS.contains(&token) => (token, rest),
+            _ => ("", error),
+        }
+    }
+}
+
+/// Build the model-listing URL for a kind + normalized base. Mirrors the
+/// engine probe's per-kind endpoint choice (`probe.rs`):
+/// anthropic/openai under `/v1/models`, deepseek and every
+/// openai-compatible endpoint under `/models`, Ollama's bespoke
+/// `/api/tags`. `base` must already be validated + trailing-slash-free.
+fn models_list_url_for_kind(kind: &str, base: &str) -> String {
+    match kind {
+        "anthropic" | "openai" => format!("{base}/v1/models"),
+        "ollama" => format!("{base}/api/tags"),
+        // deepseek + openai-compatible share the OpenAI-compatible path.
+        _ => format!("{base}/models"),
+    }
+}
+
+/// Extract model ids from a provider's list-models JSON body. Handles the
+/// three shapes live providers actually return:
+/// - OpenAI / Anthropic / deepseek / openai-compatible: `{"data":[{"id":…}]}`
+/// - Ollama `/api/tags`: `{"models":[{"name":…}]}` (id/model accepted too)
+///
+/// Sorted, deduplicated. An unrecognized body yields an empty list — the
+/// UI treats that as "fetched, nothing usable" rather than an error.
+fn extract_model_ids(body: &serde_json::Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let items = body
+        .get("data")
+        .and_then(|v| v.as_array())
+        .or_else(|| body.get("models").and_then(|v| v.as_array()));
+    if let Some(items) = items {
+        for item in items {
+            let id = ["id", "name", "model"]
+                .iter()
+                .find_map(|k| item.get(*k))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !id.is_empty() {
+                out.push(id.to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Fetch the live model list from a provider endpoint (review §2-9).
+///
+/// `GET {base_url}/models` with per-kind auth mirroring
+/// [`test_provider_connection`] (anthropic → `x-api-key`, the OpenAI-wire
+/// kinds → `Authorization: Bearer`, ollama → none). When `api_key` is
+/// `None`/empty and `provider_id` names a saved connection, the stored
+/// credential is used — the modal never round-trips the existing secret.
+/// Results are in-memory only: nothing is persisted anywhere.
+///
+/// `base_url` is required and runs through the same `validate_base_url`
+/// normalization as the connection test.
+#[tauri::command]
+pub async fn fetch_provider_models(
+    provider_id: Option<String>,
+    kind: String,
+    base_url: String,
+    api_key: Option<String>,
+) -> Result<Vec<String>, String> {
+    let base = validate_base_url(&base_url).map_err(|e| {
+        fetch_models_error::categorized(fetch_models_error::INVALID_BASE_URL, Some(e))
+    })?;
+    if !is_probeable_kind(&kind) {
+        return Err(fetch_models_error::categorized(
+            fetch_models_error::UNSUPPORTED_KIND,
+            Some(kind),
+        ));
+    }
+
+    let needs_key = kind_needs_key(&kind);
+    let key = resolve_probe_key(&api_key, &provider_id);
+    if needs_key && key.is_none() {
+        return Err(fetch_models_error::MISSING_KEY.to_string());
+    }
+
+    let url = models_list_url_for_kind(&kind, &base);
+    // Settings R3 T4 (B1): shared desktop outbound builder — carries the
+    // SHANNON_CA_BUNDLE custom roots so probing works behind a corporate CA.
+    let client = crate::desktop_http::builder()
+        // Generous listing timeout: some self-hosted gateways paginate
+        // slowly. Mirrors the probe's "network-level failures are
+        // unreachable" semantics.
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let mut req = client.get(&url);
+    if let Some(k) = key.as_deref() {
+        req = if kind == "anthropic" {
+            req.header("x-api-key", k)
+        } else {
+            req.header("Authorization", format!("Bearer {k}"))
+        };
+    }
+
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) if e.is_connect() || e.is_timeout() => {
+            return Err(fetch_models_error::NETWORK_UNREACHABLE.to_string());
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(fetch_models_error::INVALID_KEY.to_string());
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(fetch_models_error::RATE_LIMITED.to_string());
+    }
+    if !status.is_success() {
+        return Err(fetch_models_error::categorized(
+            fetch_models_error::PROVIDER_ERROR,
+            Some(status.as_u16().to_string()),
+        ));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("invalid response body: {e}"))?;
+    Ok(extract_model_ids(&body))
+}
+
+/// Result of [`refresh_model_catalog`] — the R2-2 Settings "Refresh model
+/// catalog" button payload. `count` is the number of models the dynamic
+/// overlay now carries; `generation` is the overlay's monotonically
+/// increasing revision (so the UI can tell a no-op re-refresh from a real
+/// bump) and doubles as a cheap "last changed" signal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCatalogRefreshResult {
+    pub count: usize,
+    pub generation: u64,
+}
+
+/// Re-fetch the models.dev dynamic model catalog (roadmap R2-2).
+///
+/// The dynamic overlay (`shannon_core::model_registry::dynamic`) previously
+/// refreshed only via the CLI `/model refresh` command; this command wires
+/// the SAME refresh path into the desktop Settings → Models surface:
+/// fetch → persist the on-disk cache → rebuild the in-memory overlay.
+/// On failure the existing overlay/static catalog is left untouched
+/// (fail-open) and the error string is surfaced verbatim so the UI can
+/// show the failure reason inline.
+#[tauri::command]
+pub async fn refresh_model_catalog() -> Result<ModelCatalogRefreshResult, String> {
+    let count = shannon_core::model_registry::dynamic::refresh_overlay_async(
+        std::time::Duration::from_secs(20),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(ModelCatalogRefreshResult {
+        count,
+        generation: shannon_core::model_registry::dynamic::overlay_generation(),
+    })
 }
 
 /// One row in the response from [`test_all_providers`]. Carries enough
@@ -1053,6 +2101,11 @@ pub async fn test_all_providers(
                 Ok(Err(shannon_engine::api::ApiError::RateLimitExceeded { .. })) => {
                     TestConnectionResult::RateLimited
                 }
+                // R2-P1-10: keep the Test-all fan-out in lockstep with
+                // `probe_and_map` (402 → quota exhausted, not "Unknown").
+                Ok(Err(shannon_engine::api::ApiError::ApiError { status: 402, .. })) => {
+                    TestConnectionResult::QuotaExhausted
+                }
                 Ok(Err(shannon_engine::api::ApiError::ApiError { status, .. }))
                     if (500..=599).contains(&status) =>
                 {
@@ -1128,13 +2181,13 @@ fn engine_kind_str(k: &shannon_types::provider_config::ProviderKind) -> String {
 /// server generates one. An `api_key` of `"***"` or empty means "keep the
 /// existing key", so editing the label never blanks the stored secret.
 ///
-/// Phase 2 task 3: the desktop Add Provider modal authors three of the
-/// v2 ProviderProfile fields. `extra_headers`, `default_max_tokens`, and
-/// `tiers` are mirrored into the connection and passed through to the
-/// engine's `ProviderConfigStore` (see `connection_to_profile`). The
-/// remaining two v2 fields (`models_url`, `quirks`) are read-only on the
-/// wire today — the modal doesn't edit them yet — so they stay out of
-/// this input shape.
+/// Phase 2 task 3: the desktop Add Provider modal authors the v2
+/// ProviderProfile fields. `extra_headers`, `default_max_tokens`,
+/// `tiers`, and — since S4-c — `models_url` are mirrored into the
+/// connection and passed through to the engine's `ProviderConfigStore`
+/// (see `connection_to_profile`). The one remaining read-only v2 field
+/// is `quirks`: the modal doesn't edit it yet, so it stays out of this
+/// input shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderInput {
     #[serde(default)]
@@ -1145,6 +2198,14 @@ pub struct ProviderInput {
     pub api_key: Option<String>,
     #[serde(default)]
     pub base_url: Option<String>,
+    /// Optional override of the models-list endpoint (v2 ProviderProfile
+    /// field, S4-c). Same wire shape as `base_url`, but on edit `None`
+    /// means "don't change": the modal only ever sends a trimmed
+    /// non-empty URL or omits the field, so a stored override can never
+    /// be blanked by re-saving. The engine expands an unset value to
+    /// `{base_url}/models`.
+    #[serde(default)]
+    pub models_url: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     /// Per-request HTTP headers. The desktop modal collects key/value
@@ -1168,10 +2229,16 @@ pub struct ProviderInput {
     pub fallback_models: Option<Vec<String>>,
 }
 
+/// Kinds the `save_provider` gate accepts. Mirrors the Add Provider
+/// modal's `KIND_INFO` vocabulary exactly (S4-c: `gemini` joined the
+/// set) so anything the dropdown offers can actually be saved, and
+/// nothing the dropdown doesn't offer (`azure`, `bedrock`, ...) sneaks
+/// in ahead of a UI for it. Probing is governed separately by
+/// [`is_probeable_kind`] / [`NON_PROBEABLE_PROVIDER_KINDS`].
 fn is_known_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "anthropic" | "openai" | "deepseek" | "ollama" | "openai-compatible"
+        "anthropic" | "openai" | "deepseek" | "ollama" | "gemini" | "openai-compatible"
     )
 }
 
@@ -1259,7 +2326,9 @@ fn apply_provider_update(
     // `extra_headers` and `default_max_tokens` use `None` for "leave
     // alone" and the inner Option for the value-or-clear signal.
     // `tiers` is plain — replace-on-send matches how the engine store
-    // upserts the whole field.
+    // upserts the whole field. `models_url` (S4-c) is the same
+    // leave-alone-on-`None` shape as the modal sends: a trimmed URL or
+    // an omitted field, never a blank.
     if let Some(h) = input.extra_headers.as_ref() {
         conn.extra_headers = h.clone();
     }
@@ -1271,6 +2340,9 @@ fn apply_provider_update(
     }
     if let Some(fm) = input.fallback_models.as_ref() {
         conn.fallback_models = fm.clone();
+    }
+    if let Some(mu) = normalize_models_url(input.models_url.as_deref()) {
+        conn.models_url = Some(mu);
     }
 }
 
@@ -1399,6 +2471,9 @@ pub async fn save_provider(
             kind: input.kind.clone(),
             has_api_key: false,
             base_url,
+            // S4-c — models-list endpoint override; blank/omitted → None
+            // (engine default `{base_url}/models`).
+            models_url: normalize_models_url(input.models_url.as_deref()),
             // Phase 2 task 3 — v2 ProviderProfile fields authored by
             // the Add Provider modal. On insert the client sends the
             // explicit value (or `None` for "unset") for all three;
@@ -1536,7 +2611,10 @@ pub async fn set_active_provider(
 /// collapses to `OpenAI` for catalog walking — the real provider is
 /// whatever the user's `base_url` points at (served through the desktop
 /// singular config above).
-fn llm_provider_for_active_mirror(s: &str) -> Option<shannon_engine::api::LlmProvider> {
+///
+/// `pub(crate)` so the R2-1 `set_session_model` command resolves the
+/// catalog-walking provider for `normalize_model_id` from the same mapping.
+pub(crate) fn llm_provider_for_active_mirror(s: &str) -> Option<shannon_engine::api::LlmProvider> {
     use shannon_engine::api::LlmProvider;
     match s {
         "anthropic" => Some(LlmProvider::Anthropic),
@@ -1552,6 +2630,115 @@ fn llm_provider_for_active_mirror(s: &str) -> Option<shannon_engine::api::LlmPro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::Manager;
+
+    // === Probeability partition (S2-6 / review P-N25 single source of truth) ===
+    //
+    // `is_probeable_kind` is an allowlist; `NON_PROBEABLE_PROVIDER_KINDS`
+    // names the complement the S4 batch's pre-submit hint will consume.
+    // Both must stay consistent with the modal's selectable-kind set:
+    // every selectable kind is either probeable or explicitly listed as
+    // not — a kind in neither set would silently change the
+    // Test-connection contract.
+
+    #[test]
+    fn non_probeable_kinds_are_never_probeable() {
+        for kind in NON_PROBEABLE_PROVIDER_KINDS {
+            assert!(
+                !is_probeable_kind(kind),
+                "{kind} is listed non-probeable but the allowlist accepts it"
+            );
+        }
+    }
+
+    #[test]
+    fn selectable_kinds_partition_into_probeable_and_not() {
+        // The selectable-kind vocabulary: the modal's `KIND_INFO` set
+        // (anthropic / openai / deepseek / ollama / gemini /
+        // openai-compatible) plus `azure` — engine-supported (LlmProvider::
+        // Azure, S2-6 catalog + deployments wire) and explicitly named by
+        // review P-N25 even though the modal dropdown does not offer it yet.
+        const SELECTABLE_KINDS: &[&str] = &[
+            "anthropic",
+            "openai",
+            "deepseek",
+            "ollama",
+            "gemini",
+            "openai-compatible",
+            "azure",
+        ];
+        for kind in SELECTABLE_KINDS {
+            assert_eq!(
+                is_probeable_kind(kind),
+                !NON_PROBEABLE_PROVIDER_KINDS.contains(kind),
+                "{kind}: probeable must equal \"not in NON_PROBEABLE_PROVIDER_KINDS\""
+            );
+        }
+        // Exactly the two P-N25 kinds are non-probeable — adding a third
+        // requires updating this pin deliberately.
+        assert_eq!(NON_PROBEABLE_PROVIDER_KINDS.len(), 2);
+    }
+
+    // === Save gate (S4-c: is_known_kind aligned with the modal's KIND_INFO) ===
+
+    /// The save gate admits exactly the modal's `KIND_INFO` vocabulary.
+    /// `gemini` used to be selectable in the dropdown yet rejected here
+    /// ("unknown provider kind"); `azure` stays out until the modal's
+    /// KIND_INFO offers it — probeability (`is_probeable_kind`) is a
+    /// deliberately different set.
+    #[test]
+    fn is_known_kind_matches_modal_kind_vocabulary() {
+        for kind in [
+            "anthropic",
+            "openai",
+            "deepseek",
+            "ollama",
+            "gemini",
+            "openai-compatible",
+        ] {
+            assert!(is_known_kind(kind), "{kind} must pass the save gate");
+        }
+        for kind in ["azure", "bedrock", "anthropicc", ""] {
+            assert!(
+                !is_known_kind(kind),
+                "{kind} must be refused by the save gate"
+            );
+        }
+    }
+
+    /// A `kind=gemini` save passes the gate and lands in the engine
+    /// store as `ProviderKind::Gemini` with the canonical
+    /// generativelanguage base URL when the user leaves `base_url`
+    /// blank — the same default the engine's `LlmProvider::Gemini`
+    /// uses. Probe behavior is untouched: gemini stays non-probeable,
+    /// so fetch-models / test keep their typed "not supported" verdict.
+    #[test]
+    fn gemini_input_passes_gate_and_lands_engine_profile() {
+        assert!(is_known_kind("gemini"));
+        assert_eq!(
+            default_base_url_for_kind("gemini"),
+            Some("https://generativelanguage.googleapis.com")
+        );
+
+        let conn = ProviderConnection {
+            id: "gemini".into(),
+            display_name: "Gemini".into(),
+            kind: "gemini".into(),
+            ..Default::default()
+        };
+        let profile = connection_to_profile(&conn);
+        assert_eq!(
+            profile.kind,
+            shannon_types::provider_config::ProviderKind::Gemini
+        );
+        assert_eq!(
+            profile.base_url,
+            "https://generativelanguage.googleapis.com"
+        );
+
+        assert!(!is_probeable_kind("gemini"));
+        assert!(NON_PROBEABLE_PROVIDER_KINDS.contains(&"gemini"));
+    }
 
     #[test]
     fn config_update_round_trips_through_serde() {
@@ -1563,6 +2750,263 @@ mod tests {
         let back: ConfigUpdate = serde_json::from_str(&json).unwrap();
         assert_eq!(back.key, "model");
         assert_eq!(back.value, "claude-opus");
+    }
+
+    // === Grouped boolean toggles (final-review #1 regression) ===
+    //
+    // `dream_enabled` / `dream_skill_distill_enabled` shipped with no
+    // `configure` arm at all — every Settings toggle errored with "Unknown
+    // config key" and snapped back; the older `skill_loop_enabled` /
+    // `skill_detection_enabled` switches had the same hole. These tests pin
+    // the whole toggle family through the exact body the command arm runs,
+    // with the disk persist captured instead of written (tests never touch
+    // the process HOME).
+
+    /// The Settings toggle keys → the value `get_config` must show after
+    /// the toggle. Explicit on purpose: adding or removing a toggle key
+    /// means updating this list deliberately.
+    fn toggled_value(cfg: &DesktopConfig, key: &str) -> Option<bool> {
+        match key {
+            "memory_enabled" => cfg.memory_enabled,
+            "telemetry" => cfg.telemetry_enabled,
+            "encryption" => cfg.encryption_enabled,
+            "debug_console" => cfg.debug_console,
+            "skill_loop_enabled" => Some(cfg.skill_loop_enabled),
+            "skill_detection_enabled" => Some(cfg.skill_detection_enabled),
+            "dream_enabled" => Some(cfg.dream_enabled),
+            "dream_skill_distill_enabled" => Some(cfg.dream_skill_distill_enabled),
+            "session_gc_enabled" => Some(cfg.session_gc_enabled),
+            // Settings R3 T3 — hardware-acceleration escape hatch + the
+            // run-time sleep blocker (both plain bools). `power.keep_awake`
+            // is NOT here: it has a dedicated arm with an immediate
+            // start/stop side effect, so it must never route through the
+            // grouped applier.
+            "hardware_acceleration" => Some(cfg.hardware_acceleration),
+            "power.block_sleep_during_tasks" => Some(cfg.power_block_sleep_during_tasks),
+            "context.auto_compact" => Some(cfg.context_auto_compact),
+            // Settings R3 T7 — the auto-archive master switch.
+            "session.auto_archive_enabled" => Some(cfg.session_auto_archive_enabled),
+            // Settings R3 T8 — 提问自动继续.
+            "chat.ask_user_auto_continue" => Some(cfg.chat_ask_user_auto_continue),
+            // D5 方案① — 主动任务推荐 (presentation toggle).
+            "suggestions.enabled" => Some(cfg.suggestions_enabled),
+            _ => None,
+        }
+    }
+
+    const TOGGLE_KEYS: [&str; 15] = [
+        "memory_enabled",
+        "telemetry",
+        "encryption",
+        "debug_console",
+        "skill_loop_enabled",
+        "skill_detection_enabled",
+        "dream_enabled",
+        "dream_skill_distill_enabled",
+        "session_gc_enabled",
+        "hardware_acceleration",
+        "power.block_sleep_during_tasks",
+        "context.auto_compact",
+        "session.auto_archive_enabled",
+        "chat.ask_user_auto_continue",
+        "suggestions.enabled",
+    ];
+
+    #[test]
+    fn set_boolean_toggle_flips_exactly_the_requested_key() {
+        for key in TOGGLE_KEYS {
+            for value in [true, false] {
+                let mut cfg = DesktopConfig::default();
+                set_boolean_toggle(&mut cfg, key, value)
+                    .unwrap_or_else(|e| panic!("toggle {key}: {e}"));
+                assert_eq!(
+                    toggled_value(&cfg, key),
+                    Some(value),
+                    "key {key} must flip to {value}"
+                );
+            }
+        }
+        // Unknown keys are refused, never silently accepted, and never routed.
+        assert!(!is_boolean_toggle_key("not_a_toggle"));
+        assert!(!is_boolean_toggle_key("agent_teams_enabled"));
+        // Settings R3 T3: the always-on keep-awake switch has a dedicated
+        // arm (immediate start/stop side effect) — it must never route
+        // through the grouped boolean applier.
+        assert!(!is_boolean_toggle_key("power.keep_awake"));
+        for key in TOGGLE_KEYS {
+            assert!(is_boolean_toggle_key(key), "{key} must be routed");
+        }
+    }
+
+    #[tokio::test]
+    async fn configure_boolean_toggle_round_trips_into_get_config() {
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::new()), "AppState managed once");
+        let tauri_state = app.state::<AppState>();
+        // Deterministic starting point regardless of what the ambient
+        // on-disk config `AppState::new()` loaded: every toggle false.
+        {
+            let mut cfg = tauri_state.desktop_config.write().await;
+            cfg.memory_enabled = Some(false);
+            cfg.telemetry_enabled = Some(false);
+            cfg.encryption_enabled = Some(false);
+            cfg.debug_console = Some(false);
+            cfg.skill_loop_enabled = false;
+            cfg.skill_detection_enabled = false;
+            cfg.dream_enabled = false;
+            cfg.dream_skill_distill_enabled = false;
+            // Settings R3 T3 keys: hw-accel + block-sleep default true, so
+            // pin them false like the rest for a deterministic start.
+            cfg.hardware_acceleration = false;
+            cfg.power_block_sleep_during_tasks = false;
+            // Settings R3 T6: auto-compaction defaults true — pin false like
+            // the rest so the round trip starts deterministic.
+            cfg.context_auto_compact = false;
+            // Settings R3 T8: ask auto-continue defaults false; pinned like
+            // the rest so the round trip starts deterministic.
+            cfg.chat_ask_user_auto_continue = false;
+            // D5 方案①: suggestions default true — pinned false like the
+            // rest so the round trip starts deterministic.
+            cfg.suggestions_enabled = false;
+        }
+
+        let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());
+        for key in TOGGLE_KEYS {
+            for value in [true, false] {
+                apply_boolean_toggle_arm(
+                    tauri_state.inner(),
+                    app.handle(),
+                    &ConfigUpdate {
+                        key: key.to_string(),
+                        value: value.to_string(),
+                    },
+                    |cfg| {
+                        persisted.lock().unwrap().push(cfg);
+                        Ok(())
+                    },
+                )
+                .await
+                .unwrap_or_else(|e| panic!("toggle {key}={value} failed: {e}"));
+
+                // The command's read-back path: `get_config` shows the value
+                // the toggle just persisted.
+                let shown = get_config(app.state::<AppState>()).await.unwrap();
+                assert_eq!(
+                    toggled_value(&shown, key),
+                    Some(value),
+                    "toggle {key}={value} must round-trip into get_config"
+                );
+                // The persist step saw the same snapshot.
+                let snapshot = persisted.lock().unwrap().last().unwrap().clone();
+                assert_eq!(
+                    toggled_value(&snapshot, key),
+                    Some(value),
+                    "persisted snapshot for {key}={value}"
+                );
+            }
+        }
+        assert_eq!(
+            persisted.lock().unwrap().len(),
+            TOGGLE_KEYS.len() * 2,
+            "every toggle persisted exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn configure_boolean_toggle_rejects_bad_values_and_surfaces_persist_errors() {
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::new()), "AppState managed once");
+        let tauri_state = app.state::<AppState>();
+        let before = tauri_state.desktop_config.read().await.clone();
+
+        // A non-boolean value is an error and leaves the config untouched.
+        let err = apply_boolean_toggle_arm(
+            tauri_state.inner(),
+            app.handle(),
+            &ConfigUpdate {
+                key: "dream_enabled".into(),
+                value: "maybe".into(),
+            },
+            |_| Ok(()),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("Invalid boolean"), "{err}");
+        assert_eq!(
+            toggled_value(
+                &tauri_state.desktop_config.read().await.clone(),
+                "dream_enabled"
+            ),
+            toggled_value(&before, "dream_enabled"),
+        );
+
+        // A persist failure propagates (the command turns it into the same
+        // Err the frontend's toastError shows).
+        let err = apply_boolean_toggle_arm(
+            tauri_state.inner(),
+            app.handle(),
+            &ConfigUpdate {
+                key: "dream_enabled".into(),
+                value: "true".into(),
+            },
+            |_| Err("disk full".into()),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("disk full"), "{err}");
+    }
+
+    #[test]
+    fn session_retention_days_wire_value_maps_zero_to_never_and_clamps() {
+        // 卡A GC: 0 is the UI's 永不 gear → `None` (never auto-delete).
+        assert_eq!(parse_session_retention_days("0").unwrap(), None);
+        assert_eq!(parse_session_retention_days(" 30 ").unwrap(), Some(30));
+        assert_eq!(parse_session_retention_days("90").unwrap(), Some(90));
+        // Overshoot clamps to the 3650-day ceiling instead of persisting an
+        // effectively eternal window.
+        assert_eq!(
+            parse_session_retention_days("99999").unwrap(),
+            Some(3650),
+            "clamp to ≤3650"
+        );
+        // Negatives are excluded by the u32 wire parse; so is any junk.
+        assert!(parse_session_retention_days("-1").is_err());
+        assert!(parse_session_retention_days("soon").is_err());
+        assert!(parse_session_retention_days("").is_err());
+    }
+
+    #[test]
+    fn auto_archive_days_wire_value_clamps_into_scanable_window() {
+        // Settings R3 T7: no 永不 gear (disabling is the master switch's
+        // job), so every value lands inside `1..=365`.
+        assert_eq!(parse_auto_archive_days("7").unwrap(), 7);
+        assert_eq!(parse_auto_archive_days(" 30 ").unwrap(), 30);
+        assert_eq!(parse_auto_archive_days("1").unwrap(), 1);
+        // 0 and undershoot clamp to the 1-day floor; overshoot clamps to
+        // the 365-day ceiling — a wedged (0-day) or eternal window can
+        // never be persisted.
+        assert_eq!(parse_auto_archive_days("0").unwrap(), 1);
+        assert_eq!(parse_auto_archive_days("99999").unwrap(), 365);
+        // Junk still errors rather than silently re-gearing.
+        assert!(parse_auto_archive_days("soon").is_err());
+        assert!(parse_auto_archive_days("").is_err());
+    }
+
+    #[test]
+    fn monthly_budget_usd_wire_value_clears_on_zero_and_rejects_typos() {
+        // P2-1: empty/null are the UI's "no budget" gear; "0" also clears.
+        assert_eq!(parse_monthly_budget_usd("").unwrap(), None);
+        assert_eq!(parse_monthly_budget_usd("null").unwrap(), None);
+        assert_eq!(parse_monthly_budget_usd("0").unwrap(), None);
+        // Parsed non-positive and non-finite amounts clear too (lenient,
+        // like the retention gear) — never persist a meaningless cap.
+        assert_eq!(parse_monthly_budget_usd("-5").unwrap(), None);
+        assert_eq!(parse_monthly_budget_usd("inf").unwrap(), None);
+        // Positive amounts survive trimming.
+        assert_eq!(parse_monthly_budget_usd(" 25.5 ").unwrap(), Some(25.5));
+        // A non-numeric non-empty value errors — a typo must not silently
+        // drop the user's budget.
+        assert!(parse_monthly_budget_usd("lots").is_err());
     }
 
     #[test]
@@ -1591,6 +3035,124 @@ mod tests {
         let err = validate_sandbox_mode("banana").unwrap_err();
         assert!(err.contains("off | local | landlock"), "{err}");
         assert!(validate_sandbox_mode("full").is_err());
+    }
+
+    // ── Settings R3 T4 (B1): `network.*` configure arms ────────────────
+
+    #[test]
+    fn expand_tilde_uses_injected_home_and_passthrough_otherwise() {
+        let home = std::path::Path::new("/home/demo");
+        assert_eq!(
+            expand_tilde("~/certs/root-ca.pem", Some(home)),
+            "/home/demo/certs/root-ca.pem"
+        );
+        assert_eq!(expand_tilde("~", Some(home)), "/home/demo");
+        // Windows-style separator folded into the same expansion.
+        assert_eq!(
+            expand_tilde("~\\certs\\ca.pem", Some(home)),
+            "/home/demo/certs\\ca.pem"
+        );
+        // No tilde → verbatim.
+        assert_eq!(
+            expand_tilde("/etc/pki/ca.pem", Some(home)),
+            "/etc/pki/ca.pem"
+        );
+        // No home available → honest passthrough (the existence check then
+        // rejects it rather than silently mangling the path).
+        assert_eq!(expand_tilde("~/ca.pem", None), "~/ca.pem");
+    }
+
+    #[test]
+    fn validate_ca_cert_path_round_trip_and_missing_file_error() {
+        let home = std::path::Path::new("/home/demo");
+        // Empty / whitespace clears.
+        assert_eq!(
+            validate_ca_cert_path("", Some(home)).expect("empty value clears"),
+            None
+        );
+        assert_eq!(
+            validate_ca_cert_path("   ", Some(home)).expect("whitespace clears"),
+            None
+        );
+        // An existing file passes and comes back `~`-expanded.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca = dir.path().join("root-ca.pem");
+        std::fs::write(
+            &ca,
+            "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----",
+        )
+        .expect("write temp CA bundle");
+        let ok = validate_ca_cert_path(&ca.to_string_lossy(), Some(home))
+            .expect("existing bundle accepted");
+        assert_eq!(
+            ok.as_deref(),
+            Some(ca.to_string_lossy().as_ref()),
+            "existing bundle accepted verbatim"
+        );
+        // A missing file is a write-time error naming the path.
+        let err = validate_ca_cert_path("~/missing/ca.pem", Some(home))
+            .expect_err("missing bundle must be refused");
+        assert!(err.contains("/home/demo/missing/ca.pem"), "{err}");
+        assert!(err.contains("not found"), "{err}");
+    }
+
+    #[test]
+    fn network_arm_proxy_url_scheme_gate_and_clear() {
+        let mut cfg = DesktopConfig::default();
+        // Valid http(s) URLs land trimmed.
+        apply_network_config_arm(
+            &mut cfg,
+            "network.proxy_url",
+            " http://127.0.0.1:7890 ",
+            None,
+        )
+        .expect("http proxy accepted");
+        assert_eq!(
+            cfg.network_proxy_url.as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+        apply_network_config_arm(&mut cfg, "network.proxy_url", "HTTPS://corp:3128", None)
+            .expect("https proxy accepted (case-insensitive scheme)");
+        assert_eq!(cfg.network_proxy_url.as_deref(), Some("HTTPS://corp:3128"));
+        // No scheme → refused, previous value kept.
+        let err = apply_network_config_arm(&mut cfg, "network.proxy_url", "127.0.0.1:7890", None)
+            .expect_err("missing scheme must be refused");
+        assert!(err.contains("http://"), "{err}");
+        assert_eq!(cfg.network_proxy_url.as_deref(), Some("HTTPS://corp:3128"));
+        // socks:// is not supported by the env-injection path either.
+        assert!(
+            apply_network_config_arm(&mut cfg, "network.proxy_url", "socks5://corp:1080", None)
+                .is_err()
+        );
+        // Empty clears (R1: keep the implicit env fallback).
+        apply_network_config_arm(&mut cfg, "network.proxy_url", "   ", None).expect("clear");
+        assert_eq!(cfg.network_proxy_url, None);
+    }
+
+    #[test]
+    fn network_arm_no_proxy_trims_and_clears() {
+        let mut cfg = DesktopConfig::default();
+        apply_network_config_arm(
+            &mut cfg,
+            "network.no_proxy",
+            " localhost,127.0.0.1,::1,.example.com ",
+            None,
+        )
+        .expect("no_proxy accepted");
+        assert_eq!(
+            cfg.network_no_proxy.as_deref(),
+            Some("localhost,127.0.0.1,::1,.example.com")
+        );
+        apply_network_config_arm(&mut cfg, "network.no_proxy", "", None).expect("clear");
+        assert_eq!(cfg.network_no_proxy, None);
+    }
+
+    #[test]
+    fn network_arm_unknown_key_is_an_error() {
+        let mut cfg = DesktopConfig::default();
+        let err = apply_network_config_arm(&mut cfg, "network.bogus", "x", None)
+            .expect_err("unknown network key must be refused");
+        assert!(err.contains("network.bogus"), "{err}");
     }
 
     #[test]
@@ -1713,6 +3275,7 @@ mod tests {
             kind: kind.into(),
             api_key: key.map(str::to_string),
             base_url: None,
+            models_url: None,
             model: None,
             // Phase 2 task 3 — default to `None` so the helper doesn't
             // touch the v2 fields; individual tests pass the field
@@ -1741,8 +3304,7 @@ mod tests {
             );
             assert!(
                 !conn.has_api_key,
-                "apply_provider_update must never set has_api_key (saw key={:?})",
-                key
+                "apply_provider_update must never set has_api_key (saw key={key:?})",
             );
         }
         // The display name still updates regardless of key handling.
@@ -1758,6 +3320,7 @@ mod tests {
             kind: "openai-compatible".into(),
             api_key: Some("***".into()),
             base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
+            models_url: None,
             model: Some("".into()), // empty => cleared
             extra_headers: None,
             default_max_tokens: None,
@@ -1792,6 +3355,7 @@ mod tests {
             kind: "anthropic".into(),
             api_key: Some("***".into()),
             base_url: None,
+            models_url: None,
             model: None,
             extra_headers: Some(headers.clone()),
             default_max_tokens: Some(Some(8192)),
@@ -1827,6 +3391,7 @@ mod tests {
             kind: "anthropic".into(),
             api_key: Some("***".into()),
             base_url: None,
+            models_url: None,
             model: None,
             extra_headers: None,
             default_max_tokens: None,
@@ -1859,6 +3424,7 @@ mod tests {
             kind: "anthropic".into(),
             api_key: Some("***".into()),
             base_url: None,
+            models_url: None,
             model: None,
             extra_headers: None,
             default_max_tokens: Some(None),
@@ -1867,6 +3433,65 @@ mod tests {
         };
         apply_provider_update(&mut conn, &input, None);
         assert!(conn.default_max_tokens.is_none());
+    }
+
+    // === models_url wire line (S4-c) ===
+
+    /// The `models_url` full wire line: input → connection → engine
+    /// profile (what `providers.toml` persists) → read-side fan-out
+    /// (what the UI list shows). The modal sends a trimmed URL or
+    /// omits the field; the server-side normalization matches.
+    #[test]
+    fn models_url_round_trips_input_to_profile_and_back() {
+        const URL: &str = "https://open.bigmodel.cn/api/paas/v4/models";
+        let mut conn = sample_conn("glm", "openai-compatible", Some("k"));
+        assert!(conn.models_url.is_none());
+
+        let mut input = provider_input(Some("glm"), "GLM", "openai-compatible", Some("***"));
+        input.models_url = Some(format!("  {URL}  "));
+        apply_provider_update(&mut conn, &input, None);
+        assert_eq!(conn.models_url.as_deref(), Some(URL));
+
+        // Landing in the engine store: the override survives
+        // `to_provider_profile` verbatim.
+        let profile = conn.to_provider_profile("https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(profile.models_url.as_deref(), Some(URL));
+
+        // Read-side fan-out (`list_providers`) shows it back to the UI.
+        let back = config::from_provider_profile(&conn.id, &profile);
+        assert_eq!(back.models_url.as_deref(), Some(URL));
+    }
+
+    /// Edit semantics: `None` (field omitted) and blank (normalized to
+    /// `None`) must both leave a stored `models_url` override untouched —
+    /// re-saving a label never blanks the models endpoint.
+    #[test]
+    fn models_url_none_and_blank_leave_stored_override_untouched() {
+        const URL: &str = "https://gateway.example.com/v1/models";
+        let mut conn = sample_conn("glm", "openai-compatible", Some("k"));
+        conn.models_url = Some(URL.into());
+
+        let omitted = provider_input(Some("glm"), "Renamed", "openai-compatible", Some("***"));
+        apply_provider_update(&mut conn, &omitted, None);
+        assert_eq!(conn.models_url.as_deref(), Some(URL));
+
+        let mut blank = provider_input(Some("glm"), "Renamed", "openai-compatible", Some("***"));
+        blank.models_url = Some("   ".into());
+        apply_provider_update(&mut conn, &blank, None);
+        assert_eq!(conn.models_url.as_deref(), Some(URL));
+    }
+
+    /// Insert-branch normalization (new connections go through
+    /// `normalize_models_url` in `save_provider`): trim, blank → `None`.
+    #[test]
+    fn normalize_models_url_trims_and_refuses_blank() {
+        assert_eq!(normalize_models_url(None), None);
+        assert_eq!(normalize_models_url(Some("")), None);
+        assert_eq!(normalize_models_url(Some("   ")), None);
+        assert_eq!(
+            normalize_models_url(Some("  https://x.example/v1/models ")),
+            Some("https://x.example/v1/models".to_string())
+        );
     }
 
     #[test]
@@ -1932,6 +3557,10 @@ mod tests {
         assert_eq!(
             default_base_url_for_kind("deepseek"),
             Some("https://api.deepseek.com")
+        );
+        assert_eq!(
+            default_base_url_for_kind("gemini"),
+            Some("https://generativelanguage.googleapis.com")
         );
     }
 
@@ -2020,6 +3649,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         store.upsert_profile(profile, model_id);
     }
@@ -2171,6 +3801,7 @@ mod tests {
                 standard: Some("sonnet-model".into()),
                 pro: Some("opus-model".into()),
             },
+            models: Vec::new(),
         };
         store.upsert_profile(profile, "claude-sonnet-4-20250514");
 
@@ -2233,6 +3864,7 @@ mod tests {
                 fallback_models: Vec::new(),
                 quirks: Default::default(),
                 tiers: ProviderTiers::default(),
+                models: Vec::new(),
             },
             model_id,
         );
@@ -2338,5 +3970,404 @@ mod tests {
             "removing the active profile must clear the surfaced active id on read",
         );
         assert!(file.providers.is_empty());
+    }
+
+    // === B1-8 [R1-4]: `configure('model')` value normalization (decision 1) ===
+    //
+    // The Header used to write the display NAME into the config's `model`
+    // key, so existing providers.toml files carry names/aliases in
+    // `active_target.model_id` while the resolver passes the stored string
+    // through as the API model parameter verbatim. `normalize_model_id` is
+    // the write-entry repair: exact id unchanged, name/alias → id, unknown
+    // → unchanged.
+
+    #[test]
+    fn normalize_model_id_rewrites_legacy_display_name_to_id() {
+        use shannon_engine::api::LlmProvider;
+        // Catalog: id "claude-sonnet-4-20250514", display_name "Claude Sonnet 4".
+        assert_eq!(
+            normalize_model_id(LlmProvider::Anthropic, "Claude Sonnet 4"),
+            "claude-sonnet-4-20250514"
+        );
+        // Case-insensitive on the display name too.
+        assert_eq!(
+            normalize_model_id(LlmProvider::OpenAI, "gpt-4o mini"),
+            "gpt-4o-mini"
+        );
+    }
+
+    #[test]
+    fn normalize_model_id_rewrites_alias_to_id() {
+        use shannon_engine::api::LlmProvider;
+        // Catalog: "claude-sonnet-4-20250514" aliases include "sonnet4".
+        assert_eq!(
+            normalize_model_id(LlmProvider::Anthropic, "sonnet4"),
+            "claude-sonnet-4-20250514"
+        );
+        assert_eq!(normalize_model_id(LlmProvider::OpenAI, "GPT4O"), "gpt-4o");
+    }
+
+    #[test]
+    fn normalize_model_id_passes_exact_id_through() {
+        use shannon_engine::api::LlmProvider;
+        assert_eq!(
+            normalize_model_id(LlmProvider::Anthropic, "claude-sonnet-4-20250514"),
+            "claude-sonnet-4-20250514"
+        );
+        assert_eq!(normalize_model_id(LlmProvider::OpenAI, "gpt-4o"), "gpt-4o");
+    }
+
+    #[test]
+    fn normalize_model_id_passes_unknown_values_through() {
+        use shannon_engine::api::LlmProvider;
+        // Unknown ids must not be mangled — the resolver's passthrough
+        // contract covers custom endpoints and freshly published models.
+        assert_eq!(
+            normalize_model_id(LlmProvider::Anthropic, "totally-custom-model"),
+            "totally-custom-model"
+        );
+        // A display name of a DIFFERENT provider must not resolve — the
+        // value is only rewritten within the active provider's own catalog.
+        assert_eq!(
+            normalize_model_id(LlmProvider::Anthropic, "GPT-4o"),
+            "GPT-4o"
+        );
+        assert_eq!(normalize_model_id(LlmProvider::OpenAI, ""), "");
+    }
+
+    // === Fetch model list (2026-09-29 provider review §2-9) ===
+
+    #[test]
+    fn models_list_url_for_kind_mirrors_engine_probe_endpoints() {
+        let base = "https://api.example.com";
+        assert_eq!(
+            models_list_url_for_kind("anthropic", base),
+            "https://api.example.com/v1/models"
+        );
+        assert_eq!(
+            models_list_url_for_kind("openai", base),
+            "https://api.example.com/v1/models"
+        );
+        assert_eq!(
+            models_list_url_for_kind("deepseek", base),
+            "https://api.example.com/models"
+        );
+        assert_eq!(
+            models_list_url_for_kind("openai-compatible", base),
+            "https://api.example.com/models"
+        );
+        assert_eq!(
+            models_list_url_for_kind("ollama", "http://localhost:11434"),
+            "http://localhost:11434/api/tags"
+        );
+    }
+
+    #[test]
+    fn extract_model_ids_parses_openai_data_shape() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"object":"list","data":[{"id":"gpt-4o","object":"model"},{"id":"gpt-4.1-mini","object":"model"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(extract_model_ids(&body), vec!["gpt-4.1-mini", "gpt-4o"]);
+    }
+
+    #[test]
+    fn extract_model_ids_parses_ollama_tags_shape() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"models":[{"name":"llama3.2:latest"},{"name":"qwen2.5:7b"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            extract_model_ids(&body),
+            vec!["llama3.2:latest", "qwen2.5:7b"]
+        );
+    }
+
+    #[test]
+    fn extract_model_ids_sorts_dedups_and_tolerates_garbage() {
+        // Lookup is lenient across id/name/model keys (some gateways mix
+        // shapes inside one array); sort + dedup still apply.
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"data":[{"id":"b"},{"id":"a"},{"id":"a"},{"name":"no-id-field"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(extract_model_ids(&body), vec!["a", "b", "no-id-field"]);
+        // Unrecognized body → empty list (UI treats it as "nothing usable").
+        assert!(extract_model_ids(&serde_json::json!({"error": "nope"})).is_empty());
+        assert!(extract_model_ids(&serde_json::Value::Null).is_empty());
+    }
+
+    #[test]
+    fn fetch_models_error_round_trips_through_split() {
+        // Token-only categories.
+        assert_eq!(
+            fetch_models_error::split(fetch_models_error::INVALID_KEY),
+            (fetch_models_error::INVALID_KEY, "")
+        );
+        assert_eq!(
+            fetch_models_error::split(fetch_models_error::NETWORK_UNREACHABLE),
+            (fetch_models_error::NETWORK_UNREACHABLE, "")
+        );
+        // token:detail categories survive the round trip.
+        assert_eq!(
+            fetch_models_error::split("provider_error:503"),
+            (fetch_models_error::PROVIDER_ERROR, "503")
+        );
+        assert_eq!(
+            fetch_models_error::split("unsupported_kind:gemini"),
+            (fetch_models_error::UNSUPPORTED_KIND, "gemini")
+        );
+        // Unknown messages are NOT mistaken for categories (provider error
+        // bodies with colons must reach the user verbatim).
+        assert_eq!(
+            fetch_models_error::split("boom: detail"),
+            ("", "boom: detail")
+        );
+    }
+
+    #[test]
+    fn resolve_probe_key_prefers_explicit_and_falls_back_to_store() {
+        // Explicit wins; the "***" mask means "keep stored" and must not be
+        // sent to the provider (same contract `store_provider_key` uses).
+        assert_eq!(
+            resolve_probe_key(&Some("  sk-live ".into()), &Some("id".into())).as_deref(),
+            Some("sk-live")
+        );
+        assert_eq!(resolve_probe_key(&Some("***".into()), &None), None);
+        assert_eq!(resolve_probe_key(&Some("".into()), &None), None);
+        // No key in store → None (command turns that into missing_key /
+        // Unknown "no API key provided").
+        assert_eq!(
+            resolve_probe_key(&None, &Some("nonexistent-id".into())),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_and_map_classifies_402_as_quota_exhausted() {
+        use mockito::Server;
+
+        // R2-P1-10: a provider answering 402 (Payment Required — account out
+        // of credits / over plan) must surface as the typed
+        // `QuotaExhausted` verdict shared by the saved-connection test, the
+        // in-modal test, and the Test-all fan-out — not `Unknown` with the
+        // raw English provider body. The engine probe maps the status before
+        // any body parsing, so the 402 survives even with a JSON error body.
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/models")
+            .with_status(402)
+            .with_body(
+                r#"{"error":{"message":"You have exceeded your billing quota","type":"insufficient_quota"}}"#,
+            )
+            .create_async()
+            .await;
+
+        let result =
+            probe_and_map("openai-compatible", "sk-test", Some(server.url().as_str())).await;
+        assert_eq!(result, TestConnectionResult::QuotaExhausted, "{result:?}");
+        mock.assert();
+    }
+
+    #[test]
+    fn test_connection_result_serializes_quota_exhausted_tag() {
+        // Wire contract with the frontend's discriminated union
+        // (`api.TestConnectionResult`): the serde tag must stay
+        // `quota_exhausted` or every test surface falls back to "Unknown".
+        let json = serde_json::to_value(TestConnectionResult::QuotaExhausted).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "quota_exhausted" }));
+    }
+
+    // === S1-4a — Ollama default-port detection + TTL cache (review R2 P-N4) ===
+
+    #[test]
+    fn env_scan_detects_ollama_host_without_probing() {
+        // `OLLAMA_HOST` set at all counts as configured, regardless of value.
+        let prev = std::env::var("OLLAMA_HOST").ok();
+        // SAFETY: single-threaded mutation of an env var no other test in
+        // this binary reads (grep: OLLAMA_HOST only appears here and in the
+        // production scan this test pins).
+        unsafe { std::env::set_var("OLLAMA_HOST", "http://0.0.0.0:1135") };
+        let detected = scan_env_provider();
+        // Restore before asserts so a panic path still cleans up.
+        match prev {
+            Some(v) => unsafe { std::env::set_var("OLLAMA_HOST", v) },
+            None => unsafe { std::env::remove_var("OLLAMA_HOST") },
+        }
+        assert_eq!(
+            detected.map(|d| (d.provider, d.has_api_key)),
+            Some(("ollama".into(), false)),
+            "OLLAMA_HOST set → ollama, no API key"
+        );
+    }
+
+    #[test]
+    fn env_scan_prefers_api_keys_over_ollama() {
+        // First key candidate wins in the documented ranking order — the
+        // OLLAMA_HOST branch must never shadow a real key.
+        let prev_a = std::env::var("ANTHROPIC_API_KEY").ok();
+        let prev_o = std::env::var("OLLAMA_HOST").ok();
+        // SAFETY: see env_scan_detects_ollama_host_without_probing.
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "sk-test");
+            std::env::set_var("OLLAMA_HOST", "http://localhost:11434");
+        }
+        let detected = scan_env_provider();
+        unsafe {
+            match prev_a {
+                Some(v) => std::env::set_var("ANTHROPIC_API_KEY", v),
+                None => std::env::remove_var("ANTHROPIC_API_KEY"),
+            }
+            match prev_o {
+                Some(v) => std::env::set_var("OLLAMA_HOST", v),
+                None => std::env::remove_var("OLLAMA_HOST"),
+            }
+        }
+        assert_eq!(
+            detected.map(|d| (d.provider, d.has_api_key)),
+            Some(("anthropic".into(), true)),
+            "an API-key env must outrank the OLLAMA_HOST branch"
+        );
+    }
+
+    #[test]
+    fn env_hit_short_circuits_the_probe() {
+        // S1-4a guardrail: an env-detected provider must never pay a socket
+        // connect. `scan` is injected so the ambient environment cannot flip
+        // this test, and the probe closure asserts zero invocations.
+        let mut cache = None;
+        let mut probes = 0usize;
+        let detected = cached_env_provider(
+            &mut cache,
+            Instant::now(),
+            || {
+                Some(DetectedProvider {
+                    provider: "anthropic".into(),
+                    has_api_key: true,
+                })
+            },
+            || {
+                probes += 1;
+                false
+            },
+        );
+        assert_eq!(
+            detected.map(|d| (d.provider, d.has_api_key)),
+            Some(("anthropic".into(), true))
+        );
+        assert_eq!(probes, 0, "env hit must not probe the socket");
+    }
+
+    #[test]
+    fn cache_holds_within_ttl_and_expires_after_it() {
+        // S1-4a guardrail: the gating hot path (`get_provider_status`) must
+        // not re-probe on every call. Injected clock + counting probe pin
+        // the memoize-once / re-probe-after-TTL contract.
+        let t0 = Instant::now();
+        let mut cache = None;
+        let mut probes = 0usize;
+        // Non-capturing → Copy, so it can be re-passed by value per call.
+        let scan = || -> Option<DetectedProvider> { None };
+
+        let first = cached_env_provider(&mut cache, t0, scan, || {
+            probes += 1;
+            false
+        });
+        assert_eq!(first, None, "nothing set and port closed → None");
+        assert_eq!(probes, 1, "first call probes");
+
+        // Just inside the TTL: cached None comes back, zero new probes.
+        let within = cached_env_provider(
+            &mut cache,
+            t0 + ENV_PROVIDER_CACHE_TTL - Duration::from_millis(1),
+            scan,
+            || {
+                probes += 1;
+                false
+            },
+        );
+        assert_eq!(within, None);
+        assert_eq!(probes, 1, "cache hit must not re-probe");
+
+        // Past the TTL: the probe fires again (value refreshed).
+        let after = cached_env_provider(
+            &mut cache,
+            t0 + ENV_PROVIDER_CACHE_TTL + Duration::from_millis(1),
+            scan,
+            || {
+                probes += 1;
+                true
+            },
+        );
+        assert_eq!(
+            after.map(|d| (d.provider, d.has_api_key)),
+            Some(("ollama".into(), false)),
+            "probe hit → ollama detected, no API key"
+        );
+        assert_eq!(probes, 2, "expired entry re-probes exactly once");
+    }
+
+    #[test]
+    fn closed_port_probe_fails_fast() {
+        // S1-4a acceptance: env unset + closed port → None, quickly. Grab a
+        // port, release it, then probe it — deterministic "nothing listens".
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let addr = listener.local_addr().expect("local addr");
+        drop(listener);
+        let start = Instant::now();
+        let hit = probe_ollama_endpoint(addr);
+        let elapsed = start.elapsed();
+        assert!(!hit, "released port must not be detected as Ollama");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "closed-port probe must fail fast, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn open_port_probe_detects_a_listener() {
+        // The positive half of the probe contract, fully local: a live
+        // listener on an ephemeral port stands in for `ollama serve`.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let addr = listener.local_addr().expect("local addr");
+        assert!(
+            probe_ollama_endpoint(addr),
+            "live listener must be detected"
+        );
+    }
+
+    // === S1-4b — quick-fill ids are current static-catalog entries (review R2 P-N5) ===
+
+    #[test]
+    fn quick_fill_model_ids_exist_in_static_catalog() {
+        use shannon_core::model_registry::MODEL_CATALOG;
+
+        // Pin: the quick-fill chips the AddProviderModal prefills must be
+        // REAL ids in `MODEL_CATALOG` — the 2026-10 review (P-N5) flagged
+        // that users' first impression was a stale 2024 catalog. This list
+        // is the Rust half of the contract; the TS half lives in
+        // `desktop/ui/src/__tests__/addProviderQuickFill.test.ts`. Keep the
+        // two lists in sync with `QUICK_FILL` in
+        // `desktop/ui/src/components/settings/add-provider-modal/types.ts`.
+        let pinned: &[(&str, &str)] = &[
+            // (quick-fill chip id, prefilled model id)
+            ("anthropic", "claude-sonnet-4-6"),
+            ("openai", "gpt-5-mini"),
+            ("deepseek", "deepseek-chat"),
+            ("glm", "glm-5.1"),
+            ("kimi", "kimi-k2.6"),
+            ("minimax", "MiniMax-M3"),
+            // NOTE: the `ollama` chip (`llama3.2`) is deliberately absent —
+            // Ollama model ids are detected at runtime from the user's local
+            // daemon (`detect_local_models`), so the static catalog has no
+            // Ollama entries to pin against. The stale-id rule ("must exist
+            // in MODEL_CATALOG") cannot apply there.
+        ];
+        for (chip, model) in pinned {
+            assert!(
+                MODEL_CATALOG.iter().any(|m| m.id == *model),
+                "quick-fill chip `{chip}`: model `{model}` must exist in MODEL_CATALOG (it is what new users see prefilled)"
+            );
+        }
     }
 }

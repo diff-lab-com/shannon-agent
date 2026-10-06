@@ -1,0 +1,40 @@
+# ChatScript: visual-tool-run — R5 视觉状态矩阵（task-5 brief §B）专用停点剧本。
+#
+# 文本 lead-in → Bash tool-start → tool-progress 40% → waitFor:'ui' 停点。
+# 玩家停在 running 卡 + 进度 pill 上（tool-task-file 的 40% 停点同款手法），
+# 让「工具运行中」成为可截图的稳定中间态；spec 断言 running 卡在场后截图，
+# 不 resume（该会话到此为止）。
+name: visual-tool-run
+description: R5 视觉矩阵 — 工具运行中（Bash running 卡 + 40% 进度 pill 的停点态）
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-visual-tool
+      title: Visual tool run
+      messages: []
+turns:
+  - user: 帮我看看目录结构
+    script:
+      - event: query:text
+        chunks:
+          - "好的，我先查看当前目录结构。"
+        chunkDelayMs: 120
+      - event: query:tool-start
+        payload:
+          tool_use_id: tool-visual-1
+          tool_name: Bash
+          tool_input:
+            command: "ls -R"
+      - event: query:tool-progress
+        payload:
+          tool_use_id: tool-visual-1
+          progress: 0.4
+          message: "scanning entries"
+      - waitFor: ui
+      - event: query:tool-result
+        payload:
+          tool_use_id: tool-visual-1
+          result: "src/ e2e/"
+          is_error: false
+      - event: query:completed

@@ -75,15 +75,22 @@ describe('createVoiceProvider', () => {
     delete (globalThis as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
   })
 
-  it('returns a stub provider when kind is stub', () => {
+  it('returns a stub provider when kind is stub, and the stub reports itself unsupported', () => {
     const p = createVoiceProvider({ kind: 'stub' })
     expect(p.kind).toBe('stub')
-    expect(p.isSupported()).toBe(true)
+    // F-voice-gate: the stub is the fallback for environments WITHOUT real
+    // STT support, so it must report isSupported() === false — otherwise the
+    // ChatInput mic gate can never close and users without a provider get a
+    // mic that only ever emits the stub's canned transcript.
+    expect(p.isSupported()).toBe(false)
   })
 
-  it('falls back to stub when remote is unsupported (no MediaRecorder)', () => {
+  it('falls back to stub when remote is unsupported (no MediaRecorder), and that stub is unsupported', () => {
     const p = createVoiceProvider({ kind: 'remote' })
     expect(p.kind).toBe('stub')
+    // F-voice-gate: the fallback must surface as unsupported so
+    // useVoice().supported is false and the UI hides the mic.
+    expect(p.isSupported()).toBe(false)
   })
 
   it('returns the remote provider when MediaRecorder is available', () => {
@@ -116,9 +123,83 @@ describe('createVoiceProvider', () => {
     }
   })
 
-  it('falls back to stub when local is unsupported (no MediaRecorder)', () => {
+  it('falls back to stub when local is unsupported (no MediaRecorder), and that stub is unsupported', () => {
     const p = createVoiceProvider({ kind: 'local' })
     expect(p.kind).toBe('stub')
+    expect(p.isSupported()).toBe(false)
+  })
+})
+
+// F-voice-gate: the factory's support surface must be honest. A provider is
+// "supported" only when BOTH real capture seams exist (`MediaRecorder` global
+// + `navigator.mediaDevices.getUserMedia`), and the stub fallback — whatever
+// route led to it — always reports unsupported so `useVoice().supported` is
+// false and ChatInput hides the mic instead of offering a recording that can
+// only ever emit the stub's canned transcript.
+describe('factory isSupported gate (F-voice-gate)', () => {
+  interface Seam {
+    recorder: boolean
+    mediaDevices: boolean
+  }
+
+  /** Install/remove exactly the two capture seams isSupported() probes. */
+  function installSeams(seam: Seam): () => void {
+    const g = globalThis as unknown as { MediaRecorder?: unknown }
+    const originalMR = g.MediaRecorder
+    const originalDesc = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices')
+
+    if (seam.recorder) {
+      g.MediaRecorder = class {
+        static isTypeSupported() {
+          return true
+        }
+      }
+    } else {
+      delete g.MediaRecorder
+    }
+    Object.defineProperty(
+      navigator,
+      'mediaDevices',
+      seam.mediaDevices
+        ? { value: { getUserMedia: vi.fn() }, configurable: true }
+        : { get: () => undefined, configurable: true },
+    )
+
+    return () => {
+      if (originalMR === undefined) delete g.MediaRecorder
+      else g.MediaRecorder = originalMR
+      if (originalDesc) Object.defineProperty(navigator, 'mediaDevices', originalDesc)
+      else delete (navigator as unknown as { mediaDevices?: unknown }).mediaDevices
+    }
+  }
+
+  const cases: Array<{
+    name: string
+    kind: 'remote' | 'local' | 'stub'
+    seam: Seam
+    expectedKind: 'remote' | 'local' | 'stub'
+    expectedSupported: boolean
+  }> = [
+    { name: 'remote with both seams → remote, supported', kind: 'remote', seam: { recorder: true, mediaDevices: true }, expectedKind: 'remote', expectedSupported: true },
+    { name: 'remote without getUserMedia → stub fallback, unsupported', kind: 'remote', seam: { recorder: true, mediaDevices: false }, expectedKind: 'stub', expectedSupported: false },
+    { name: 'remote without MediaRecorder → stub fallback, unsupported', kind: 'remote', seam: { recorder: false, mediaDevices: true }, expectedKind: 'stub', expectedSupported: false },
+    { name: 'remote with no seams → stub fallback, unsupported', kind: 'remote', seam: { recorder: false, mediaDevices: false }, expectedKind: 'stub', expectedSupported: false },
+    { name: 'local with both seams → local, supported', kind: 'local', seam: { recorder: true, mediaDevices: true }, expectedKind: 'local', expectedSupported: true },
+    { name: 'local without getUserMedia → stub fallback, unsupported', kind: 'local', seam: { recorder: true, mediaDevices: false }, expectedKind: 'stub', expectedSupported: false },
+    { name: 'local without MediaRecorder → stub fallback, unsupported', kind: 'local', seam: { recorder: false, mediaDevices: true }, expectedKind: 'stub', expectedSupported: false },
+    { name: 'explicit stub reports unsupported even with both seams', kind: 'stub', seam: { recorder: true, mediaDevices: true }, expectedKind: 'stub', expectedSupported: false },
+    { name: 'explicit stub reports unsupported with no seams', kind: 'stub', seam: { recorder: false, mediaDevices: false }, expectedKind: 'stub', expectedSupported: false },
+  ]
+
+  it.each(cases)('$name', ({ kind, seam, expectedKind, expectedSupported }) => {
+    const restore = installSeams(seam)
+    try {
+      const p = createVoiceProvider({ kind })
+      expect(p.kind).toBe(expectedKind)
+      expect(p.isSupported()).toBe(expectedSupported)
+    } finally {
+      restore()
+    }
   })
 })
 

@@ -1084,6 +1084,7 @@ mod tests {
             }),
             // Turn 1 closes with a usage triple.
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: Some(usage(100, 20, 5, 50, 0.25)),
                 error: None,
@@ -1154,6 +1155,7 @@ mod tests {
             }),
             // Final turn closes (interrupted marker exercises the signal).
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_INTERRUPTED.into(),
                 usage: Some(usage(30, 10, 0, 80, 0.05)),
                 error: None,
@@ -1217,6 +1219,7 @@ mod tests {
             dir.path(),
             "one",
             vec![SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: Some(usage(10, 5, 0, 0, 0.01)),
                 error: None,
@@ -1233,6 +1236,7 @@ mod tests {
                 call("c", "Read", r#"{"p":1}"#),
                 result("c", "Read", false),
                 SessionEventBody::TurnEnd(TurnEndPayload {
+                    llm_steps: None,
                     reason: TurnEndPayload::REASON_COMPLETED.into(),
                     usage: Some(usage(4, 2, 1, 3, 0.02)),
                     error: None,
@@ -1258,8 +1262,14 @@ mod tests {
         write_log(dir.path(), "aaa", Vec::new());
         let found = find_event_logs(dir.path());
         assert_eq!(found.len(), 2);
-        assert!(found[0].display().to_string().ends_with("aaa/events.jsonl"));
-        assert!(found[1].display().to_string().ends_with("bbb/events.jsonl"));
+        // Compare path components, not a `/` string suffix — Windows
+        // renders `\`.
+        let ends_with_log = |p: &std::path::Path, id: &str| {
+            p.file_name() == Some(std::ffi::OsStr::new("events.jsonl"))
+                && p.parent().and_then(|d| d.file_name()) == Some(std::ffi::OsStr::new(id))
+        };
+        assert!(ends_with_log(&found[0], "aaa"), "{:?}", found[0]);
+        assert!(ends_with_log(&found[1], "bbb"), "{:?}", found[1]);
     }
 
     #[test]

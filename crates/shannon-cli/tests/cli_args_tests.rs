@@ -17,20 +17,29 @@ fn shannon() -> Command {
 
 #[test]
 fn test_target_flag_is_accepted() {
-    // Parse-level check only: an unknown target name must surface as a
-    // "not found" style error, not an argument error.
+    // Parse-level check only: --version short-circuits AFTER clap has
+    // validated every preceding flag (left-to-right parse), so this proves
+    // "--target is a known flag" without starting a real headless session.
+    // The session path made this the slowest test in the workspace — >60s
+    // of provider wait per run on CI (2026-10-01 review); a trailing
+    // --version returns in ~20ms. An unknown flag still surfaces as
+    // "unexpected argument" BEFORE --version is reached.
     let output = shannon()
         .arg("--target")
         .arg("definitely-not-a-registered-host")
         .arg("--prompt")
         .arg("hello")
-        .env("SHANNON_HEADLESS_SILENT", "1")
+        .arg("--version")
         .output()
         .expect("binary runs");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stderr.contains("unexpected argument '--target'"),
         "--target must be a recognized flag, stderr: {stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "parse must reach --version, stderr: {stderr}"
     );
 }
 
@@ -97,10 +106,12 @@ fn test_help_flag_short() {
 fn test_attach_flag_is_recognized() {
     // `--attach` must parse without "unrecognized argument" surfacing in
     // stderr; the actual file resolution runs at query dispatch time.
+    // Trailing --version short-circuits after parse (see
+    // test_target_flag_is_accepted) — no real headless session.
     shannon()
-        .args(["--attach", "/nonexistent.png", "--prompt", "x"])
-        .env("SHANNON_HEADLESS_SILENT", "1")
+        .args(["--attach", "/nonexistent.png", "--prompt", "x", "--version"])
         .assert()
+        .success()
         .stderr(predicate::str::contains("unexpected argument '--attach'").not());
 }
 
@@ -115,11 +126,22 @@ fn test_attach_flag_help_lists_path_metavar() {
 #[test]
 fn test_attach_repeats_allowed() {
     // `--attach` is `num_args = 1..` — ensure clap accepts two values
-    // without complaining about a missing second occurrence.
+    // without complaining about a missing second occurrence. Trailing
+    // --version short-circuits after parse (see
+    // test_target_flag_is_accepted) — no real headless session (this test
+    // was the single worst offender: >60s per CI run).
     shannon()
-        .args(["--attach", "/a.png", "--attach", "/b.jpg", "--prompt", "x"])
-        .env("SHANNON_HEADLESS_SILENT", "1")
+        .args([
+            "--attach",
+            "/a.png",
+            "--attach",
+            "/b.jpg",
+            "--prompt",
+            "x",
+            "--version",
+        ])
         .assert()
+        .success()
         .stderr(predicate::str::contains("unexpected argument").not());
 }
 
@@ -512,11 +534,19 @@ fn test_trace_diff_requires_two_sessions() {
 #[serial]
 #[test]
 fn test_trace_show_missing_session_errors_cleanly() {
+    // Hermetic HOME: the headless startup gate reads `~/.shannon/meta.json`
+    // before arg-specific handling, so a developer home last written by a
+    // NEWER build aborts the binary with the downgrade refusal instead of
+    // reaching the trace error under test. Redirect HOME/USERPROFILE at an
+    // empty tempdir so the gate sees no data directory at all.
+    let home = tempfile::tempdir().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let container = dir.path().join("sessions");
     std::fs::create_dir_all(&container).unwrap();
 
     shannon()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .args([
             "trace",
             "show",

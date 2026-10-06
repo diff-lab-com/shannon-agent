@@ -5,12 +5,175 @@
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 use super::error::ApiError;
 use super::types::{
-    ContentBlock, ContentDelta, LlmProvider, Message, MessageDeltaDelta, MessageRequest,
-    StreamEvent, Usage, WireFormat,
+    ContentBlock, ContentDelta, LlmProvider, Message, MessageContent, MessageDeltaDelta,
+    MessageRequest, StreamEvent, ToolResultContent, Usage, WireFormat,
 };
+
+// ── A13: wire sanitizer for OpenAI-compatible (strict) providers ───────────
+//
+// minimax-M3 validates that every tool result immediately follows the
+// assistant message that declared the call and rejects orphans with
+// `invalid params, tool result's tool id(..) not found (2013)` —
+// ~/.shannon/eval/deepswe-smoke/jobs/deepswe-smoke-mm1/. The engine's turn
+// loop (A13 root fix) no longer produces orphan sequences, but any upstream
+// assembly bug must still fail closed: this sanitizer runs at the
+// OpenAI-compatible serialization exit and (1) drops tool results that no
+// preceding assistant declared and (2) settles dangling declarations with a
+// synthetic "(interrupted)" result. Anthropic-wire serialization (tolerant
+// providers: Anthropic / Zhipu-coding path) deliberately does NOT run it.
+
+/// Placeholder content for a tool result whose call was interrupted before
+/// producing anything (A13 wire sanitizer).
+const INTERRUPTED_TOOL_RESULT: &str = "(interrupted)";
+
+/// A13-c: minimax's backend parses `tool_calls[].function.arguments` and
+/// requires a JSON object — the literal `"null"` (and any other non-object
+/// JSON value) is rejected with `400 (2013) invalid params`, while `"{}"`
+/// succeeds (decisive live-API comparison, request_id
+/// 06fc6407792530aa1d9df28fe350fd1a → 400 vs
+/// 06fc64093ab64d878b704669ba551957 → 200). Normalize any non-object
+/// arguments to the empty object; valid objects pass through untouched.
+fn normalize_tool_arguments(input: &Value) -> Value {
+    let rendered = input.to_string();
+    match serde_json::from_str::<Value>(&rendered) {
+        Ok(v) if v.is_object() => input.clone(),
+        Ok(other) => {
+            tracing::warn!(
+                arguments = %rendered,
+                "A13 wire sanitizer: tool_call arguments is a non-object JSON value ({other}) — normalizing to {{}}"
+            );
+            json!({})
+        }
+        Err(_) => {
+            tracing::warn!(
+                arguments = %rendered,
+                "A13 wire sanitizer: tool_call arguments is not valid JSON — normalizing to {{}}"
+            );
+            json!({})
+        }
+    }
+}
+
+/// Settle dangling tool-call declarations with synthetic `"(interrupted)"`
+/// results so the wire never carries an unanswered `tool_call`.
+fn synthesize_interrupted_results(out: &mut Vec<Message>, pending: &mut Vec<(String, String)>) {
+    if pending.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        count = pending.len(),
+        calls = ?pending.iter().map(|(id, name)| format!("{name}#{id}")).collect::<Vec<_>>(),
+        "A13 wire sanitizer: tool call(s) interrupted before their results — synthesizing placeholders"
+    );
+    let blocks: Vec<ContentBlock> = pending
+        .drain(..)
+        .map(|(id, name)| ContentBlock::ToolResult {
+            tool_use_id: id,
+            content: Some(ToolResultContent::Single(format!(
+                "{INTERRUPTED_TOOL_RESULT} — tool '{name}' was interrupted before producing a result"
+            ))),
+            is_error: Some(true),
+        })
+        .collect();
+    out.push(Message {
+        role: "user".to_string(),
+        content: MessageContent::Blocks(blocks),
+    });
+}
+
+/// Enforce a strict tool-call/tool-result conversation shape (A13):
+///
+/// 1. A tool result whose `tool_use_id` was never declared by a preceding
+///    assistant message is dropped.
+/// 2. A declared call that would be left dangling — because the sequence
+///    ends, a new declaration round starts, or any unrelated message
+///    intervenes — is settled with a synthetic `"(interrupted)"` result so
+///    strict providers (minimax 2013, OpenAI tool-message adjacency) always
+///    see a legal sequence.
+///
+/// Pure: returns a cleaned copy; the input is untouched.
+pub(crate) fn sanitize_tool_sequence(messages: &[Message]) -> Vec<Message> {
+    let mut out: Vec<Message> = Vec::new();
+    // (tool_use_id, tool name) declared and still awaiting its result.
+    let mut pending: Vec<(String, String)> = Vec::new();
+
+    for msg in messages {
+        match (&msg.content, msg.role.as_str()) {
+            (MessageContent::Blocks(blocks), "assistant") => {
+                // A new declaration round begins: settle any leftovers from
+                // the previous round so results cannot interleave.
+                if blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                {
+                    synthesize_interrupted_results(&mut out, &mut pending);
+                }
+                let mut kept: Vec<ContentBlock> = Vec::with_capacity(blocks.len());
+                for b in blocks {
+                    if let ContentBlock::ToolUse { id, name, input } = b {
+                        pending.push((id.clone(), name.clone()));
+                        kept.push(ContentBlock::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: normalize_tool_arguments(input),
+                        });
+                    } else {
+                        kept.push(b.clone());
+                    }
+                }
+                out.push(Message {
+                    role: msg.role.clone(),
+                    content: MessageContent::Blocks(kept),
+                });
+            }
+            (MessageContent::Blocks(blocks), "user") => {
+                let mut kept: Vec<ContentBlock> = Vec::with_capacity(blocks.len());
+                let mut dropped = 0usize;
+                for b in blocks {
+                    if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                        match pending.iter().position(|(id, _)| id == tool_use_id) {
+                            Some(pos) => {
+                                pending.remove(pos);
+                                kept.push(b.clone());
+                            }
+                            None => {
+                                dropped += 1;
+                                continue;
+                            }
+                        }
+                    } else {
+                        kept.push(b.clone());
+                    }
+                }
+                if dropped > 0 {
+                    tracing::warn!(
+                        dropped,
+                        "A13 wire sanitizer: dropped orphaned tool_result block(s) with no declaring assistant (minimax 2013 guard)"
+                    );
+                }
+                if !kept.is_empty() {
+                    out.push(Message {
+                        role: msg.role.clone(),
+                        content: MessageContent::Blocks(kept),
+                    });
+                }
+            }
+            _ => {
+                // Any other message (pure text, system, plain assistant)
+                // intervening between a declaration and its result breaks
+                // strict adjacency — settle first.
+                synthesize_interrupted_results(&mut out, &mut pending);
+                out.push(msg.clone());
+            }
+        }
+    }
+    synthesize_interrupted_results(&mut out, &mut pending);
+    out
+}
 
 // ── Request Serialization ──────────────────────────────────────────────────
 
@@ -36,11 +199,21 @@ fn serialize_request_inner(
 ) -> Value {
     match provider.wire_format() {
         WireFormat::Anthropic => {
+            // A13 backstop (F4c): run the same tool-sequence sanitizer the
+            // OpenAI branch uses. Its assumptions are wire-safe here: it
+            // operates on the unified `Message` shape, drops user
+            // `tool_result` blocks with no declaring assistant call
+            // (Anthropic 400s on unknown `tool_use_id`), and settles
+            // dangling calls with synthetic `tool_result` blocks carried in
+            // user messages (Anthropic's required carrier role; consecutive
+            // user messages are combined into one turn by the API).
+            // Fail-closed: legal sequences pass through unchanged.
+            let mut req = request.clone();
+            req.messages = sanitize_tool_sequence(&req.messages);
             // Anthropic API only accepts `user` and `assistant` roles in the
             // messages array.  Compression / context-reinjection may inject
             // `role: "system"` messages.  Extract them and merge into the
             // top-level `system` field instead.
-            let mut req = request.clone();
             let mut system_texts: Vec<String> = Vec::new();
             req.messages.retain(|msg| {
                 if msg.role == "system" {
@@ -135,7 +308,32 @@ fn serialize_request_inner(
 
             val
         }
-        WireFormat::OpenAI => serialize_openai_request(request),
+        WireFormat::OpenAI => {
+            let mut body = serialize_openai_request(request);
+            // Explicit thinking toggle: zhipu/GLM only (`thinking: {"type":
+            // "enabled"|"disabled"}`). Other OpenAI-compatible providers never
+            // asked for this field and several reject unknown bodies with a
+            // 400, so the toggle is stripped everywhere else — SHANNON_THINKING
+            // stays a global env knob without leaking the field to non-GLM
+            // endpoints. Precedence: an explicit toggle wins over
+            // reasoning_effort on this wire (effort=high asks for MORE
+            // thinking; the toggle says less).
+            if let Some(ref t) = request.thinking_type {
+                if matches!(
+                    provider,
+                    LlmProvider::Zhipu
+                        | LlmProvider::ZhipuInternational
+                        | LlmProvider::ZhipuCoding
+                        | LlmProvider::ZhipuCodingPlan
+                ) {
+                    body["thinking"] = json!({ "type": t });
+                    if let Some(obj) = body.as_object_mut() {
+                        obj.remove("reasoning_effort");
+                    }
+                }
+            }
+            body
+        }
         WireFormat::Ollama => serialize_ollama_request(request),
         WireFormat::Gemini => serialize_gemini_request(request),
     }
@@ -213,9 +411,11 @@ fn serialize_openai_request(request: &MessageRequest) -> Value {
         }
     }
 
-    // Convert messages
-    for msg in &request.messages {
-        messages.extend(convert_message_for_openai(msg));
+    // Convert messages — A13: sanitize the sequence first so orphaned tool
+    // results and dangling tool calls never reach strict providers (minimax
+    // 2013).
+    for msg in sanitize_tool_sequence(&request.messages) {
+        messages.extend(convert_message_for_openai(&msg));
     }
 
     let mut body = json!({
@@ -300,7 +500,7 @@ fn serialize_ollama_request(request: &MessageRequest) -> Value {
     }
 
     for msg in &request.messages {
-        messages.extend(convert_message_for_openai(msg)); // same format as OpenAI
+        messages.extend(convert_message_for_openai_flavor(msg, OpenAiFlavor::Ollama));
     }
 
     let mut body = json!({
@@ -359,6 +559,19 @@ fn serialize_ollama_request(request: &MessageRequest) -> Value {
 
 /// Convert a single `Message` to OpenAI-style JSON value.
 fn convert_message_for_openai(msg: &Message) -> Vec<Value> {
+    convert_message_for_openai_flavor(msg, OpenAiFlavor::OpenAi)
+}
+
+/// Which OpenAI-shaped wire dialect to emit. Ollama shares the message
+/// structure but not OpenAI's vision format: it takes base64 images in a
+/// top-level `images` array, not `image_url` content parts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpenAiFlavor {
+    OpenAi,
+    Ollama,
+}
+
+fn convert_message_for_openai_flavor(msg: &Message, flavor: OpenAiFlavor) -> Vec<Value> {
     match &msg.content {
         crate::api::types::MessageContent::Text(text) => {
             vec![json!({
@@ -442,42 +655,89 @@ fn convert_message_for_openai(msg: &Message) -> Vec<Value> {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                // Check for tool_result blocks (tool response messages)
-                let tool_results: Vec<Value> = blocks
-                    .iter()
-                    .filter_map(|b| match b {
-                        ContentBlock::ToolResult {
-                            tool_use_id,
-                            content,
-                            ..
-                        } => {
-                            let result_text = match content {
-                                Some(crate::api::types::ToolResultContent::Single(s)) => s.clone(),
-                                Some(crate::api::types::ToolResultContent::Multiple(blocks)) => {
-                                    blocks
-                                        .iter()
-                                        .filter_map(|b| match b {
-                                            ContentBlock::Text { text } => Some(text.as_str()),
-                                            _ => None,
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
+                // Tool result messages: one `role:"tool"` message per result.
+                // OpenAI-style tool messages cannot carry images, so when a
+                // tool_result contains image blocks (screenshots from the
+                // `computer`/browser tools) the pixels ride in a follow-up
+                // user message right after the tool reply — the same
+                // convention the OpenAI ecosystem uses for tool-result
+                // vision. Ollama gets its native `images` array instead.
+                let mut out: Vec<Value> = Vec::new();
+                let mut saw_tool_results = false;
+                for b in blocks {
+                    let ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } = b
+                    else {
+                        continue;
+                    };
+                    {
+                        saw_tool_results = true;
+                        let (result_text, image_sources): (String, Vec<(&String, &String)>) =
+                            match content {
+                                Some(crate::api::types::ToolResultContent::Single(s)) => {
+                                    (s.clone(), Vec::new())
                                 }
-                                None => String::new(),
+                                Some(crate::api::types::ToolResultContent::Multiple(inner)) => {
+                                    let mut texts: Vec<String> = Vec::new();
+                                    let mut imgs: Vec<(&String, &String)> = Vec::new();
+                                    for ib in inner {
+                                        match ib {
+                                            ContentBlock::Text { text } => texts.push(text.clone()),
+                                            ContentBlock::Image { source } => {
+                                                imgs.push((&source.media_type, &source.data))
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    (texts.join("\n"), imgs)
+                                }
+                                None => (String::new(), Vec::new()),
                             };
-                            Some(json!({
-                                "role": "tool",
-                                "tool_call_id": tool_use_id,
-                                "content": result_text,
-                            }))
+                        out.push(json!({
+                            "role": "tool",
+                            "tool_call_id": tool_use_id,
+                            "content": result_text,
+                        }));
+                        if image_sources.is_empty() {
+                            continue;
                         }
-                        _ => None,
-                    })
-                    .collect();
-
-                if !tool_results.is_empty() {
-                    // OpenAI expects one message per tool result — return all
-                    tool_results
+                        match flavor {
+                            OpenAiFlavor::OpenAi => {
+                                let mut parts = vec![json!({
+                                    "type": "text",
+                                    "text": format!(
+                                        "[image(s) returned by tool result {tool_use_id}]"
+                                    ),
+                                })];
+                                for (media_type, data) in &image_sources {
+                                    parts.push(json!({
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": format!("data:{media_type};base64,{data}")
+                                        }
+                                    }));
+                                }
+                                out.push(json!({"role": "user", "content": parts}));
+                            }
+                            OpenAiFlavor::Ollama => {
+                                let images: Vec<&String> =
+                                    image_sources.iter().map(|(_, data)| *data).collect();
+                                out.push(json!({
+                                    "role": "user",
+                                    "content": format!(
+                                        "[image(s) returned by tool result {tool_use_id}]"
+                                    ),
+                                    "images": images,
+                                }));
+                            }
+                        }
+                    }
+                }
+                if saw_tool_results {
+                    out
                 } else {
                     vec![json!({
                         "role": msg.role,
@@ -504,15 +764,52 @@ pub fn normalize_sse_event(
     openai_state: &mut OpenaiStreamState,
 ) -> Vec<Result<StreamEvent, ApiError>> {
     match provider.wire_format() {
-        WireFormat::Anthropic => match serde_json::from_str::<StreamEvent>(json_str) {
-            Ok(event) => vec![Ok(event)],
-            Err(e) => vec![Err(ApiError::InvalidResponse(format!(
-                "Failed to parse Anthropic SSE event: {e} (data: {json_str})"
-            )))],
-        },
+        WireFormat::Anthropic => normalize_anthropic_event(json_str),
         WireFormat::OpenAI => normalize_openai_event(json_str, openai_state),
         WireFormat::Ollama => normalize_ollama_event(json_str),
         WireFormat::Gemini => normalize_gemini_event(json_str, openai_state),
+    }
+}
+
+/// Normalize an Anthropic SSE event.
+///
+/// Known event shapes pass through into `StreamEvent` unchanged. Two shapes
+/// are surfaced as typed [`StreamEvent::Error`] instead of killing the stream:
+/// - provider error events (`{"type":"error","error":{"message":...}}`) — the
+///   nested payload does not fit the tagged enum, so the message is extracted
+///   here; and
+/// - unknown/unparseable payloads (e.g. a new event type from a future API
+///   revision, or a broken frame), which used to fail the whole stream with
+///   `InvalidResponse`.
+///
+/// Keepalives (`{"type":"ping"}`, SSE comment/empty lines) are handled
+/// upstream in `parse_sse_line` and are unaffected.
+fn normalize_anthropic_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> {
+    let val: Value = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            return vec![Ok(StreamEvent::Error {
+                message: format!("Unparseable Anthropic SSE event: {e} (data: {json_str})"),
+            })];
+        }
+    };
+
+    // Provider mid-stream error event: Anthropic terminates the stream after
+    // it, so surface the provider's message typed.
+    if val.get("type").and_then(Value::as_str) == Some("error") {
+        let message = val
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| json_str.to_string());
+        return vec![Ok(StreamEvent::Error { message })];
+    }
+
+    match serde_json::from_value::<StreamEvent>(val) {
+        Ok(event) => vec![Ok(event)],
+        Err(e) => vec![Ok(StreamEvent::Error {
+            message: format!("Unknown Anthropic SSE event type: {e} (data: {json_str})"),
+        })],
     }
 }
 
@@ -668,6 +965,9 @@ pub fn normalize_response(
                         provider: "ollama".to_string(),
                         error_type: String::new(),
                         message: error.clone(),
+                        // Parsed from a response body, not an HTTP error
+                        // exchange — no status to preserve.
+                        status: None,
                     };
                     if probe.is_ollama_malformed_output() {
                         tracing::warn!("Ollama recoverable error (returning warning): {error}");
@@ -691,6 +991,9 @@ pub fn normalize_response(
                         provider: "ollama".to_string(),
                         error_type: "ollama_error".to_string(),
                         message: error.clone(),
+                        // Parsed from a response body, not an HTTP error
+                        // exchange — no status to preserve.
+                        status: None,
                     });
                 }
             }
@@ -742,9 +1045,15 @@ pub fn normalize_response(
 
 #[derive(Deserialize)]
 struct OpenAiChunk {
+    #[serde(default)]
     choices: Vec<OpenAiChoice>,
     #[serde(default)]
     usage: Option<OpenAiUsage>,
+    /// Mid-stream error payload from OpenAI-compatible gateways:
+    /// `{"error":{"message":"...","type":"...","code":"..."}}`. Such chunks
+    /// carry no choices/usage and used to be silently dropped.
+    #[serde(default)]
+    error: Option<Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -805,6 +1114,15 @@ pub struct OpenaiStreamState {
     /// assistant history and the provider rejects the next request with
     /// `invalid params, duplicate tool_call id` (2013).
     pub seen_tool_ids: Vec<String>,
+    /// Raw wire `arguments` fragments per tool-call index, in arrival order.
+    ///
+    /// RCA observability only (MiniMax-M3 DeepSWE empty-arguments diagnosis,
+    /// 90/90 failures): the adapter streams fragments through without
+    /// assembling them — the engine assembles downstream — so this ledger
+    /// exists solely so the finish paths can `tracing::trace!` the fully
+    /// assembled raw string and discriminate "the API sent no arguments"
+    /// from "we dropped them". Cleared by `reset`.
+    pub argument_fragments: BTreeMap<usize, Vec<String>>,
 }
 
 impl OpenaiStreamState {
@@ -813,6 +1131,7 @@ impl OpenaiStreamState {
             tool_index: 0,
             open_tool_indices: Vec::new(),
             seen_tool_ids: Vec::new(),
+            argument_fragments: BTreeMap::new(),
         }
     }
 
@@ -826,12 +1145,57 @@ impl OpenaiStreamState {
         self.tool_index = 0;
         self.open_tool_indices.clear();
         self.seen_tool_ids.clear();
+        self.argument_fragments.clear();
     }
 }
 
 impl Default for OpenaiStreamState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Assemble a tool call's final raw arguments string from the wire
+/// fragments received for it, in arrival order. Deliberately a plain
+/// concatenation of UNPARSED fragments — the string itself is the RCA
+/// evidence (empty string vs non-empty), not a parsed JSON object.
+fn assemble_argument_fragments(fragments: &[String]) -> String {
+    fragments.concat()
+}
+
+/// Trace the assembled raw arguments of every tool call the stream touched,
+/// called on both finish paths (the `finish_reason` chunk, and the
+/// usage-bearing terminal chunk that packs the finish for Zhipu-style
+/// providers). Empty-string vs non-empty, compared against the per-delta
+/// fragment traces, is the M3 empty-arguments discriminator: it tells
+/// "the API never sent arguments" apart from "the engine dropped them".
+///
+/// No-op when no tool call was started and no fragment was recorded (pure
+/// text finishes; MiniMax's trailing usage-only frame after the finish
+/// chunk already reset the state).
+fn trace_assembled_tool_arguments(state: &OpenaiStreamState, finish_reason: Option<&str>) {
+    let mut indices: Vec<usize> = state.open_tool_indices.clone();
+    indices.extend(state.argument_fragments.keys().copied());
+    indices.sort_unstable();
+    indices.dedup();
+    if indices.is_empty() {
+        return;
+    }
+    for idx in indices {
+        let assembled = state
+            .argument_fragments
+            .get(&idx)
+            .map(|frags| assemble_argument_fragments(frags))
+            .unwrap_or_default();
+        // arguments may embed user code / prompt content: trace level only
+        // (explicit RUST_LOG opt-in), stays on local / eval containers.
+        tracing::trace!(
+            target: "shannon_engine::api::adapter",
+            index = idx,
+            assembled_arguments = %assembled,
+            finish_reason = ?finish_reason,
+            "tool_call finished: assembled raw wire arguments"
+        );
     }
 }
 
@@ -842,11 +1206,25 @@ fn normalize_openai_event(
     let chunk: OpenAiChunk = match serde_json::from_str(json_str) {
         Ok(c) => c,
         Err(e) => {
-            return vec![Err(ApiError::InvalidResponse(format!(
-                "Failed to parse OpenAI chunk: {e} (data: {json_str})"
-            )))];
+            return vec![Ok(StreamEvent::Error {
+                message: format!("Failed to parse OpenAI chunk: {e} (data: {json_str})"),
+            })];
         }
     };
+
+    // Provider mid-stream error event: OpenAI-compatible gateways stream
+    // errors as `{"error":{...}}` chunks. Surface the provider's message
+    // typed instead of dropping the frame.
+    if let Some(err) = &chunk.error {
+        if !err.is_null() {
+            let message = err
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| err.to_string());
+            return vec![Ok(StreamEvent::Error { message })];
+        }
+    }
 
     // If we have usage info, emit a MessageDelta with usage.
     //
@@ -884,11 +1262,19 @@ fn normalize_openai_event(
             // (ContentBlockStop handler) fires exactly once with the fully
             // parsed input.
             let mut events: Vec<Result<StreamEvent, ApiError>> = Vec::new();
+            let raw_reason = chunk.choices.first().and_then(|c| c.finish_reason.clone());
+            tracing::trace!(
+                target: "shannon_engine::api::adapter",
+                input_tokens = input,
+                output_tokens = output,
+                cached_tokens = cached,
+                "openai stream usage"
+            );
+            trace_assembled_tool_arguments(state, raw_reason.as_deref());
             for idx in state.open_tool_indices.drain(..) {
                 events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
             }
             state.reset();
-            let raw_reason = chunk.choices.first().and_then(|c| c.finish_reason.clone());
             let normalized_reason = raw_reason.map(|r| match r.as_str() {
                 "stop" | "STOP" => "end_turn".to_string(),
                 other => other.to_string(),
@@ -979,6 +1365,19 @@ fn normalize_openai_event(
                 }
             };
 
+            // Wire-level trace: raw values exactly as received, never
+            // parsed. arguments may embed user code / prompt content —
+            // trace level only (explicit RUST_LOG opt-in), stays on local /
+            // eval containers.
+            tracing::trace!(
+                target: "shannon_engine::api::adapter",
+                index = idx,
+                id = ?tc.id,
+                name = ?tc.function.as_ref().and_then(|f| f.name.as_deref()),
+                fragment = ?tc.function.as_ref().and_then(|f| f.arguments.as_deref()),
+                "openai tool_call wire delta"
+            );
+
             if let (Some(ref id), true) = (call_id.as_ref(), is_new_call) {
                 state.seen_tool_ids.push(id.to_string());
                 // New tool call starting
@@ -1011,6 +1410,11 @@ fn normalize_openai_event(
                             partial_json: args.clone(),
                         },
                     }));
+                    state
+                        .argument_fragments
+                        .entry(idx)
+                        .or_default()
+                        .push(args.clone());
                 }
             }
         }
@@ -1021,6 +1425,12 @@ fn normalize_openai_event(
     // emit MessageDelta with the normalized stop reason. (Any final text
     // content packed into this chunk was already emitted above.)
     if let Some(ref reason) = choice.finish_reason {
+        tracing::trace!(
+            target: "shannon_engine::api::adapter",
+            finish_reason = %reason,
+            "openai stream finish"
+        );
+        trace_assembled_tool_arguments(state, Some(reason));
         for idx in state.open_tool_indices.drain(..) {
             events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
         }
@@ -1090,14 +1500,22 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
         Ok(c) => c,
         Err(e) => {
             // Ollama sometimes sends incomplete JSON chunks during streaming.
-            // Log and skip rather than killing the entire query.
+            // Surface them as a typed error event instead of dropping the
+            // frame silently or killing the entire query.
             tracing::warn!(
                 "Skipping malformed Ollama chunk: {e} (data: {} bytes)",
                 json_str.len()
             );
-            return vec![];
+            return vec![Ok(StreamEvent::Error {
+                message: format!(
+                    "Malformed Ollama chunk: {e} (data: {} bytes)",
+                    json_str.len()
+                ),
+            })];
         }
     };
+
+    let mut events: Vec<Result<StreamEvent, ApiError>> = Vec::new();
 
     // Ollama can return errors mid-stream (e.g. model produces malformed output).
     // Guard: skip empty error strings (some Ollama versions include `"error":""`
@@ -1105,19 +1523,22 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
     //
     // Treat in-stream errors as NON-FATAL for Ollama. Many local models produce
     // valid text alongside (or before) a malformed tool-call error. Stopping the
-    // stream kills the entire response. Instead, log the warning and continue
-    // processing — any text content in this or subsequent chunks is still valid.
-    // This matches the pre-error-field behavior where errors were silently ignored.
+    // stream kills the entire response. Instead, surface the error as a typed
+    // event and continue processing — any text content in this or subsequent
+    // chunks is still valid. This keeps the previous fall-through behavior,
+    // where the error was only logged, while making it visible to consumers.
     if let Some(error) = &chunk.error {
         if !error.is_empty() {
             tracing::warn!("Ollama stream error (non-fatal, continuing): {error}");
-            // Fall through — process content/tool_calls from this chunk if present
+            events.push(Ok(StreamEvent::Error {
+                message: error.clone(),
+            }));
         }
     }
 
     if chunk.done {
         // Final chunk with usage info
-        return vec![Ok(StreamEvent::MessageDelta {
+        events.push(Ok(StreamEvent::MessageDelta {
             delta: MessageDeltaDelta {
                 stop_reason: Some("end_turn".to_string()),
                 stop_sequence: None,
@@ -1127,7 +1548,8 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
                 output_tokens: chunk.eval_count.unwrap_or(0),
                 ..Default::default()
             },
-        })];
+        }));
+        return events;
     }
 
     if let Some(ref msg) = chunk.message {
@@ -1136,41 +1558,41 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
         // This matches Anthropic's incremental pattern so the engine's
         // ContentBlockStop handler naturally finalizes the tool input.
         if let Some(ref tool_calls) = msg.tool_calls {
-            let mut events = Vec::new();
             for (idx, tc) in tool_calls.iter().enumerate() {
-                events.push(StreamEvent::ContentBlockStart {
+                events.push(Ok(StreamEvent::ContentBlockStart {
                     index: idx,
                     content_block: ContentBlock::ToolUse {
                         id: format!("call_{idx}"),
                         name: tc.function.name.clone(),
                         input: serde_json::Value::Object(Default::default()),
                     },
-                });
-                events.push(StreamEvent::ContentBlockDelta {
+                }));
+                events.push(Ok(StreamEvent::ContentBlockDelta {
                     index: idx,
                     delta: ContentDelta::InputJsonDelta {
                         partial_json: tc.function.arguments.to_string(),
                     },
-                });
-                events.push(StreamEvent::ContentBlockStop { index: idx });
+                }));
+                events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
             }
-            return events.into_iter().map(Ok).collect();
+            return events;
         }
 
         // Text content
         if let Some(ref content) = msg.content {
             if !content.is_empty() {
-                return vec![Ok(StreamEvent::ContentBlockDelta {
+                events.push(Ok(StreamEvent::ContentBlockDelta {
                     index: 0,
                     delta: ContentDelta::TextDelta {
                         text: content.clone(),
                     },
-                })];
+                }));
+                return events;
             }
         }
     }
 
-    vec![]
+    events
 }
 
 // ── Gemini Request Serialization ────────────────────────────────────────────
@@ -1215,6 +1637,11 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
         };
 
         let mut parts: Vec<Value> = Vec::new();
+        // functionResponse parts can only carry JSON — image blocks that
+        // ride in a tool_result (screenshots from the `computer`/browser
+        // tools) are emitted as a follow-up user turn with inlineData,
+        // mirroring the official Gemini computer-use reference design.
+        let mut tool_result_images: Vec<Value> = Vec::new();
 
         match &msg.content {
             super::types::MessageContent::Text(t) => {
@@ -1250,24 +1677,29 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
                             content,
                             is_error,
                         } => {
-                            let result_text = match content {
-                                Some(super::types::ToolResultContent::Single(s)) => s.clone(),
-                                Some(super::types::ToolResultContent::Multiple(bs)) => bs
-                                    .iter()
-                                    .filter_map(|b| match b {
-                                        ContentBlock::Text { text } => Some(text.as_str()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n"),
-                                None => String::new(),
-                            };
-                            let response = json!({
-                                "name": tool_use_id, // Best effort; real name is in the preceding functionCall
-                                "response": {
-                                    "result": result_text,
-                                }
-                            });
+                            let (result_text, image_sources): (String, Vec<(&String, &String)>) =
+                                match content {
+                                    Some(super::types::ToolResultContent::Single(s)) => {
+                                        (s.clone(), Vec::new())
+                                    }
+                                    Some(super::types::ToolResultContent::Multiple(bs)) => {
+                                        let mut texts: Vec<String> = Vec::new();
+                                        let mut imgs: Vec<(&String, &String)> = Vec::new();
+                                        for b in bs {
+                                            match b {
+                                                ContentBlock::Text { text } => {
+                                                    texts.push(text.clone())
+                                                }
+                                                ContentBlock::Image { source } => {
+                                                    imgs.push((&source.media_type, &source.data))
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        (texts.join("\n"), imgs)
+                                    }
+                                    None => (String::new(), Vec::new()),
+                                };
                             if is_error.unwrap_or(false) {
                                 parts.push(json!({
                                     "functionResponse": {
@@ -1278,9 +1710,21 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
                                     }
                                 }));
                             } else {
-                                let _ = &response; // Use the success version
                                 parts.push(json!({
-                                    "functionResponse": response
+                                    "functionResponse": {
+                                        "name": tool_use_id,
+                                        "response": {
+                                            "result": result_text,
+                                        }
+                                    }
+                                }));
+                            }
+                            for (media_type, data) in image_sources {
+                                tool_result_images.push(json!({
+                                    "inline_data": {
+                                        "mime_type": media_type,
+                                        "data": data,
+                                    }
                                 }));
                             }
                         }
@@ -1296,6 +1740,19 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
             contents.push(json!({
                 "role": gemini_role,
                 "parts": parts,
+            }));
+        }
+
+        // Tool-result pixels ride in a follow-up user turn (functionResponse
+        // itself can only carry JSON).
+        if !tool_result_images.is_empty() {
+            let mut image_parts = vec![json!({
+                "text": "[image(s) returned by the tool results above]",
+            })];
+            image_parts.extend(tool_result_images);
+            contents.push(json!({
+                "role": "user",
+                "parts": image_parts,
             }));
         }
     }
@@ -1392,9 +1849,18 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
 #[derive(Deserialize)]
 struct GeminiResponse {
     candidates: Option<Vec<GeminiCandidate>>,
+    /// Mid-stream error payload: `{"error":{"code":...,"message":"...","status":"..."}}`.
+    #[serde(default)]
+    error: Option<GeminiError>,
     #[serde(default)]
     #[serde(rename = "usageMetadata")]
     usage_metadata: Option<GeminiUsageMetadata>,
+}
+
+#[derive(Deserialize)]
+struct GeminiError {
+    message: Option<String>,
+    status: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1506,11 +1972,24 @@ fn normalize_gemini_event(
     let resp: GeminiResponse = match serde_json::from_str(json_str) {
         Ok(r) => r,
         Err(e) => {
-            return vec![Err(ApiError::InvalidResponse(format!(
-                "Failed to parse Gemini SSE event: {e} (data: {json_str})"
-            )))];
+            return vec![Ok(StreamEvent::Error {
+                message: format!("Failed to parse Gemini SSE event: {e} (data: {json_str})"),
+            })];
         }
     };
+
+    // Provider mid-stream error event: Gemini streams errors as
+    // `{"error":{...}}` chunks (no candidates), which used to normalize to
+    // an empty event list — silently dropped.
+    if let Some(err) = resp.error {
+        let message = match (err.message, err.status) {
+            (Some(m), Some(s)) => format!("{s}: {m}"),
+            (Some(m), None) => m,
+            (None, Some(s)) => s,
+            (None, None) => json_str.to_string(),
+        };
+        return vec![Ok(StreamEvent::Error { message })];
+    }
 
     let mut events = Vec::new();
 
@@ -1616,7 +2095,58 @@ mod tests {
             budget_tokens: None,
             thinking_budget: None,
             reasoning_effort: None,
+            thinking_type: None,
         }
+    }
+
+    // -- zhipu/GLM thinking toggle --
+
+    #[test]
+    fn test_openai_serialize_thinking_toggle_present_on_zhipu() {
+        let mut req = make_request();
+        req.thinking_type = Some("disabled".into());
+        req.reasoning_effort = Some(crate::api::types::ReasoningEffort::High);
+        let val = serialize_request(&req, &LlmProvider::ZhipuCodingPlan);
+        assert_eq!(val["thinking"]["type"], "disabled");
+        // explicit toggle wins: reasoning_effort is dropped on this wire
+        assert!(val.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn test_openai_serialize_thinking_stripped_off_zhipu() {
+        let mut req = make_request();
+        req.thinking_type = Some("disabled".into());
+        let val = serialize_request(&req, &LlmProvider::OpenAI);
+        assert!(val.get("thinking").is_none());
+    }
+
+    #[test]
+    fn test_openai_serialize_thinking_toggle_absent_by_default() {
+        let req = make_request();
+        let val = serialize_request(&req, &LlmProvider::OpenAI);
+        assert!(val.get("thinking").is_none());
+    }
+
+    #[test]
+    fn test_normalize_thinking_type() {
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("disabled"),
+            Some("disabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type(" ON "),
+            Some("enabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("True"),
+            Some("enabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("0"),
+            Some("disabled".into())
+        );
+        assert_eq!(crate::api::types::normalize_thinking_type("whatever"), None);
+        assert_eq!(crate::api::types::normalize_thinking_type(""), None);
     }
 
     // -- Anthropic passthrough --
@@ -1631,12 +2161,301 @@ mod tests {
         assert_eq!(val["model"], "test-model");
     }
 
+    // -- Multi-image batch tool_result (C-ImgBatch) --
+
+    /// A user message carrying one `tool_result` whose content is
+    /// `Multiple([Text, Image, Text, Image])` — the shape the engine builds
+    /// for AnalyzeImages — must serialize (Anthropic wire) into a single
+    /// request message whose tool_result content array contains BOTH image
+    /// parts, i.e. one vision request for the whole batch.
+    #[test]
+    fn test_anthropic_tool_result_multi_image_single_request() {
+        let req = MessageRequest {
+            thinking_type: None,
+            model: "claude-test".to_string(),
+            max_tokens: 1024,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                // A13/F4c: the sequence must be wire-legal — the assistant
+                // declaring the tool call precedes its result (otherwise the
+                // sanitizer drops the result as orphaned).
+                Message {
+                    role: "assistant".to_string(),
+                    content: crate::api::types::MessageContent::Blocks(vec![
+                        ContentBlock::ToolUse {
+                            id: "batch_1".to_string(),
+                            name: "read_image".to_string(),
+                            input: serde_json::json!({}),
+                        },
+                    ]),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Blocks(vec![
+                        ContentBlock::ToolResult {
+                            tool_use_id: "batch_1".to_string(),
+                            content: Some(crate::api::types::ToolResultContent::Multiple(vec![
+                                ContentBlock::Text {
+                                    text: "Batch of 2 images follows".to_string(),
+                                },
+                                ContentBlock::Text {
+                                    text: "## /tmp/a.png".to_string(),
+                                },
+                                ContentBlock::Image {
+                                    source: crate::api::types::ImageSource::base64(
+                                        "image/png",
+                                        "AAAA",
+                                    ),
+                                },
+                                ContentBlock::Text {
+                                    text: "## /tmp/b.png".to_string(),
+                                },
+                                ContentBlock::Image {
+                                    source: crate::api::types::ImageSource::base64(
+                                        "image/png",
+                                        "BBBB",
+                                    ),
+                                },
+                            ])),
+                            is_error: Some(false),
+                        },
+                    ]),
+                },
+            ],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+        // messages[1].content[0] is the tool_result block; its own "content"
+        // is the array of per-image text/image parts sent in this one request.
+        let content = &val["messages"][1]["content"][0]["content"];
+        assert!(content.is_array(), "tool_result content should be an array");
+        let image_parts: Vec<&Value> = content
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|b| b["type"] == "image")
+            .collect();
+        assert_eq!(
+            image_parts.len(),
+            2,
+            "One request must carry both image parts, got: {content}"
+        );
+        assert_eq!(image_parts[0]["source"]["data"], "AAAA");
+        assert_eq!(image_parts[1]["source"]["data"], "BBBB");
+        // Section headings preserved so the model can map answers to paths.
+        let headings: Vec<&Value> = content
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|b| b["type"] == "text" && b["text"].as_str().unwrap_or("").starts_with("## "))
+            .collect();
+        assert_eq!(headings.len(), 2);
+    }
+
+    /// OpenAI-style `role:"tool"` messages cannot carry images, so a
+    /// tool_result with image blocks (screenshots from the `computer` /
+    /// browser tools) emits the tool text reply PLUS a follow-up user
+    /// message carrying the image as an `image_url` data part — pixels
+    /// reach the model instead of being flattened away (pre-2026-09
+    /// behavior).
+    #[test]
+    fn test_openai_tool_result_multi_image_emits_followup_user_vision_turn() {
+        let req = MessageRequest {
+            thinking_type: None,
+            model: "gpt-test".to_string(),
+            max_tokens: 1024,
+            system: None,
+            system_blocks: None,
+            // A13: the sequence must be wire-legal — the assistant declaring
+            // the tool call precedes its result (otherwise the sanitizer
+            // drops the result as orphaned).
+            messages: vec![
+                Message {
+                    role: "assistant".to_string(),
+                    content: crate::api::types::MessageContent::Blocks(vec![
+                        ContentBlock::ToolUse {
+                            id: "batch_1".to_string(),
+                            name: "read_image".to_string(),
+                            input: serde_json::json!({}),
+                        },
+                    ]),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Blocks(vec![
+                        ContentBlock::ToolResult {
+                            tool_use_id: "batch_1".to_string(),
+                            content: Some(crate::api::types::ToolResultContent::Multiple(vec![
+                                ContentBlock::Text {
+                                    text: "## /tmp/a.png".to_string(),
+                                },
+                                ContentBlock::Image {
+                                    source: crate::api::types::ImageSource::base64(
+                                        "image/png",
+                                        "AAAA",
+                                    ),
+                                },
+                            ])),
+                            is_error: Some(false),
+                        },
+                    ]),
+                },
+            ],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::OpenAI);
+        // messages[0] is the assistant tool_use, messages[1] the tool text
+        // reply — no pixel data in the text.
+        let tool_msg = &val["messages"][1];
+        assert_eq!(tool_msg["role"], "tool");
+        let text = tool_msg["content"].as_str().unwrap();
+        assert!(text.contains("## /tmp/a.png"));
+        assert!(!text.contains("AAAA"), "image data must not leak into text");
+        // messages[2]: the follow-up user turn carrying the pixels.
+        let vision_msg = &val["messages"][2];
+        assert_eq!(vision_msg["role"], "user");
+        let parts = vision_msg["content"].as_array().unwrap();
+        let image_parts: Vec<&Value> = parts.iter().filter(|p| p["type"] == "image_url").collect();
+        assert_eq!(image_parts.len(), 1, "one image part expected");
+        assert_eq!(
+            image_parts[0]["image_url"]["url"],
+            "data:image/png;base64,AAAA"
+        );
+    }
+
+    /// Ollama shares the message structure with OpenAI but takes base64
+    /// images in a top-level `images` array instead of image_url parts.
+    #[test]
+    fn test_ollama_tool_result_image_uses_images_array() {
+        let req = MessageRequest {
+            thinking_type: None,
+            model: "llava-test".to_string(),
+            max_tokens: 1024,
+            system: None,
+            system_blocks: None,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: crate::api::types::MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "shot_1".to_string(),
+                        content: Some(crate::api::types::ToolResultContent::Multiple(vec![
+                            ContentBlock::Text {
+                                text: "screenshot".to_string(),
+                            },
+                            ContentBlock::Image {
+                                source: crate::api::types::ImageSource::base64("image/png", "BBBB"),
+                            },
+                        ])),
+                        is_error: Some(false),
+                    },
+                ]),
+            }],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Ollama);
+        let msgs = val["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["role"], "tool");
+        let vision_msg = &msgs[1];
+        assert_eq!(vision_msg["role"], "user");
+        assert_eq!(vision_msg["images"][0], "BBBB");
+        assert!(
+            !vision_msg["content"].as_str().unwrap().is_empty(),
+            "context note present"
+        );
+        assert!(
+            !serde_json::to_string(&vision_msg)
+                .unwrap()
+                .contains("image_url"),
+            "Ollama wire must not use OpenAI image_url parts"
+        );
+    }
+
+    /// Gemini functionResponse carries only JSON, so tool-result images are
+    /// emitted as a follow-up user turn with inlineData parts.
+    #[test]
+    fn test_gemini_tool_result_image_emits_inline_data_turn() {
+        let req = MessageRequest {
+            thinking_type: None,
+            model: "gemini-test".to_string(),
+            max_tokens: 1024,
+            system: None,
+            system_blocks: None,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: crate::api::types::MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "shot_1".to_string(),
+                        content: Some(crate::api::types::ToolResultContent::Multiple(vec![
+                            ContentBlock::Text {
+                                text: "screenshot".to_string(),
+                            },
+                            ContentBlock::Image {
+                                source: crate::api::types::ImageSource::base64("image/png", "CCCC"),
+                            },
+                        ])),
+                        is_error: Some(false),
+                    },
+                ]),
+            }],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Gemini);
+        let contents = val["contents"].as_array().unwrap();
+        assert_eq!(contents[0]["role"], "user");
+        assert!(
+            contents[0]["parts"][0]["functionResponse"].is_object(),
+            "first turn carries the functionResponse"
+        );
+        assert_eq!(contents[1]["role"], "user");
+        let inline = &contents[1]["parts"][1]["inline_data"];
+        assert_eq!(inline["mime_type"], "image/png");
+        assert_eq!(inline["data"], "CCCC");
+    }
+
     #[test]
     fn test_anthropic_extracts_system_role_messages() {
         // Compression may inject role: "system" messages into the messages
         // array.  The Anthropic adapter must extract them into the top-level
         // `system` field so the API doesn't reject the request.
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("Base prompt.".to_string()),
@@ -1687,6 +2506,7 @@ mod tests {
         // When system_blocks is used (structured prompt), extracted system
         // text should be appended as a new block.
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: None,
@@ -1887,11 +2707,16 @@ mod tests {
         state: &mut OpenaiStreamState,
         out: &mut String,
     ) {
-        for ev in normalize_sse_event(chunk, provider, state) {
-            if let Ok(StreamEvent::ContentBlockDelta { delta, .. }) = ev {
-                if let ContentDelta::TextDelta { text: t } = delta {
-                    out.push_str(&t);
-                }
+        for ev in normalize_sse_event(chunk, provider, state)
+            .into_iter()
+            .flatten()
+        {
+            if let StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text: t },
+                ..
+            } = ev
+            {
+                out.push_str(&t);
             }
         }
     }
@@ -2130,17 +2955,54 @@ mod tests {
     // -- Round-trip: no panic on malformed JSON --
 
     #[test]
-    fn test_malformed_json_returns_error() {
-        let result = normalize_sse_event("not json", &LlmProvider::OpenAI, &mut fresh_state());
-        assert!(result[0].is_err());
+    fn test_malformed_json_yields_typed_error_event() {
+        // Malformed chunks surface as a typed StreamEvent::Error for every
+        // wire format — never a panic, never a silently dropped frame.
+        for provider in [LlmProvider::OpenAI, LlmProvider::Anthropic] {
+            let result = normalize_sse_event("not json", &provider, &mut fresh_state());
+            assert_eq!(result.len(), 1, "{provider:?}");
+            assert!(
+                matches!(&result[0], Ok(StreamEvent::Error { .. })),
+                "{provider:?} should yield a typed Error event, got {:?}",
+                result[0]
+            );
+        }
 
-        // Ollama gracefully skips malformed chunks (logs warning, continues stream)
+        // Ollama also surfaces it typed (previously the frame was dropped).
         let result = normalize_sse_event("not json", &LlmProvider::Ollama, &mut fresh_state());
-        assert!(result.is_empty());
+        assert!(
+            matches!(&result[0], Ok(StreamEvent::Error { .. })),
+            "Ollama should yield a typed Error event, got {:?}",
+            result[0]
+        );
+    }
 
-        // Anthropic also returns error for invalid JSON
-        let result = normalize_sse_event("not json", &LlmProvider::Anthropic, &mut fresh_state());
-        assert!(result[0].is_err());
+    // -- Provider mid-stream error events --
+
+    #[test]
+    fn test_anthropic_sse_sequence_with_mid_stream_error_yields_typed_error() {
+        // An Anthropic SSE sequence carrying a mid-stream provider error
+        // event must yield StreamEvent::Error with the provider's message —
+        // not InvalidResponse — while earlier content stays intact.
+        let mut state = fresh_state();
+        let mut events = Vec::new();
+        for line in [
+            r#"{"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"so far"}}"#,
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        ] {
+            events.extend(normalize_sse_event(
+                line,
+                &LlmProvider::Anthropic,
+                &mut state,
+            ));
+        }
+        assert_eq!(events.len(), 3);
+        assert!(events.iter().take(2).all(|e| e.is_ok()));
+        match &events[2] {
+            Ok(StreamEvent::Error { message }) => assert_eq!(message, "Overloaded"),
+            other => panic!("Expected StreamEvent::Error, got {other:?}"),
+        }
     }
 
     // -- Non-streaming response normalization --
@@ -2333,11 +3195,11 @@ mod tests {
         assert_eq!(starts, 1, "echoed id must not re-emit ContentBlockStart");
 
         let mut args = String::new();
-        for e in &events {
-            if let Ok(StreamEvent::ContentBlockDelta {
+        for ev in events.iter().flatten() {
+            if let StreamEvent::ContentBlockDelta {
                 delta: ContentDelta::InputJsonDelta { partial_json },
                 ..
-            }) = e
+            } = ev
             {
                 args.push_str(partial_json);
             }
@@ -2350,6 +3212,285 @@ mod tests {
             .filter(|e| matches!(e, Ok(StreamEvent::ContentBlockStop { .. })))
             .count();
         assert_eq!(stops, 1);
+    }
+
+    // ── Wire-trace RCA support (M3 empty-arguments diagnosis) ──────────────
+
+    #[test]
+    fn openai_rca_assemble_argument_fragments_pure_cases() {
+        // Zhipu-shaped flow (the fragments of
+        // test_zhipu_terminal_chunk_with_usage_synthesizes_content_block_stop):
+        // three wire fragments concatenate into the full arguments object.
+        let zhipu = vec![
+            "".to_string(),
+            "{\"command\":".to_string(),
+            "\"ls\"}".to_string(),
+        ];
+        assert_eq!(assemble_argument_fragments(&zhipu), r#"{"command":"ls"}"#);
+
+        // MiniMax-shaped fragmentation (empty-id continuations).
+        let minimax = vec![
+            "{\"file_pa".to_string(),
+            "th\":\"/tmp/a.rs\"".to_string(),
+            "}".to_string(),
+        ];
+        assert_eq!(
+            assemble_argument_fragments(&minimax),
+            r#"{"file_path":"/tmp/a.rs"}"#
+        );
+
+        // The M3 DeepSWE signature: the only wire payload is the empty string.
+        assert_eq!(assemble_argument_fragments(&["".to_string()]), "");
+        assert_eq!(assemble_argument_fragments(&[]), "");
+    }
+
+    #[test]
+    fn openai_stream_state_keeps_assembled_fragments_for_rca_trace() {
+        // Drive the MiniMax empty-id-continuation flow. Before the finish
+        // chunk, the stream state must hold the per-index fragments whose
+        // concatenation is the assembled raw arguments string that the
+        // finish-path trace emits — this is the wire-vs-engine RCA
+        // discriminator (empty string = the API truly sent no arguments).
+        let mut state = fresh_state();
+        let start = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_mm_1","type":"function","function":{"name":"Read","arguments":"{\"file_pa"}}]},"index":0}]}"#;
+        let cont1 = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":"th\":\"/tmp/a.rs\"}"}}]},"index":0}]}"#;
+        for chunk in [start, cont1] {
+            normalize_sse_event(chunk, &LlmProvider::Minimax, &mut state);
+        }
+        let fragments = state
+            .argument_fragments
+            .get(&0)
+            .expect("wire fragments recorded for tool-call index 0");
+        assert_eq!(
+            assemble_argument_fragments(fragments),
+            r#"{"file_path":"/tmp/a.rs"}"#
+        );
+
+        // The finish chunk resets the ledger — nothing leaks into the next
+        // stream segment.
+        let cont2 = r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#;
+        normalize_sse_event(cont2, &LlmProvider::Minimax, &mut state);
+        assert!(state.argument_fragments.is_empty());
+        assert!(state.open_tool_indices.is_empty());
+    }
+
+    // ── Wire-trace smoke: lines actually emitted under RUST_LOG ────────────
+    //
+    // The crate has no tracing-subscriber dependency (and the wire-trace
+    // task forbids adding one), so this rolls a minimal subscriber that
+    // (1) filters like a coarse EnvFilter — RUST_LOG entries `target[=level]`,
+    // bare target implying trace, bare level names as a global cap, unset
+    // RUST_LOG disabling everything — and (2) captures the emitted lines.
+    mod wire_trace_smoke {
+        use super::*;
+        use std::sync::{Arc, Mutex};
+        use tracing::field::{Field, Visit};
+
+        fn parse_level(s: &str) -> Option<tracing::level_filters::LevelFilter> {
+            match s.to_ascii_lowercase().as_str() {
+                "off" => Some(tracing::level_filters::LevelFilter::OFF),
+                "error" => Some(tracing::level_filters::LevelFilter::ERROR),
+                "warn" => Some(tracing::level_filters::LevelFilter::WARN),
+                "info" => Some(tracing::level_filters::LevelFilter::INFO),
+                "debug" => Some(tracing::level_filters::LevelFilter::DEBUG),
+                "trace" => Some(tracing::level_filters::LevelFilter::TRACE),
+                _ => None,
+            }
+        }
+
+        struct CapturingSubscriber {
+            directives: Vec<(String, tracing::level_filters::LevelFilter)>,
+            global: Option<tracing::level_filters::LevelFilter>,
+            lines: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl CapturingSubscriber {
+            fn from_rust_log(raw: Option<&str>, lines: Arc<Mutex<Vec<String>>>) -> Self {
+                let mut directives = Vec::new();
+                let mut global: Option<tracing::level_filters::LevelFilter> = None;
+                if let Some(raw) = raw {
+                    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+                        if let Some(level) = parse_level(entry) {
+                            global = Some(global.map_or(level, |g| g.max(level)));
+                        } else if let Some((target, level)) = entry.split_once('=') {
+                            if let Some(level) = parse_level(level.trim()) {
+                                directives.push((target.trim().to_string(), level));
+                            }
+                        } else {
+                            directives.push((
+                                entry.to_string(),
+                                tracing::level_filters::LevelFilter::TRACE,
+                            ));
+                        }
+                    }
+                }
+                Self {
+                    directives,
+                    global,
+                    lines,
+                }
+            }
+
+            fn allows(&self, target: &str, level: &tracing::Level) -> bool {
+                let event_level = tracing::level_filters::LevelFilter::from(*level);
+                if let Some(g) = self.global {
+                    if event_level <= g {
+                        return true;
+                    }
+                }
+                self.directives
+                    .iter()
+                    .any(|(name, max)| target.starts_with(name.as_str()) && event_level <= *max)
+            }
+
+            /// True when any directive at all was configured.
+            fn on(&self) -> bool {
+                self.global.is_some() || !self.directives.is_empty()
+            }
+        }
+
+        struct LineVisitor<'a>(&'a mut String);
+
+        impl Visit for LineVisitor<'_> {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                use std::fmt::Write as _;
+                if field.name() == "message" {
+                    let _ = write!(self.0, "{value:?}");
+                } else {
+                    let _ = write!(self.0, " {}={:?}", field.name(), value);
+                }
+            }
+        }
+
+        impl tracing::Subscriber for CapturingSubscriber {
+            fn enabled(&self, meta: &tracing::Metadata<'_>) -> bool {
+                self.allows(meta.target(), meta.level())
+            }
+
+            fn new_span(&self, _attrs: &tracing::span::Attributes<'_>) -> tracing::Id {
+                tracing::Id::from_u64(1)
+            }
+
+            fn record(&self, _id: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+
+            fn record_follows_from(&self, _id: &tracing::Id, _follows: &tracing::Id) {}
+
+            fn exit(&self, _id: &tracing::Id) {}
+
+            fn event(&self, event: &tracing::Event<'_>) {
+                if !self.enabled(event.metadata()) {
+                    return;
+                }
+                let mut line = format!(
+                    "[{} {}]",
+                    event.metadata().level(),
+                    event.metadata().target()
+                );
+                event.record(&mut LineVisitor(&mut line));
+                self.lines
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(line);
+            }
+
+            fn enter(&self, _id: &tracing::Id) {}
+
+            fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+                self.on()
+                    .then_some(tracing::level_filters::LevelFilter::TRACE)
+            }
+        }
+
+        #[test]
+        fn openai_wire_trace_smoke_assembled_arguments_emitted() {
+            let lines = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = CapturingSubscriber::from_rust_log(
+                std::env::var("RUST_LOG").ok().as_deref(),
+                lines.clone(),
+            );
+            let any_directive = subscriber.on();
+            let module_trace_on =
+                subscriber.allows("shannon_engine::api::adapter", &tracing::Level::TRACE);
+
+            tracing::subscriber::with_default(subscriber, || {
+                let mut state = fresh_state();
+
+                // M3 DeepSWE shape: tool name declared with an EMPTY arguments
+                // payload, then finish (the ~4-token truncated response).
+                for chunk in [
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_m3","type":"function","function":{"name":"bash","arguments":""}}]},"index":0}]}"#,
+                    r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+                ] {
+                    normalize_sse_event(chunk, &LlmProvider::Minimax, &mut state);
+                }
+
+                // Fragmented shape: arguments split across wire frames
+                // assemble to a full object; usage arrives in a trailing
+                // choices-less frame.
+                for chunk in [
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_mm_1","type":"function","function":{"name":"Read","arguments":"{\"file_pa"}}]},"index":0}]}"#,
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":"th\":\"/tmp/a.rs\"}"}}]},"index":0}]}"#,
+                    r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+                    r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":4,"total_tokens":104}}"#,
+                ] {
+                    normalize_sse_event(chunk, &LlmProvider::Minimax, &mut state);
+                }
+            });
+
+            let captured = lines.lock().unwrap_or_else(|e| e.into_inner());
+            for line in captured.iter() {
+                println!("{line}");
+            }
+
+            if !any_directive {
+                // Default runs (no RUST_LOG): the trace surface is compiled in
+                // but must stay completely silent.
+                assert!(
+                    captured.is_empty(),
+                    "trace must be silent without RUST_LOG: {captured:?}"
+                );
+                return;
+            }
+            if !module_trace_on {
+                return; // RUST_LOG enables something else; nothing to assert here.
+            }
+
+            // Per-delta: raw unparsed fragment, `Some("")` visible for M3.
+            assert!(
+                captured.iter().any(|l| {
+                    l.contains("openai tool_call wire delta")
+                        && l.contains(r#"id=Some("call_m3")"#)
+                        && l.contains(r#"fragment=Some("")"#)
+                }),
+                "missing M3 empty-arguments delta trace: {captured:?}"
+            );
+            // Finish: the assembled EMPTY string — the RCA discriminator line
+            // (display rendering leaves an empty value after `=`).
+            assert!(
+                captured.iter().any(
+                    |l| l.contains("tool_call finished") && l.contains("assembled_arguments= ")
+                ),
+                "missing assembled-empty trace line: {captured:?}"
+            );
+            // Fragmented flow assembles to the full raw object.
+            assert!(
+                captured.iter().any(|l| l.contains("tool_call finished")
+                    && l.contains("assembled_arguments={\"file_path\":\"/tmp/a.rs\"}")),
+                "missing assembled-fragmented trace line: {captured:?}"
+            );
+            // finish_reason and usage reach the trace surface.
+            assert!(
+                captured.iter().any(|l| l.contains("openai stream finish")
+                    && l.contains("finish_reason=tool_calls")),
+                "missing finish_reason trace: {captured:?}"
+            );
+            assert!(
+                captured
+                    .iter()
+                    .any(|l| l.contains("openai stream usage") && l.contains("output_tokens=4")),
+                "missing usage trace: {captured:?}"
+            );
+        }
     }
 
     #[test]
@@ -2556,8 +3697,9 @@ mod tests {
 
     #[test]
     fn test_anthropic_image_block_serialization() {
-        use crate::api::types::{ImageSource, MessageContent};
+        use crate::api::types::MessageContent;
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3-5-sonnet".to_string(),
             max_tokens: 1024,
             system: None,
@@ -2569,7 +3711,7 @@ mod tests {
                         text: "What is this?".to_string(),
                     },
                     ContentBlock::Image {
-                        source: ImageSource::base64("image/png", "iVBOR..."),
+                        source: crate::api::types::ImageSource::base64("image/png", "iVBOR..."),
                     },
                 ]),
             }],
@@ -2602,8 +3744,9 @@ mod tests {
 
     #[test]
     fn test_openai_image_block_conversion() {
-        use crate::api::types::{ImageSource, MessageContent};
+        use crate::api::types::MessageContent;
         let req = MessageRequest {
+            thinking_type: None,
             model: "gpt-4o".to_string(),
             max_tokens: 1024,
             system: None,
@@ -2615,7 +3758,7 @@ mod tests {
                         text: "Describe this".to_string(),
                     },
                     ContentBlock::Image {
-                        source: ImageSource::base64("image/jpeg", "/9j/4AAQ"),
+                        source: crate::api::types::ImageSource::base64("image/jpeg", "/9j/4AAQ"),
                     },
                 ]),
             }],
@@ -2716,6 +3859,7 @@ mod tests {
         // role: "system" messages must not appear in contents — they should
         // be merged into systemInstruction.
         let req = MessageRequest {
+            thinking_type: None,
             model: "gemini-2.0-flash".to_string(),
             max_tokens: 1024,
             system: Some("Base system prompt.".to_string()),
@@ -2776,6 +3920,7 @@ mod tests {
     #[test]
     fn test_gemini_serialize_assistant_role_mapping() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "gemini-2.0-flash".to_string(),
             max_tokens: 1024,
             system: None,
@@ -3238,27 +4383,38 @@ mod tests {
 
     #[test]
     fn test_ollama_stream_error_in_chunk() {
-        // Ollama errors in chunks are non-fatal: logged as warnings, stream continues.
-        // A chunk with only error (no content) produces no events (skipped).
+        // Ollama errors in chunks are non-fatal: the stream continues, and
+        // the error now surfaces as a typed StreamEvent::Error instead of
+        // only a log line.
         let chunk_json =
             r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
         assert_eq!(
             result.len(),
-            0,
-            "Error-only chunk should be skipped (non-fatal)"
+            1,
+            "Error-only chunk should yield one typed Error event"
+        );
+        assert!(
+            matches!(&result[0], Ok(StreamEvent::Error { message }) if message.contains("can't find closing")),
+            "expected typed Error with the Ollama message, got {:?}",
+            result[0]
         );
     }
 
     #[test]
     fn test_ollama_stream_error_generic() {
-        // Error-only chunk is non-fatal: skipped, stream continues
+        // Error-only chunk is non-fatal: surfaced typed, stream continues.
         let chunk_json = r#"{"error":"model not found"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
         assert_eq!(
             result.len(),
-            0,
-            "Error-only chunk should be skipped (non-fatal)"
+            1,
+            "Error-only chunk should yield one typed Error event"
+        );
+        assert!(
+            matches!(&result[0], Ok(StreamEvent::Error { message }) if message == "model not found"),
+            "expected typed Error with the Ollama message, got {:?}",
+            result[0]
         );
     }
 
@@ -3272,6 +4428,7 @@ mod tests {
                 provider,
                 error_type,
                 message,
+                ..
             }) => {
                 assert_eq!(provider, "ollama");
                 assert_eq!(error_type, "ollama_error");
@@ -3286,15 +4443,21 @@ mod tests {
 
     #[test]
     fn test_ollama_chunk_with_both_message_and_error() {
-        // Error is non-fatal: content is preserved, error is just logged
+        // Error is non-fatal: the content is preserved AND the error is
+        // surfaced as a typed StreamEvent::Error (before the content).
         let chunk_json = r#"{"message":{"content":"hello"},"error":"something went wrong"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
         assert_eq!(
             result.len(),
-            1,
-            "Should produce content delta only (error is non-fatal)"
+            2,
+            "Should produce a typed Error event plus the content delta"
         );
-        match &result[0] {
+        assert!(
+            matches!(&result[0], Ok(StreamEvent::Error { message }) if message == "something went wrong"),
+            "expected typed Error first, got {:?}",
+            result[0]
+        );
+        match &result[1] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => match delta {
                 ContentDelta::TextDelta { text } => assert_eq!(text, "hello"),
                 other => panic!("Expected TextDelta, got {other:?}"),
@@ -3343,6 +4506,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_on_last_user_message_text() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: Some("You are helpful.".to_string()),
@@ -3391,6 +4555,7 @@ mod tests {
     #[test]
     fn test_anthropic_no_cache_control_single_user_msg() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -3419,6 +4584,7 @@ mod tests {
     fn test_anthropic_cache_control_with_content_blocks() {
         use crate::api::types::MessageContent;
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -3466,6 +4632,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_not_for_openai() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "gpt-4o".to_string(),
             max_tokens: 4096,
             system: None,
@@ -3503,7 +4670,12 @@ mod tests {
     #[test]
     fn test_anthropic_cache_skips_tool_result() {
         use crate::api::types::MessageContent;
+        // The tool_result must be DECLARED by a preceding assistant tool_use
+        // (F4c): the A13 sanitizer now drops orphaned results from the
+        // Anthropic branch too, so an undeclared fixture would be sanitized
+        // away before the cache-injection logic runs.
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -3512,6 +4684,14 @@ mod tests {
                 Message {
                     role: "user".to_string(),
                     content: MessageContent::Text("First".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                        id: "tool_123".to_string(),
+                        name: "Bash".to_string(),
+                        input: serde_json::json!({}),
+                    }]),
                 },
                 Message {
                     role: "user".to_string(),
@@ -3541,7 +4721,7 @@ mod tests {
         };
 
         let val = serialize_request(&req, &LlmProvider::Anthropic);
-        let blocks = val["messages"].as_array().unwrap()[1]["content"]
+        let blocks = val["messages"].as_array().unwrap()[2]["content"]
             .as_array()
             .unwrap();
         assert_eq!(blocks[0]["cache_control"]["type"], "ephemeral");
@@ -3551,6 +4731,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_with_system_blocks() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -3590,6 +4771,7 @@ mod tests {
     fn test_system_blocks_renamed_to_system_in_output() {
         // system_blocks must be renamed to "system" (Anthropic API format)
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: None,
@@ -3626,6 +4808,7 @@ mod tests {
     fn test_cache_control_skipped_for_third_party_endpoint() {
         // Third-party Anthropic-compatible endpoints should NOT get cache_control
         let req = MessageRequest {
+            thinking_type: None,
             model: "glm-5.1".to_string(),
             max_tokens: 1024,
             system: Some("System prompt".to_string()),
@@ -3689,6 +4872,7 @@ mod tests {
     fn test_cache_control_injected_for_real_anthropic() {
         // Real Anthropic API should still get cache_control
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("System".to_string()),
@@ -3735,6 +4919,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_on_last_tool_definition() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("System".to_string()),
@@ -3807,6 +4992,7 @@ mod tests {
     #[test]
     fn test_anthropic_no_tool_cache_when_no_tools() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("System".to_string()),
@@ -3874,5 +5060,403 @@ mod tests {
             !json.contains("cache_control"),
             "cache_control should be omitted when None: {json}"
         );
+    }
+
+    // ── A13: wire sanitizer for OpenAI-compatible providers ─────────────
+
+    fn tool_use_msg(id: &str, name: &str) -> Message {
+        Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: id.to_string(),
+                name: name.to_string(),
+                input: serde_json::json!({}),
+            }]),
+        }
+    }
+
+    fn tool_result_msg(id: &str) -> Message {
+        Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: Some(ToolResultContent::Single("ok".to_string())),
+                is_error: Some(false),
+            }]),
+        }
+    }
+
+    fn text_msg(text: &str) -> Message {
+        Message {
+            role: "user".to_string(),
+            content: MessageContent::Text(text.to_string()),
+        }
+    }
+
+    fn result_ids(messages: &[Message]) -> Vec<String> {
+        messages
+            .iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Blocks(blocks) => Some(
+                    blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::ToolResult { tool_use_id, .. } => {
+                                Some(tool_use_id.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// Orphaned tool results (no preceding assistant declared the call) are
+    /// dropped — the exact minimax 400 2013 "tool result's tool id not
+    /// found" shape.
+    #[test]
+    fn sanitize_drops_orphaned_tool_result() {
+        let input = vec![text_msg("task"), tool_result_msg("toolu_orphan")];
+        let out = sanitize_tool_sequence(&input);
+        assert!(
+            !result_ids(&out).contains(&"toolu_orphan".to_string()),
+            "the orphaned result must be dropped: {out:?}"
+        );
+        // The non-tool message is preserved.
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, "user");
+    }
+
+    /// A dangling tool call (declared but never answered) gets a synthetic
+    /// "(interrupted)" result appended, so strict providers never see an
+    /// unanswered tool_call.
+    #[test]
+    fn sanitize_synthesizes_interrupted_for_dangling_call() {
+        let input = vec![text_msg("task"), tool_use_msg("toolu_dangle", "Bash")];
+        let out = sanitize_tool_sequence(&input);
+        let ids = result_ids(&out);
+        assert_eq!(
+            ids,
+            vec!["toolu_dangle".to_string()],
+            "exactly one synthetic result for the dangling call: {out:?}"
+        );
+        let synthetic = out
+            .last()
+            .expect("synthetic result message appended")
+            .clone();
+        let rendered = serde_json::to_string(&synthetic).unwrap();
+        assert!(
+            rendered.contains("(interrupted)"),
+            "placeholder content must contain '(interrupted)': {rendered}"
+        );
+    }
+
+    /// A legal sequence passes through semantically unchanged.
+    #[test]
+    fn sanitize_keeps_legal_sequence_verbatim() {
+        let input = vec![
+            text_msg("task"),
+            tool_use_msg("toolu_ok", "Read"),
+            tool_result_msg("toolu_ok"),
+            text_msg("mid-conversation user note"),
+            tool_use_msg("toolu_ok2", "Bash"),
+            tool_result_msg("toolu_ok2"),
+            text_msg("done"),
+        ];
+        let out = sanitize_tool_sequence(&input);
+        assert_eq!(
+            serde_json::to_value(&out).unwrap(),
+            serde_json::to_value(&input).unwrap(),
+            "legal sequences must pass through unchanged"
+        );
+    }
+
+    /// Strict adjacency: when an unrelated message would intervene between a
+    /// tool call and its result, the sanitizer settles the dangling call with
+    /// the placeholder FIRST, so the wire never carries
+    /// assistant(tool_call) → user(text) → …
+    #[test]
+    fn sanitize_settles_dangling_call_before_intervening_message() {
+        let input = vec![
+            text_msg("task"),
+            tool_use_msg("toolu_cut", "Edit"),
+            text_msg("continuation prompt"),
+        ];
+        let out = sanitize_tool_sequence(&input);
+        let ids = result_ids(&out);
+        assert_eq!(
+            ids,
+            vec!["toolu_cut".to_string()],
+            "the placeholder must land before the intervening text message: {out:?}"
+        );
+        // Order: text(task) → assistant(call) → user(placeholder) → user(text).
+        let rendered: Vec<String> = out
+            .iter()
+            .map(|m| serde_json::to_string(m).unwrap())
+            .collect();
+        assert_eq!(
+            rendered.len(),
+            4,
+            "one placeholder settles the dangling call: {rendered:?}"
+        );
+        assert!(rendered[2].contains("(interrupted)"), "{rendered:?}");
+        assert_eq!(
+            rendered[3],
+            serde_json::to_string(&text_msg("continuation prompt")).unwrap()
+        );
+    }
+
+    /// A13-c: minimax's backend parses `tool_calls[].function.arguments`
+    /// and requires a JSON object — the literal "null" (and any other
+    /// non-object) is rejected 400 (2013) while "{}" succeeds (decisive
+    /// live-API test: request_id 06fc6407792530aa1d9df28fe350fd1a → 400 vs
+    /// 06fc64093ab64d878b704669ba551957 → 200). Five argument shapes.
+    #[test]
+    fn normalize_tool_arguments_five_shapes() {
+        // 1. JSON null → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::Value::Null),
+            serde_json::json!({})
+        );
+        // 2. Empty string → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::Value::String(String::new())),
+            serde_json::json!({})
+        );
+        // 3. Garbage string (invalid JSON tail from a cut stream) → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::Value::String("{\"na".to_string())),
+            serde_json::json!({})
+        );
+        // 4. Array (valid JSON, not an object) → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::json!(["a", "b"])),
+            serde_json::json!({})
+        );
+        // 5. Valid object → preserved verbatim.
+        let obj = serde_json::json!({"path": "src/lib.rs", "limit": 10});
+        assert_eq!(normalize_tool_arguments(&obj), obj);
+    }
+
+    /// Wire-level: a Null-input tool_use serializes with arguments "{}",
+    /// never the "null" literal minimax rejects.
+    #[test]
+    fn serialize_openai_normalizes_non_object_arguments() {
+        let request = MessageRequest {
+            thinking_type: None,
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                        id: "toolu_null".to_string(),
+                        name: "Edit".to_string(),
+                        input: serde_json::Value::Null,
+                    }]),
+                },
+                tool_result_msg("toolu_null"),
+            ],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let wire = serde_json::to_string(&serialize_openai_request(&request)).unwrap();
+        assert!(
+            wire.contains("\"arguments\":\"{}\""),
+            "arguments must normalize to an object literal: {wire}"
+        );
+        assert!(
+            !wire.contains("\"arguments\":\"null\""),
+            "arguments must never be the null literal: {wire}"
+        );
+    }
+
+    /// Wire-level guard-review pin (2026-09-27): the malformed-turn recovery
+    /// path persists assistant messages mixing a narration Text block with
+    /// an empty-input `{}` tool_use. The production failure was on the
+    /// OpenAI-compatible (minimax) wire, but #140 only pinned the Anthropic
+    /// mock. Contract pin — this test passed on first run (no defect found);
+    /// it exists so the recovered-message wire shape cannot regress: text
+    /// content preserved non-empty, exactly one tool_call with the JSON
+    /// object literal `"{}"` arguments (never `"null"`), and a legal
+    /// sequence (the call answered by exactly one tool message).
+    #[test]
+    fn serialize_openai_keeps_recovered_assistant_text_with_empty_object_arguments() {
+        let request = MessageRequest {
+            thinking_type: None,
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                text_msg("task"),
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![
+                        ContentBlock::Text {
+                            text: "Recovered narration before the tool call.".to_string(),
+                        },
+                        ContentBlock::ToolUse {
+                            id: "toolu_rec".to_string(),
+                            name: "Bash".to_string(),
+                            input: serde_json::json!({}),
+                        },
+                    ]),
+                },
+                tool_result_msg("toolu_rec"),
+            ],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let json = serialize_openai_request(&request);
+        let wire = serde_json::to_string(&json).unwrap();
+
+        let assistant = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .expect("assistant message on the wire");
+        // Narration text survives — never collapsed to null.
+        assert_eq!(
+            assistant["content"].as_str(),
+            Some("Recovered narration before the tool call."),
+            "assistant text content must be preserved: {wire}"
+        );
+        // Exactly one tool call, with `{}` (JSON object literal) arguments.
+        let calls = assistant["tool_calls"]
+            .as_array()
+            .expect("tool_calls array");
+        assert_eq!(calls.len(), 1, "exactly one tool_call: {wire}");
+        assert_eq!(calls[0]["id"], "toolu_rec", "wire: {wire}");
+        assert_eq!(calls[0]["function"]["name"], "Bash", "wire: {wire}");
+        assert_eq!(
+            calls[0]["function"]["arguments"].as_str(),
+            Some("{}"),
+            "arguments must be the JSON object literal string: {wire}"
+        );
+        assert!(
+            !wire.contains("\"arguments\":\"null\""),
+            "arguments must never be the null literal minimax rejects: {wire}"
+        );
+        // Sequence stays legal: the call is answered by exactly one tool
+        // message.
+        let tool_msgs: Vec<&serde_json::Value> = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .collect();
+        assert_eq!(tool_msgs.len(), 1, "exactly one tool message: {wire}");
+        assert_eq!(tool_msgs[0]["tool_call_id"], "toolu_rec", "wire: {wire}");
+    }
+
+    #[test]
+    fn serialize_openai_request_sanitizes_orphans() {
+        let request = MessageRequest {
+            thinking_type: None,
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                text_msg("task"),
+                tool_use_msg("toolu_w", "Edit"),
+                text_msg("continuation"),
+                tool_result_msg("toolu_w"),
+            ],
+            tools: None,
+            stream: Some(true),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let json = serialize_openai_request(&request);
+        let wire = serde_json::to_string(&json).unwrap();
+        let tool_msgs = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .count();
+        assert_eq!(
+            tool_msgs, 1,
+            "the real result must be the only tool message; wire: {wire}"
+        );
+        assert!(wire.contains("(interrupted)"), "wire: {wire}");
+    }
+
+    /// F4c: the Anthropic branch runs the A13 sanitizer too (fail-closed
+    /// backstop) — a dangling tool call must be settled on the Anthropic
+    /// wire exactly like on the OpenAI wire, since Anthropic 400s on
+    /// `tool_use` blocks without a matching `tool_result`.
+    #[test]
+    fn serialize_anthropic_request_sanitizes_orphans() {
+        let request = MessageRequest {
+            thinking_type: None,
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                text_msg("task"),
+                tool_use_msg("toolu_w", "Edit"),
+                text_msg("continuation"),
+                tool_result_msg("toolu_w"),
+            ],
+            tools: None,
+            stream: Some(true),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let json = serialize_request(&request, &LlmProvider::Anthropic);
+        let wire = serde_json::to_string(&json).unwrap();
+
+        let tool_results: Vec<&Value> = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["content"].as_array())
+            .flat_map(|blocks| blocks.iter())
+            .filter(|b| b["type"] == "tool_result")
+            .collect();
+        assert_eq!(
+            tool_results.len(),
+            1,
+            "exactly the synthetic result may reach the Anthropic wire: {wire}"
+        );
+        assert!(
+            tool_results[0]["tool_use_id"] == "toolu_w",
+            "the synthetic result must answer the dangling call: {wire}"
+        );
+        assert!(wire.contains("(interrupted)"), "wire: {wire}");
     }
 }

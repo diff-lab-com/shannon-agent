@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/capability/2",
+  "identifier": "file-dialogs",
+  "description": "review §P1-11: the desktop frontend invokes the @tauri-apps/plugin-dialog `open()` and `save()` helpers in seven places (ChatInput attachments, session export, artifact save, welcome/editor directory picker, persona-pack import/export). The existing session-windows capability deliberately excluded plugin:dialog, so every one of those calls hit 'dialog on {window}' failures under ACL and surfaced as catch/toast errors. This capability grants the minimum required dialog verbs to main and session-* windows so the actual UX paths work end-to-end.",
+  "windows": ["main", "session-*"],
+  "permissions": [
+    "dialog:allow-open",
+    "dialog:allow-save"
+  ]
+}

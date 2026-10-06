@@ -1,18 +1,23 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 import {
   listDataSourceCatalog,
   listInstalledDataSources,
   installDataSource,
   uninstallDataSource,
+  queryDataSource,
   type DataSourceCatalogEntry,
   type DataSourceField,
   type InstalledDataSource,
 } from "@/lib/tauri-api";
+import { toastError } from "@/lib/errorToast";
 import DataSourcesQuery from "./DataSourcesQuery";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import LoadingState from "@/components/ui/loading-state";
+import ErrorState from "@/components/ui/error-state";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -52,6 +57,7 @@ function datasourceIcon(slug: string): string {
  */
 export default function DataSources() {
   const intl = useIntl()
+  const navigate = useNavigate()
   const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
   const { search } = useOutletContext<{ search: string }>();
@@ -60,22 +66,34 @@ export default function DataSources() {
 
   const [catalog, setCatalog] = useState<DataSourceCatalogEntry[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
+  // B3 P1-17: failed catalog/installed reads get their own error states —
+  // a dead IPC must not render as "no adapters" / "nothing installed".
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   const [installed, setInstalled] = useState<InstalledDataSource[]>([]);
   const [installedLoading, setInstalledLoading] = useState(true);
+  const [installedError, setInstalledError] = useState<string | null>(null);
 
   const [installingSlug, setInstallingSlug] = useState<string | null>(null);
   const [installForm, setInstallForm] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<{ slug: string; msg: string; ok: boolean } | null>(null);
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  // Office Wave 2 B3 — "Fetch now" on installed obsidian/email_imap rows.
+  const [fetchingSlug, setFetchingSlug] = useState<string | null>(null);
 
-  useEffect(() => {
+  const refreshCatalog = useCallback(() => {
     let cancelled = false;
     setCatalogLoading(true);
     listDataSourceCatalog()
       .then((rows) => {
-        if (!cancelled) setCatalog(rows);
+        if (!cancelled) {
+          setCatalog(rows);
+          setCatalogError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setCatalogError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
         if (!cancelled) setCatalogLoading(false);
@@ -85,9 +103,17 @@ export default function DataSources() {
     };
   }, []);
 
+  useEffect(() => refreshCatalog(), [refreshCatalog]);
+
   const refreshInstalled = () => {
     listInstalledDataSources()
-      .then(setInstalled)
+      .then((rows) => {
+        setInstalled(rows);
+        setInstalledError(null);
+      })
+      .catch((err) => {
+        setInstalledError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => setInstalledLoading(false));
   };
 
@@ -97,9 +123,12 @@ export default function DataSources() {
 
   function startInstall(entry: DataSourceCatalogEntry) {
     const fields = entry.metadata.fields ?? [];
+    // B3 P1-19: start from EMPTY inputs — catalog placeholders are examples
+    // ("/home/user/MyVault"), not defaults. Seeding them let a bare "Save"
+    // pass required-validation with a sample string baked into the config.
     const initial: Record<string, string> = {};
     for (const field of fields) {
-      initial[field.key] = field.placeholder ?? "";
+      initial[field.key] = "";
     }
     setInstallForm(initial);
     setInstallingSlug(entry.id);
@@ -156,6 +185,29 @@ export default function DataSources() {
     }
   }
 
+  // Office Wave 2 B3 — same command the query panel issues
+  // (query_data_source); an empty query means "list everything" in the
+  // fetcher convention (`if !query.is_empty()` filters).
+  async function handleFetchNow(row: InstalledDataSource) {
+    setFetchingSlug(row.slug);
+    try {
+      const result = await queryDataSource(row.slug, '');
+      toast.success(t('extensions.datasources.query.resultsCount', { count: result.total }));
+    } catch (err) {
+      toastError(t('extensions.datasources.query.errorTitle'), err);
+    } finally {
+      setFetchingSlug(null);
+    }
+  }
+
+  // F5 (A8): the page's credential-storage status line — where the
+  // sources' passwords/tokens live. Derived from the rows the backend
+  // already reports; a degraded (`plaintext_file`) row wins over a keyring
+  // one so the honest mode is what the page shows.
+  const storageMode = installed.some((row) => row.credential_storage === 'plaintext_file')
+    ? 'plaintext_file'
+    : (installed.find((row) => row.credential_storage)?.credential_storage ?? null);
+
   const installedSlugs = new Set(installed.map((row) => row.slug));
   const filtered = search
     ? catalog.filter(
@@ -166,12 +218,45 @@ export default function DataSources() {
     : catalog;
 
   return (
-    <div className="p-lg max-w-6xl mx-auto space-y-xl">
+    <div className="p-lg max-w-medium mx-auto space-y-xl">
       <header>
         <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.datasources.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
           {t('extensions.datasources.subtitle')}
         </p>
+        {/* X3 互链: data sources = external data connections; gateway =
+            model/platform access. Reciprocal of the gateway page's note. */}
+        <p className="text-body-sm text-on-surface-variant/80 mt-xs flex flex-wrap items-center gap-xs">
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+            swap_horiz
+          </span>
+          {t('extensions.datasources.crossLink.text')}{' '}
+          <button
+            type="button"
+            onClick={() => navigate('/settings/connections')}
+            data-testid="datasources-to-gateway-link"
+            className="text-primary hover:underline cursor-pointer inline-flex items-center gap-0.5"
+          >
+            {t('extensions.datasources.crossLink.link')}
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+              arrow_forward
+            </span>
+          </button>
+        </p>
+        {storageMode && (
+          <p
+            className="text-body-sm text-on-surface-variant mt-xs flex items-center gap-xs"
+            data-testid="datasources-credential-storage"
+          >
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+              key
+            </span>
+            {t('extensions.credentialStorage.label')}:{' '}
+            {storageMode === 'keyring'
+              ? t('extensions.credentialStorage.keyring')
+              : t('extensions.credentialStorage.file')}
+          </p>
+        )}
       </header>
 
       <div className="flex gap-md border-b border-outline-variant/30">
@@ -207,6 +292,15 @@ export default function DataSources() {
         <DataSourcesQuery onSwitchToAdapters={() => setActiveTab('adapters')} />
       ) : catalogLoading ? (
         <LoadingState size="sm" label={t('extensions.datasources.loading')} />
+      ) : catalogError ? (
+        <div className="border border-outline-variant/30 rounded-2xl bg-surface-container-lowest/50">
+          <ErrorState
+            icon="database"
+            title={t('extensions.datasources.catalogLoadFailed')}
+            description={catalogError}
+            action={{ label: t('common.retry'), onClick: refreshCatalog }}
+          />
+        </div>
       ) : (
         <section>
           <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
@@ -215,6 +309,15 @@ export default function DataSources() {
           {filtered.length === 0 ? (
             <div className="text-center py-md text-on-surface-variant text-label-md">
               {t('extensions.datasources.noAdapters')}
+              <div className="mt-sm">
+                <button
+                  type="button"
+                  onClick={() => navigate('/extensions/featured')}
+                  className="text-primary hover:underline cursor-pointer"
+                >
+                  {t('extensions.datasources.goFeatured')}
+                </button>
+              </div>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
@@ -254,6 +357,15 @@ export default function DataSources() {
         </h3>
         {installedLoading ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.datasources.loadingInstalled')}</div>
+        ) : installedError ? (
+          <div className="border border-outline-variant/30 rounded-2xl bg-surface-container-lowest/50">
+            <ErrorState
+              icon="database"
+              title={t('extensions.datasources.installedLoadFailed')}
+              description={installedError}
+              action={{ label: t('common.retry'), onClick: refreshInstalled }}
+            />
+          </div>
         ) : installed.length === 0 ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">
             {t('extensions.datasources.noInstalled')}
@@ -268,7 +380,7 @@ export default function DataSources() {
                   i !== installed.length - 1 && "border-b border-outline-variant/15",
                 )}
               >
-                <span className="material-symbols-outlined text-primary text-[20px]" aria-hidden="true">{datasourceIcon(row.slug)}</span>
+                <span className="material-symbols-outlined text-primary icon-md" aria-hidden="true">{datasourceIcon(row.slug)}</span>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-label-md text-on-surface truncate">{row.name}</div>
                   <div className="text-label-xs text-on-surface-variant font-mono truncate">
@@ -278,16 +390,31 @@ export default function DataSources() {
                     {row.path}
                   </div>
                 </div>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  type="button"
-                  onClick={() => setRemoveTarget(row.slug)}
-                  disabled={busySlug === `uninstall:${row.slug}`}
-                  className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
-                >
-                  {busySlug === `uninstall:${row.slug}` ? "…" : t('extensions.datasources.remove')}
-                </Button>
+                <div className="flex gap-xs shrink-0">
+                  {FETCHABLE_KINDS.has(row.kind) && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      type="button"
+                      onClick={() => void handleFetchNow(row)}
+                      disabled={fetchingSlug === row.slug}
+                      data-testid={`fetch-now-${row.slug}`}
+                    >
+                      <span className="material-symbols-outlined icon-sm" aria-hidden="true">sync</span>
+                      {fetchingSlug === row.slug ? "…" : t('office.sources.fetchNow')}
+                    </Button>
+                  )}
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    type="button"
+                    onClick={() => setRemoveTarget(row.slug)}
+                    disabled={busySlug === `uninstall:${row.slug}`}
+                    className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
+                  >
+                    {busySlug === `uninstall:${row.slug}` ? "…" : t('extensions.datasources.remove')}
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
@@ -340,21 +467,26 @@ function AdapterCard({
   const fields: DataSourceField[] = entry.metadata.fields ?? [];
   const kind = (entry.metadata.kind as string | undefined) ?? "";
   const accent = ACCENT_BY_KIND[kind] ?? ACCENT_DEFAULT;
+  // Office Wave 2 B3 — only the config-only kinds (slack/discord/telegram/
+  // rss/ical) still lack a Rust fetcher. obsidian/email_imap graduated from
+  // Wave 1's QUERY_IN_DEV_KINDS: dispatch() handles them now, so they wear
+  // the Verified badge again and pre-install no longer shows the coming-soon
+  // hint.
   const isQueryPending = CONFIG_ONLY_KINDS.has(kind);
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-lg transition-all flex flex-col group">
+    <div className="relative overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-e3 transition-all flex flex-col group">
       <div className={cn("h-1 w-full bg-gradient-to-r", accent.bar)} />
       <div className="p-md flex flex-col flex-1">
         <div className="flex items-start gap-sm mb-xs">
-          <div className={cn("w-11 h-11 rounded-xl bg-gradient-to-br flex items-center justify-center shrink-0 shadow-sm", accent.icon)}>
-            <span className="material-symbols-outlined text-white text-[22px]">{accent.icon_name}</span>
+          <div className={cn("w-11 h-11 rounded-xl bg-gradient-to-br flex items-center justify-center shrink-0 shadow-e1", accent.icon)}>
+            <span className="material-symbols-outlined text-white icon-lg">{accent.icon_name}</span>
           </div>
           <div className="flex-1 min-w-0">
             <h4 className="font-bold text-label-md text-on-surface truncate">{entry.name}</h4>
             <p className="text-label-sm text-on-surface-variant line-clamp-2">{entry.description}</p>
           </div>
           {isQueryPending && !isInstalled ? (
-            <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-secondary/15 text-secondary shrink-0 inline-flex items-center gap-[4px]" title={t('extensions.datasources.queryComingSoonHint')}>
+            <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-secondary-container text-on-secondary-container shrink-0 inline-flex items-center gap-[4px]" title={t('extensions.datasources.queryComingSoonHint')}>
               <span className="material-symbols-outlined icon-xs">schedule</span>
               {t('extensions.datasources.queryComingSoon')}
             </span>
@@ -366,14 +498,14 @@ function AdapterCard({
         </div>
 
         {isQueryPending && !isInstalled && (
-          <div className="text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded bg-secondary/10 text-on-secondary-container border border-secondary/20">
+          <div className="text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded-sm bg-secondary/10 text-on-secondary-container border border-secondary/20">
             <span className="material-symbols-outlined icon-xs">info</span>
             {t('extensions.datasources.queryComingSoonHint')}
           </div>
         )}
 
         {feedback && (
-          <div className={cn("text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded", feedback.ok ? "bg-primary-container text-on-primary-container" : "bg-error-container text-on-error-container")}>
+          <div className={cn("text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded-sm", feedback.ok ? "bg-primary-container text-on-primary-container" : "bg-error-container text-on-error-container")}>
             <span className="material-symbols-outlined icon-xs">{feedback.ok ? "check_circle" : "error"}</span>
             {feedback.msg}
           </div>
@@ -454,7 +586,15 @@ function AdapterCard({
 
 /// Kinds whose query path is stubbed (config-only). Surfaced as a "coming
 /// soon" badge in the card header so users know install works today.
+/// Office Wave 2 B3 — obsidian/email_imap no longer belong here: the Rust
+/// dispatch() ships real fetchers for them, so Wave 1 A4's QUERY_IN_DEV
+/// honesty family is retired and both kinds wear Verified again.
 const CONFIG_ONLY_KINDS = new Set(["slack", "discord", "telegram", "rss", "ical"]);
+
+/// Office Wave 2 B3 — kinds with a real query fetcher behind
+/// query_data_source. Installed rows of these kinds get a "Fetch now"
+/// button (empty query = list everything, the fetcher convention).
+const FETCHABLE_KINDS = new Set(["obsidian", "email_imap"]);
 
 const ACCENT_DEFAULT = {
   bar: "from-primary/60 to-primary/20",

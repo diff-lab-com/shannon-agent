@@ -1,0 +1,27 @@
+# ChatScript: draft-bridge — wave-2 journey #18（方案 §9.4 J18）。
+#
+# composer 草稿桥（shannon:composer-draft CustomEvent）契约三钉的端到端面：
+# 永不自动发送、追加不覆盖（\n\n 分隔）。PPT 大纲对话框（ppt-outline-input
+# → Generate）与 Context 面板 Session sources cite（session-source-cite →
+# [Source] 草稿）是 pushComposerDraft 的真实应用面，同一事件路径。
+# 「未挂载暂存 mount 后 flush」钉在 L1（composerBridge pending queue ——
+# e2e 无可在 composer 未挂载时调用 pushComposerDraft 的应用面，见报告）。
+#
+# turn 1 供「手动发送才出消息」的证明：草稿推送后 snapshot().sentTurns 仍
+# 为 0，用户按 Enter 才消耗该轮。断言在 spec
+# （chat-script.draft-bridge.spec.ts）。
+name: draft-bridge
+description: 草稿桥 — CustomEvent 推送永不自动发送、追加不覆盖；PPT 对话框与 Session sources cite 同路径
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-draftbridge
+      title: Draft bridge
+      messages: []
+turns:
+  - user: "这条只有用户手动按 Enter 才会发出"
+    script:
+      - event: query:text
+        chunks:
+          - "手动发送后的回复"

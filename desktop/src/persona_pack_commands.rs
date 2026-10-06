@@ -25,7 +25,7 @@
 //! - **Secret stripping is hard**: every textual asset (`.md/.toml/.json/
 //!   .jsonl/.yml/.yaml/.txt`) is scanned before it enters the pack; secret-
 //!   shaped lines / tokens / webhook credentials are replaced with
-//!   `[stripped: secret]` and counted (see [`strip_text`] for the rule list).
+//!   `[stripped: secret]` and counted (see `strip_text` for the rule list).
 //!   Memory entries export content fields only — never `source_session_id`
 //!   and never the source machine's project paths.
 //! - **Path safety on import**: manifest paths must be relative, `..`-free,
@@ -1563,6 +1563,7 @@ fn import_memories(data: &[u8], roots: &PackRoots, report: &mut PackImportReport
                 .unwrap_or_else(chrono::Utc::now),
             accessed_at: chrono::Utc::now(),
             access_count: 0,
+            valid_until: None,
             // Provenance: the packed kind is preserved; never a session id.
             source_session_id: None,
             source_kind: Some(
@@ -1874,7 +1875,6 @@ mod tests {
 
     #[test]
     fn stripping_rules_matrix() {
-        let fixture_sk_live = format!("api_key = \"{}-live-abcdef123456\"", "sk");
         let cases: Vec<(&str, &str)> = vec![
             // R1 — assignment lines (whole line replaced)
             (
@@ -1905,26 +1905,17 @@ mod tests {
             "{out}"
         );
         assert_eq!(n, 1);
-        let fixture_ghp_tok = format!("{}{}", "ghp", "_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890");
-        let (out, n) = strip_text(&fixture_ghp_tok, false);
         let fixture = format!("{}{}", "ghp", "_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890");
-        let (out, n) = strip_text(&fixture, false);
+        let (_, n) = strip_text(&fixture, false);
         assert_eq!(n, 1);
-        let fixture_xoxb_tok = format!("{}{}", "xoxb", "-123456789-abcdefghijklmnopqrstuv");
-        let (out, n) = strip_text(&fixture_xoxb_tok, false);
         let fixture = format!("{}{}", "xoxb", "-123456789-abcdefghijklmnopqrstuv");
-        let (out, n) = strip_text(&fixture, false);
+        let (_, n) = strip_text(&fixture, false);
         assert_eq!(n, 1);
-        let fixture_gp_tok = format!(
-            "{}{}{}",
-            "github", "_pat_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ123_4567890"
-        );
-        let (out, n) = strip_text(&fixture_gp_tok, false);
         let fixture = format!(
             "{}{}{}",
             "github", "_pat_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ123_4567890"
         );
-        let (out, n) = strip_text(&fixture, false);
+        let (_, n) = strip_text(&fixture, false);
         assert_eq!(n, 1);
 
         // R3a — webhook URLs truncated after the fixed prefix.

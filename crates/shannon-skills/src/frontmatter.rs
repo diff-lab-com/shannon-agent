@@ -149,8 +149,10 @@ fn extract_frontmatter(content: &str) -> SkillResult<(&str, &str)> {
     }
 
     let rest = &content[3..]; // Skip opening ---
-    let end_idx = rest
-        .find("\n---")
+    // F36: the closing delimiter must be a line that is exactly `---`
+    // (followed by a newline or end of input). A `----` horizontal rule or
+    // a `---extra` line inside the frontmatter must not close it.
+    let end_idx = find_closing_delimiter(rest)
         .ok_or_else(|| SkillError::InvalidFormat("Missing closing --- in frontmatter".into()))?;
 
     let frontmatter = &rest[..end_idx];
@@ -158,6 +160,27 @@ fn extract_frontmatter(content: &str) -> SkillResult<(&str, &str)> {
     let body = &rest[body_start..];
 
     Ok((frontmatter, body))
+}
+
+/// Find the byte offset of the newline starting the closing `---` delimiter
+/// line. The delimiter line must be exactly three dashes with nothing after
+/// it on the same line.
+fn find_closing_delimiter(rest: &str) -> Option<usize> {
+    let bytes = rest.as_bytes();
+    let mut search_from = 0;
+    while let Some(idx) = rest[search_from..].find("\n---") {
+        let abs = search_from + idx; // offset of the '\n'
+        let after = abs + 4; // offset just past "---"
+        // A trailing \r (CRLF line endings) still means the line is exactly
+        // "---"; anything else (`----`, `---extra`) keeps the scan going.
+        let closed = after >= bytes.len() || bytes[after] == b'\n' || bytes[after] == b'\r';
+        if closed {
+            return Some(abs);
+        }
+        // `----` / `---extra`: keep scanning past this candidate.
+        search_from = abs + 1;
+    }
+    None
 }
 
 /// Parse shell command configuration from frontmatter
@@ -249,5 +272,33 @@ body content"#;
         // The actual result has \n before body content
         assert_eq!(fm, "\nkey: value");
         assert_eq!(body, "\nbody content");
+    }
+
+    /// F36 regression: only a line that is exactly `---` closes the
+    /// frontmatter. A `----` horizontal rule inside the frontmatter must not.
+    #[test]
+    fn test_frontmatter_closes_only_on_exact_delimiter() {
+        let content = "---\nkey: value\n----\nstill: frontmatter\n---\nbody";
+        let (fm, body) = extract_frontmatter(content).unwrap();
+        assert!(fm.contains("still: frontmatter"), "---- must not close");
+        assert_eq!(body, "\nbody");
+    }
+
+    /// F36: a `---extra` line is not a closing delimiter either.
+    #[test]
+    fn test_frontmatter_ignores_delimiter_with_suffix() {
+        let content = "---\nkey: value\n---extra\nmore: stuff\n---\nbody";
+        let (fm, body) = extract_frontmatter(content).unwrap();
+        assert!(fm.contains("more: stuff"), "---extra must not close");
+        assert_eq!(body, "\nbody");
+    }
+
+    /// F36: the delimiter may be the last line of the file (EOS terminator).
+    #[test]
+    fn test_frontmatter_delimiter_at_end_of_input() {
+        let content = "---\nkey: value\n---";
+        let (fm, body) = extract_frontmatter(content).unwrap();
+        assert_eq!(fm, "\nkey: value");
+        assert_eq!(body, "");
     }
 }

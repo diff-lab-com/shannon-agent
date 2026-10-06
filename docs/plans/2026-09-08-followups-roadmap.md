@@ -10,9 +10,9 @@
 
 | # | 项 | 阻塞原因 | 解锁条件 | 关联 |
 |---|---|---|---|---|
-| A1 | **T13-T2 macOS AX 适配器完整实现** | 无 Mac 开发机；AXUIElement 行为（TCC 授权流、AXObserver、Electron 树差异）无法在 Linux 验证，盲写风险高 | ① 一台 Mac；② telemetry 显示 macOS 用户占比可观 | `platform_adapter.rs` 的 `MacosAxAdapter` 骨架已合并，实现即插即用 |
-| A2 | **applescript 工具 macOS 真机 QA**（T13-T1 的 TCC 授权流 + 真实 osascript 执行） | 同上（无 Mac） | 同上；步骤已备于 [docs/qa/2026-09-07-computer-use-browser-qa-checklist.md](./2026-09-07-computer-use-browser-qa-checklist.md) QA-1 | T13-T1 代码已合并 |
-| A3 | **chromiumoxide / computer-use 在 Windows 与 macOS 的编译与运行验证** | 无对应环境 | CI windows/macos job 已覆盖编译（Cross-platform Check windows 项为 dev 基线红、与上游 openssh 依赖相关）；运行验证需真机 | T14 / T10 |
+| A1 | **T13-T2 macOS AX 适配器完整实现** | ~~无 Mac 开发机~~（**2026-09-10 起已有 Mac**，见 A2）；剩余门槛是 telemetry：AXUIElement 行为（TCC 授权流、AXObserver、Electron 树差异）需真机投入验证，盲写风险仍高 | ① ~~一台 Mac~~ ✅；② telemetry 显示 macOS 用户占比可观 | `platform_adapter.rs` 的 `MacosAxAdapter` 骨架已合并，实现即插即用 |
+| A2 | **applescript 工具 macOS 真机 QA**（T13-T1 的 TCC 授权流 + 真实 osascript 执行） | 剩余 4 步需真人操作：TCC 弹窗点击（#2）、权限开关切换（#3）、快捷指令名（#5）、provider + REPL 审批流（#6） | 步骤与复跑命令见 [QA 清单 QA-1](../qa/2026-09-07-computer-use-browser-qa-checklist.md) 与 [2026-09-10 结果文档](../qa/2026-09-10-macos-real-machine-qa-results.md)；#1/#4/#7 已 ✅（harness `tests/macos_real_machine.rs`） | T13-T1 代码已合并 |
+| A3 | ~~chromiumoxide / computer-use 在 Windows 与 macOS 的编译与运行验证~~ | **macOS 半边已完成（2026-09-10）**：编译修复（xcap 0.0.13→0.9.8，见 F1）、screenshot/browser E2E 真机通过。**Windows 侧（2026-09-21）：编译验证已闭合**——`--features computer-use,local-browser` 在 Windows CI 腿（ci.yml）与本机 `cargo check` 通过，enigo(Win32 SendInput)/xcap(GDI)/chromiumoxide 链路可编译；Windows 发布产物（CLI + desktop NSIS）已默认启用双 feature；真机 harness `tests/windows_real_machine.rs` 已就位（截图/UIA/窗口/剪贴板/Edge 检测/浏览器元素点击循环，`--ignored` 手动跑）。**剩余：Windows 真机执行 harness + 人工输入回归** | Windows 真机执行 `cargo test -p shannon-tools --features computer-use,local-browser --test windows_real_machine -- --ignored` | T14 / T10；macOS 证据见结果文档 |
 | A4 | **computer-use libei 后端的 Wayland 真机会话验证**（Portal 授权流 + 原生 Wayland 点击） | 本机无原生 Wayland 会话可自动化；Portal 授权需人工点击 | 带 GNOME-Wayland 的测试机或自托管 runner；步骤见 QA 清单 QA-2 | T10-Phase1 已合并（编译门在 CI） |
 
 ## B. 工程量大，按排期延后（有就绪的底座）
@@ -34,6 +34,7 @@
 |---|---|---|---|---|
 | B1-tail | **远端浏览器自动编排**（B1 方案 A 残余：远端自动启动 Chrome + `ssh -L` 转发生命周期 + 断线重连） | CDP attach 通道已通（B1-B）；`SshRuntime` exec/piped/控制套接字齐备；手动 `ssh -L` + `SHANNON_BROWSER_CDP` 已可用 | openssh 会话编排、远端环境探测、转发进程生命周期、Degraded 联动重连 | 2027 H1；用户提出远端浏览器需求且手动转发嫌麻烦 |
 | B4-out | **引擎出站图片 → IM 渠道**（B4 残余） | `SendOpts.attachments` 类型已存在；入站管线已建 | 引擎事件携带图片块 → adapter send 附件（sendPhoto/上传/Block Kit）；各渠道 mediaOut 能力表 | 有 IM 渠道用户需求时 |
+| B5 | **Windows 平台的 ssh 远程世界**（openssh 栈 unix-only；2026-09-08 起类型/trait 全平台编译、运行时报 `Unsupported`） | 类型/trait 表面全平台编译（`SshRuntime`/`SshFs`/`SshProcess` stub + provider trait）；Windows 内置 OpenSSH 的 per-command 模式 + 非 mux sftp 子进程的路线在 `ssh/session.rs` 注释已有雏形 | 非 mux 传输实现（逐命令 ssh 子进程）、SFTP 子进程等价物、真机验证 | Windows 桌面用户提出 `/remote use` 需求 |
 
 ## C. 明确不做（留档防重提）
 
@@ -47,8 +48,20 @@
 
 | # | 项 | 现状 |
 |---|---|---|
-| D1 | **dev 前端 overlay lint 红**（`MigrationWizard.tsx:193` 白名单外 `fixed inset-0`，dev CI "Desktop Unit Tests" job） | dev 上游提交引入；建议转前端 owner（加白名单或改用规范组件） |
-| D2 | **goal.rs 的 clippy 告警**（unused imports ×3、unused_mut、never_loop）与 `shannon-ui` 两处 private-interface 告警 | dev 基线预存；15 分钟清理即可 |
+| D1 | **dev 前端 overlay lint 红**（`MigrationWizard.tsx:193` 白名单外 `fixed inset-0`，dev CI "Desktop Unit Tests" job） | **已修复（2026-09-08）**：MigrationWizard 迁移至 Modal 原语（与 CancelTaskModal 的 T1.2 路径一致），`ui/modal.tsx` 增加可选 `testId` prop；未动白名单 |
+| D2 | **goal.rs 的 clippy 告警**（unused imports ×3、unused_mut、never_loop）与 `shannon-ui` 两处 private-interface 告警 | **已修复（2026-09-08）**：全 workspace 25 处 clippy 告警清零（含 `GuardCounters` 提为 pub、applescript 后端按 `cfg(target_os)` 门控）；Clippy job 转绿 |
+
+## E. macOS 真机验证发现（2026-09-10，见 [结果文档](../qa/2026-09-10-macos-real-machine-qa-results.md)）
+
+| # | 项 | 说明 | 状态 |
+|---|---|---|---|
+| E1 | **`screen_size()` 静默兜底 (1024,768)** | `Monitor::all()` 失败（如显示器休眠，`CGGetActiveDisplayList` 返回 0）时坐标缩放退化为恒等映射；若 AX 已授权，参考系坐标会被原样当作屏幕坐标点击（错位） | **已修复（2026-09-10）**：改为向上传播错误 + `tracing::warn` |
+| E2 | **CI 的 macOS 腿不覆盖 `computer-use` feature** | "Build with computer-use feature" step 在 Linux-only job；`cross-platform` macOS 腿只跑默认 feature `cargo check` → F1 那类 macOS 专属编译损坏在 CI 不可见 | **已修复（2026-09-10）**：`cross-platform` macOS 腿新增 `cargo check -p shannon-tools --features computer-use` |
+| E3 | **权限预检缺口的实证** | AX 未授权时 enigo 动作报成功但 CGEvent 静默丢弃（此前仅为注释级认知，现有点击/输入双向证据） | **已修复（2026-09-10，输入侧）**：`platform_adapter::accessibility_granted()`（AXIsProcessTrusted）+ 6 个输入动作预检，未授权时返回可行动错误；真机 harness 已验证。剩余：desktop 端 Info.plist/entitlements 声明 |
+| E4 | **存量 clippy 告警在 computer-use 形态下** | `computer_use.rs` format! 风格 ×3、Key clone ×3、landlock unused imports、platform_adapter unneeded return、glob/sandbox 测试散点 | **已清理（2026-09-10）**：双形态 clippy 归零 |
+| E5 | **30s 超时与首次 TCC 提示竞争** | 实测：Notes 首次授权若用户未在 30s 内点击，osascript 连同未决提示被超时杀死，报 `timed out after 30s` | **已缓解（2026-09-10）**：超时错误信息附带 TCC 提示指引；根治（放宽/暂停计时）需 TCC 状态内省（无公开 API），随权限预检立项评估 |
+| E6 | **macOS /private 路径别名破坏沙箱显示与策略匹配** | `std::fs::canonicalize` 把 /etc、/tmp、/var 解析为 /private/…：denied pattern（/etc/**）失配降级为 outside-roots 错误；bind-alias 显示失配导致错误信息泄漏宿主真实路径；temp 拼写失配使 tmp 排除失效，临时目录下的路径被错误重写为 /workspace。4 个存量单测在 macOS 上失败即源于此 | **已修复（2026-09-10）**：denied pattern 按可见拼写别名匹配；alias 展示匹配 canonical+raw 双拼写；temp 根统一渲染为沙箱可见的 /tmp 拼写；4 个测试修正为拼写无关断言，`file::sandbox::` 53/53 通过 |
+| E7 | **残留 9 个存量 macOS 失败 + git 测试负载敏感** | sandbox_adapter 策略匹配（denied_paths 在 macOS 实际未生效，安全相关）、FileHistory 缓存键拼写敏感、glob/read/write 回显；git/edit 31+5 处进程级 chdir 无串行化 | **已修复（2026-09-10）**：策略匹配双拼写；FileHistory 键规范化；回显测试按沙箱可见拼写修正；新增 `test_support::CwdGuard` 串行化并恢复 cwd；`generate_cell_id` 加原子序号。最终双形态全量 0 失败 |
 
 ---
 
@@ -59,3 +72,4 @@
 - T10-Phase1 enigo backend / T12 OptionC toolset / T13-T1 AppleScript / T13-T2 地基 / T14 地基 —— #74
 - T14 Phase 1+2（chromiumoxide 会话 / 8 工具 / TUI open / press_key / console / full_page / E2E）/ Phase 3（providers + DynamicWorld + dispatch QA）—— #76
 - T15 架构基线 —— #73（已验证干净）
+- **macOS 真机验证第一批**（QA-1 #1/#4/#7、screenshot、browser E2E、CI 对齐单测；xcap 0.0.13→0.9.8 编译修复、browser_e2e 探测修复、landlock 非 Linux 测试编译修复、真机 harness `tests/macos_real_machine.rs`）—— 2026-09-10，证据见 [结果文档](../qa/2026-09-10-macos-real-machine-qa-results.md)

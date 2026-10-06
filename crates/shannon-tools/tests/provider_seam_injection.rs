@@ -129,6 +129,21 @@ impl FileSystemProvider for MemoryFs {
         Ok(())
     }
 
+    fn rename_blocking(&self, from: &Path, to: &Path) -> io::Result<()> {
+        // Move the recorded file bytes from `from` to `to`.
+        let bytes = self
+            .files
+            .lock()
+            .expect("memfs lock")
+            .remove(from)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "rename source missing"))?;
+        self.files
+            .lock()
+            .expect("memfs lock")
+            .insert(to.to_path_buf(), bytes);
+        Ok(())
+    }
+
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
         self.files.lock().expect("memfs lock").remove(path);
         Ok(())
@@ -248,7 +263,8 @@ async fn write_then_read_roundtrip(world: Arc<dyn FileSystemProvider>, sandbox: 
         .await
         .expect("read succeeds through provider");
     assert!(!out.is_error);
-    assert_eq!(out.content, "hello world");
+    // Output is numbered cat -n style: "N\tcontent".
+    assert_eq!(out.content, "1\thello world");
 
     // Overwrite semantics match the local suite's expectations.
     let out = write_tool
@@ -266,7 +282,7 @@ async fn write_then_read_roundtrip(world: Arc<dyn FileSystemProvider>, sandbox: 
         }))
         .await
         .unwrap();
-    assert_eq!(out.content, "second", "overwrite must replace content");
+    assert_eq!(out.content, "1\tsecond", "overwrite must replace content");
 }
 
 #[tokio::test]

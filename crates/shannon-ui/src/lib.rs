@@ -74,3 +74,56 @@ pub fn run() -> Result<()> {
     let mut repl = Repl::new()?;
     repl.run()
 }
+
+/// Test-only: shared lock for tests that touch process-global environment
+/// (cwd, HOME). Plain `cargo test` runs tests as threads of one process, so
+/// env-swapping tests otherwise race every other test that reads those
+/// values (roadmap E7 follow-up).
+#[cfg(test)]
+pub(crate) mod test_env {
+    use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Held for the duration of any test that mutates process-global
+    /// environment (cwd / HOME / other env vars).
+    /// KEEP: the guard field stays alive for the lock's lifetime even though
+    /// nothing reads it — dropping early would release ENV_LOCK.
+    pub struct EnvLock(#[allow(dead_code)] pub(crate) MutexGuard<'static, ()>); // KEEP: guard must outlive scope
+
+    pub fn env_lock() -> EnvLock {
+        EnvLock(ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Point HOME at a scratch dir for the test's lifetime. Holds ENV_LOCK,
+    /// keeps the scratch dir alive, and restores the ORIGINAL home on drop
+    /// (restoring "/" broke later HOME-reading tests).
+    pub struct HomeGuard {
+        original: PathBuf,
+        _guard: (EnvLock, tempfile::TempDir),
+    }
+
+    impl HomeGuard {
+        pub fn new() -> Self {
+            let lock = env_lock();
+            let original = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/"));
+            let dir = tempfile::tempdir().unwrap();
+            // SAFETY: every env-swapping test holds ENV_LOCK.
+            unsafe { std::env::set_var("HOME", dir.path()) };
+            Self {
+                original,
+                _guard: (lock, dir),
+            }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: ENV_LOCK is held for this guard's lifetime.
+            unsafe { std::env::set_var("HOME", &self.original) };
+        }
+    }
+}

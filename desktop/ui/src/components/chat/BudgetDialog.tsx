@@ -5,7 +5,7 @@
 // through `set_session_budget` (sidecar-backed) and reports back via
 // `onSaved` so callers can refresh their badges.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { Modal, ModalBody, ModalFooter } from '@/components/ui/modal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -25,6 +25,7 @@ export interface BudgetDialogProps {
 
 export default function BudgetDialog({ open, sessionId, budget, onClose, onSaved }: BudgetDialogProps) {
   const t = useT()
+  const errorId = useId()
   const [value, setValue] = useState('')
   const [error, setError] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -73,13 +74,14 @@ export default function BudgetDialog({ open, sessionId, budget, onClose, onSaved
             placeholder={t('budget.dialog.placeholder')}
             value={value}
             aria-invalid={error || undefined}
+            aria-describedby={error ? errorId : undefined}
             onChange={e => { setValue(e.target.value); setError(false) }}
             onKeyDown={e => { if (e.key === 'Enter') void save(value) }}
             className="mt-xs font-mono"
           />
         </label>
         {error && (
-          <p role="alert" className="text-body-sm text-error mt-xs">{t('budget.dialog.invalid')}</p>
+          <p id={errorId} role="alert" className="text-body-sm text-error mt-xs">{t('budget.dialog.invalid')}</p>
         )}
       </ModalBody>
       <ModalFooter className="pt-0">

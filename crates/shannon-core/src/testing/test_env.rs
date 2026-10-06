@@ -198,7 +198,9 @@ impl TestShannon {
         };
 
         LlmClientConfig {
+            thinking_type: None,
             api_key: "test-key".to_string(),
+            alternate_api_keys: Vec::new(),
             base_url: server_url.to_string(),
             model: self.model.clone(),
             max_tokens: 4096,
@@ -358,13 +360,13 @@ mod tests {
         let env = TestShannonBuilder::new()
             .provider("ollama")
             .model("llama3")
-            .permission_mode(ApprovalMode::Suggest)
+            .permission_mode(ApprovalMode::Ask)
             .workspace_file("src/main.rs", "fn main() {}")
             .build();
 
         assert_eq!(env.provider(), "ollama");
         assert_eq!(env.model(), "llama3");
-        assert_eq!(env.permission_mode(), ApprovalMode::Suggest);
+        assert_eq!(env.permission_mode(), ApprovalMode::Ask);
         assert!(env.workspace_file_exists("src/main.rs"));
         assert_eq!(env.read_workspace_file("src/main.rs"), "fn main() {}");
     }

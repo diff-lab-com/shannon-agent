@@ -12,9 +12,51 @@
 
 use crate::commands::{AppState, ChatMessage, SessionMeta, chrono_timestamp};
 use crate::scheduled_commands::TaskWorktreeDto;
-use crate::session_registry::SessionKey;
+use crate::session_registry::{SessionKey, SessionRegistry};
 use crate::{config, events, events::event_names};
+use serde::Serialize;
+use shannon_core::session_log::SessionCuration;
+use std::collections::HashSet;
+use std::path::Path;
 use tauri::Emitter;
+
+/// Tauri event pushed when `switch_session` auto-unarchives an archived
+/// session (卡A resume-unarchive: opening a session must never be blocked
+/// by its archived flag — the Codex Desktop bug lesson). Payload:
+/// [`SessionAutoUnarchived`]. The UI toasts it so the user understands why
+/// the conversation left the archived section.
+pub const SESSION_AUTO_UNARCHIVED_EVENT: &str = "session-auto-unarchived";
+
+/// Wire payload for [`SESSION_AUTO_UNARCHIVED_EVENT`].
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionAutoUnarchived {
+    /// The session that was unarchived by being opened.
+    pub session_id: String,
+    /// Its title when known (empty string otherwise).
+    pub title: String,
+}
+
+/// Wire payload for [`event_names::SESSION_PINS_CHANGED`] (Settings R3 T7):
+/// one session's pin flip, emitted after the curation sidecar write lands.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionPinChanged {
+    /// The session whose pinned flag changed.
+    pub session_id: String,
+    /// The flag's new value.
+    pub pinned: bool,
+}
+
+/// Wire payload for [`event_names::SESSION_AUTO_ARCHIVED`] (Settings R3 T7):
+/// one session the auto-archive scan archived on the user's behalf. The
+/// frontend toasts it so the conversation leaving the active rail is never
+/// a surprise (mirror of [`SessionAutoUnarchived`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionAutoArchived {
+    /// The session the scan archived.
+    pub session_id: String,
+    /// Its title when known (empty string otherwise).
+    pub title: String,
+}
 
 /// Create a new session and return its UUID.
 ///
@@ -100,24 +142,28 @@ pub(crate) fn derive_title_from_message(message: &str) -> String {
 /// StateManager save with `Some(title)`); later auto-saves pass
 /// `title: None`, which `StateManager::save_session` backfills from disk,
 /// so the derived title survives every subsequent save.
-pub(crate) async fn auto_title_from_first_message(
+///
+/// Returns the derived title **when it was applied** — the TitleGeneration
+/// slot consumer (`session_title`) keys its one-shot LLM retitling off this
+/// (spawn only what the deterministic pass actually retitled, so a session
+/// the user renamed — in this or any previous process — can never reach the
+/// LLM title path). `None` = the placeholder was kept, no LLM title either.
+pub(crate) async fn auto_title_from_first_message<R: tauri::Runtime>(
     state: &AppState,
-    app_handle: &tauri::AppHandle,
+    app_handle: &tauri::AppHandle<R>,
     session_id: uuid::Uuid,
     message: &str,
-) {
+) -> Option<String> {
     let title = derive_title_from_message(message);
     if title.is_empty() {
-        return;
+        return None;
     }
     let id_str = session_id.to_string();
 
     let mut sessions = state.sessions.lock().await;
-    let Some(session) = sessions.iter_mut().find(|s| s.id == id_str) else {
-        return;
-    };
+    let session = sessions.iter_mut().find(|s| s.id == id_str)?;
     if !session.title.starts_with("Session ") {
-        return;
+        return None;
     }
     session.title = title.clone();
 
@@ -128,12 +174,13 @@ pub(crate) async fn auto_title_from_first_message(
     let _ = state.l0_store().save_sidecar(
         &session_id,
         &shannon_core::session_log::SessionSidecar {
-            title: Some(title),
+            title: Some(title.clone()),
             ..Default::default()
         },
     );
 
     let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
+    Some(title)
 }
 
 /// List all sessions.
@@ -142,22 +189,969 @@ pub(crate) async fn auto_title_from_first_message(
 pub async fn list_sessions(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<events::SessionInfo>, String> {
-    let sessions = state.sessions.lock().await;
-    let result: Vec<events::SessionInfo> = sessions
-        .iter()
-        .map(|s| events::SessionInfo {
-            id: s.id.clone(),
-            title: s.title.clone(),
-            created_at: s.created_at,
-            message_count: s.message_count,
-            working_dir: s.working_dir.clone(),
-            parent_id: s.parent_id.clone(),
-            branch_point: s.branch_point,
-        })
-        .collect();
+    // P0 sidebar telemetry: clone the display metas out of the lock, then
+    // join each with the registry's live `querying` flag (an await — must
+    // not happen while holding the std Mutex).
+    let metas: Vec<SessionMeta> = state.sessions.lock().await.clone();
+    let mut result = Vec::with_capacity(metas.len());
+    for s in &metas {
+        result.push(session_wire_info(&state, s).await);
+    }
     Ok(result)
 }
 
+/// P0 sidebar telemetry: build the wire `SessionInfo`, joining the live
+/// `running` flag from the session registry and the session's last activity
+/// time (events.jsonl mtime, epoch ms). Both fields are additive. The
+/// archived state is deliberately not on the wire: the active list hides
+/// archived rows backend-side and the 归档 lens reads `list_archived_sessions`
+/// (the curation sidecar stays the single source of archived truth).
+async fn session_wire_info(state: &AppState, s: &SessionMeta) -> events::SessionInfo {
+    let running = match uuid::Uuid::parse_str(&s.id) {
+        Ok(id) => Some(state.registry.is_querying(id).await),
+        Err(_) => None,
+    };
+    // Settings R3 T7: the pin flag rides the curation sidecar — a tiny
+    // atomic-rename JSON read per row, the same shape the archived lens
+    // already pays per row. Missing/unparsable sidecars load as unpinned.
+    let pinned = match uuid::Uuid::parse_str(&s.id) {
+        Ok(id) => state.l0_store().curation(&id).pinned,
+        Err(_) => false,
+    };
+    events::SessionInfo {
+        id: s.id.clone(),
+        title: s.title.clone(),
+        created_at: s.created_at,
+        message_count: s.message_count,
+        working_dir: s.working_dir.clone(),
+        parent_id: s.parent_id.clone(),
+        branch_point: s.branch_point,
+        running,
+        updated_at: session_log_mtime(state, &s.id),
+        pinned,
+    }
+}
+
+/// Last-activity epoch ms for a session, taken from its L0 log's mtime.
+/// `None` when the log doesn't exist yet (brand-new in-memory session) or
+/// the id is not a UUID (legacy rows).
+fn session_log_mtime(state: &AppState, id: &str) -> Option<i64> {
+    let uuid = uuid::Uuid::parse_str(id).ok()?;
+    let path = state
+        .l0_store()
+        .container()
+        .join(uuid.to_string())
+        .join("events.jsonl");
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta.modified().ok()?;
+    mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as i64)
+}
+
+// ---------------------------------------------------------------------------
+// Session archive MVP (卡A) — curation flag + active-rail sync + archived lens
+// ---------------------------------------------------------------------------
+
+/// One archived session as the 归档 lens renders it (`SidebarSessions`
+/// collapsed section): id + title + last activity. Deliberately lean — the
+/// lens never needs messages or token counts.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArchivedSessionRow {
+    /// Owning session id.
+    pub id: String,
+    /// Curated title from the sidecar; `None` → the UI renders its
+    /// "untitled" placeholder.
+    pub title: Option<String>,
+    /// Last activity, epoch ms (latest event timestamp); `None` when
+    /// unknown.
+    pub updated_at: Option<i64>,
+}
+
+/// Rebuild an active-rail [`SessionMeta`] from one `SessionStore::list()`
+/// summary ([`StoredSessionInfo`]): single enumeration + sidecar title. The
+/// unarchive rebuild uses this — never the full `store.load` projection —
+/// so repopulating the rail cannot fail on the session's own log parsing
+/// (final review F2) and one listing serves every lookup.
+fn session_meta_from_info(info: &shannon_core::session_log::StoredSessionInfo) -> SessionMeta {
+    let id = info.session_id.to_string();
+    let title = info
+        .title
+        .clone()
+        .unwrap_or_else(|| format!("Session {}", id.split('-').next().unwrap_or(&id)));
+    SessionMeta {
+        id,
+        title,
+        created_at: info.created_at.timestamp_millis(),
+        // The listing projects turns, not raw messages; the rail does not
+        // render this count — turn_count is the honest closest value.
+        message_count: info.turn_count,
+        working_dir: info.project_path.clone(),
+        parent_id: info.parent_session_id.map(|p| p.to_string()),
+        branch_point: info.branch_point_message_index,
+    }
+}
+
+/// Rebuild one session's active-rail row from [`SessionStore::list`] info —
+/// the shared unarchive repair behind [`apply_archived_flag`] and
+/// [`resume_unarchive_in`]. Returns whether the row was (re)built. Skips
+/// silently when the row is already on the rail; best-effort otherwise —
+/// when the listing cannot serve the session the failure is logged (the
+/// flag is already correct by then, and the next successful retry or
+/// restart repairs the row), never fatal.
+fn rebuild_rail_row_from_listing(
+    store: &shannon_core::session_log::SessionStore,
+    sessions: &mut Vec<SessionMeta>,
+    session_id: &uuid::Uuid,
+) -> bool {
+    let id_str = session_id.to_string();
+    if sessions.iter().any(|s| s.id == id_str) {
+        return false; // already on the rail — nothing to repair
+    }
+    let info = match store.list() {
+        Ok(infos) => infos.into_iter().find(|i| i.session_id == *session_id),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                session_id = %id_str,
+                "unarchive: store listing failed; rail row not rebuilt (retry or restart repairs)"
+            );
+            None
+        }
+    };
+    let Some(info) = info else {
+        return false;
+    };
+    sessions.push(session_meta_from_info(&info));
+    true
+}
+
+/// Shared archive/unarchive mutation (卡A): flip the curation sidecar flag
+/// and keep the in-memory display list (`state.sessions`) in sync — archive
+/// removes the row (the active rail and every input adapter stop seeing the
+/// session), unarchive rebuilds it from `SessionStore::list` info. Returns
+/// whether the visible state changed: a flag flip, or a display-list repair
+/// on the idempotent path (final review F2 — a previous run may have
+/// persisted the flag but died before the row moved, leaving the session in
+/// neither the active rail nor the archived lens until restart; the retry
+/// must repair instead of short-circuiting).
+/// Hermetic by design: the store and list are injected, so tests run on a
+/// tempdir container without touching `AppState` or `$HOME`.
+pub(crate) fn apply_archived_flag(
+    store: &shannon_core::session_log::SessionStore,
+    sessions: &mut Vec<SessionMeta>,
+    session_id: &uuid::Uuid,
+    archived: bool,
+) -> Result<bool, String> {
+    // Guard: only real sessions (an L0 log on disk) are archivable. Path
+    // existence, deliberately not a full read: the flag and the rail repair
+    // never depend on parsing the log, so a corrupt log can still be
+    // archived / repaired instead of wedging the session.
+    let log = shannon_core::session_log::session_log_container_path(
+        store.container(),
+        &session_id.to_string(),
+    );
+    if !log.exists() {
+        return Err(format!("Session not found: {session_id}"));
+    }
+    let was_archived = store.curation(session_id).archived;
+    let flipped = was_archived != archived;
+    if flipped {
+        store
+            .save_curation(
+                session_id,
+                &SessionCuration {
+                    archived,
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| format!("failed to write session curation: {e}"))?;
+    }
+
+    // Display-list sync + repair — on BOTH paths: an archive request always
+    // drops a (possibly stale) rail row; an unarchive request rebuilds a
+    // missing one from the listing.
+    let id_str = session_id.to_string();
+    let repaired = if archived {
+        let had_row = sessions.iter().any(|s| s.id == id_str);
+        sessions.retain(|s| s.id != id_str);
+        had_row
+    } else {
+        rebuild_rail_row_from_listing(store, sessions, session_id)
+    };
+    Ok(flipped || repaired)
+}
+
+/// Archived-lens rows over one container, most recently active first
+/// ([`list_archived_sessions`]' body; injected store keeps it hermetic).
+pub(crate) fn archived_rows(
+    store: &shannon_core::session_log::SessionStore,
+) -> Result<Vec<ArchivedSessionRow>, String> {
+    let mut rows = Vec::new();
+    for info in store.list().map_err(|e| e.to_string())? {
+        if !store.curation(&info.session_id).archived {
+            continue;
+        }
+        rows.push(ArchivedSessionRow {
+            id: info.session_id.to_string(),
+            title: info.title,
+            updated_at: Some(info.updated_at.timestamp_millis()),
+        });
+    }
+    Ok(rows)
+}
+
+/// Archive a session (卡A): write the curation sidecar flag, drop it from
+/// the active rail, and emit `sessions-updated`. Returns `true` when this
+/// call flipped the flag (`false` = already archived). On success, when
+/// `dream_enabled` is on, a best-effort dream pass rides along (T4).
+#[tauri::command]
+pub async fn archive_session(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    id: String,
+) -> Result<bool, String> {
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
+    let changed = {
+        let mut sessions = state.sessions.lock().await;
+        apply_archived_flag(&state.l0_store(), &mut sessions, &session_uuid, true)?
+    };
+    if changed {
+        let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
+        spawn_post_archive_dream(&state, app_handle, session_uuid).await;
+    }
+    Ok(changed)
+}
+
+/// T4 archive callback: a successful archive (when `dream_enabled`) spawns
+/// one best-effort dream pass over a 3-day window — archiving is a natural
+/// "this thread is done, distill it" moment. Strictly off the hot path:
+/// failures are warn-logged, never surfaced, and the pass's own 6h throttle
+/// naturally rate-limits bursts of archives.
+///
+/// Ordering (final review F1): the session is flagged archived BEFORE this
+/// callback runs — a crash can then never leave it un-archived — which is
+/// exactly why the plain dream window can no longer see it. Its content is
+/// distilled through the pass's explicit include: `session_id` is handed to
+/// the pass as an `extra_session_ids` entry, which `SessionQuery` fetches by
+/// id regardless of the archived flag.
+async fn spawn_post_archive_dream(
+    state: &AppState,
+    app_handle: tauri::AppHandle,
+    session_id: uuid::Uuid,
+) {
+    let dream_enabled = state.desktop_config.read().await.dream_enabled;
+    tauri::async_runtime::spawn(async move {
+        post_archive_dream_with(dream_enabled, session_id, |id| {
+            let app_handle = app_handle.clone();
+            async move {
+                crate::commands_dream::execute_dream_pass(
+                    app_handle,
+                    DEFAULT_ARCHIVE_DAYS_BACK,
+                    vec![id.to_string()],
+                )
+                .await
+                .map(|_| ())
+            }
+        })
+        .await;
+    });
+}
+
+/// The T4 handoff over an injected pass runner (the hermetic seam behind
+/// [`spawn_post_archive_dream`]): a disabled switch means no pass at all;
+/// otherwise the just-archived session id is handed to exactly one pass,
+/// and a pass failure is warn-logged (best-effort — the archive itself
+/// already succeeded).
+async fn post_archive_dream_with<F, Fut>(dream_enabled: bool, session_id: uuid::Uuid, run_pass: F)
+where
+    F: FnOnce(uuid::Uuid) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    if !dream_enabled {
+        return;
+    }
+    // The pass re-checks its own privacy gates + throttle internally.
+    if let Err(e) = run_pass(session_id).await {
+        tracing::warn!(
+            error = %e,
+            "post-archive dream pass failed (best-effort; archive already succeeded)"
+        );
+    }
+}
+
+/// `days_back` for the T4 post-archive dream pass (brief: 3 — same window
+/// as the manual entry point).
+const DEFAULT_ARCHIVE_DAYS_BACK: u32 = 3;
+
+/// Unarchive a session (卡A): clear the curation flag, rebuild the rail row
+/// from the store projection, and emit `sessions-updated`. Returns `true`
+/// when this call flipped the flag (`false` = was not archived).
+#[tauri::command]
+pub async fn unarchive_session(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    id: String,
+) -> Result<bool, String> {
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
+    let changed = {
+        let mut sessions = state.sessions.lock().await;
+        apply_archived_flag(&state.l0_store(), &mut sessions, &session_uuid, false)?
+    };
+    if changed {
+        let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
+    }
+    Ok(changed)
+}
+
+/// The 归档 lens: every archived session in the container, most recently
+/// active first. Runs off the async runtime (the store listing may
+/// re-project logs).
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn list_archived_sessions(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ArchivedSessionRow>, String> {
+    let store = state.l0_store();
+    tokio::task::spawn_blocking(move || archived_rows(&store))
+        .await
+        .map_err(|e| format!("archived list task failed: {e}"))?
+}
+
+/// Resume-unarchive (卡A): if `session_id` is archived, clear the flag,
+/// repopulate the display list from the store projection, and emit both
+/// `sessions-updated` and `session-auto-unarchived` (the UI toasts the
+/// latter). Best-effort by contract: a curation-write failure logs and
+/// gives up — resuming must never break because the flag could not be
+/// cleared.
+async fn auto_unarchive_if_archived(
+    state: &AppState,
+    app_handle: &tauri::AppHandle,
+    session_id: &uuid::Uuid,
+) {
+    let store = state.l0_store();
+    let mut sessions = state.sessions.lock().await;
+    let Some(title) = resume_unarchive_in(&store, &mut sessions, session_id) else {
+        return;
+    };
+    drop(sessions);
+    let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
+    let _ = app_handle.emit(
+        SESSION_AUTO_UNARCHIVED_EVENT,
+        SessionAutoUnarchived {
+            session_id: session_id.to_string(),
+            title,
+        },
+    );
+}
+
+/// The resume-unarchive mutation over injected store + display list (the
+/// hermetic seam behind [`auto_unarchive_if_archived`]): returns the
+/// session's title when the flag was cleared (empty string when untitled),
+/// `None` when the session was not archived or the write failed. The rail
+/// rebuild rides the same list-based repair as [`apply_archived_flag`]
+/// (final review F2): best-effort — a listing that cannot serve the session
+/// is logged, never fatal to the resume.
+pub(crate) fn resume_unarchive_in(
+    store: &shannon_core::session_log::SessionStore,
+    sessions: &mut Vec<SessionMeta>,
+    session_id: &uuid::Uuid,
+) -> Option<String> {
+    if !store.curation(session_id).archived {
+        return None;
+    }
+    if let Err(e) = store.save_curation(
+        session_id,
+        &SessionCuration {
+            archived: false,
+            ..Default::default()
+        },
+    ) {
+        tracing::warn!(
+            error = %e,
+            session_id = %session_id,
+            "resume-unarchive: failed to clear archived flag; continuing"
+        );
+        return None;
+    }
+    // Rail row: repaired from the listing when missing (logged when the
+    // listing cannot serve it). The toast title comes from the row on the
+    // rail after the repair — rebuilt or already present.
+    rebuild_rail_row_from_listing(store, sessions, session_id);
+    let id_str = session_id.to_string();
+    Some(
+        sessions
+            .iter()
+            .find(|s| s.id == id_str)
+            .map(|s| s.title.clone())
+            .unwrap_or_default(),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Session pin (Settings R3 T7) — curation sidecar flag + wire event
+// ---------------------------------------------------------------------------
+
+/// Pin/unpin a session (Settings R3 T7): flip the curation sidecar's
+/// `pinned` flag and emit `session-pins-changed`. The sidecar is the single
+/// source of truth — the auto-archive scan exempts pinned sessions and the
+/// rail re-derives its pin sort/glyph from the list DTO, so there is no
+/// localStorage to keep in sync (the legacy key is migrated once by the
+/// frontend). Returns `true` when this call flipped the flag (`false` =
+/// already in the requested state).
+#[tauri::command]
+pub async fn set_session_pinned(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    id: String,
+    pinned: bool,
+) -> Result<bool, String> {
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
+    let changed = set_pinned_in(&state.l0_store(), &session_uuid, pinned)?;
+    if changed {
+        let _ = app_handle.emit(
+            event_names::SESSION_PINS_CHANGED,
+            SessionPinChanged {
+                session_id: id,
+                pinned,
+            },
+        );
+    }
+    Ok(changed)
+}
+
+/// The pin mutation over an injected store (the hermetic seam behind
+/// [`set_session_pinned`]): a read-modify-write of the curation sidecar that
+/// preserves the `archived` flag. Returns whether the flag flipped.
+pub(crate) fn set_pinned_in(
+    store: &shannon_core::session_log::SessionStore,
+    session_id: &uuid::Uuid,
+    pinned: bool,
+) -> Result<bool, String> {
+    let mut curation = store.curation(session_id);
+    if curation.pinned == pinned {
+        return Ok(false);
+    }
+    curation.pinned = pinned;
+    store
+        .save_curation(session_id, &curation)
+        .map_err(|e| format!("failed to write session curation: {e}"))?;
+    Ok(true)
+}
+
+// ---------------------------------------------------------------------------
+// Session GC wiring (卡A) — archived-aware retention over the live config
+// ---------------------------------------------------------------------------
+
+/// Effective session-GC retention window, resolved from the desktop config
+/// plus the `SHANNON_SESSION_GC_ENABLED` env override (卡A documented
+/// contract):
+///
+/// - **Deletion requires config.** `session_gc_enabled == false` (the
+///   default) → disabled. No environment value can ever enable deletion.
+/// - **The env var can only force-disable.** `SHANNON_SESSION_GC_ENABLED`
+///   set to `0` or `false` (case-insensitive) disables the GC even when the
+///   config opts in; unset (the common case) or any other value has no
+///   effect.
+/// - **`Ok(None)` = enabled but windowless.** `session_retention_days`
+///   defaults to `None` = never delete; a pass runs and deletes nothing.
+///   A stored `Some(0)` is honored as 永不 too: the wire/UI define 0 as
+///   "never auto-delete", so folding it into this windowless path keeps a
+///   hand-edited config (`session_retention_days = 0`) from becoming a
+///   0-day window that deletes every archived session.
+pub(crate) fn effective_gc_retention_days(
+    cfg: &config::DesktopConfig,
+) -> Result<Option<u32>, &'static str> {
+    effective_gc_retention_days_with(
+        &cfg.session_gc_enabled,
+        cfg.session_retention_days,
+        std::env::var("SHANNON_SESSION_GC_ENABLED").ok().as_deref(),
+    )
+}
+
+/// [`effective_gc_retention_days`] with every input injected (hermetic —
+/// tests never touch process env).
+fn effective_gc_retention_days_with(
+    gc_enabled: &bool,
+    retention_days: Option<u32>,
+    env_override: Option<&str>,
+) -> Result<Option<u32>, &'static str> {
+    if !gc_enabled {
+        return Err("session GC disabled (session_gc_enabled=false)");
+    }
+    if let Some(v) = env_override {
+        if v == "0" || v.eq_ignore_ascii_case("false") {
+            return Err("session GC force-disabled via SHANNON_SESSION_GC_ENABLED");
+        }
+    }
+    Ok(retention_days.filter(|days| *days > 0))
+}
+
+/// One archived-session GC pass over injected state — the hermetic seam
+/// behind [`spawn_session_gc`]. Returns a human-readable outcome (for the
+/// log); `Ok` never implies deletion happened: disabled and windowless
+/// passes report instead. On deletions, skill candidates whose
+/// `example_session_ids` reference a deleted session are named in the log
+/// and message (裁决③: report only — the candidate structure is untouched),
+/// and any stale display-list rows are dropped.
+pub(crate) async fn run_session_gc_with(
+    desktop_config: &tokio::sync::RwLock<config::DesktopConfig>,
+    sessions: &tokio::sync::Mutex<Vec<SessionMeta>>,
+    container: &Path,
+    candidates_dir: &Path,
+) -> Result<String, String> {
+    let days = {
+        let cfg = desktop_config.read().await;
+        effective_gc_retention_days(&cfg)
+    };
+    let days = match days {
+        Ok(Some(days)) => days,
+        Ok(None) => {
+            return Ok(
+                "session GC enabled but no session_retention_days configured; nothing deleted"
+                    .to_string(),
+            );
+        }
+        Err(reason) => return Ok(format!("session GC skipped: {reason}")),
+    };
+    let report = shannon_core::housekeeping::prune_archived_sessions(
+        container,
+        Some(days),
+        std::time::SystemTime::now(),
+    )
+    .map_err(|e| format!("session GC failed: {e}"))?;
+    if report.deleted_session_ids.is_empty() {
+        return Ok(format!(
+            "session GC: no archived sessions past the {days}-day retention window"
+        ));
+    }
+
+    // Reference hygiene (裁决③): candidates keep their example ids; the
+    // affected candidate ids land in the log + message only.
+    let affected = crate::commands_skill_candidates::candidate_ids_referencing_sessions_in(
+        candidates_dir,
+        &report.deleted_session_ids,
+    );
+    // Defensive rail sync: archived rows should already be off the display
+    // list; a deletion makes any stale row real — drop it.
+    {
+        let mut list = sessions.lock().await;
+        list.retain(|s| !report.deleted_session_ids.contains(&s.id));
+    }
+    tracing::info!(
+        deleted = report.deleted_session_ids.len(),
+        retention_days = days,
+        affected_candidates = affected.len(),
+        "session GC pruned archived sessions past retention"
+    );
+    let mut msg = format!(
+        "session GC: pruned {} archived session(s) past the {days}-day retention window",
+        report.deleted_session_ids.len()
+    );
+    if !affected.is_empty() {
+        msg.push_str("; skill candidates referencing deleted sessions: ");
+        msg.push_str(&affected.join(", "));
+    }
+    Ok(msg)
+}
+
+/// Daily archived-session GC loop (卡A). Inert by design unless the user
+/// opts in: `session_gc_enabled` (default false) gates every pass and
+/// `session_retention_days` (default None = never delete) holds the policy
+/// at zero deletions. First pass 10 minutes after startup (let the app
+/// settle — GC is never urgent), then every 24 hours; every outcome is
+/// log-only.
+pub fn spawn_session_gc(state: &AppState) {
+    let desktop_config = state.desktop_config.clone();
+    let sessions = state.sessions.clone();
+    let container = state.l0_store().container().to_path_buf();
+    // Empty on failure: a missing desktop dir just means zero candidates to
+    // cross-reference (the helper treats it as an empty candidates file).
+    let candidates_dir = crate::commands_skill_candidates::desktop_dir().unwrap_or_default();
+    tauri::async_runtime::spawn(async move {
+        const STARTUP_DELAY: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+        const INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+        tracing::info!(
+            "session GC loop started (inert unless session_gc_enabled and \
+             session_retention_days are configured)"
+        );
+        loop {
+            tokio::time::sleep(STARTUP_DELAY).await;
+            match run_session_gc_with(&desktop_config, &sessions, &container, &candidates_dir).await
+            {
+                Ok(msg) => tracing::debug!(outcome = %msg, "session GC pass"),
+                Err(e) => tracing::warn!(error = %e, "session GC pass failed"),
+            }
+            tokio::time::sleep(INTERVAL).await;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Auto-archive (Settings R3 T7) — timed scan over the live config
+// ---------------------------------------------------------------------------
+
+/// Effective auto-archive retention window, resolved from the desktop config
+/// (R6: 已完成 = `!running && 无未读 inbox` — there is no completed field).
+/// Disabled (`session_auto_archive_enabled`, default) → `None`; otherwise the
+/// configured window clamped into `1..=365` days so a hand-edited config can
+/// neither wedge the scan (0) nor explode it (u32::MAX).
+pub(crate) fn effective_auto_archive_days(cfg: &config::DesktopConfig) -> Option<u32> {
+    if !cfg.session_auto_archive_enabled {
+        return None;
+    }
+    Some(cfg.session_auto_archive_days.clamp(1, 365))
+}
+
+/// Last-activity [`SystemTime`] for one session: its `events.jsonl` mtime.
+/// `None` when the log does not exist yet or the mtime is unreadable —
+/// callers skip (fail closed), the same contract the archived-session GC
+/// uses in `shannon_core::housekeeping`.
+fn session_events_mtime(
+    container: &Path,
+    session_id: &uuid::Uuid,
+) -> Option<std::time::SystemTime> {
+    let path =
+        shannon_core::session_log::session_log_container_path(container, &session_id.to_string());
+    let meta = std::fs::metadata(path).ok()?;
+    meta.modified().ok()
+}
+
+/// Sessions carrying at least one **pending** (未读 / needs-attention) inbox
+/// entry, over an injected store. The status vocabulary is the inbox side's
+/// own — `pending` is the open/needs-attention state; `read` and `archived`
+/// entries no longer demand the user's attention. Best-effort: a store
+/// failure yields the empty set (the scan proceeds; the worst case is an
+/// auto-archive the next pass skips — never a lost triage item).
+fn pending_inbox_session_ids(inbox: &shannon_core::inbox_store::InboxStore) -> HashSet<String> {
+    const SCAN_LIMIT: u32 = 10_000;
+    match inbox.list(
+        Some(shannon_core::inbox_store::InboxStatus::Pending),
+        None,
+        SCAN_LIMIT,
+    ) {
+        Ok(items) => items
+            .into_iter()
+            .filter_map(|item| item.session_id)
+            .collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "auto-archive: inbox pending query failed; treating as no unread");
+            HashSet::new()
+        }
+    }
+}
+
+/// Live running-set source behind the auto-archive scan (the T7 seam's
+/// injectable slot). The scan asks "is this session running right now" at
+/// two distinct moments — the lock-free adjudication and the pre-archive
+/// re-verification — so a session that starts running mid-scan is caught
+/// before the flip. Production injects the session registry (a live
+/// `is_querying` lookup per call); tests inject a static set or a stateful
+/// double. The returned future must be `Send`: the scan runs inside the
+/// spawned scheduler task.
+pub(crate) trait AutoArchiveRunningCheck: Send + Sync {
+    /// Whether `session_id` currently has a live query.
+    fn is_running(&self, session_id: uuid::Uuid) -> impl std::future::Future<Output = bool> + Send;
+}
+
+impl AutoArchiveRunningCheck for HashSet<uuid::Uuid> {
+    fn is_running(&self, session_id: uuid::Uuid) -> impl std::future::Future<Output = bool> + Send {
+        std::future::ready(self.contains(&session_id))
+    }
+}
+
+impl AutoArchiveRunningCheck for SessionRegistry {
+    fn is_running(&self, session_id: uuid::Uuid) -> impl std::future::Future<Output = bool> + Send {
+        self.is_querying(session_id)
+    }
+}
+
+/// One auto-archive scan over injected state — the hermetic seam behind
+/// [`run_auto_archive_scan`], restructured (F1) so the display-list mutex is
+/// never held across fs I/O: it guards an in-memory snapshot, then one
+/// `apply_archived_flag` flip at a time, and nothing else.
+///
+/// R6 adjudication: a session is "已完成" when it is `!running && 无未读
+/// inbox 条目`. Three phases:
+///
+/// 1. **Snapshot** (brief lock): clone the active rail — the sessions the
+///    sidebar shows as live (not archived), ids plus the display fields.
+/// 2. **Adjudication** (no lock): per candidate, read the curation sidecar
+///    (pinned / archived re-check against the persisted truth), stat
+///    `events.jsonl`, consult the pending-inbox set and the running check,
+///    and compare the mtime against the retention window.
+/// 3. **Archive** (brief lock per flip): re-verify every exemption — not
+///    archived, not pinned, not running (live), retention still holds (the
+///    phase-2 mtime is reused) — then `apply_archived_flag` under the same
+///    lock the display mutation needs. Any change skips the session.
+///
+/// Unknown mtimes skip (fail closed). Returns the archived rows so the
+/// caller emits `session-auto-archived` per session.
+pub(crate) async fn run_auto_archive_scan_with(
+    desktop_config: &tokio::sync::RwLock<config::DesktopConfig>,
+    sessions: &tokio::sync::Mutex<Vec<SessionMeta>>,
+    store: &shannon_core::session_log::SessionStore,
+    running: &impl AutoArchiveRunningCheck,
+    inbox: Option<&shannon_core::inbox_store::InboxStore>,
+    now: std::time::SystemTime,
+) -> Result<Vec<SessionAutoArchived>, String> {
+    let Some(days) = ({
+        let cfg = desktop_config.read().await;
+        effective_auto_archive_days(&cfg)
+    }) else {
+        return Ok(Vec::new());
+    };
+    let cutoff = now
+        .checked_sub(std::time::Duration::from_secs(
+            u64::from(days) * 24 * 60 * 60,
+        ))
+        .unwrap_or(now);
+
+    // Phase 1 — snapshot the active rail under a brief lock. Pure in-memory
+    // clone: nothing here touches the fs, so the sidebar's lock never waits
+    // on disk regardless of library size.
+    let snapshot: Vec<SessionMeta> = sessions.lock().await.clone();
+
+    let pending: HashSet<String> = match inbox {
+        Some(inbox) => pending_inbox_session_ids(inbox),
+        None => HashSet::new(),
+    };
+
+    // Phase 2 — lock-free adjudication. Every per-candidate read (curation
+    // sidecar, events.jsonl stat) and the inbox query run with no lock held.
+    let mut to_archive: Vec<(uuid::Uuid, String, std::time::SystemTime)> = Vec::new();
+    for row in snapshot {
+        let Ok(session_id) = uuid::Uuid::parse_str(&row.id) else {
+            tracing::debug!(
+                session_id = %row.id,
+                "auto-archive: rail id is not a UUID; skipping (fail closed)"
+            );
+            continue;
+        };
+        // Re-check against the persisted sidecar: the rail mirrors curation,
+        // but the sidecar is the source of archived/pinned truth. The pinned
+        // exemption is the user's explicit "never auto-archive this one" (R5).
+        let curation = store.curation(&session_id);
+        if curation.archived || curation.pinned {
+            continue;
+        }
+        if running.is_running(session_id).await {
+            continue;
+        }
+        if pending.contains(&row.id) {
+            continue;
+        }
+        let Some(mtime) = session_events_mtime(store.container(), &session_id) else {
+            tracing::debug!(
+                session_id = %session_id,
+                "auto-archive: events.jsonl mtime unknown; skipping session (fail closed)"
+            );
+            continue;
+        };
+        if mtime >= cutoff {
+            continue;
+        }
+        to_archive.push((session_id, row.title, mtime));
+    }
+
+    // Phase 3 — re-verify, then archive one at a time. The checks run before
+    // the lock (no await ever holds it); the flip itself takes the display
+    // mutex just long enough for `apply_archived_flag`.
+    let mut archived = Vec::new();
+    for (session_id, title, mtime) in to_archive {
+        let curation = store.curation(&session_id);
+        if curation.archived || curation.pinned {
+            continue;
+        }
+        if running.is_running(session_id).await {
+            continue;
+        }
+        if mtime >= cutoff {
+            continue; // retention re-check, reusing the phase-2 mtime
+        }
+        let mut rail = sessions.lock().await;
+        if apply_archived_flag(store, &mut rail, &session_id, true)? {
+            archived.push(SessionAutoArchived {
+                session_id: session_id.to_string(),
+                title,
+            });
+        }
+    }
+    Ok(archived)
+}
+
+/// Production wrapper behind the scheduler: runs one scan with the live
+/// session registry as the running source and the shared inbox store, then
+/// emits `sessions-updated` + one `session-auto-archived` per archived
+/// session (the frontend toasts; both events also drive list refreshes).
+async fn run_auto_archive_scan(state: &AppState, app_handle: &tauri::AppHandle) {
+    let store = state.l0_store();
+    // The registry is the running source itself: both decision points
+    // (adjudication and the pre-archive re-verification) query
+    // `is_querying` live, so a session that starts running mid-scan is
+    // still skipped — no pass-start snapshot of running ids, and no
+    // store-wide listing pass just to build one.
+    let inbox = state.inbox_store();
+    let now = std::time::SystemTime::now();
+    let archived = match run_auto_archive_scan_with(
+        &state.desktop_config,
+        &state.sessions,
+        &store,
+        state.registry.as_ref(),
+        Some(inbox.as_ref()),
+        now,
+    )
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "auto-archive scan failed");
+            return;
+        }
+    };
+    if archived.is_empty() {
+        return;
+    }
+    let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
+    for row in &archived {
+        let _ = app_handle.emit(event_names::SESSION_AUTO_ARCHIVED, row);
+    }
+    tracing::info!(
+        archived = archived.len(),
+        "auto-archive: archived sessions past the retention window"
+    );
+}
+
+/// Auto-archive loop (Settings R3 T7). Inert by design unless the user opts
+/// in: `session.auto_archive_enabled` (default false) gates every scan, so
+/// a disabled pass wakes, re-reads the config, and returns without doing
+/// anything. First pass 15 minutes after startup (let the app settle — the
+/// GC-loop skeleton this mirrors), then every 6 hours; the config is re-read
+/// every pass so a Settings flip lands on the next scan with no restart.
+/// Every outcome is log-only; the user-facing signal rides the per-session
+/// `session-auto-archived` events.
+pub fn spawn_auto_archive(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        const STARTUP_DELAY: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+        const INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+        tracing::info!(
+            "auto-archive loop started (inert unless session_auto_archive_enabled is set)"
+        );
+        loop {
+            tokio::time::sleep(STARTUP_DELAY).await;
+            {
+                use tauri::Manager;
+                let state: tauri::State<'_, AppState> = app.state();
+                run_auto_archive_scan(state.inner(), &app).await;
+            }
+            tokio::time::sleep(INTERVAL).await;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// P0 plan dock (ZCode delta ②) — surface the engine's persisted plan doc
+// ---------------------------------------------------------------------------
+
+/// One persisted plan file, parsed into the wire shape the right dock's
+/// 计划 tab renders. Mirrors the on-disk format `PlanManager::
+/// save_plan_to_file` writes (`crates/shannon-tools/src/plan_mode.rs`):
+/// `# Plan: {title}` / `Created: {rfc3339}` / `Status: {approved|pending}` /
+/// blank line / markdown body.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionPlanInfo {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub created_at: String,
+    pub content: String,
+}
+
+/// Read the session working directory's most recent plan from
+/// `<working_dir>/.shannon/plans/*.md` (newest by file mtime). Returns
+/// `Ok(None)` when no plan has been persisted — the dock tab renders its
+/// empty state. Read-only: plan lifecycle stays owned by the engine tools
+/// (`enter_plan_mode` / `exit_plan_mode` / `get_plan_status`).
+#[tauri::command]
+pub async fn get_session_plan(working_dir: String) -> Result<Option<SessionPlanInfo>, String> {
+    if working_dir.trim().is_empty() {
+        return Ok(None);
+    }
+    // Sync file IO on a worker thread — plans are tiny but the scan is
+    // still blocking IO, and this command fires on every plan-tab refresh.
+    let plan = tokio::task::spawn_blocking(move || {
+        let plans_dir = std::path::Path::new(&working_dir)
+            .join(".shannon")
+            .join("plans");
+        let entries = match std::fs::read_dir(&plans_dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("Failed to read plans directory: {e}")),
+        };
+        let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            if newest.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
+                newest = Some((mtime, path));
+            }
+        }
+        let Some((_, path)) = newest else {
+            return Ok(None);
+        };
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) => return Err(format!("Failed to read plan file: {e}")),
+        };
+        let id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Parse the 3-line header the engine writes (see save_plan_to_file);
+        // anything after the first blank line is the markdown body.
+        let mut lines = raw.lines();
+        let title = lines
+            .next()
+            .and_then(|l| l.strip_prefix("# Plan: "))
+            .unwrap_or("Untitled plan")
+            .trim()
+            .to_string();
+        let created_at = lines
+            .next()
+            .and_then(|l| l.strip_prefix("Created: "))
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let status = lines
+            .next()
+            .and_then(|l| l.strip_prefix("Status: "))
+            .unwrap_or("pending")
+            .trim()
+            .to_string();
+        let _blank = lines.next();
+        let content = lines.collect::<Vec<_>>().join("\n");
+
+        Ok(Some(SessionPlanInfo {
+            id,
+            title,
+            status,
+            created_at,
+            content,
+        }))
+    })
+    .await
+    .map_err(|e| format!("plan read task failed: {e}"))??;
+    Ok(plan)
+}
 /// Search sessions by title substring or message content.
 ///
 /// Title matches rank first; content matches fill the rest. Only the first
@@ -175,45 +1169,46 @@ pub async fn search_sessions(
         return Ok(Vec::new());
     }
 
-    let sessions = state.sessions.lock().await;
-    let mut title_matches: Vec<events::SessionInfo> = Vec::new();
-    let mut content_matches: Vec<events::SessionInfo> = Vec::new();
+    // P0 sidebar telemetry: collect matching metas under the lock (pure
+    // sync work), then build wire infos after dropping it — the `running`
+    // join awaits the registry and must not hold a std Mutex guard.
+    let matched: Vec<SessionMeta> = {
+        let sessions = state.sessions.lock().await;
+        let mut title_matches: Vec<SessionMeta> = Vec::new();
+        let mut content_matches: Vec<SessionMeta> = Vec::new();
 
-    for s in sessions.iter() {
-        let info = || events::SessionInfo {
-            id: s.id.clone(),
-            title: s.title.clone(),
-            created_at: s.created_at,
-            message_count: s.message_count,
-            working_dir: s.working_dir.clone(),
-            parent_id: s.parent_id.clone(),
-            branch_point: s.branch_point,
-        };
+        for s in sessions.iter() {
+            if s.title.to_lowercase().contains(&query_lower) {
+                title_matches.push(s.clone());
+                continue;
+            }
 
-        if s.title.to_lowercase().contains(&query_lower) {
-            title_matches.push(info());
-            continue;
-        }
+            if content_matches.len() + title_matches.len() >= CONTENT_SCAN_LIMIT {
+                continue;
+            }
 
-        if content_matches.len() + title_matches.len() >= CONTENT_SCAN_LIMIT {
-            continue;
-        }
-
-        if let Ok(uuid) = uuid::Uuid::parse_str(&s.id) {
-            // Full-text search on L0 events — the transcript-search successor.
-            let hit = state
-                .l0_store()
-                .search_session(&uuid, &query_lower)
-                .map(|hits| !hits.is_empty())
-                .unwrap_or(false);
-            if hit {
-                content_matches.push(info());
+            if let Ok(uuid) = uuid::Uuid::parse_str(&s.id) {
+                // Full-text search on L0 events — the transcript-search successor.
+                let hit = state
+                    .l0_store()
+                    .search_session(&uuid, &query_lower)
+                    .map(|hits| !hits.is_empty())
+                    .unwrap_or(false);
+                if hit {
+                    content_matches.push(s.clone());
+                }
             }
         }
-    }
 
-    title_matches.extend(content_matches);
-    Ok(title_matches)
+        title_matches.extend(content_matches);
+        title_matches
+    };
+
+    let mut result = Vec::with_capacity(matched.len());
+    for s in &matched {
+        result.push(session_wire_info(&state, s).await);
+    }
+    Ok(result)
 }
 
 /// Load a session by ID.
@@ -232,11 +1227,19 @@ pub async fn load_session(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Session not found: {id}"))?;
 
-    // Convert shannon_core Messages to ChatMessages
+    // Convert shannon_core Messages to ChatMessages. D6: the projection's
+    // per-message interrupted flags ride along, so a cancelled run's partial
+    // assistant message keeps its "stopped" marker across reloads. OBS1: the
+    // interrupt reasons ride along too ("cancelled" | "failed"), so a FAILED
+    // turn's partial — whose prefix the log now keeps exactly like a
+    // cancelled one — reloads with its distinguishable failed marker.
+    let interrupted_flags = session_data.message_interrupted.clone();
+    let interrupt_reasons = session_data.message_interrupt_reason.clone();
     let messages: Vec<ChatMessage> = session_data
         .messages
         .into_iter()
-        .map(|msg| ChatMessage {
+        .enumerate()
+        .map(|(i, msg)| ChatMessage {
             role: msg.role,
             content: match msg.content {
                 shannon_engine::api::MessageContent::Text(t) => t,
@@ -254,6 +1257,12 @@ pub async fn load_session(
             },
             timestamp: chrono_timestamp(),
             file_attachments: None,
+            interrupted: interrupted_flags
+                .get(i)
+                .copied()
+                .unwrap_or(false)
+                .then_some(true),
+            interrupted_reason: interrupt_reasons.get(i).and_then(Clone::clone),
         })
         .collect();
 
@@ -384,35 +1393,57 @@ pub async fn switch_session(
 ) -> Result<Vec<ChatMessage>, String> {
     let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
+    // 卡A resume-unarchive (the Codex-shipped-a-bug lesson): opening an
+    // archived session must never be blocked by its archived flag — clear
+    // it first so the session silently returns to the active rail, and
+    // toast the UI about it.
+    auto_unarchive_if_archived(&state, &app_handle, &session_uuid).await;
+
     // (§4.6) No explicit save needed before switching: every turn is already
     // durable in events.jsonl via the engine tee.
 
-    // Load new session by projecting its L0 log.
+    // Load new session by projecting its L0 log. D6: interrupted flags ride
+    // along (same contract as load_session) so a cancelled run's partial
+    // assistant message keeps its "stopped" marker across switches. OBS1:
+    // interrupt reasons ride along too (same contract), so a FAILED turn's
+    // partial keeps its failed marker across switches.
     let messages = match state
         .l0_store()
         .load(&session_uuid)
         .map_err(|e| e.to_string())?
     {
-        Some(data) => data
-            .messages
-            .into_iter()
-            .map(|msg| ChatMessage {
-                role: msg.role,
-                content: match msg.content {
-                    shannon_engine::api::MessageContent::Text(t) => t,
-                    shannon_engine::api::MessageContent::Blocks(blocks) => blocks
-                        .iter()
-                        .filter_map(|b| match b {
-                            shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                },
-                timestamp: chrono_timestamp(),
-                file_attachments: None,
-            })
-            .collect(),
+        Some(data) => {
+            let interrupted_flags = data.message_interrupted.clone();
+            let interrupt_reasons = data.message_interrupt_reason.clone();
+            data.messages
+                .into_iter()
+                .enumerate()
+                .map(|(i, msg)| ChatMessage {
+                    role: msg.role,
+                    content: match msg.content {
+                        shannon_engine::api::MessageContent::Text(t) => t,
+                        shannon_engine::api::MessageContent::Blocks(blocks) => blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                shannon_engine::api::ContentBlock::Text { text } => {
+                                    Some(text.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    },
+                    timestamp: chrono_timestamp(),
+                    file_attachments: None,
+                    interrupted: interrupted_flags
+                        .get(i)
+                        .copied()
+                        .unwrap_or(false)
+                        .then_some(true),
+                    interrupted_reason: interrupt_reasons.get(i).and_then(Clone::clone),
+                })
+                .collect()
+        }
         None => Vec::new(),
     };
 
@@ -425,12 +1456,14 @@ pub async fn switch_session(
     }
     state.registry.set_active(SessionKey(session_uuid));
 
-    // Restore working_dir from session metadata if present.
+    // Restore working_dir from session metadata if present. B2-2: this only
+    // moves the "user's current project" pointer (global config + UI emit) —
+    // the process cwd stays put, engines pin their own directory via
+    // `QueryEngineConfig.working_directory` at send time.
     {
         let sessions = state.sessions.lock().await;
         if let Some(meta) = sessions.iter().find(|s| s.id == id) {
             if let Some(ref wd) = meta.working_dir {
-                let _ = std::env::set_current_dir(wd);
                 let mut desktop_cfg = state.desktop_config.write().await;
                 desktop_cfg.working_dir = Some(wd.clone());
                 let _ = app_handle.emit(
@@ -460,12 +1493,23 @@ pub async fn switch_session(
         },
     );
 
+    // T5: the user just opened this session — an outstanding `session_failed`
+    // entry has now been seen, so it is resolved (mark read). Best-effort.
+    crate::inbox_session_events::resolve_session_failure(
+        state.inbox_store().as_ref(),
+        &app_handle,
+        &id,
+    );
+
     Ok(messages)
 }
 
 /// Set working directory for a session. Updates in-memory metadata, the
-/// process cwd, and the persisted desktop config. Pass an empty string to
-/// reset to the Shannon home directory.
+/// persisted desktop config, and — for the current session — the process-wide
+/// "current project" pointer (global config + CONFIG_UPDATED emit). Pass an
+/// empty string to reset. B2-2: the process cwd is NOT touched — engines pin
+/// their own directory via `QueryEngineConfig.working_directory` at send
+/// time.
 #[tauri::command]
 pub async fn set_session_working_dir(
     state: tauri::State<'_, AppState>,
@@ -490,13 +1534,18 @@ pub async fn set_session_working_dir(
         }
     }
 
-    // If this is the current session, switch process cwd + desktop config
+    // P-E3 adopt-not-migrate: the session just gained a working dir, so the
+    // project registry learns it (idempotent — an existing row, archived or
+    // not, is never overwritten). Best-effort.
+    if let Some(dir) = &wd {
+        crate::commands_projects::adopt_working_dir(&state, dir);
+    }
+
+    // If this is the current session, update the global "current project"
+    // pointer + emit. B2-2: no process-cwd flip.
     let current = state.registry.active_key();
     let is_current = current == Some(SessionKey(session_uuid));
     if is_current {
-        if let Some(ref p) = wd {
-            let _ = std::env::set_current_dir(p);
-        }
         let mut desktop_cfg = state.desktop_config.write().await;
         desktop_cfg.working_dir = wd.clone();
         drop(desktop_cfg);
@@ -554,10 +1603,10 @@ pub async fn create_session_worktree(
         }
     }
 
-    // If this is the current session, switch process cwd + desktop config
+    // If this is the current session, update the global "current project"
+    // pointer + emit. B2-2: no process-cwd flip.
     let current = state.registry.active_key();
     if current == Some(SessionKey(session_uuid)) {
-        let _ = std::env::set_current_dir(&wt_path);
         let mut desktop_cfg = state.desktop_config.write().await;
         desktop_cfg.working_dir = Some(wt_path.clone());
         drop(desktop_cfg);
@@ -576,6 +1625,27 @@ pub async fn create_session_worktree(
     Ok(wt.into())
 }
 
+/// B1-3 (R8-②): take + cancel the session's in-flight query token, if one
+/// is registered. Same shape as `cancel_session_query` (commands_chat) —
+/// the streaming loop observes the cancellation via its `select!` and
+/// unwinds on its own; we do not wait for it (发完即删不等待) — but split
+/// out so `delete_session` can run it before the L0 directory disappears
+/// and the registry contract stays testable without a Wry app handle.
+/// Unknown ids are a no-op: a session this process never queried has no
+/// entry and nothing to cancel.
+async fn cancel_session_run(registry: &SessionRegistry, key: SessionKey) {
+    let Some(session) = registry.get(key) else {
+        return;
+    };
+    let token_opt = {
+        let mut token_guard = session.cancellation_token.lock().await;
+        token_guard.take()
+    };
+    if let Some(token) = token_opt {
+        token.cancel();
+    }
+}
+
 /// Delete a session by ID. If the session had a bound worktree (working_dir
 /// pointing inside the default worktree base), the worktree is removed too —
 /// best-effort, logs failures but does not block session deletion.
@@ -586,6 +1656,12 @@ pub async fn delete_session(
     id: String,
 ) -> Result<bool, String> {
     let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
+
+    // B1-3 (R8-②): a running query must not outlive its session. Cancel the
+    // in-flight token BEFORE the L0 directory disappears, so the engine loop
+    // unwinds instead of streaming (and billing) into a deleted session and
+    // the tee writer keeps appending to the soon-to-be-unlinked inode.
+    cancel_session_run(&state.registry, SessionKey(session_uuid)).await;
 
     // Capture working_dir before deleting so we can clean up worktree
     let working_dir = {
@@ -608,6 +1684,14 @@ pub async fn delete_session(
             let mut sessions = state.sessions.lock().await;
             sessions.retain(|s| s.id != id);
         }
+
+        // B1-3 (R8-②): recycle the registry entry — its SessionState
+        // (rolling messages + the unbounded per-session event channel)
+        // would otherwise be pinned until process exit for a session that
+        // no longer exists. Only after the store delete succeeded: a failed
+        // deletion leaves the live session's state untouched. `destroy`
+        // also clears the active pointer if this was the focused session.
+        state.registry.destroy(SessionKey(session_uuid));
 
         // Best-effort worktree cleanup: if working_dir lives under the
         // default worktree base dir, remove the worktree. Failures are
@@ -776,6 +1860,11 @@ pub async fn duplicate_session(
         working_dir: None,
         parent_id: None,
         branch_point: None,
+        running: Some(false),
+        updated_at: None,
+        // A fresh duplicate starts unpinned — the pin belongs to the
+        // original conversation, not its copy.
+        pinned: false,
     })
 }
 
@@ -861,6 +1950,10 @@ pub(crate) async fn branch_session_internal(
         working_dir: parent_working_dir,
         parent_id: Some(parent_id),
         branch_point: Some(branch_point),
+        running: Some(false),
+        updated_at: None,
+        // Same contract as duplicate: a brand-new branch starts unpinned.
+        pinned: false,
     })
 }
 
@@ -901,6 +1994,717 @@ pub async fn trace_timeline(
     }
 
     Ok(shannon_core::session_log::project_turn_timeline(&events))
+}
+
+#[cfg(test)]
+mod archive_tests {
+    // 卡A command-layer tests. Hermetic by construction: fixtures are real
+    // sessions written through the session_log writer into a tempdir
+    // container, and the mutations under test take injected store/display
+    // list — nothing touches `AppState` or `$HOME`.
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use shannon_core::session_log::{SessionLogWriter, SessionQuery, SessionStore};
+    use shannon_types::session_event::{
+        SessionEventBody, SessionStartPayload, TurnStartPayload, UserMessagePayload,
+    };
+    use std::sync::Arc;
+
+    fn store(tmp: &tempfile::TempDir) -> SessionStore {
+        SessionStore::new(tmp.path().join("sessions"))
+    }
+
+    /// Seed one real session through the L0 writer (session/start + one
+    /// user turn) — the same write path production uses.
+    fn seed_session(store: &SessionStore, id: &uuid::Uuid, title: Option<&str>) {
+        let mut w =
+            SessionLogWriter::open_layout(store.container(), &id.to_string()).expect("open log");
+        w.record(SessionEventBody::SessionStart(SessionStartPayload {
+            model: "test-model".into(),
+            provider: None,
+            cwd: Some("/proj".into()),
+            app_version: None,
+            ..Default::default()
+        }));
+        w.record(SessionEventBody::TurnStart(TurnStartPayload {
+            query_id: None,
+        }));
+        w.record(SessionEventBody::UserMessage(UserMessagePayload {
+            source: UserMessagePayload::SOURCE_USER.into(),
+            content: "hello there".into(),
+            attachment_count: 0,
+        }));
+        w.close().expect("close log");
+        if let Some(t) = title {
+            store
+                .save_sidecar(
+                    id,
+                    &shannon_core::session_log::SessionSidecar {
+                        title: Some(t.into()),
+                        ..Default::default()
+                    },
+                )
+                .expect("save sidecar");
+        }
+    }
+
+    fn display_list(ids: &[&uuid::Uuid]) -> Vec<SessionMeta> {
+        ids.iter()
+            .map(|id| SessionMeta {
+                id: id.to_string(),
+                title: "Session".into(),
+                created_at: 1,
+                message_count: 1,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn archive_hides_from_active_list_and_surfaces_in_archived_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Archived one"));
+        seed_session(&store, &b, None);
+        let mut sessions = display_list(&[&a, &b]);
+
+        // archive → the display list hides it, the archived lens shows it,
+        // and the input adapter (SessionQuery) stops seeing it.
+        assert!(apply_archived_flag(&store, &mut sessions, &a, true).unwrap());
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, b.to_string());
+        assert!(store.curation(&a).archived);
+
+        let rows = archived_rows(&store).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, a.to_string());
+        assert_eq!(rows[0].title.as_deref(), Some("Archived one"));
+        assert!(rows[0].updated_at.is_some());
+
+        let query = SessionQuery::new(store.container().to_path_buf());
+        let visible: Vec<_> = query.list_recent(7, false).unwrap();
+        assert_eq!(visible.len(), 1, "archived sessions leave the input layer");
+        assert_eq!(visible[0].session_id, b);
+        assert_eq!(query.list_recent(7, true).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn unarchive_restores_input_layer_visibility() {
+        // 收尾钉死: the reverse of the archive-hides assertion above —
+        // after unarchive, `SessionQuery::list_recent(days, false)` (the
+        // input adapter's lens) sees the session again. Archiving hides a
+        // session from the input layer; it must not be a one-way door.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Comeback"));
+        let mut sessions = display_list(&[&a]);
+
+        assert!(apply_archived_flag(&store, &mut sessions, &a, true).unwrap());
+        let query = SessionQuery::new(store.container().to_path_buf());
+        assert!(
+            query
+                .list_recent(7, false)
+                .unwrap()
+                .iter()
+                .all(|s| s.session_id != a),
+            "fixture: the archived session is invisible to the input layer"
+        );
+
+        // Unarchive → the input layer sees the session again.
+        assert!(apply_archived_flag(&store, &mut sessions, &a, false).unwrap());
+        let visible: Vec<_> = query.list_recent(7, false).unwrap();
+        assert!(
+            visible.iter().any(|s| s.session_id == a),
+            "unarchive → the session re-enters list_recent(days, false)"
+        );
+    }
+
+    /// Overwrite every event's `ts_ns` in one seeded session's log, keeping
+    /// the JSONL shape (so the projection still parses) — gives the ordering
+    /// test wall-clock-independent `updated_at` values.
+    fn rewrite_event_ts(store: &SessionStore, id: &uuid::Uuid, ts_ns: u64) {
+        let log = store.container().join(id.to_string()).join("events.jsonl");
+        let rewritten = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                let mut event: serde_json::Value = serde_json::from_str(line).unwrap();
+                event["ts_ns"] = serde_json::json!(ts_ns);
+                event.to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&log, rewritten + "\n").unwrap();
+    }
+
+    #[test]
+    fn archived_rows_are_ordered_most_recently_active_first() {
+        // 收尾钉死: the 归档 lens's UI contract — `list_archived_sessions`
+        // (via its [`archived_rows`] seam) returns archived sessions ordered
+        // by `updated_at` descending, most recently active first. The
+        // ordering is inherited from `SessionStore::list`; if the store's
+        // sort ever drifts, this fails here instead of silently reordering
+        // the rail. Event timestamps are rewritten so the fixture does not
+        // depend on the real clock.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let older = uuid::Uuid::new_v4();
+        let newer = uuid::Uuid::new_v4();
+        seed_session(&store, &older, Some("Older"));
+        seed_session(&store, &newer, Some("Newer"));
+        let hour_ns = 3_600_000_000_000u64;
+        let now_ns: u64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        rewrite_event_ts(&store, &older, now_ns - 48 * hour_ns);
+        rewrite_event_ts(&store, &newer, now_ns - hour_ns);
+
+        store
+            .save_curation(
+                &older,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .save_curation(
+                &newer,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let rows = archived_rows(&store).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, newer.to_string(), "most recently active first");
+        assert_eq!(rows[1].id, older.to_string());
+        // The lens reports epoch-millisecond last activity (the rail's
+        // time-ago badges), newest first.
+        assert_eq!(
+            (rows[0].updated_at, rows[1].updated_at),
+            (
+                Some(((now_ns - hour_ns) / 1_000_000) as i64),
+                Some(((now_ns - 48 * hour_ns) / 1_000_000) as i64),
+            ),
+            "rows carry last-activity and run updated_at-descending"
+        );
+    }
+
+    #[test]
+    fn unarchive_rebuilds_the_rail_row_from_the_store_projection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Restorable"));
+        let mut sessions = display_list(&[&a]);
+        assert!(apply_archived_flag(&store, &mut sessions, &a, true).unwrap());
+        assert!(sessions.is_empty());
+
+        // unarchive → the rail row is rebuilt from StoredSessionInfo (title
+        // from the sidecar, epoch-ms created_at, project working dir) so the
+        // list repopulates without a restart.
+        assert!(apply_archived_flag(&store, &mut sessions, &a, false).unwrap());
+        assert!(!store.curation(&a).archived);
+        assert_eq!(sessions.len(), 1);
+        let meta = &sessions[0];
+        assert_eq!(meta.id, a.to_string());
+        assert_eq!(meta.title, "Restorable");
+        assert_eq!(meta.working_dir.as_deref(), Some("/proj"));
+        assert!(meta.created_at > 1_000_000_000_000, "epoch milliseconds");
+        assert_eq!(meta.message_count, 1, "one seeded turn");
+    }
+
+    #[test]
+    fn idempotent_unarchive_repairs_a_rail_row_missing_from_a_failed_rebuild() {
+        // Final review F2: the old code persisted the unarchive flag and
+        // THEN rebuilt the row via the full projection — a failure between
+        // the two wedged the session out of both lists (flag false, row
+        // absent), and the retry hit the idempotent short-circuit. The
+        // retry must now repair the rail.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Wedged"));
+
+        // The wedge: flag already cleared, row nowhere.
+        store
+            .save_curation(
+                &a,
+                &SessionCuration {
+                    archived: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut sessions = Vec::new();
+        assert!(
+            apply_archived_flag(&store, &mut sessions, &a, false).unwrap(),
+            "the repair is a visible state change, not a no-op"
+        );
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, a.to_string());
+        assert_eq!(sessions[0].title, "Wedged");
+
+        // Once repaired, the next request is a true no-op again.
+        let mut again = sessions.clone();
+        assert!(!apply_archived_flag(&store, &mut again, &a, false).unwrap());
+        assert_eq!(again.len(), 1);
+    }
+
+    #[test]
+    fn idempotent_archive_drops_a_stale_rail_row() {
+        // The mirror repair: the flag is already true (archived) but the
+        // row is back on the rail (restored by a crashed run) — the
+        // archive request must still remove it and report the change.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Stale"));
+        store
+            .save_curation(
+                &a,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut sessions = display_list(&[&a]);
+        assert!(apply_archived_flag(&store, &mut sessions, &a, true).unwrap());
+        assert!(sessions.is_empty());
+
+        // Truly idempotent afterwards.
+        let mut again = display_list(&[]);
+        assert!(!apply_archived_flag(&store, &mut again, &a, true).unwrap());
+        assert!(again.is_empty());
+    }
+
+    #[test]
+    fn unarchive_rebuild_survives_a_corrupt_log_via_the_listing() {
+        // Final review F2: the rail rebuild must depend on the
+        // `SessionStore::list` summaries, not the full `store.load`
+        // projection. Corrupt the log IN PLACE (same byte length + restored
+        // mtime, so the E-9 index still validates): the projection fails on
+        // the unparsable line while the listing serves from its cache.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Durable"));
+        let mut rail = display_list(&[&a]);
+        assert!(apply_archived_flag(&store, &mut rail, &a, true).unwrap());
+
+        let log = store.container().join(a.to_string()).join("events.jsonl");
+        let mtime = std::fs::metadata(&log).unwrap().modified().unwrap();
+        let raw = std::fs::read_to_string(&log).unwrap();
+        let corrupted = raw.replacen('{', "x", 1);
+        assert_eq!(
+            corrupted.len(),
+            raw.len(),
+            "in-place corruption keeps the byte length"
+        );
+        std::fs::write(&log, corrupted).unwrap();
+        std::fs::File::open(&log)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert!(
+            store.load(&a).is_err(),
+            "fixture: the full projection must fail on the corrupt log"
+        );
+
+        // Wedged state (flag already cleared, row absent) + retry: the rail
+        // is rebuilt from the listing anyway — no `store.load` dependency.
+        store
+            .save_curation(
+                &a,
+                &SessionCuration {
+                    archived: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut sessions = Vec::new();
+        assert!(apply_archived_flag(&store, &mut sessions, &a, false).unwrap());
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].title, "Durable");
+    }
+
+    #[tokio::test]
+    async fn post_archive_dream_hands_the_archived_id_to_exactly_one_pass() {
+        // Final review F1: the archive callback must pass the just-archived
+        // session id into the dream pass (its explicit include) — verified
+        // through the injected runner seam, in the style of the other
+        // hermetic seams in this module.
+        let archived = uuid::Uuid::new_v4();
+        let seen: Arc<std::sync::Mutex<Vec<uuid::Uuid>>> = Arc::default();
+        let spy = seen.clone();
+        post_archive_dream_with(true, archived, move |id| {
+            let spy = spy.clone();
+            async move {
+                spy.lock().unwrap().push(id);
+                Ok(())
+            }
+        })
+        .await;
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![archived],
+            "exactly one pass receives the archived id"
+        );
+
+        // Switch off → no pass at all.
+        let disabled: Arc<std::sync::Mutex<Vec<uuid::Uuid>>> = Arc::default();
+        let spy = disabled.clone();
+        post_archive_dream_with(false, archived, move |id| {
+            let spy = spy.clone();
+            async move {
+                spy.lock().unwrap().push(id);
+                Ok(())
+            }
+        })
+        .await;
+        assert!(disabled.lock().unwrap().is_empty(), "disabled → no pass");
+    }
+
+    #[test]
+    fn apply_flag_is_idempotent_and_rejects_unknown_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, None);
+        let mut sessions = display_list(&[&a]);
+
+        assert!(apply_archived_flag(&store, &mut sessions, &a, true).unwrap());
+        assert!(
+            !apply_archived_flag(&store, &mut sessions, &a, true).unwrap(),
+            "already archived → no-op"
+        );
+        assert!(
+            sessions.is_empty(),
+            "the only active row was removed; the no-op removed nothing twice"
+        );
+
+        assert!(
+            apply_archived_flag(&store, &mut sessions, &a, false).unwrap(),
+            "unarchive flips the flag back"
+        );
+        assert!(
+            !apply_archived_flag(&store, &mut sessions, &a, false).unwrap(),
+            "already unarchived → no-op"
+        );
+        let missing = uuid::Uuid::new_v4();
+        let err = apply_archived_flag(&store, &mut sessions, &missing, true).unwrap_err();
+        assert!(err.contains("Session not found"), "{err}");
+    }
+
+    #[test]
+    fn resume_unarchive_clears_the_flag_and_reports_the_title() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let plain = uuid::Uuid::new_v4();
+        let archived = uuid::Uuid::new_v4();
+        seed_session(&store, &plain, None);
+        seed_session(&store, &archived, Some("Welcome back"));
+        // Archive one through the real mutation; it leaves the display list.
+        let mut staging = Vec::new();
+        assert!(apply_archived_flag(&store, &mut staging, &archived, true).unwrap());
+        assert!(staging.is_empty());
+        let mut sessions = Vec::new();
+
+        // Resuming a not-archived session is a no-op.
+        assert!(resume_unarchive_in(&store, &mut sessions, &plain).is_none());
+        // Resuming an archived session unarchives + repopulates + names it.
+        let title = resume_unarchive_in(&store, &mut sessions, &archived).unwrap();
+        assert_eq!(title, "Welcome back");
+        assert!(!store.curation(&archived).archived);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, archived.to_string());
+        // A second resume (flag already cleared) is nothing.
+        assert!(resume_unarchive_in(&store, &mut sessions, &archived).is_none());
+    }
+
+    fn gc_config(enabled: bool, retention: Option<u32>) -> config::DesktopConfig {
+        config::DesktopConfig {
+            session_gc_enabled: enabled,
+            session_retention_days: retention,
+            ..config::DesktopConfig::default()
+        }
+    }
+
+    #[test]
+    fn gc_gate_requires_config_and_env_can_only_force_disable() {
+        // Deletion requires config.
+        assert!(effective_gc_retention_days_with(&false, Some(30), None).is_err());
+        // …and no env value can enable it.
+        assert!(effective_gc_retention_days_with(&false, Some(30), Some("1")).is_err());
+        // Enabled + window.
+        assert_eq!(
+            effective_gc_retention_days_with(&true, Some(90), None).unwrap(),
+            Some(90)
+        );
+        // Enabled + no window = runs but deletes nothing.
+        assert_eq!(
+            effective_gc_retention_days_with(&true, None, None).unwrap(),
+            None
+        );
+        // 0 is 永不 on the wire/UI; the gate honors it so a hand-edited
+        // `session_retention_days = 0` can never become a 0-day window that
+        // deletes every archived session.
+        assert_eq!(
+            effective_gc_retention_days_with(&true, Some(0), None).unwrap(),
+            None
+        );
+        // The env var can only force-disable.
+        assert!(effective_gc_retention_days_with(&true, Some(90), Some("0")).is_err());
+        assert!(effective_gc_retention_days_with(&true, Some(90), Some("FALSE")).is_err());
+        // Any other value is inert, never an enabler or disabler.
+        assert_eq!(
+            effective_gc_retention_days_with(&true, Some(90), Some("yes")).unwrap(),
+            Some(90)
+        );
+    }
+
+    fn seed_old_archived_and_active(
+        container: &std::path::Path,
+    ) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid) {
+        let old_archived = uuid::Uuid::new_v4();
+        let recent_archived = uuid::Uuid::new_v4();
+        let old_active = uuid::Uuid::new_v4();
+        let st = SessionStore::new(container.to_path_buf());
+        for id in [&old_archived, &recent_archived, &old_active] {
+            seed_session(&st, id, None);
+        }
+        // Backdate the two old sessions' logs (file + dir) past any window.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 3600);
+        for id in [&old_archived, &old_active] {
+            let log = container.join(id.to_string()).join("events.jsonl");
+            std::fs::File::open(&log)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            std::fs::File::open(log.parent().unwrap())
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        for id in [&old_archived, &recent_archived] {
+            st.save_curation(
+                id,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        (old_archived, recent_archived, old_active)
+    }
+
+    #[tokio::test]
+    async fn gc_pass_deletes_only_archived_past_retention_and_reports() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        std::fs::create_dir_all(&container).unwrap();
+        let (old_archived, recent_archived, old_active) = seed_old_archived_and_active(&container);
+
+        let desktop_config = Arc::new(tokio::sync::RwLock::new(gc_config(true, Some(30))));
+        let stale_row = SessionMeta {
+            id: old_archived.to_string(),
+            title: "stale".into(),
+            created_at: 1,
+            message_count: 0,
+            working_dir: None,
+            parent_id: None,
+            branch_point: None,
+        };
+        let sessions = Arc::new(tokio::sync::Mutex::new(vec![stale_row]));
+        let candidates = tempfile::tempdir().unwrap();
+
+        let msg = run_session_gc_with(&desktop_config, &sessions, &container, candidates.path())
+            .await
+            .unwrap();
+        assert!(msg.contains("pruned 1"), "{msg}");
+        assert!(
+            !container.join(old_archived.to_string()).exists(),
+            "archived + past retention → deleted"
+        );
+        assert!(
+            container.join(recent_archived.to_string()).exists(),
+            "archived but inside the window → kept"
+        );
+        assert!(
+            container.join(old_active.to_string()).exists(),
+            "unarchived is never auto-deleted, however old"
+        );
+        assert!(
+            sessions.lock().await.is_empty(),
+            "stale display rows are dropped by the pass"
+        );
+    }
+
+    #[tokio::test]
+    async fn gc_pass_treats_retention_zero_as_never() {
+        // Review finding (GC deletion-path duality): the wire/UI define
+        // `session_retention_days = 0` as 永不 (never auto-delete). The gate
+        // must honor that for a hand-edited config — folding it into the
+        // windowless path — never letting it become a 0-day window that
+        // deletes every archived session.
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        std::fs::create_dir_all(&container).unwrap();
+        let (old_archived, recent_archived, old_active) = seed_old_archived_and_active(&container);
+        let sessions = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let candidates = tempfile::tempdir().unwrap();
+
+        let zero_window = Arc::new(tokio::sync::RwLock::new(gc_config(true, Some(0))));
+        let msg = run_session_gc_with(&zero_window, &sessions, &container, candidates.path())
+            .await
+            .unwrap();
+        // The windowless outcome: a pass ran, deleted nothing.
+        assert!(msg.contains("no session_retention_days"), "{msg}");
+        assert!(
+            container.join(old_archived.to_string()).exists(),
+            "0 = 永不 → even the ancient archived session survives"
+        );
+        assert!(container.join(recent_archived.to_string()).exists());
+        assert!(container.join(old_active.to_string()).exists());
+    }
+
+    #[tokio::test]
+    async fn gc_pass_is_inert_disabled_and_without_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        std::fs::create_dir_all(&container).unwrap();
+        let (old_archived, _, _) = seed_old_archived_and_active(&container);
+        let sessions = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let candidates = tempfile::tempdir().unwrap();
+
+        // Disabled (the default): skipped, nothing deleted.
+        let disabled = Arc::new(tokio::sync::RwLock::new(gc_config(false, Some(30))));
+        let msg = run_session_gc_with(&disabled, &sessions, &container, candidates.path())
+            .await
+            .unwrap();
+        assert!(msg.contains("skipped"), "{msg}");
+        assert!(container.join(old_archived.to_string()).exists());
+
+        // Enabled but windowless (session_retention_days = None): zero
+        // deletions even though the session is archived and ancient.
+        let windowless = Arc::new(tokio::sync::RwLock::new(gc_config(true, None)));
+        let msg = run_session_gc_with(&windowless, &sessions, &container, candidates.path())
+            .await
+            .unwrap();
+        assert!(msg.contains("no session_retention_days"), "{msg}");
+        assert!(
+            container.join(old_archived.to_string()).exists(),
+            "retention None → zero deletions even with GC enabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn gc_pass_names_candidates_referencing_deleted_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        std::fs::create_dir_all(&container).unwrap();
+        let (old_archived, _, _) = seed_old_archived_and_active(&container);
+
+        // One candidate references the doomed session, another does not.
+        let candidates = tempfile::tempdir().unwrap();
+        let hitting = crate::commands_skill_candidates::SkillCandidate {
+            id: "sig-hit".into(),
+            example_session_ids: vec![old_archived.to_string()],
+            ..sample_skill_candidate("sig-hit")
+        };
+        let other = sample_skill_candidate("sig-other");
+        crate::commands_skill_candidates::append_candidate_in(candidates.path(), hitting).unwrap();
+        crate::commands_skill_candidates::append_candidate_in(candidates.path(), other).unwrap();
+
+        let desktop_config = Arc::new(tokio::sync::RwLock::new(gc_config(true, Some(30))));
+        let sessions = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let msg = run_session_gc_with(&desktop_config, &sessions, &container, candidates.path())
+            .await
+            .unwrap();
+        assert!(msg.contains("sig-hit"), "{msg}");
+        assert!(!msg.contains("sig-other"), "{msg}");
+    }
+
+    fn sample_skill_candidate(id: &str) -> crate::commands_skill_candidates::SkillCandidate {
+        crate::commands_skill_candidates::SkillCandidate {
+            id: id.into(),
+            detected_at: "2026-09-25T00:00:00Z".into(),
+            occurrence_count: 2,
+            example_session_ids: vec![],
+            proposed_name: "bash".into(),
+            proposed_trigger: "recurring bash(cmd) calls".into(),
+            procedure: vec!["invoke bash".into()],
+            source_tool_calls: vec![],
+            refined: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod delete_cleanup_tests {
+    // B1-3 (R8-②) registry contract of the delete path. `delete_session`
+    // itself needs a Wry app handle + `tauri::State`, so the pinning here is
+    // hermetic: the cancel seam (`cancel_session_run`) plus the registry
+    // `destroy` it hands off to, in the exact sequence the command runs
+    // them (cancel before the store delete; destroy only on success —
+    // see the two call sites above).
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn cancel_session_run_takes_and_fires_the_registered_token() {
+        let registry = SessionRegistry::new();
+        let key = SessionKey::new();
+        let session = registry.get_or_create(key);
+        let token = CancellationToken::new();
+        *session.cancellation_token.lock().await = Some(token.clone());
+
+        cancel_session_run(&registry, key).await;
+        assert!(token.is_cancelled(), "the registered run token must fire");
+        // Take-and-cancel: the slot is drained — a later cancel finds
+        // nothing to fire (same contract as cancel_session_query).
+        assert!(session.cancellation_token.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn cancel_session_run_is_a_noop_for_unknown_sessions() {
+        let registry = SessionRegistry::new();
+        // Must not panic — and must not materialise an entry for a session
+        // this process never queried (that's `get_or_create`'s job, not
+        // ours; deleting an unqueried session stays allocation-free).
+        cancel_session_run(&registry, SessionKey::new()).await;
+        assert_eq!(registry.list().len(), 0, "no entry was created");
+    }
+
+    #[tokio::test]
+    async fn destroy_after_cancel_releases_the_registry_entry() {
+        // The delete-success tail of `delete_session`: the cancelled run's
+        // entry (with its unbounded per-session event channel) is dropped,
+        // and the token stays cancelled — no resurrection of either.
+        let registry = SessionRegistry::new();
+        let key = SessionKey::new();
+        let session = registry.get_or_create(key);
+        let token = CancellationToken::new();
+        *session.cancellation_token.lock().await = Some(token.clone());
+
+        cancel_session_run(&registry, key).await;
+        assert!(registry.destroy(key), "entry present, destroy succeeds");
+        assert!(registry.get(key).is_none(), "entry is gone from the map");
+        assert!(token.is_cancelled());
+    }
 }
 
 #[cfg(test)]
@@ -950,5 +2754,553 @@ mod auto_title_tests {
     #[test]
     fn whitespace_only_yields_empty() {
         assert_eq!(derive_title_from_message("   \n\t  "), "");
+    }
+
+    /// The return contract the TitleGeneration slot consumer keys off
+    /// (`session_title` spawns its one LLM attempt only on `Some`): the
+    /// derived title is returned when — and only when — it was applied, and
+    /// a user-renamed session (placeholder rule) never reaches the LLM path.
+    #[tokio::test]
+    async fn auto_title_returns_the_applied_title_and_none_for_user_renames() {
+        use crate::commands::{AppState, SessionMeta};
+        use shannon_engine::state::StateManager;
+        use std::sync::Arc;
+        use tauri::Manager;
+
+        let app = tauri::test::mock_app().handle().clone();
+        let dir = tempfile::tempdir().unwrap();
+        let mut app_state = AppState::new();
+        app_state.state_manager =
+            Arc::new(StateManager::with_sessions_dir(dir.path().join("sessions")).unwrap());
+        app.manage(app_state);
+        let state = app.state::<AppState>();
+
+        async fn push(state: &AppState, id: uuid::Uuid, title: &str) {
+            state.sessions.lock().await.push(SessionMeta {
+                id: id.to_string(),
+                title: title.to_string(),
+                created_at: 0,
+                message_count: 0,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            });
+        }
+
+        // Placeholder-titled session → retitled; returns the derived title.
+        let fresh = uuid::Uuid::new_v4();
+        push(&state, fresh, "Session abcd1234").await;
+        let derived =
+            super::auto_title_from_first_message(&state, &app, fresh, "Fix the login bug").await;
+        assert_eq!(derived.as_deref(), Some("Fix the login bug"));
+        let id_str = fresh.to_string();
+        let title = state
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .find(|s| s.id == id_str)
+            .map(|s| s.title.clone())
+            .unwrap_or_default();
+        assert_eq!(title, "Fix the login bug");
+
+        // User-renamed session (this or a previous process) → None; the
+        // title — and therefore the LLM title path — is never touched.
+        let renamed = uuid::Uuid::new_v4();
+        push(&state, renamed, "My Own Name").await;
+        let derived =
+            super::auto_title_from_first_message(&state, &app, renamed, "Fix the login bug").await;
+        assert_eq!(derived, None);
+        let id_str = renamed.to_string();
+        let title = state
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .find(|s| s.id == id_str)
+            .map(|s| s.title.clone())
+            .unwrap_or_default();
+        assert_eq!(title, "My Own Name");
+    }
+}
+
+#[cfg(test)]
+mod pin_and_auto_archive_tests {
+    // Settings R3 T7 — the pin sidecar mutation and the auto-archive scan,
+    // hermetic over injected store/display-list/config/inbox fixtures (the
+    // same construction as `archive_tests`: real L0 logs in a tempdir,
+    // nothing touches `AppState` or `$HOME`).
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use shannon_core::inbox_store::{InboxItemNew, InboxStore, SOURCE_SESSION_APPROVAL};
+    use shannon_core::session_log::{SessionLogWriter, SessionStore};
+    use shannon_types::session_event::{
+        SessionEventBody, SessionStartPayload, TurnStartPayload, UserMessagePayload,
+    };
+
+    fn store(tmp: &tempfile::TempDir) -> SessionStore {
+        SessionStore::new(tmp.path().join("sessions"))
+    }
+
+    /// Seed one real session through the L0 writer (session/start + one
+    /// user turn) — the same write path production uses.
+    fn seed_session(store: &SessionStore, id: &uuid::Uuid, title: Option<&str>) {
+        let mut w =
+            SessionLogWriter::open_layout(store.container(), &id.to_string()).expect("open log");
+        w.record(SessionEventBody::SessionStart(SessionStartPayload {
+            model: "test-model".into(),
+            provider: None,
+            cwd: Some("/proj".into()),
+            app_version: None,
+            ..Default::default()
+        }));
+        w.record(SessionEventBody::TurnStart(TurnStartPayload {
+            query_id: None,
+        }));
+        w.record(SessionEventBody::UserMessage(UserMessagePayload {
+            source: UserMessagePayload::SOURCE_USER.into(),
+            content: "hello there".into(),
+            attachment_count: 0,
+        }));
+        w.close().expect("close log");
+        if let Some(t) = title {
+            store
+                .save_sidecar(
+                    id,
+                    &shannon_core::session_log::SessionSidecar {
+                        title: Some(t.into()),
+                        ..Default::default()
+                    },
+                )
+                .expect("save sidecar");
+        }
+    }
+
+    fn display_list(ids: &[&uuid::Uuid]) -> Vec<SessionMeta> {
+        ids.iter()
+            .map(|id| SessionMeta {
+                id: id.to_string(),
+                title: "Session".into(),
+                created_at: 1,
+                message_count: 1,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            })
+            .collect()
+    }
+
+    /// Same rail shape with per-row titles — the scan's report rows carry
+    /// the snapshot's title (F1: the phase-1 rail snapshot is what the
+    /// archived-row report is built from).
+    fn display_list_titled(rows: &[(&uuid::Uuid, &str)]) -> Vec<SessionMeta> {
+        rows.iter()
+            .map(|(id, title)| SessionMeta {
+                id: id.to_string(),
+                title: (*title).into(),
+                created_at: 1,
+                message_count: 1,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            })
+            .collect()
+    }
+
+    fn config_lock(enabled: bool, days: u32) -> tokio::sync::RwLock<config::DesktopConfig> {
+        tokio::sync::RwLock::new(config::DesktopConfig {
+            session_auto_archive_enabled: enabled,
+            session_auto_archive_days: days,
+            ..config::DesktopConfig::default()
+        })
+    }
+
+    fn inbox_at(tmp: &tempfile::TempDir) -> InboxStore {
+        InboxStore::open(&tmp.path().join("inbox.db")).expect("open inbox store")
+    }
+
+    // --- pinned curation sidecar -------------------------------------------
+
+    #[test]
+    fn pinned_round_trips_and_preserves_the_archived_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Pinnable"));
+
+        // Default: unpinned. Flip → true; the write preserves archived=false.
+        assert!(!store.curation(&a).pinned);
+        assert!(
+            set_pinned_in(&store, &a, true).unwrap(),
+            "first flip changes"
+        );
+        let curation = store.curation(&a);
+        assert!(curation.pinned);
+        assert!(!curation.archived);
+
+        // Idempotent: pinning an already-pinned session reports no change…
+        assert!(!set_pinned_in(&store, &a, true).unwrap());
+        // …and unpinning flips back.
+        assert!(set_pinned_in(&store, &a, false).unwrap());
+        assert!(!store.curation(&a).pinned);
+
+        // Pin and archive are independent curation bits: once the session is
+        // archived, the pin path's read-modify-write must preserve the
+        // archived flag in both directions.
+        store
+            .save_curation(
+                &a,
+                &SessionCuration {
+                    archived: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(set_pinned_in(&store, &a, true).unwrap());
+        let curation = store.curation(&a);
+        assert!(curation.pinned);
+        assert!(curation.archived, "pin must not clear the archive flag");
+        assert!(set_pinned_in(&store, &a, false).unwrap());
+        let curation = store.curation(&a);
+        assert!(!curation.pinned);
+        assert!(curation.archived, "unpin must not clear the archive flag");
+    }
+
+    #[test]
+    fn legacy_curation_json_without_a_pinned_key_loads_unpinned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Legacy"));
+
+        // A pre-T7 sidecar carries only `archived`; the missing `pinned`
+        // key must deserialize as false — never wedge the read.
+        let path =
+            shannon_core::session_log::session_curation_path(store.container(), &a.to_string());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"archived":true}"#).unwrap();
+        let curation = store.curation(&a);
+        assert!(curation.archived);
+        assert!(!curation.pinned, "missing key → unpinned (serde default)");
+
+        // A completely missing file loads as the default too.
+        let b = uuid::Uuid::new_v4();
+        seed_session(&store, &b, None);
+        let curation = store.curation(&b);
+        assert!(!curation.archived);
+        assert!(!curation.pinned);
+    }
+
+    // --- the auto-archive scan ----------------------------------------------
+
+    #[tokio::test]
+    async fn scan_archives_old_inactive_unpinned_sessions_and_reports_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let old = uuid::Uuid::new_v4();
+        let fresh = uuid::Uuid::new_v4();
+        seed_session(&store, &old, Some("Old chat"));
+        seed_session(&store, &fresh, Some("Fresh chat"));
+        // The rail rows carry the titles the report must repeat: F1 builds
+        // the archived-row payload from the phase-1 snapshot, not a sidecar
+        // listing pass.
+        let sessions = tokio::sync::Mutex::new(display_list_titled(&[
+            (&old, "Old chat"),
+            (&fresh, "Fresh chat"),
+        ]));
+        let cfg = config_lock(true, 7);
+
+        // A brand-new session's events.jsonl mtime is "now": with the clock
+        // pushed 8 days ahead, the 7-day window only catches the (shared)
+        // mtime — both sessions share it here, so push past retention and
+        // verify both are archived and reported with their sidecar titles.
+        let mtime = session_events_mtime(store.container(), &old).unwrap();
+        let now = mtime + std::time::Duration::from_secs(8 * 24 * 60 * 60);
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, now)
+                .await
+                .unwrap();
+        assert_eq!(archived.len(), 2, "both sessions are past the window");
+        assert!(
+            archived
+                .iter()
+                .any(|r| r.session_id == old.to_string() && r.title == "Old chat")
+        );
+        assert!(store.curation(&old).archived);
+        assert!(store.curation(&fresh).archived);
+        // The display list sync rides apply_archived_flag: rail rows dropped.
+        assert!(sessions.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scan_skips_running_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let running = uuid::Uuid::new_v4();
+        seed_session(&store, &running, Some("Still running"));
+        let sessions = tokio::sync::Mutex::new(display_list(&[&running]));
+        let cfg = config_lock(true, 7);
+        let mtime = session_events_mtime(store.container(), &running).unwrap();
+        let now = mtime + std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+        let mut running_ids = HashSet::new();
+        running_ids.insert(running);
+        let archived = run_auto_archive_scan_with(&cfg, &sessions, &store, &running_ids, None, now)
+            .await
+            .unwrap();
+        assert!(archived.is_empty(), "R6: a running session is never 已完成");
+        assert!(!store.curation(&running).archived);
+        assert_eq!(sessions.lock().await.len(), 1, "rail row stays");
+    }
+
+    #[tokio::test]
+    async fn scan_skips_pinned_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let pinned = uuid::Uuid::new_v4();
+        seed_session(&store, &pinned, Some("Pinned"));
+        store
+            .save_curation(
+                &pinned,
+                &SessionCuration {
+                    pinned: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let sessions = tokio::sync::Mutex::new(display_list(&[&pinned]));
+        let cfg = config_lock(true, 7);
+        let mtime = session_events_mtime(store.container(), &pinned).unwrap();
+        let now = mtime + std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, now)
+                .await
+                .unwrap();
+        assert!(archived.is_empty(), "R5: the pin exempts from auto-archive");
+        assert!(!store.curation(&pinned).archived);
+        assert!(
+            store.curation(&pinned).pinned,
+            "the pin itself is untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_skips_sessions_with_pending_inbox_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let unread = uuid::Uuid::new_v4();
+        seed_session(&store, &unread, Some("Has pending approval"));
+        let inbox = inbox_at(&tmp);
+        inbox
+            .append_item(InboxItemNew {
+                source: SOURCE_SESSION_APPROVAL.into(),
+                source_id: Some("req-1".into()),
+                session_id: Some(unread.to_string()),
+                title: "Approval requested".into(),
+                summary: String::new(),
+                error: None,
+            })
+            .unwrap();
+        // A READ item is no longer 未读: a second session whose only inbox
+        // entry was read must still be archivable.
+        let read_only = uuid::Uuid::new_v4();
+        seed_session(&store, &read_only, Some("Read inbox only"));
+        let item = inbox
+            .append_item(InboxItemNew {
+                source: SOURCE_SESSION_APPROVAL.into(),
+                source_id: Some("req-2".into()),
+                session_id: Some(read_only.to_string()),
+                title: "Old approval".into(),
+                summary: String::new(),
+                error: None,
+            })
+            .unwrap();
+        inbox
+            .update_status(item.id, shannon_core::inbox_store::InboxStatus::Read)
+            .unwrap();
+
+        let sessions = tokio::sync::Mutex::new(display_list(&[&unread, &read_only]));
+        let cfg = config_lock(true, 7);
+        let mtime = session_events_mtime(store.container(), &unread).unwrap();
+        let now = mtime + std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), Some(&inbox), now)
+                .await
+                .unwrap();
+        assert_eq!(archived.len(), 1, "the read-only session is archived");
+        assert_eq!(archived[0].session_id, read_only.to_string());
+        assert!(!store.curation(&unread).archived, "pending inbox ⇒ skip");
+        assert!(store.curation(&read_only).archived, "read inbox ⇒ eligible");
+    }
+
+    #[tokio::test]
+    async fn scan_respects_the_retention_boundary_fail_closed_on_unknown_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Boundary"));
+        let sessions = tokio::sync::Mutex::new(display_list(&[&a]));
+        let cfg = config_lock(true, 7);
+        let mtime = session_events_mtime(store.container(), &a).unwrap();
+
+        // One second inside the window → kept; one second past → archived.
+        let inside = mtime + std::time::Duration::from_secs(7 * 24 * 60 * 60 - 1);
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, inside)
+                .await
+                .unwrap();
+        assert!(
+            archived.is_empty(),
+            "mtime >= cutoff is kept (>= is the boundary)"
+        );
+        assert!(!store.curation(&a).archived);
+
+        let past = mtime + std::time::Duration::from_secs(7 * 24 * 60 * 60 + 1);
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, past)
+                .await
+                .unwrap();
+        assert_eq!(archived.len(), 1);
+        assert!(store.curation(&a).archived);
+
+        // A session whose events.jsonl vanished mid-flight drops out of the
+        // store listing entirely — the pass reports Ok with nothing archived
+        // (a listed-but-unreadable mtime would take the `session_events_mtime`
+        // None branch and skip fail-closed instead).
+        let b = uuid::Uuid::new_v4();
+        seed_session(&store, &b, Some("Ghost"));
+        let log = store.container().join(b.to_string()).join("events.jsonl");
+        std::fs::remove_file(&log).unwrap();
+        let sessions = tokio::sync::Mutex::new(display_list(&[&b]));
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, past)
+                .await
+                .unwrap();
+        assert!(archived.is_empty(), "a logless session is not a candidate");
+        assert!(!store.curation(&b).archived);
+    }
+
+    #[tokio::test]
+    async fn scan_disabled_is_a_no_op() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Ancient"));
+        let sessions = tokio::sync::Mutex::new(display_list(&[&a]));
+        let cfg = config_lock(false, 7);
+        let mtime = session_events_mtime(store.container(), &a).unwrap();
+        let now = mtime + std::time::Duration::from_secs(365 * 24 * 60 * 60);
+
+        let archived =
+            run_auto_archive_scan_with(&cfg, &sessions, &store, &HashSet::new(), None, now)
+                .await
+                .unwrap();
+        assert!(archived.is_empty(), "default-off gates every pass");
+        assert!(!store.curation(&a).archived);
+        assert_eq!(sessions.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn scan_reverification_skips_a_session_that_turns_running_mid_scan() {
+        // F1 phase 3: a session idle during the lock-free adjudication but
+        // running by the time the archive flip is due must be skipped. The
+        // injected double models the race with mutable state: its target
+        // reads idle on the first lookup (adjudication), then flips to
+        // running for every later lookup (re-verification) — the same
+        // live-query semantics the production registry injects.
+        struct TurnsRunningMidScan {
+            session_id: uuid::Uuid,
+            running: std::sync::Mutex<bool>,
+        }
+        impl AutoArchiveRunningCheck for TurnsRunningMidScan {
+            fn is_running(
+                &self,
+                session_id: uuid::Uuid,
+            ) -> impl std::future::Future<Output = bool> + Send {
+                let target = session_id == self.session_id;
+                async move {
+                    if !target {
+                        return false;
+                    }
+                    let mut running = self.running.lock().unwrap();
+                    if *running {
+                        return true;
+                    }
+                    *running = true; // it started running after adjudication
+                    false
+                }
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let turns = uuid::Uuid::new_v4();
+        let stays = uuid::Uuid::new_v4();
+        seed_session(&store, &turns, Some("Turns running mid-scan"));
+        seed_session(&store, &stays, Some("Stays idle"));
+        let sessions = tokio::sync::Mutex::new(display_list(&[&turns, &stays]));
+        let cfg = config_lock(true, 7);
+        let mtime = session_events_mtime(store.container(), &turns).unwrap();
+        let now = mtime + std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+        let running = TurnsRunningMidScan {
+            session_id: turns,
+            running: std::sync::Mutex::new(false),
+        };
+        let archived = run_auto_archive_scan_with(&cfg, &sessions, &store, &running, None, now)
+            .await
+            .unwrap();
+
+        assert!(
+            !archived.iter().any(|r| r.session_id == turns.to_string()),
+            "a session that starts running between adjudication and the flip is skipped"
+        );
+        assert!(!store.curation(&turns).archived);
+        assert_eq!(
+            sessions.lock().await.len(),
+            1,
+            "the skipped session's rail row stays"
+        );
+
+        assert_eq!(
+            archived.len(),
+            1,
+            "the always-idle session still archives on the same pass"
+        );
+        assert_eq!(archived[0].session_id, stays.to_string());
+        assert!(store.curation(&stays).archived);
+        // Only the stays-idle row left the rail; the skipped one is intact.
+        assert_eq!(sessions.lock().await.len(), 1);
+    }
+
+    #[test]
+    fn effective_auto_archive_days_clamps_into_the_scanable_window() {
+        // Disabled → None regardless of the stored window.
+        assert_eq!(
+            effective_auto_archive_days(&config::DesktopConfig::default()),
+            None
+        );
+        // Enabled: the stored days clamp into 1..=365 so a hand-edited
+        // config can neither wedge (0) nor explode (u32::MAX) the scan.
+        let cfg = config_lock(true, 0);
+        let days = {
+            let cfg = cfg.blocking_read();
+            effective_auto_archive_days(&cfg)
+        };
+        assert_eq!(days, Some(1));
+        let cfg = config_lock(true, 7);
+        let days = {
+            let cfg = cfg.blocking_read();
+            effective_auto_archive_days(&cfg)
+        };
+        assert_eq!(days, Some(7));
+        let big = config::DesktopConfig {
+            session_auto_archive_enabled: true,
+            session_auto_archive_days: u32::MAX,
+            ..config::DesktopConfig::default()
+        };
+        assert_eq!(effective_auto_archive_days(&big), Some(365));
     }
 }

@@ -63,7 +63,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[allow(dead_code)] // KEEP: names the 0 state in the status mapping for readability
 const STATUS_LOCAL: u8 = 0;
+#[allow(dead_code)] // KEEP: names the 1-satate in the status mapping for readability
 const STATUS_CONNECTED: u8 = 1;
+#[allow(dead_code)] // KEEP: names the 2-state in the status mapping for readability
 const STATUS_DEGRADED: u8 = 2;
 
 #[cfg(unix)]
@@ -235,7 +237,7 @@ impl SshRuntime {
     }
 
     /// Blocking capture bridge for sync call sites (git helpers). Marshals
-    /// onto the dedicated runtime via [`block_on_anywhere`].
+    /// onto the dedicated runtime via `block_on_anywhere`.
     pub fn exec_blocking(self: &Arc<Self>, argv: Vec<String>) -> io::Result<CapturedOutput> {
         block_on_anywhere(&self.handle, {
             let this = self.clone();
@@ -449,6 +451,13 @@ where
 /// `block_on` from any thread, including threads already inside another
 /// tokio runtime (spawn_blocking workers): hop to a plain OS thread when
 /// necessary. Blocking ssh helpers call this.
+///
+/// Review §P2-14 guidance: inside a runtime this hop costs one OS thread per
+/// call (an async worker must not block, and there is no public probe that
+/// separates worker threads from blocking-pool threads). Callers of the SFTP
+/// `FileSystemProvider::*_blocking` fns should therefore invoke them from
+/// `tokio::task::spawn_blocking` — the helper-thread hop then happens on the
+/// blocking pool instead of stalling an async worker.
 #[cfg(unix)]
 pub(crate) fn block_on_anywhere<T, F>(handle: &Handle, fut: F) -> T
 where

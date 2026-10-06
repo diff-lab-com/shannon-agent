@@ -4,13 +4,29 @@ import { useOutletContext } from "react-router-dom";
 import { useIntl } from 'react-intl'
 import {
   listFeaturedVendors,
+  listInstalledAddons,
   installMcpOAuthLoopback,
   installMcpOAuthComplete,
   installMcpStdio,
   type FeaturedVendor,
 } from "@/lib/tauri-api";
+import type { InstalledAddonSummary } from "@/types";
 import { Button } from "@/components/ui/button";
+import { CardSkeleton } from '@/components/SkeletonLoader'
 import { cn } from "@/lib/utils";
+import InstalledIconRow from '@/components/extensions/InstalledIconRow'
+
+// Batch E4/B3 P1-21 contract: any successful install from this page must
+// dispatch `shannon:extension-installed` (same shape InstallDialog uses) so
+// the other extension tabs (Installed, InstalledIconRow, the personal tab
+// below) refresh immediately instead of showing stale inventories.
+function announceInstalled(name: string) {
+  window.dispatchEvent(
+    new CustomEvent('shannon:extension-installed', {
+      detail: { kind: 'mcp', name },
+    }),
+  )
+}
 
 /**
  * Featured tab — curated list of verified MCP vendors Shannon ships with.
@@ -38,6 +54,32 @@ export default function Featured() {
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ slug: string; msg: string; ok: boolean } | null>(null);
   const [tokenPrompt, setTokenPrompt] = useState<string | null>(null);
+  // Batch E4: 公开（精选目录）/ 个人（本机已装资产） market dichotomy.
+  const [marketTab, setMarketTab] = useState<'public' | 'personal'>('public');
+  const [installed, setInstalled] = useState<InstalledAddonSummary[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      listInstalledAddons()
+        .then(rows => { if (!cancelled) setInstalled(rows) })
+        .catch(() => { /* personal tab is opportunistic */ });
+    };
+    load();
+    window.addEventListener('shannon:extension-installed', load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('shannon:extension-installed', load);
+    };
+  }, []);
+
+  const personalFiltered = search
+    ? installed.filter(
+        (a) =>
+          a.name.toLowerCase().includes(search.toLowerCase()) ||
+          a.id.toLowerCase().includes(search.toLowerCase())
+      )
+    : installed;
 
   useEffect(() => {
     let cancelled = false;
@@ -66,6 +108,7 @@ export default function Featured() {
     try {
       if (vendor.install_kind.type === "oauth_remote") {
         await installMcpOAuthLoopback(vendor.slug);
+        announceInstalled(vendor.slug);
         setFeedback({ slug: vendor.slug, msg: t('extensions.featured.connected'), ok: true });
       } else {
         // stdio featured vendor — install directly.
@@ -77,6 +120,7 @@ export default function Featured() {
           args: vendor.install_kind.args,
           env: Object.entries(env),
         });
+        announceInstalled(vendor.slug);
         setFeedback({ slug: vendor.slug, msg: t('extensions.featured.installed'), ok: true });
       }
     } catch (err) {
@@ -97,6 +141,7 @@ export default function Featured() {
     setBusy(vendor.slug);
     try {
       await installMcpOAuthComplete(vendor.slug, token);
+      announceInstalled(vendor.slug);
       setFeedback({ slug: vendor.slug, msg: t('extensions.featured.connected'), ok: true });
       setTokenPrompt(null);
     } catch (err) {
@@ -117,9 +162,19 @@ export default function Featured() {
     : vendors;
 
   if (loading) {
+    // Audit §P3-3 (round 6): align loading affordance with Triage's
+    // CardSkeleton so the loading shimmer feels consistent across
+    // collection pages.
     return (
-      <div className="p-lg max-w-5xl mx-auto">
-        <div className="text-center py-3xl text-on-surface-variant">{t('extensions.featured.loading')}</div>
+      <div className="p-lg max-w-7xl mx-auto">
+        <div className="mb-xl">
+          <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.featured.title')}</h2>
+          <p className="text-body-md text-on-surface-variant">{t('extensions.featured.subtitle')}</p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-md">
+          {Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}
+        </div>
+        <span className="sr-only">{t('extensions.featured.loading')}</span>
       </div>
     );
   }
@@ -134,13 +189,92 @@ export default function Featured() {
 
   return (
     <div className="p-lg max-w-7xl mx-auto">
-      <div className="mb-xl">
+      <div className="mb-md">
         <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.featured.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
           {t('extensions.featured.subtitle')}
         </p>
       </div>
 
+      {/* Batch E3: 已安装 icon row — installed assets surface on the hub's
+          first screen, one click from the full inventory. */}
+      <div className="mb-md">
+        <InstalledIconRow />
+      </div>
+
+      {/* Batch E4: 公开 / 个人 market tabs (ZCode 插件市场 pattern). */}
+      <div className="mb-lg">
+        <div role="group" aria-label={t('extensions.market.tabs.aria')} className="inline-flex items-center rounded-lg bg-surface-container-low p-0.5">
+          {([
+            { id: 'public' as const, label: t('extensions.market.public') },
+            { id: 'personal' as const, label: t('extensions.market.personal') },
+          ]).map(opt => (
+            <button
+              key={opt.id}
+              type="button"
+              aria-pressed={marketTab === opt.id}
+              onClick={() => setMarketTab(opt.id)}
+              className={cn(
+                'px-md py-xs rounded-md font-label-md text-label-md transition-colors cursor-pointer whitespace-nowrap',
+                marketTab === opt.id
+                  ? 'bg-primary text-on-primary shadow-e1 font-bold'
+                  : 'text-on-surface-variant hover:text-primary',
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {marketTab === 'personal' ? (
+        personalFiltered.length === 0 ? (
+          <div className="border border-dashed border-outline-variant/40 rounded-2xl p-xl text-center">
+            {search ? (
+              // B3 (P2 顺带): a no-match search must not read as "nothing
+              // installed" — same distinction the public tab makes.
+              <>
+                <span className="material-symbols-outlined icon-md text-on-surface-variant/60" aria-hidden="true">search_off</span>
+                <p className="font-label-md text-on-surface-variant mt-xs">
+                  {intl.formatMessage({ id: 'extensions.market.personalNoMatches' }, { search })}
+                </p>
+              </>
+            ) : (
+              <>
+                <span className="material-symbols-outlined icon-md text-on-surface-variant/60" aria-hidden="true">folder_off</span>
+                <p className="font-label-md text-on-surface-variant mt-xs">{t('extensions.market.personalEmpty')}</p>
+                <p className="font-label-sm text-on-surface-variant/70 mt-xs">{t('extensions.market.personalEmptyHint')}</p>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-lg">
+            {personalFiltered.map(a => (
+              <div
+                key={a.id}
+                className="rounded-2xl border border-outline-variant/30 bg-surface-container-lowest p-lg flex items-start gap-md hover:border-primary/40 transition-colors"
+              >
+                <div className={cn(
+                  'w-11 h-11 rounded-xl flex items-center justify-center shrink-0',
+                  a.enabled ? 'bg-primary-container text-on-primary-container' : 'bg-surface-container-low text-on-surface-variant/60',
+                )}>
+                  <span className="material-symbols-outlined icon-lg" aria-hidden="true">extension</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-sm">
+                    <h3 className="font-bold text-label-md text-on-surface truncate">{a.name}</h3>
+                    <span className="font-label-xs px-xs py-[1px] rounded-sm bg-surface-container-low text-on-surface-variant shrink-0">{a.kind}</span>
+                  </div>
+                  <p className="text-label-xs text-on-surface-variant font-mono truncate mt-[2px]">{a.id}</p>
+                  {!a.enabled && (
+                    <p className="text-label-xs text-warning mt-xs">{t('extensions.installed.disabled')}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-lg">
         {filtered.map((vendor) => {
           const isBusy = busy === vendor.slug;
@@ -150,15 +284,15 @@ export default function Featured() {
           return (
             <div
               key={vendor.slug}
-              className={`relative overflow-hidden rounded-3xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-xl hover:-translate-y-1 transition-all duration-200 flex flex-col group`}
+              className={`relative overflow-hidden rounded-3xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-e4 hover:-translate-y-1 transition-all duration-(--duration-normal) flex flex-col group`}
             >
               {/* Accent strip */}
               <div className={cn("h-1.5 w-full bg-gradient-to-r", accent.bar)} />
 
               <div className="p-lg flex flex-col flex-1">
                 <div className="flex items-start justify-between mb-md">
-                  <div className={cn("relative w-14 h-14 rounded-2xl bg-gradient-to-br flex items-center justify-center shadow-md", accent.icon)}>
-                    <span className="material-symbols-outlined text-white text-[28px] drop-shadow-sm">
+                  <div className={cn("relative w-14 h-14 rounded-2xl bg-gradient-to-br flex items-center justify-center shadow-e2", accent.icon)}>
+                    <span className="material-symbols-outlined text-white icon-xl drop-shadow-e1 max-w-full overflow-hidden">
                       {vendor.icon}
                     </span>
                   </div>
@@ -168,8 +302,17 @@ export default function Featured() {
                 <h3 className="font-bold text-label-lg text-on-surface mb-xs leading-tight">
                   {vendor.display_name}
                 </h3>
-                <p className="text-label-sm text-on-surface-variant flex-1 mb-lg leading-relaxed min-h-[40px]">
+                <p className="text-label-sm text-on-surface-variant flex-1 mb-sm leading-relaxed min-h-[40px]">
                   {vendor.description}
+                </p>
+
+                {/* Shannon installs every connector through the prompt-injection
+                    scanner + signature verifier — surface it as a visible
+                    differentiator (audit §3.6: the capability existed but was
+                    never shown). */}
+                <p className="text-label-xs text-on-surface-variant/90 mb-lg inline-flex items-center gap-xs">
+                  <span className="material-symbols-outlined icon-sm text-success" aria-hidden="true">verified_user</span>
+                  {t('extensions.featured.securityBadge')}
                 </p>
 
                 {showTokenPrompt && (
@@ -189,7 +332,7 @@ export default function Featured() {
                         : "bg-error-container/50 text-on-error-container",
                     )}
                   >
-                    <span className="material-symbols-outlined text-[14px]">
+                    <span className="material-symbols-outlined icon-sm">
                       {feedbackForVendor.ok ? "check_circle" : "error"}
                     </span>
                     {feedbackForVendor.msg}
@@ -197,14 +340,19 @@ export default function Featured() {
                 )}
 
                 {!showTokenPrompt && (
-                  <Button
+                  // 2026-09 axe-ci: bypass <Button> + cva here. shadcn base's
+                  // `disabled:opacity-50` lingers in the cascade even after
+                  // we stripped it (variant classList ordering keeps the
+                  // muted look on primary bg in some themes). A native
+                  // <button> with className composed inline gives us full
+                  // control over the disabled style, and axe verifies the
+                  // final computed style.
+                  <button
                     type="button"
                     onClick={() => handleConnect(vendor)}
                     disabled={isBusy}
-                    className={cn(
-                      "w-full px-md py-sm rounded-xl bg-gradient-to-r text-white text-label-md font-bold shadow-sm hover:shadow-md hover:brightness-110 disabled:cursor-not-allowed disabled:hover:brightness-100 transition-all",
-                      accent.button,
-                    )}
+                    aria-busy={isBusy || undefined}
+                    className="group/button inline-flex shrink-0 items-center justify-center rounded-xl border border-transparent bg-primary text-on-primary text-label-md font-bold shadow-e1 hover:shadow-e2 w-full px-md py-sm transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-surface-container disabled:text-on-surface disabled:shadow-none"
                   >
                     {isBusy ? (
                       <>
@@ -215,24 +363,25 @@ export default function Featured() {
                       </>
                     ) : vendor.install_kind.type === "oauth_remote" ? (
                       <>
-                        <span className="material-symbols-outlined text-[18px]">link</span>
+                        <span className="material-symbols-outlined icon-md">link</span>
                         {t('extensions.featured.connect')}
                       </>
                     ) : (
                       <>
-                        <span className="material-symbols-outlined text-[18px]">download</span>
+                        <span className="material-symbols-outlined icon-md">download</span>
                         {t('extensions.featured.install')}
                       </>
                     )}
-                  </Button>
+                  </button>
                 )}
               </div>
             </div>
           );
         })}
       </div>
+      )}
 
-      {filtered.length === 0 && (
+      {marketTab === 'public' && filtered.length === 0 && (
         <div className="text-center py-3xl text-on-surface-variant">
           {search ? intl.formatMessage({ id: 'extensions.featured.noMatches' }, { search }) : t('extensions.featured.noVendors')}
         </div>
@@ -267,7 +416,7 @@ function TrustBadge({ trust }: { trust: FeaturedVendor["trust"] }) {
 
   const labels: Record<FeaturedVendor["trust"], { text: string; cls: string }> = {
     verified: { text: t('extensions.featured.trust.verified'), cls: "bg-primary-container text-on-primary-container" },
-    official: { text: t('extensions.featured.trust.official'), cls: "bg-secondary-container text-on-secondary-container" },
+    official: { text: t('extensions.featured.trust.official'), cls: "bg-primary text-on-primary" },
     community: { text: t('extensions.featured.trust.community'), cls: "bg-tertiary-container/50 text-on-tertiary-container" },
     unknown: { text: t('extensions.featured.trust.unknown'), cls: "bg-surface-container-highest text-on-surface-variant" },
   };
@@ -300,7 +449,7 @@ function TokenPasteForm({
         value={token}
         onChange={(e) => setToken(e.target.value)}
         placeholder={t('extensions.featured.tokenPlaceholder')}
-        className="w-full px-sm py-xs rounded border border-outline-variant text-label-sm bg-surface mb-xs"
+        className="w-full px-sm py-xs rounded-sm border border-outline-variant text-label-sm bg-surface mb-xs"
         disabled={disabled}
       />
       <div className="flex gap-xs">
@@ -309,7 +458,7 @@ function TokenPasteForm({
           size="sm"
           onClick={() => token && onSubmit(token)}
           disabled={disabled || !token}
-          className="flex-1 rounded"
+          className="flex-1 rounded-sm"
         >
           {t('extensions.featured.tokenSubmit')}
         </Button>
@@ -319,7 +468,7 @@ function TokenPasteForm({
           type="button"
           onClick={onCancel}
           disabled={disabled}
-          className="rounded"
+          className="rounded-sm"
         >
           {t('extensions.featured.tokenCancel')}
         </Button>

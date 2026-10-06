@@ -1,6 +1,6 @@
 # Testing
 
-Shannon Code has 8,600+ tests across all crates.
+Shannon has 11,752+ automated tests across all workspace members (see the metrics table in the repository README for the per-crate breakdown).
 
 ## Running Tests
 

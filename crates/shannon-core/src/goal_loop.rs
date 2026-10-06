@@ -12,8 +12,8 @@
 //!
 //! Everything in this module is pure: no I/O, no engine access, no state
 //! mutation. Lifecycle gating ("is the goal even active?") stays with the
-//! caller, which is why [`GoalContinuation::Inactive`] exists for them to
-//! map to — [`decide_goal_continuation`] itself never returns it.
+//! caller, which is why [`GoalContinuation::Inactive`](goal_loop::GoalContinuation::Inactive) exists for them to
+//! map to — [`decide_goal_continuation`](goal_loop::decide_goal_continuation) itself never returns it.
 
 use crate::query_engine::{GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER};
 

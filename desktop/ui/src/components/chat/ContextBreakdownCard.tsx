@@ -12,11 +12,17 @@
 //
 // Re-estimates whenever the streaming `usage` prop changes (each engine
 // Usage event) so the card tracks the live conversation.
+//
+// P2-5 "which memories did this turn use": under the memory legend row, the
+// injected entries (`get_session_injected_memories`, the same selection the
+// system prompt uses) are listed with a jump back to the session that
+// produced each one (provenance via `source_session_id`).
 
-import { useEffect, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import { useT } from '@/i18n'
 import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
+import { SessionContext } from '@/context/SessionContext'
 import type { ContextBreakdown, ContextBreakdownCategory } from '@/types'
 
 /** Theme-semantic segment color per category key (stable, distinct). */
@@ -50,14 +56,19 @@ export interface ContextBreakdownCardProps {
 
 export default function ContextBreakdownCard({ sessionId, usageTick }: ContextBreakdownCardProps) {
   const t = useT()
+  // Optional chain: test harnesses render the card bare, outside the
+  // AppProvider — the jump degrades to a plain (disabled) row, never throws.
+  const sessionCtx = useContext(SessionContext)
   const [breakdown, setBreakdown] = useState<ContextBreakdown | null>(null)
   const [summary, setSummary] = useState<api.SessionUsageSummary | null>(null)
+  const [injected, setInjected] = useState<api.InjectedMemory[]>([])
 
   useEffect(() => {
     let cancelled = false
     if (!sessionId) {
       setBreakdown(null)
       setSummary(null)
+      setInjected([])
       return
     }
     void api.getSessionContextBreakdown(sessionId)
@@ -66,6 +77,10 @@ export default function ContextBreakdownCard({ sessionId, usageTick }: ContextBr
     void api.getSessionUsage(sessionId)
       .then(u => { if (!cancelled) setSummary(u) })
       .catch(() => { if (!cancelled) setSummary(null) })
+    // P2-5: undefined (mock harness) / failure degrade to "nothing injected".
+    void api.getSessionInjectedMemories(sessionId)
+      .then(m => { if (!cancelled) setInjected(Array.isArray(m) ? m : []) })
+      .catch(() => { if (!cancelled) setInjected([]) })
     return () => { cancelled = true }
   }, [sessionId, usageTick])
 
@@ -132,6 +147,50 @@ export default function ContextBreakdownCard({ sessionId, usageTick }: ContextBr
             )
           })}
         </ul>
+
+        {/* P2-5 — "which memories did this turn use": the injected entries,
+            listed under the memory legend row. A row jumps back to the
+            session that produced the memory (provenance); entries without a
+            source session (manual / imported) render as plain rows. Hidden
+            entirely when the memory category is empty — a zero-token memory
+            segment means nothing was injected. */}
+        {(breakdown?.categories.find(c => c.key === 'memory')?.tokens ?? 0) > 0 && injected.length > 0 && (
+          <ul className="pt-xs border-t border-outline-variant/10 space-y-0.5" data-testid="injected-memories">
+            <li className="font-label-xs text-on-surface-variant/80 uppercase tracking-wider px-xs pt-0.5">
+              {t('chat.context.injectedMemories.title')}
+            </li>
+            {injected.map(m => {
+              const jumpable = Boolean(m.sourceSessionId) && m.sourceSessionId !== sessionId
+              return (
+                <li key={m.id} className="flex items-center gap-xs px-xs py-[2px] rounded-md">
+                  <span className="material-symbols-outlined icon-sm text-on-surface-variant/70 shrink-0" aria-hidden="true">
+                    psychology
+                  </span>
+                  <span className="flex-1 min-w-0 truncate text-label-sm text-on-surface-variant" title={m.title}>
+                    {m.title}
+                  </span>
+                  {jumpable ? (
+                    <button
+                      type="button"
+                      data-testid={`injected-memory-jump-${m.id}`}
+                      title={t('chat.context.injectedMemories.jump')}
+                      aria-label={`${t('chat.context.injectedMemories.jump')}: ${m.title}`}
+                      className="shrink-0 inline-flex items-center gap-0.5 px-xs py-[1px] rounded-full bg-primary-container/40 text-on-primary-container text-label-xs font-bold hover:bg-primary-container/70 transition-colors cursor-pointer"
+                      onClick={() => { void sessionCtx?.switchSession?.(m.sourceSessionId!) }}
+                    >
+                      <span className="material-symbols-outlined icon-xs" aria-hidden="true">history</span>
+                      {t('chat.context.injectedMemories.source')}
+                    </button>
+                  ) : (
+                    <span className="shrink-0 font-label-xs text-on-surface-variant/60">
+                      {t('chat.context.injectedMemories.unsourced')}
+                    </span>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        )}
 
         {/* Total + window occupancy */}
         <div className="pt-sm border-t border-outline-variant/10 text-label-sm text-on-surface-variant">

@@ -20,6 +20,14 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
 
+# Same group scheme as ci.yml. A crates.io publish must NEVER be cancelled
+# mid-flight (a killed `cargo publish` can leave a stale index entry), so
+# cancel-in-progress stays off; the group only serializes re-tagged pushes
+# (review F57).
+concurrency:
+  group: publish-crates-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -36,12 +44,18 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     name: cargo publish shannon-api-protocol
     runs-on: ubuntu-22.04
+    # Referencing the environment auto-creates `cratesio` in the repo
+    # settings; a repo admin should add required reviewers at
+    # https://github.com/diff-lab-com/shannon-agent/settings/environments
+    # so tag -> crates.io publishes get a human confirmation gate
+    # (mirrors the release publish gating).
+    environment: cratesio
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.88
 

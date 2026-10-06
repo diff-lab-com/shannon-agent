@@ -1,6 +1,6 @@
 // TypeScript types matching Rust structs in shannon-desktop/src/events.rs and commands.rs
 
-import type { VoiceLocalConfig } from '@/lib/tauri-api'
+import type { VoiceLocalConfig, InjectedMemory } from '@/lib/tauri-api'
 
 // --- Event Payloads ---
 
@@ -22,6 +22,12 @@ export interface ToolResultPayload {
   tool_name: string
   result: string
   is_error: boolean
+  /** P1-⑤: engine tool metadata (e.g. sandbox classification). Absent on
+   *  older engines. */
+  meta?: unknown
+  /** P1-⑤ telemetry: approximate per-tool token attribution collapsed by
+   *  the desktop forwarder. */
+  tokens_used?: number
 }
 
 export interface ToolProgressPayload {
@@ -45,6 +51,21 @@ export interface UsagePayload {
   cache_hit_rate?: number
   max_tokens?: number
   /** P1-1: owner session for multi-window event filtering. */
+  session_id?: string
+}
+
+/** R5-2: which retry the engine surfaced on `query:notice`. Both kinds mean
+ *  the request CONTINUED — these are informational, never errors. */
+export type QueryNoticeKind = 'failover' | 'key_rotation'
+
+/** R5-2 wire payload for QUERY_NOTICE (`query:notice`). `message` is the
+ *  verbatim engine line (e.g. "falling back to glm-5.3-flash@zhipu (rate
+ *  limited)") — shown as the notice detail; `kind` drives icon + localized
+ *  label. */
+export interface QueryNoticeEvent {
+  query_id: string
+  kind: QueryNoticeKind
+  message: string
   session_id?: string
 }
 
@@ -80,6 +101,48 @@ export interface PermissionRequest {
   session_id?: string
   /** P1-3: why this prompt was raised. Absent on payloads from older engines. */
   reason?: PermissionReason
+  /** P3-1: the engine's free-text risk explanation. Absent on legacy payloads. */
+  riskReason?: string
+}
+
+// --- Settings R3 T8: desktop ask_user question round-trip ---
+
+/** One selectable option of an AskUserRequest (mirrors `QuestionOption`). */
+export interface AskUserOption {
+  label: string
+  description: string
+}
+
+/**
+ * `ask-user-request` payload — one question from the engine's
+ * `ask_user_question` tool, flattened from `Question` plus the correlation
+ * id the answer travels back through (`respondAskUser(requestId, answers)`).
+ * `timeout_ms` is present only when 提问自动继续 is on (drives the card's
+ * pure-display countdown); `None` = wait forever. `session_id` (F2) is
+ * present only when exactly one run is active — the card then shows just in
+ * windows viewing that session; absent = ambiguous run → every-window
+ * fallback.
+ */
+export interface AskUserRequest {
+  request_id: string
+  question: string
+  header: string
+  options: AskUserOption[]
+  multi_select: boolean
+  /** F2: the live run's session when unambiguous; absent keeps the every-window fallback. */
+  session_id?: string
+  timeout_ms?: number
+}
+
+/**
+ * `ask-user-resolved` payload — the question settled. Emitted on BOTH
+ * paths (F2): `timed_out: true` on the auto-continue timeout,
+ * `timed_out: false` right after an answer was submitted (any window).
+ * Cards for the request clear on either.
+ */
+export interface AskUserResolved {
+  request_id: string
+  timed_out: boolean
 }
 
 // --- Core Types ---
@@ -92,6 +155,23 @@ export interface ChatMessage {
   thinking?: string
   file_attachments?: FileAttachment[]
   research_report?: ResearchReport
+  /** W3-4 — memories injected into the turn that produced this answer
+   *  (citation chips with a source jump). Live-turn only: the session log
+   *  does not persist the list, so reloaded history carries no chips. */
+  injected_memories?: InjectedMemory[]
+  /** D6 (keep the partial output) — true on an assistant message that is a
+   *  CANCELLED run's partial answer; the bubble renders a "stopped" marker.
+   *  Committed live by the QUERY_CANCELLED handler and carried by reloaded
+   *  history (the L0 log finalizes interrupted turns with the same flag), so
+   *  the marker survives session switches and restarts. Absent otherwise. */
+  interrupted?: boolean
+  /** OBS1 (unify the failed half) — WHY an interrupted partial was cut
+   *  short: "cancelled" (user stop, D6) or "failed" (the turn failed
+   *  mid-step; the L0 log now keeps its streamed prefix the same way and the
+   *  QUERY_FAILED handler commits the bucket as a failed-marked bubble).
+   *  Absent on completed messages and on cancelled partials from older
+   *  history; a bare `interrupted` flag reads as "cancelled". */
+  interrupted_reason?: string
 }
 
 export interface ToolCall {
@@ -103,6 +183,39 @@ export interface ToolCall {
   progress?: number
   progress_message?: string
   status: 'running' | 'completed' | 'error'
+  /** P1-⑤ telemetry: wall-clock start (epoch ms) captured at tool-start. */
+  started_at?: number
+  /** P1-⑤ telemetry: client-measured duration (ms), set when the result
+   *  arrives. Historical messages get durations from the L0 trace timeline
+   *  instead (see MessageArea's duration lookup). */
+  duration_ms?: number
+  /** P1-⑤: engine tool metadata (e.g. `{ classification: 'sandbox_denied' }`). */
+  meta?: unknown
+  /** P1-⑤ telemetry: approximate per-tool token attribution (collapsed by
+   *  the desktop forwarder). Historical cards don't carry this. */
+  tokens_used?: number
+}
+
+/** B2: live registry state of a running sub-agent, bridged from the
+ *  desktop agent-teams observer via `subagent:start` / `subagent:stop`. */
+export interface SubAgentLive {
+  agentId: string
+  agentName: string
+  team: string | null
+}
+
+/** B2 follow-up — desktop backend DTO mirroring
+ *  `desktop/src/commands_agents.rs::SubAgentDto`. Stable wire shape used
+ *  by the Tasks page panel + the `useSubagents` hook. */
+export interface SubAgentDto {
+  id: string
+  name: string
+  team: string | null
+  status: string
+  turnsUsed: number
+  maxTurns: number
+  model: string
+  createdAtMs: number
 }
 
 export interface ResearchReport {
@@ -127,10 +240,35 @@ export interface ResearchCitation {
   accessed_at?: number
 }
 
+/**
+ * G3b P1-4 — per-file extraction summary for parseable attachments
+ * (pdf/docx/xlsx/pptx/ods/csv). Mirrors the Rust
+ * `AttachmentExtractionReport`: the send pipeline stamps it onto the
+ * message's `FileAttachment`s (and the attach-time preflight) so the UI can
+ * show what actually reached the model instead of keeping extraction
+ * model-only.
+ */
+export interface AttachmentExtractionReport {
+  path: string
+  /** Lowercased source extension: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'ods' | 'csv'. */
+  kind: string
+  /** false when parsing failed — the model got a failure placeholder. */
+  extracted: boolean
+  /** Sectioned documents only (office formats); pdf reports 0/0. */
+  sections_total: number
+  sections_inlined: number
+  /** true when the inline injection had to cut content. */
+  truncated: boolean
+  /** `~/.shannon/cache/extracted/<sha256>.txt` holding the full text, when written. */
+  cache_path?: string
+}
+
 export interface FileAttachment {
   name: string
   path: string
   size: number
+  /** G3b P1-4 — present when the send pipeline parsed this file for the model. */
+  extraction?: AttachmentExtractionReport
 }
 
 export interface SessionInfo {
@@ -150,6 +288,60 @@ export interface SessionInfo {
   parent_id?: string | null
   /** Message index in parent where this branch diverged */
   branch_point?: number | null
+  /** P0 sidebar telemetry: live-query flag joined from the session registry.
+   *  Absent on older engines — treat as unknown, not false. */
+  running?: boolean
+  /** P0 sidebar telemetry: epoch **ms** of the session's last activity
+   *  (L0 log mtime). Absent on older engines / brand-new sessions. */
+  updated_at?: number
+  /** Settings R3 T7: user-pinned flag, joined from the curation sidecar.
+   *  Absent on older engines — treat as false (unpinned). */
+  pinned?: boolean
+}
+
+/** Session archive (卡A): one archived session as the sidebar's 已归档
+ *  section renders it — returned by the `list_archived_sessions` command. */
+export interface ArchivedSessionRow {
+  id: string
+  /** Curated title; null → the UI renders its "untitled" placeholder. */
+  title?: string | null
+  /** Last activity, epoch ms; absent when unknown. */
+  updated_at?: number | null
+}
+
+/**
+ * P0 plan dock: one persisted plan file from the session working dir
+ * (`<workingDir>/.shannon/plans/*.md`), parsed by the `get_session_plan`
+ * command. Mirrors the engine `PlanManager::save_plan_to_file` format.
+ */
+export interface SessionPlan {
+  /** Plan file stem (the engine's plan id). */
+  id: string
+  title: string
+  /** `"approved" | "pending"` — raw header value. */
+  status: string
+  /** RFC3339 creation timestamp (raw header value). */
+  created_at: string
+  /** Markdown body (everything after the header block). */
+  content: string
+}
+
+/**
+ * P0 sidebar telemetry: live per-session activity derived from the query:*
+ * event stream (and reconciled with `SessionInfo.running` on refresh).
+ * `startedAt === null` means "running, start unknown" (e.g. a goal-owned run
+ * that began before this window joined the event stream).
+ */
+export interface SessionActivity {
+  running: boolean
+  startedAt: number | null
+  lastActivity: number
+  activeTool: string | null
+  /** Batch B2: last run ended with QUERY_FAILED — red dot on the rail until
+   *  a new run starts or the session is opened (seen). */
+  failed?: boolean
+  /** Batch B2: a permission prompt is pending for this session — amber dot. */
+  awaitingApproval?: boolean
 }
 
 export interface StatusResponse {
@@ -158,6 +350,12 @@ export interface StatusResponse {
   querying: boolean
   message_count: number
   working_dir: string
+  /** S3-1 (P-N11): the engine store's ACTIVE model profile name — the
+   *  global default model IS that profile's pinned target, so the pickers
+   *  can label the default row "pinned by profile X". `null`/absent on
+   *  legacy payloads; the `"default"` sentinel means the pointer is unset
+   *  (rendered as the plain "global default" label). */
+  active_profile?: string | null
 }
 
 export interface ModelInfo {
@@ -174,14 +372,92 @@ export interface ModelInfo {
   /** Optional tier label (`fast` / `standard` / `pro`). */
   tier?: string | null
   /** Whether this entry comes from the dynamic models.dev overlay (vs the
-   *  static catalog). Surfaces a freshness indicator in the UI. */
+   *  static catalog). Wire-only for now: the engine hardcodes `dynamic:
+   *  None`, and the Settings badge that consumed it was removed (S1-3,
+   *  P-N3) — superseded by `source` (S2-1). */
   dynamic?: boolean
+  /** Vision (image input) capability from the catalog metadata. `undefined`
+   *  / null = unknown — the UI renders no capability dot rather than
+   *  guessing (R2-3, honest metadata). */
+  vision?: boolean | null
+  /** S2-3: maximum output tokens per request (declared value wins over the
+   *  catalog's curated estimate). null = unknown — render "—". */
+  max_output?: number | null
+  /** S2-1 source badge (裁定③): `"catalog"` (curated static table),
+   *  `"overlay"` (models.dev-only row) or `"declared"` (synthesized from
+   *  the provider's curated vault with no catalog metadata behind it). */
+  source?: 'catalog' | 'overlay' | 'declared' | string | null
+  /** S2-4b (schema/wire only): native tool-calling support. `null` = the
+   *  source carries no explicit tool data (unknown — no badge). */
+  tools?: boolean | null
+  /** S3-5 (P2-19): reasoning/thinking support. `false` is the ONLY decisive
+   *  verdict — the effort sub-tier shows its "steers thinking models" note
+   *  on it. `true` from an explicit source; `null` = unknown (sub-tier
+   *  renders normally — the engine passes effort params through and the
+   *  provider arbitrates). */
+  reasoning?: boolean | null
+}
+
+/** S3-6: projected cost of the NEXT send — produced by the backend's
+ *  `estimate_send_cost` (billing-grade counting + pricing; the frontend only
+ *  renders). `costLow` prices the input at zero output, `costHigh` at the
+ *  `maxOutputTokens` ceiling ("≈$low–$high" range). */
+export interface SendCostEstimate {
+  model: string
+  inputTokens: number
+  contextTokens: number
+  draftTokens: number
+  attachmentTokens: number
+  maxOutputTokens: number
+  costLow: number
+  costHigh: number
+  budgetUsd?: number | null
+  spentUsd: number
+}
+
+/// Mirrors `shannon_types::provider_config::ModelSpec` (S2-1 curated vault).
+/// Only `id` is required — users without metadata固化 id-only specs and the
+/// catalog keeps supplying pricing/context for ids it knows.
+export interface DeclaredModelSpec {
+  id: string
+  display_name?: string | null
+  context_window?: number | null
+  max_output?: number | null
+  cost_per_m_input?: number | null
+  cost_per_m_output?: number | null
+  capabilities?: ModelCapabilityName[]
+}
+
+/// Schema capability names (snake_case, mirrors `ModelCapability`).
+export type ModelCapabilityName =
+  | 'reasoning'
+  | 'coding'
+  | 'speed'
+  | 'cheap'
+  | 'vision'
+  | 'tool_use'
+  | (string & {})
+
+/// Wire input for `set_provider_models` (S2-1) — same shape as
+/// `DeclaredModelSpec`; capability names are validated server-side.
+export interface DeclaredModelInput {
+  id: string
+  display_name?: string | null
+  context_window?: number | null
+  max_output?: number | null
+  cost_per_m_input?: number | null
+  cost_per_m_output?: number | null
+  capabilities?: ModelCapabilityName[]
 }
 
 export interface ToolInfo {
   name: string
   description: string
   enabled: boolean
+  /** Settings R3 T11 — backend `Tool::is_read_only()`. Drives the
+   *  Explore/Terminal/Changes call grouping (lib/toolGrouping); the wire
+   *  serde-defaults missing fields to `true`. */
+  read_only: boolean
 }
 
 export interface ConfigUpdate {
@@ -214,6 +490,17 @@ export interface GatewayMobileConfig {
   port?: number
   tokensFile?: string
   devicesFile?: string
+  /// v0.12 LAN hardening: serve the mobile face over wss with the persisted
+  /// self-signed cert; phones pin the QR-carried fingerprint. Default off.
+  tls?: { enabled?: boolean }
+}
+
+/// `mobile_tls_status` result — config flag + live cert material info.
+export interface MobileTlsStatus {
+  enabled: boolean
+  /// SHA-256 (lowercase hex) of the gateway's self-signed cert; present only
+  /// after the gateway first boots with TLS on (null until then).
+  fingerprint: string | null
 }
 
 export interface GatewayConfig {
@@ -239,6 +526,22 @@ export interface MobilePairToken {
   expiresAt: number
   lanEndpoint: string
   qrDataUrl: string
+}
+
+/// One pending (or just-approved) IM pairing request (T9). Mirrors the Rust
+/// `GatewayPairingRequest` in `desktop/src/gateway_pairing.rs` and the
+/// gateway's `PairingRequestRecord` (camelCase, passed through).
+export interface GatewayPairingRequest {
+  /// The 6-digit code shown in the IM pairing challenge.
+  code: string
+  /// Chat platform the requester came from (slack/telegram/…).
+  platform: string
+  /// Platform sender id the allowlist entry carries.
+  senderId: string
+  /// Epoch ms when the challenge was issued.
+  requestedAt: number
+  /// Epoch ms after which the code expires (issue + 5 min).
+  expiresAt: number
 }
 
 /// E-1 方案 C — supervised gateway process status. Mirrors the Rust
@@ -288,17 +591,22 @@ export interface AppUpdateInfo {
 
 /// A managed provider connection kind. `openai-compatible` covers any
 /// OpenAI-style endpoint (GLM/Zhipu, Moonshot/Kimi, MiniMax, Together, Groq…).
+/// P2-23 残留 (S4): `gemini` joined the union — it has been a first-class
+/// `LlmProvider::Gemini` + KIND_INFO row on the desktop since R5, and the
+/// old `| string` muffler only silenced the drift. This union now mirrors
+/// the modal's actual option set (KIND_INFO's keys) exactly.
 export type ProviderKind =
   | 'anthropic'
   | 'openai'
   | 'deepseek'
   | 'ollama'
+  | 'gemini'
   | 'openai-compatible'
 
 export interface ProviderConnection {
   id: string
   display_name: string
-  kind: ProviderKind | string
+  kind: ProviderKind
   /// True when the credential store has a key for this id. Replaces the
   /// dead `api_key` field (TD-4).
   has_api_key: boolean
@@ -314,6 +622,8 @@ export interface ProviderConnection {
   fallback_models?: string[]
   quirks?: ProviderQuirks
   tiers?: ProviderTiers
+  /** S2-1 curated model vault (`ModelSpec`s in providers.toml v2). */
+  models?: DeclaredModelSpec[]
 }
 
 /// Mirrors `shannon_types::provider_config::ProviderTiers`. Canonical
@@ -340,6 +650,29 @@ export interface ProvidersFile {
   providers: ProviderConnection[]
 }
 
+/// Reliable provider-activation signal from `get_provider_status`
+/// (2026-09-29 provider review §2-2). `DesktopConfig.provider`/`api_key`
+/// are dead since ADR-0005 — all "is a provider configured" gating reads
+/// this instead.
+export interface ProviderStatus {
+  /// Id of the active managed provider, `null` when nothing is active.
+  active_provider_id: string | null
+  /// Display name of the active provider, `null` when unset (fall back
+  /// to `active_provider_id` for display).
+  display_name: string | null
+  /// Wire kind slug of the active provider (`anthropic` | `openai` |
+  /// `deepseek` | `ollama` | `openai-compatible` | `gemini`).
+  kind: string | null
+  /// True when the credential store has a key for the active provider.
+  has_api_key: boolean
+  /// Active model id, `null` when unset (or the `"default"` sentinel).
+  model: string | null
+  /// Provider detected purely from env vars — only populated when the
+  /// store has no active provider, so env-configured users are not
+  /// nagged for a key.
+  env_provider: string | null
+}
+
 /// Payload for adding or editing a managed provider. On edit, `id` identifies
 /// the entry; an `api_key` of '***' or empty means "keep the existing key".
 ///
@@ -352,9 +685,13 @@ export interface ProvidersFile {
 export interface ProviderInput {
   id?: string
   display_name: string
-  kind: ProviderKind | string
+  kind: ProviderKind
   api_key?: string
   base_url?: string
+  /// v2 ProviderProfile models-list override (S4 / P2-23 残留 — the wire
+  /// field existed on `ProviderConnection` but the modal had no input).
+  /// Empty/undefined = "unset, engine default list applies".
+  models_url?: string
   model?: string
   extra_headers?: Record<string, string>
   default_max_tokens?: number | null
@@ -385,6 +722,23 @@ export interface DesktopConfig {
   skill_loop_min_duration_secs?: number
   skill_loop_min_tool_calls?: number
   skill_detection_enabled?: boolean
+  /** B2: real sub-agent execution (agent teams). Default off — placeholder
+   *  agent_spawn only, until opted in (real LLM spend). */
+  agent_teams_enabled?: boolean
+  /** Dream pass (梦境提炼): master switch. Default off — when false the
+   *  dream pass is skipped without reading any session or memory file. */
+  dream_enabled?: boolean
+  /** Dream pass L3: refine freshly detected skill candidates inside a
+   *  dream pass. Default off; review remains the only write path. */
+  dream_skill_distill_enabled?: boolean
+  /** 卡A session GC: master switch for auto-cleaning **archived** sessions.
+   *  Default off — nothing is ever auto-deleted until opted in, and an
+   *  enabled GC still never touches active sessions. */
+  session_gc_enabled?: boolean
+  /** 卡A session GC: retention window in days, counted from each session's
+   *  last activity. `null`/undefined = 永不 (never auto-delete), the
+   *  standing default. */
+  session_retention_days?: number | null
   stt?: SttConfig
   /** P2-5e local-only STT (whisper-rs). Independent of `stt`
    *  so a user can keep a cloud key for fallback while local
@@ -396,11 +750,105 @@ export interface DesktopConfig {
   sandbox?: SandboxConfig
   /** P2-5: off-peak execution settings — frozen key path `offpeak.model_override`. */
   offpeak?: OffpeakConfig
+  /** R3-3: plan-phase model tier (`fast` | `standard` | `pro`). null/undefined
+   *  = inherit — the plan phase uses the global default model. */
+  plan_tier?: string | null
+  /** R3-3: act-phase model tier — same contract as `plan_tier` for the
+   *  execution phase (every approval mode except `plan`). */
+  act_tier?: string | null
+  /** P2-1: user-set monthly spend budget (USD, all sources). null/undefined
+   *  = unset — the sidebar shows the trailing 7-day cost and no threshold
+   *  alerts fire. Written via `configure('monthly_budget_usd')`. */
+  monthly_budget_usd?: number | null
+  /** S3-5 (P2-19): effort dial — canonical `low` | `standard` | `high` |
+   *  `max`. null/undefined = the engine default (`standard`, which sends no
+   *  thinking parameters). Written via `configure('effort_level')`; the
+   *  engine applies it per turn (`set_effort`). */
+  effort_level?: string | null
+  /** Settings R3 T3: GPU-composited webview rendering. Default true;
+   *  false injects the per-platform disable-GPU env vars at next launch. */
+  hardware_acceleration?: boolean
+  /** Settings R3 T3: always-on wake lock (`power.keep_awake`). Default false. */
+  power_keep_awake?: boolean
+  /** Settings R3 T3: block idle sleep while agent runs stream
+   *  (`power.block_sleep_during_tasks`). Default true. */
+  power_block_sleep_during_tasks?: boolean
+  /** Settings R3 T4 (B1): explicit HTTP(S) proxy URL. Injected at startup
+   *  as HTTPS_PROXY/HTTP_PROXY/ALL_PROXY; null/empty keeps the implicit
+   *  env fallback (never forces direct connections). Restart to apply. */
+  network_proxy_url?: string | null
+  /** Settings R3 T4 (B1): comma-separated hosts that bypass the proxy —
+   *  injected as NO_PROXY. null/empty leaves the env untouched. */
+  network_no_proxy?: string | null
+  /** Settings R3 T4 (B1): custom CA certificate (PEM) path, `~`-expanded
+   *  server-side and existence-checked at configure time. Injected as
+   *  SHANNON_CA_BUNDLE / NODE_EXTRA_CA_CERTS / SSL_CERT_FILE. Restart to
+   *  apply. */
+  network_ca_cert_path?: string | null
+  /** Settings R3 T6: master switch for the engine's automatic context
+   *  compaction (Default true). Off preserves model requests/responses
+   *  verbatim; the engine is rebuilt per message, so a change applies to
+   *  the next message. Written via `configure('context.auto_compact')`. */
+  context_auto_compact?: boolean
+  /** Settings R3 T7: master switch for the timed auto-archive scan. Default
+   *  false — the scan archives nothing until opted in. Written via
+   *  `configure('session.auto_archive_enabled')`; re-read every pass. */
+  session_auto_archive_enabled?: boolean
+  /** Settings R3 T7: auto-archive retention window in days. Default 7;
+   *  the backend clamps into 1..=365. Written via
+   *  `configure('session.auto_archive_days')`. */
+  session_auto_archive_days?: number
+  /** Settings R3 T8: 提问自动继续 — auto-answer an agent question left
+   *  unanswered for 5 minutes with "continue on your best judgment".
+   *  Default false (wait forever). Written via
+   *  `configure('chat.ask_user_auto_continue')`; read live per question. */
+  chat_ask_user_auto_continue?: boolean
+  /** D5 方案①: 主动任务推荐 presentation toggle — the post-completion
+   *  action chips + the welcome card's 换一批 refresh / workspace-aware
+   *  example filtering. Purely a UI surface switch the frontend reads live;
+   *  the backend never gates anything on it. Default true (missing key /
+   *  old backend → shown). Written via `configure('suggestions.enabled')`. */
+  suggestions_enabled?: boolean
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
 export interface SandboxConfig {
   mode?: 'off' | 'local' | 'landlock' | null
+}
+
+/**
+ * R3-2 (desktop slice): one row of the Settings → Models "Profiles" list —
+ * a named providers.toml v2 `ModelProfile`. `active` mirrors the engine's
+ * `active_profile` pointer; a freshly created profile has `provider_count: 0`
+ * (the UI asks for confirmation before switching to it).
+ */
+export interface ProviderProfileSummary {
+  name: string
+  provider_count: number
+  active: boolean
+  /** The profile's `active_target.model_id` when set; null for an empty profile. */
+  model?: string | null
+}
+
+/** R5 (profile rename/delete): result of `delete_provider_profile`. The
+ *  fresh list rides along (its `active` marker reflects the engine's
+ *  fallback) and `became_active` names the profile that took over when the
+ *  deleted one was active. */
+export interface DeleteProfileOutcome {
+  profiles: ProviderProfileSummary[]
+  became_active?: string | null
+}
+
+/**
+ * R4-3 (desktop slice): one row of the per-provider "API keys" list — the
+ * credential store's rotation order for that provider. `index` 0 is the
+ * ACTIVE key; `masked_hint` is display-only (`sk-pri…aaaa`-style) and never
+ * carries full key material.
+ */
+export interface ProviderKeySummary {
+  index: number
+  active: boolean
+  masked_hint: string
 }
 
 /** P2-5: `offpeak` config payload. Empty/missing `model_override` = disabled. */
@@ -426,8 +874,51 @@ export interface TranscriptionResult {
   text: string
 }
 
+/**
+ * P0-3 — why the backend refused an attachment path. Mirrors the Rust
+ * `RejectedAttachmentReason` (snake_case serde tags). `no_working_dir`
+ * comes from the `check_attachment_paths` preflight only; the send path
+ * hard-rejects that state with an explicit error instead.
+ * `unsupported_type` (R2-P1-2) marks image formats the multimodal
+ * whitelist never sends (svg/bmp/…) — flagged by the preflight badge and
+ * refused with a receipt on send, never silently dropped.
+ */
+export type RejectedAttachmentReason =
+  | 'out_of_working_dir'
+  | 'unresolvable'
+  | 'too_large'
+  | 'no_working_dir'
+  | 'unsupported_type'
+
+/** P0-3 — one attachment the send pipeline refused (partial success). */
+export interface RejectedAttachment {
+  path: string
+  reason: RejectedAttachmentReason
+}
+
+/** P0-3 — one path's verdict from the `check_attachment_paths` preflight. */
+export interface AttachmentPathCheck {
+  path: string
+  ok: boolean
+  reason?: RejectedAttachmentReason
+  /** G3b P1-4 — extraction summary for parseable ok paths (best-effort). */
+  extraction?: AttachmentExtractionReport
+  /**
+   * R7-③ threshold hybrid — a parseable, ok document over the large-file
+   * threshold: the preflight skipped the attach-time full parse, so the chip
+   * shows the honest "large file — parsed on send" placeholder and the real
+   * extraction badge lights from the send receipt instead.
+   */
+  deferred_parse?: boolean
+}
+
 export interface SendMessageResponse {
   query_id: string
+  /** P0-3 — files that were NOT sent, reported per file instead of dropped. */
+  rejected_attachments?: RejectedAttachment[]
+  /** W3-4 — memories injected into THIS turn's prompt (the answer bubble's
+   *  citation chips). Empty for the temporary-chat bypass / zero selections. */
+  injected_memories?: InjectedMemory[]
 }
 
 // --- Session multi-window (P1-1) ---
@@ -438,6 +929,13 @@ export interface SessionWindowInfo {
   sessionId: string
 }
 
+// --- Companion Quick Capture window (Office Wave 3 C3) ---
+
+/** Result of `open_companion_window` (fixed `companion` label). */
+export interface CompanionWindowInfo {
+  label: string
+}
+
 // --- Diff Types ---
 
 export interface FileDiff {
@@ -445,6 +943,8 @@ export interface FileDiff {
   new_content: string
   file_name: string
   language: string
+  /** B0 P0-3: fetch-time mtime (RFC3339) for the Apply-time conflict check. Optional so test fixtures can omit it. */
+  mtime?: string
 }
 
 export interface DiffFileInfo {
@@ -467,6 +967,25 @@ export interface HunkAction {
   action: 'accept' | 'reject'
 }
 
+// --- File Index Types (office Wave 2 B9' — reference-style file library) ---
+
+/** How an entry entered the index — from the composer's attach flow or an
+ *  engine-generated file card. Wire format is a plain string so the Rust
+ *  side can extend it without a frontend migration. */
+export type FileIndexSource = 'attachment' | 'generated'
+
+/// One row of `list_file_index` — every file the user has ever attached or
+/// the agent produced, newest first. `size_bytes` is null when the file has
+/// since vanished; `registered_at` is RFC3339.
+export interface FileIndexEntry {
+  path: string
+  name: string
+  size_bytes: number | null
+  registered_at: string
+  favorite: boolean
+  source: string
+}
+
 // --- MCP Types ---
 
 export interface McpServerConfig {
@@ -475,6 +994,8 @@ export interface McpServerConfig {
   args: string[]
   env: Record<string, string>
   enabled: boolean
+  /** Remote (HTTP/SSE) endpoint. Present on url-only entries, absent on stdio. */
+  url?: string | null
 }
 
 export interface McpServerInfo {
@@ -484,7 +1005,34 @@ export interface McpServerInfo {
   connected: boolean
   tool_count: number
   tools: ToolInfo[]
-  last_connected: string | null
+  /** Epoch millis of the last successful connection (uptime-derived). */
+  last_connected: number | null
+  /** W1-1: remote endpoint of url-only (OAuth/HTTP) entries — `null` on stdio rows. */
+  url?: string | null
+  /**
+   * W2-A (R4/A1) / W3-B (A2): the backend's single-source auth verdict —
+   * since A2 its semantics are "OAuth entry" (url-only row carrying a
+   * credential). Those rows connect through the stored-credential OAuth
+   * path; failures render the classified failure state instead of a
+   * generic Offline badge. Header-less remote rows render like stdio.
+   */
+  has_auth_headers: boolean
+  /** W1-7: pool-reported failure reason, so a dead server is diagnosable. */
+  last_error?: string | null
+  /**
+   * W3-B (A2): classified failure state of a url-only row (backend
+   * `shannon_mcp::classify_remote_failure`) — `needs_auth` offers
+   * re-authentication, `unreachable` a retry, `server_error` retry plus a
+   * detail view. `null`/absent on stdio rows and healthy remotes.
+   */
+  failure_kind?: 'needs_auth' | 'unreachable' | 'server_error' | null
+  /**
+   * F5 (A8): where this row's credential lives — `keyring` (migrated into
+   * the OS keyring) or `plaintext_file` (keyring unavailable; owner-only
+   * 0600 file). `null`/absent on rows without a credential. Drives the
+   * page's credential-storage status line.
+   */
+  credential_storage?: 'keyring' | 'plaintext_file' | null
 }
 
 // --- Skill Types ---
@@ -598,6 +1146,9 @@ export interface UpdateTaskPayload {
   priority?: string
   due_date?: number | null
   execution_mode?: 'serial' | 'parallel'
+  /// P1-3: writes `subject` (the board card title). Lets a caller mint a
+  /// board task through the adhoc path (`.claude/tasks/<adhoc>/{id}.json`).
+  title?: string
 }
 
 // --- OPC analytics ---
@@ -724,6 +1275,36 @@ export interface BudgetStatusPayload {
   budgetUsd: number
 }
 
+// --- X7 Extension Stats Types ---
+//
+// Field names mirror the Rust DTOs in shannon-desktop/src/cost_commands.rs
+// exactly (serde camelCase on the wire).
+
+/** One tool's invocation stats within the stats window. */
+export interface ExtensionToolStatRow {
+  name: string
+  calls: number
+  totalTokens: number
+}
+
+/** Per-server MCP rollup: server totals plus the per-tool detail. */
+export interface ExtensionMcpServerStats {
+  server: string
+  calls: number
+  totalTokens: number
+  tools: ExtensionToolStatRow[]
+}
+
+/** Per-extension stats bucketed by engine tool name (skills / MCP / other). */
+export interface ExtensionStats {
+  days: number
+  /** Skill ids with the `skill_` prefix stripped. */
+  skills: ExtensionToolStatRow[]
+  mcpServers: ExtensionMcpServerStats[]
+  /** Non-extension tools keep the raw engine tool name. */
+  other: ExtensionToolStatRow[]
+}
+
 // --- Usage Stats Types ---
 //
 // Field names mirror the Rust DTOs in shannon-desktop/src/commands_usage.rs
@@ -747,6 +1328,43 @@ export interface UsageStats {
   by_day: UsageBucket[]
 }
 
+// --- Usage governance (P2-1) ---
+//
+// Field names mirror Rust structs in shannon-desktop/src/usage_governance.rs
+// exactly (camelCase via serde rename on the wire).
+
+/** Sidebar % bar + /usage budget card snapshot (`get_usage_governance`). */
+export interface UsageGovernance {
+  /** Calendar month the snapshot is keyed to, `"YYYY-MM"`. */
+  month: string
+  /** Month-to-date spend across all sources (chat + scheduled routines). */
+  monthCostUsd: number
+  /** Trailing 7-day spend — the no-budget fallback the sidebar shows. */
+  last7dCostUsd: number
+  /** User-set monthly budget (`null` = unset). */
+  budgetUsd: number | null
+  /** `monthCost / budget * 100`, unclamped; `null` without a budget. */
+  percent: number | null
+  /** The 80% desktop notification already fired this month. */
+  warned80: boolean
+  /** The 100% desktop notification already fired this month. */
+  hit100: boolean
+  /** Live banner level for /usage: `'100'` at/over the cap, `'80'` at/over
+   *  the warn line, `null` below both or without a budget. */
+  thresholdReached: '80' | '100' | null
+}
+
+/** Pre-task cost estimate (`estimate_task_cost`, P2-6). */
+export interface TaskCostEstimate {
+  /** `false` = no cost-tracked history → "first run, no estimate yet". */
+  hasHistory: boolean
+  runsCounted: number
+  minUsd: number | null
+  maxUsd: number | null
+  avgUsd: number | null
+  lastUsd: number | null
+}
+
 // --- Scheduled Tasks (Sprint 2) ---
 //
 // Field names mirror Rust structs in shannon-desktop/src/scheduled_commands.rs
@@ -764,10 +1382,7 @@ export interface ExecutionPolicy {
   notify_on_failure: boolean
   budget_usd?: number | null
   auto_archive_when_empty: boolean
-  /// P2.3: Result routing channels. Each entry is a target spec like
-  /// "slack:#ops", "email:ops@example.com", "notification", "log".
-  /// Empty array = log only (default behavior).
-  result_routing?: string[]
+  // email/notification routing: deferred, needs ExecutionPolicy + SMTP (backlog)
   /// P2-5: off-peak execution window (frozen contract
   /// `ExecutionPolicy.execution_window`). Hours are inclusive wall-clock
   /// hours in `timezone`; cross-midnight windows (start > end) wrap.
@@ -806,6 +1421,14 @@ export interface ScheduledRoutine {
   last_error?: string | null
   /// IDs of routines that must succeed before this one fires.
   depends_on?: string[]
+  /// P-E1: project directory the routine belongs to (persisted as the task's
+  /// `working_dir` sidecar, flattened onto this shape by the desktop
+  /// `RoutineDto`). null/undefined = no project.
+  working_dir?: string | null
+  /// office B6' routing: when true the run-finished notification is also
+  /// delivered to the configured webhook (Settings → Notifications).
+  /// Absent = false (no webhook copy).
+  notify_webhook?: boolean
 }
 
 /// Payload for `create_scheduled_task`.
@@ -819,6 +1442,11 @@ export interface CreateTaskPayload {
   expires_at?: number
   max_fires?: number
   policy?: ExecutionPolicy
+  /// P-E1: project directory; stored as the routine's working_dir sidecar.
+  working_dir?: string | null
+  /// office B6' routing: deliver the run-finished notification to the
+  /// configured webhook as well. Default false.
+  notify_webhook?: boolean
 }
 
 /// Payload for `update_scheduled_task`. All fields optional except `id`.
@@ -834,8 +1462,14 @@ export interface UpdateTaskPayload {
   expires_at?: number
   max_fires?: number
   policy?: ExecutionPolicy
+  /// office B6' routing — same field as the create payload; omitted leaves
+  /// the routine's current setting unchanged.
+  notify_webhook?: boolean
   /// Replaces dependency list. Send the full list (add or remove); empty clears.
   depends_on?: string[]
+  /// P-E1: non-empty replaces the routine's project, empty string clears it,
+  /// omitted leaves it unchanged.
+  working_dir?: string | null
 }
 
 /// Result of `preview_cron`.
@@ -888,8 +1522,25 @@ export interface TriageStats {
 /// Where an inbox item came from. `routine`/`scheduled_task` are produced by
 /// scheduled-task runs (and are the only rerunnable sources); `goal` and
 /// `trigger` come from goal events / the external trigger endpoint; `batch`
-/// is the aggregate completion record of a parallel batch run (T3).
-export type InboxSource = 'routine' | 'scheduled_task' | 'goal' | 'trigger' | 'batch'
+/// is the aggregate completion record of a parallel batch run (T3). The T5
+/// unified "needs attention" stream adds the session/agent events:
+/// `session_approval` (a permission prompt is waiting on the user),
+/// `session_failed` (the session's last turn failed), and `skill_candidate`
+/// (a detected skill pattern awaits review). `dream_report` is the daily
+/// dream-distillation summary card (at most one per day, deduped by the
+/// backend writer). `background_task` is a failed desktop background task
+/// (R2-P1-5) — successes/cancels never write an item.
+export type InboxSource =
+  | 'routine'
+  | 'scheduled_task'
+  | 'goal'
+  | 'trigger'
+  | 'batch'
+  | 'background_task'
+  | 'session_approval'
+  | 'session_failed'
+  | 'skill_candidate'
+  | 'dream_report'
 
 /// Lifecycle status of an inbox item (`pending` → `read` → `archived`).
 export type InboxItemStatus = 'pending' | 'read' | 'archived'
@@ -940,6 +1591,22 @@ export interface TaskExecutionDetail extends TaskExecution {
   prompt?: string
   cron_expr?: string
   next_fire_at?: number
+}
+
+/// One cross-agent run row for the OPC "runs" view (P2-8): the TaskExecution
+/// projection plus the session jump target and that session's latest model.
+export interface AgentRunRow {
+  run_id: string
+  task_id: string
+  task_name: string
+  started_at: number
+  finished_at?: number
+  status: string
+  error_message?: string
+  cost_usd?: number
+  token_usage?: number
+  session_id?: string
+  model?: string
 }
 
 /// Triggered routine row for the routines panel.
@@ -1002,12 +1669,19 @@ export interface TaskWorktreeDto {
 export type ViewMode = 'verbose' | 'normal' | 'summary'
 
 export type ApprovalMode =
-  | 'suggest'
+  // Canonical tokens (docs/plans/2026-10-04-permission-mode-naming-design.md)
+  | 'ask'
   | 'plan'
+  | 'auto-edit'
+  | 'full-auto'
+  | 'readonly'
+  | 'dontAsk'
+  | 'bypassPermissions'
+  // Legacy stored values (still parsed by the desktop backend)
+  | 'suggest'
   | 'auto'
   | 'auto_edit'
   | 'full_auto'
-  | 'readonly'
   | 'plan_ro'
   | 'bypass_permissions'
   | 'dont_ask'
@@ -1041,6 +1715,10 @@ export interface GoalRunDto {
   lastError: string | null
   startedAtMs: number
   updatedAtMs: number
+  /// P-E2: project directory inherited from the originating session.
+  /// null on interrupted (restart-reconciled) cards — the sidecar cannot
+  /// round-trip a working dir.
+  workingDir: string | null
 }
 
 // --- Batch runs (P1-2 desktop best-of-N; serde contract is camelCase) ---
@@ -1098,13 +1776,40 @@ export const EVENT_NAMES = {
   QUERY_TOOL_PROGRESS: 'query:tool-progress',
   QUERY_THINKING: 'query:thinking',
   QUERY_USAGE: 'query:usage',
+  /**
+   * R5-2: the engine failed over to a fallback model/provider (R3-1) or
+   * rotated the provider's API key (R4-3) and the request CONTINUED.
+   * Payload: QueryNoticeEvent { query_id, kind, message, session_id? } —
+   * rendered as a subtle system line in the conversation, never an error
+   * banner.
+   */
+  QUERY_NOTICE: 'query:notice',
   QUERY_COMPLETED: 'query:completed',
   QUERY_FAILED: 'query:failed',
   QUERY_CANCELLED: 'query:cancelled',
   PERMISSION_REQUEST: 'permission-request',
+  /** Settings R3 T8: the ask_user tool surfaced a question (payload: AskUserRequest). */
+  ASK_USER_REQUEST: 'ask-user-request',
+  /** Settings R3 T8: an ask_user question's auto-continue timeout fired (payload: AskUserResolved). */
+  ASK_USER_RESOLVED: 'ask-user-resolved',
   SESSIONS_UPDATED: 'sessions-updated',
+  /** 卡A: switch_session auto-unarchived an archived session (toast cue). */
+  SESSION_AUTO_UNARCHIVED: 'session-auto-unarchived',
+  /** Settings R3 T7: a session's pinned flag changed — refresh the list so
+   *  the rail's pin sort/glyph re-derives from the curation sidecar. */
+  SESSION_PINS_CHANGED: 'session-pins-changed',
+  /** Settings R3 T7: the auto-archive scan archived a session (toast cue). */
+  SESSION_AUTO_ARCHIVED: 'session-auto-archived',
   SESSION_LOADED: 'session-loaded',
   CONFIG_UPDATED: 'config-updated',
+  /**
+   * S3-2 (P-N10): a session's pinned model override no longer resolves
+   * (e.g. its provider vanished with a profile switch) and the query rode
+   * the global default. Payload: ModelOverrideFallbackPayload
+   * { session_id, provider, model } — rendered as a one-time toast per
+   * distinct triple, replacing the old tracing-only silence.
+   */
+  MODEL_OVERRIDE_FALLBACK: 'model-override-fallback',
   DIFF_REVIEW_AVAILABLE: 'diff-review-available',
   BACKGROUND_TASK_UPDATE: 'background-task-update',
   BACKGROUND_TASKS_UPDATED: 'background-tasks-updated',
@@ -1118,8 +1823,19 @@ export const EVENT_NAMES = {
   BUDGET_WARNING: 'budget:warning',
   /** P0-4: budget cap hit — send rejected pre-turn or turn cancelled. */
   BUDGET_EXCEEDED: 'budget:exceeded',
+  /** B2: the agent-teams registry accepted a new sub-agent (desktop bridge). */
+  SUBAGENT_START: 'subagent:start',
+  /** B2: a sub-agent run finished (ok or failed; desktop bridge). */
+  SUBAGENT_STOP: 'subagent:stop',
   /** P1-5 D: PTY output for the integrated terminal (data is base64). */
   TERMINAL_OUTPUT: 'terminal:output',
+  /**
+   * P3-6: the terminal's process exited (backend emission lands with the
+   * Task-4 pump change). Authoritative exit signal — the in-stream
+   * "[shannon: process exited …" notice is display text only and must not
+   * be parsed.
+   */
+  TERMINAL_EXIT: 'terminal:exit',
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]
@@ -1130,6 +1846,15 @@ export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]
 export interface TerminalInfo {
   terminalId: string
   projectDir: string
+  /**
+   * Additive (review fix): the project dir EXACTLY as the spawn request
+   * carried it, before the backend canonicalized `projectDir`. The
+   * per-project tab filter matches this first — canonical-vs-raw
+   * mismatches (symlinked segments on Unix, `\\?\C:\…` verbatim prefixes
+   * on Windows) used to make a freshly spawned tab vanish into the empty
+   * state. Absent/null on legacy payloads: fall back to `projectDir`.
+   */
+  projectDirRaw?: string | null
   shell: string
   startedAtMs: number
 }
@@ -1138,6 +1863,47 @@ export interface TerminalInfo {
 export interface TerminalOutputPayload {
   terminalId: string
   data: string
+  /**
+   * Additive (review fix): per-session monotonic chunk number assigned by
+   * the backend pump in stream order. Replay stitching drops queued
+   * events with `seq <= terminal_history.endSeq` (already replayed) and
+   * flushes the rest — no loss, no duplication around (re)connect.
+   * Absent on legacy/demo payloads: the consumer falls back to
+   * flush-everything.
+   */
+  seq?: number
+}
+
+/** `terminal:exit` payload — the terminal's process has exited. */
+export interface TerminalExitPayload {
+  terminalId: string
+}
+
+/**
+ * P3-1: persisted terminal preferences (`[terminal]` in
+ * `~/.shannon/config.toml`; camelCase over the wire, frozen shape).
+ * The backend clamps `fontSize` (8–32), `scrollback` (0–100000) and
+ * `drawerHeight` (120–1200), blanks the shell and the font family, and
+ * clamps the font stack to 200 chars — after a set, render the values
+ * the response carries, not the ones the caller sent.
+ */
+export interface TerminalSettings {
+  shell: string | null
+  fontSize: number
+  scrollback: number
+  drawerHeight: number
+  screenReaderMode: boolean
+  /**
+   * Task 12 (R3): spawn a login-capable shell (`bash`/`zsh`/`fish`/`ksh`,
+   * never on Windows) with `-l` so it inherits the login environment
+   * (profile chain — proxies, kube config). Opt-in, default off.
+   */
+  loginShell: boolean
+  /**
+   * Task 12 (R3): xterm.js `fontFamily` override for terminals opened
+   * afterwards. `null` (blank on disk) = the built-in monospace stack.
+   */
+  fontFamily: string | null
 }
 
 // --- Inter-agent message history (Phase D C3) ---
@@ -1274,4 +2040,30 @@ export interface RemoteHealth {
   workspaceExists: boolean
   latencyMs: number
   error: string | null
+}
+
+/** A registered project (P-E3 project registry, `~/.shannon/projects.db`).
+ *  `path` is the unique key (canonical working dir). `name`/`icon`/`color`
+ *  are curation layers — `null` means the UI renders the default (the
+ *  path's tail segment). Wire shape mirrors the Rust `ProjectRecord`
+ *  (camelCase serde). */
+export interface ProjectRecord {
+  path: string
+  name: string | null
+  icon: string | null
+  color: string | null
+  archivedAtMs: number | null
+  createdAtMs: number
+}
+
+/** X5 trust preview — wire shape of `inspect_plugin_source`'s
+ *  `PluginBundleSummary`. Everything a plugin bundle will enable, read
+ *  from its manifest + directories BEFORE the user confirms an install. */
+export interface PluginBundleSummary {
+  name: string
+  source_format: 'shannon-toml' | 'claude-json' | 'unknown'
+  skills: string[]
+  agents: string[]
+  commands: string[]
+  mcp_servers: string[]
 }

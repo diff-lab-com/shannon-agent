@@ -904,6 +904,10 @@ mod tests {
     /// Standard ① (on-state): the captured request carries exactly the
     /// whitelisted aggregate-counters payload — five top-level keys, counter
     /// deltas matching what was observed — signed when a secret is set.
+    // Intentional: registry_lock() serializes the process-global signals
+    // registry that report() reads during the awaited run; test-only and
+    // uncontended, so holding it across .await cannot deadlock.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn enabled_report_posts_only_the_whitelisted_payload() {
         let _guard = registry_lock();
@@ -1014,6 +1018,9 @@ mod tests {
     /// Standard ② (off-state): with the switch unset (the shipped default) a
     /// report persists locally and transmits nothing — zero TCP connections
     /// ever reach the capture sink despite its address being the endpoint.
+    // Intentional: same registry serialization lock, read during the
+    // awaited run; test-only and uncontended.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn disabled_report_never_touches_the_network() {
         let _guard = registry_lock();

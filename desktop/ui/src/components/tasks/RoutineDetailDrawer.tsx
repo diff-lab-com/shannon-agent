@@ -1,8 +1,10 @@
 // RoutineDetailDrawer — Phase D C4 deliverable.
 //
 // Right-side drawer for inspecting and editing a scheduled routine.
-// Currently exposes the DependsOnEditor; later phases can add prompt /
-// trigger / policy editing here too.
+// P1-1 (G2b): the name/prompt static blocks became the RoutineBasicsEditor
+// (name + prompt + trigger editing via update_scheduled_task) and the
+// lifecycle row (pause/resume switch + guarded delete) joined the top of
+// the body — the "can build but can't stop" gap.
 //
 // T1.2 — migrated onto the shared <SidePanel> primitive. The previous
 // hand-rolled overlay, document-level Escape listener, backdrop click
@@ -14,6 +16,8 @@ import { useIntl } from 'react-intl'
 import type { ScheduledRoutine } from '@/types'
 import DependsOnEditor from './DependsOnEditor'
 import OffpeakWindowEditor from './OffpeakWindowEditor'
+import RoutineBasicsEditor from './RoutineBasicsEditor'
+import RoutineLifecycleRow from './RoutineLifecycleRow'
 import { SidePanel, SidePanelBody, SidePanelCloseButton, SidePanelHeader, SidePanelTitle } from '@/components/ui/side-panel'
 
 interface RoutineDetailDrawerProps {
@@ -56,26 +60,34 @@ export default function RoutineDetailDrawer({
       </SidePanelHeader>
       <SidePanelBody>
         <div className="space-y-md">
-          <div>
-            <span className="text-label-sm text-on-surface-variant">{t('tasks.routineDetailDrawer.name')}</span>
-            <p className="font-body-lg text-on-surface font-bold mt-xs">{routine.name}</p>
-          </div>
-          <div>
-            <span className="text-label-sm text-on-surface-variant">{t('tasks.routineDetailDrawer.prompt')}</span>
-            <p className="font-body-md text-on-surface mt-xs whitespace-pre-wrap break-words">
-              {routine.prompt}
-            </p>
-          </div>
+          {/* P1-1: pause/resume switch + guarded delete. The drawer-level
+              onUpdated carries the routine; the sub-editors only need a
+              "something changed, refresh" signal. */}
+          <RoutineLifecycleRow
+            key={`lifecycle-${routine.id}`}
+            routine={routine}
+            onUpdated={onUpdated ? () => onUpdated(routine) : undefined}
+            onDeleted={onClose}
+          />
+          {/* P1-1: name / prompt / trigger editing. Keyed by routine id so
+              the fields reset when another routine is opened. */}
+          <RoutineBasicsEditor
+            key={`basics-${routine.id}`}
+            routine={routine}
+            onUpdated={onUpdated ? () => onUpdated(routine) : undefined}
+          />
           <div className="grid grid-cols-2 gap-md">
+            <div>
+              <span className="text-label-sm text-on-surface-variant">{t('tasks.routineDetailDrawer.enabled')}</span>
+              <p className="font-body-md text-on-surface mt-xs">
+                {routine.enabled ? t('tasks.routineDetailDrawer.yes') : t('tasks.routineDetailDrawer.no')}
+              </p>
+            </div>
             <div>
               <span className="text-label-sm text-on-surface-variant">{t('tasks.routineDetailDrawer.trigger')}</span>
               <p className="font-body-md text-on-surface mt-xs capitalize">
                 {routine.trigger_type.charAt(0).toUpperCase() + routine.trigger_type.slice(1)}
               </p>
-            </div>
-            <div>
-              <span className="text-label-sm text-on-surface-variant">{t('tasks.routineDetailDrawer.enabled')}</span>
-              <p className="font-body-md text-on-surface mt-xs">{routine.enabled ? t('tasks.routineDetailDrawer.yes') : t('tasks.routineDetailDrawer.no')}</p>
             </div>
             <div>
               <span className="text-label-sm text-on-surface-variant">{t('tasks.routineDetailDrawer.nextFire')}</span>
@@ -95,27 +107,12 @@ export default function RoutineDetailDrawer({
           {/* P2-5: off-peak execution window editor + queued status.
               Keyed by routine id so toggles/inputs reset per routine. */}
           <OffpeakWindowEditor key={routine.id} routine={routine} onUpdated={onUpdated} />
-          {routine.policy?.result_routing && routine.policy.result_routing.length > 0 ? (
-            <div>
-              <span className="text-label-sm text-on-surface-variant">{t('tasks.routineDetailDrawer.resultRouting')}</span>
-              <ul className="flex flex-wrap gap-xs mt-xs">
-                {routine.policy.result_routing.map(entry => (
-                  <li
-                    key={entry}
-                    className="font-label-sm text-[11px] bg-tertiary/10 text-tertiary px-sm py-0.5 rounded-full border border-tertiary/30"
-                  >
-                    {entry}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
           <div>
             <div className="flex items-center justify-between mb-sm">
               <span className="text-label-sm text-on-surface-variant uppercase tracking-wider">
                 {t('tasks.routineDetailDrawer.dependencies')}
               </span>
-              <span className="font-label-sm text-[11px] text-on-surface-variant">
+              <span className="font-label-sm text-label-xs text-on-surface-variant">
                 {deps.length === 0 ? t('tasks.routineDetailDrawer.none') : deps.join(', ')}
               </span>
             </div>

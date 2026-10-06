@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::adapter::{OpenaiStreamState, normalize_sse_event};
 use super::error::ApiError;
-use super::retry::{RetryNotice, RetryObserver, retry_request_with_observer};
+use super::retry::{RetryNotice, RetryNoticeKind, RetryObserver, retry_request_with_observer};
 use super::streaming::MessageStream;
 use super::types::*;
 use crate::testing::record_replay::{RecordedExchange, RecordedRequest, RecordedResponse};
@@ -77,6 +77,142 @@ fn generate_zhipu_jwt(api_key: &str) -> Option<String> {
 /// can log requests byte-faithfully without reconstructing them.
 pub type RequestCapture = std::sync::Arc<dyn Fn(&serde_json::Value) + Send + Sync>;
 
+/// Settings R3 T4 (B1) — split a PEM bundle into individual certificate
+/// blocks. A corporate CA bundle usually carries more than one root, and
+/// `reqwest::Certificate::from_pem` only accepts a single certificate per
+/// call, so the bundle has to be cut on the `END CERTIFICATE` markers.
+fn split_pem_blocks(pem: &str) -> Vec<&str> {
+    const END: &str = "-----END CERTIFICATE-----";
+    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    let mut blocks = Vec::new();
+    let mut rest = pem;
+    while let Some(end) = rest.find(END) {
+        let end_idx = end + END.len();
+        let begin = rest[..end].rfind(BEGIN).unwrap_or(0);
+        blocks.push(rest[begin..end_idx].trim());
+        rest = &rest[end_idx..];
+    }
+    blocks
+}
+
+/// Settings R3 T4 (B1) — validate one PEM block before handing it to
+/// reqwest. On the rustls backend `Certificate::from_pem` stores the raw PEM
+/// verbatim and the real DER parse happens inside `ClientBuilder::build()` —
+/// where a corrupt entry fails the WHOLE client build (`try_new` would then
+/// return Err and no LLM client would come up at all). To keep the
+/// warn-and-skip contract honest, decode the base64 body here (base64 is
+/// already an engine dependency) and require a DER `SEQUENCE` tag (0x30) as
+/// the first byte — the two shapes file corruption actually takes.
+/// Returns the decoded DER on success.
+fn decode_pem_block(block: &str) -> Result<Vec<u8>, String> {
+    let body: String = block
+        .lines()
+        .filter(|line| !line.contains("-----"))
+        .collect::<Vec<_>>()
+        .join("");
+    use base64::Engine;
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(body.trim())
+        .map_err(|e| format!("base64 body does not decode: {e}"))?;
+    if der.first() != Some(&0x30) {
+        return Err("decoded bytes are not a DER SEQUENCE".to_string());
+    }
+    Ok(der)
+}
+
+/// Settings R3 T4 (B1) — parse every certificate block in `pem` and add it
+/// as a trust root. A block that fails to validate is logged and skipped,
+/// never a panic: a single malformed entry in a big corporate bundle must
+/// not take the whole client down. Returns the builder plus the number of
+/// accepted certificates so the caller can warn when the bundle yielded
+/// nothing.
+fn add_pem_roots(
+    mut builder: reqwest::ClientBuilder,
+    pem: &str,
+) -> (reqwest::ClientBuilder, usize) {
+    let mut added = 0;
+    for block in split_pem_blocks(pem) {
+        let der = match decode_pem_block(block) {
+            Ok(der) => der,
+            Err(reason) => {
+                tracing::warn!(
+                    "SHANNON_CA_BUNDLE: skipping unparseable certificate block: {reason}"
+                );
+                continue;
+            }
+        };
+        match reqwest::Certificate::from_der(&der) {
+            Ok(cert) => {
+                builder = builder.add_root_certificate(cert);
+                added += 1;
+            }
+            Err(e) => {
+                tracing::warn!("SHANNON_CA_BUNDLE: skipping invalid certificate block: {e}");
+            }
+        }
+    }
+    (builder, added)
+}
+
+/// Settings R3 T4 (B1) — add the custom root certificates named by the
+/// `SHANNON_CA_BUNDLE` env var (the desktop app injects the configured CA
+/// path there at startup) to a reqwest builder.
+///
+/// reqwest is built with `rustls-tls` + webpki-roots in this workspace — it
+/// does NOT read the system certificate store — so a corporate MITM /
+/// inspection CA must be added explicitly or every LLM HTTPS call fails the
+/// TLS handshake. Failures are non-fatal: an unreadable or unparseable
+/// bundle logs a warning and the builder keeps the built-in webpki roots.
+///
+/// Public so the desktop's own outbound clients (`desktop_http`) and
+/// shannon-core's models.dev catalog fetch share the exact same trust
+/// behavior as the LLM client.
+pub fn apply_custom_root_certificates(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    let path = match std::env::var_os("SHANNON_CA_BUNDLE") {
+        Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+        _ => return builder,
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(pem) => {
+            let (builder, added) = add_pem_roots(builder, &pem);
+            if added == 0 {
+                tracing::warn!(
+                    "SHANNON_CA_BUNDLE ({}): no usable PEM certificates found — trusting built-in roots only",
+                    path.display()
+                );
+            } else {
+                tracing::info!(
+                    "SHANNON_CA_BUNDLE ({}): added {} custom root certificate(s)",
+                    path.display(),
+                    added
+                );
+            }
+            builder
+        }
+        Err(e) => {
+            tracing::warn!(
+                "SHANNON_CA_BUNDLE ({}): unreadable ({e}) — trusting built-in roots only",
+                path.display()
+            );
+            builder
+        }
+    }
+}
+
+/// Settings R3 T4 (B1) — the shared network tuning for every LLM HTTP
+/// client builder: connect/read timeouts plus the custom CA bundle.
+/// `build_client` and `try_new` must stay byte-identical in behavior, so
+/// both go through this one function instead of maintaining two builders.
+fn apply_network_tuning(
+    builder: reqwest::ClientBuilder,
+    timeout_secs: u64,
+) -> reqwest::ClientBuilder {
+    let builder = builder
+        .connect_timeout(LlmClient::CONNECT_TIMEOUT)
+        .read_timeout(Duration::from_secs(timeout_secs.max(1)));
+    apply_custom_root_certificates(builder)
+}
+
 /// LLM API client with multi-provider and streaming support
 #[derive(Clone)]
 pub struct LlmClient {
@@ -89,6 +225,15 @@ pub struct LlmClient {
     /// Optional retry observer: fired before every retry sleep / mid-stream
     /// reconnect so consumers can surface the pause (§ retry observability).
     retry_observer: std::sync::Arc<std::sync::RwLock<Option<RetryObserver>>>,
+    /// A14: per-client stream-idle watchdog budget override. `Some(b)` forces
+    /// the SSE streams built from this client to use `b` as their
+    /// content-idle budget instead of the `SHANNON_STREAM_IDLE_SECS` env
+    /// default. The engine escalates it on timeout-class turn continuations:
+    /// a legitimately long-thinking model was killed at the base budget on
+    /// every retry of the same hard turn (w7 csstree/expr/superjson — all
+    /// three runs died at exactly 421s per attempt). Cleared when a stream
+    /// finalizes normally.
+    stream_idle_override: std::sync::Arc<std::sync::RwLock<Option<std::time::Duration>>>,
 }
 
 impl LlmClient {
@@ -125,9 +270,7 @@ impl LlmClient {
     /// Falls back to a default client if TLS initialization fails,
     /// logging the error instead of panicking.
     fn build_client(timeout_secs: u64) -> Client {
-        Client::builder()
-            .connect_timeout(Self::CONNECT_TIMEOUT)
-            .read_timeout(Duration::from_secs(timeout_secs.max(1)))
+        apply_network_tuning(Client::builder(), timeout_secs)
             .build()
             .unwrap_or_else(|e| {
                 tracing::error!("Failed to build HTTP client with timeout ({timeout_secs}s): {e}; falling back to default");
@@ -145,14 +288,13 @@ impl LlmClient {
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
             retry_observer: Default::default(),
+            stream_idle_override: Default::default(),
         }
     }
 
     /// Create a new LLM API client, returning an error if client construction fails.
     pub fn try_new(config: LlmClientConfig) -> Result<Self, ApiError> {
-        let client = Client::builder()
-            .connect_timeout(Self::CONNECT_TIMEOUT)
-            .read_timeout(Duration::from_secs(config.timeout_seconds.max(1)))
+        let client = apply_network_tuning(Client::builder(), config.timeout_seconds)
             .build()
             .map_err(|e| ApiError::InvalidResponse(format!("Failed to create HTTP client: {e}")))?;
         Ok(Self {
@@ -161,6 +303,7 @@ impl LlmClient {
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
             retry_observer: Default::default(),
+            stream_idle_override: Default::default(),
         })
     }
 
@@ -194,13 +337,14 @@ impl LlmClient {
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
             retry_observer: Default::default(),
+            stream_idle_override: Default::default(),
         }
     }
 
     /// Attach a retry observer: fired before every retry sleep (rate-limit
     /// backoff, read-timeout retry) and before mid-stream reconnects, so
     /// consumers can surface the pause instead of watching a silent stall.
-    /// See [`RetryNotice`](super::retry::RetryNotice).
+    /// See [`RetryNotice`].
     pub fn set_retry_observer(&self, observer: Option<RetryObserver>) {
         *self
             .retry_observer
@@ -222,15 +366,44 @@ impl LlmClient {
             .clone()
     }
 
+    /// A14: set/clear the stream-idle watchdog budget override. `Some(b)`
+    /// makes every SSE stream subsequently built from this client enforce
+    /// `b` as its content-idle budget (instead of `SHANNON_STREAM_IDLE_SECS`);
+    /// `None` restores the env default. The engine escalates the budget on
+    /// timeout-class turn continuations and clears it when a stream
+    /// finalizes normally.
+    pub fn set_stream_idle_override(&self, budget: Option<std::time::Duration>) {
+        *self
+            .stream_idle_override
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = budget;
+    }
+
+    fn stream_idle_override_handle(&self) -> Option<std::time::Duration> {
+        *self
+            .stream_idle_override
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Fire the retry observer (if attached).
-    pub(crate) fn notify_retry(&self, notice: &RetryNotice) {
-        if let Some(observer) = self
+    ///
+    /// Async + by-value notice (review §P3-6): the observer may forward the
+    /// notice onto the engine's bounded event channel, so the caller awaits
+    /// it and backpressure reaches the retry/reconnect loop.
+    pub(crate) async fn notify_retry(&self, notice: RetryNotice) {
+        // Clone the observer out of the lock and drop the guard BEFORE the
+        // await: the guard is a std RwLock guard (not Send), and holding it
+        // across the observer's send would both poison the future's Send-ness
+        // and block a concurrent `set_retry_observer(None)` for the whole
+        // suspension (§P3-6 lock-across-send audit).
+        let observer = self
             .retry_observer
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-        {
-            observer(notice);
+            .clone();
+        if let Some(observer) = observer {
+            observer(notice).await;
         }
     }
 
@@ -245,6 +418,24 @@ impl LlmClient {
     /// fallback / reconnect client clones).
     pub(crate) fn request_capture_handle(&self) -> Option<RequestCapture> {
         self.request_capture.clone()
+    }
+
+    /// Build an internal sub-client for mid-stream reconnection (F11).
+    ///
+    /// The sub-client starts from this client's config and inherits:
+    /// - the session-log request tee ([`RequestCapture`]) — without it the
+    ///   replayed reconnect request vanished from the session log;
+    /// - the retry observer (SHARED `Arc` cell, like `Clone`) so reconnect
+    ///   pauses are surfaced the same way first-attempt pauses are;
+    /// - the stream-idle override budget (SHARED `Arc` cell) so an engine
+    ///   A14 escalation performed after this sub-client was built is still
+    ///   visible to the reconnect request it makes.
+    pub(crate) fn reconnect_clone(&self) -> Self {
+        let mut cloned = Self::new(self.config.clone());
+        cloned.request_capture = self.request_capture.clone();
+        cloned.retry_observer = self.retry_observer.clone();
+        cloned.stream_idle_override = self.stream_idle_override.clone();
+        cloned
     }
 
     /// Fire the observer (if attached) with a serialized request body.
@@ -332,6 +523,23 @@ impl LlmClient {
                 headers.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
             }
             LlmProvider::Custom => {
+                // Default to Bearer auth with the stored key so a key saved
+                // via `/connect` works against openai-compatible gateways
+                // (review 2026-09-29 P0-7). An explicit Authorization in
+                // extra_headers (case-insensitive) suppresses the default
+                // and wins, so bespoke gateways keep full control.
+                if !self.config.api_key.is_empty()
+                    && !self
+                        .config
+                        .extra_headers
+                        .keys()
+                        .any(|k| k.eq_ignore_ascii_case("authorization"))
+                {
+                    headers.push((
+                        "Authorization".to_string(),
+                        format!("Bearer {}", self.config.api_key),
+                    ));
+                }
                 // Use extra_headers for custom provider auth
                 for (k, v) in &self.config.extra_headers {
                     headers.push((k.clone(), v.clone()));
@@ -363,8 +571,36 @@ impl LlmClient {
         headers
     }
 
-    /// Get the full endpoint URL for the configured provider
+    /// Get the full endpoint URL for the configured provider.
+    ///
+    /// Azure OpenAI (S2-6) uses path-based deployment routing plus a
+    /// **mandatory** versioned query:
+    ///
+    /// ```text
+    /// POST {base_url}/openai/deployments/{deployment}/chat/completions?api-version={v}
+    /// ```
+    ///
+    /// The deployment name IS the configured model id (`deployment = model`
+    /// semantics — the id the user configures is the Azure deployment name),
+    /// and an empty `api_version` falls back to
+    /// [`AZURE_DEFAULT_API_VERSION`] so a default-built config still produces
+    /// a requestable URL. The pre-S2-6 composition stopped at
+    /// `{base_url}/openai/deployments/` — no deployment, no `api-version` —
+    /// which could only 404; the pin tests in `api/mod.rs` freeze the exact
+    /// wire shape.
     pub(crate) fn endpoint_url(&self) -> String {
+        if self.config.provider == LlmProvider::Azure {
+            let base = self.config.base_url.trim_end_matches('/');
+            let deployment = self.config.model.trim();
+            let api_version = if self.config.api_version.is_empty() {
+                AZURE_DEFAULT_API_VERSION
+            } else {
+                self.config.api_version.as_str()
+            };
+            return format!(
+                "{base}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+            );
+        }
         format!(
             "{}{}",
             self.config.base_url,
@@ -521,6 +757,7 @@ impl LlmClient {
 
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system,
             system_blocks: None,
@@ -625,12 +862,9 @@ impl LlmClient {
             let messages_clone = request_body.messages.clone();
             let tools_clone = request_body.tools.clone();
             let system_clone = request_body.system.clone();
-            let reconnect_client = Self::new(self.config.clone());
-            let reconnect_client = match self.request_capture_handle() {
-                Some(capture) => reconnect_client.with_request_capture(capture),
-                None => reconnect_client,
-            }
-            .with_retry_observer(self.retry_observer_handle());
+            // F11: the reconnect sub-client inherits the request tee, the
+            // retry observer, and the (shared) stream-idle override.
+            let reconnect_client = self.reconnect_clone();
             Ok(super::streaming::sse_stream_from_response_resumable(
                 response,
                 self.config.provider.clone(),
@@ -639,11 +873,13 @@ impl LlmClient {
                 tools_clone,
                 system_clone,
                 max_reconnects,
+                self.stream_idle_override_handle(),
             ))
         } else {
             Ok(super::streaming::sse_stream_from_response(
                 response,
                 self.config.provider.clone(),
+                self.stream_idle_override_handle(),
             ))
         }
     }
@@ -660,6 +896,7 @@ impl LlmClient {
     ) -> Result<MessageStream, ApiError> {
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system: None,
             system_blocks: Some(system_blocks),
@@ -753,6 +990,7 @@ impl LlmClient {
         Ok(super::streaming::sse_stream_from_response(
             response,
             self.config.provider.clone(),
+            self.stream_idle_override_handle(),
         ))
     }
 
@@ -770,6 +1008,7 @@ impl LlmClient {
     ) -> Result<MessageStream, ApiError> {
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system,
             system_blocks: None,
@@ -782,7 +1021,10 @@ impl LlmClient {
             stop_sequences: None,
             budget_tokens: self.config.budget_tokens,
             thinking_budget: None,
-            reasoning_effort: None,
+            // F11: replay the SAME request shape the interrupted attempt
+            // used — this was hardcoded to `None`, so a reconnect silently
+            // downgraded adaptive-thinking requests.
+            reasoning_effort: self.config.reasoning_effort,
         };
 
         let url = self.endpoint_url();
@@ -848,6 +1090,7 @@ impl LlmClient {
         Ok(super::streaming::sse_stream_from_response(
             response,
             self.config.provider.clone(),
+            self.stream_idle_override_handle(),
         ))
     }
 
@@ -860,6 +1103,7 @@ impl LlmClient {
     ) -> Result<Vec<ContentBlock>, ApiError> {
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system,
             system_blocks: None,
@@ -1072,54 +1316,13 @@ impl LlmClient {
         tools: Option<Vec<ToolDefinition>>,
         system: Option<String>,
     ) -> Result<Vec<ContentBlock>, ApiError> {
-        let retry_config = &self.config.retry_config;
-        let retry_observer = self.retry_observer_handle();
-        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
-            self.send_message(messages.clone(), tools.clone(), system.clone())
+        self.send_with_failover(|client| {
+            let messages = messages.clone();
+            let tools = tools.clone();
+            let system = system.clone();
+            Box::pin(async move { client.send_message(messages, tools, system).await })
         })
-        .await;
-
-        match result {
-            Ok(blocks) => Ok(blocks),
-            Err(primary_err) => {
-                // Try fallback provider if configured
-                if let (Some(fallback_provider), Some(fallback_base_url)) = (
-                    &self.config.fallback_provider,
-                    &self.config.fallback_base_url,
-                ) {
-                    tracing::warn!(
-                        "Primary provider {} failed: {}. Falling back to {} at {}",
-                        self.config.provider,
-                        primary_err,
-                        fallback_provider,
-                        fallback_base_url,
-                    );
-                    let mut fallback_config = self.config.clone();
-                    fallback_config.provider = fallback_provider.clone();
-                    fallback_config.base_url = fallback_base_url.clone();
-                    // Inherit retry config
-                    let fallback_retry = fallback_config.retry_config.clone();
-                    // Keep the request observer attached across failover so
-                    // the session log records fallback envelopes too.
-                    let fallback_client = match self.request_capture_handle() {
-                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
-                        None => Self::new(fallback_config),
-                    }
-                    .with_retry_observer(self.retry_observer_handle());
-                    let fallback_observer = fallback_client.retry_observer_handle();
-                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
-                        fallback_client.send_message(
-                            messages.clone(),
-                            tools.clone(),
-                            system.clone(),
-                        )
-                    })
-                    .await
-                } else {
-                    Err(primary_err)
-                }
-            }
-        }
+        .await
     }
 
     /// Send a streaming message with retry logic and optional provider fallback.
@@ -1129,52 +1332,13 @@ impl LlmClient {
         tools: Option<Vec<ToolDefinition>>,
         system: Option<String>,
     ) -> Result<MessageStream, ApiError> {
-        let retry_config = &self.config.retry_config;
-        let retry_observer = self.retry_observer_handle();
-        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
-            self.send_message_stream(messages.clone(), tools.clone(), system.clone())
+        self.send_with_failover(|client| {
+            let messages = messages.clone();
+            let tools = tools.clone();
+            let system = system.clone();
+            Box::pin(async move { client.send_message_stream(messages, tools, system).await })
         })
-        .await;
-
-        match result {
-            Ok(stream) => Ok(stream),
-            Err(primary_err) => {
-                if let (Some(fallback_provider), Some(fallback_base_url)) = (
-                    &self.config.fallback_provider,
-                    &self.config.fallback_base_url,
-                ) {
-                    tracing::warn!(
-                        "Primary provider {} stream failed: {}. Falling back to {} at {}",
-                        self.config.provider,
-                        primary_err,
-                        fallback_provider,
-                        fallback_base_url,
-                    );
-                    let mut fallback_config = self.config.clone();
-                    fallback_config.provider = fallback_provider.clone();
-                    fallback_config.base_url = fallback_base_url.clone();
-                    let fallback_retry = fallback_config.retry_config.clone();
-                    // Keep the request observer attached across failover so
-                    // the session log records fallback envelopes too.
-                    let fallback_client = match self.request_capture_handle() {
-                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
-                        None => Self::new(fallback_config),
-                    }
-                    .with_retry_observer(self.retry_observer_handle());
-                    let fallback_observer = fallback_client.retry_observer_handle();
-                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
-                        fallback_client.send_message_stream(
-                            messages.clone(),
-                            tools.clone(),
-                            system.clone(),
-                        )
-                    })
-                    .await
-                } else {
-                    Err(primary_err)
-                }
-            }
-        }
+        .await
     }
 
     /// Send a structured streaming message with retry logic and optional provider fallback.
@@ -1184,56 +1348,289 @@ impl LlmClient {
         tools: Option<Vec<ToolDefinition>>,
         system_blocks: Vec<super::types::SystemContentBlock>,
     ) -> Result<MessageStream, ApiError> {
-        let retry_config = &self.config.retry_config;
-        let retry_observer = self.retry_observer_handle();
-        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
-            self.send_message_stream_structured(
-                messages.clone(),
-                tools.clone(),
-                system_blocks.clone(),
-            )
-        })
-        .await;
-
-        match result {
-            Ok(stream) => Ok(stream),
-            Err(primary_err) => {
-                if let (Some(fallback_provider), Some(fallback_base_url)) = (
-                    &self.config.fallback_provider,
-                    &self.config.fallback_base_url,
-                ) {
-                    tracing::warn!(
-                        "Primary provider {} structured stream failed: {}. Falling back to {} at {}",
-                        self.config.provider,
-                        primary_err,
-                        fallback_provider,
-                        fallback_base_url,
-                    );
-                    let mut fallback_config = self.config.clone();
-                    fallback_config.provider = fallback_provider.clone();
-                    fallback_config.base_url = fallback_base_url.clone();
-                    let fallback_retry = fallback_config.retry_config.clone();
-                    // Keep the request observer attached across failover so
-                    // the session log records fallback envelopes too.
-                    let fallback_client = match self.request_capture_handle() {
-                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
-                        None => Self::new(fallback_config),
-                    }
-                    .with_retry_observer(self.retry_observer_handle());
-                    let fallback_observer = fallback_client.retry_observer_handle();
-                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
-                        fallback_client.send_message_stream_structured(
-                            messages.clone(),
-                            tools.clone(),
-                            system_blocks.clone(),
-                        )
-                    })
+        self.send_with_failover(|client| {
+            let messages = messages.clone();
+            let tools = tools.clone();
+            let system_blocks = system_blocks.clone();
+            Box::pin(async move {
+                client
+                    .send_message_stream_structured(messages, tools, system_blocks)
                     .await
-                } else {
-                    Err(primary_err)
+            })
+        })
+        .await
+    }
+
+    // ── R3-1: explicit failover walk ─────────────────────────────────────
+
+    /// Run `send` against `self` with the standard retry budget, then — only
+    /// when the user authored an explicit fallback chain and the failure is
+    /// failover-eligible — walk that chain in order.
+    ///
+    /// Semantics (roadmap R3-1, review C15):
+    /// - **Opt-in only.** No chain configured → the primary error surfaces
+    ///   unchanged (the pre-R3-1 behavior; Shannon does not route).
+    /// - **AuthenticationFailed never fails over.** A bad key fails over
+    ///   nowhere useful — surface it so the user fixes the credential.
+    ///   (Exception: R4-3 key rotation below — a bad key CAN be healed by
+    ///   another key of the SAME provider, which is tried first.)
+    /// - Only rate-limit (429) and 5xx/529 errors that survived the primary
+    ///   target's full retry budget trigger the walk
+    ///   ([`RetryConfig::is_failover_eligible`]).
+    /// - Each fallback target gets the standard retry budget exactly once,
+    ///   at most [`MAX_FAILOVER_TARGETS`] hops (enforced again here, not
+    ///   only at resolution time — the config is user-editable data).
+    /// - Every hop emits a [`RetryNotice`] with
+    ///   [`RetryNoticeKind::Failover`] through the retry observer, so the
+    ///   downgrade lands in the query event stream (replayable) plus the
+    ///   tracing log: "falling back to <model>@<provider> (<reason>)".
+    /// - `RetryConfig::suppress_failover` (session-level model override,
+    ///   desktop R2-1) skips the walk entirely — the user pinned the target.
+    ///   It does **NOT** suppress R4-3 key rotation (see below): a pinned
+    ///   *target* still allows rotating credentials *within* that target.
+    ///
+    /// # R4-3: multi-key rotation (runs BEFORE provider failover)
+    ///
+    /// When the config carries alternate API keys for the same provider
+    /// (`LlmClientConfig::alternate_api_keys`) and the exhausted error is
+    /// rotation-eligible ([`RetryConfig::is_key_rotation_eligible`]:
+    /// 401/403-class auth failures or persistent 429), each remaining key is
+    /// tried in order — **before** any provider failover. Budget discipline
+    /// mirrors the failover walk: each key gets exactly one standard retry
+    /// pass, total rotations are capped at the key count, and every rotation
+    /// emits a [`RetryNoticeKind::KeyRotation`] notice
+    /// ("rotating API key (i/N) for <provider> (<reason>)") through the
+    /// retry observer. If every key is exhausted the last error flows into
+    /// the failover checks below — so a final 401 still surfaces as
+    /// [`ApiError::AuthenticationFailed`] (never provider-fails-over), while
+    /// a final 429 may walk the chain.
+    ///
+    /// The closure receives the client to attempt (primary, rotated-key or
+    /// fallback), so the same shape works for streaming, structured-streaming
+    /// and plain sends. The boxed-future return (lifetime tied to the client
+    /// argument) lets one closure serve all of those hops.
+    pub(crate) async fn send_with_failover<T, F>(&self, send: F) -> Result<T, ApiError>
+    where
+        F: Fn(&LlmClient) -> futures::future::BoxFuture<'_, Result<T, ApiError>>,
+    {
+        let retry_config = self.config.retry_config.clone();
+        let observer = self.retry_observer_handle();
+        let primary_err =
+            retry_request_with_observer(&retry_config, observer.as_ref(), || send(self)).await;
+
+        let mut last_err = match primary_err {
+            Ok(ok) => return Ok(ok),
+            Err(e) => e,
+        };
+
+        // ── R4-3: rotate to the next key of THIS provider before any
+        //    provider failover. Deliberately NOT gated on
+        //    `suppress_failover`: a session-level pin means "this exact
+        //    provider/model target", not "this exact credential" — rotating
+        //    keys within the pinned target keeps the user's choice intact
+        //    and can only help.
+        let alternates = self.config.alternate_api_keys.clone();
+        if !alternates.is_empty() && retry_config.is_key_rotation_eligible(&last_err) {
+            let provider = self.config.provider.to_string();
+            let total = (alternates.len() + 1) as u32;
+            for (i, key) in alternates.into_iter().enumerate() {
+                // Visible rotation: the query event stream (via the retry
+                // observer) + the log. Emitted BEFORE the rotated attempt so
+                // the event precedes any of its own retry notices. The key
+                // being switched TO is position i + 2 (1-based; the primary
+                // key is position 1).
+                let notice = RetryNotice {
+                    attempt: 0,
+                    total_attempts: 0,
+                    wait: Duration::ZERO,
+                    reason: last_err.to_string(),
+                    kind: RetryNoticeKind::KeyRotation {
+                        index: (i + 2) as u32,
+                        total,
+                        provider: provider.clone(),
+                    },
+                };
+                tracing::warn!(
+                    "rotating API key ({}/{}) for {} ({})",
+                    i + 2,
+                    total,
+                    provider,
+                    last_err
+                );
+                self.notify_retry(notice).await;
+
+                let rotated = self.build_rotated_client(&key);
+                let rotated_observer = rotated.retry_observer_handle();
+                last_err = match retry_request_with_observer(
+                    &rotated.config.retry_config,
+                    rotated_observer.as_ref(),
+                    || send(&rotated),
+                )
+                .await
+                {
+                    Ok(ok) => return Ok(ok),
+                    Err(e) => e,
+                };
+                // The rotated key burned its standard retry pass. A
+                // non-rotation-eligible error (5xx, 400, timeout, ...) ends
+                // the walk — the next key cannot heal it either.
+                if !retry_config.is_key_rotation_eligible(&last_err) {
+                    break;
                 }
             }
         }
+
+        // Session-level model override (desktop R2-1): the user explicitly
+        // pinned this target — no silent degradation. Documented precedence
+        // on `RetryConfig::suppress_failover`. Key rotation above is
+        // intentionally exempt (same provider, same model — only the
+        // credential changes).
+        if retry_config.suppress_failover {
+            return Err(last_err);
+        }
+        // Bad key: switching targets cannot heal it; surface immediately.
+        // (Reaching here means rotation already ran — and exhausted every
+        // key — so this is the spec's "401 with NO remaining keys" case.)
+        if matches!(last_err, ApiError::AuthenticationFailed) {
+            return Err(last_err);
+        }
+        if !retry_config.is_failover_eligible(&last_err) {
+            return Err(last_err);
+        }
+
+        let chain = self.failover_chain();
+        if chain.is_empty() {
+            return Err(last_err);
+        }
+
+        for target in chain
+            .into_iter()
+            .take(crate::api::retry::MAX_FAILOVER_TARGETS)
+        {
+            // Visible downgrade: the query event stream (via the retry
+            // observer) + the log. Emitted BEFORE the hop so the event
+            // precedes any of the hop's own retry notices.
+            let notice = RetryNotice {
+                attempt: 0,
+                total_attempts: 0,
+                wait: Duration::ZERO,
+                reason: last_err.to_string(),
+                kind: RetryNoticeKind::Failover {
+                    model: target.model.clone(),
+                    provider: target.provider.to_string(),
+                },
+            };
+            tracing::warn!(
+                "falling back to {}@{} ({})",
+                target.model,
+                target.provider,
+                last_err
+            );
+            self.notify_retry(notice).await;
+
+            let fallback_client = self.build_failover_client(&target);
+            let hop_observer = fallback_client.retry_observer_handle();
+            last_err = match retry_request_with_observer(
+                &fallback_client.config.retry_config,
+                hop_observer.as_ref(),
+                || send(&fallback_client),
+            )
+            .await
+            {
+                Ok(ok) => return Ok(ok),
+                Err(e) => e,
+            };
+            // The hop failed with its full retry budget spent — try the next
+            // target with the freshest error as the reason. AuthenticationFailed
+            // from a HOP only disqualifies that hop (its own credential); the
+            // next hop may carry a different provider's key.
+        }
+        Err(last_err)
+    }
+
+    /// The effective failover chain for this client: the resolved
+    /// `fallback_models` chain, or — for configs authored before R3-1 — a
+    /// single-hop chain synthesized from the legacy
+    /// `fallback_provider`/`fallback_base_url` pair (model and key
+    /// unchanged). Already capped at [`MAX_FAILOVER_TARGETS`] by the walk.
+    fn failover_chain(&self) -> Vec<FailoverTarget> {
+        let mut chain = self.config.retry_config.fallbacks.clone();
+        if chain.is_empty() {
+            if let (Some(provider), Some(base_url)) = (
+                &self.config.fallback_provider,
+                &self.config.fallback_base_url,
+            ) {
+                chain.push(FailoverTarget {
+                    model: self.config.model.clone(),
+                    provider: provider.clone(),
+                    base_url: base_url.clone(),
+                    api_key: String::new(), // inherit the primary key
+                });
+            }
+        }
+        chain
+    }
+
+    /// Build the per-hop failover client: the primary config re-targeted at
+    /// `target`. Inherits the session-log tee, the (shared) retry observer
+    /// and the stream-idle override cell like [`Self::reconnect_clone`] —
+    /// but deliberately carries an EMPTY chain: hop progression is owned by
+    /// the [`Self::send_with_failover`] loop, and a nested walk would
+    /// multiply the retry budget.
+    fn build_failover_client(&self, target: &FailoverTarget) -> LlmClient {
+        let mut cfg = self.config.clone();
+        cfg.provider = target.provider.clone();
+        cfg.base_url = target.base_url.clone();
+        cfg.model = target.model.clone();
+        if !target.api_key.is_empty() {
+            cfg.api_key = target.api_key.clone();
+        }
+        // Per-provider api-version reset: Anthropic pins its date-versioned
+        // header; Azure needs an explicit `api-version` query on its
+        // deployments route (`endpoint_url`), so a hop keeps a wire-valid
+        // value instead of inheriting the previous provider's (possibly
+        // empty) one.
+        cfg.api_version = match cfg.provider {
+            LlmProvider::Anthropic => "2023-06-01".to_string(),
+            LlmProvider::Azure => std::env::var("AZURE_OPENAI_API_VERSION")
+                .unwrap_or_else(|_| AZURE_DEFAULT_API_VERSION.to_string()),
+            _ => String::new(),
+        };
+        // Terminal hop: no further failover from inside a failover hop.
+        cfg.retry_config.fallbacks = Vec::new();
+        cfg.fallback_provider = None;
+        cfg.fallback_base_url = None;
+        let mut client = match self.request_capture_handle() {
+            Some(capture) => LlmClient::new(cfg).with_request_capture(capture),
+            None => LlmClient::new(cfg),
+        };
+        client.retry_observer = self.retry_observer.clone();
+        client.stream_idle_override = self.stream_idle_override.clone();
+        client
+    }
+
+    /// R4-3: build the same-provider client that sends with the NEXT key in
+    /// the rotation walk. Same shape as [`Self::build_failover_client`] —
+    /// inherits the request tee, the (shared) retry observer and the
+    /// stream-idle override, and is terminal: the rotation loop above owns
+    /// progression, so a rotated client carries no remaining alternates and
+    /// no failover chain (a nested walk would multiply the retry budget).
+    /// Unlike a failover hop, provider/base_url/model are untouched — only
+    /// the credential changes.
+    fn build_rotated_client(&self, api_key: &str) -> LlmClient {
+        let mut cfg = self.config.clone();
+        cfg.api_key = api_key.to_string();
+        cfg.alternate_api_keys = Vec::new();
+        cfg.retry_config.fallbacks = Vec::new();
+        cfg.fallback_provider = None;
+        cfg.fallback_base_url = None;
+        let mut client = match self.request_capture_handle() {
+            Some(capture) => LlmClient::new(cfg).with_request_capture(capture),
+            None => LlmClient::new(cfg),
+        };
+        client.retry_observer = self.retry_observer.clone();
+        client.stream_idle_override = self.stream_idle_override.clone();
+        client
     }
 
     /// Check Ollama model capabilities via `/api/show`.
@@ -1327,9 +1724,12 @@ pub type ClaudeClient = LlmClient;
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::api::RetryConfig;
 
     fn test_config() -> LlmClientConfig {
         LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             provider: LlmProvider::Anthropic,
             api_key: "test-key".to_string(),
             model: "claude-3-5-sonnet-20241022".to_string(),
@@ -1350,6 +1750,8 @@ mod tests {
 
     fn ollama_config() -> LlmClientConfig {
         LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             provider: LlmProvider::Ollama,
             api_key: String::new(),
             model: "llama3".to_string(),
@@ -1368,6 +1770,81 @@ mod tests {
         }
     }
 
+    // ── Custom provider default Bearer (review 2026-09-29 P0-7) ──────────
+
+    fn custom_config() -> LlmClientConfig {
+        LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            provider: LlmProvider::Custom,
+            api_key: "sk-custom-secret".to_string(),
+            model: "test-model".to_string(),
+            base_url: "https://gateway.example.com".to_string(),
+            max_tokens: 4096,
+            api_version: String::new(),
+            timeout_seconds: 30,
+            max_stream_reconnects: 0,
+            extra_headers: Default::default(),
+            budget_tokens: None,
+            fallback_provider: None,
+            fallback_base_url: None,
+            retry_config: Default::default(),
+            reasoning_effort: None,
+            thinking_type: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
+        }
+    }
+
+    /// A stored key with no explicit auth header must produce a default
+    /// `Authorization: Bearer` — previously the `/connect` key was never
+    /// sent and custom openai-compatible gateways always 401'd.
+    #[test]
+    fn custom_provider_sends_bearer_from_stored_key() {
+        let client = LlmClient::new(custom_config());
+        let headers = client.auth_headers();
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer sk-custom-secret"),
+            "default Bearer from the stored key must be sent: {headers:?}"
+        );
+    }
+
+    /// An explicit Authorization in extra_headers (any case) suppresses the
+    /// default so bespoke gateways keep full control of the auth scheme.
+    #[test]
+    fn custom_provider_extra_headers_override_authorization() {
+        let mut cfg = custom_config();
+        cfg.extra_headers
+            .insert("authorization".to_string(), "X".to_string());
+        let client = LlmClient::new(cfg);
+        let headers = client.auth_headers();
+        let auth: Vec<&(String, String)> = headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            .collect();
+        assert_eq!(
+            auth.len(),
+            1,
+            "exactly one Authorization header: {headers:?}"
+        );
+        assert_eq!(auth[0].1, "X", "extra_headers auth must win verbatim");
+    }
+
+    /// No key and no extra_headers → no Authorization header at all.
+    #[test]
+    fn custom_provider_empty_key_adds_no_authorization() {
+        let mut cfg = custom_config();
+        cfg.api_key = String::new();
+        let client = LlmClient::new(cfg);
+        let headers = client.auth_headers();
+        assert!(
+            !headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("authorization")),
+            "empty key must not add an Authorization header: {headers:?}"
+        );
+    }
+
     // ── Stream timeouts (review 2026-08-28 PERF-2) ──────────────────────
 
     const STREAM_TIMEOUT_SECS: u64 = 2;
@@ -1377,6 +1854,8 @@ mod tests {
     /// so the timeout behavior is observed in isolation.
     fn slow_stream_config(base_url: String) -> LlmClientConfig {
         LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             provider: LlmProvider::Anthropic,
             api_key: "test-key".to_string(),
             model: "claude-3-5-sonnet-20241022".to_string(),
@@ -1410,7 +1889,6 @@ mod tests {
     #[tokio::test]
     async fn slow_stream_survives_past_legacy_total_timeout() {
         use futures::StreamExt;
-        use std::io::Write as _;
         use std::sync::Arc;
         use std::time::Instant;
 
@@ -1487,7 +1965,6 @@ mod tests {
     #[tokio::test]
     async fn stalled_stream_is_cut_by_read_idle_timeout() {
         use futures::StreamExt;
-        use std::io::Write as _;
         use std::time::{Duration, Instant};
 
         let mut server = mockito::Server::new_async().await;
@@ -1906,6 +2383,8 @@ mod tests {
     #[test]
     fn test_zhipu_auth_headers_use_jwt() {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             provider: LlmProvider::Zhipu,
             api_key: "testid.testsecret".to_string(),
             model: "glm-4-flash".to_string(),
@@ -1929,5 +2408,1216 @@ mod tests {
         // Should be a JWT (3 dot-separated parts), not the raw key
         assert_eq!(token.split('.').count(), 3);
         assert_ne!(token, "testid.testsecret");
+    }
+
+    // ── A8b: interrupted-stream typing (smoke-5) ─────────────────────────
+
+    fn truncated_sse_body() -> String {
+        format!(
+            "data: {}\n\ndata: {}\n\n",
+            r#"{"type":"message_start","message":{"id":"msg_cut","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial before the cut"}}"#
+        )
+    }
+
+    /// A stream whose bytes end WITHOUT a terminal frame (no MessageStop,
+    /// no stop-reason MessageDelta) is an abnormal EOF — it must surface as
+    /// `ApiError::StreamEndedUnexpectedly`, never as a silent clean end
+    /// (the silent end is what let smoke-5 commit a truncated generation
+    /// as a complete answer).
+    #[tokio::test]
+    async fn premature_sse_end_without_terminal_frame_is_typed_interrupted() {
+        use futures::StreamExt;
+
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(truncated_sse_body())
+            .create_async()
+            .await;
+
+        let mut cfg = test_config(); // reconnects = 0
+        cfg.base_url = server.url();
+        let client = LlmClient::new(cfg);
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+
+        let mut saw_delta = false;
+        let mut terminal = None;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(StreamEvent::ContentBlockDelta { .. }) => saw_delta = true,
+                Ok(_) => {}
+                Err(e) => {
+                    terminal = Some(e);
+                    break;
+                }
+            }
+        }
+        assert!(saw_delta, "the partial delta must still be delivered");
+        assert!(
+            matches!(terminal, Some(ApiError::StreamEndedUnexpectedly)),
+            "premature EOF must be typed StreamEndedUnexpectedly, got {terminal:?}"
+        );
+    }
+
+    /// The exact smoke-5 mechanism: the upstream cuts the connection
+    /// mid-body and reqwest reports a body/decode failure. The stream layer
+    /// knows this was a stream, so it types the failure as
+    /// `StreamEndedUnexpectedly` (type preserved for the engine's A8b
+    /// continuation) instead of an opaque HttpError string.
+    #[tokio::test]
+    async fn mid_stream_body_failure_is_typed_interrupted() {
+        use futures::StreamExt;
+
+        let mut server = mockito::Server::new_async().await;
+        let payload = truncated_sse_body();
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| {
+                w.write_all(payload.as_bytes())?;
+                w.flush()?;
+                // Cut the body mid-stream, like a hard connection kill.
+                Err(std::io::Error::other("connection cut by upstream"))
+            })
+            .create_async()
+            .await;
+
+        let mut cfg = test_config(); // reconnects = 0
+        cfg.base_url = server.url();
+        let client = LlmClient::new(cfg);
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+
+        let mut saw_delta = false;
+        let mut terminal = None;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(StreamEvent::ContentBlockDelta { .. }) => saw_delta = true,
+                Ok(_) => {}
+                Err(e) => {
+                    terminal = Some(e);
+                    break;
+                }
+            }
+        }
+        // Whether the buffered chunk reached the wire before the cut is
+        // transport-dependent (mockito drops it); the contract under test is
+        // the ERROR TYPE.
+        let _ = saw_delta;
+        assert!(
+            matches!(terminal, Some(ApiError::StreamEndedUnexpectedly)),
+            "mid-body failure must be typed StreamEndedUnexpectedly, got {terminal:?}"
+        );
+    }
+
+    /// With reconnection enabled, a truncated stream is first treated as
+    /// reconnectable; when every reconnect dies the same way, the typed
+    /// abnormal EOF surfaces to the caller (which hands it to the engine's
+    /// A8b turn continuation).
+    #[tokio::test]
+    async fn resumable_stream_reconnects_on_premature_end_then_surfaces_typed_error() {
+        use futures::StreamExt;
+
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(truncated_sse_body())
+            .expect(2)
+            .create_async()
+            .await;
+
+        let mut cfg = test_config();
+        cfg.max_stream_reconnects = 1;
+        cfg.base_url = server.url();
+        let client = LlmClient::new(cfg);
+        let started = std::time::Instant::now();
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+
+        let mut terminal = None;
+        while let Some(item) = stream.next().await {
+            if let Err(e) = item {
+                terminal = Some(e);
+                break;
+            }
+        }
+        mock.assert();
+        assert!(
+            matches!(terminal, Some(ApiError::StreamEndedUnexpectedly)),
+            "exhausted reconnects must surface the typed abnormal EOF, got {terminal:?}"
+        );
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(900),
+            "the reconnect backoff must have run before the typed error"
+        );
+    }
+
+    /// A14: `set_stream_idle_override` round-trips through the handle, and
+    /// `Clone` sees the same value (the RwLock is shared, not duplicated).
+    /// Reconnect sub-clients built inside `send_message_stream_internal`
+    /// must inherit the override so a continuation attempt sees the
+    /// escalated budget.
+    #[test]
+    fn stream_idle_override_round_trips_and_clones() {
+        let cfg = test_config();
+        let client = LlmClient::new(cfg);
+
+        // default = None
+        assert_eq!(client.stream_idle_override_handle(), None);
+
+        client.set_stream_idle_override(Some(std::time::Duration::from_secs(840)));
+        assert_eq!(
+            client.stream_idle_override_handle(),
+            Some(std::time::Duration::from_secs(840))
+        );
+
+        // Clone sees the override (RwLock content, not Arc cell).
+        let clone = client.clone();
+        assert_eq!(
+            clone.stream_idle_override_handle(),
+            Some(std::time::Duration::from_secs(840))
+        );
+
+        // Clearing on the original is visible to the clone (shared RwLock).
+        client.set_stream_idle_override(None);
+        assert_eq!(clone.stream_idle_override_handle(), None);
+    }
+
+    // ── F11: reconnect sub-client inheritance ───────────────────────────
+
+    /// `reconnect_clone` must inherit the request tee and the retry
+    /// observer, and SHARE the stream-idle override cell so an engine-side
+    /// A14 escalation after the clone is still visible to the reconnect.
+    #[test]
+    fn reconnect_clone_propagates_capture_observer_and_idle_override() {
+        let cfg = test_config();
+        let client = LlmClient::new(cfg)
+            .with_request_capture(std::sync::Arc::new(|_body| {
+                // tee: any sync sink; presence is what matters here
+            }))
+            .with_retry_observer(Some(std::sync::Arc::new(|_notice| {
+                Box::pin(futures::future::ready(()))
+            })));
+
+        let sub = client.reconnect_clone();
+
+        assert!(
+            sub.request_capture_handle().is_some(),
+            "reconnect sub-client must inherit the session-log tee"
+        );
+        assert!(
+            sub.retry_observer_handle().is_some(),
+            "reconnect sub-client must inherit the retry observer"
+        );
+
+        // Shared idle-override cell: escalate on the parent AFTER cloning.
+        assert_eq!(sub.stream_idle_override_handle(), None);
+        client.set_stream_idle_override(Some(std::time::Duration::from_secs(600)));
+        assert_eq!(
+            sub.stream_idle_override_handle(),
+            Some(std::time::Duration::from_secs(600)),
+            "an escalation after the clone must be visible to the reconnect client"
+        );
+    }
+
+    /// Full-path regression (F11): a mid-stream reconnect must (a) tee the
+    /// replayed request like the original — the pre-fix fresh client lost
+    /// the capture, so only ONE body was ever observed — and (b) replay the
+    /// same reasoning_effort the interrupted attempt carried (the resumable
+    /// path used to hardcode `None`).
+    #[tokio::test]
+    async fn reconnect_replays_request_tee_and_reasoning_effort() {
+        use futures::StreamExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut server = mockito::Server::new_async().await;
+
+        let truncated = truncated_sse_body();
+        let complete = format!(
+            "data: {}\n\ndata: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            r#"{"type":"message_start","message":{"id":"msg_reconnect","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"after reconnect"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":1,"output_tokens":3}}"#,
+        );
+
+        let call_index = AtomicUsize::new(0);
+        let mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| {
+                let n = call_index.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    w.write_all(truncated.as_bytes())?;
+                } else {
+                    w.write_all(complete.as_bytes())?;
+                }
+                w.flush()?;
+                Ok(())
+            })
+            .expect(2)
+            .create_async()
+            .await;
+
+        let captured: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> = Default::default();
+        let captured_for_tee = captured.clone();
+
+        let mut cfg = test_config();
+        cfg.max_stream_reconnects = 1;
+        cfg.base_url = server.url();
+        cfg.reasoning_effort = Some(ReasoningEffort::High);
+        let client = LlmClient::new(cfg).with_request_capture(std::sync::Arc::new(move |body| {
+            captured_for_tee.lock().unwrap().push(body.clone());
+        }));
+
+        let mut text = String::new();
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+        while let Some(item) = stream.next().await {
+            if let Ok(StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text: t },
+                ..
+            }) = item
+            {
+                text.push_str(&t);
+            }
+        }
+        mock.assert(); // exactly two HTTP hits: original + one reconnect
+
+        // (a) The tee saw BOTH envelopes.
+        let bodies = captured.lock().unwrap();
+        assert_eq!(
+            bodies.len(),
+            2,
+            "the reconnect request must be captured too (tee propagation)"
+        );
+        // (b) The replay carries the same reasoning_effort (pre-fix: null).
+        for (i, body) in bodies.iter().enumerate() {
+            assert_eq!(
+                body.get("reasoning_effort").and_then(|v| v.as_str()),
+                Some("High"),
+                "request {i} must carry reasoning_effort"
+            );
+        }
+        assert_eq!(text, "partial before the cutafter reconnect");
+    }
+
+    // ── R3-1: explicit failover walk ────────────────────────────────────
+
+    /// A minimal valid Anthropic non-streaming response body.
+    fn anthropic_ok(text: &str) -> String {
+        format!(
+            r#"{{"id":"msg_fb","role":"assistant","content":[{{"type":"text","text":"{text}"}}],"model":"test-model","stop_reason":"end_turn","usage":{{"input_tokens":1,"output_tokens":1}}}}"#
+        )
+    }
+
+    /// A full, terminal Anthropic SSE stream delivering `text`.
+    fn anthropic_sse(text: &str) -> String {
+        let delta = format!(
+            r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{text}"}}}}"#
+        );
+        format!(
+            "data: {}\n\ndata: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            r#"{"type":"message_start","message":{"id":"msg_fb_stream","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#,
+            delta,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":1,"output_tokens":1}}"#,
+        )
+    }
+
+    /// Failover target against a local mockito server (Anthropic wire).
+    async fn fb_target(model: &str, server: &mut mockito::ServerGuard) -> FailoverTarget {
+        FailoverTarget {
+            model: model.to_string(),
+            provider: LlmProvider::Anthropic,
+            base_url: server.url(),
+            api_key: "fb-key".to_string(),
+        }
+    }
+
+    /// Client with a no-retry budget (failover semantics get tested in
+    /// isolation from the retry loop) plus a notice sink.
+    fn fb_client(
+        base_url: String,
+        retry_config: RetryConfig,
+    ) -> (
+        LlmClient,
+        std::sync::Arc<std::sync::Mutex<Vec<RetryNotice>>>,
+    ) {
+        let mut cfg = test_config();
+        cfg.base_url = base_url;
+        cfg.retry_config = retry_config;
+        let client = LlmClient::new(cfg);
+        let notices: std::sync::Arc<std::sync::Mutex<Vec<RetryNotice>>> = Default::default();
+        let sink = notices.clone();
+        client.set_retry_observer(Some(std::sync::Arc::new(move |notice: RetryNotice| {
+            sink.lock().unwrap().push(notice);
+            Box::pin(futures::future::ready(())) as futures::future::BoxFuture<'static, ()>
+        })));
+        (client, notices)
+    }
+
+    fn fb_retry_config(fallbacks: Vec<FailoverTarget>) -> RetryConfig {
+        RetryConfig {
+            max_retries: 0,
+            initial_backoff_ms: 1,
+            max_backoff_ms: 1,
+            fallbacks,
+            ..RetryConfig::default()
+        }
+    }
+
+    /// Primary 429 → hop 1 429 → hop 2 200: the walk degrades in order and
+    /// each hop emits exactly one `Failover` notice naming the target it is
+    /// degrading TO, with the triggering error as the reason.
+    #[tokio::test]
+    async fn failover_walks_chain_in_order_and_emits_notices() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(429)
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        hop1.mock("POST", "/v1/messages")
+            .with_status(429)
+            .expect(1)
+            .create_async()
+            .await;
+        let mut hop2 = mockito::Server::new_async().await;
+        let ok = hop2
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_body(anthropic_ok("third hop"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let (client, notices) = fb_client(
+            primary.url(),
+            fb_retry_config(vec![
+                fb_target("fallback-a", &mut hop1).await,
+                fb_target("fallback-b", &mut hop2).await,
+            ]),
+        );
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the third hop must answer");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "third hop");
+
+        ok.assert();
+        let notices = notices.lock().unwrap();
+        let failovers: Vec<&RetryNotice> = notices
+            .iter()
+            .filter(|n| matches!(n.kind, RetryNoticeKind::Failover { .. }))
+            .collect();
+        assert_eq!(failovers.len(), 2, "one Failover notice per hop");
+        match &failovers[0].kind {
+            RetryNoticeKind::Failover { model, provider } => {
+                assert_eq!(model, "fallback-a");
+                assert_eq!(provider, "anthropic");
+            }
+            other => panic!("expected Failover kind, got {other:?}"),
+        }
+        match &failovers[1].kind {
+            RetryNoticeKind::Failover { model, .. } => assert_eq!(model, "fallback-b"),
+            other => panic!("expected Failover kind, got {other:?}"),
+        }
+        assert!(
+            failovers[0].reason.contains("Rate limit"),
+            "the reason must carry the triggering error: {}",
+            failovers[0].reason
+        );
+    }
+
+    /// 401 fails over NOWHERE: the credential error surfaces unchanged, no
+    /// fallback server is contacted, no Failover notice is emitted.
+    #[tokio::test]
+    async fn no_failover_on_authentication_failure() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(401)
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        let untouched = hop1
+            .mock("POST", "/v1/messages")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let (client, notices) = fb_client(
+            primary.url(),
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop1).await]),
+        );
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("401 must surface");
+        assert!(
+            matches!(err, ApiError::AuthenticationFailed),
+            "the auth error must surface verbatim, got {err:?}"
+        );
+        untouched.assert();
+        assert!(notices.lock().unwrap().is_empty());
+    }
+
+    // ── R4-3: multi-key rotation ─────────────────────────────────────────
+
+    /// Client with alternate keys (rotation candidates) plus a notice sink.
+    fn rotation_client(
+        base_url: String,
+        alternate_api_keys: Vec<String>,
+        retry_config: RetryConfig,
+    ) -> (
+        LlmClient,
+        std::sync::Arc<std::sync::Mutex<Vec<RetryNotice>>>,
+    ) {
+        let mut cfg = test_config();
+        cfg.base_url = base_url;
+        cfg.api_key = "key-1".to_string();
+        cfg.alternate_api_keys = alternate_api_keys;
+        cfg.retry_config = retry_config;
+        let client = LlmClient::new(cfg);
+        let notices: std::sync::Arc<std::sync::Mutex<Vec<RetryNotice>>> = Default::default();
+        let sink = notices.clone();
+        client.set_retry_observer(Some(std::sync::Arc::new(move |notice: RetryNotice| {
+            sink.lock().unwrap().push(notice);
+            Box::pin(futures::future::ready(())) as futures::future::BoxFuture<'static, ()>
+        })));
+        (client, notices)
+    }
+
+    /// Mock one x-api-key slot on `server`: `key` → `status` (+ optional body).
+    async fn key_mock(
+        server: &mut mockito::ServerGuard,
+        key: &str,
+        status: usize,
+        body: Option<String>,
+    ) -> mockito::Mock {
+        let mut m = server
+            .mock("POST", "/v1/messages")
+            .match_header("x-api-key", key)
+            .with_status(status);
+        m = match body {
+            Some(b) => m.with_body(b),
+            None => m,
+        };
+        m.create_async().await
+    }
+
+    /// 401 on key 1 → rotate to key 2 → 200: exactly one `KeyRotation`
+    /// notice (index 2/2, provider "anthropic", auth reason), and the second
+    /// key's answer is returned.
+    #[tokio::test]
+    async fn key_rotation_on_auth_failure_succeeds_with_next_key() {
+        let mut server = mockito::Server::new_async().await;
+        let dead = key_mock(&mut server, "key-1", 401, None).await;
+        let ok = key_mock(&mut server, "key-2", 200, Some(anthropic_ok("second key"))).await;
+
+        let (client, notices) = rotation_client(
+            server.url(),
+            vec!["key-2".to_string()],
+            fb_retry_config(vec![]),
+        );
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the second key must answer");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "second key");
+
+        dead.assert();
+        ok.assert();
+        let notices = notices.lock().unwrap();
+        assert_eq!(notices.len(), 1, "one notice per rotation: {notices:?}");
+        match &notices[0].kind {
+            RetryNoticeKind::KeyRotation {
+                index,
+                total,
+                provider,
+            } => {
+                assert_eq!(*index, 2);
+                assert_eq!(*total, 2);
+                assert_eq!(provider, "anthropic");
+            }
+            other => panic!("expected KeyRotation kind, got {other:?}"),
+        }
+        assert!(
+            notices[0].reason.contains("Authentication"),
+            "the reason must carry the triggering error: {}",
+            notices[0].reason
+        );
+    }
+
+    /// 401 on every key → each remaining key gets exactly one standard pass
+    /// (rotations capped at the key count), the walk emits one notice per
+    /// rotation in order, and the FINAL error is `AuthenticationFailed` —
+    /// which must NOT fail over to a configured fallback chain.
+    #[tokio::test]
+    async fn key_rotation_exhaustion_surfaces_auth_and_never_fails_over() {
+        let mut server = mockito::Server::new_async().await;
+        let m1 = key_mock(&mut server, "key-1", 401, None).await;
+        let m2 = key_mock(&mut server, "key-2", 401, None).await;
+        let m3 = key_mock(&mut server, "key-3", 401, None).await;
+        let mut hop = mockito::Server::new_async().await;
+        let untouched = hop
+            .mock("POST", "/v1/messages")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let (client, notices) = rotation_client(
+            server.url(),
+            vec!["key-2".to_string(), "key-3".to_string()],
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop).await]),
+        );
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("every key 401s");
+        assert!(
+            matches!(err, ApiError::AuthenticationFailed),
+            "exhausted rotation must surface the auth error, got {err:?}"
+        );
+        m1.assert();
+        m2.assert();
+        m3.assert();
+        untouched.assert();
+
+        let notices = notices.lock().unwrap();
+        let rotations: Vec<(u32, u32)> = notices
+            .iter()
+            .filter_map(|n| match n.kind {
+                RetryNoticeKind::KeyRotation { index, total, .. } => Some((index, total)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            rotations,
+            vec![(2, 3), (3, 3)],
+            "one notice per rotation, i/N in walk order"
+        );
+    }
+
+    /// Persistent 429 on both keys → rotation runs FIRST, and only after the
+    /// keys are exhausted does the provider failover walk start. Notice
+    /// order proves the precedence: KeyRotation before Failover.
+    #[tokio::test]
+    async fn key_rotation_precedes_provider_failover() {
+        let mut server = mockito::Server::new_async().await;
+        let m1 = key_mock(&mut server, "key-1", 429, None).await;
+        let m2 = key_mock(&mut server, "key-2", 429, None).await;
+        let mut hop = mockito::Server::new_async().await;
+        let ok = hop
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_body(anthropic_ok("fallback hop"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let (client, notices) = rotation_client(
+            server.url(),
+            vec!["key-2".to_string()],
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop).await]),
+        );
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the fallback hop must answer after key exhaustion");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "fallback hop");
+
+        m1.assert();
+        m2.assert();
+        ok.assert();
+        let notices = notices.lock().unwrap();
+        assert_eq!(notices.len(), 2, "one rotation + one failover");
+        assert!(
+            matches!(
+                notices[0].kind,
+                RetryNoticeKind::KeyRotation {
+                    index: 2,
+                    total: 2,
+                    ..
+                }
+            ),
+            "rotation must come first: {:?}",
+            notices[0].kind
+        );
+        assert!(
+            matches!(notices[1].kind, RetryNoticeKind::Failover { ref model, .. } if model == "fallback-a"),
+            "failover must follow exhausted keys: {:?}",
+            notices[1].kind
+        );
+    }
+
+    /// `suppress_failover` (session pin) keeps rotation ON: the pinned target
+    /// still rotates its own keys; only cross-provider degradation is
+    /// suppressed. 401 on key 1 + a configured (untouched) fallback chain +
+    /// key 2 answering 200 → the request succeeds via key 2.
+    #[tokio::test]
+    async fn suppress_failover_keeps_key_rotation() {
+        let mut server = mockito::Server::new_async().await;
+        let dead = key_mock(&mut server, "key-1", 401, None).await;
+        let ok = key_mock(
+            &mut server,
+            "key-2",
+            200,
+            Some(anthropic_ok("pinned key 2")),
+        )
+        .await;
+        let mut hop = mockito::Server::new_async().await;
+        let untouched = hop
+            .mock("POST", "/v1/messages")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let mut retry = fb_retry_config(vec![fb_target("fallback-a", &mut hop).await]);
+        retry.suppress_failover = true;
+        let (client, notices) = rotation_client(server.url(), vec!["key-2".to_string()], retry);
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("rotation must run even under suppress_failover");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "pinned key 2");
+
+        dead.assert();
+        ok.assert();
+        untouched.assert();
+        let notices = notices.lock().unwrap();
+        assert_eq!(notices.len(), 1);
+        assert!(matches!(
+            notices[0].kind,
+            RetryNoticeKind::KeyRotation { .. }
+        ));
+    }
+
+    /// A deterministic client error on a rotated key (400 → ProviderError)
+    /// stops the walk: further keys cannot heal it, so key 3 is never tried.
+    #[tokio::test]
+    async fn key_rotation_stops_on_non_eligible_error() {
+        let mut server = mockito::Server::new_async().await;
+        let m1 = key_mock(&mut server, "key-1", 401, None).await;
+        let m2 = key_mock(
+            &mut server,
+            "key-2",
+            400,
+            Some(
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#
+                    .to_string(),
+            ),
+        )
+        .await;
+        let m3 = server
+            .mock("POST", "/v1/messages")
+            .match_header("x-api-key", "key-3")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let (client, notices) = rotation_client(
+            server.url(),
+            vec!["key-2".to_string(), "key-3".to_string()],
+            fb_retry_config(vec![]),
+        );
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("400 must surface");
+        assert!(matches!(err, ApiError::ProviderError { .. }), "got {err:?}");
+        m1.assert();
+        m2.assert();
+        m3.assert();
+
+        let notices = notices.lock().unwrap();
+        assert_eq!(notices.len(), 1, "only the first rotation happened");
+    }
+
+    /// 5xx never rotates (server-side, key-independent) and still fails over
+    /// exactly as R3-1 defined: alternates present, but the chain is walked
+    /// with the ORIGINAL key.
+    #[tokio::test]
+    async fn server_errors_do_not_rotate_keys() {
+        let mut server = mockito::Server::new_async().await;
+        // No per-key mocks: any key would hit this 500.
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(500)
+            .expect(1)
+            .create_async()
+            .await;
+        let mut hop = mockito::Server::new_async().await;
+        let ok = hop
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_body(anthropic_ok("hop"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let (client, notices) = rotation_client(
+            server.url(),
+            vec!["key-2".to_string()],
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop).await]),
+        );
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the hop must answer");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "hop");
+        ok.assert();
+
+        let notices = notices.lock().unwrap();
+        assert!(
+            notices
+                .iter()
+                .all(|n| !matches!(n.kind, RetryNoticeKind::KeyRotation { .. })),
+            "5xx must not rotate keys: {notices:?}"
+        );
+    }
+
+    /// A session-level model override (desktop R2-1) pins the target:
+    /// `suppress_failover` skips the walk even for an eligible 429.
+    #[tokio::test]
+    async fn session_override_suppression_blocks_failover() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(429)
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        let untouched = hop1
+            .mock("POST", "/v1/messages")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let mut retry = fb_retry_config(vec![fb_target("fallback-a", &mut hop1).await]);
+        retry.suppress_failover = true;
+        let (client, notices) = fb_client(primary.url(), retry);
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("suppressed failover must surface the primary error");
+        assert!(
+            matches!(err, ApiError::RateLimitExceeded { .. }),
+            "got {err:?}"
+        );
+        untouched.assert();
+        assert!(notices.lock().unwrap().is_empty());
+    }
+
+    /// Deterministic client errors (400 → ProviderError) are not
+    /// failover-eligible: another target would repeat the same request
+    /// problem, so the error surfaces and the chain stays untouched.
+    #[tokio::test]
+    async fn client_error_does_not_failover() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(400)
+            .with_body(
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#,
+            )
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        let untouched = hop1
+            .mock("POST", "/v1/messages")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let (client, _) = fb_client(
+            primary.url(),
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop1).await]),
+        );
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("400 must surface");
+        assert!(matches!(err, ApiError::ProviderError { .. }), "got {err:?}");
+        untouched.assert();
+    }
+
+    /// The walk is hard-capped at [`MAX_FAILOVER_TARGETS`] hops even when
+    /// the configured chain is longer; the final hop's error surfaces.
+    #[tokio::test]
+    async fn failover_is_capped_at_three_hops() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(500)
+            .create_async()
+            .await;
+        let mut hops = Vec::new();
+        for _ in 0..4 {
+            let mut server = mockito::Server::new_async().await;
+            server
+                .mock("POST", "/v1/messages")
+                .with_status(500)
+                .create_async()
+                .await;
+            hops.push(server);
+        }
+
+        let mut targets = Vec::new();
+        for (i, server) in hops.iter_mut().enumerate().take(4) {
+            targets.push(fb_target(&format!("fallback-{i}"), server).await);
+        }
+        let (client, notices) = fb_client(primary.url(), fb_retry_config(targets));
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("every hop 500s");
+        match err {
+            ApiError::ApiError { status: 500, .. } => {}
+            other => panic!("expected the last hop's 500, got {other:?}"),
+        }
+
+        let notices = notices.lock().unwrap();
+        let failovers: Vec<&RetryNotice> = notices
+            .iter()
+            .filter(|n| matches!(n.kind, RetryNoticeKind::Failover { .. }))
+            .collect();
+        assert_eq!(
+            failovers.len(),
+            crate::api::retry::MAX_FAILOVER_TARGETS,
+            "the fourth configured target must never be tried"
+        );
+        match &failovers[2].kind {
+            RetryNoticeKind::Failover { model, .. } => assert_eq!(model, "fallback-2"),
+            other => panic!("expected Failover kind, got {other:?}"),
+        }
+    }
+
+    /// The pre-R3-1 `fallback_provider`/`fallback_base_url` pair still
+    /// works: synthesized as a single hop carrying the SAME model and the
+    /// primary's key.
+    #[tokio::test]
+    async fn legacy_fallback_pair_synthesizes_single_hop() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(500)
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        let ok = hop1
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_body(anthropic_ok("legacy hop"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut cfg = test_config();
+        cfg.base_url = primary.url();
+        cfg.retry_config = RetryConfig {
+            max_retries: 0,
+            initial_backoff_ms: 1,
+            max_backoff_ms: 1,
+            ..RetryConfig::default()
+        };
+        cfg.fallback_provider = Some(LlmProvider::Anthropic);
+        cfg.fallback_base_url = Some(hop1.url());
+        let client = LlmClient::new(cfg);
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the legacy hop must answer");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "legacy hop");
+        ok.assert();
+    }
+
+    /// The streaming `*_with_retry` entry walks the chain too: primary 429 →
+    /// fallback answers with a full SSE stream.
+    #[tokio::test]
+    async fn streaming_failover_walks_chain() {
+        use futures::StreamExt;
+
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(429)
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        hop1.mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(anthropic_sse("fallback stream"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let (client, notices) = fb_client(
+            primary.url(),
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop1).await]),
+        );
+
+        let mut stream = client
+            .send_message_stream_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the fallback stream must open");
+        let mut text = String::new();
+        while let Some(event) = stream.next().await {
+            if let Ok(StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text: t },
+                ..
+            }) = event
+            {
+                text.push_str(&t);
+            }
+        }
+        assert_eq!(text, "fallback stream");
+        assert_eq!(notices.lock().unwrap().len(), 1, "one Failover notice");
+    }
+
+    // ── Settings R3 T4 (B1): custom CA bundle (SHANNON_CA_BUNDLE) ──────
+
+    /// A real, self-contained root certificate (ACCVRAIZ1, a public ES root)
+    /// so the parser is exercised against a genuine PEM, not a hand-waved
+    /// placeholder. Embedded verbatim — tests never touch the network or
+    /// the system trust store.
+    const VALID_PEM: &str = "-----BEGIN CERTIFICATE-----
+MIIH0zCCBbugAwIBAgIIXsO3pkN/pOAwDQYJKoZIhvcNAQEFBQAwQjESMBAGA1UE
+AwwJQUNDVlJBSVoxMRAwDgYDVQQLDAdQS0lBQ0NWMQ0wCwYDVQQKDARBQ0NWMQsw
+CQYDVQQGEwJFUzAeFw0xMTA1MDUwOTM3MzdaFw0zMDEyMzEwOTM3MzdaMEIxEjAQ
+BgNVBAMMCUFDQ1ZSQUlaMTEQMA4GA1UECwwHUEtJQUNDVjENMAsGA1UECgwEQUND
+VjELMAkGA1UEBhMCRVMwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQCb
+qau/YUqXry+XZpp0X9DZlv3P4uRm7x8fRzPCRKPfmt4ftVTdFXxpNRFvu8gMjmoY
+HtiP2Ra8EEg2XPBjs5BaXCQ316PWywlxufEBcoSwfdtNgM3802/J+Nq2DoLSRYWo
+G2ioPej0RGy9ocLLA76MPhMAhN9KSMDjIgro6TenGEyxCQ0jVn8ETdkXhBilyNpA
+lHPrzg5XPAOBOp0KoVdDaaxXbXmQeOW1tDvYvEyNKKGno6e6Ak4l0Squ7a4DIrhr
+IA8wKFSVf+DuzgpmndFALW4ir50awQUZ0m/A8p/4e7MCQvtQqR0tkw8jq8bBD5L/
+0KIV9VMJcRz/RROE5iZe+OCIHAr8Fraocwa48GOEAqDGWuzndN9wrqODJerWx5eH
+k6fGioozl2A3ED6XPm4pFdahD9GILBKfb6qkxkLrQaLjlUPTAYVtjrs78yM2x/47
+4KElB0iryYl0/wiPgL/AlmXz7uxLaL2diMMxs0Dx6M/2OLuc5NF/1OVYm3z61PMO
+m3WR5LpSLhl+0fXNWhn8ugb2+1KoS5kE3fj5tItQo05iifCHJPqDQsGH+tUtKSpa
+cXpkatcnYGMN285J9Y0fkIkyF/hzQ7jSWpOGYdbhdQrqeWZ2iE9x6wQl1gpaepPl
+uUsXQA+xtrn13k/c4LOsOxFwYIRKQ26ZIMApcQrAZQIDAQABo4ICyzCCAscwfQYI
+KwYBBQUHAQEEcTBvMEwGCCsGAQUFBzAChkBodHRwOi8vd3d3LmFjY3YuZXMvZmls
+ZWFkbWluL0FyY2hpdm9zL2NlcnRpZmljYWRvcy9yYWl6YWNjdjEuY3J0MB8GCCsG
+AQUFBzABhhNodHRwOi8vb2NzcC5hY2N2LmVzMB0GA1UdDgQWBBTSh7Tj3zcnk1X2
+VuqB5TbMjB4/vTAPBgNVHRMBAf8EBTADAQH/MB8GA1UdIwQYMBaAFNKHtOPfNyeT
+VfZW6oHlNsyMHj+9MIIBcwYDVR0gBIIBajCCAWYwggFiBgRVHSAAMIIBWDCCASIG
+CCsGAQUFBwICMIIBFB6CARAAQQB1AHQAbwByAGkAZABhAGQAIABkAGUAIABDAGUA
+cgB0AGkAZgBpAGMAYQBjAGkA8wBuACAAUgBhAO0AegAgAGQAZQAgAGwAYQAgAEEA
+QwBDAFYAIAAoAEEAZwBlAG4AYwBpAGEAIABkAGUAIABUAGUAYwBuAG8AbABvAGcA
+7QBhACAAeQAgAEMAZQByAHQAaQBmAGkAYwBhAGMAaQDzAG4AIABFAGwAZQBjAHQA
+cgDzAG4AaQBjAGEALAAgAEMASQBGACAAUQA0ADYAMAAxADEANQA2AEUAKQAuACAA
+QwBQAFMAIABlAG4AIABoAHQAdABwADoALwAvAHcAdwB3AC4AYQBjAGMAdgAuAGUA
+czAwBggrBgEFBQcCARYkaHR0cDovL3d3dy5hY2N2LmVzL2xlZ2lzbGFjaW9uX2Mu
+aHRtMFUGA1UdHwROMEwwSqBIoEaGRGh0dHA6Ly93d3cuYWNjdi5lcy9maWxlYWRt
+aW4vQXJjaGl2b3MvY2VydGlmaWNhZG9zL3JhaXphY2N2MV9kZXIuY3JsMA4GA1Ud
+DwEB/wQEAwIBBjAXBgNVHREEEDAOgQxhY2N2QGFjY3YuZXMwDQYJKoZIhvcNAQEF
+BQADggIBAJcxAp/n/UNnSEQU5CmH7UwoZtCPNdpNYbdKl02125DgBS4OxnnQ8pdp
+D70ER9m+27Up2pvZrqmZ1dM8MJP1jaGo/AaNRPTKFpV8M9xii6g3+CfYCS0b78gU
+JyCpZET/LtZ1qmxNYEAZSUNUY9rizLpm5U9EelvZaoErQNV/+QEnWCzI7UiRfD+m
+AM/EKXMRNt6GGT6d7hmKG9Ww7Y49nCrADdg9ZuM8Db3VlFzi4qc1GwQA9j9ajepD
+vV+JHanBsMyZ4k0ACtrJJ1vnE5Bc5PUzolVt3OAJTS+xJlsndQAJxGJ3KQhfnlms
+tn6tn1QwIgPBHnFk/vk4CpYY3QIUrCPLBhwepH2NDd4nQeit2hW3sCPdK6jT2iWH
+7ehVRE2I9DZ+hJp4rPcOVkkO1jMl1oRQQmwgEh0q1b688nCBpHBgvgW1m54ERL5h
+I6zppSSMEYCUWqKiuUnSwdzRp+0xESyeGabu4VXhwOrPDYTkF7eifKXeVSUG7szA
+h1xA2syVP1XgNce4hL60Xc16gwFy7ofmXx2utYXGJt/mwZrpHgJHnyqobalbz+xF
+d3+YJ5oyXSrjhO7FmGYvliAd3djDJ9ew+f7Zfc3Qn48LFFhRny+Lwzgt3uiP1o2H
+pPVWQxaZLPSkVrQ0uGE3ycJYgBugl6H8WY3pEfbRD0tVNEYqi4Y7
+-----END CERTIFICATE-----";
+
+    #[test]
+    fn pem_split_extracts_each_certificate_block() {
+        let bundle = format!("{VALID_PEM}\n{VALID_PEM}\nnot a pem\n");
+        let blocks = split_pem_blocks(&bundle);
+        assert_eq!(blocks.len(), 2, "two PEM blocks in, two blocks out");
+        for b in &blocks {
+            assert!(b.starts_with("-----BEGIN CERTIFICATE-----"));
+            assert!(b.ends_with("-----END CERTIFICATE-----"));
+        }
+        // A bundle with no PEM markers yields nothing (not a panic).
+        assert!(split_pem_blocks("garbage, no markers").is_empty());
+        assert!(split_pem_blocks("").is_empty());
+    }
+
+    #[test]
+    fn valid_pem_parses_into_root_certificate() {
+        let (builder, added) = add_pem_roots(reqwest::Client::builder(), VALID_PEM);
+        assert_eq!(added, 1, "the embedded certificate must parse");
+        let client = builder.build();
+        assert!(
+            client.is_ok(),
+            "builder with a custom root still builds: {client:?}"
+        );
+    }
+
+    #[test]
+    fn garbage_pem_is_skipped_without_panicking() {
+        // reqwest's rustls backend defers ALL certificate validation to
+        // ClientBuilder::build() — a corrupt entry handed to it unchecked
+        // would fail the WHOLE client build (try_new → Err, no client at
+        // all). add_pem_roots therefore validates each block itself and
+        // every bad shape is warn-and-skip, builder still buildable:
+        //
+        // - no PEM markers at all → nothing to add;
+        // - a marker block whose body is not base64 → skipped;
+        // - valid base64 but not a DER SEQUENCE (a truncated / wrong
+        //   binary file) → skipped.
+        let (builder, added) = add_pem_roots(reqwest::Client::builder(), "totally not a pem");
+        assert_eq!(added, 0, "marker-less input adds nothing");
+        assert!(builder.build().is_ok());
+
+        let (builder, added) = add_pem_roots(
+            reqwest::Client::builder(),
+            "-----BEGIN CERTIFICATE-----\nnot valid base64!!!\n-----END CERTIFICATE-----",
+        );
+        assert_eq!(added, 0, "non-base64 body skipped");
+        assert!(builder.build().is_ok());
+
+        let (builder, added) = add_pem_roots(
+            reqwest::Client::builder(),
+            "-----BEGIN CERTIFICATE-----\nanR1bmtqdW5r\n-----END CERTIFICATE-----",
+        );
+        assert_eq!(added, 0, "base64 of non-DER bytes skipped");
+        assert!(builder.build().is_ok());
+    }
+
+    #[test]
+    fn mixed_bundle_adds_the_parseable_blocks() {
+        // A real-world bundle: one corrupt-looking entry between valid
+        // roots. The corrupt one is skipped, the valid one is kept, and
+        // the builder constructs a client.
+        let bundle =
+            "-----BEGIN CERTIFICATE-----\nnot valid base64!!!\n-----END CERTIFICATE-----\n\n"
+                .to_string()
+                + VALID_PEM;
+        let (builder, added) = add_pem_roots(reqwest::Client::builder(), &bundle);
+        assert_eq!(added, 1, "the valid block is kept, the corrupt one skipped");
+        assert!(builder.build().is_ok());
+    }
+
+    #[test]
+    fn ca_bundle_env_missing_or_empty_leaves_builder_untouched() {
+        // No SHANNON_CA_BUNDLE: the helper is an identity (builds fine).
+        unsafe { std::env::remove_var("SHANNON_CA_BUNDLE") };
+        assert!(
+            apply_custom_root_certificates(reqwest::Client::builder())
+                .build()
+                .is_ok()
+        );
+        // Empty value counts as unset (desktop stores empty = cleared).
+        // NOTE: env mutation below is only safe because each nextest test
+        // runs in its own process; plain `cargo test` runs this file's env
+        // tests on one thread-scoped sequence and nothing else here reads
+        // the variable concurrently.
+        unsafe { std::env::set_var("SHANNON_CA_BUNDLE", "") };
+        assert!(
+            apply_custom_root_certificates(reqwest::Client::builder())
+                .build()
+                .is_ok()
+        );
+        unsafe { std::env::remove_var("SHANNON_CA_BUNDLE") };
+    }
+
+    #[test]
+    fn ca_bundle_env_missing_file_warns_and_builds() {
+        // Set but pointing nowhere: warn + built-in roots, never a panic.
+        unsafe { std::env::set_var("SHANNON_CA_BUNDLE", "/nonexistent/shannon-test-ca.pem") };
+        assert!(
+            apply_custom_root_certificates(reqwest::Client::builder())
+                .build()
+                .is_ok()
+        );
+        unsafe { std::env::remove_var("SHANNON_CA_BUNDLE") };
+    }
+
+    #[tokio::test]
+    async fn ca_bundle_env_with_valid_file_builds_client() {
+        let dir = std::env::temp_dir().join(format!("shannon-ca-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("root-ca.pem");
+        std::fs::write(&path, VALID_PEM).expect("write PEM");
+        unsafe { std::env::set_var("SHANNON_CA_BUNDLE", &path) };
+        let built = apply_custom_root_certificates(reqwest::Client::builder()).build();
+        unsafe { std::env::remove_var("SHANNON_CA_BUNDLE") };
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(built.is_ok(), "valid bundle on disk must build a client");
+    }
+
+    #[test]
+    fn network_tuning_applies_timeouts_and_builds() {
+        let built = apply_network_tuning(reqwest::Client::builder(), 0).build();
+        assert!(built.is_ok(), "tuned builder (clamped timeout) builds");
     }
 }

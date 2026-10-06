@@ -25,17 +25,34 @@ export class SessionLane {
     private readonly logger: Logger,
   ) {}
 
-  /** Connected engine client for this session. Memoized after first use. */
+  /**
+   * Connected engine client for this session. Memoized after first use.
+   *
+   * review F41: a failed connect must not poison the lane — the memo is
+   * cleared on rejection so the next turn dials a fresh connection instead of
+   * replaying the stale error forever (e.g. the engine was restarting during
+   * the first turn). No backoff exists in the WS client, so one attempt per
+   * turn is the retry policy.
+   */
   getClient(): Promise<EngineWsClient> {
-    if (!this.clientPromise) {
-      this.clientPromise = (async () => {
-        const client = this.clientFactory();
-        await client.connect();
-        this.logger.info(`lane ${this.key}: engine client connected`);
-        return client;
-      })();
-    }
-    return this.clientPromise;
+    if (this.clientPromise) return this.clientPromise;
+    const attempt = (async () => {
+      const client = this.clientFactory();
+      await client.connect();
+      this.logger.info(`lane ${this.key}: engine client connected`);
+      return client;
+    })();
+    const memoized = attempt.catch((err: unknown) => {
+      if (this.clientPromise === memoized) this.clientPromise = null;
+      // Rethrow so the turn that triggered the connect still fails loudly.
+      throw err;
+    });
+    // `memoized` is dropped after a failure (and `stop()` only reads it via
+    // its own catch) — pin a no-op handler on the underlying attempt so its
+    // rejection can never surface as unhandled.
+    attempt.catch(() => {});
+    this.clientPromise = memoized;
+    return memoized;
   }
 
   /**

@@ -248,7 +248,7 @@ function PieChart({ spec }: PieChartProps) {
 function ChartError({ message }: { message: string }) {
   return (
     <div className="my-md p-sm rounded-lg bg-error-container/20 border border-error/30 text-label-sm text-error">
-      <span className="material-symbols-outlined text-[14px] align-middle mr-xs">error</span>
+      <span className="material-symbols-outlined icon-sm align-middle mr-xs">error</span>
       {message}
     </div>
   )
@@ -347,11 +347,25 @@ function arcPath(cx: number, cy: number, r: number, start: number, end: number):
 
 export function parseChartSpec(text: string): ChartSpec | null {
   try {
-    const obj = JSON.parse(text)
+    const obj = JSON.parse(text) as Record<string, unknown>
     if (typeof obj !== 'object' || obj === null) return null
     if (!Array.isArray(obj.data)) return null
-    if (!['bar', 'line', 'pie'].includes(obj.type)) return null
-    return obj as ChartSpec
+    if (!['bar', 'line', 'pie'].includes(obj.type as string)) return null
+    // Numeric validation: coerce values to numbers, drop anything non-finite
+    // (NaN/Infinity/garbage strings) so the geometry never draws NaN. An
+    // all-invalid series leaves no usable data → the caller renders its
+    // existing error card instead of an empty chart.
+    const data: { label: string; value: number }[] = []
+    for (const raw of obj.data) {
+      if (typeof raw !== 'object' || raw === null) continue
+      const entry = raw as Record<string, unknown>
+      const value = typeof entry.value === 'number' ? entry.value : Number(entry.value)
+      if (!Number.isFinite(value)) continue
+      const label = typeof entry.label === 'string' ? entry.label : String(entry.label ?? '')
+      data.push({ label, value })
+    }
+    if (data.length === 0) return null
+    return { ...(obj as object), data } as ChartSpec
   } catch {
     return null
   }

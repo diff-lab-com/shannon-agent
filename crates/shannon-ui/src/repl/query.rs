@@ -75,7 +75,29 @@ fn capture_turn_snapshots(files: &[String], turn_index: usize) {
         return;
     };
     let mut manager = shannon_tools::FileHistoryManager::new(config);
+    maybe_run_file_history_housekeeping(&mut manager);
     capture_turn_snapshots_with(&mut manager, files, turn_index);
+}
+
+/// N-8: run file-history housekeeping (TTL sweep + snapshot-cap enforcement —
+/// `cleanup_old_snapshots` previously had zero production callers, and quota
+/// exhaustion used to silently stop checkpointing) throttled to once per day
+/// per process. The post-turn snapshot hook is the natural caller: it already
+/// builds a manager over the on-disk history dir.
+fn maybe_run_file_history_housekeeping(manager: &mut shannon_tools::FileHistoryManager) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST_RUN_SECS: AtomicU64 = AtomicU64::new(0);
+    const DAY_SECS: u64 = 24 * 3600;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let last = LAST_RUN_SECS.load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < DAY_SECS {
+        return;
+    }
+    LAST_RUN_SECS.store(now, Ordering::Relaxed);
+    manager.run_housekeeping();
 }
 
 /// Wrap a single line to fit within `max_width` columns, breaking at char boundaries.
@@ -242,6 +264,16 @@ impl Default for StreamingState {
     }
 }
 
+/// Drain the pending text delta and current status in one lock acquisition.
+///
+/// §P2-25: reading and clearing the delta must happen under the same lock —
+/// the previous pattern acquired the lock to read, released, then re-acquired
+/// to clear, dropping anything the query task appended in between.
+fn drain_streaming_delta(state: &std::sync::Mutex<StreamingState>) -> (String, String) {
+    let mut s = recover_lock(state.lock());
+    (std::mem::take(&mut s.delta), s.status.clone())
+}
+
 /// Handle a query (send to AI)
 /// Type alias for the TUI terminal used by the REPL.
 pub(crate) type Term = Terminal<CrosstermBackend<io::Stdout>>;
@@ -295,7 +327,13 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     repl.state.context_window = query_engine.resolved_context_window();
 
     // Sync effort_level and focus_area from REPL state into the query engine
-    query_engine.set_effort_level(repl.state.effort_level.clone());
+    query_engine.set_effort(
+        repl.state
+            .effort_level
+            .as_deref()
+            .and_then(shannon_core::query_engine::EffortLevel::parse)
+            .unwrap_or_default(),
+    );
     query_engine.set_focus_area(repl.state.focus_area.clone());
     // Sync the session goal (/goal) so its system block is injected this query
     query_engine.set_goal(repl.state.goal.as_ref().and_then(|g| g.to_spec()));
@@ -753,7 +791,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 Ok(QueryEvent::Failed { error, .. }) => {
                     // Don't return immediately — preserve conversation_messages
                     // that may have been received via ConversationUpdate before Failed.
-                    response_text.push_str(&format!("\n\n⚠️ Query failed: {error}"));
+                    // When nothing is configured, prepend an exit ramp so a fresh
+                    // user hitting the silent Ollama fallback isn't left with a
+                    // bare connection error (review P0-1/P0-2). The engine's
+                    // resolution behavior is untouched.
+                    let unconfigured = crate::repl::commands::provider_unconfigured();
+                    response_text.push_str(&compose_query_failure(unconfigured, &error));
                     if let Ok(mut s) = ss.lock() {
                         s.done = true;
                         s.status = format!("Failed: {error}");
@@ -802,18 +845,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             let is_done = streaming.lock().map(|s| s.done).unwrap_or(false);
             let query_finished = is_done || query_handle.is_finished();
 
-            let current_status;
-            {
-                let s = recover_lock(streaming.lock());
-                current_status = s.status.clone();
-
-                if !s.delta.is_empty() {
-                    buffer.push_chunk(&s.delta);
-                }
-            }
-            {
-                let mut s = recover_lock(streaming.lock());
-                s.delta.clear();
+            // §P2-25: status read + delta drain under a single lock
+            // acquisition so nothing appended between them is lost.
+            let (delta, current_status) = drain_streaming_delta(&streaming);
+            if !delta.is_empty() {
+                buffer.push_chunk(&delta);
             }
 
             if buffer.needs_render() {
@@ -1022,7 +1058,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     render_ctx.progress_bar = pb;
                     render_ctx.sidebar_info = sidebar_info.as_ref();
                     render_ctx.sidebar_tab = state.sidebar_tab;
-                    render_ctx.approval_mode = Some(&state.approval_mode_label);
+                    render_ctx.approval_mode = Some(state.approval_mode_label());
                     render_ctx.focus_mode = state.focus_mode;
                     render_ctx.fullscreen_mode = state.fullscreen_mode;
                     render_ctx.auto_follow = state.auto_follow;
@@ -1058,6 +1094,18 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
 
             if query_finished {
                 break;
+            }
+
+            // Drain any pending permission request raised by the engine. The
+            // main loop only checks permission_req_rx when streaming_active
+            // is false; while we are streaming here that check is skipped, so
+            // approval dialogs would never appear and the engine would block
+            // forever on response_rx.recv() in ASK mode (review §P0-4).
+            if repl.state.permission_dialog.is_none() {
+                if let Ok(req) = repl.permission_req_rx.try_recv() {
+                    repl.state.permission_dialog = Some(req.prompt);
+                    repl.state.permission_response_tx = Some(req.response_tx);
+                }
             }
 
             // Handle key events during streaming: cancel, scroll, and input
@@ -1282,6 +1330,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     timestamp: chrono::Utc::now(),
                     source: Some("query_complete".to_string()),
                     action_id: None,
+                    kind: shannon_core::notifier::NotificationKind::Completed,
                 });
             }
         }
@@ -1377,20 +1426,15 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             }
             repl.query_engine = Some(engine);
 
-            // Sync approval mode if changed during streaming
+            // P0-1: forward-sync UI state from the engine (the engine is the
+            // single source of truth). The old label→engine reverse-sync
+            // silently mutated modes via lossy short labels.
             if let Some(ref engine) = repl.query_engine {
-                let engine_label = {
+                let mode = {
                     let perms = shannon_types::recover_lock(engine.permissions().read());
-                    perms.approval_mode().short_label().to_string()
+                    perms.approval_mode()
                 };
-                if engine_label != repl.state.approval_mode_label {
-                    if let Some(mode) = shannon_engine::permissions::ApprovalMode::from_label(
-                        &repl.state.approval_mode_label,
-                    ) {
-                        let mut perms = shannon_types::recover_lock(engine.permissions().write());
-                        perms.set_approval_mode(mode);
-                    }
-                }
+                repl.state.approval_mode = mode;
             }
 
             let rendered = repl.output_renderer.render_output(&response, "assistant");
@@ -1477,9 +1521,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 );
             }
 
-            // Auto-memory: if the assistant response contains memory-worthy
-            // patterns, persist them to the memory store automatically.
-            auto_save_memory(repl, &response);
+            // NOTE: automatic assistant-response memory saving was removed
+            // (P0-10): phatic phrases like "I'll remember that!" or "saved:"
+            // caused unrelated response lines to be persisted as Preference
+            // memories that poisoned every future session's prompt. Durable
+            // facts are now saved deliberately by the model via the
+            // MemorySave tool, or by the user via /remember.
 
             // Sidecar persistence after each turn (§4.6): the turn's data is
             // already durable in events.jsonl via the engine tee — only a
@@ -1532,29 +1579,31 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             // drain loop — NOT here — to avoid recursive handle_query calls.
         }
         Err((engine_opt, e)) => {
-            // Clear queued messages on error/cancel — user chose to stop.
-            repl.state.queued_messages.clear();
+            // §P2-25: on error/cancel do NOT drop queued messages — the user
+            // typed them for future turns, and silently clearing them is
+            // input loss. They stay visible in the queue panel and drain on
+            // the next successful turn (the user can also clear the queue
+            // explicitly).
+            if !repl.state.queued_messages.is_empty() {
+                tracing::warn!(
+                    count = repl.state.queued_messages.len(),
+                    error = %e,
+                    "query failed; retaining queued messages for the next turn"
+                );
+            }
             // Restore the query engine if it was recovered from the task.
             // Preserve the user message so conversation state stays consistent
             // (the background task only added it to its clone, not the engine).
             if let Some(mut engine) = engine_opt {
                 engine.add_user_message(input.to_string());
                 repl.query_engine = Some(engine);
-                // Sync approval mode if changed during streaming
+                // P0-1: forward-sync UI state from the engine (see above).
                 if let Some(ref engine) = repl.query_engine {
-                    let engine_label = {
+                    let mode = {
                         let perms = shannon_types::recover_lock(engine.permissions().read());
-                        perms.approval_mode().short_label().to_string()
+                        perms.approval_mode()
                     };
-                    if engine_label != repl.state.approval_mode_label {
-                        if let Some(mode) = shannon_engine::permissions::ApprovalMode::from_label(
-                            &repl.state.approval_mode_label,
-                        ) {
-                            let mut perms =
-                                shannon_types::recover_lock(engine.permissions().write());
-                            perms.set_approval_mode(mode);
-                        }
-                    }
+                    repl.state.approval_mode = mode;
                 }
             }
             let is_cancelled = e == "cancelled";
@@ -1616,143 +1665,73 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     repl.state.multi_progress_visible = false;
     repl.state.multi_progress.clear();
 
+    // review §P0-5 safety net: if the spawned query task was aborted before
+    // it could hand the engine back (cancel / panic / early drop), the
+    // `repl.query_engine` slot is now None and the REPL would otherwise
+    // refuse every subsequent query. Construct a fresh engine so the user
+    // can keep going. Conversation state from the dropped engine is lost —
+    // this is preferable to bricking the REPL.
+    if repl.query_engine.is_none() {
+        let config = shannon_engine::api::LlmClientConfig {
+            api_key: String::new(),
+            alternate_api_keys: Vec::new(),
+            base_url: String::new(),
+            model: repl.state.model.clone().unwrap_or_default(),
+            max_tokens: 8192,
+            timeout_seconds: 600,
+            api_version: String::new(),
+            provider: repl
+                .state
+                .selected_provider
+                .clone()
+                .unwrap_or(shannon_engine::api::LlmProvider::Ollama),
+            extra_headers: std::collections::HashMap::new(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 0,
+            budget_tokens: None,
+            reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
+            thinking_type: shannon_engine::api::types::thinking_type_from_env(),
+        };
+        let client = shannon_engine::api::LlmClient::new(config);
+        let tools = shannon_core::ToolRegistry::new();
+        let permissions = shannon_engine::permissions::PermissionManager::new();
+        let state = shannon_engine::state::StateManager::new();
+        let engine = shannon_core::query_engine::QueryEngine::with_defaults(
+            client,
+            tools,
+            permissions,
+            state,
+        );
+        repl.query_engine = Some(engine);
+        tracing::warn!(
+            "handle_query: query engine was lost mid-turn (cancel/abort/panic); \
+             replaced with a fresh engine so subsequent queries still work"
+        );
+    }
+
+    // T5: one-time redaction opt-in notice. The built-in secret-guard runs
+    // audit-only by default, so detected secret values are forwarded to the
+    // provider and logged; when this turn's outbound requests contained
+    // secret-shaped content, tell the user (exactly once, non-blocking chat
+    // note — never a prompt) how to switch redaction on. Headless hosts get
+    // the same hint via the `tracing::warn!` in
+    // `shannon_core::secret_guard::take_redaction_suggestion`.
+    if shannon_core::secret_guard::take_redaction_suggestion() {
+        repl.chat.add_message(
+            ChatRole::System,
+            "\u{26A0} Secret-guard detected secret-shaped content in outbound \
+             requests (audit-only mode: values were forwarded to the provider \
+             and written to the session log). Enable redaction with \
+             `[secret_guard] mode = \"redact\"` in .shannon.toml (or \
+             ~/.shannon/config.toml), or `SHANNON_SECRET_GUARD=redact`."
+                .to_string(),
+        );
+    }
+
     Ok(())
-}
-
-/// Auto-save memory: detect memory-worthy patterns in the assistant response
-/// and persist them to the memory store.
-///
-/// This runs after every successful query turn. It scans for explicit memory
-/// signals (e.g. the assistant saying "I'll remember that") and saves the
-/// relevant context. This is a lightweight heuristic — the full LLM-based
-/// `MemoryExtractor` handles deeper extraction when explicitly invoked.
-fn auto_save_memory(repl: &mut Repl, response: &str) {
-    let engine = match repl.query_engine.as_ref() {
-        Some(e) => e,
-        None => return,
-    };
-
-    let memory = match engine.memory() {
-        Some(m) => m,
-        None => return,
-    };
-
-    // Patterns that indicate the assistant is recording a memory
-    let memory_signals = [
-        "i'll remember that",
-        "i'll keep that in mind",
-        "saved to memory",
-        "noted. i'll remember",
-        "saved memory",
-        "i've saved this",
-        "memory saved",
-        "i've noted",
-        "stored in memory",
-        "committing to memory",
-        "i'll make a note of that",
-        "remembering:",
-        "saved:",
-        "i'll remember",
-    ];
-
-    let lower = response.to_lowercase();
-    let has_signal = memory_signals.iter().any(|sig| lower.contains(sig));
-    if !has_signal {
-        return;
-    }
-
-    // Extract the most relevant line(s) from the response
-    let content = extract_memory_content(response);
-    if content.is_empty() {
-        return;
-    }
-
-    let mut store = match memory.write() {
-        Ok(guard) => guard,
-        Err(e) => {
-            tracing::warn!("memory lock poisoned, recovering: {e}");
-            e.into_inner()
-        }
-    };
-    let project = repl.state.working_directory.clone();
-
-    use shannon_core::memory::{MemoryCategory, MemoryEntry};
-    let entry = MemoryEntry {
-        id: uuid::Uuid::new_v4().to_string(),
-        content: content.clone(),
-        category: MemoryCategory::Preference,
-        project: project.clone(),
-        tags: vec!["auto-memory".to_string()],
-        confidence: 0.8,
-        created_at: chrono::Utc::now(),
-        accessed_at: chrono::Utc::now(),
-        access_count: 0,
-        source_session_id: None,
-        source_kind: Some(MemoryEntry::SOURCE_AUTO_EXTRACT.to_string()),
-    };
-
-    let id = entry.id.clone();
-    if let Err(e) = store.add_or_update(entry) {
-        tracing::warn!("Auto-memory add failed: {e}");
-        return;
-    }
-    if let Err(e) = store.save() {
-        tracing::warn!("Auto-memory save failed: {e}");
-        return;
-    }
-    drop(store);
-
-    // Also save as file for Claude Code-compatible persistence
-    let project_path = std::path::PathBuf::from(&project);
-    if let Err(e) = shannon_core::project_memory::save_memory_file(&project_path, &id, &content) {
-        tracing::debug!("Auto-memory file save skipped: {e}");
-    }
-
-    tracing::debug!("Auto-saved memory: {}...", &id[..8]);
-}
-
-/// Extract the most memory-worthy content from a response.
-/// Takes the sentence(s) around the memory signal.
-fn extract_memory_content(response: &str) -> String {
-    // Find lines that contain substantial content (not just the signal phrase)
-    let lines: Vec<&str> = response.lines().collect();
-    let mut content_lines: Vec<String> = Vec::new();
-
-    for line in &lines {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        // Skip very short lines (likely just the signal phrase)
-        if trimmed.len() < 20 {
-            continue;
-        }
-        // Skip lines that are just formatting
-        if trimmed.starts_with('#') || trimmed.starts_with("---") || trimmed.starts_with("===") {
-            continue;
-        }
-        content_lines.push(trimmed.to_string());
-        // Cap at 5 lines to avoid saving the entire response
-        if content_lines.len() >= 5 {
-            break;
-        }
-    }
-
-    if content_lines.is_empty() {
-        return String::new();
-    }
-
-    let mut content = content_lines.join("\n");
-    // Cap at 500 chars
-    if content.len() > 500 {
-        let mut end = 500;
-        while !content.is_char_boundary(end) {
-            end -= 1;
-        }
-        content.truncate(end);
-        content.push_str("...");
-    }
-    content
 }
 
 /// Format thinking content for display in the streaming message area.
@@ -1763,6 +1742,23 @@ fn escape_html_simple(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+/// Compose the user-facing text for `QueryEvent::Failed`.
+///
+/// When Shannon is unconfigured (review P0-1/P0-2: the silent Ollama fallback
+/// makes a fresh user's first message die with a bare connection error), a
+/// guidance line pointing at `/connect` is prepended before the underlying
+/// error so there is always an exit ramp. Pure — unit-tested below.
+fn compose_query_failure(unconfigured: bool, error: &str) -> String {
+    if unconfigured {
+        format!(
+            "\n\n⚠️ {}\n⚠️ Query failed: {error}",
+            t!("repl.unconfigured_guidance")
+        )
+    } else {
+        format!("\n\n⚠️ Query failed: {error}")
+    }
 }
 
 #[cfg(test)]
@@ -1787,9 +1783,12 @@ mod tests {
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
 
+    use super::{Repl, StreamingState, compose_query_failure, drain_streaming_delta, handle_query};
+
     fn create_test_engine() -> QueryEngine {
         let config = LlmClientConfig {
             api_key: "test".to_string(),
+            alternate_api_keys: Vec::new(),
             base_url: "http://localhost:1".to_string(), // unreachable
             model: "test-model".to_string(),
             max_tokens: 100,
@@ -1804,6 +1803,7 @@ mod tests {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
+            thinking_type: shannon_engine::api::types::thinking_type_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
         let tools = ToolRegistry::new();
@@ -1995,6 +1995,117 @@ mod tests {
         assert!(
             backtab_section.is_some_and(|s| s.contains("cycle_approval_mode")),
             "BackTab handler must call cycle_approval_mode()"
+        );
+    }
+
+    // ── §P2-25: delta drain under a single lock + queue retention ──────
+
+    /// The drain must return the pending delta and leave the state clean —
+    /// one lock acquisition, read + clear together (the old two-lock pattern
+    /// dropped tokens appended between the acquisitions).
+    #[test]
+    fn delta_drain_returns_pending_delta_and_empties_state() {
+        let state = std::sync::Mutex::new(StreamingState::default());
+        {
+            let mut s = state.lock().unwrap();
+            s.delta.push_str("partial ");
+            s.delta.push_str("token");
+        }
+
+        let (delta, _status) = drain_streaming_delta(&state);
+        assert_eq!(delta, "partial token");
+
+        // Nothing left: a second drain observes an empty delta.
+        let (again, _status) = drain_streaming_delta(&state);
+        assert_eq!(again, "");
+    }
+
+    /// A token appended *before* the drain must never be lost by the clear —
+    /// this is the race the old read-lock/clear-lock pair could hit.
+    #[test]
+    fn delta_drain_does_not_lose_tokens_appended_before_it() {
+        let state = std::sync::Mutex::new(StreamingState::default());
+        {
+            let mut s = state.lock().unwrap();
+            s.delta.push_str("abc");
+        }
+
+        let (first, _) = drain_streaming_delta(&state);
+
+        // Writer appends after the first drain (between poll iterations).
+        {
+            let mut s = state.lock().unwrap();
+            s.delta.push_str("def");
+        }
+        let (second, _) = drain_streaming_delta(&state);
+
+        assert_eq!(first, "abc");
+        assert_eq!(second, "def", "tokens appended between drains must survive");
+    }
+
+    /// §P2-25: the Err path of handle_query must NOT clear queued messages —
+    /// the user typed them for future turns; silently dropping them is input
+    /// loss. A failed query against an unreachable endpoint exercises the
+    /// Err path; the queued messages must still be there afterwards.
+    #[test]
+    fn failed_query_keeps_queued_messages() {
+        let _home = crate::test_env::HomeGuard::new();
+        let mut repl = Repl::new().expect("minimal repl");
+        repl.query_engine = Some(create_test_engine());
+        repl.state.queued_messages.push("first queued".to_string());
+        repl.state.queued_messages.push("second queued".to_string());
+
+        // Unreachable endpoint (localhost:1) → the query fails.
+        let result = handle_query(&mut repl, "hello", &mut None);
+        assert!(
+            result.is_ok(),
+            "handle_query surfaces engine errors in-chat, not as Err"
+        );
+
+        assert_eq!(
+            repl.state.queued_messages,
+            vec!["first queued".to_string(), "second queued".to_string()],
+            "failed query must retain queued messages"
+        );
+    }
+
+    // ── compose_query_failure (review P0-1/P0-2: unconfigured exit ramp) ──
+
+    #[test]
+    fn compose_query_failure_unconfigured_prepends_guidance_before_error() {
+        use rust_i18n::t;
+        let out = compose_query_failure(true, "connection refused");
+        let guidance = t!("repl.unconfigured_guidance").to_string();
+        assert!(
+            out.contains(&guidance),
+            "guidance line must be present, got {out:?}"
+        );
+        // Literal-substring guard: `t!` yields the key path itself when the
+        // key is missing (e.g. placed under the wrong yml namespace), which
+        // would make the `contains` above pass vacuously.
+        assert!(
+            out.contains("run /connect <provider> <key>"),
+            "guidance must be resolved translation text, got {out:?}"
+        );
+        // Guidance comes before the underlying error, both on separate lines.
+        let gpos = out.find(&guidance).expect("guidance present");
+        let epos = out
+            .find("Query failed: connection refused")
+            .expect("error present");
+        assert!(
+            gpos < epos,
+            "guidance must precede the raw error, got {out:?}"
+        );
+        assert!(out.contains("\n⚠️ Query failed: connection refused"));
+    }
+
+    #[test]
+    fn compose_query_failure_configured_keeps_legacy_format() {
+        // The configured path must be byte-identical to the old message so
+        // nothing changes for users who already set a provider up.
+        assert_eq!(
+            compose_query_failure(false, "boom"),
+            "\n\n⚠️ Query failed: boom"
         );
     }
 }

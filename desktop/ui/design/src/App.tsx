@@ -7,7 +7,6 @@ import Extensions from './pages/Extensions';
 import Settings from './pages/Settings';
 import OPC from './pages/OPC';
 import OPCTask from './pages/OPCTask';
-import ExtensionsHub from './components/extensions/ExtensionsHub';
 import MyAgents from './components/extensions/MyAgents';
 import DataSources from './components/extensions/DataSources';
 
@@ -27,8 +26,10 @@ export default function App() {
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/goals" element={<Goals />} />
           <Route path="/extensions" element={<Extensions />}>
-            <Route index element={<Navigate to="skills" replace />} />
-            <Route path="skills" element={<ExtensionsHub />} />
+            <Route index element={<Navigate to="agents" replace />} />
+            {/* The old skills hub page is retired in the production app —
+                the mock redirects to the extensions root. */}
+            <Route path="skills" element={<Navigate to="/extensions" replace />} />
             <Route path="agents" element={<MyAgents />} />
             <Route path="datasources" element={<DataSources />} />
           </Route>

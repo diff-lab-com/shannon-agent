@@ -63,14 +63,6 @@ export const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek', descKey: 'welcome.model.deepseek.desc' },
 ] as const
 
-export const TOOL_CATALOG: Record<string, { labelKey: string; icon: string; descKey: string }> = {
-  filesystem: { labelKey: 'welcome.tools.filesystem.label', icon: 'folder', descKey: 'welcome.tools.filesystem.desc' },
-  git: { labelKey: 'welcome.tools.git.label', icon: 'commit', descKey: 'welcome.tools.git.desc' },
-  playwright: { labelKey: 'welcome.tools.playwright.label', icon: 'web', descKey: 'welcome.tools.playwright.desc' },
-  web_search: { labelKey: 'welcome.tools.webSearch.label', icon: 'travel_explore', descKey: 'welcome.tools.webSearch.desc' },
-  tavily: { labelKey: 'welcome.tools.tavily.label', icon: 'menu_book', descKey: 'welcome.tools.tavily.desc' },
-}
-
 export const SHORTCUT_ROWS = [
   { keys: () => `${formatShortcut('K')}`, actionKey: 'shortcuts.openPalette' },
   { keys: () => `${formatShortcut('N')}`, actionKey: 'shortcuts.newChat' },
@@ -79,13 +71,8 @@ export const SHORTCUT_ROWS = [
   { keys: () => 'Esc', actionKey: 'shortcuts.cancel' },
 ] as const
 
-// Display labels for the Stepper (Step 0..3). Order matches STEPS_INDEX.
-export const STEP_LABEL_KEYS = [
-  'welcome.step.task',
-  'welcome.step.model',
-  'welcome.step.tools',
-  'welcome.step.done',
-] as const
+// (Round 6 §P3-1) The 4-key STEP_LABEL_KEYS array was unused after the
+// batch-5 Welcome refactor moved to a 2-key inline list. Removed.
 
 // ─── Documents skill recommendations (P2.4) ─────────────────────────────────
 // Instead of building a Documents engine inside Shannon (Phase D's MVP), we

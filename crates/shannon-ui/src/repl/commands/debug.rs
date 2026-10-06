@@ -149,11 +149,13 @@ pub(crate) fn handle_diag(repl: &mut Repl, args: &str) -> Result<()> {
     // ensures coverage if the logic is ever extended to accept user input.
     shannon_core::sandbox::audit_shell_command(cmd);
 
-    let output = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .current_dir(cwd)
-        .output();
+    let output = {
+        let (program, args) = shannon_types::shell::local_shell(cmd);
+        std::process::Command::new(program)
+            .args(&args)
+            .current_dir(cwd)
+            .output()
+    };
 
     match output {
         Ok(out) => {

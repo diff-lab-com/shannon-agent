@@ -6,10 +6,27 @@
 import { createContext, useContext } from 'react'
 import type { SlashCommand, SlashResult } from '@/lib/slash/commands'
 
+/** B1 §4-8: the user message currently being edited via the composer.
+ *  `turnIndex` is the rewind target (drops this turn and everything after);
+ *  `draft` is the composer content the user had before entering edit mode,
+ *  restored on cancel. */
+export interface EditingMessageState {
+  index: number
+  turnIndex: number
+  content: string
+  timestamp: number
+  attachmentPaths: string[]
+  draft: { text: string; attachments: string[] }
+}
+
 export interface ComposerContextValue {
   input: string
   setInput: (s: string) => void
   handleSend: () => void
+  /** GB P2-10a: the interrupt-now send — cancels the running turn and
+   *  delivers the composer text when it settles (ahead of the FIFO queue).
+   *  A no-op on an empty composer. */
+  handleSteer: () => void
   attachedFiles: string[]
   handleAttach: (files: string[]) => void
   handleDetachAll: () => void
@@ -18,6 +35,10 @@ export interface ComposerContextValue {
   /** Output of the last slash command; rendered by ComposerPanel. */
   slashResult: SlashResult | null
   dismissSlashResult: () => void
+  /** B1 §4-8: message being edited (composer-prefilled), or null. */
+  editing: EditingMessageState | null
+  /** Exit edit mode and restore the pre-edit draft. */
+  cancelEdit: () => void
 }
 
 export const ComposerContext = createContext<ComposerContextValue | null>(null)

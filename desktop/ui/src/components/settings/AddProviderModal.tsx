@@ -16,22 +16,27 @@
 //   - `add-provider-modal/TiersEditor.tsx` — per-tier model overrides.
 //   - `add-provider-modal/FallbackModelsEditor.tsx` — fallback list.
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/ui/modal'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import * as api from '@/lib/tauri-api'
+import { fetchFailureMessage, testResultMessage } from './models-settings/utils'
 import type {
   ProviderConnection,
   ProviderInput,
+  ProviderKind,
   ProvidersFile,
 } from '@/types'
 import { DefaultMaxTokensField } from './add-provider-modal/DefaultMaxTokensField'
 import { FallbackModelsEditor } from './add-provider-modal/FallbackModelsEditor'
 import { Field } from './add-provider-modal/Field'
 import { HeaderRowsEditor } from './add-provider-modal/HeaderRowsEditor'
+import ModelCurationEditor from './add-provider-modal/ModelCurationEditor'
 import { TiersEditor } from './add-provider-modal/TiersEditor'
+import { selectedToInputs, selectionEquals } from './add-provider-modal/modelCuration'
 import {
   KIND_INFO,
   QUICK_FILL,
@@ -41,6 +46,16 @@ import {
   parseDefaultMaxTokens,
   type AdvancedState,
 } from './add-provider-modal/types'
+import { NON_PROBEABLE_PROVIDER_KINDS } from './models-settings/types'
+
+/// In-modal probe state for the "Test connection" button (review §2-12 /
+/// §3-B item 11): spinner while the probe runs, then the categorized
+/// verdict + client-side round-trip latency. Purely transient — testing
+/// never saves.
+type TestState =
+  | { status: 'testing' }
+  | { status: 'done'; result: api.TestConnectionResult; latencyMs: number }
+  | null
 
 export interface AddProviderModalProps {
   editing: ProviderConnection | null
@@ -52,36 +67,162 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const [label, setLabel] = useState(editing?.display_name ?? '')
-  const [kind, setKind] = useState<string>(editing?.kind ?? 'openai-compatible')
+  // S4 (P2-23 残留): the union closed over `gemini` and lost its `| string`
+  // muffler, so the kind state is a real ProviderKind now (the select's
+  // options are exactly the KIND_INFO keys).
+  const [kind, setKind] = useState<ProviderKind>(editing?.kind ?? 'openai-compatible')
   const [baseUrl, setBaseUrl] = useState(editing?.base_url ?? '')
+  // S4 (P2-23 残留): the v2 `models_url` field finally has an input — the
+  // wire carried it on ProviderConnection but the modal had no way to author
+  // it. Advanced-tier (the 90% path never needs it); empty = unset.
+  const [modelsUrl, setModelsUrl] = useState(editing?.models_url ?? '')
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState('')
+  // S1-4c (P-N5 fetch linkage): true once the user has TYPED in the model
+  // field. A chip prefill resets it (a guess is not a choice), so a later
+  // successful Fetch models may replace it — but a user-typed id is never
+  // overwritten.
+  const [modelDirty, setModelDirty] = useState(false)
   const [advanced, setAdvanced] = useState<AdvancedState>(() => advancedFromEditing(editing))
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // B6-37: which field the error belongs to — drives aria-invalid/aria-describedby.
+  const [errorField, setErrorField] = useState<'label' | 'baseUrl' | null>(null)
+  // S2-1 (模型仓固化): the curated selection that becomes this provider's
+  // `models` vault. Edit mode starts from the provider's EXISTING
+  // declarations (unchecking is explicit — a save must never silently wipe
+  // a curated vault); a new connection starts at zero selected (裁定⑥).
+  const declaredIds = editing?.models?.map((m) => m.id) ?? []
+  const [curated, setCurated] = useState<Set<string>>(() => new Set(declaredIds))
+  const resetCurated = () => setCurated(new Set(declaredIds))
+
+  // P2: the modal holds unsaved edits (label, key, advanced rows…) — a stray
+  // Esc / backdrop click must not silently throw them away once anything is
+  // filled in.
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const dirty =
+    label.trim() !== (editing?.display_name ?? '') ||
+    kind !== (editing?.kind ?? 'openai-compatible') ||
+    baseUrl.trim() !== (editing?.base_url ?? '') ||
+    modelsUrl.trim() !== (editing?.models_url ?? '') ||
+    apiKey.trim() !== '' ||
+    model.trim() !== '' ||
+    !selectionEquals(curated, new Set(declaredIds))
+
+  const requestClose = () => {
+    if (dirty) {
+      setConfirmDiscard(true)
+      return
+    }
+    onClose()
+  }
 
   const info = KIND_INFO[kind] ?? KIND_INFO['openai-compatible']
+
+  // === Fetch model list + in-modal connection test (review §2-9 / §2-12) ===
+  const modelListId = useId()
+  const [suggestions, setSuggestions] = useState<string[] | null>(null)
+  const [fetching, setFetching] = useState(false)
+  const [fetchFailure, setFetchFailure] = useState<api.FetchModelsFailure | null>(null)
+  const [testState, setTestState] = useState<TestState>(null)
+
+  // A fetched list (and any verdict) is only valid for the kind+base_url+
+  // key it was fetched with — any of those changes invalidates it.
+  const clearProbeState = () => {
+    setSuggestions(null)
+    setFetchFailure(null)
+    setTestState(null)
+    resetCurated()
+  }
+
+  // The stored key counts in edit mode: the backend falls back to the saved
+  // credential for this connection id when the input is empty (the modal
+  // never re-displays the secret).
+  const keyAvailable = apiKey.trim() !== '' || !!editing?.has_api_key
+  const canProbe = baseUrl.trim() !== '' && (!info.needsKey || keyAvailable)
+  const providerLabel = kindLabel(intl, kind)
+  // S4 (P-N25): gemini/azure have no shared list-models endpoint — the
+  // backend's `is_probeable_kind` refuses them, so in-modal Test would
+  // always end in an "Unknown" verdict and Fetch models in
+  // `unsupported_kind`. Surface that BEFORE the user walks into the
+  // silent dead-end (the buttons stay enabled — the honest refusal is
+  // the backend's to give, and the hint must not change that behavior).
+  const probeUnsupported = NON_PROBEABLE_PROVIDER_KINDS.includes(kind)
 
   const applyQuickFill = (qf: (typeof QUICK_FILL)[number]) => {
     setKind(qf.kind)
     if (qf.baseUrl) setBaseUrl(qf.baseUrl)
-    if (qf.model) setModel(qf.model)
+    if (qf.model) {
+      setModel(qf.model)
+      // The chip's id is a guess, not a user choice — a later Fetch models
+      // is allowed to replace it with a real id (S1-4c). The `custom` chip
+      // carries no model and must not clear a previously typed one.
+      setModelDirty(false)
+    }
     if (!label) setLabel(qf.id === 'custom' ? '' : qf.label)
+    clearProbeState()
+  }
+
+  const handleFetchModels = async () => {
+    if (!canProbe || fetching) return
+    setFetching(true)
+    setFetchFailure(null)
+    try {
+      const models = await api.fetchProviderModels(
+        editing?.id ?? null,
+        kind,
+        baseUrl.trim(),
+        apiKey.trim() || null,
+      )
+      setSuggestions(models)
+      // S1-4c (P-N5): a successful fetch makes the endpoint's real catalog
+      // the best guess — prefill the first id while the field still holds
+      // the initial/chip value. A user-typed id is never overwritten.
+      if (models.length > 0 && !modelDirty) {
+        setModel(models[0])
+      }
+    } catch (e) {
+      setSuggestions(null)
+      setFetchFailure(api.parseFetchModelsError(String(e)))
+    } finally {
+      setFetching(false)
+    }
+  }
+
+  const handleTestConnection = async () => {
+    if (!canProbe || testState?.status === 'testing') return
+    setTestState({ status: 'testing' })
+    setFetchFailure(null)
+    const start = performance.now()
+    try {
+      const result = await api.testProviderCredentials(
+        kind,
+        baseUrl.trim() || null,
+        apiKey.trim() || null,
+        editing?.id ?? null,
+      )
+      setTestState({ status: 'done', result, latencyMs: Math.max(1, Math.round(performance.now() - start)) })
+    } catch (e) {
+      setTestState({ status: 'done', result: { kind: 'unknown', message: String(e) }, latencyMs: 0 })
+    }
   }
 
   const submit = async () => {
     const trimmedLabel = label.trim()
     if (!trimmedLabel) {
       setError(t('settings.models.providers.needLabel'))
+      setErrorField('label')
       return
     }
     if (info.baseUrlRequired && !baseUrl.trim()) {
       setError(t('settings.models.providers.needBaseUrl'))
+      setErrorField('baseUrl')
       return
     }
     setSaving(true)
     setError(null)
+    setErrorField(null)
     const input: ProviderInput = {
       id: editing?.id,
       display_name: trimmedLabel,
@@ -90,6 +231,10 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
       // an empty value tells the backend to keep the existing key.
       api_key: apiKey.trim() || undefined,
       base_url: baseUrl.trim() || undefined,
+      // S4 (P2-23 残留): the v2 models-list override. Empty collapses to
+      // omitted so the engine applies its own default (A1 — never send
+      // empty strings as overrides).
+      models_url: modelsUrl.trim() || undefined,
       model: model.trim() || undefined,
       // Phase 2 task 3: surface the v2 ProviderProfile fields. Empty rows /
       // empty inputs collapse to `null` or omitted so the engine applies
@@ -105,9 +250,24 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
     }
     try {
       const fresh = await api.saveProvider(input)
+      // S2-1: 固化 the curated selection into the provider's model vault.
+      // The just-saved provider id: explicit on edit; on insert the save
+      // repointed the store's active target at the new slot, which the
+      // returned file mirrors as `active_provider_id`. An edit always
+      // syncs (unchecking everything is an explicit clear); a fresh
+      // connection with zero selected skips the call (vault already
+      // empty).
+      const providerId = input.id ?? fresh.active_provider_id ?? null
+      const vault = selectedToInputs(suggestions, curated)
+      if (providerId && (vault.length > 0 || editing != null)) {
+        await api.setProviderModels(providerId, vault)
+      }
       onSaved(fresh)
     } catch (e) {
+      // The provider save itself may have landed — the error keeps the
+      // modal open (and the dirty guard on) so nothing is silently lost.
       setError(String(e))
+      setErrorField(null)
     } finally {
       setSaving(false)
     }
@@ -116,7 +276,9 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   return (
     <Modal
       open
-      onClose={onClose}
+      onClose={requestClose}
+      closeOnEscape={!dirty}
+      closeOnBackdrop={!dirty}
       size="2xl"
       title={editing ? t('settings.models.providers.editTitle') : t('settings.models.providers.addTitle')}
       className="max-h-[90vh] overflow-y-auto p-lg space-y-md"
@@ -134,9 +296,9 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
                 type="button"
                 variant="outline"
                 onClick={() => applyQuickFill(qf)}
-                className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low/40 hover:border-primary/40 hover:bg-primary/5 text-on-surface-variant hover:text-primary font-label-sm text-[12px] cursor-pointer"
+                className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low/40 hover:border-primary/40 hover:bg-primary/5 text-on-surface-variant hover:text-primary font-label-sm text-label-sm cursor-pointer"
               >
-                <span className="material-symbols-outlined text-[14px]">{qf.icon}</span>
+                <span className="material-symbols-outlined icon-sm">{qf.icon}</span>
                 {qf.id === 'custom' ? t(qf.label) : qf.label}
               </Button>
             ))}
@@ -145,14 +307,22 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
 
         <div className="space-y-sm">
           <Field label={t('settings.models.providers.labelField')}>
-            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm" value={label} onChange={(e) => { setLabel(e.target.value); setError(null) }} placeholder={t('settings.models.providers.labelPlaceholder')} autoFocus />
+            <Input
+              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm"
+              value={label}
+              onChange={(e) => { setLabel(e.target.value); setError(null); setErrorField(null) }}
+              placeholder={t('settings.models.providers.labelPlaceholder')}
+              autoFocus
+              aria-invalid={errorField === 'label' || undefined}
+              aria-describedby={error ? 'add-provider-error' : undefined}
+            />
           </Field>
 
           <Field label={t('settings.models.providers.kindField')}>
             <select
               className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm cursor-pointer"
               value={kind}
-              onChange={(e) => setKind(e.target.value)}
+              onChange={(e) => { setKind(e.target.value as ProviderKind); clearProbeState() }}
             >
               {Object.keys(KIND_INFO).map(k => (
                 <option key={k} value={k}>{kindLabel(intl, k)}</option>
@@ -161,7 +331,14 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
           </Field>
 
           <Field label={t(info.baseUrlRequired ? 'settings.models.providers.baseUrlRequired' : 'settings.models.providers.baseUrlOptional')}>
-            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono" value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setError(null) }} placeholder="https://api.example.com/v1" />
+            <Input
+              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
+              value={baseUrl}
+              onChange={(e) => { setBaseUrl(e.target.value); setError(null); setErrorField(null); clearProbeState() }}
+              placeholder="https://api.example.com/v1"
+              aria-invalid={errorField === 'baseUrl' || undefined}
+              aria-describedby={error ? 'add-provider-error' : undefined}
+            />
           </Field>
 
           <Field label={t('settings.models.providers.apiKeyField')}>
@@ -169,14 +346,121 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
               className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
               type="password"
               value={apiKey}
-              onChange={(e) => { setApiKey(e.target.value); setError(null) }}
+              onChange={(e) => { setApiKey(e.target.value); setError(null); clearProbeState() }}
               placeholder={editing ? t('settings.models.providers.apiKeyKeep') : t('settings.models.providers.apiKeyPlaceholder')}
               disabled={!info.needsKey}
             />
           </Field>
 
+          {/* Review §2-12: verify the form values BEFORE saving — save ≠
+              test. Edit mode with an untouched key tests the stored
+              credential (api_key null + provider id → backend reads the
+              credential store). */}
+          <div className="flex items-center gap-md flex-wrap">
+            {/* S4 (P-N25): pre-submit honest hint — this kind cannot be
+                probed at all, so the user can skip straight to Save. Full
+                width (wraps above the button row) so it reads as a note,
+                not a verdict. */}
+            {probeUnsupported ? (
+              <p
+                data-testid="probe-unsupported-hint"
+                className="basis-full font-label-sm text-on-surface-variant flex items-center gap-xs"
+              >
+                <span className="material-symbols-outlined icon-sm text-warning" aria-hidden="true">info</span>
+                {t('settings.models.providers.probeUnsupportedHint')}
+              </p>
+            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              data-testid="test-provider-connection"
+              disabled={!canProbe || testState?.status === 'testing'}
+              onClick={handleTestConnection}
+              className="inline-flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-low hover:border-primary/40 hover:bg-primary/5 text-on-surface font-label-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span className={`material-symbols-outlined icon-md${testState?.status === 'testing' ? ' animate-spin' : ''}`}>
+                {testState?.status === 'testing' ? 'progress_activity' : 'network_check'}
+              </span>
+              {testState?.status === 'testing'
+                ? t('settings.models.providers.testingConnection')
+                : t('settings.models.providers.testConnection')}
+            </Button>
+            {testState?.status === 'done' && (
+              <p
+                role="status"
+                data-testid="provider-test-status"
+                className={`font-label-sm ${testState.result.kind === 'success' ? 'text-primary' : 'text-error'}`}
+              >
+                {testState.result.kind === 'success'
+                  ? intl.formatMessage({ id: 'settings.models.testResult.successLatency' }, { ms: testState.latencyMs })
+                  : testResultMessage(intl, testState.result, providerLabel)}
+              </p>
+            )}
+          </div>
+
           <Field label={t('settings.models.providers.modelField')}>
-            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono" value={model} onChange={(e) => setModel(e.target.value)} placeholder="claude-sonnet-4-6" />
+            <div className="flex gap-sm items-center">
+              <Input
+                className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
+                value={model}
+                onChange={(e) => { setModel(e.target.value); setModelDirty(true) }}
+                placeholder="claude-sonnet-4-6"
+                // Conditional: an input with a `list` attribute is exposed
+                // to assistive tech as a combobox, which would mislabel the
+                // free-text field (and collide with the kind select's role
+                // in tests) when no suggestions exist.
+                list={suggestions != null && suggestions.length > 0 ? modelListId : undefined}
+                data-testid="provider-model-input"
+              />
+              {/* Review §2-9: pull the live /models catalog so users pick
+                  real ids instead of typing free text and discovering typos
+                  as provider 404s. Free text stays valid — the datalist only
+                  suggests. Works identically in add and edit mode (edit
+                  falls back to the stored key). */}
+              <Button
+                type="button"
+                variant="outline"
+                data-testid="fetch-models"
+                disabled={!canProbe || fetching}
+                onClick={handleFetchModels}
+                className="shrink-0 inline-flex items-center gap-xs px-md py-sm rounded-lg border border-outline-variant/50 bg-surface-container-low hover:border-primary/40 hover:bg-primary/5 text-on-surface font-label-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <span className={`material-symbols-outlined icon-md${fetching ? ' animate-spin' : ''}`}>
+                  {fetching ? 'progress_activity' : 'cloud_download'}
+                </span>
+                {fetching
+                  ? t('settings.models.providers.fetchingModels')
+                  : t('settings.models.providers.fetchModels')}
+              </Button>
+            </div>
+            {suggestions != null && suggestions.length > 0 && (
+              <>
+                <datalist id={modelListId}>
+                  {suggestions.map((m) => <option key={m} value={m} />)}
+                </datalist>
+                <p data-testid="models-found" className="mt-xs font-label-sm text-on-surface-variant">
+                  {intl.formatMessage({ id: 'settings.models.providers.modelsFound' }, { count: suggestions.length })}
+                </p>
+                {/* S2-1: pick the models to 固化 into the provider's model
+                    vault — the curated whitelist the picker filters by
+                    (裁定③), capacity-guarded per 裁定⑥. */}
+                <ModelCurationEditor
+                  suggestions={suggestions}
+                  selected={curated}
+                  onChange={setCurated}
+                />
+              </>
+            )}
+            {suggestions != null && suggestions.length === 0 && (
+              <p data-testid="models-empty" className="mt-xs font-label-sm text-on-surface-variant">
+                {t('settings.models.providers.modelsEmpty')}
+              </p>
+            )}
+            {fetchFailure && (
+              <p role="alert" data-testid="fetch-models-error" className="mt-xs font-label-sm text-error">
+                {fetchFailureMessage(intl, fetchFailure, providerLabel)}
+              </p>
+            )}
           </Field>
 
           {/* Advanced disclosure — surfaces v2 ProviderProfile fields. The
@@ -191,11 +475,23 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
               aria-expanded={advancedOpen}
               data-testid="add-provider-advanced-toggle"
             >
-              <span className="material-symbols-outlined text-[18px]">{advancedOpen ? 'expand_less' : 'expand_more'}</span>
+              <span className="material-symbols-outlined icon-md">{advancedOpen ? 'expand_less' : 'expand_more'}</span>
               {t('settings.models.providers.advanced')}
             </Button>
             {advancedOpen ? (
               <div className="mt-sm space-y-md p-md rounded-lg border border-outline-variant/30 bg-surface-container-low/40">
+                {/* S4 (P2-23 残留): the v2 models-list override — where the
+                    engine looks up the provider's model catalog when it
+                    differs from the base URL. Omitted = engine default. */}
+                <Field label={t('settings.models.providers.modelsUrlField')}>
+                  <Input
+                    className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
+                    value={modelsUrl}
+                    onChange={(e) => { setModelsUrl(e.target.value); setError(null); setErrorField(null) }}
+                    placeholder="https://api.example.com/v1/models"
+                    data-testid="provider-models-url-input"
+                  />
+                </Field>
                 <HeaderRowsEditor
                   rows={advanced.headers}
                   onChange={(rows) => setAdvanced((s) => ({ ...s, headers: rows }))}
@@ -219,19 +515,30 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
         </div>
 
         {error ? (
-          <div className="font-label-sm text-[12px] text-error">{error}</div>
+          <div id="add-provider-error" role="alert" className="font-label-sm text-label-sm text-error">{error}</div>
         ) : null}
 
         <div className="flex justify-end gap-sm pt-xs">
-          <Button className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container cursor-pointer" onClick={onClose}>
+          <Button className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container cursor-pointer" onClick={requestClose}>
             {t('settings.models.providers.cancel')}
           </Button>
           <Button className="px-lg py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm cursor-pointer disabled:opacity-50" onClick={submit} disabled={saving}>
-            <span className="material-symbols-outlined text-[18px]">{saving ? 'progress_activity' : 'save'}</span>
+            <span className="material-symbols-outlined icon-md">{saving ? 'progress_activity' : 'save'}</span>
             {saving ? t('settings.models.providers.saving') : t('settings.models.providers.save')}
           </Button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        title={t('ui.modal.discard.title')}
+        message={t('ui.modal.discard.message')}
+        confirmLabel={t('ui.modal.discard.confirm')}
+        cancelLabel={t('ui.modal.discard.cancel')}
+        destructive
+        onConfirm={onClose}
+        onCancel={() => setConfirmDiscard(false)}
+      />
     </Modal>
   )
 }

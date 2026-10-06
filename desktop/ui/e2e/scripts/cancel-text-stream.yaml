@@ -1,0 +1,33 @@
+# ChatScript: cancel-text-stream — journey #6 子集（矩阵#6，完整 cancel 矩阵在 R3）。
+#
+# 3 个分片（间隔 5s，流一直挂着）→ 用户点 Stop → onCancel 缺省路径 →
+# query:cancelled 收敛：无残留 streaming/光标、stop→send 复位、无失败横幅。
+# D6（已裁定采纳）：半截文本保留——AppContext 的 QUERY_CANCELLED 把已流出
+# 的分片提交为 assistant 气泡（interrupted 标记 → 「已停止」chip），后端
+# L0 以 assistant/message(interrupted) 落盘，切走切回/重载后气泡与标记
+# 一致返回。原 knownIssue: "A-19" 锚点已随 D6 实施移除（断言在 spec
+# chat-script.cancel.spec.ts 与 L1 chatStateMachine.scripts.test.tsx）。
+name: cancel-text-stream
+description: 流中取消 — stop → query:cancelled 收敛 + 半截文本保留（interrupted 标记，D6 已实施）
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-cancel
+      title: Cancel stream
+      messages: []
+    - id: script-sess-cancel-spare
+      title: Cancel spare
+      messages: []
+turns:
+  - user: "写一首关于海的长诗，慢慢写"
+    script:
+      - event: query:text
+        chunks:
+          - "海浪拍岸，"
+          - "月光洒落，"
+          - "风起云涌，"
+        chunkDelayMs: 5000
+onCancel:
+  emit:
+    - event: query:cancelled

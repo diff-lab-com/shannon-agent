@@ -12,9 +12,17 @@ import { test, expect } from '@playwright/test'
  * against a real Chromium.
  */
 test.describe('Command palette', () => {
+  // The mod+k handler attaches in a Layout effect one commit after first
+  // paint — under a loaded runner a raw networkidle keypress can land before
+  // it and be swallowed. Anchor the keypress on a mounted surface instead.
+  async function waitAppInteractive(page: import('@playwright/test').Page): Promise<void> {
+    await expect(page.getByRole('textbox', { name: 'Message' })).toBeVisible()
+  }
+
   test('Ctrl+K opens the palette and Escape closes it', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
+    await waitAppInteractive(page)
     await page.keyboard.press('Control+k')
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
@@ -26,6 +34,7 @@ test.describe('Command palette', () => {
   test('filter + Enter navigates to the matched page command', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
+    await waitAppInteractive(page)
     await page.keyboard.press('Control+k')
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()

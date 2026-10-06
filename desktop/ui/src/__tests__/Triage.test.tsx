@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { IntlProvider } from 'react-intl'
 import { MemoryRouter, useLocation } from 'react-router-dom'
+import { toast } from 'sonner'
 import Triage from '@/pages/Triage'
 import * as api from '@/lib/tauri-api'
 import type { InboxItem, InboxListFilter } from '@/types'
@@ -31,6 +32,13 @@ const testMessages: Record<string, string> = {
   'inbox.source.goal': 'Goal',
   'inbox.source.trigger': 'Trigger',
   'inbox.source.batch': 'Batch',
+  'inbox.source.session_approval': 'Approval',
+  'inbox.source.session_failed': 'Session failed',
+  'inbox.source.skill_candidate': 'Skill candidate',
+  'inbox.action.viewSession': 'View session',
+  'inbox.action.viewSession.aria': 'Open the session this item came from',
+  'inbox.review.label': 'Review',
+  'inbox.review.aria': 'Review this skill candidate in Extensions → Pending',
   'inbox.sort.aria': 'Toggle sort order',
   'inbox.sort.newest': 'Newest first',
   'inbox.sort.oldest': 'Oldest first',
@@ -45,6 +53,9 @@ const testMessages: Record<string, string> = {
   'inbox.rerun.aria': 'Rerun the routine behind this item',
   'inbox.rerun.title': 'Rerun',
   'inbox.rerun.disabled.title': 'Rerun is available for routine and scheduled-task items',
+  'inbox.openSource.label': 'View source automation',
+  'inbox.openSource.aria': 'Open the automation that produced this item',
+  'inbox.groupBySource': 'Group by source',
   'inbox.select.aria': 'Select item {id}',
   'inbox.select.selectAll': 'Select all visible items',
   'inbox.select.deselectAll': 'Deselect all',
@@ -58,10 +69,25 @@ const testMessages: Record<string, string> = {
   'inbox.bulk.toast.markRead.plural': 'Marked {count} items as read',
   'inbox.bulk.toast.archived': 'Archived {count} item',
   'inbox.bulk.toast.archived.plural': 'Archived {count} items',
+  'inbox.bulk.toast.failedAll': 'Nothing was updated — all {count} operations failed',
+  'inbox.bulk.toast.partial': 'Updated {written} of {total} items — {failed} failed',
+  'inbox.undo': 'Undo',
+  'inbox.undo.failed': 'Undo failed — could not restore {count} items',
+  'inbox.errorState.title': "Couldn't load the inbox",
+  'inbox.errorState.description': 'The automation inbox could not be reached.',
+  'inbox.errorState.retry': 'Retry',
   'inbox.list.aria': 'Inbox items. Use j or k to move focus, Enter to mark read, and a to archive.',
   'inbox.empty.title': 'All clear.',
   'inbox.empty.description': 'The automation inbox collects results from routines and triggers.',
   'inbox.empty.cta': 'Refresh',
+  'inbox.empty.project.title': 'Nothing here for this project',
+  'inbox.empty.project.description': 'Every inbox item in this view belongs to another project (or has no session). Clear the filter to see the full inbox.',
+  'inbox.empty.project.cta': 'Clear project filter',
+  'project.filter.chip.aria': 'Filtered by project: {name}',
+  'project.filter.remove.aria': 'Remove project filter',
+  'tasks.status.failed.label': 'Failed',
+  'inbox.needsAction': 'Needs action',
+  'inbox.runStatus.succeeded': 'Succeeded',
 }
 
 // Hook spies — useInboxItems returns
@@ -93,7 +119,7 @@ vi.mock('@/lib/tauri-api', async () => {
 })
 
 function makeItem(o: Partial<InboxItem> & { id: number }): InboxItem {
-  return {
+  const base: InboxItem = {
     source: 'routine',
     sourceId: 'sched-001',
     sessionId: null,
@@ -105,6 +131,10 @@ function makeItem(o: Partial<InboxItem> & { id: number }): InboxItem {
     updatedAtMs: 1_700_000_000_000,
     ...o,
   }
+  // Store invariant: a freshly appended row has updatedAtMs == createdAtMs
+  // (only an in-place upsert refresh diverges them). Fixtures that set only
+  // createdAtMs therefore inherit it as updatedAtMs too.
+  return { ...base, updatedAtMs: o.updatedAtMs ?? o.createdAtMs ?? base.updatedAtMs }
 }
 
 const baseStats = { pending: 0, today: 0 }
@@ -128,12 +158,18 @@ function setItems(items: InboxItem[], stats: { pending: number; today: number } 
 
 function LocationCapture() {
   const location = useLocation()
-  return <div data-testid="location">{location.pathname}</div>
+  return (
+    <div
+      data-testid="location"
+      data-state={JSON.stringify(location.state ?? null)}
+      data-search={location.search}
+    >{location.pathname}</div>
+  )
 }
 
-function renderPage() {
+function renderPage(initialEntry: string | { pathname: string; state?: unknown } = '/triage') {
   return render(
-    <MemoryRouter initialEntries={['/triage']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <IntlProvider locale="en" messages={testMessages} defaultLocale="en">
         <div>
           <Triage />
@@ -150,6 +186,8 @@ beforeEach(() => {
   switchSessionSpy.mockReset()
   switchSessionSpy.mockResolvedValue(undefined)
   vi.mocked(api.updateInboxItemStatus).mockClear()
+  vi.mocked(toast.success).mockClear()
+  vi.mocked(toast.error).mockClear()
   setItems([])
 })
 
@@ -159,6 +197,30 @@ describe('Triage page (inbox)', () => {
     renderPage()
     expect(screen.getByText('All clear.')).toBeInTheDocument()
     expect(screen.getByText(/automation inbox collects results/i)).toBeInTheDocument()
+  })
+
+  // A1 polish: emptiness is judged on the VISIBLE list. A project deep-link
+  // that filters every item out must land on the scoped empty state — not a
+  // select-all row reading 「shown 0 of 1」 — with the 清除筛选 escape hatch.
+  it('shows the scoped empty state (no select-all row) when the project filter excludes every item', () => {
+    setItems([makeItem({ id: 1, sessionId: 'sess-elsewhere' })])
+    renderPage('/triage?project=%2Fw%2Falpha')
+    expect(screen.getByText('Nothing here for this project')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Select all visible items')).not.toBeInTheDocument()
+    expect(screen.queryByText('0 of 1')).not.toBeInTheDocument()
+
+    // 清除筛选 strips ?project= — the unscoped inbox and its select-all row return.
+    fireEvent.click(screen.getByRole('button', { name: 'Clear project filter' }))
+    expect(screen.getByText('Item 1')).toBeInTheDocument()
+    expect(screen.getByLabelText('Select all visible items')).toBeInTheDocument()
+    expect(screen.queryByText('Nothing here for this project')).not.toBeInTheDocument()
+  })
+
+  it('keeps the plain empty state when no project filter is active and the inbox is empty', () => {
+    setItems([])
+    renderPage('/triage?project=%2Fw%2Falpha')
+    // Zero items everywhere WITH the param → still the scoped variant.
+    expect(screen.getByText('Nothing here for this project')).toBeInTheDocument()
   })
 
   it('renders one card per inbox item with title and summary', () => {
@@ -189,7 +251,9 @@ describe('Triage page (inbox)', () => {
   it('source filter chips push the source onto the hook filter', () => {
     const { setFilter } = setItems([makeItem({ id: 1 })])
     renderPage()
-    fireEvent.click(screen.getByRole('button', { name: 'Goal' }))
+    // Q4 2026-09: source filter is a dropdown — open it first, then click the option.
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Goal' }))
     expect(setFilter).toHaveBeenCalledWith({ status: undefined, source: 'goal' })
   })
 
@@ -211,7 +275,13 @@ describe('Triage page (inbox)', () => {
   it('batch source chip pushes source=batch onto the hook filter', () => {
     const { setFilter } = setItems([makeItem({ id: 7, source: 'batch' })])
     renderPage()
-    fireEvent.click(screen.getByRole('button', { name: 'Batch' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }))
+    // Menu items render label inside a <span>; query by partial match to
+    // tolerate i18n locale changes ("Best-of-N" / "多方案").
+    const items = screen.getAllByRole('menuitem')
+    const target = items.find(el => /best-of|多方案|batch/i.test(el.textContent || ''))
+    expect(target).toBeTruthy()
+    fireEvent.click(target!)
     expect(setFilter).toHaveBeenCalledWith({ status: undefined, source: 'batch' })
   })
 
@@ -332,11 +402,11 @@ describe('Triage page (inbox)', () => {
       makeItem({ id: 2, title: 'Newer', createdAtMs: 5_000 }),
     ])
     const { container } = renderPage()
-    const cards = container.querySelectorAll('.glass-panel')
+    const cards = container.querySelectorAll('[role="listitem"]')
     expect(cards[0]).toHaveTextContent('Newer')
     expect(cards[1]).toHaveTextContent('Older')
     fireEvent.click(screen.getByRole('button', { name: 'Toggle sort order' }))
-    const cardsAfter = container.querySelectorAll('.glass-panel')
+    const cardsAfter = container.querySelectorAll('[role="listitem"]')
     expect(cardsAfter[0]).toHaveTextContent('Older')
     expect(cardsAfter[1]).toHaveTextContent('Newer')
   })
@@ -399,5 +469,385 @@ describe('Triage page (inbox)', () => {
   it('filter type stays assignable to the wire shape', () => {
     const f: InboxListFilter = { status: 'read', source: 'routine' }
     expect(f.status).toBe('read')
+  })
+})
+
+// IA T2 (互链闭环): routine/scheduled_task cards link back to the automation
+// that produced them, and a HistoryView hand-over highlights the target card.
+describe('Triage — cross links (IA T2)', () => {
+  it('shows「View source automation」on a routine item and navigates to /tasks with openRoutineId', () => {
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001' })])
+    renderPage()
+    const btn = screen.getByRole('button', { name: 'Open the automation that produced this item' })
+    expect(btn).toHaveTextContent('View source automation')
+    fireEvent.click(btn)
+    const probe = screen.getByTestId('location')
+    expect(probe).toHaveTextContent('/tasks')
+    expect(JSON.parse(probe.getAttribute('data-state')!)).toEqual({ openRoutineId: 'sched-001' })
+  })
+
+  it('shows the source link for scheduled_task items too', () => {
+    setItems([makeItem({ id: 2, source: 'scheduled_task', sourceId: 'st-9' })])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Open the automation that produced this item' })).toBeInTheDocument()
+  })
+
+  it('hides the source link for goal/trigger items and items without sourceId', () => {
+    setItems([
+      makeItem({ id: 1, source: 'goal', sourceId: null }),
+      makeItem({ id: 2, source: 'trigger', sourceId: 'tr-1' }),
+    ])
+    renderPage()
+    expect(screen.queryByRole('button', { name: 'Open the automation that produced this item' })).not.toBeInTheDocument()
+  })
+
+  it('rings the card handed over via highlightInboxId state and drains the router state', () => {
+    setItems([
+      makeItem({ id: 7, source: 'routine', sourceId: 'sched-001' }),
+      makeItem({ id: 8, source: 'routine', sourceId: 'sched-002' }),
+    ])
+    renderPage({ pathname: '/triage', state: { highlightInboxId: 7 } })
+    const highlighted = screen.getByText('Item 7').closest('[role="listitem"]')
+    expect(highlighted).not.toBeNull()
+    expect(highlighted!).toHaveAttribute('data-highlight', 'true')
+    expect(highlighted!.className).toContain('ring-2')
+    // The other card is not highlighted.
+    expect(screen.getByText('Item 8').closest('[data-highlight]')).toBeNull()
+    // One-shot: the router state was consumed (highlight lives in local state).
+    expect(JSON.parse(screen.getByTestId('location').getAttribute('data-state')!)).toBeNull()
+  })
+
+  it('does not ring any card without highlight state', () => {
+    setItems([makeItem({ id: 1 })])
+    renderPage()
+    expect(document.querySelector('[data-highlight="true"]')).toBeNull()
+  })
+})
+
+// IA T6 (收件箱升级): session sources read "View session", skill candidates
+// link to the Extensions → Pending review queue (互通), pending items pin to
+// the top of the default view, and the three new sources are filterable.
+describe('Triage — session sources, skill candidates and pending pinning (IA T6/X1)', () => {
+  it('shows「View session」as the primary action for a session_approval item and switches to it', async () => {
+    const { getSessionId } = setItems([
+      makeItem({ id: 11, source: 'session_approval', sessionId: 'sess-77', title: 'Permission requested' }),
+    ])
+    renderPage()
+    const btn = screen.getByRole('button', { name: 'Open the session this item came from' })
+    expect(btn).toHaveTextContent('View session')
+    // The automation-facing「Resume session」wording stays off approval cards.
+    expect(screen.queryByRole('button', { name: 'Continue this item session' })).not.toBeInTheDocument()
+    fireEvent.click(btn)
+    await waitFor(() => expect(getSessionId).toHaveBeenCalledWith(11))
+    await waitFor(() => expect(switchSessionSpy).toHaveBeenCalledWith('sess-006'))
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/chat'))
+  })
+
+  it('shows「View session」for a session_failed item too', () => {
+    setItems([makeItem({ id: 12, source: 'session_failed', sessionId: 'sess-88', title: 'Turn failed' })])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Open the session this item came from' })).toBeInTheDocument()
+  })
+
+  it('keeps「Resume session」as the primary action for automation sources', () => {
+    setItems([makeItem({ id: 13, source: 'routine', sessionId: 'sess-99' })])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Continue this item session' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open the session this item came from' })).not.toBeInTheDocument()
+  })
+
+  it('shows「Review」on a skill_candidate card and jumps to /extensions/pending with the candidate id', () => {
+    setItems([makeItem({ id: 21, source: 'skill_candidate', sourceId: 'cand-42', title: 'Recurring deploy pattern' })])
+    renderPage()
+    const btn = screen.getByRole('button', { name: 'Review this skill candidate in Extensions → Pending' })
+    expect(btn).toHaveTextContent('Review')
+    fireEvent.click(btn)
+    const probe = screen.getByTestId('location')
+    expect(probe).toHaveTextContent('/extensions/pending')
+    expect(JSON.parse(probe.getAttribute('data-state')!)).toEqual({ skillCandidateId: 'cand-42' })
+  })
+
+  it('hides「Review」on items that are not skill candidates', () => {
+    setItems([makeItem({ id: 22, source: 'routine', sourceId: 'sched-001' })])
+    renderPage()
+    expect(screen.queryByRole('button', { name: /Review this skill candidate/ })).not.toBeInTheDocument()
+  })
+
+  it('pins pending items above read items in the default (newest) sort', () => {
+    setItems([
+      makeItem({ id: 1, status: 'read', title: 'Newer read', createdAtMs: 9_000 }),
+      makeItem({ id: 2, status: 'pending', title: 'Older pending', createdAtMs: 1_000 }),
+    ])
+    const { container } = renderPage()
+    const cards = container.querySelectorAll('[role="listitem"]')
+    expect(cards[0]).toHaveTextContent('Older pending')
+    expect(cards[1]).toHaveTextContent('Newer read')
+    // Pinning survives the sort toggle; time order stays stable inside a band.
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle sort order' }))
+    const cardsAfter = container.querySelectorAll('[role="listitem"]')
+    expect(cardsAfter[0]).toHaveTextContent('Older pending')
+    expect(cardsAfter[1]).toHaveTextContent('Newer read')
+  })
+
+  // 卡 3a: upsert_pending refreshes an existing row's updatedAtMs in place.
+  // A same-session failure that re-fails must float to the top of its band
+  // even though its createdAtMs is older than other entries.
+  it('floats an upsert-refreshed item to the top of its status band', () => {
+    setItems([
+      // Session A failed once at t=9s and was never refreshed.
+      makeItem({
+        id: 1,
+        source: 'session_failed',
+        sourceId: 'sess-a',
+        title: 'Stale failure',
+        createdAtMs: 9_000,
+        updatedAtMs: 9_000,
+      }),
+      // Session B failed at t=1s, then failed AGAIN at t=12s — the second
+      // event updated the same row in place (createdAtMs stays 1s).
+      makeItem({
+        id: 2,
+        source: 'session_failed',
+        sourceId: 'sess-b',
+        title: 'Re-failed session',
+        createdAtMs: 1_000,
+        updatedAtMs: 12_000,
+      }),
+    ])
+    const { container } = renderPage()
+    const cards = container.querySelectorAll('[role="listitem"]')
+    expect(cards[0]).toHaveTextContent('Re-failed session')
+    expect(cards[1]).toHaveTextContent('Stale failure')
+    // The toggle still only reorders inside the band — the refreshed entry
+    // lands last under 'oldest', never losing its band membership.
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle sort order' }))
+    const cardsAfter = container.querySelectorAll('[role="listitem"]')
+    expect(cardsAfter[0]).toHaveTextContent('Stale failure')
+    expect(cardsAfter[1]).toHaveTextContent('Re-failed session')
+  })
+
+  it('filters the three new sources through the source dropdown', () => {
+    const { setFilter } = setItems([makeItem({ id: 1 })])
+    renderPage()
+    const cases: Array<[RegExp, string]> = [
+      [/approval/i, 'session_approval'],
+      [/session failed/i, 'session_failed'],
+      [/skill candidate/i, 'skill_candidate'],
+    ]
+    for (const [label, source] of cases) {
+      fireEvent.click(screen.getByRole('button', { name: 'Source' }))
+      const items = screen.getAllByRole('menuitem')
+      const target = items.find(el => label.test(el.textContent || ''))
+      expect(target, `menu item for ${source}`).toBeTruthy()
+      fireEvent.click(target!)
+      expect(setFilter).toHaveBeenCalledWith({ status: undefined, source })
+    }
+  })
+})
+
+// ─── B4 hardening (P1-28 / P1-29 / P1-30, §7-26 + §7-28) ───────────────────
+
+describe('Triage — B4 keyboard/focus hardening', () => {
+  it('grouped mode rings exactly one card and a archives THAT card (P1-28)', () => {
+    // Flat order under grouping: routine bucket [1, 2] then trigger bucket [3].
+    // The old bucket-local index (j) rang cards 1 AND 2 (j=1 in each bucket)
+    // while the cursor acted on a third item entirely.
+    const { archive } = setItems([
+      makeItem({ id: 1, source: 'routine' }),
+      makeItem({ id: 2, source: 'routine' }),
+      makeItem({ id: 3, source: 'trigger' }),
+    ])
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Group by source' }))
+    const list = screen.getByRole('list', { name: /Inbox items/ })
+    list.focus()
+    fireEvent.keyDown(list, { key: 'j' })
+    fireEvent.keyDown(list, { key: 'j' })
+    // Exactly one ring — the second routine card (flat index 1).
+    const ringed = document.querySelectorAll('[data-focused="true"]')
+    expect(ringed).toHaveLength(1)
+    expect(ringed[0]).toHaveTextContent('Item 2')
+    fireEvent.keyDown(list, { key: 'a' })
+    expect(archive).toHaveBeenCalledWith(2)
+  })
+
+  it('Enter on a focused card button is not hijacked into mark-read (P1-29)', () => {
+    const { markRead } = setItems([makeItem({ id: 1 })])
+    renderPage()
+    const list = screen.getByRole('list', { name: /Inbox items/ })
+    list.focus()
+    fireEvent.keyDown(list, { key: 'j' })
+    const archiveBtn = within(list).getByRole('button', { name: 'Archive item 1' })
+    fireEvent.keyDown(archiveBtn, { key: 'Enter' })
+    expect(markRead).not.toHaveBeenCalled()
+  })
+
+  it('j/k still navigate while focus rests on a card button', () => {
+    setItems([makeItem({ id: 1 }), makeItem({ id: 2 })])
+    renderPage()
+    const list = screen.getByRole('list', { name: /Inbox items/ })
+    list.focus()
+    fireEvent.keyDown(list, { key: 'j' })
+    const btn = within(list).getAllByRole('button', { name: 'Rerun the routine behind this item' })[0]
+    btn.focus()
+    fireEvent.keyDown(btn, { key: 'j' })
+    const ringed = document.querySelectorAll('[data-focused="true"]')
+    expect(ringed).toHaveLength(1)
+    expect(ringed[0]).toHaveTextContent('Item 2')
+  })
+})
+
+describe('Triage — B4 bulk failures and undo (P1-30)', () => {
+  it('keeps the selection and toasts when every bulk write fails', async () => {
+    setItems([makeItem({ id: 1 }), makeItem({ id: 2 })])
+    vi.mocked(api.updateInboxItemStatus).mockRejectedValue(new Error('db locked'))
+    renderPage()
+    fireEvent.click(screen.getByLabelText('Select all visible items'))
+    const bar = screen.getByRole('region', { name: 'Bulk actions' })
+    fireEvent.click(within(bar).getByRole('button', { name: 'Archive' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Nothing was updated — all 2 operations failed'),
+    )
+    // The selection survives so a retry is one click away.
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('reports partial bulk failure truthfully and keeps failed items selected', async () => {
+    setItems([makeItem({ id: 1 }), makeItem({ id: 2 })])
+    vi.mocked(api.updateInboxItemStatus).mockImplementation((id: number) =>
+      id === 1 ? Promise.resolve(undefined) : Promise.reject(new Error('boom')),
+    )
+    renderPage()
+    fireEvent.click(screen.getByLabelText('Select all visible items'))
+    const bar = screen.getByRole('region', { name: 'Bulk actions' })
+    fireEvent.click(within(bar).getByRole('button', { name: 'Archive' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Updated 1 of 2 items — 1 failed'),
+    )
+    expect(toast.success).not.toHaveBeenCalled()
+    // Only the failed item stays selected.
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+  })
+
+  it('successful bulk archive offers an Undo that restores prior statuses', async () => {
+    setItems([
+      makeItem({ id: 1, status: 'read' }),
+      makeItem({ id: 2, status: 'pending' }),
+    ])
+    vi.mocked(api.updateInboxItemStatus).mockResolvedValue(undefined)
+    renderPage()
+    fireEvent.click(screen.getByLabelText('Select all visible items'))
+    const bar = screen.getByRole('region', { name: 'Bulk actions' })
+    fireEvent.click(within(bar).getByRole('button', { name: 'Archive' }))
+    await waitFor(() => expect(api.updateInboxItemStatus).toHaveBeenCalledWith(1, 'archived'))
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    const archiveToast = vi.mocked(toast.success).mock.calls.find(([msg]) => String(msg).startsWith('Archived'))
+    expect(archiveToast).toBeTruthy()
+    const action = (archiveToast![1] as { action: { label: string; onClick: () => void } }).action
+    expect(action.label).toBe('Undo')
+    vi.mocked(api.updateInboxItemStatus).mockClear()
+    action.onClick()
+    // Undo restores each item's PRE-operation status, not a blanket 'pending'.
+    await waitFor(() => expect(api.updateInboxItemStatus).toHaveBeenCalledWith(1, 'read'))
+    expect(api.updateInboxItemStatus).toHaveBeenCalledWith(2, 'pending')
+  })
+})
+
+describe('Triage — B4 URL view state and error state (§7-28)', () => {
+  it('initializes status/sort/group from search params and writes changes back', () => {
+    const { setFilter } = setItems([
+      makeItem({ id: 1, status: 'read', title: 'Read later', createdAtMs: 5_000 }),
+      makeItem({ id: 2, status: 'read', title: 'Read earlier', createdAtMs: 1_000 }),
+    ])
+    renderPage('/triage?status=read&sort=oldest')
+    expect(setFilter).toHaveBeenCalledWith({ status: 'read', source: undefined })
+    // oldest-first honored from the param.
+    const cards = document.querySelectorAll('[role="listitem"]')
+    expect(cards[0]).toHaveTextContent('Read earlier')
+    expect(cards[1]).toHaveTextContent('Read later')
+    // Interactions write the params back (replace navigation).
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle sort order' }))
+    expect(screen.getByTestId('location').getAttribute('data-search')).toContain('sort=newest')
+    fireEvent.click(screen.getByRole('button', { name: 'Group by source' }))
+    expect(screen.getByTestId('location').getAttribute('data-search')).toContain('group=source')
+    fireEvent.click(screen.getByRole('button', { name: 'Pending' }))
+    expect(screen.getByTestId('location').getAttribute('data-search')).toContain('status=pending')
+  })
+
+  it('ignores unknown param values instead of silently narrowing the list', () => {
+    const { setFilter } = setItems([makeItem({ id: 1 })])
+    renderPage('/triage?status=bogus&source=warp&sort=sideways')
+    expect(setFilter).toHaveBeenCalledWith({ status: undefined, source: undefined })
+    expect(screen.getByText('Item 1')).toBeInTheDocument()
+  })
+
+  it('renders the full error state when the inbox IPC fails with no rows', () => {
+    const refresh = vi.fn()
+    itemsSpy.mockReturnValue({
+      items: [], loading: false, error: 'db locked', filter: undefined,
+      setFilter: vi.fn(), refresh, markRead: vi.fn(), archive: vi.fn(),
+      rerun: vi.fn(), getSessionId: vi.fn(),
+    })
+    statsSpy.mockReturnValue({ stats: baseStats, loading: false, error: null, refresh: vi.fn() })
+    renderPage()
+    expect(screen.getByText("Couldn't load the inbox")).toBeInTheDocument()
+    expect(screen.queryByText('All clear.')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(refresh).toHaveBeenCalled()
+  })
+
+  it('shows a stale-rows banner (not a silent list) when refresh fails with rows present', () => {
+    itemsSpy.mockReturnValue({
+      items: [makeItem({ id: 1 })], loading: false, error: 'db locked', filter: undefined,
+      setFilter: vi.fn(), refresh: vi.fn(), markRead: vi.fn(), archive: vi.fn(),
+      rerun: vi.fn(), getSessionId: vi.fn(),
+    })
+    statsSpy.mockReturnValue({ stats: baseStats, loading: false, error: null, refresh: vi.fn() })
+    renderPage()
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load the inbox")
+    expect(screen.getByText('Item 1')).toBeInTheDocument()
+  })
+})
+
+// ── W3-2: needs-action run status on triage cards ──────────────────────────
+describe('W3-2 run outcome on triage cards', () => {
+  it('leads a failed run card with Failed · Needs action and an error border', () => {
+    setItems([makeItem({ id: 1, source: 'routine', error: 'provider unreachable' })])
+    const { container } = renderPage()
+    const chip = screen.getByTestId('inbox-run-status')
+    expect(chip).toHaveTextContent('Failed')
+    expect(chip).toHaveTextContent('Needs action')
+    // needs-action semantics beyond colour: priority icon + words on a
+    // tinted chip, plus the card's error-tinted border.
+    expect(chip.querySelector('.material-symbols-outlined')).toHaveTextContent('priority_high')
+    expect(container.querySelector('[role="listitem"]')?.className).toContain('border-error/40')
+  })
+
+  it('leads a succeeded run card with the succeeded status word', () => {
+    setItems([makeItem({ id: 2, source: 'routine', error: null })])
+    renderPage()
+    const chip = screen.getByTestId('inbox-run-status')
+    expect(chip).toHaveTextContent('Succeeded')
+    expect(chip).not.toHaveTextContent('Needs action')
+  })
+
+  it('derives the outcome for trigger results too', () => {
+    setItems([
+      makeItem({ id: 3, source: 'trigger', error: 'boom' }),
+      makeItem({ id: 4, source: 'trigger', error: null }),
+    ])
+    renderPage()
+    expect(screen.getAllByTestId('inbox-run-status')).toHaveLength(2)
+  })
+
+  it('carries no run-status chip on non-run sources', () => {
+    setItems([
+      makeItem({ id: 5, source: 'session_failed', error: 'turn failed' }),
+      makeItem({ id: 6, source: 'skill_candidate', error: null }),
+      makeItem({ id: 7, source: 'dream_report', error: null }),
+    ])
+    renderPage()
+    expect(screen.queryByTestId('inbox-run-status')).not.toBeInTheDocument()
   })
 })

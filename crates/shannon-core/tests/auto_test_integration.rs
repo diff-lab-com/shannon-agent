@@ -1,4 +1,5 @@
 //! Integration tests for the auto-test loop (P1-5).
+#![cfg(unix)] // uses std::os::unix::fs::PermissionsExt::from_mode.
 //!
 //! These tests exercise the `shannon_core::auto_test` public API end-to-end
 //! against real shell scripts in a temporary directory. They verify:

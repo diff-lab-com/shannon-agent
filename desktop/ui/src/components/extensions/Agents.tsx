@@ -13,8 +13,19 @@ import {
 } from "@/lib/tauri-api";
 import { SecurityBadge } from "./SecurityBadge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import ErrorState from "@/components/ui/error-state";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+// B0 P0-6: catalog names come from upstream HTTP — enforce the same shape
+// the backend sanitizes to before an install can be attempted.
+const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/;
+
+/** P1-22: a catalog description with newlines could inject extra YAML
+ *  frontmatter fields — collapse it to a single line before interpolating. */
+function singleLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
 
 /**
  * P4 Agents tab — federated catalog + install/remove.
@@ -22,7 +33,8 @@ import { cn } from "@/lib/utils";
  * Lists agents from native built-ins + community GitHub upstreams
  * (VoltAgent/awesome-claude-code-agents, rohitg00/claude-code-agents).
  * Each entry has an Install button that either:
- * - Native: writes agent.md directly via install_native_agent
+ * - Native: writes a flat ~/.shannon/agents/<name>.toml AgentDefinition via
+ *   install_native_agent (G1 P1-9 — the shape the runtime loader reads)
  * - GitHub: git clones into ~/.shannon/agents/<plugin>/ via install_agent_from_repo
  */
 export default function Agents() {
@@ -37,6 +49,8 @@ export default function Agents() {
 
   const [installed, setInstalled] = useState<InstalledAgent[]>([]);
   const [installedLoading, setInstalledLoading] = useState(true);
+  // B3 P1-17: a failed read must not render as "nothing installed".
+  const [installedError, setInstalledError] = useState<string | null>(null);
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ id: string; msg: string; ok: boolean } | null>(null);
@@ -65,7 +79,13 @@ export default function Agents() {
 
   const refreshInstalled = () => {
     listInstalledAgentPlugins()
-      .then(setInstalled)
+      .then((rows) => {
+        setInstalled(rows);
+        setInstalledError(null);
+      })
+      .catch((err) => {
+        setInstalledError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => setInstalledLoading(false));
   };
 
@@ -74,15 +94,33 @@ export default function Agents() {
   }, []);
 
   async function handleInstall(entry: AgentCatalogEntry) {
+    if (!SAFE_NAME_RE.test(entry.name)) {
+      setFeedback({ id: entry.id, msg: t('extensions.agents.invalidName', { name: entry.name }), ok: false });
+      return;
+    }
     setBusyId(entry.id);
     setFeedback(null);
     try {
       if (entry.source.type === 'native') {
+        // G1 P1-9: native entries install as a FLAT
+        // `~/.shannon/agents/<name>.toml` AgentDefinition — the shape the
+        // runtime loader reads. The catalog's system_prompt is required
+        // (entries carry one since the format unification); falling back to
+        // the description keeps a bodyless install from producing an agent
+        // the engine cannot steer.
         const model = (entry.metadata.model as string | undefined) ?? 'claude-sonnet-4-6';
         const tools = Array.isArray(entry.metadata.tools) ? entry.metadata.tools : [];
-        const toolsYaml = tools.length > 0 ? `\ntools: [${tools.join(', ')}]` : '';
-        const body = `---\nname: ${entry.name}\ndescription: ${entry.description}\nmodel: ${model}${toolsYaml}\n---\n# ${entry.name}\n\n${entry.description}\n`;
-        await installNativeAgent(entry.name, body);
+        const systemPrompt =
+          typeof entry.metadata.system_prompt === 'string' && entry.metadata.system_prompt.trim()
+            ? entry.metadata.system_prompt
+            : entry.description;
+        await installNativeAgent(
+          entry.name,
+          singleLine(entry.description),
+          systemPrompt,
+          model,
+          tools,
+        );
       } else if (entry.source.type === 'git_hub_repo') {
         const repo = entry.source.repo;
         const ref_ = entry.source.ref_ ?? 'main';
@@ -125,7 +163,7 @@ export default function Agents() {
     : catalog;
 
   return (
-    <div className="p-lg max-w-6xl mx-auto space-y-xl">
+    <div className="p-lg max-w-medium mx-auto space-y-xl">
       <header>
         <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.agents.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
@@ -178,6 +216,15 @@ export default function Agents() {
         </h3>
         {installedLoading ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.agents.loadingInstalled')}</div>
+        ) : installedError ? (
+          <div className="border border-outline-variant/30 rounded-2xl bg-surface-container-lowest/50">
+            <ErrorState
+              icon="smart_toy"
+              title={t('extensions.agents.installedLoadFailed')}
+              description={installedError}
+              action={{ label: t('common.retry'), onClick: refreshInstalled }}
+            />
+          </div>
         ) : installed.length === 0 ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">
             {t('extensions.agents.noInstalled')}
@@ -192,7 +239,7 @@ export default function Agents() {
                   i !== installed.length - 1 && "border-b border-outline-variant/15",
                 )}
               >
-                <span className="material-symbols-outlined text-primary text-[20px]">smart_toy</span>
+                <span className="material-symbols-outlined text-primary icon-md">smart_toy</span>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-label-md text-on-surface truncate">{agent.name}</div>
                   <div className="text-label-xs text-on-surface-variant font-mono truncate">
@@ -246,7 +293,7 @@ function AgentCard({
   onInstall: () => void;
 }) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
   const trustLabel = TRUST_LABELS[entry.trust];
   const model = (entry.metadata.model as string | undefined) ?? null;
@@ -267,9 +314,9 @@ function AgentCard({
       </p>
       {(model || tools.length > 0) && (
         <div className="text-label-xs text-on-surface-variant mb-xs font-mono">
-          {model && <span>model: {model}</span>}
+          {model && <span>{t('extensions.myAgents.modelLabel', { model })}</span>}
           {model && tools.length > 0 && <span> · </span>}
-          {tools.length > 0 && <span>tools: {tools.join(', ')}</span>}
+          {tools.length > 0 && <span>{t('extensions.myAgents.toolsInline', { tools: tools.join(', ') })}</span>}
         </div>
       )}
       {entry.author && (
@@ -310,7 +357,7 @@ function AgentCard({
 
 const TRUST_LABELS: Record<AgentCatalogEntry['trust'], { textKey: string; cls: string }> = {
   verified: { textKey: "extensions.agents.trust.verified", cls: "bg-primary-container text-on-primary-container" },
-  official: { textKey: "extensions.agents.trust.official", cls: "bg-secondary-container text-on-secondary-container" },
+  official: { textKey: "extensions.agents.trust.official", cls: "bg-primary text-on-primary" },
   community: { textKey: "extensions.agents.trust.community", cls: "bg-tertiary-container/50 text-on-tertiary-container" },
   unknown: { textKey: "extensions.agents.trust.unknown", cls: "bg-surface-container-highest text-on-surface-variant" },
 };

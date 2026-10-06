@@ -1,6 +1,6 @@
 # Prompt Caching
 
-Shannon Code implements three-layer Anthropic cache breakpoint injection to minimize token costs.
+Shannon implements three-layer Anthropic cache breakpoint injection to minimize token costs.
 
 ## How Prompt Caching Works
 

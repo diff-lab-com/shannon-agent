@@ -58,10 +58,25 @@ export function useInboxItems(initialFilter?: InboxListFilter) {
   }, [setStatus, t])
 
   const archive = useCallback(async (id: number): Promise<boolean> => {
+    // B4 P1-30: archive used to be irreversible from the UI (no「取消归档」
+    // anywhere). Capture the pre-archive status and hand the success toast an
+    // Undo action that writes it back via update_inbox_item_status.
+    const prev = items.find(i => i.id === id)?.status ?? 'pending'
     const ok = await setStatus(id, 'archived')
-    if (ok) toast.success(t('inbox.toast.archived'))
+    if (ok) {
+      toast.success(t('inbox.toast.archived'), {
+        action: {
+          label: t('inbox.undo'),
+          onClick: () => {
+            api.updateInboxItemStatus(id, prev)
+              .then(() => refresh())
+              .catch(e => toastError(t('inbox.undo.failed'), e))
+          },
+        },
+      })
+    }
     return ok
-  }, [setStatus, t])
+  }, [setStatus, t, items, refresh])
 
   const rerun = useCallback(async (id: number): Promise<string | null> => {
     try {

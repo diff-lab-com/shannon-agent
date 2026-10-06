@@ -29,7 +29,7 @@ export function MessageAvatar({ from, icon = 'smart_toy', className = '' }: Mess
   const bg = from === 'user' ? 'bg-primary' : 'bg-primary-container'
   const fg = from === 'user' ? 'text-on-primary' : 'text-on-primary-container'
   return (
-    <div className={cn('h-10 w-10 rounded-full', bg, fg, 'flex items-center justify-center shrink-0 shadow-md', className)}>
+    <div className={cn('h-10 w-10 rounded-full', bg, fg, 'flex items-center justify-center shrink-0 shadow-e2', className)}>
       <span className="material-symbols-outlined" aria-hidden="true">{icon}</span>
     </div>
   )
@@ -109,10 +109,23 @@ interface ToolHeaderProps {
 }
 
 export function ToolHeader({ onClick, className = '', children }: ToolHeaderProps) {
+  // P1-7: keyboard operability. A native <button> would be the ideal host,
+  // but ToolCallDisplay nests an interactive diff Button inside the header
+  // (nested <button> is invalid HTML and un-reachable for AT), so the div
+  // keeps role="button" and adds the Enter/Space activation a button has.
+  // Visual output is unchanged.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!onClick) return
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onClick()
+    }
+  }
   return (
     <div
       className={cn('flex items-center gap-sm', onClick ? 'cursor-pointer' : '', className)}
       onClick={onClick}
+      onKeyDown={onClick ? onKeyDown : undefined}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
     >

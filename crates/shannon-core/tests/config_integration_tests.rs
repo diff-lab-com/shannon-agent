@@ -1,4 +1,5 @@
 //! Integration tests for credential_manager, settings, and unified_config modules.
+#![cfg(unix)] // uses std::os::unix::fs::PermissionsExt.
 //!
 //! Covers:
 
@@ -1062,6 +1063,7 @@ mod unified_config_tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         let mut profiles = HashMap::new();
         profiles.insert(
@@ -1080,6 +1082,7 @@ mod unified_config_tests {
         );
         ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
             profiles,
             gateway: Default::default(),
         }

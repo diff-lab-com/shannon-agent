@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::installer::{AddonInstaller, InstallError};
+use super::installer::{AddonInstaller, InstallError, safe_plugin_name};
 use super::types::{
     AddonKind, CatalogEntry, CatalogSource, ConfirmationLevel, InstallTarget, InstalledAddon,
     ProgressSink,
@@ -88,7 +88,11 @@ impl AddonInstaller for MarketplacePluginInstaller {
             })
             .await;
 
-        let target_dir = shannon_skills_root().join(&self.plugin_name);
+        // B0 P0-6: the name comes from the upstream catalog — sanitize it
+        // before it touches the filesystem (Path::join escapes the root for
+        // absolute paths / `..`).
+        let plugin = safe_plugin_name(&self.plugin_name)?;
+        let target_dir = shannon_skills_root().join(&plugin);
         if target_dir.exists() {
             return Err(InstallError::Io(format!(
                 "{} already exists at {}",
@@ -142,7 +146,7 @@ impl AddonInstaller for MarketplacePluginInstaller {
         Ok(InstalledAddon {
             id: entry.id.clone(),
             kind: entry.kind,
-            name: self.plugin_name.clone(),
+            name: plugin.clone(),
             install_path: Some(target_dir.display().to_string()),
             installed_at: Some(Utc::now()),
             version: entry.version.clone(),
@@ -234,7 +238,10 @@ impl AddonInstaller for SkillMarkdownInstaller {
             })
             .await;
 
-        let dir = shannon_skills_root().join(&self.plugin_name);
+        // B0 P0-6: same sanitization as the repo installer — a polluted
+        // native entry must not escape the skills root either.
+        let plugin = safe_plugin_name(&self.plugin_name)?;
+        let dir = shannon_skills_root().join(&plugin);
         std::fs::create_dir_all(&dir)?;
         let skill_md = dir.join("SKILL.md");
         std::fs::write(&skill_md, &self.body)?;
@@ -244,7 +251,7 @@ impl AddonInstaller for SkillMarkdownInstaller {
         Ok(InstalledAddon {
             id: entry.id.clone(),
             kind: entry.kind,
-            name: self.plugin_name.clone(),
+            name: plugin.clone(),
             install_path: Some(skill_md.display().to_string()),
             installed_at: Some(Utc::now()),
             version: entry.version.clone(),
@@ -431,5 +438,73 @@ mod tests {
         std::fs::create_dir_all(&skill_dir).unwrap();
         remove_installed_skill("beta").expect("remove");
         assert!(!skill_dir.exists());
+    }
+
+    // ---- B0 P0-6: path traversal / absolute-path injection ----
+
+    #[tokio::test]
+    async fn markdown_installer_rejects_traversal_and_absolute_names() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join(".shannon").join("skills");
+        let _g = set_test_skills_root(root.clone());
+        let outside = tmp.path().join("pwned");
+        let _ = std::fs::remove_dir_all(&outside);
+
+        for name in [
+            "../pwned",
+            "..\\pwned",
+            "/etc/passwd",
+            "C:\\Windows",
+            "~/pwned",
+            "a/../../pwned",
+            "..",
+            ".",
+        ] {
+            let installer = SkillMarkdownInstaller {
+                plugin_name: name.into(),
+                body: "---\nname: x\n---\n".into(),
+            };
+            let entry = fixture_entry();
+            installer
+                .install(
+                    &entry,
+                    &InstallTarget::ShannonSkillsDir { plugin: "t".into() },
+                    &ProgressSink::null(),
+                )
+                .await
+                .expect_err(&format!("must reject unsafe name: {name}"));
+        }
+
+        // Nothing landed outside the skills root…
+        assert!(
+            !outside.exists(),
+            "traversal must not write outside the root"
+        );
+        assert!(!root.parent().unwrap().join("etc").exists());
+        // …and nothing at all was created under the root either.
+        assert!(!root.exists() || std::fs::read_dir(&root).unwrap().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn markdown_installer_slugs_unsafe_characters() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join(".shannon").join("skills");
+        let _g = set_test_skills_root(root.clone());
+
+        let installer = SkillMarkdownInstaller {
+            plugin_name: "My Skill v2!".into(),
+            body: "---\nname: x\n---\n".into(),
+        };
+        let entry = fixture_entry();
+        let installed = installer
+            .install(
+                &entry,
+                &InstallTarget::ShannonSkillsDir { plugin: "t".into() },
+                &ProgressSink::null(),
+            )
+            .await
+            .expect("safe name must install");
+        assert_eq!(installed.name, "my-skill-v2");
+        assert!(root.join("my-skill-v2").exists());
     }
 }

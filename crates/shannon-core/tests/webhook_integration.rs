@@ -22,6 +22,7 @@ fn sample_notification(title: &str) -> Notification {
         timestamp: Utc::now(),
         source: Some("query_complete".into()),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::Completed,
     }
 }
 

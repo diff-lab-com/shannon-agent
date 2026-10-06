@@ -124,7 +124,7 @@ function isActive(doc: typeof allDocs[0]): boolean {
                   display: 'block',
                   padding: '6px 10px',
                   borderRadius: 6,
-                  color: active ? 'var(--accent)' : 'var(--body)',
+                  color: active ? 'var(--accent-bright)' : 'var(--body)',
                   textDecoration: 'none',
                   marginBottom: 2,
                   fontWeight: active ? 500 : 400,
@@ -191,9 +191,9 @@ function isActive(doc: typeof allDocs[0]): boolean {
     font-weight: 600;
     color: var(--ink);
   }
-  main a { color: var(--accent); }
+  main a { color: var(--accent-bright); }
   main blockquote {
-    border-left: 3px solid var(--accent);
+    border-left: 3px solid var(--accent-hover);
     padding-left: 16px;
     color: var(--muted);
     margin: 0 0 16px;

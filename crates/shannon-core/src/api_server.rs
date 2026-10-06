@@ -17,9 +17,19 @@
 //! `shannon_engine`, so the boundary glue lives next to the server.
 
 use crate::VERSION;
+// SSE mapping + §P3-4 serialization-failure fallback: shared with the
+// headless server via `query_engine::sse` — one contract for every SSE
+// producer (review §P2-6).
+use crate::query_engine::sse::sse_parts_from_query_event;
 use crate::query_engine::{
-    PermissionRequest, QueryContext, QueryEngine, QueryEvent, QueryMetadata,
+    PERMISSION_REQUEST_CHANNEL_CAPACITY, PermissionRequest, QueryContext, QueryEngine, QueryEvent,
+    QueryMetadata,
 };
+// R2-W2 WS session-enumeration surface: the L0 store + conversation
+// projection answer `sessions.list` / `session.history` (see the
+// "WS session-enumeration surface" section next to the WS handler).
+use crate::session_log::session_store::ns_to_datetime;
+use crate::session_log::{SessionStore, project_conversation};
 use crate::tools::ToolRegistry;
 use axum::Json;
 use axum::extract::State;
@@ -29,13 +39,17 @@ use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use futures::{SinkExt, StreamExt};
-use shannon_engine::api::{LlmClient, LlmClientConfig, Message};
-use shannon_engine::permissions::{PermissionChoice, PermissionManager};
+use shannon_api_protocol::{
+    ApprovalModeRequest, ApprovalModeState, SessionSummary, TranscriptMessage,
+};
+use shannon_engine::api::{ContentBlock, LlmClient, LlmClientConfig, Message, MessageContent};
+use shannon_engine::permissions::PermissionChoice;
 use shannon_engine::state::StateManager;
+use shannon_types::session_event::SessionEvent;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
@@ -45,8 +59,8 @@ use uuid::Uuid;
 // directly when there is no engine-side adapter to write.
 pub use shannon_api_protocol::{
     ApprovalDecision, ApprovalRespondRequest, HealthResponse, MessageAttachment, ModelInfo,
-    ModelsResponse, PROTOCOL_VERSION, QueryRequest, QueryResponse, ToolEntry, ToolsListResponse,
-    UsageInfo, WsClientMessage, WsServerMessage,
+    ModelsResponse, PROTOCOL_VERSION, QueryRequest, QueryResponse, SseEventName, ToolEntry,
+    ToolsListResponse, UsageInfo, WsClientMessage, WsServerMessage,
 };
 
 /// Generic error returned by all API endpoints.
@@ -75,6 +89,7 @@ fn approval_decision_to_choice(d: ApprovalDecision) -> PermissionChoice {
     match d {
         ApprovalDecision::AllowOnce => PermissionChoice::AllowOnce,
         ApprovalDecision::AlwaysAllow => PermissionChoice::AlwaysAllow,
+        ApprovalDecision::AlwaysAllowSession => PermissionChoice::AlwaysAllowSession,
         ApprovalDecision::Deny => PermissionChoice::Deny,
     }
 }
@@ -96,6 +111,44 @@ pub struct AppState {
     /// the WS handler; a per-request resolver task awaits the client's choice
     /// (300s timeout → `Deny`) and forwards it back to the engine.
     pub approval_registry: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionChoice>>>>,
+    /// Wall-clock budget for the aggregate `POST /api/query` handler
+    /// (review §P2-2). See [`ShannonApiServer::DEFAULT_QUERY_BUDGET`].
+    pub query_budget: std::time::Duration,
+    /// Review §P2-3: per-session locks serialising the session-state
+    /// critical section (attach → query → session-log settle) so two
+    /// concurrent requests for the same session cannot project a
+    /// half-written `events.jsonl` into their restored history (dangling
+    /// `tool_use` without its `tool_result` → provider 400). Entries are
+    /// created on demand and opportunistically reclaimed; different
+    /// sessions never contend.
+    pub session_locks:
+        std::sync::Arc<dashmap::DashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+}
+
+/// Upper bound on retained per-session lock entries (review §P2-3). Once the
+/// map exceeds this, entries no longer referenced by an in-flight request
+/// (strong count 1 = the map alone) are reclaimed. Holders clone their
+/// `Arc` before awaiting, so a reclaimed entry can never split a session's
+/// mutual exclusion while a request is running.
+const MAX_SESSION_LOCKS: usize = 4096;
+
+/// Review §P2-3: acquire the per-session lock for `session_id`.
+///
+/// The guard serialises the caller's session-state critical section against
+/// other requests for the SAME session: attach (project `events.jsonl` into
+/// the engine) plus the query that appends to it. Cross-session concurrency
+/// is untouched — a different `session_id` gets a different lock. The
+/// `OwnedMutexGuard` is deliberately movable so the SSE handler can hold it
+/// for as long as the response body is alive (a client disconnect releases
+/// it together with the stream).
+async fn session_lock(state: &AppState, session_id: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
+    if state.session_locks.len() > MAX_SESSION_LOCKS {
+        state
+            .session_locks
+            .retain(|_, v| std::sync::Arc::strong_count(v) > 1);
+    }
+    let lock = state.session_locks.entry(session_id).or_default().clone();
+    lock.lock_owned().await
 }
 
 /// A single WebSocket session holding conversation history.
@@ -104,6 +157,10 @@ pub struct WsSession {
     pub messages: Vec<Message>,
     /// The model override for this session.
     pub model: Option<String>,
+    /// K4/P2-3: session-persistent approval mode token. `None` = server
+    /// default (settings defaultMode / profile / engine default). Applied to
+    /// every engine built for this session.
+    pub approval_mode: Option<String>,
 }
 
 // ── ShannonApiServer ───────────────────────────────────────────────────
@@ -129,9 +186,28 @@ pub struct ShannonApiServer {
     /// `POST /api/routines/:id/trigger` handler with its own state.
     /// They sit under the same auth/CORS middleware as the core routes.
     extra_routes: Vec<axum::Router<()>>,
+    /// Wall-clock budget for the aggregate `POST /api/query` handler
+    /// (review §P2-2).
+    query_budget: std::time::Duration,
 }
 
 impl ShannonApiServer {
+    /// Default wall-clock budget for the aggregate `POST /api/query`
+    /// endpoint (review §P2-2). That handler used to drain the engine's
+    /// event stream with no cancellation channel: a client disconnect does
+    /// NOT drop the handler (hyper keeps serving the in-flight request until
+    /// it finishes — proven by the `p2_2_client_disconnect_*` tests), so a
+    /// wedged query pinned the handler forever. The budget bounds that: on
+    /// expiry the `QueryStream` is dropped mid-await, whose
+    /// `AbortOnDropStream` contract aborts the engine producer task.
+    /// 600s = 2× the engine's per-event stall budget
+    /// (`QueryEngineConfig::timeout_seconds`, default 300s), so a healthy
+    /// query with flowing events is never cut off while a stalled one is
+    /// still reaped in bounded time. The SSE endpoints don't need this:
+    /// there, a client disconnect drops the SSE body → the `QueryStream` →
+    /// aborts the producer directly.
+    pub const DEFAULT_QUERY_BUDGET: std::time::Duration = std::time::Duration::from_secs(600);
+
     /// Create a new server using the given LLM client configuration for every
     /// incoming query.
     pub fn new(client_config: LlmClientConfig) -> Self {
@@ -144,7 +220,16 @@ impl ShannonApiServer {
             allowed_origins: Vec::new(),
             allow_nonloopback: false,
             extra_routes: Vec::new(),
+            query_budget: Self::DEFAULT_QUERY_BUDGET,
         }
+    }
+
+    /// Override the aggregate `POST /api/query` wall-clock budget
+    /// (review §P2-2). See [`Self::DEFAULT_QUERY_BUDGET`] for the default's
+    /// rationale.
+    pub fn query_budget(mut self, budget: std::time::Duration) -> Self {
+        self.query_budget = budget;
+        self
     }
 
     /// Provide a pre-populated [`ToolRegistry`] so that the `/api/tools/list`
@@ -207,27 +292,62 @@ impl ShannonApiServer {
             .route("/api/health", get(health_handler))
             .route("/api/models", get(models_handler))
             .route("/api/query", post(query_handler))
-            .route("/api/query/stream", get(query_stream_handler))
+            .route(
+                "/api/query/stream",
+                get(query_stream_handler).post(query_stream_post_handler),
+            )
             .route("/api/tools/list", post(tools_list_handler))
-            .route("/api/ws", get(ws_handler))
-            .route("/api/approval/respond", post(approval_respond_handler));
+            .route(
+                "/api/ws",
+                get(ws_handler).layer(axum::middleware::from_fn(ws_origin_guard)),
+            )
+            .route("/api/approval/respond", post(approval_respond_handler))
+            .route(
+                "/api/approval/mode",
+                get(approval_mode_get_handler).post(approval_mode_post_handler),
+            );
         for extra in &self.extra_routes {
             // `with_state(())` re-types an already state-applied router so it
             // can merge with the (not yet state-applied) core router.
             router = router.merge(extra.clone().with_state(()));
         }
-        router
+        let router = router
+            .layer(
+                // axum 0.7 defaults to a 2 MiB request body limit, which
+                // 413'd any real multimodal request before attachment
+                // validation could run. The shared rule allows 8 × 10 MiB
+                // decoded attachments; inflated 4/3 through base64 that is
+                // ~107 MiB, so 128 MiB covers it plus JSON headroom.
+                axum::extract::DefaultBodyLimit::max(128 * 1024 * 1024),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 self.auth_token.clone(),
                 auth_middleware,
             ))
-            .layer(cors)
-            .with_state(AppState {
-                client_config: self.client_config.clone(),
-                tools: self.tools.clone(),
-                ws_sessions: Arc::new(RwLock::new(HashMap::new())),
-                approval_registry: Arc::new(Mutex::new(HashMap::new())),
-            })
+            .layer(cors);
+        // Review F15: on a loopback bind (the default) a browser page can
+        // drive this server via DNS rebinding regardless of the CORS policy
+        // (a rebinding page is same-origin by construction). Install the
+        // Host guard with the loopback allowlist plus the literal bound host
+        // (covers e.g. `127.0.0.2`). Non-loopback binds are skipped: they
+        // already require `auth_token`, and the client-facing hostname is
+        // unknowable here.
+        if is_loopback_host(&self.host) {
+            router.layer(axum::middleware::from_fn_with_state(
+                vec![self.host.clone()],
+                host_guard_middleware,
+            ))
+        } else {
+            router
+        }
+        .with_state(AppState {
+            client_config: self.client_config.clone(),
+            tools: self.tools.clone(),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: self.query_budget,
+            session_locks: Arc::new(dashmap::DashMap::new()),
+        })
     }
 
     /// Start the server and block until shutdown.
@@ -301,6 +421,73 @@ fn build_cors_layer(origins: &[String]) -> CorsLayer {
     cors
 }
 
+// ── Host-header guard (review F15: DNS-rebinding) ──────────────────────
+
+/// Is this `Host` header value acceptable for a loopback-bound server?
+///
+/// Shared by the desktop-embedded server ([`ShannonApiServer`]) and
+/// `shannon-server` (review F15): a page that DNS-rebinds an attacker domain
+/// to `127.0.0.1` sends `Host: attacker.com:<port>`, so any Host outside the
+/// loopback names — plus `extra_allowed` (the literal bound host, or future
+/// operator-configured names) — is rejected. Comparison is case-insensitive
+/// and accepts both the bare (`localhost`) and `host:port`
+/// (`localhost:8080`) forms.
+pub fn host_header_allowed(host_header: &str, extra_allowed: &[String]) -> bool {
+    let host = host_header.trim();
+    let bare = strip_host_port(host).to_ascii_lowercase();
+    if matches!(bare.as_str(), "127.0.0.1" | "localhost" | "::1") {
+        return true;
+    }
+    extra_allowed.iter().any(|allowed| {
+        let allowed = allowed.trim();
+        bare == strip_host_port(allowed).to_ascii_lowercase() || host.eq_ignore_ascii_case(allowed)
+    })
+}
+
+/// Strip a trailing `:port` from a `Host` header value, handling bracketed
+/// IPv6 literals (`[::1]:8080` → `::1`). Bare IPv6 and malformed values are
+/// returned unchanged.
+fn strip_host_port(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
+        return rest.split_once(']').map_or(host, |(v6, _)| v6);
+    }
+    match host.rsplit_once(':') {
+        Some((h, port))
+            if !h.contains(':') && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            h
+        }
+        _ => host,
+    }
+}
+
+/// Router-level Host guard for loopback binds (review F15). State is the
+/// extra allowed Host list (the bound host). Requests without a Host header
+/// pass: no browser ever omits it, so the rebinding vector is fully covered
+/// while HTTP/1.0 tooling and in-process probes keep working.
+async fn host_guard_middleware(
+    State(extra): State<Vec<String>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    let Some(host) = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return Ok(next.run(req).await);
+    };
+    if host_header_allowed(host, &extra) {
+        Ok(next.run(req).await)
+    } else {
+        tracing::warn!(
+            host,
+            "rejected request: Host header is outside the loopback allowlist (possible DNS rebinding)"
+        );
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
 /// Axum middleware enforcing the optional bearer-token auth policy.
 ///
 /// `/api/health` is always public (liveness probes must work unauthenticated).
@@ -346,27 +533,26 @@ async fn models_handler(State(state): State<AppState>) -> Json<ModelsResponse> {
     let provider_str = state.client_config.provider.to_string();
     let model = state.client_config.model.clone();
 
-    // Return a small set of well-known models alongside the configured one.
-    let mut models = vec![
-        ModelInfo {
-            id: "claude-sonnet-4".to_string(),
-            provider: "anthropic".to_string(),
-        },
-        ModelInfo {
-            id: "gpt-4o".to_string(),
-            provider: "openai".to_string(),
-        },
-        ModelInfo {
-            id: "llama3".to_string(),
-            provider: "ollama".to_string(),
-        },
-    ];
+    // WP-15 T5: serve the FULL merged catalog (static registry + models.dev
+    // overlay) with display names — the gateway's model picker proxies this
+    // endpoint. Falls back to the configured model for providers with an
+    // empty catalog.
+    let mut models: Vec<ModelInfo> =
+        crate::model_registry::merged_models_for_provider(state.client_config.provider.clone())
+            .into_iter()
+            .map(|m| ModelInfo {
+                id: m.id.to_string(),
+                provider: m.provider.to_string(),
+                name: Some(m.display_name.to_string()),
+            })
+            .collect();
 
     // Add the currently-configured model if it is not already in the list.
     if !models.iter().any(|m| m.id == model) {
         models.push(ModelInfo {
             id: model,
             provider: provider_str,
+            name: None,
         });
     }
 
@@ -380,6 +566,37 @@ async fn models_handler(State(state): State<AppState>) -> Json<ModelsResponse> {
 /// connection's own session id for WebSocket). A malformed hint is silently
 /// ignored rather than rejected — the session id is attribution metadata,
 /// not an auth credential, so a bad hint must never block a query.
+/// P0-6/P1 wiring for served sessions: configured profile + settings rules
+/// (allow/ask/deny + defaultMode) — CLI parity for REST/WS engines, never a
+/// bare engine-default manager.
+fn server_permissions() -> shannon_engine::permissions::PermissionManager {
+    let mut pm = shannon_engine::permissions::PermissionManager::new();
+    if let Some(profile) = crate::unified_config::ShannonConfig::configured_permission_profile() {
+        shannon_engine::permissions::apply_configured_profile(&mut pm, &profile);
+    }
+    shannon_engine::permissions::load_settings_permission_files(&mut pm);
+    pm
+}
+
+/// K4/P2-3: apply a session's approval-mode token to a manager, enforcing the
+/// bypass guardrails. Returns Err(reason) when the mode is unknown/refused.
+fn apply_session_approval_mode(
+    pm: &mut shannon_engine::permissions::PermissionManager,
+    token: &str,
+) -> Result<(), String> {
+    let mode = shannon_engine::permissions::ApprovalMode::from_str_ci(token).ok_or_else(|| {
+        format!(
+            "unknown approval mode '{token}'; valid: {}",
+            shannon_engine::permissions::ApprovalMode::all_names().join(", ")
+        )
+    })?;
+    if mode == shannon_engine::permissions::ApprovalMode::BypassPermissions {
+        shannon_engine::permissions::ensure_bypass_allowed()?;
+    }
+    pm.set_approval_mode(mode);
+    Ok(())
+}
+
 fn resolve_session_id(hint: Option<&str>, fallback: Uuid) -> Uuid {
     hint.and_then(|s| Uuid::parse_str(s).ok())
         .unwrap_or(fallback)
@@ -412,13 +629,14 @@ fn attach_session(engine: &mut QueryEngine, session_id: Uuid) {
     }
 }
 
-/// Maximum attachments per message (Anthropic accepts up to 100; this keeps
-/// a single request's multimodal payload bounded).
-pub const MAX_ATTACHMENTS: usize = 8;
-/// 10 MiB per attachment after base64 decode.
-pub const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
-/// MIME types the multimodal adapters can serialize.
-const SUPPORTED_MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+use crate::attachments::{
+    AttachmentError, is_supported_image_type, validate_base64_size, validate_count,
+    validate_decoded_size,
+};
+/// Shared attachment limits + validation live in [`crate::attachments`] —
+/// the single source of truth every entry path (REST, WS, desktop, TUI,
+/// headless CLI) enforces. Re-exported here for existing callers.
+pub use crate::attachments::{MAX_ATTACHMENTS, MAX_IMAGE_BYTES};
 
 /// Validate attachments and convert them to provider-agnostic content
 /// blocks. Returns a user-facing error message on the first violation.
@@ -426,17 +644,16 @@ const SUPPORTED_MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif"
 /// Shared by every entry path (REST `/v1/sessions/:id/messages`,
 /// `POST /api/query`, and the `WsClientMessage::Query` frame) so the
 /// gateway's IM media pipeline (B4) faces exactly one set of rules.
+///
+/// Per attachment the checks run count → media type → base64 length
+/// pre-check → decode → post-decode size, so an oversized payload is
+/// rejected from its length alone instead of being fully decoded first.
 pub fn attachments_to_blocks(
     attachments: &[MessageAttachment],
 ) -> Result<Vec<shannon_engine::api::ContentBlock>, String> {
     use base64::Engine;
 
-    if attachments.len() > MAX_ATTACHMENTS {
-        return Err(format!(
-            "too many attachments: {} (max {MAX_ATTACHMENTS})",
-            attachments.len()
-        ));
-    }
+    validate_count(attachments.len()).map_err(|e| e.to_string())?;
 
     let mut blocks = Vec::with_capacity(attachments.len());
     for (i, att) in attachments.iter().enumerate() {
@@ -444,22 +661,23 @@ pub fn attachments_to_blocks(
             .name
             .clone()
             .unwrap_or_else(|| format!("attachment-{i}"));
-        if !SUPPORTED_MEDIA_TYPES.contains(&att.media_type.as_str()) {
-            return Err(format!(
-                "attachment \"{label}\": unsupported media_type \"{}\" (supported: {})",
-                att.media_type,
-                SUPPORTED_MEDIA_TYPES.join(", ")
-            ));
+        // Wrap the shared error with the attachment label so the caller can
+        // tell which attachment violated the rule (wording kept stable).
+        let labeled = |e: AttachmentError| format!("attachment \"{label}\": {e}");
+        if !is_supported_image_type(&att.media_type) {
+            return Err(labeled(AttachmentError::Unsupported {
+                media_type: att.media_type.clone(),
+            }));
         }
+        // Cheap length pre-check BEFORE decoding: rejects oversized
+        // payloads from the base64 character count alone, without
+        // materialising them in memory.
+        validate_base64_size(att.data.len()).map_err(labeled)?;
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(att.data.as_bytes())
             .map_err(|_| format!("attachment \"{label}\": data is not valid base64"))?;
-        if decoded.len() > MAX_ATTACHMENT_BYTES {
-            return Err(format!(
-                "attachment \"{label}\": {} bytes exceeds the {MAX_ATTACHMENT_BYTES} byte limit",
-                decoded.len()
-            ));
-        }
+        // Exact check on the real decoded bytes.
+        validate_decoded_size(decoded.len()).map_err(labeled)?;
         blocks.push(shannon_engine::api::ContentBlock::Image {
             source: shannon_engine::api::ImageSource::base64(
                 att.media_type.clone(),
@@ -506,12 +724,26 @@ async fn query_handler(
     };
 
     // Create a fresh engine per request (stateless).
-    let tools = ToolRegistry::new();
-    let permissions = PermissionManager::new();
+    // Same tools=[] fix as the WS path: serve the server's registry, not a
+    // fresh empty one. K4/P2-3: the request may pin an approval mode.
+    let mut permissions = server_permissions();
+    if let Some(token) = req.approval_mode.as_deref() {
+        apply_session_approval_mode(&mut permissions, token).map_err(|message| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message,
+        })?;
+    }
     let state_mgr = StateManager::new();
-    let mut engine = QueryEngine::with_defaults(client, tools, permissions, state_mgr);
+    let mut engine =
+        QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
 
     let session_id = resolve_session_id(req.session_id.as_deref(), Uuid::new_v4());
+    // Review §P2-3: serialise this session's state critical section — the
+    // attach below projects `events.jsonl`, and the query driven by this
+    // handler appends to it. Holding the guard across the (budget-bounded)
+    // drain keeps a concurrent same-session request from restoring a
+    // half-written turn. Held to the end of the handler scope.
+    let _session_guard = session_lock(&state, session_id).await;
     attach_session(&mut engine, session_id);
 
     let context = QueryContext {
@@ -535,31 +767,53 @@ async fn query_handler(
     let mut usage: Option<UsageInfo> = None;
     let mut errors: Vec<String> = Vec::new();
 
-    while let Some(event_result) = stream.next().await {
-        match event_result {
-            Ok(QueryEvent::Text { content, .. }) => {
-                text.push_str(&content);
-            }
-            Ok(QueryEvent::Usage {
-                input_tokens,
-                output_tokens,
-                cost_usd,
-                ..
-            }) => {
-                usage = Some(UsageInfo {
+    // Review §P2-2: this handler used to drain the engine's event stream
+    // unconditionally — no cancellation channel at all (a client disconnect
+    // does NOT drop the handler; hyper keeps serving the in-flight request —
+    // see the p2_2_client_disconnect tests). Bound the aggregate with the
+    // configured wall-clock budget: on expiry the `QueryStream` is dropped
+    // mid-await, whose `AbortOnDropStream` contract aborts the engine
+    // producer task, and the partial result is returned with a cancellation
+    // error entry.
+    let budget = state.query_budget;
+    let drain = async {
+        while let Some(event_result) = stream.next().await {
+            match event_result {
+                Ok(QueryEvent::Text { content, .. }) => {
+                    text.push_str(&content);
+                }
+                Ok(QueryEvent::Usage {
                     input_tokens,
                     output_tokens,
                     cost_usd,
-                });
-            }
-            Ok(QueryEvent::Failed { error, .. }) => {
-                errors.push(error);
-            }
-            Ok(_) => {}
-            Err(e) => {
-                errors.push(e.to_string());
+                    ..
+                }) => {
+                    usage = Some(UsageInfo {
+                        input_tokens,
+                        output_tokens,
+                        cost_usd,
+                    });
+                }
+                Ok(QueryEvent::Failed { error, .. }) => {
+                    errors.push(error);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    errors.push(e.to_string());
+                }
             }
         }
+    };
+    if tokio::time::timeout(budget, drain).await.is_err() {
+        tracing::warn!(
+            session = %session_id,
+            budget_secs = budget.as_secs(),
+            "aggregate query exceeded its budget; cancelling the producer"
+        );
+        errors.push(format!(
+            "query cancelled: exceeded the {}s aggregate budget",
+            budget.as_secs()
+        ));
     }
 
     Ok(Json(QueryResponse {
@@ -571,8 +825,56 @@ async fn query_handler(
     }))
 }
 
-/// SSE streaming endpoint. The caller supplies `prompt` and optional `model`
-/// as query parameters, e.g. `GET /api/query/stream?prompt=hello&model=llama3`.
+/// SSE streaming endpoint (review §P3-3). The caller supplies the prompt and
+/// optional `model` / `session_id` / `attachments` in the JSON body — the same
+/// [`QueryRequest`] shape as `POST /api/query` — instead of URL query
+/// parameters, which leak into access logs, intermediary proxies, and browser
+/// history. Prefer this route over the deprecated `GET` variant.
+async fn query_stream_post_handler(
+    State(state): State<AppState>,
+    Json(req): Json<QueryRequest>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    if req.prompt.trim().is_empty() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "prompt must not be empty".to_string(),
+        });
+    }
+
+    // Attachments follow the exact same validation rules as `POST /api/query`
+    // (shared `attachments_to_blocks`), so every entry path faces one set of
+    // MIME/size limits.
+    let attachment_blocks = match req.attachments.as_deref() {
+        None => Vec::new(),
+        Some(atts) => match attachments_to_blocks(atts) {
+            Ok(blocks) => blocks,
+            Err(message) => {
+                return Err(ApiError {
+                    status: StatusCode::BAD_REQUEST,
+                    message,
+                });
+            }
+        },
+    };
+
+    stream_query_sse(
+        state,
+        req.prompt,
+        req.model,
+        req.session_id,
+        attachment_blocks,
+    )
+    .await
+}
+
+/// SSE streaming endpoint.
+///
+/// **Deprecated (review §P3-3).** This variant takes the prompt as a URL query
+/// parameter (`GET /api/query/stream?prompt=hello&model=llama3`), which leaks
+/// the prompt into access logs, intermediary proxies, and browser history.
+/// Use `POST /api/query/stream` with a JSON [`QueryRequest`] body instead.
+/// Kept temporarily for backward compatibility with existing callers; it will
+/// be removed in a future release.
 async fn query_stream_handler(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -585,9 +887,25 @@ async fn query_stream_handler(
         });
     }
 
+    let model = params.get("model").cloned();
+    let session_hint = params.get("session_id").cloned();
+    stream_query_sse(state, prompt, model, session_hint, Vec::new()).await
+}
+
+/// Shared implementation behind both SSE streaming endpoints (`POST` body and
+/// the deprecated `GET` query-parameter route): build a stateless engine,
+/// serialise the session's state critical section, run the query, and convert
+/// the [`QueryEvent`] stream into SSE events.
+async fn stream_query_sse(
+    state: AppState,
+    prompt: String,
+    model: Option<String>,
+    session_id_hint: Option<String>,
+    attachments: Vec<shannon_engine::api::ContentBlock>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let mut config = state.client_config.clone();
-    if let Some(model) = params.get("model") {
-        config.model = model.to_string();
+    if let Some(model) = model {
+        config.model = model;
     }
 
     let client = if config.provider.requires_auth() {
@@ -596,21 +914,27 @@ async fn query_stream_handler(
         LlmClient::new_unauthenticated(config.clone())
     };
 
-    // Create a fresh engine per request (stateless).
-    let tools = ToolRegistry::new();
-    let permissions = PermissionManager::new();
+    // Create a fresh engine per request (stateless). Settings/profile
+    // bootstrap shared with the WS path.
+    let permissions = server_permissions();
     let state_mgr = StateManager::new();
-    let mut engine = QueryEngine::with_defaults(client, tools, permissions, state_mgr);
+    let mut engine =
+        QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
 
-    let session_id =
-        resolve_session_id(params.get("session_id").map(String::as_str), Uuid::new_v4());
+    let session_id = resolve_session_id(session_id_hint.as_deref(), Uuid::new_v4());
+    // Review §P2-3: same per-session serialisation as the aggregate
+    // endpoint. The guard is folded into the response stream (see
+    // [`WithSessionGuard`]) so it is held while the SSE body is alive and
+    // released when the client disconnects or the stream ends — never
+    // across a request we are not serving.
+    let session_guard = session_lock(&state, session_id).await;
     attach_session(&mut engine, session_id);
 
     let context = QueryContext {
         query_id: Uuid::new_v4(),
         session_id,
         user_message: prompt,
-        attachments: Vec::new(),
+        attachments,
         metadata: QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: true,
@@ -627,36 +951,46 @@ async fn query_stream_handler(
     let sse_stream = query_stream.filter_map(|result| async move {
         match result {
             Ok(event) => {
-                let event_type = match &event {
-                    QueryEvent::Text { .. } => "text",
-                    QueryEvent::ToolUseRequest { .. } => "tool_use_request",
-                    QueryEvent::ToolUseResult { .. } => "tool_use_result",
-                    QueryEvent::Usage { .. } => "usage",
-                    QueryEvent::Completed { .. } => "completed",
-                    QueryEvent::Failed { .. } => "failed",
-                    QueryEvent::Progress { .. } => "progress",
-                    QueryEvent::Cost { .. } => "cost",
-                    QueryEvent::TurnCompleted { .. } => "turn_completed",
-                    QueryEvent::Started { .. } => "started",
-                    QueryEvent::ToolProgress { .. } => "tool_progress",
-                    QueryEvent::Thinking { .. } => "thinking",
-                    QueryEvent::Info { .. } => "info",
-                    QueryEvent::RateLimit { .. } => "rate_limit",
-                    QueryEvent::ConversationUpdate { .. } => "conversation_update",
-                    QueryEvent::Warning { .. } => "warning",
-                };
-                let data = serde_json::to_string(&event).unwrap_or_default();
+                let (event_type, data) = sse_parts_from_query_event(&event);
                 Some(Ok(Event::default().event(event_type).data(data)))
             }
             Err(e) => {
                 let data = serde_json::to_string(&serde_json::json!({ "error": e.to_string() }))
                     .unwrap_or_default();
-                Some(Ok(Event::default().event("error").data(data)))
+                Some(Ok(Event::default()
+                    .event(SseEventName::Error.as_str())
+                    .data(data)))
             }
         }
     });
 
-    Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
+    Ok(Sse::new(WithSessionGuard {
+        inner: Box::pin(sse_stream),
+        _guard: session_guard,
+    })
+    .keep_alive(KeepAlive::default()))
+}
+
+/// Stream wrapper holding the §P2-3 per-session lock for as long as the SSE
+/// response body exists. axum drops the body — and therefore this wrapper,
+/// whose `Drop` releases the guard — when the client disconnects or the
+/// stream completes, so a cancelled stream never wedges the session's lock.
+/// Fields drop in declaration order: the inner stream (and the engine's
+/// `QueryStream` inside it) is torn down before the lock is released.
+struct WithSessionGuard<S> {
+    inner: std::pin::Pin<Box<S>>,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl<S: futures::Stream> futures::Stream for WithSessionGuard<S> {
+    type Item = S::Item;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.get_mut().inner.as_mut().poll_next(cx)
+    }
 }
 
 async fn tools_list_handler(State(state): State<AppState>) -> Json<ToolsListResponse> {
@@ -715,8 +1049,349 @@ async fn approval_respond_handler(
 // shannon-mobile docs/cross-repo-adaptation-spec.md §G (G4); reference
 // behavior + test: relayHost.test.ts "re-pairs after phone reconnects
 // (recv counter resets)".
+/// P3-3: `GET /api/approval/mode?session_id=<uuid>` — the approval token
+/// currently in effect for a WS-backed session (server default when the
+/// session has none stored).
+async fn approval_mode_get_handler(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<axum::Json<ApprovalModeState>, ApiError> {
+    let session_id = params
+        .get("session_id")
+        .ok_or_else(|| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "missing session_id query parameter".into(),
+        })?
+        .clone();
+    let stored = {
+        let sessions = state.ws_sessions.read().await;
+        match sessions.get(&session_id) {
+            Some(s) => s.lock().await.approval_mode.clone(),
+            None => None,
+        }
+    };
+    // The stored token was validated on write; fall back to the engine
+    // default token when the session is unknown/has none.
+    let mode = match stored {
+        Some(m) => m,
+        None => "auto-edit".to_string(),
+    };
+    Ok(axum::Json(ApprovalModeState { mode }))
+}
+
+/// P3-3: `POST /api/approval/mode` — the mobile TIGHTEN route. Only
+/// `readonly` is accepted: a phone may clamp a session down, never loosen
+/// or escalate it.
+async fn approval_mode_post_handler(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<ApprovalModeRequest>,
+) -> Result<axum::Json<ApprovalModeState>, ApiError> {
+    if body.mode != "readonly" {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "mobile approval-mode changes may only tighten to 'readonly'".into(),
+        });
+    }
+    let session_id = body.session_id.clone();
+    let mut sessions = state.ws_sessions.write().await;
+    // Upsert: between queries the WS session entry may not exist yet, but
+    // the tighten must survive — the WS query path reads the stored mode on
+    // every engine build, so a pre-registered clamp applies to the session's
+    // next turn.
+    let session = sessions.entry(session_id.clone()).or_insert_with(|| {
+        std::sync::Arc::new(tokio::sync::Mutex::new(WsSession {
+            messages: Vec::new(),
+            model: None,
+            approval_mode: None,
+        }))
+    });
+    session.lock().await.approval_mode = Some("readonly".to_string());
+    tracing::info!(session = %session_id, "mobile tighten: approval mode -> readonly");
+    Ok(axum::Json(ApprovalModeState {
+        mode: "readonly".to_string(),
+    }))
+}
+
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws_socket(socket, state))
+}
+
+/// Router-level guard for `/api/ws`: reject cross-site browser origins before
+/// the WebSocket upgrade is attempted.
+///
+/// Browsers attach an unforgable `Origin` to every cross-site WebSocket
+/// handshake, and WebSocket handshakes are not subject to CORS — so without
+/// this check any web page the user visits could drive the local engine
+/// (`ws://127.0.0.1:33420/api/ws`) with the user's full tool permissions.
+/// This runs as route middleware (not inside the handler) so it rejects
+/// before axum's `WebSocketUpgrade` extractor touches the request. It sits
+/// *inside* the router-level `auth_middleware`, so a configured token is
+/// still enforced first.
+async fn ws_origin_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let origin = req
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok());
+    if !ws_origin_allowed(origin) {
+        tracing::warn!(
+            origin = origin.unwrap_or(""),
+            "rejected WebSocket upgrade: cross-site Origin is not allowed on /api/ws"
+        );
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(req).await
+}
+
+/// Decide whether a WebSocket upgrade to `/api/ws` may proceed based on its
+/// `Origin` header.
+///
+/// Allowed:
+/// - header absent (non-browser clients: the gateway's ws client, curl,
+///   tests — they never send `Origin`), or
+/// - a Shannon webview origin (`tauri://localhost`, `http(s)://tauri.localhost`
+///   — the Tauri WebView2/WKWebView/WebKitGTK defaults), or
+/// - a loopback host on any port (`localhost`, `127.0.0.1`, `[::1]`, and the
+///   `::ffff:127.0.0.1` IPv4-mapped form) — the desktop dev server and local
+///   tooling.
+///
+/// Anything else (any public host, or `Origin: null` from a sandboxed iframe)
+/// is rejected with 403 before the upgrade.
+fn ws_origin_allowed(origin: Option<&str>) -> bool {
+    let Some(origin) = origin else {
+        return true;
+    };
+    let origin = origin.trim();
+    if matches!(
+        origin,
+        "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
+    ) {
+        return true;
+    }
+    // `scheme://host[:port]/…` — take the authority, then strip the port to
+    // compare the bare host.
+    let Some((_scheme, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    let authority = authority.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority
+        .strip_prefix('[')
+        .and_then(|h| h.split_once(']'))
+        .map(|(v6, _)| v6) // bracketed IPv6 literal → inner address
+        .unwrap_or_else(|| authority.split(':').next().unwrap_or(""));
+    let host = host.trim_start_matches("[::ffff:").trim_end_matches(']');
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1" | "::ffff:127.0.0.1"
+    )
+}
+
+// ── WS session-enumeration surface (R2-W2) ──────────────────────────────
+//
+// `sessions.list` / `session.history` read the engine's own L0 session
+// container so a phone (or any WS client) can enumerate sessions and
+// backfill transcripts. Paging semantics deliberately mirror the mobile
+// spec §J2 reference (`shannon-mobile/tool/mock_server.dart`): `before`
+// anchors at the FIRST transcript entry bearing that ts (same-ts neighbors
+// stay on one side of the boundary), the window is the last `limit`
+// messages strictly before the anchor, and `has_more` says whether
+// still-older messages remain.
+
+/// Default `session.history` page size (§J2: absent `limit` answers 50).
+const HISTORY_PAGE_DEFAULT: u32 = 50;
+/// Hard cap on one `session.history` page.
+const HISTORY_PAGE_MAX: u32 = 500;
+
+/// The engine process's own sessions container. The WS handler builds its
+/// per-query engines over a fresh default `StateManager` (see the Query
+/// arm), so the enumeration surface reads that same default directory —
+/// no separate sessions-dir configuration is introduced.
+fn engine_session_store() -> SessionStore {
+    SessionStore::new(StateManager::new().sessions_dir().to_path_buf())
+}
+
+/// Answer a `sessions.list` frame: the persisted sessions as
+/// [`SessionSummary`] rows, most recently active first (the store's order).
+fn sessions_snapshot(store: &SessionStore) -> WsServerMessage {
+    match store.list() {
+        Ok(infos) => WsServerMessage::SessionsSnapshot {
+            sessions: infos
+                .into_iter()
+                .map(|info| SessionSummary {
+                    session_id: info.session_id.to_string(),
+                    title: info.title,
+                    preview: info.preview,
+                    created_at: info.created_at.to_rfc3339(),
+                    updated_at: info.updated_at.to_rfc3339(),
+                    turn_count: info.turn_count as u64,
+                    total_input_tokens: info.total_input_tokens,
+                    total_output_tokens: info.total_output_tokens,
+                })
+                .collect(),
+        },
+        // A store that cannot be read is a real failure the caller should
+        // see — one Error frame, socket stays up (the attachment-validation
+        // pattern). An EMPTY store, by contrast, is a plain empty snapshot.
+        Err(e) => WsServerMessage::Error {
+            message: format!("sessions.list failed: {e}"),
+        },
+    }
+}
+
+/// Answer a `session.history` frame.
+///
+/// An id the engine has no log for — unknown UUID, or not a UUID at all —
+/// answers an EMPTY transcript, not an error: the phone reads empty
+/// history as "the server has no content for this session yet" (§J2). A
+/// log that exists but fails to READ is a real failure and answers an
+/// Error frame.
+fn session_history_response(
+    store: &SessionStore,
+    session_id: &str,
+    before: Option<&str>,
+    limit: Option<u32>,
+) -> WsServerMessage {
+    let empty = || WsServerMessage::SessionTranscript {
+        session_id: session_id.to_string(),
+        messages: Vec::new(),
+        has_more: false,
+    };
+    let Ok(id) = Uuid::parse_str(session_id) else {
+        return empty();
+    };
+    match store.read_events(&id) {
+        Ok(Some(events)) => transcript_page(session_id, &events, before, limit),
+        Ok(None) => empty(),
+        Err(e) => WsServerMessage::Error {
+            message: format!("session.history: cannot read log for {session_id}: {e}"),
+        },
+    }
+}
+
+/// Compute one transcript page over an event slice (the pure, unit-tested
+/// core of [`session_history_response`]).
+fn transcript_page(
+    session_id: &str,
+    events: &[SessionEvent],
+    before: Option<&str>,
+    limit: Option<u32>,
+) -> WsServerMessage {
+    let transcript = transcript_messages(events);
+    let anchor = history_anchor(&transcript, before);
+    let limit = history_page_limit(limit);
+    let start = anchor.saturating_sub(limit as usize);
+    WsServerMessage::SessionTranscript {
+        session_id: session_id.to_string(),
+        messages: transcript[start..anchor].to_vec(),
+        has_more: anchor > limit as usize,
+    }
+}
+
+/// Clamp the wire `limit` to the page contract (§J2 + review I2): absent =
+/// 50, below 1 clamps to 1 — never the default — and the page is capped at
+/// [`HISTORY_PAGE_MAX`].
+fn history_page_limit(limit: Option<u32>) -> u32 {
+    match limit {
+        None => HISTORY_PAGE_DEFAULT,
+        Some(l) => l.clamp(1, HISTORY_PAGE_MAX),
+    }
+}
+
+/// The exclusive END of the history page window for the `before` cursor:
+/// the index of the FIRST transcript entry whose ts is not older than the
+/// cursor (RFC3339; an unparseable cursor selects the whole transcript, and
+/// an entry with an unparseable ts stays on the older side — both mirror
+/// the §J2 reference). Slicing `[max(0, anchor - limit), anchor)` then
+/// yields the `limit` entries immediately before the cursor in
+/// chronological order, and `has_more = anchor > limit`. Because the anchor
+/// is the FIRST entry bearing the cursor ts, same-ts neighbors can never be
+/// split across a page boundary.
+fn history_anchor(transcript: &[TranscriptMessage], before: Option<&str>) -> usize {
+    let Some(before_iso) = before else {
+        return transcript.len();
+    };
+    let Ok(cursor) = chrono::DateTime::parse_from_rfc3339(before_iso) else {
+        return transcript.len();
+    };
+    for (i, message) in transcript.iter().enumerate() {
+        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&message.ts)
+            && ts >= cursor
+        {
+            return i;
+        }
+    }
+    transcript.len()
+}
+
+/// Project an event slice into the chat-visible transcript.
+///
+/// `project_conversation` folds the log into engine messages; each becomes
+/// at most one [`TranscriptMessage`] whose ts is the envelope ts of the
+/// event that STARTED the message. Messages without text content (tool-call
+/// bookkeeping: tool_use-only assistant steps, tool_result user messages)
+/// are left out — a transcript entry is chat text, and `role` stays exactly
+/// "user" (a prompt) or "assistant" (a reply).
+fn transcript_messages(events: &[SessionEvent]) -> Vec<TranscriptMessage> {
+    let proj = project_conversation(events);
+    // Dense seq → ts table: every projected message cites the inclusive
+    // event range it was folded from; its ts is the FIRST event's.
+    let seq_ts: HashMap<u64, u64> = events
+        .iter()
+        .map(|event| (event.seq, event.ts_ns))
+        .collect();
+    let mut out = Vec::with_capacity(proj.messages.len());
+    for (message, (first_seq, _)) in proj.messages.iter().zip(&proj.message_origin_seqs) {
+        let content = message_text(&message.content);
+        if content.is_empty() {
+            continue;
+        }
+        let ts_ns = seq_ts.get(first_seq).copied().unwrap_or(0);
+        out.push(TranscriptMessage {
+            role: message.role.clone(),
+            content,
+            ts: rfc3339_from_ns(ts_ns),
+        });
+    }
+    out
+}
+
+/// Render one projected message's content to chat text: the plain text, or
+/// the joined text blocks (tool_use / tool_result / thinking / image blocks
+/// contribute nothing — they are protocol traffic, not chat text).
+fn message_text(content: &MessageContent) -> String {
+    match content {
+        MessageContent::Text(text) => text.clone(),
+        MessageContent::Blocks(blocks) => {
+            let mut text = String::new();
+            for block in blocks {
+                if let ContentBlock::Text { text: part } = block {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str(part);
+                }
+            }
+            text
+        }
+    }
+}
+
+/// Nanoseconds since the epoch → RFC3339 UTC string (the wire timestamp
+/// format for `SessionSummary` / `TranscriptMessage`).
+fn rfc3339_from_ns(ns: u64) -> String {
+    ns_to_datetime(ns).to_rfc3339()
+}
+
+/// Wall-clock stamp for the approval frames, epoch milliseconds. `None`
+/// only when the clock is before the epoch (never in practice) — the
+/// protocol keeps `ts` optional so the frame shape is unchanged.
+fn epoch_millis_now() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as u64)
 }
 
 async fn handle_ws_socket(socket: WebSocket, state: AppState) {
@@ -724,6 +1399,7 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
     let session = Arc::new(Mutex::new(WsSession {
         messages: Vec::new(),
         model: None,
+        approval_mode: None,
     }));
 
     // Register session
@@ -772,6 +1448,34 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                 session_id: query_session_hint,
                 attachments,
             } => {
+                // review §P3-3: parse session_id eagerly. The previous
+                // `Uuid::parse_str(...).unwrap_or_default()` silently
+                // collapsed every malformed id to the nil UUID, so every
+                // broken caller shared one disk-side session log and
+                // events history. A malformed id now yields one Error
+                // frame and continues the outer loop (socket stays up),
+                // matching the attachment-validation pattern below.
+                let parsed_session_id = match query_session_hint.as_deref() {
+                    None => Uuid::new_v4(),
+                    Some(s) => match uuid::Uuid::parse_str(s) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::warn!(
+                                session_id = %s,
+                                error = %e,
+                                "rejecting WS Query: malformed session_id",
+                            );
+                            let _ = send_msg(
+                                &mut sender,
+                                WsServerMessage::Error {
+                                    message: format!("invalid session_id: {e}"),
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+                    },
+                };
                 // Validate B4 attachments before touching the engine; a
                 // violation is one Error frame, then the socket stays up.
                 let attachment_blocks = match attachments.as_deref() {
@@ -802,10 +1506,28 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                     LlmClient::new_unauthenticated(config.clone())
                 };
 
-                let tools = ToolRegistry::new();
-                let permissions = PermissionManager::new();
+                // WP-15 P0-1 root cause: this used to build a FRESH EMPTY
+                // ToolRegistry, so gateway/WS sessions went out with
+                // `tools=[]` — the model never saw a single tool definition,
+                // could only emit tool calls as text, and the approval chain
+                // was structurally unreachable. Use the server's registry
+                // (populated by the desktop's loopback setup via with_tools).
+                let mut permissions = server_permissions();
+                {
+                    let s = session.lock().await;
+                    if let Some(token) = s.approval_mode.as_deref() {
+                        if let Err(e) = apply_session_approval_mode(&mut permissions, token) {
+                            tracing::warn!(session = %session_id, error = %e, "stored approval mode refused");
+                        }
+                    }
+                }
                 let state_mgr = StateManager::new();
-                let mut engine = QueryEngine::with_defaults(client, tools, permissions, state_mgr);
+                let mut engine = QueryEngine::with_defaults_arc(
+                    client,
+                    state.tools.clone(),
+                    permissions,
+                    state_mgr,
+                );
 
                 // Restore conversation history
                 {
@@ -813,10 +1535,8 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                     engine.restore_messages(s.messages.clone());
                 }
 
-                let effective_session_id = resolve_session_id(
-                    query_session_hint.as_deref(),
-                    uuid::Uuid::parse_str(&session_id).unwrap_or_default(),
-                );
+                let effective_session_id =
+                    resolve_session_id(query_session_hint.as_deref(), parsed_session_id);
 
                 let context = QueryContext {
                     query_id: uuid::Uuid::new_v4(),
@@ -838,7 +1558,13 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                 // client responds via `POST /api/approval/respond`; a resolver
                 // task (300s timeout → Deny) forwards the choice back to the
                 // engine. See `claudedocs/social-connection-architecture.md` P0-b.
-                let (perm_tx, mut perm_rx) = mpsc::unbounded_channel::<PermissionRequest>();
+                // Bounded permission-request channel (review §P3-6): prompts
+                // are strictly sequential (the engine awaits each response),
+                // so this small bound only guards against a handler that
+                // stopped draining; `perm_rx.recv()` in the select loop below
+                // keeps it drained while the query is live.
+                let (perm_tx, mut perm_rx) =
+                    mpsc::channel::<PermissionRequest>(PERMISSION_REQUEST_CHANNEL_CAPACITY);
                 // `process_query` returns a stream whose drop aborts the engine's
                 // producer task — so dropping `stream` (on cancel, or when the
                 // socket closes mid-query) actually interrupts the LLM/tool loop
@@ -854,6 +1580,13 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                             let server_msg = match result {
                                 Ok(QueryEvent::Text { content, .. }) => {
                                     Some(WsServerMessage::Text { content })
+                                }
+                                Ok(QueryEvent::Thinking { content, .. }) => {
+                                    // WP-15 P0-2: forward the reasoning channel
+                                    // (native thinking deltas + inline `<think>`
+                                    // re-split by the engine) instead of dropping
+                                    // it — clients decide whether to render it.
+                                    Some(WsServerMessage::Thinking { content })
                                 }
                                 Ok(QueryEvent::ToolUseRequest {
                                     tool_name,
@@ -885,6 +1618,16 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                                 Ok(QueryEvent::Failed { error, .. }) => {
                                     Some(WsServerMessage::Failed { error })
                                 }
+                                Ok(QueryEvent::ConversationUpdate { messages, .. }) => {
+                                    // review §P1-6: the WS host was previously
+                                    // dropping ConversationUpdate, so each new
+                                    // Query on the same connection started with
+                                    // the stale `self.conversation` (often the
+                                    // empty default). Restore on receipt so the
+                                    // next Query carries the prior context.
+                                    engine.restore_messages(messages);
+                                    None
+                                }
                                 Ok(_) => None,
                                 Err(e) => Some(WsServerMessage::Failed {
                                     error: e.to_string(),
@@ -915,6 +1658,20 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                                 description: prompt.description.clone(),
                                 is_destructive: prompt.is_destructive,
                                 diff_preview: prompt.diff_preview.clone(),
+                                // R2-W2 approval enrichment. `ts` is stamped
+                                // from the wall clock. `agent` stays None:
+                                // this path builds a fresh default-profile
+                                // engine per query and tracks no active
+                                // agent/profile name. `risk` stays None:
+                                // neither `permission_classifier` nor the
+                                // tool metadata carries a scope/reversible
+                                // dimension (only `is_destructive`, which is
+                                // forwarded untouched above) — the protocol
+                                // treats both fields as honestly-absent
+                                // rather than synthesized.
+                                ts: epoch_millis_now(),
+                                agent: None,
+                                risk: None,
                             };
                             if !send_msg(&mut sender, areq).await {
                                 break 'outer;
@@ -998,6 +1755,60 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                     WsServerMessage::Error {
                         message: "no active query to cancel".to_string(),
                     },
+                )
+                .await;
+            }
+            WsClientMessage::SetApprovalMode { mode } => {
+                // K4/P2-3: the server is the authority. WS engines are built
+                // per query, so the mode persists on the session state and is
+                // applied to every subsequent engine build (`server_permissions`
+                // path validates again — defense in depth). ACK carries the
+                // effective mode either way.
+                let current = {
+                    let s = session.lock().await;
+                    s.approval_mode
+                        .clone()
+                        .unwrap_or_else(|| "auto-edit".to_string())
+                };
+                let ack = match apply_session_approval_mode(
+                    &mut shannon_engine::permissions::PermissionManager::new(),
+                    &mode,
+                ) {
+                    Ok(()) => {
+                        {
+                            let mut s = session.lock().await;
+                            s.approval_mode = Some(mode.clone());
+                        }
+                        tracing::info!(session = %session_id, %mode, "WS approval mode changed");
+                        WsServerMessage::ApprovalMode {
+                            mode: mode.clone(),
+                            ok: true,
+                            error: None,
+                        }
+                    }
+                    Err(e) => WsServerMessage::ApprovalMode {
+                        mode: current,
+                        ok: false,
+                        error: Some(e),
+                    },
+                };
+                let _ = send_msg(&mut sender, ack).await;
+            }
+            WsClientMessage::SessionsList => {
+                // R2-W2: the engine's own L0 container, read on demand —
+                // sessions are being written underneath us, so no caching.
+                let store = engine_session_store();
+                let _ = send_msg(&mut sender, sessions_snapshot(&store)).await;
+            }
+            WsClientMessage::SessionHistory {
+                session_id,
+                before,
+                limit,
+            } => {
+                let store = engine_session_store();
+                let _ = send_msg(
+                    &mut sender,
+                    session_history_response(&store, &session_id, before.as_deref(), limit),
                 )
                 .await;
             }
@@ -1089,10 +1900,27 @@ mod tests {
         let atts = vec![MessageAttachment {
             name: Some("big.png".into()),
             media_type: "image/png".into(),
-            data: png_b64(MAX_ATTACHMENT_BYTES + 1),
+            data: png_b64(MAX_IMAGE_BYTES + 1),
         }];
         let err = attachments_to_blocks(&atts).unwrap_err();
         assert!(err.contains("exceeds"), "got: {err}");
+    }
+
+    #[test]
+    fn attachments_oversized_base64_rejected_before_decode() {
+        // 14 MiB of invalid base64 characters: long enough that the length
+        // pre-check fires, invalid enough that a decode-first order would
+        // have reported "not valid base64". The size error proves the
+        // payload is rejected without a full base64 decode.
+        let data = "!".repeat(14 * 1024 * 1024);
+        let atts = vec![MessageAttachment {
+            name: Some("big.png".into()),
+            media_type: "image/png".into(),
+            data,
+        }];
+        let err = attachments_to_blocks(&atts).unwrap_err();
+        assert!(err.contains("exceeds"), "got: {err}");
+        assert!(!err.contains("not valid base64"), "got: {err}");
     }
 
     #[test]
@@ -1108,7 +1936,6 @@ mod tests {
         assert!(err.contains("too many attachments"), "got: {err}");
     }
 
-    use super::*;
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -1117,6 +1944,8 @@ mod tests {
 
     fn test_config() -> LlmClientConfig {
         LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: "http://localhost:11434".to_string(),
             model: "test-model".to_string(),
@@ -1198,6 +2027,126 @@ mod tests {
             .allow_nonloopback(true)
             .auth_token("secret");
         assert!(server.validate_bind().is_ok());
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Host-header guard (F15) — loopback DNS-rebinding defense
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn host_header_allows_loopback_forms_case_insensitively() {
+        for host in [
+            "127.0.0.1",
+            "127.0.0.1:8080",
+            "localhost",
+            "LOCALHOST:3000",
+            "LocalHost",
+            "::1",
+            "[::1]",
+            "[::1]:9000",
+        ] {
+            assert!(
+                host_header_allowed(host, &[]),
+                "loopback Host '{host}' must be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn host_header_rejects_rebound_names() {
+        for host in [
+            "evil.com",
+            "evil.com:8080",
+            "127.0.0.1.evil.com",
+            "localhost.evil.com",
+            "sub.localhost",
+            "metadata.google.internal",
+            // Look-alikes that are not the loopback literals.
+            "127.0.0.256",
+            "localhost:",
+            "::11211",
+        ] {
+            assert!(
+                !host_header_allowed(host, &[]),
+                "rebound Host '{host}' must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn host_header_extra_allows_are_matched_bare_and_with_port() {
+        let extra = vec!["127.0.0.2".to_string(), "myhost.local:8443".to_string()];
+        for host in [
+            "127.0.0.2",
+            "127.0.0.2:9999",
+            "myhost.local",
+            "MYHOST.LOCAL:8443",
+        ] {
+            assert!(
+                host_header_allowed(host, &extra),
+                "extra allowlist must accept '{host}'"
+            );
+        }
+        assert!(!host_header_allowed("myhost.local.evil.com", &extra));
+        assert!(!host_header_allowed("evil.com", &extra));
+    }
+
+    #[tokio::test]
+    async fn host_guard_rejects_rebinding_browser_but_keeps_loopback_clients() {
+        // Default bind host (127.0.0.1) installs the guard: a rebound Host
+        // gets 403 before any handler runs, while loopback addressing and
+        // Host-less probes reach the route (404 = unknown session route
+        // would 405/404; /api/models 200 = handler ran).
+        let app = test_app();
+
+        let rebound = Request::builder()
+            .uri("/api/models")
+            .header("host", "evil.com:8080")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(rebound).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let lookalike = Request::builder()
+            .uri("/api/models")
+            .header("host", "127.0.0.1.evil.com")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(lookalike).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        for host in ["127.0.0.1:33420", "localhost", "[::1]:1"] {
+            let req = Request::builder()
+                .uri("/api/models")
+                .header("host", host)
+                .body(Body::empty())
+                .unwrap();
+            let response = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "Host '{host}' passes");
+        }
+
+        let hostless = Request::builder()
+            .uri("/api/models")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(hostless).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "Host-less probe passes");
+    }
+
+    #[tokio::test]
+    async fn host_guard_accepts_the_literal_bound_host() {
+        // A non-default loopback bind address is allowed through its literal
+        // form (the router passes the bound host as the guard's extra list).
+        let app = ShannonApiServer::new(test_config())
+            .host("127.0.0.2")
+            .build_router();
+        let req = Request::builder()
+            .uri("/api/models")
+            .header("host", "127.0.0.2:8080")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -1370,9 +2319,18 @@ mod tests {
         let body = read_body(response.into_body()).await;
         let models: ModelsResponse = serde_json::from_slice(&body).unwrap();
         assert!(!models.models.is_empty());
-        assert!(models.models.iter().any(|m| m.id == "claude-sonnet-4"));
-        assert!(models.models.iter().any(|m| m.id == "gpt-4o"));
-        assert!(models.models.iter().any(|m| m.id == "llama3"));
+        // The test config uses LlmProvider::Ollama, which has no static
+        // MODEL_CATALOG entries (local Ollama models are detected at runtime,
+        // never hardcoded) — so the endpoint serves the documented fallback:
+        // the currently-configured model, tagged with its provider.
+        assert!(
+            models
+                .models
+                .iter()
+                .any(|m| m.id == "test-model" && m.provider == "ollama"),
+            "expected the configured-model fallback, got: {:?}",
+            models.models
+        );
     }
 
     #[tokio::test]
@@ -1401,6 +2359,8 @@ mod tests {
         // When the configured model matches a built-in one, it should not
         // appear twice.
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: "http://localhost:11434".to_string(),
             model: "claude-sonnet-4".to_string(),
@@ -1577,6 +2537,361 @@ mod tests {
     }
 
     // ══════════════════════════════════════════════════════════════════════
+    // review §P2-2: query cancellation
+    //
+    // The SSE endpoint cancels on client disconnect: dropping the response
+    // body drops the `QueryStream`, whose `AbortOnDropStream` contract
+    // aborts the producer task at its next `.await`. The aggregate POST
+    // endpoint has no such signal (hyper keeps the handler alive across a
+    // client FIN), so it gets a wall-clock budget instead — see
+    // [`ShannonApiServer::DEFAULT_QUERY_BUDGET`]. Both tests use a mock
+    // "LLM" that never answers, so the producer stays parked mid-request
+    // until it is cancelled, and the mock observes the teardown as EOF on
+    // its socket. A real axum server is used for the SSE case (`oneshot`
+    // cannot simulate disconnects).
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// A mock LLM that accepts one connection, never responds, and fires
+    /// `gone_tx` once the engine's outbound request socket sees EOF/reset —
+    /// i.e. the query producer task was cancelled.
+    fn start_hanging_llm() -> (String, tokio::sync::oneshot::Receiver<()>) {
+        use std::io::Read as _;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (gone_tx, gone_rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let accepted = listener.incoming().flatten().next();
+            let mut gone_tx = Some(gone_tx);
+            if let Some(mut stream) = accepted {
+                let mut buf = [0u8; 1024];
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break, // client went away
+                        Ok(_) => continue,       // more request bytes; keep waiting
+                    }
+                }
+                // EOF/reset observed — the engine's producer socket closed.
+                if let Some(tx) = gone_tx.take() {
+                    let _ = tx.send(());
+                }
+            }
+            // If accept failed, dropping `gone_tx` fails the test fast.
+        });
+        (format!("http://127.0.0.1:{port}"), gone_rx)
+    }
+
+    /// Spawn the real router on an ephemeral port and return its address.
+    async fn spawn_real_server(app: Router) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        addr
+    }
+
+    fn disconnect_test_config(base_url: String) -> LlmClientConfig {
+        LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
+            api_key: "test-key".to_string(),
+            base_url,
+            model: "test-model".to_string(),
+            provider: LlmProvider::Anthropic,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn p2_2_aggregate_query_budget_cancels_stalled_query() {
+        // The aggregate POST endpoint has no client-disconnect signal
+        // (hyper keeps the handler alive across a FIN — proven by the SSE
+        // sibling test being the only one that can rely on body-drop), so
+        // its cancellation channel is the wall-clock budget. A 1s budget
+        // against the never-answering mock must (a) return a JSON response
+        // with a cancellation error quickly and (b) abort the engine
+        // producer — observable as EOF on the mock's socket.
+        let (base_url, gone_rx) = start_hanging_llm();
+        let app = ShannonApiServer::new(disconnect_test_config(base_url))
+            .query_budget(std::time::Duration::from_secs(1))
+            .build_router();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"prompt":"hello"}"#))
+            .unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+            .await
+            .expect("aggregate endpoint must honour the query budget instead of hanging")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let errors = parsed["errors"].as_array().cloned().unwrap_or_default();
+        assert!(
+            errors
+                .iter()
+                .any(|v| v.as_str().unwrap_or_default().contains("cancelled")),
+            "the budget expiry must surface as a cancellation error, got: {errors:?}"
+        );
+
+        // Dropping the QueryStream at budget expiry aborts the producer,
+        // closing its outbound request — the hanging mock observes EOF.
+        match tokio::time::timeout(std::time::Duration::from_secs(5), gone_rx).await {
+            Ok(Ok(())) => {}
+            _ => panic!("engine producer must be aborted when the budget fires"),
+        }
+    }
+
+    #[tokio::test]
+    async fn p2_2_client_disconnect_cancels_sse_query() {
+        use tokio::io::AsyncReadExt as _;
+        use tokio::io::AsyncWriteExt as _;
+
+        let (base_url, gone_rx) = start_hanging_llm();
+        let app = ShannonApiServer::new(disconnect_test_config(base_url)).build_router();
+        let addr = spawn_real_server(app).await;
+
+        // Raw TCP client: open the SSE stream, read the response head, then
+        // disconnect mid-stream.
+        {
+            let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req = format!(
+                "GET /api/query/stream?prompt=hello HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+            );
+            sock.write_all(req.as_bytes()).await.unwrap();
+            sock.flush().await.unwrap();
+            // Wait until the SSE response head (and at least the first body
+            // bytes) came back, so the server has fully committed to the
+            // streaming response before the client vanishes.
+            let mut head = vec![0u8; 2048];
+            let n = tokio::time::timeout(std::time::Duration::from_secs(10), sock.read(&mut head))
+                .await
+                .expect("SSE response head must arrive")
+                .expect("read head");
+            let head_text = String::from_utf8_lossy(&head[..n]).to_string();
+            assert!(
+                head_text.contains("text/event-stream"),
+                "expected an SSE response, got: {head_text}"
+            );
+            drop(sock);
+        }
+
+        // Dropping the SSE body must drop the underlying QueryStream, whose
+        // AbortOnDropStream contract aborts the producer — observable as EOF
+        // on the mock's socket.
+        match tokio::time::timeout(std::time::Duration::from_secs(10), gone_rx).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => panic!("mock LLM died before observing the disconnect"),
+            Err(_) => panic!("SSE query loop kept running after the client disconnected"),
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // review §P2-3: same-session concurrency
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Minimal Anthropic end-turn SSE response for the scripted mock.
+    fn p2_3_end_turn_sse(text: &str) -> String {
+        let payload = format!(r#"{{"type":"text_delta","text":"{text}"}}"#);
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_p2_3","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            "event: content_block_delta",
+            format!(
+                "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{payload}}}"
+            )
+            .as_str(),
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"output_tokens":7}}"#,
+            r#"event: message_stop"#,
+            r#"data: {"type":"message_stop"}"#,
+        ]
+        .join("\n\n");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sse}",
+            sse.len()
+        )
+    }
+
+    /// Review §P2-3: two concurrent requests for the SAME session must not
+    /// interleave their session-log access. While request A is parked
+    /// mid-turn at the provider, request B must wait on the per-session
+    /// lock instead of attaching immediately; when B finally attaches, it
+    /// restores A's completed turn — its provider request carries A's
+    /// assistant reply as history (a partial restore would send a dangling
+    /// `tool_use`/half turn and trip provider 400s).
+    #[tokio::test]
+    async fn p2_3_concurrent_same_session_queries_do_not_interleave_history() {
+        use std::io::Read as _;
+        use std::io::Write as _;
+        use tokio::io::AsyncReadExt as _;
+        use tokio::io::AsyncWriteExt as _;
+
+        // Isolate the session log: the handlers build `StateManager::new()`
+        // whose sessions dir derives from $HOME, and the L0 tee honours
+        // $SHANNON_HOME. Point both at one temp container (nextest runs each
+        // test in its own process, so the env mutation stays local).
+        let home = std::env::temp_dir()
+            .join("shannon-p2-3")
+            .join(Uuid::new_v4().to_string());
+        std::fs::create_dir_all(home.join(".shannon")).unwrap();
+        // SAFETY: test-only env mutation, isolated per nextest process.
+        unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::set_var("SHANNON_HOME", home.join(".shannon")) };
+
+        // Scripted mock: request 0 (request A) signals arrival and parks
+        // until the test releases it; any later request is answered at once.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let captured: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (first_arrived_tx, first_arrived_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        {
+            let captured = captured.clone();
+            std::thread::spawn(move || {
+                let mut first_arrived_tx = Some(first_arrived_tx);
+                for mut stream in listener.incoming().flatten() {
+                    // 1 MiB: the engine's system prompt embeds the workspace
+                    // environment, so provider requests can far exceed the
+                    // 64 KiB other mocks use.
+                    let mut buf = vec![0u8; 1 << 20];
+                    let mut read = 0usize;
+                    loop {
+                        match stream.read(&mut buf[read..]) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => read += n,
+                        }
+                        let s = String::from_utf8_lossy(&buf[..read]).to_string();
+                        if let Some(header_end) = s.find("\r\n\r\n") {
+                            let cl: usize = s[..header_end]
+                                .to_ascii_lowercase()
+                                .split("\r\n")
+                                .find_map(|l| l.strip_prefix("content-length:"))
+                                .and_then(|v| v.trim().parse().ok())
+                                .unwrap_or(0);
+                            if read >= header_end + 4 + cl {
+                                break;
+                            }
+                        }
+                        if read == buf.len() {
+                            break;
+                        }
+                    }
+                    let body = String::from_utf8_lossy(&buf[..read]).to_string();
+                    let index = {
+                        let mut guard = captured.lock().unwrap();
+                        guard.push(body);
+                        guard.len() - 1
+                    };
+                    let http = if index == 0 {
+                        if let Some(tx) = first_arrived_tx.take() {
+                            let _ = tx.send(());
+                        }
+                        // Park mid-turn, like a slow/stalled provider.
+                        let _ = release_rx.recv();
+                        p2_3_end_turn_sse("A_REPLY")
+                    } else {
+                        p2_3_end_turn_sse("B_REPLY")
+                    };
+                    stream.write_all(http.as_bytes()).ok();
+                    stream.flush().ok();
+                }
+            });
+        }
+
+        let app = ShannonApiServer::new(disconnect_test_config(format!("http://127.0.0.1:{port}")))
+            .query_budget(std::time::Duration::from_secs(60))
+            .build_router();
+        let addr = spawn_real_server(app).await;
+        let session_id = Uuid::new_v4();
+
+        // Raw-TCP POST /api/query; returns the JSON response body.
+        let post_query = |prompt: &'static str| async move {
+            let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let body = format!(r#"{{"prompt":"{prompt}","session_id":"{session_id}"}}"#);
+            let req = format!(
+                "POST /api/query HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            sock.write_all(req.as_bytes()).await.unwrap();
+            sock.flush().await.unwrap();
+            let mut raw = Vec::new();
+            sock.read_to_end(&mut raw).await.unwrap();
+            String::from_utf8_lossy(&raw).to_string()
+        };
+
+        // A goes first and parks inside the provider call.
+        let a_task = tokio::spawn(post_query("A question"));
+        tokio::time::timeout(std::time::Duration::from_secs(10), first_arrived_rx)
+            .await
+            .expect("A's provider request must arrive")
+            .expect("arrival channel");
+
+        // B starts while A is mid-flight; give it time to reach the handler.
+        let b_task = tokio::spawn(post_query("B question"));
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // The discriminator: while A's query is in flight, B must NOT have
+        // attached + reached the provider. Without the §P2-3 per-session
+        // lock, B attaches immediately (projecting A's half-written turn)
+        // and the mock would already see 2 requests.
+        assert_eq!(
+            captured.lock().unwrap().len(),
+            1,
+            "B must wait for A's query to settle before attaching the same session"
+        );
+
+        // Let A finish; both queries must then complete successfully.
+        let _ = release_tx.send(());
+        let a_resp = tokio::time::timeout(std::time::Duration::from_secs(30), a_task)
+            .await
+            .expect("A must finish")
+            .expect("A task");
+        let b_resp = tokio::time::timeout(std::time::Duration::from_secs(30), b_task)
+            .await
+            .expect("B must finish")
+            .expect("B task");
+        assert!(a_resp.starts_with("HTTP/1.1 200"), "A response: {a_resp}");
+        assert!(b_resp.starts_with("HTTP/1.1 200"), "B response: {b_resp}");
+
+        // B's provider request must carry A's completed turn as history.
+        let bodies = captured.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 2, "mock must have served exactly 2 requests");
+        // The mock captures the raw HTTP request; take the JSON body after
+        // the header block.
+        let json_part = bodies[1]
+            .split("\r\n\r\n")
+            .nth(1)
+            .unwrap_or_default()
+            .trim();
+        let second: serde_json::Value = serde_json::from_str(json_part)
+            .unwrap_or_else(|e| panic!("B provider request must parse as JSON: {e}"));
+        let messages = second["messages"].as_array().cloned().unwrap_or_default();
+        assert!(
+            messages.iter().any(|m| {
+                m["role"] == "assistant"
+                    && m["content"]
+                        .as_array()
+                        .map(|blocks| {
+                            blocks.iter().any(|b| {
+                                b["type"] == "text"
+                                    && b["text"].as_str().unwrap_or_default().contains("A_REPLY")
+                            })
+                        })
+                        .unwrap_or(false)
+            }),
+            "B must restore A's completed turn from the session log; provider saw: {second}"
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
     // session_id pass-through (P0-d)
     // ══════════════════════════════════════════════════════════════════════
 
@@ -1675,6 +2990,7 @@ mod tests {
             });
             tee.record_query_event(&QueryEvent::Completed {
                 query_id: Uuid::new_v4(),
+                outcome: Default::default(),
             });
             tee.close();
         }
@@ -1683,7 +2999,7 @@ mod tests {
         let mut engine = QueryEngine::with_defaults(
             LlmClient::new(test_config()),
             ToolRegistry::new(),
-            PermissionManager::new(),
+            shannon_engine::permissions::PermissionManager::new(),
             StateManager::with_sessions_dir(dir.join("sessions")).unwrap(),
         );
 
@@ -1710,7 +3026,7 @@ mod tests {
         let mut engine = QueryEngine::with_defaults(
             LlmClient::new(test_config()),
             ToolRegistry::new(),
-            PermissionManager::new(),
+            shannon_engine::permissions::PermissionManager::new(),
             state,
         );
 
@@ -1751,9 +3067,121 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // POST /api/query/stream (review §P3-3): prompt in the JSON body
+    // ══════════════════════════════════════════════════════════════════════
+
     #[tokio::test]
-    async fn test_query_stream_endpoint_post_method_rejected() {
+    async fn test_query_stream_post_returns_sse_stream() {
+        // Hanging mock: the handler must return the SSE response head
+        // immediately (the query streams lazily in the background), proving
+        // the POST path is wired to the streaming handler.
+        let (base_url, _gone_rx) = start_hanging_llm();
+        let app = ShannonApiServer::new(disconnect_test_config(base_url)).build_router();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query/stream")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_string(&QueryRequest {
+                    prompt: "hello".to_string(),
+                    model: Some("llama3".to_string()),
+                    session_id: None,
+                    attachments: None,
+                    approval_mode: None,
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+            .await
+            .expect("POST stream must return the SSE response head promptly")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        // The POST path streams SSE exactly like the GET path did.
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("text/event-stream"),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_stream_post_empty_prompt_returns_bad_request() {
         let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query/stream")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_string(&QueryRequest {
+                    prompt: String::new(),
+                    model: None,
+                    session_id: None,
+                    attachments: None,
+                    approval_mode: None,
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed.get("error").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_query_stream_post_whitespace_prompt_returns_bad_request() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query/stream")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"prompt": "   "}"#))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_query_stream_post_invalid_attachment_returns_bad_request() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query/stream")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "prompt": "hello",
+                    "attachments": [{
+                        "media_type": "application/pdf",
+                        "data": "aGk="
+                    }]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let err = parsed.get("error").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(err.contains("unsupported media_type"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_query_stream_post_missing_body_returns_rejection() {
+        let app = test_app();
+        // §P3-3: the prompt must no longer be read from the query string; a
+        // POST without a JSON body cannot carry a prompt at all and must not
+        // fall back to `?prompt=...`.
         let req = Request::builder()
             .method("POST")
             .uri("/api/query/stream?prompt=hello")
@@ -1761,7 +3189,9 @@ mod tests {
             .unwrap();
 
         let response = app.oneshot(req).await.unwrap();
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        // The Json extractor rejects the bodyless request (415 without a
+        // content type) — anything except a successful GET-style query.
+        assert_ne!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -1859,6 +3289,93 @@ mod tests {
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
+    /// Build a GET /api/ws request that satisfies the WebSocketUpgrade
+    /// extractor, optionally with an `Origin` header.
+    fn ws_upgrade_request(origin: Option<&str>) -> axum::extract::Request {
+        let mut builder = Request::builder()
+            .uri("/api/ws")
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
+        if let Some(origin) = origin {
+            builder = builder.header("origin", origin);
+        }
+        builder.body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_ws_cross_site_origin_rejected() {
+        let app = test_app();
+        // A browser page at a public host must not be able to drive the
+        // local engine via ws://127.0.0.1:33420 (WS handshakes bypass CORS).
+        // The guard short-circuits before the WebSocketUpgrade extractor.
+        let req = ws_upgrade_request(Some("https://evil.example"));
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_ws_null_origin_rejected() {
+        let app = test_app();
+        // `Origin: null` (sandboxed iframes) is a browser origin — reject.
+        let req = ws_upgrade_request(Some("null"));
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_ws_loopback_and_webview_origins_pass_guard() {
+        for origin in [
+            "http://localhost:1420",  // desktop dev server
+            "http://127.0.0.1:5173",  // local tooling
+            "ws://[::1]:33420",       // bracketed IPv6 loopback
+            "tauri://localhost",      // Tauri WKWebView / WebKitGTK
+            "http://tauri.localhost", // Tauri WebView2 (Windows)
+        ] {
+            let app = test_app();
+            let req = ws_upgrade_request(Some(origin));
+            let response = app.oneshot(req).await.unwrap();
+            // Under `oneshot` the guard passes and the WebSocketUpgrade
+            // extractor then fails with 426 (no hyper upgrade state) — the
+            // point is that the guard did NOT reject with 403.
+            assert_eq!(
+                response.status(),
+                StatusCode::UPGRADE_REQUIRED,
+                "origin {origin} should pass the WS origin guard"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ws_no_origin_header_passes_guard() {
+        let app = test_app();
+        // Non-browser clients (gateway ws client, tests) send no Origin.
+        let req = ws_upgrade_request(None);
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+    }
+
+    #[test]
+    fn ws_origin_allowed_host_parsing() {
+        assert!(ws_origin_allowed(None));
+        assert!(ws_origin_allowed(Some("tauri://localhost")));
+        assert!(ws_origin_allowed(Some("http://tauri.localhost")));
+        assert!(ws_origin_allowed(Some("https://tauri.localhost")));
+        assert!(ws_origin_allowed(Some("http://localhost:1420")));
+        assert!(ws_origin_allowed(Some("http://127.0.0.1:33420")));
+        assert!(ws_origin_allowed(Some("ws://[::1]:33420")));
+        assert!(ws_origin_allowed(Some("http://[::ffff:127.0.0.1]:8080")));
+        assert!(ws_origin_allowed(Some("http://LOCALHOST:1420")));
+
+        assert!(!ws_origin_allowed(Some("https://evil.example")));
+        assert!(!ws_origin_allowed(Some("http://127.0.0.1.evil.example"))); // suffix spoof
+        assert!(!ws_origin_allowed(Some("http://0.0.0.0:33420")));
+        assert!(!ws_origin_allowed(Some("null")));
+        assert!(!ws_origin_allowed(Some("garbage"))); // no scheme
+        assert!(!ws_origin_allowed(Some("https://example.com/127.0.0.1")));
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // Unknown route tests
     // ══════════════════════════════════════════════════════════════════════
@@ -1895,6 +3412,7 @@ mod tests {
             model: Some("gpt-4o".to_string()),
             session_id: None,
             attachments: None,
+            approval_mode: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("hello world"));
@@ -1969,10 +3487,12 @@ mod tests {
                 ModelInfo {
                     id: "gpt-4o".to_string(),
                     provider: "openai".to_string(),
+                    name: Some("GPT-4o".to_string()),
                 },
                 ModelInfo {
                     id: "llama3".to_string(),
                     provider: "ollama".to_string(),
+                    name: None,
                 },
             ],
         };
@@ -2334,6 +3854,8 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let cloned = state.clone();
         assert!(Arc::ptr_eq(&state.tools, &cloned.tools));
@@ -2347,6 +3869,8 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let sessions = state.ws_sessions.read().await;
         assert!(sessions.is_empty());
@@ -2359,11 +3883,14 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
 
         let session = Arc::new(Mutex::new(WsSession {
             messages: vec![],
             model: None,
+            approval_mode: None,
         }));
 
         // Insert
@@ -2435,6 +3962,9 @@ mod tests {
             description: "Run a shell command".to_string(),
             is_destructive: true,
             diff_preview: Some("--- old\n+++ new".to_string()),
+            ts: None,
+            agent: None,
+            risk: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2446,12 +3976,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_approval_mode_get_defaults_and_post_tightens() {
+        let state = AppState {
+            client_config: test_config(),
+            tools: Arc::new(ToolRegistry::new()),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+        };
+        let sid = uuid::Uuid::new_v4().to_string();
+
+        // GET on an unknown session answers the engine default token.
+        let res = approval_mode_get_handler(
+            State(state.clone()),
+            axum::extract::Query(std::collections::HashMap::from([(
+                "session_id".to_string(),
+                sid.clone(),
+            )])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.mode, "auto-edit");
+
+        // POST readonly UPSERTS the session entry and stores the tighten.
+        let res = approval_mode_post_handler(
+            State(state.clone()),
+            axum::Json(ApprovalModeRequest {
+                session_id: sid.clone(),
+                mode: "readonly".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.mode, "readonly");
+        {
+            let sessions = state.ws_sessions.read().await;
+            let stored = sessions.get(&sid).expect("upserted").lock().await;
+            assert_eq!(stored.approval_mode.as_deref(), Some("readonly"));
+        }
+
+        // GET now reflects the stored tighten.
+        let res = approval_mode_get_handler(
+            State(state.clone()),
+            axum::extract::Query(std::collections::HashMap::from([(
+                "session_id".to_string(),
+                sid.clone(),
+            )])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.mode, "readonly");
+    }
+
+    #[tokio::test]
+    async fn test_approval_mode_post_rejects_non_readonly() {
+        let state = AppState {
+            client_config: test_config(),
+            tools: Arc::new(ToolRegistry::new()),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+        };
+        let err = approval_mode_post_handler(
+            State(state),
+            axum::Json(ApprovalModeRequest {
+                session_id: uuid::Uuid::new_v4().to_string(),
+                mode: "full-auto".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("readonly"));
+    }
+
+    #[tokio::test]
     async fn test_approval_respond_resolves_pending_request() {
         let state = AppState {
             client_config: test_config(),
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let request_id = "test-approval-1".to_string();
         let (tx, rx) = oneshot::channel::<PermissionChoice>();
@@ -2491,6 +4100,8 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let body = ApprovalRespondRequest {
             request_id: "does-not-exist".to_string(),
@@ -2528,6 +4139,7 @@ mod tests {
         let session = WsSession {
             messages: vec![],
             model: None,
+            approval_mode: None,
         };
         assert!(session.messages.is_empty());
         assert!(session.model.is_none());
@@ -2538,6 +4150,7 @@ mod tests {
         let session = Arc::new(Mutex::new(WsSession {
             messages: vec![],
             model: None,
+            approval_mode: None,
         }));
 
         {
@@ -2554,6 +4167,7 @@ mod tests {
         let session = Arc::new(Mutex::new(WsSession {
             messages: vec![],
             model: None,
+            approval_mode: None,
         }));
 
         let test_msg = Message {
@@ -2658,5 +4272,439 @@ mod tests {
         let server = ShannonApiServer::new(config);
         // Ensure build_router is deterministic and doesn't panic
         let _router = server.build_router();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // WS session-enumeration surface (R2-W2): sessions.list / session.history
+    // ══════════════════════════════════════════════════════════════════════
+
+    use shannon_types::session_event::{
+        AssistantChunkPayload, SessionEventBody, SessionStartPayload, TokenUsage, TurnEndPayload,
+        TurnStartPayload, UserMessagePayload,
+    };
+    use std::path::PathBuf;
+
+    /// Append one event as a JSONL row with an explicit seq/ts — the fixture
+    /// path (the live writer stamps its own wall-clock ts, which the paging
+    /// tests need to control).
+    fn write_event(file: &mut std::fs::File, event: &SessionEvent) {
+        use std::io::Write;
+        writeln!(file, "{}", serde_json::to_string(event).unwrap()).unwrap();
+    }
+
+    fn event(session: &str, seq: u64, ts_ns: u64, body: SessionEventBody) -> SessionEvent {
+        SessionEvent::new(seq, ts_ns, session, 1, body)
+    }
+
+    fn user_msg(session: &str, seq: u64, ts_ns: u64, content: &str) -> SessionEvent {
+        event(
+            session,
+            seq,
+            ts_ns,
+            SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: content.into(),
+                attachment_count: 0,
+            }),
+        )
+    }
+
+    fn assistant_chunk(session: &str, seq: u64, ts_ns: u64, delta: &str) -> SessionEvent {
+        event(
+            session,
+            seq,
+            ts_ns,
+            SessionEventBody::AssistantChunk(AssistantChunkPayload {
+                delta: delta.into(),
+                thinking: false,
+            }),
+        )
+    }
+
+    /// One `user prompt → assistant reply` turn at a controlled ts. The pair
+    /// shares ONE ts, mirroring the §J2 same-ts-group contract.
+    fn turn(session: &str, seq: u64, ts_ns: u64, prompt: &str, reply: &str) -> Vec<SessionEvent> {
+        vec![
+            user_msg(session, seq, ts_ns, prompt),
+            assistant_chunk(session, seq + 1, ts_ns, reply),
+        ]
+    }
+
+    /// Fixture container with one session whose transcript is the given
+    /// turns; returns (container, session id string).
+    fn fixture_session(dir: &std::path::Path, turns: &[(u64, &str, &str)]) -> (PathBuf, String) {
+        let sid = Uuid::new_v4().to_string();
+        let session_dir = dir.join(&sid);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let path = session_dir.join("events.jsonl");
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let start_ns = 1_760_000_000_000_000_000; // 2025-10-09T05:06:40Z
+        write_event(
+            &mut file,
+            &event(
+                &sid,
+                0,
+                start_ns,
+                SessionEventBody::SessionStart(SessionStartPayload {
+                    model: "test-model".into(),
+                    provider: None,
+                    cwd: None,
+                    app_version: None,
+                    os: None,
+                    arch: None,
+                    browser_cdp: None,
+                }),
+            ),
+        );
+        for (i, (turn_no, prompt, reply)) in turns.iter().enumerate() {
+            let seq = 1 + (i as u64) * 4;
+            let ts_ns = start_ns + turn_no * 1_000_000_000;
+            write_event(
+                &mut file,
+                &event(
+                    &sid,
+                    seq,
+                    ts_ns,
+                    SessionEventBody::TurnStart(TurnStartPayload { query_id: None }),
+                ),
+            );
+            for e in turn(&sid, seq + 1, ts_ns + 1_000_000_000, prompt, reply) {
+                write_event(&mut file, &e);
+            }
+            write_event(
+                &mut file,
+                &event(
+                    &sid,
+                    seq + 3,
+                    ts_ns + 2_000_000_000,
+                    SessionEventBody::TurnEnd(TurnEndPayload {
+                        llm_steps: None,
+                        reason: TurnEndPayload::REASON_COMPLETED.into(),
+                        usage: Some(TokenUsage {
+                            input_tokens: 10,
+                            output_tokens: 5,
+                            cache_creation_tokens: 0,
+                            cache_read_tokens: 0,
+                            cost_usd: None,
+                        }),
+                        error: None,
+                    }),
+                ),
+            );
+        }
+        (dir.to_path_buf(), sid)
+    }
+
+    fn temp_container(tag: &str) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join(tag);
+        std::fs::create_dir_all(&container).unwrap();
+        (tmp, container)
+    }
+
+    fn assert_transcript(msg: WsServerMessage) -> (String, Vec<TranscriptMessage>, bool) {
+        match msg {
+            WsServerMessage::SessionTranscript {
+                session_id,
+                messages,
+                has_more,
+            } => (session_id, messages, has_more),
+            other => panic!("expected SessionTranscript, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sessions_list_maps_store_rows_to_summaries() {
+        let (_tmp, container) = temp_container("list");
+        let (_container2, sid) =
+            fixture_session(&container, &[(1, "fix the login", "done, tests pass")]);
+        let store = SessionStore::new(&container);
+
+        let msg = sessions_snapshot(&store);
+        let sessions = match msg {
+            WsServerMessage::SessionsSnapshot { sessions } => sessions,
+            other => panic!("expected SessionsSnapshot, got {other:?}"),
+        };
+        assert_eq!(sessions.len(), 1);
+        let s = &sessions[0];
+        assert_eq!(s.session_id, sid);
+        assert_eq!(s.turn_count, 1);
+        assert_eq!(s.total_input_tokens, 10);
+        assert_eq!(s.total_output_tokens, 5);
+        // RFC3339 UTC stamps parse back.
+        chrono::DateTime::parse_from_rfc3339(&s.created_at).unwrap();
+        chrono::DateTime::parse_from_rfc3339(&s.updated_at).unwrap();
+        assert_eq!(s.preview.as_deref(), Some("fix the login"));
+    }
+
+    #[test]
+    fn sessions_list_empty_container_answers_empty_snapshot() {
+        let (_tmp, container) = temp_container("empty");
+        let store = SessionStore::new(&container);
+        match sessions_snapshot(&store) {
+            WsServerMessage::SessionsSnapshot { sessions } => assert!(sessions.is_empty()),
+            other => panic!("expected SessionsSnapshot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_history_full_transcript_roles_and_ts() {
+        let (_tmp, container) = temp_container("full");
+        let (_dir, sid) = fixture_session(
+            &container,
+            &[
+                (1, "turn one ask", "turn one answer"),
+                (2, "turn two ask", "turn two answer"),
+            ],
+        );
+        let store = SessionStore::new(&container);
+
+        let (echoed, messages, has_more) =
+            assert_transcript(session_history_response(&store, &sid, None, None));
+        assert_eq!(echoed, sid);
+        assert!(!has_more, "everything fits on the latest page");
+        assert_eq!(messages.len(), 4, "user+assistant per turn");
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].content, "turn one ask");
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].content, "turn one answer");
+        assert_eq!(messages[3].content, "turn two answer");
+        // Ascending ts, RFC3339.
+        assert!(messages[0].ts <= messages[1].ts && messages[1].ts <= messages[2].ts);
+        for m in messages {
+            chrono::DateTime::parse_from_rfc3339(&m.ts).unwrap();
+        }
+    }
+
+    #[test]
+    fn session_history_latest_page_is_tail_with_has_more() {
+        let (_tmp, container) = temp_container("tail");
+        let turns: Vec<(u64, &str, &str)> = (0..60)
+            .map(|i| {
+                (
+                    i + 1,
+                    Box::leak(format!("p{i}").into_boxed_str()) as &str,
+                    "r",
+                )
+            })
+            .collect();
+        let (_dir, sid) = fixture_session(&container, &turns);
+        let store = SessionStore::new(&container);
+
+        let (_, messages, has_more) =
+            assert_transcript(session_history_response(&store, &sid, None, None));
+        assert!(has_more, "70 older messages remain");
+        assert_eq!(messages.len(), 50, "the §J2 default page size");
+        assert_eq!(messages[0].content, "p35");
+        assert_eq!(messages[49].content, "r");
+    }
+
+    #[test]
+    fn session_history_before_slices_strictly_before_cursor() {
+        let (_tmp, container) = temp_container("before");
+        let turns: Vec<(u64, &str, &str)> = (0..60)
+            .map(|i| {
+                (
+                    i + 1,
+                    Box::leak(format!("p{i}").into_boxed_str()) as &str,
+                    "r",
+                )
+            })
+            .collect();
+        let (_dir, sid) = fixture_session(&container, &turns);
+        let store = SessionStore::new(&container);
+
+        // Deterministic fixture arithmetic: transcript entry 70 is turn 35's
+        // user message, stamped at start + 37s (§J2: the cursor is a message
+        // ts — the client echoes one back from a previous page).
+        let start_ns = 1_760_000_000_000_000_000u64;
+        let cursor = rfc3339_from_ns(start_ns + 37_000_000_000);
+
+        let (_, messages, has_more) = assert_transcript(session_history_response(
+            &store,
+            &sid,
+            Some(&cursor),
+            Some(10),
+        ));
+        assert!(has_more);
+        assert_eq!(messages.len(), 10);
+        assert_eq!(messages[0].content, "p30");
+        assert_eq!(messages[9].content, "r");
+    }
+
+    #[test]
+    fn session_history_same_ts_group_never_splits() {
+        let (_tmp, container) = temp_container("group");
+        let (_dir, sid) = fixture_session(
+            &container,
+            &[(1, "a1", "b1"), (2, "a2", "b2"), (3, "a3", "b3")],
+        );
+        let store = SessionStore::new(&container);
+
+        // a2/b2 share one ts (the fixture stamps the pair together): a page
+        // ending at that ts boundary takes the pair as a unit.
+        let (_, all, _) = assert_transcript(session_history_response(&store, &sid, None, None));
+        assert_eq!(all[2].content, "a2");
+        assert_eq!(all[2].ts, all[3].ts, "fixture: the pair shares one ts");
+        let cursor = all[2].ts.clone();
+
+        // limit 1 → strictly before the cursor's group: exactly b1.
+        let (_, page, has_more) = assert_transcript(session_history_response(
+            &store,
+            &sid,
+            Some(&cursor),
+            Some(1),
+        ));
+        assert!(has_more, "a1/b1 remain");
+        assert_eq!(page.len(), 1);
+        assert_eq!(
+            page[0].content, "b1",
+            "the same-ts group stayed on the newer side"
+        );
+
+        // limit 2 → the whole a1/b1 group, and nothing older: has_more false.
+        let (_, page, has_more) = assert_transcript(session_history_response(
+            &store,
+            &sid,
+            Some(&cursor),
+            Some(2),
+        ));
+        assert!(!has_more);
+        assert_eq!(
+            page.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(),
+            vec!["a1", "b1"]
+        );
+
+        // Cursor at the head group: empty page, still no more.
+        let head = all[0].ts.clone();
+        let (_, page, has_more) =
+            assert_transcript(session_history_response(&store, &sid, Some(&head), Some(5)));
+        assert!(!has_more);
+        assert!(page.is_empty());
+    }
+
+    #[test]
+    fn session_history_unknown_and_foreign_ids_answer_empty_transcript() {
+        let (_tmp, container) = temp_container("unknown");
+        let store = SessionStore::new(&container);
+
+        // Not a UUID at all.
+        let (_, messages, has_more) = assert_transcript(session_history_response(
+            &store,
+            "no-such-session",
+            None,
+            None,
+        ));
+        assert!(messages.is_empty());
+        assert!(!has_more);
+        // A well-formed UUID with no log.
+        let (_, messages, has_more) = assert_transcript(session_history_response(
+            &store,
+            &Uuid::new_v4().to_string(),
+            None,
+            None,
+        ));
+        assert!(messages.is_empty());
+        assert!(!has_more);
+    }
+
+    #[test]
+    fn session_history_unreadable_log_answers_error_frame() {
+        let (_tmp, container) = temp_container("corrupt");
+        let sid = Uuid::new_v4();
+        let dir = container.join(sid.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("events.jsonl"), "{not json}\n").unwrap();
+        let store = SessionStore::new(&container);
+
+        match session_history_response(&store, &sid.to_string(), None, None) {
+            WsServerMessage::Error { message } => {
+                assert!(message.contains("cannot read log"), "got: {message}");
+            }
+            other => panic!("expected Error frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn history_page_limit_clamps() {
+        assert_eq!(history_page_limit(None), 50);
+        assert_eq!(history_page_limit(Some(1)), 1);
+        assert_eq!(history_page_limit(Some(499)), 499);
+        assert_eq!(history_page_limit(Some(500)), 500);
+        assert_eq!(history_page_limit(Some(100_000)), 500);
+        // Review I2: degenerate values clamp to 1, never the default.
+        assert_eq!(history_page_limit(Some(0)), 1);
+    }
+
+    #[test]
+    fn history_anchor_degenerate_cursors_select_whole_transcript() {
+        let transcript = vec![TranscriptMessage {
+            role: "user".into(),
+            content: "hi".into(),
+            ts: "2026-06-01T10:00:00+00:00".into(),
+        }];
+        assert_eq!(history_anchor(&transcript, None), 1);
+        // Unparseable cursor = latest page (§J2 reference behavior).
+        assert_eq!(history_anchor(&transcript, Some("not-a-date")), 1);
+        // A cursor older than everything still anchors at 0.
+        assert_eq!(
+            history_anchor(&transcript, Some("1999-01-01T00:00:00.000Z")),
+            0
+        );
+    }
+
+    #[test]
+    fn transcript_skips_tool_bookkeeping_messages() {
+        let sid = Uuid::new_v4().to_string();
+        let start_ns = 1_760_000_000_000_000_000u64;
+        let events = vec![
+            user_msg(&sid, 0, start_ns, "run the thing"),
+            assistant_chunk(&sid, 1, start_ns + 1, ""),
+            // A tool call + result project as (assistant tool_use step,
+            // user tool_result) — neither carries chat text.
+            event(
+                &sid,
+                2,
+                start_ns + 2,
+                SessionEventBody::ToolCall(shannon_types::session_event::ToolCallPayload {
+                    tool_use_id: "t1".into(),
+                    tool_name: "Bash".into(),
+                    arguments: "{}".into(),
+                }),
+            ),
+            event(
+                &sid,
+                3,
+                start_ns + 3,
+                SessionEventBody::ToolResult(shannon_types::session_event::ToolResultPayload {
+                    tool_use_id: "t1".into(),
+                    tool_name: "Bash".into(),
+                    output: "ok".into(),
+                    is_error: false,
+                    duration_ms: Some(1),
+                    meta: serde_json::Value::Null,
+                }),
+            ),
+            assistant_chunk(&sid, 4, start_ns + 4, "all done"),
+        ];
+        let transcript = transcript_messages(&events);
+        let contents: Vec<_> = transcript.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(contents, vec!["run the thing", "all done"]);
+        // Tool noise never becomes a transcript row.
+        assert!(
+            transcript
+                .iter()
+                .all(|m| matches!(m.role.as_str(), "user" | "assistant"))
+        );
+    }
+
+    #[test]
+    fn epoch_millis_stamp_is_sane() {
+        let ts = epoch_millis_now().expect("clock after epoch");
+        assert!(ts > 1_700_000_000_000, "plausible epoch ms: {ts}");
     }
 }

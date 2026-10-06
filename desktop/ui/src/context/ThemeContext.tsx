@@ -15,7 +15,7 @@ interface ThemeContextValue {
   theme: ThemeName
   setTheme: (theme: ThemeName) => void
   resolvedTheme: ResolvedTheme
-  themes: { id: ThemeName; label: string }[]
+  themes: { id: ThemeName; labelKey: string }[]
   fontScale: number
   setFontScale: (scale: number) => void
 }
@@ -50,21 +50,31 @@ type RegistryExtra = [Exclude<RegistryTheme, ResolvedTheme>] extends [never] ? t
 const REGISTRY_ALIGNED: [RegistryMissing, RegistryExtra] = [true, true]
 void REGISTRY_ALIGNED
 
-const THEMES: { id: ThemeName; label: string }[] = [
-  { id: 'system', label: 'System' },
-  { id: 'material', label: 'Material' },
-  { id: 'tokyo-night', label: 'Tokyo Night' },
-  { id: 'tokyo-night-light', label: 'Tokyo Night Light' },
-  { id: 'catppuccin', label: 'Catppuccin' },
-  { id: 'nord', label: 'Nord' },
-  { id: 'ember', label: 'Ember' },
-  { id: 'slate', label: 'Slate' },
-  { id: 'solarized', label: 'Solarized Dark' },
-  { id: 'solarized-light', label: 'Solarized Light' },
-  { id: 'dracula', label: 'Dracula' },
-  { id: 'gruvbox', label: 'Gruvbox' },
-  { id: 'gruvbox-light', label: 'Gruvbox Light' },
-]
+// G7 i18n (P1-8): theme display names are intl message ids
+// (`settings.theme.name.*`) resolved by the consumer (ThemeSettings) — the
+// provider renders outside <IntlProvider>, so it carries keys, not strings.
+// Built from the literal ids so the compiler flags any drift with ThemeName.
+const THEMES: { id: ThemeName; labelKey: string }[] = (
+  [
+    'system',
+    'material',
+    'tokyo-night',
+    'tokyo-night-light',
+    'catppuccin',
+    'nord',
+    'ember',
+    'slate',
+    'solarized',
+    'solarized-light',
+    'dracula',
+    'gruvbox',
+    'gruvbox-light',
+  ] as const
+).map((id) => ({
+  id,
+  // kebab-case theme id → camelCase message-id suffix ('tokyo-night' → tokyoNight).
+  labelKey: `settings.theme.name.${id.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())}`,
+}))
 
 function getSystemTheme(): ResolvedTheme {
   if (typeof window === 'undefined') return 'material'
@@ -72,11 +82,14 @@ function getSystemTheme(): ResolvedTheme {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
+  // Dark-first default (UI audit §2.5: all four competitors ship dark as the
+  // default or flagship look). Users who picked a theme keep theirs via
+  // localStorage; 'system' still resolves per OS preference.
   const [theme, setThemeState] = useState<ThemeName>(() => {
     if (typeof window !== 'undefined') {
-      return (localStorage.getItem('shannon-theme') as ThemeName) || 'material'
+      return (localStorage.getItem('shannon-theme') as ThemeName) || 'tokyo-night'
     }
-    return 'material'
+    return 'tokyo-night'
   })
 
   const [fontScale, setFontScaleState] = useState<number>(() => {
@@ -87,7 +100,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return 1.0
   })
 
-  const resolvedTheme: ResolvedTheme = theme === 'system' ? getSystemTheme() : theme
+  // F-theme-system: the OS scheme lives in STATE, not in a render-time read.
+  // resolvedTheme used to call getSystemTheme() during render while the
+  // prefers-color-scheme listener "refreshed" it via setThemeState('system')
+  // — the SAME value, which hits React's eager bail-out: no re-render, so a
+  // live OS light↔dark switch never recomputed resolvedTheme and
+  // data-theme/data-theme-mode went stale. Writing the REAL new value below
+  // is a genuine state change (and if the new scheme truly equals the stored
+  // one, skipping the re-render is correct).
+  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(getSystemTheme)
+
+  const resolvedTheme: ResolvedTheme = theme === 'system' ? systemTheme : theme
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', resolvedTheme)
@@ -103,13 +126,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('shannon.fontScale', fontScale.toString())
   }, [fontScale])
 
+  // Attached for every mode (not just theme='system'): an OS flip while the
+  // user sits on an explicit theme must still update systemTheme, or a later
+  // switch back to 'system' would resolve from a stale scheme. Non-color
+  // system settings (fontScale, contrast) have their own seams and are
+  // untouched by this listener.
   useEffect(() => {
-    if (theme !== 'system') return
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const handler = () => setThemeState('system') // triggers re-render with new resolvedTheme
+    const handler = () => setSystemTheme(getSystemTheme())
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
-  }, [theme])
+  }, [])
 
   const setTheme = useCallback((newTheme: ThemeName) => {
     setThemeState(newTheme)

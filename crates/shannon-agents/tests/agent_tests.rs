@@ -95,7 +95,7 @@ mod coordinator_tests {
         };
 
         let result = coordinator
-            .add_teammate("dev-team", "alice".to_string(), config)
+            .add_teammate("dev-team", "alice".to_string(), config, None)
             .await;
 
         assert!(result.is_ok());
@@ -116,6 +116,7 @@ mod coordinator_tests {
                 "nonexistent-team",
                 "alice".to_string(),
                 TeammateConfig::default(),
+                None,
             )
             .await;
 
@@ -136,11 +137,21 @@ mod coordinator_tests {
             .unwrap();
 
         coordinator
-            .add_teammate("small-team", "alice".to_string(), TeammateConfig::default())
+            .add_teammate(
+                "small-team",
+                "alice".to_string(),
+                TeammateConfig::default(),
+                None,
+            )
             .await
             .unwrap();
         coordinator
-            .add_teammate("small-team", "bob".to_string(), TeammateConfig::default())
+            .add_teammate(
+                "small-team",
+                "bob".to_string(),
+                TeammateConfig::default(),
+                None,
+            )
             .await
             .unwrap();
 
@@ -149,6 +160,7 @@ mod coordinator_tests {
                 "small-team",
                 "charlie".to_string(),
                 TeammateConfig::default(),
+                None,
             )
             .await;
 
@@ -166,12 +178,12 @@ mod coordinator_tests {
             .await
             .unwrap();
         coordinator
-            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default(), None)
             .await
             .unwrap();
 
         let result = coordinator
-            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default(), None)
             .await;
 
         assert!(result.is_err());
@@ -188,7 +200,7 @@ mod coordinator_tests {
             .await
             .unwrap();
         coordinator
-            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default(), None)
             .await
             .unwrap();
 
@@ -251,7 +263,7 @@ mod coordinator_tests {
             .await
             .unwrap();
         coordinator
-            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default(), None)
             .await
             .unwrap();
 
@@ -304,6 +316,7 @@ mod coordinator_tests {
                 "events-team",
                 "alice".to_string(),
                 TeammateConfig::default(),
+                None,
             )
             .await
             .unwrap();
@@ -352,7 +365,7 @@ mod coordinator_tests {
             .await
             .unwrap();
         coordinator
-            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default(), None)
             .await
             .unwrap();
 
@@ -373,7 +386,7 @@ mod coordinator_tests {
             .await
             .unwrap();
         coordinator
-            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default(), None)
             .await
             .unwrap();
 
@@ -1396,7 +1409,7 @@ mod integration_tests {
             .await
             .unwrap();
         coordinator
-            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default(), None)
             .await
             .unwrap();
 
@@ -1429,7 +1442,7 @@ mod integration_tests {
             .await
             .unwrap();
         coordinator
-            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default(), None)
             .await
             .unwrap();
 
@@ -1515,7 +1528,7 @@ mod integration_tests {
         while receiver.try_recv().is_ok() {}
 
         coordinator
-            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default(), None)
             .await
             .unwrap();
 
@@ -1549,11 +1562,11 @@ mod self_claim_tests {
             .await
             .unwrap();
         coordinator
-            .add_teammate("dev", "alice".to_string(), TeammateConfig::default())
+            .add_teammate("dev", "alice".to_string(), TeammateConfig::default(), None)
             .await
             .unwrap();
         coordinator
-            .add_teammate("dev", "bob".to_string(), TeammateConfig::default())
+            .add_teammate("dev", "bob".to_string(), TeammateConfig::default(), None)
             .await
             .unwrap();
         coordinator

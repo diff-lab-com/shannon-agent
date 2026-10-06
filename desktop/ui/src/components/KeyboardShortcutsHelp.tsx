@@ -19,7 +19,10 @@ const SECTIONS: ShortcutSection[] = [
     entries: [
       { keys: '?', actionKey: 'shortcuts.help.show' },
       { keys: formatShortcut('K'), actionKey: 'shortcuts.help.openPalette' },
-      { keys: formatShortcut('/'), actionKey: 'shortcuts.help.toggle' },
+      // B1-16: Ctrl+/ is real now (useKeyboardShortcuts) — same action as `?`.
+      // The old entry advertised the binding with a "Toggle sidebar" label
+      // (the binding didn't exist and never toggled the sidebar).
+      { keys: formatShortcut('/'), actionKey: 'shortcuts.help.show' },
     ],
   },
   {
@@ -52,6 +55,10 @@ const SECTIONS: ShortcutSection[] = [
       { keys: 'Escape', actionKey: 'shortcuts.help.cancel' },
       { keys: formatShortcutShift('P'), actionKey: 'shortcuts.help.planMode' },
       { keys: formatShortcutShift('A'), actionKey: 'shortcuts.help.cycleArtifact' },
+      // P3-4: the integrated-terminal toggle (registered capture-phase in
+      // TerminalPanel so it wins over xterm's textarea) — documented with
+      // the other chat-page bindings.
+      { keys: formatShortcut('`'), actionKey: 'shortcuts.help.toggleTerminal' },
     ],
   },
   {
@@ -99,12 +106,35 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
           </div>
         </div>
         <div className="overflow-y-auto -mx-xs px-xs max-h-[60vh]">
+          {/* Composer trio explainer (audit §6 user-visible capability doc):
+              the composer's three controls are all live-wired to engine
+              config; document them where users ask "what do these do?" */}
+          <section className="mb-md p-sm rounded-lg bg-surface-container-low/60 border border-outline-variant/20">
+            <h4 className="font-label-md text-on-surface-variant uppercase tracking-wider text-label-xs mb-xs px-xs">
+              {t('shortcutsHelp.composer.title')}
+            </h4>
+            <ul className="grid grid-cols-1 sm:grid-cols-3 gap-xs">
+              {[
+                { icon: 'shield', titleKey: 'shortcutsHelp.composer.mode.title', descKey: 'shortcutsHelp.composer.mode.desc' },
+                { icon: 'neurology', titleKey: 'shortcutsHelp.composer.effort.title', descKey: 'shortcutsHelp.composer.effort.desc' },
+                { icon: 'smart_toy', titleKey: 'shortcutsHelp.composer.model.title', descKey: 'shortcutsHelp.composer.model.desc' },
+              ].map(item => (
+                <li key={item.icon} className="p-sm rounded-md bg-surface-container-lowest/60">
+                  <div className="flex items-center gap-xs mb-xs">
+                    <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">{item.icon}</span>
+                    <span className="font-label-md text-on-surface font-bold">{t(item.titleKey)}</span>
+                  </div>
+                  <p className="text-body-xs text-on-surface-variant leading-snug">{t(item.descKey)}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
           {filteredSections.length === 0 ? (
             <p className="text-body-sm text-on-surface-variant italic py-md text-center">{t('shortcutsHelp.noResults')}</p>
           ) : (
             filteredSections.map(section => (
               <section key={section.titleKey} className="mb-md last:mb-0">
-                <h4 className="font-label-md text-on-surface-variant uppercase tracking-wider text-[11px] mb-xs px-xs">
+                <h4 className="font-label-md text-on-surface-variant uppercase tracking-wider text-label-xs mb-xs px-xs">
                   {t(section.titleKey)}
                 </h4>
                 <ul className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
@@ -114,7 +144,7 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
                       className="flex items-center justify-between gap-sm py-xs px-sm rounded-md hover:bg-surface-container-low/60"
                     >
                       <span className="text-body-sm text-on-surface truncate">{t(entry.actionKey)}</span>
-                      <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono shrink-0 border border-outline-variant/30">
+                      <kbd className="text-label-xs px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono shrink-0 border border-outline-variant/30">
                         {entry.keys}
                       </kbd>
                     </li>

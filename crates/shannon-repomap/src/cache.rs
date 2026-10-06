@@ -13,7 +13,11 @@
 //!   one file's symbols in place (no re-walk, no re-parse of siblings). This
 //!   is the hot path used by both the FS watcher and explicit `edit` calls.
 //! - [`RepoMapCache::pack`] — trim to a token budget and return the markdown
-//!   the query engine injects into the system prompt.
+//!   the query engine injects into the system prompt. Destructive: the
+//!   trimmed symbols are gone from the cache afterwards.
+//! - [`RepoMapCache::pack_snapshot`] — same rendering without the
+//!   destruction (the cache keeps its full symbol set); prefer it whenever
+//!   the cache must stay usable after rendering.
 //! - [`RepoMapCache::flush`] — write the current state to the disk cache.
 //! - [`RepoMapCache::invalidate`] — drop the on-disk cache so the next `new`
 //!   does a full re-walk. Useful when the language set changes or the cache
@@ -74,7 +78,17 @@ impl RepoMapCache {
         if let Some(ref path) = cache_path {
             if let Ok(blob) = fs::read(path) {
                 if let Ok(disk) = bincode::deserialize::<DiskCache>(&blob) {
-                    if disk.version == CACHE_SCHEMA_VERSION && disk.map.root == canonical {
+                    // Version and root only prove the blob is *shaped* for
+                    // this project; the symbols in it may still describe a
+                    // tree that has since moved (edits made while no watcher
+                    // was attached, branch switches, rebases). Verify every
+                    // tracked file against a stat-only walk before trusting
+                    // the blob — a full re-parse on any mismatch is cheap
+                    // next to serving wrong symbols to the query engine.
+                    if disk.version == CACHE_SCHEMA_VERSION
+                        && disk.map.root == canonical
+                        && disk_cache_matches_fs(&canonical, &disk)
+                    {
                         return Ok(Self::from_parts(
                             canonical,
                             disk.map.files,
@@ -151,13 +165,17 @@ impl RepoMapCache {
     /// Re-parse a single file and replace its entry in the cache.
     ///
     /// Behaviour:
+    /// - File tracked & its mtime unchanged on disk → no-op (returns
+    ///   `false`) without parsing; this is the cheap fast path for
+    ///   editor-save churn that touches a file but not its contents.
     /// - File exists & parses → entry is upserted with fresh symbols + mtime.
     /// - File exists & fails to parse → entry is removed (treat as deleted).
     /// - File does not exist → entry is removed (no-op if absent).
     ///
-    /// Returns `true` if the file's symbol list changed (insert / replace /
-    /// remove) and `false` if it was a no-op (same mtime, no structural
-    /// change). Useful for the watcher to suppress redundant flushes.
+    /// An unreadable mtime skips the fast path and always re-parses — the
+    /// safe default. Returns `true` if the file's symbol list changed
+    /// (insert / replace / remove) and `false` if it was a no-op. Useful for
+    /// the watcher to suppress redundant flushes.
     pub fn update_file(&mut self, path: &Path) -> Result<bool> {
         let abs = match absolutize(&self.root, path) {
             Some(p) => p,
@@ -168,7 +186,17 @@ impl RepoMapCache {
             return Ok(self.remove_file(&abs));
         }
 
-        let mtime = read_mtime(&abs).unwrap_or(0);
+        let mtime = read_mtime(&abs);
+        if let Some(mtime) = mtime {
+            // Only an already-tracked file can take the fast path: the
+            // symbol list for it cannot have changed if its mtime hasn't
+            // moved. Untracked files must always be parsed (insert).
+            let tracked = self.files.iter().any(|(p, _)| p == &abs);
+            if tracked && self.mtimes.get(&abs) == Some(&mtime) {
+                return Ok(false);
+            }
+        }
+        let mtime = mtime.unwrap_or(0);
         match parse_file(&abs) {
             Ok(syms) => {
                 let changed = self.upsert_symbols(abs.clone(), syms);
@@ -195,10 +223,13 @@ impl RepoMapCache {
     /// engine injects under a labelled section.
     ///
     /// The budget is enforced on per-symbol tokens (signatures + recursive
-    /// children). Markdown rendering adds small per-file headers and a
-    /// top-level "# Repo Map: \<root\>" line — those are structural and not
-    /// counted against the budget. Callers that need a hard cap on the
-    /// rendered output should set the budget ~80% of their actual ceiling.
+    /// children). The rendered markdown is bounded overall, not just on
+    /// symbols: the top-level "# Repo Map: \<root\>" header, one section per
+    /// file that still has symbols after the trim, and a single trailing
+    /// section that folds every symbol-less file into a comma-separated path
+    /// list hard-capped at 4096 bytes (`… and N more (trimmed)` once it
+    /// overflows). Output therefore grows with the symbol budget and the
+    /// number of *surviving* symbols — never with the number of walked files.
     pub fn pack(&mut self, budget_tokens: usize) -> String {
         let mut map = SymbolMap {
             root: self.root.clone(),
@@ -208,6 +239,27 @@ impl RepoMapCache {
         let md = RepoMap { map: map.clone() }.to_system_prompt_markdown();
         self.files = map.files;
         md
+    }
+
+    /// Non-destructive variant of [`Self::pack`]: trim a *clone* of the
+    /// cached map to the budget and render it, leaving `self` untouched.
+    ///
+    /// `pack` permanently removes the trimmed symbols from the cache, so a
+    /// caller that wants to keep packing after every turn had to deep-clone
+    /// the whole cache first (the query engine's repo-map injector did
+    /// exactly that). `pack_snapshot` moves that clone inside: the rendering
+    /// is identical to `clone().pack(budget)`, and the cache keeps its full
+    /// symbol set, so subsequent [`Self::update_file`] calls still see
+    /// untrimmed symbols. The remaining cost is the one clone on the calls
+    /// that actually re-render; callers rendering every turn should cache
+    /// the returned string and only call again when the map changed.
+    pub fn pack_snapshot(&self, budget_tokens: usize) -> String {
+        let mut map = SymbolMap {
+            root: self.root.clone(),
+            files: self.files.clone(),
+        };
+        budget::trim_to_budget(&mut map, budget_tokens);
+        RepoMap { map }.to_system_prompt_markdown()
     }
 
     /// Persist the current cache to disk. Best-effort: errors are surfaced
@@ -302,11 +354,31 @@ impl RepoMapCache {
 /// Resolve `path` against `root` and return an absolute path. Returns `None`
 /// when `path` is unrelated to `root` (we silently ignore such events).
 fn absolutize(root: &Path, path: &Path) -> Option<PathBuf> {
-    if path.is_absolute() {
-        Some(path.to_path_buf())
+    let p = if path.is_absolute() {
+        path.to_path_buf()
     } else {
-        Some(root.join(path))
+        root.join(path)
+    };
+    // Track keys under ONE spelling: the cache root is canonicalized at
+    // construction (canonicalize_lossy), so on macOS a raw `/var/...`
+    // spelling must resolve to the same `/private/var/...` key the walk
+    // stored, or update/remove/lookup silently miss.
+    if let Ok(c) = fs::canonicalize(&p) {
+        return Some(c);
     }
+    // Path may not exist (create/remove flows): canonicalize the deepest
+    // existing ancestor and re-join the remainder. The cache-root-relative
+    // branch covers the common case exactly.
+    let root_c = canonicalize_lossy(root);
+    if let Ok(rel) = p.strip_prefix(root) {
+        return Some(root_c.join(rel));
+    }
+    if let Ok(parent) = fs::canonicalize(p.parent().unwrap_or(root)) {
+        if let Some(name) = p.file_name() {
+            return Some(parent.join(name));
+        }
+    }
+    Some(p)
 }
 
 /// Best-effort canonicalize. Falls back to the input path if canonicalize
@@ -411,25 +483,93 @@ pub(crate) fn walk_and_parse(root: &Path) -> Result<Vec<(PathBuf, Vec<SymbolNode
     Ok(out)
 }
 
+/// Stat-only walk of `root`: current mtime for every file with a supported
+/// extension, pruning the same ignored directories as [`walk_and_parse`].
+/// Never parses — this exists so a loaded disk cache can be validated
+/// against the tree for the cost of a directory walk.
+///
+/// A `None` mtime means the file could not be stat'ed; callers must treat
+/// that as "cache unverifiable" (the safe default).
+fn stat_walk(root: &Path) -> HashMap<PathBuf, Option<u64>> {
+    use walkdir::WalkDir;
+    let mut out = HashMap::new();
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| !crate::is_ignored_dir(e))
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        if LanguageParser::from_extension(ext).is_err() {
+            continue;
+        }
+        out.insert(path.to_path_buf(), read_mtime(path));
+    }
+    out
+}
+
+/// `true` when the cache's tracked-file set and per-file mtimes exactly
+/// match a fresh stat-only walk of `root`: every tracked file still exists
+/// with its recorded mtime, and no supported-extension file is missing from
+/// the cache. A tracked file with no recorded mtime cannot be verified and
+/// fails the check, as does an unreadable current mtime.
+fn disk_cache_matches_fs(root: &Path, disk: &DiskCache) -> bool {
+    let mut tracked: HashMap<&Path, u64> = HashMap::with_capacity(disk.map.files.len());
+    for (path, _) in &disk.map.files {
+        match disk.mtimes.get(path) {
+            Some(mtime) => {
+                tracked.insert(path.as_path(), *mtime);
+            }
+            // Cannot verify without a recorded mtime — treat as stale.
+            None => return false,
+        }
+    }
+    for (path, current) in stat_walk(root) {
+        let Some(recorded) = tracked.remove(path.as_path()) else {
+            // On-disk file the cache doesn't track.
+            return false;
+        };
+        let Some(mtime) = current else {
+            // Stat failed — the file may have just been replaced.
+            return false;
+        };
+        if recorded != mtime {
+            // Touched since the cache was written.
+            return false;
+        }
+    }
+    // Anything left here vanished from disk.
+    tracked.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    fn tmp_root(label: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "shannon_repomap_cache_test_{label}_{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&p);
-        fs::create_dir_all(&p).unwrap();
-        p
+    /// RAII temp root: the directory is removed when the guard drops, so a
+    /// failing test no longer litters `/tmp` with `shannon_repomap_cache_test_*`
+    /// directories (one machine had accumulated hundreds of these).
+    struct TempRoot(tempfile::TempDir);
+
+    impl std::ops::Deref for TempRoot {
+        type Target = std::path::Path;
+        fn deref(&self) -> &Self::Target {
+            self.0.path()
+        }
+    }
+
+    fn tmp_root() -> TempRoot {
+        TempRoot(tempfile::tempdir_in(std::env::temp_dir()).expect("create temp root"))
     }
 
     #[test]
     fn update_file_inserts_then_replaces() {
-        let root = tmp_root("insert_replace");
+        let root = tmp_root();
         fs::write(root.join("a.rs"), "pub fn a() {}\n").unwrap();
         let mut cache = RepoMapCache::ephemeral(&root).unwrap();
         assert_eq!(cache.file_count(), 1);
@@ -439,20 +579,27 @@ mod tests {
         assert!(cache.update_file(&root.join("b.rs")).unwrap());
         assert_eq!(cache.file_count(), 2);
 
-        // Modify an existing file — symbols differ so the cache flips.
+        // Modify an existing file — symbols differ so the cache flips. The
+        // cache only re-parses when the mtime moves past the whole-second
+        // value recorded by the walk, so pin a distinctly different one
+        // rather than racing the clock.
         fs::write(
             root.join("a.rs"),
             "pub fn a() {}\npub fn a2() -> i32 { 0 }\n",
         )
         .unwrap();
-        // Sleep 1s to ensure mtime advances; coarse but portable.
-        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        let f = fs::OpenOptions::new()
+            .append(true)
+            .open(root.join("a.rs"))
+            .unwrap();
+        f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+            .unwrap();
         assert!(cache.update_file(&root.join("a.rs")).unwrap());
     }
 
     #[test]
     fn update_file_removes_when_missing() {
-        let root = tmp_root("remove_missing");
+        let root = tmp_root();
         fs::write(root.join("c.rs"), "pub fn c() {}\n").unwrap();
         let mut cache = RepoMapCache::ephemeral(&root).unwrap();
         assert_eq!(cache.file_count(), 1);
@@ -464,7 +611,7 @@ mod tests {
 
     #[test]
     fn flush_and_reload_round_trip() {
-        let root = tmp_root("round_trip");
+        let root = tmp_root();
         fs::write(root.join("d.rs"), "pub fn d() {}\n").unwrap();
         {
             let cache = RepoMapCache::ephemeral(&root).unwrap();
@@ -479,7 +626,7 @@ mod tests {
 
     #[test]
     fn pack_returns_markdown_under_budget() {
-        let root = tmp_root("pack_budget");
+        let root = tmp_root();
         for i in 0..8 {
             fs::write(
                 root.join(format!("f{i}.rs")),
@@ -491,5 +638,49 @@ mod tests {
         let md = cache.pack(120);
         // Crude sanity: at least one function name should appear.
         assert!(md.contains("func_0"));
+    }
+
+    /// pack_snapshot must render exactly what the destructive pack renders,
+    /// and must leave the cache's symbol set intact (T12a): a snapshot can
+    /// be taken repeatedly with identical output, and the map afterwards
+    /// still matches a freshly built cache.
+    #[test]
+    fn pack_snapshot_matches_pack_and_leaves_cache_intact() {
+        let root = tmp_root();
+        for i in 0..8 {
+            fs::write(
+                root.join(format!("g{i}.rs")),
+                format!("pub fn snap_func_{i}(x: i32) -> i32 {{ x * {i} }}\n"),
+            )
+            .unwrap();
+        }
+        let cache = RepoMapCache::ephemeral(&root).unwrap();
+        let full_count = cache.file_count();
+        assert_eq!(full_count, 8);
+
+        // Tiny budget so trimming actually drops symbols.
+        let snapshot_a = cache.pack_snapshot(60);
+        let snapshot_b = cache.pack_snapshot(60);
+        assert_eq!(snapshot_a, snapshot_b, "snapshots must be stable");
+        // No content assertion here: the 60-token budget can trim every one
+        // of the 8 identical files, and WHICH files keep symbols depends on
+        // the walk's directory order (read_dir is unsorted and differs
+        // between APFS and ext4). The snapshot == destructive-pack
+        // equivalence and cache-intactness asserts below carry the contract.
+
+        // Identical content to the destructive path on an equal cache.
+        let mut destructive = RepoMapCache::ephemeral(&root).unwrap();
+        let packed = destructive.pack(60);
+        assert_eq!(snapshot_a, packed);
+
+        // The snapshot left the cache's symbol set untouched: it still
+        // matches a freshly built cache exactly, while the destructive
+        // pack above visibly emptied files in its own map.
+        assert_eq!(cache.file_count(), full_count);
+        assert_eq!(
+            cache.map().files,
+            RepoMapCache::ephemeral(&root).unwrap().map().files
+        );
+        assert_ne!(cache.map().files, destructive.map().files);
     }
 }

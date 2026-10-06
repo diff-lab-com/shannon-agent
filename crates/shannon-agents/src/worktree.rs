@@ -10,11 +10,63 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolResult};
 use shannon_types::recover_lock;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, LazyLock, RwLock};
 use tokio::sync::RwLock as AsyncRwLock;
+
+/// Per-worktree session manifest (F28). The manager's in-memory
+/// `active_sessions` map dies with the manager, so agent worktrees created
+/// through a throwaway manager (e.g. the `/team add` path) record themselves
+/// on disk instead; the startup sweep uses these manifests to find and
+/// remove worktrees whose session no longer exists.
+const SESSION_MANIFEST_FILE: &str = ".shannon-worktree-session.json";
+
+/// On-disk record of a created worktree session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeSessionManifest {
+    /// Session id (matches the worktree directory name)
+    pub session_id: String,
+    /// Branch the worktree checks out
+    pub branch: String,
+    /// Associated agent, if this is an agent worktree
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// RFC 3339 creation timestamp
+    pub created_at: String,
+}
+
+/// Classification of uncommitted work in a worktree (F30).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirtKind {
+    /// `git status --porcelain` output is empty.
+    Clean,
+    /// Only untracked (`??`) entries — build artifacts and the like; safe
+    /// to discard because no tracked file was touched.
+    UntrackedOnly,
+    /// Modified / staged / deleted tracked files — real work that must be
+    /// preserved unless explicitly discarded.
+    TrackedChanges,
+}
+
+/// Outcome of [`WorktreeManager::sweep_orphaned_sessions`] (F28).
+#[derive(Debug, Clone, Default)]
+pub struct OrphanSweepReport {
+    /// Orphaned worktree directories that were removed.
+    pub removed: Vec<PathBuf>,
+    /// Worktrees that were kept, with the reason (e.g. tracked changes).
+    pub failed: Vec<(PathBuf, String)>,
+}
+
+/// Write the per-worktree session manifest (F28).
+fn write_session_manifest(
+    worktree_path: &Path,
+    manifest: &WorktreeSessionManifest,
+) -> Result<(), AgentError> {
+    let json = serde_json::to_string_pretty(manifest).map_err(AgentError::Serialization)?;
+    std::fs::write(worktree_path.join(SESSION_MANIFEST_FILE), json).map_err(AgentError::Io)
+}
 
 /// Configuration for worktree manager
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,7 +221,7 @@ impl WorktreeManager {
 
         let session = WorktreeSession {
             id: session_id,
-            path: worktree_path,
+            path: worktree_path.clone(),
             branch_name: branch,
             original_branch,
             status: WorktreeStatus::Active,
@@ -182,6 +234,24 @@ impl WorktreeManager {
             .write()
             .await
             .insert(session.id.clone(), session.clone());
+
+        // F28: record the session on disk so a later manager (whose
+        // in-memory registry starts empty) can discover and clean it up.
+        if let Err(e) = write_session_manifest(
+            &worktree_path,
+            &WorktreeSessionManifest {
+                session_id: session.id.clone(),
+                branch: session.branch_name.clone(),
+                agent: None,
+                created_at: session.created_at.to_rfc3339(),
+            },
+        ) {
+            tracing::warn!(
+                path = %worktree_path.display(),
+                error = %e,
+                "Failed to write worktree session manifest"
+            );
+        }
 
         tracing::info!(
             session_id = %session.id,
@@ -199,8 +269,14 @@ impl WorktreeManager {
         agent_name: &str,
         task_id: Option<uuid::Uuid>,
     ) -> Result<WorktreeSession, AgentError> {
-        let session_id = format!("agent-{}-{}", agent_name, uuid::Uuid::new_v4());
-        let branch_name = format!("agent-work/{agent_name}");
+        let uid = uuid::Uuid::new_v4();
+        let session_id = format!("agent-{agent_name}-{uid}");
+        // F28: the branch must carry a unique suffix too. A plain
+        // `agent-work/<name>` branch collides on the second `/team add` of
+        // the same agent name (`git worktree add -b` fails), which is also
+        // what turned the first session into an orphan.
+        let short_uid = uid.simple().to_string()[..8].to_string();
+        let branch_name = format!("agent-work/{agent_name}-{short_uid}");
 
         let mut session = self
             .create_session(Some(session_id.clone()), Some(branch_name), None)
@@ -218,6 +294,23 @@ impl WorktreeManager {
             .write()
             .await
             .insert(session_id.clone(), session.clone());
+
+        // Refresh the on-disk manifest with the agent association.
+        if let Err(e) = write_session_manifest(
+            &session.path,
+            &WorktreeSessionManifest {
+                session_id: session.id.clone(),
+                branch: session.branch_name.clone(),
+                agent: Some(agent_name.to_string()),
+                created_at: session.created_at.to_rfc3339(),
+            },
+        ) {
+            tracing::warn!(
+                path = %session.path.display(),
+                error = %e,
+                "Failed to update worktree session manifest with agent"
+            );
+        }
 
         Ok(session)
     }
@@ -282,14 +375,25 @@ impl WorktreeManager {
             .ok_or_else(|| AgentError::Worktree(format!("Session '{session_id}' not found")))?
             .clone();
 
-        // Check for uncommitted changes
+        // Check for uncommitted changes (F30: untracked-only dirt — build
+        // artifacts and the like — does not block removal; only *tracked*
+        // modifications do).
+        let dirt = self.session_dirt_kind(&session.path).await?;
         if !discard_changes {
-            let has_changes = self.session_has_changes(&session.path).await?;
-            if has_changes {
-                return Err(AgentError::Worktree(
-                    "Session has uncommitted changes. Use discard_changes=true to force exit."
-                        .to_string(),
-                ));
+            match dirt {
+                DirtKind::Clean => {}
+                DirtKind::UntrackedOnly => {
+                    tracing::info!(
+                        session_id = %session_id,
+                        "Session has only untracked files; treating as removable"
+                    );
+                }
+                DirtKind::TrackedChanges => {
+                    return Err(AgentError::Worktree(
+                        "Session has uncommitted tracked changes. Use discard_changes=true to force exit."
+                            .to_string(),
+                    ));
+                }
             }
         }
 
@@ -302,7 +406,11 @@ impl WorktreeManager {
                 tracing::debug!(session_id = %session_id, "Keeping worktree session");
             }
             ExitAction::RemoveWorktree | ExitAction::RemoveBoth => {
-                self.remove_worktree(&session.path).await?;
+                // git worktree remove refuses dirty worktrees: force when we
+                // are intentionally discarding untracked-only content or the
+                // user explicitly discarded changes.
+                let force = discard_changes || dirt == DirtKind::UntrackedOnly;
+                self.remove_worktree_opts(&session.path, force).await?;
 
                 if action == ExitAction::RemoveBoth {
                     self.remove_branch(&session.branch_name).await?;
@@ -321,19 +429,106 @@ impl WorktreeManager {
             .await
     }
 
-    /// Clean up all active sessions
+    /// Clean up all active sessions (F30: failures are logged and counted
+    /// instead of silently swallowed).
     pub async fn cleanup_all(&self) -> Result<(), AgentError> {
         let session_ids: Vec<_> = self.active_sessions.read().await.keys().cloned().collect();
 
+        let mut failed: Vec<(String, AgentError)> = Vec::new();
         for session_id in session_ids {
-            let _ = self
+            if let Err(e) = self
                 .exit_session(&session_id, ExitAction::RemoveWorktree, false)
-                .await;
+                .await
+            {
+                failed.push((session_id, e));
+            }
         }
 
-        tracing::debug!("All worktree sessions cleaned up");
+        if failed.is_empty() {
+            tracing::debug!("All worktree sessions cleaned up");
+        } else {
+            for (session_id, error) in &failed {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %error,
+                    "Worktree session not cleaned up (kept on disk)"
+                );
+            }
+            tracing::warn!(
+                count = failed.len(),
+                "worktree cleanup: {} session(s) preserved due to tracked changes; \
+                 remove manually or exit with discard_changes=true",
+                failed.len()
+            );
+        }
 
         Ok(())
+    }
+
+    /// F28: remove agent worktree sessions this manager does not have
+    /// registered. Agent sessions record a manifest on disk at creation;
+    /// any `agent-*` directory under the base dir without a live session
+    /// here is a leftover from a dropped manager (e.g. a previous process)
+    /// and is removed — untracked-only content is force-removed, worktrees
+    /// with tracked changes are kept and reported.
+    pub async fn sweep_orphaned_sessions(&self) -> Result<OrphanSweepReport, AgentError> {
+        let live: HashSet<String> = self.active_sessions.read().await.keys().cloned().collect();
+        let mut report = OrphanSweepReport::default();
+
+        let entries = match std::fs::read_dir(&self.config.base_dir) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(report), // no base dir → nothing to sweep
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !dir_name.starts_with("agent-") || live.contains(dir_name) {
+                continue;
+            }
+
+            let branch = std::fs::read_to_string(path.join(SESSION_MANIFEST_FILE))
+                .ok()
+                .and_then(|s| serde_json::from_str::<WorktreeSessionManifest>(&s).ok())
+                .map(|m| m.branch);
+
+            match self.session_dirt_kind(&path).await {
+                Ok(DirtKind::TrackedChanges) => {
+                    report
+                        .failed
+                        .push((path.clone(), "has tracked changes".to_string()));
+                    continue;
+                }
+                Ok(DirtKind::Clean | DirtKind::UntrackedOnly) => {}
+                Err(e) => {
+                    report.failed.push((path.clone(), e.to_string()));
+                    continue;
+                }
+            }
+
+            match self.remove_worktree_opts(&path, true).await {
+                Ok(()) => {
+                    if let Some(branch) = branch {
+                        // remove_branch logs its own failures and is
+                        // deliberately non-fatal (the worktree is gone).
+                        let _ = self.remove_branch(&branch).await;
+                    }
+                    tracing::info!(
+                        path = %path.display(),
+                        "Removed orphaned agent worktree"
+                    );
+                    report.removed.push(path);
+                }
+                Err(e) => report.failed.push((path, e.to_string())),
+            }
+        }
+
+        Ok(report)
     }
 
     /// Get the current git branch
@@ -354,27 +549,45 @@ impl WorktreeManager {
         Ok(branch)
     }
 
-    /// Check if a worktree has uncommitted changes
-    async fn session_has_changes(&self, path: &Path) -> Result<bool, AgentError> {
+    /// Classify the uncommitted work in a worktree (F30).
+    ///
+    /// `git status --porcelain` reports untracked files as `??` entries and
+    /// tracked modifications with a status letter. Only tracked changes
+    /// represent work that must be preserved; untracked-only dirt (build
+    /// artifacts, logs) is safe to discard.
+    async fn session_dirt_kind(&self, path: &Path) -> Result<DirtKind, AgentError> {
         let output = Command::new("git")
             .args(["status", "--porcelain"])
             .current_dir(path)
             .output()
             .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {e}")))?;
 
-        Ok(!output.stdout.is_empty())
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let entries: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+        if entries.is_empty() {
+            return Ok(DirtKind::Clean);
+        }
+        if entries.iter().all(|l| l.starts_with("??")) {
+            return Ok(DirtKind::UntrackedOnly);
+        }
+        Ok(DirtKind::TrackedChanges)
     }
 
-    /// Remove a worktree
-    async fn remove_worktree(&self, path: &Path) -> Result<(), AgentError> {
+    /// Remove a worktree, optionally forcing through untracked/modified
+    /// content that plain `git worktree remove` refuses to delete.
+    async fn remove_worktree_opts(&self, path: &Path, force: bool) -> Result<(), AgentError> {
         let path_str = path.to_str().ok_or_else(|| {
             AgentError::Worktree(format!(
                 "Worktree path is not valid UTF-8: {}",
                 path.display()
             ))
         })?;
-        let output = Command::new("git")
-            .args(["worktree", "remove"])
+        let mut cmd = Command::new("git");
+        cmd.args(["worktree", "remove"]);
+        if force {
+            cmd.arg("--force");
+        }
+        let output = cmd
             .arg(path_str)
             .current_dir(&self.config.repository_path)
             .output()
@@ -1035,5 +1248,135 @@ mod tests {
         let result = find_git_root(Path::new("/tmp"));
         // May or may not find one depending on system, so just ensure no panic.
         let _ = result;
+    }
+
+    // ── F28 / F30: real-git-repo worktree lifecycle tests ──────────────
+
+    /// Create a throwaway git repo with one commit (RAII: TempDir removes
+    /// everything on drop).
+    fn init_git_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .expect("git should be runnable");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(dir.path().join("README.md"), "seed\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "init"]);
+        dir
+    }
+
+    async fn manager_for(repo: &tempfile::TempDir) -> WorktreeManager {
+        let config = WorktreeConfig {
+            base_dir: repo.path().join(".claude").join("worktrees"),
+            repository_path: repo.path().to_path_buf(),
+            ..Default::default()
+        };
+        WorktreeManager::new(config)
+            .await
+            .expect("worktree manager should build in a git repo")
+    }
+
+    /// F28 regression: branches carry a unique suffix, so adding two agent
+    /// sessions with the same name must both succeed with distinct branches
+    /// (the old `agent-work/<name>` branch collided on the second add).
+    #[tokio::test]
+    async fn create_agent_session_same_name_twice_distinct_branches() {
+        let repo = init_git_repo();
+        let manager = manager_for(&repo).await;
+        let s1 = manager.create_agent_session("alice", None).await.unwrap();
+        let s2 = manager.create_agent_session("alice", None).await.unwrap();
+
+        assert_ne!(s1.branch_name, s2.branch_name, "branches must differ");
+        assert_ne!(s1.path, s2.path, "worktree dirs must differ");
+        assert!(s1.branch_name.starts_with("agent-work/alice-"));
+    }
+
+    /// F28 regression: a worktree created through a throwaway manager (the
+    /// `/team add` path) must be discoverable and removable by a fresh
+    /// manager's orphan sweep, and live sessions must be left alone.
+    #[tokio::test]
+    async fn sweep_removes_orphaned_agent_worktrees_but_spares_live_sessions() {
+        let repo = init_git_repo();
+
+        // Throwaway manager: dropped immediately, its in-memory session
+        // registry is gone — exactly the leak the /team add path has.
+        let session = {
+            let manager = manager_for(&repo).await;
+            manager
+                .create_agent_session("bob", None)
+                .await
+                .expect("agent session should be created")
+        };
+        assert!(session.path.exists());
+
+        let fresh = manager_for(&repo).await;
+        let report = fresh.sweep_orphaned_sessions().await.unwrap();
+        assert_eq!(report.removed.len(), 1, "orphan must be removed");
+        assert!(
+            report.removed[0] == session.path,
+            "removed path should match the orphan"
+        );
+        assert!(!session.path.exists(), "orphan worktree dir must be gone");
+
+        // A session live in THIS manager is not an orphan.
+        let live = fresh.create_agent_session("carol", None).await.unwrap();
+        let report = fresh.sweep_orphaned_sessions().await.unwrap();
+        assert!(report.removed.is_empty(), "live session must be spared");
+        assert!(live.path.exists());
+    }
+
+    /// F30 regression: a worktree containing only untracked files must be
+    /// removed by cleanup_all (build artifacts don't strand the worktree).
+    #[tokio::test]
+    async fn cleanup_all_removes_worktree_with_only_untracked_files() {
+        let repo = init_git_repo();
+        let manager = manager_for(&repo).await;
+        let session = manager.create_session(None, None, None).await.unwrap();
+
+        std::fs::write(session.path.join("build-artifact.log"), "junk\n").unwrap();
+
+        manager.cleanup_all().await.unwrap();
+
+        assert!(
+            !session.path.exists(),
+            "untracked-only worktree must be removed"
+        );
+        assert_eq!(manager.session_count().await, 0);
+    }
+
+    /// F30: tracked modifications still preserve the worktree (and the
+    /// failure is reported, not swallowed).
+    #[tokio::test]
+    async fn cleanup_all_preserves_worktree_with_tracked_changes() {
+        let repo = init_git_repo();
+        let manager = manager_for(&repo).await;
+        let session = manager.create_session(None, None, None).await.unwrap();
+
+        // Modify a tracked file inside the worktree.
+        std::fs::write(session.path.join("README.md"), "real work\n").unwrap();
+
+        manager.cleanup_all().await.unwrap();
+
+        assert!(
+            session.path.exists(),
+            "tracked changes must preserve the worktree"
+        );
+        assert_eq!(
+            manager.session_count().await,
+            1,
+            "session stays registered for a later discard_changes exit"
+        );
     }
 }

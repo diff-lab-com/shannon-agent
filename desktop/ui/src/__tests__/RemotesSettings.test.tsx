@@ -15,13 +15,49 @@ describe('RemotesSettings', () => {
   })
 
   it('renders the empty state when no targets are saved', async () => {
-    vi.spyOn(api, 'remoteListTargets').mockResolvedValueOnce([])
+    vi.spyOn(api, 'remoteListTargets').mockResolvedValueOnce({ targets: [], defaultTarget: null })
     render(<RemotesSettings />)
     await waitFor(() =>
       expect(screen.getByTestId('remotes-empty')).toBeInTheDocument(),
     )
     expect(screen.getByText('No remote targets yet')).toBeInTheDocument()
     expect(screen.getByTestId('remotes-empty-add')).toBeInTheDocument()
+  })
+
+  it('shows the persisted default-target badge from the list response (P1-16)', async () => {
+    vi.spyOn(api, 'remoteListTargets').mockResolvedValueOnce({
+      targets: [
+        {
+          name: 'build-box',
+          kind: 'ssh',
+          host: 'build-box',
+          port: null,
+          user: null,
+          container: null,
+          shell: null,
+          sshTarget: null,
+          workspaceDir: '/home/ed/proj',
+        },
+        {
+          name: 'ci',
+          kind: 'docker',
+          host: null,
+          port: null,
+          user: null,
+          container: 'shannon-ci',
+          shell: null,
+          sshTarget: null,
+          workspaceDir: '/workspace',
+        },
+      ],
+      defaultTarget: 'ci',
+    })
+    render(<RemotesSettings />)
+    // The badge follows remotes.toml — not whatever the component guessed.
+    await waitFor(() =>
+      expect(screen.getByTestId('remotes-default-ci')).toBeInTheDocument(),
+    )
+    expect(screen.queryByTestId('remotes-default-build-box')).not.toBeInTheDocument()
   })
 
   it('lists saved targets with kind and workspace details', async () => {

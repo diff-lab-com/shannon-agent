@@ -8,7 +8,7 @@ expression: rendered
 #003 t1 request ▸ header model=claude-sonnet-4-20250514 tools=1 reason=initial
 #004 t1 assistant ▸ Listing.
 #005 t1 tool ▸ echo ({"label":"alpha"})
-#006 t1 permission ▸ ask tool=echo
+#006 t1 permission ▸ allow tool=echo
 #007 t1 tool-ok ▸ [echo] echo: alpha
 #008 t1 request ▸ header model=claude-sonnet-4-20250514 tools=1 reason=turn
 #009 t1 assistant ▸ All done.

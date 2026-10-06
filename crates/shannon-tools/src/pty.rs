@@ -78,10 +78,19 @@ pub fn execute_in_pty(
         }
     }
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| format!("Failed to spawn PTY command: {e}"))?;
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| {
+        // Windows: bash comes from Git for Windows/WSL, and a missing
+        // bash surfaces as a bare "program not found" from ConPTY —
+        // give it the same actionable guidance as the piped paths.
+        let detail = if cfg!(windows) {
+            e.downcast_ref::<std::io::Error>()
+                .map(|io| crate::system::shell_spawn_error("bash", io).to_string())
+                .unwrap_or_else(|| format!("{e}"))
+        } else {
+            format!("{e}")
+        };
+        format!("Failed to spawn PTY command: {detail}")
+    })?;
 
     // Drop the slave side so EOF propagates when the child exits
     drop(pair.slave);

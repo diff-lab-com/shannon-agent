@@ -406,9 +406,14 @@ impl AutoDreamService {
         project: &str,
         session_id: Option<&str>,
     ) -> Result<Vec<MemoryEntry>, MemoryError> {
-        // Concatenate all message text
+        // M-1: extract from USER turns only. The keyword matcher over
+        // assistant text turned exploratory phrasing ("let's use Redis for
+        // caching", "I'll remember that") into Decision/Preference memories
+        // that were then injected into every future session. The user's own
+        // words are the durable-signal source; the assistant's are not.
         let full_text: String = messages
             .iter()
+            .filter(|m| m.role == "user")
             .map(|m| match &m.content {
                 MessageContent::Text(t) => t.clone(),
                 MessageContent::Blocks(blocks) => blocks

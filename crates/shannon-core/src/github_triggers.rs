@@ -1,7 +1,7 @@
 //! GitHub event triggers for routines (P2-7).
 //!
 //! A [`ScheduledRoutine`](crate::scheduled_routines::ScheduledRoutine) with
-//! `trigger_type = "github"` carries a [`GitHubTrigger`] config and is fired
+//! `trigger_type = "github"` carries a [`GitHubTrigger`](github_triggers::GitHubTrigger) config and is fired
 //! by the shannon-server `POST /hooks/github` endpoint when an incoming
 //! GitHub webhook delivery matches the configured event, repository, and
 //! (optionally) action.
@@ -27,7 +27,7 @@
 //! | `check_run.completed` with `conclusion = "failure"` | `{ event = "check_run", action = "completed" }` |
 //!
 //! `check_run` deliveries with any other conclusion (success, cancelled, …)
-//! are **not routable** in the first batch: [`GitHubEventInfo::parse`]
+//! are **not routable** in the first batch: [`GitHubEventInfo::parse`](github_triggers::GitHubEventInfo::parse)
 //! returns `None` for them, so no routine can match and the endpoint answers
 //! `204`. Generalizing conclusion matching (e.g. `action = "completed:success"`)
 //! is left to a later batch.
@@ -38,7 +38,7 @@ use crate::scheduled_routines::{RoutineManager, ScheduledRoutine, TriggerType};
 
 /// Routine-side GitHub trigger configuration (the `github` key on a
 /// [`ScheduledRoutine`]). Present only when `trigger_type` is
-/// [`TriggerType::Github`](crate::scheduled_routines::TriggerType::Github).
+/// [`TriggerType::Github`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitHubTrigger {
     /// GitHub event name from the `X-GitHub-Event` header

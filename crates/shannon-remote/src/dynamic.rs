@@ -314,6 +314,9 @@ impl FileSystemProvider for DynamicWorld {
     fn create_dir_all_blocking(&self, path: &Path) -> io::Result<()> {
         self.snapshot().fs.create_dir_all_blocking(path)
     }
+    fn rename_blocking(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.snapshot().fs.rename_blocking(from, to)
+    }
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
         self.snapshot().fs.remove_file_blocking(path)
     }
@@ -403,6 +406,9 @@ mod tests {
             Ok(())
         }
         fn create_dir_all_blocking(&self, _path: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        fn rename_blocking(&self, _from: &Path, _to: &Path) -> io::Result<()> {
             Ok(())
         }
         fn remove_file_blocking(&self, _path: &Path) -> io::Result<()> {

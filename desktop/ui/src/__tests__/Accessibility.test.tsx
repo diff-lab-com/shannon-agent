@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
 import { I18nProvider } from '@/i18n'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Sidebar } from '@/components/Sidebar'
+import Settings from '@/pages/Settings'
 
 function wrap(ui: React.ReactElement, { path = '/chat' } = {}) {
   return (
@@ -33,12 +34,22 @@ describe('Accessibility', () => {
     it('nav links have visible text labels', () => {
       render(wrap(<Sidebar />))
       expect(screen.getByText('Chat')).toBeInTheDocument()
-      expect(screen.getByText('Scheduled')).toBeInTheDocument()
+      // IA T1: the sidebar entry for /tasks is the「自动化」button.
+      expect(screen.getByText('Automations')).toBeInTheDocument()
     })
 
-    it('settings sub-nav items have visible text when expanded', () => {
-      render(wrap(<Sidebar />))
-      fireEvent.click(screen.getByText('Settings'))
+    it('settings section nav is visible on the Settings page rail', () => {
+      render(
+        wrap(
+          <Routes>
+            <Route path="/settings" element={<Settings />}>
+              <Route index element={<Navigate to="general" replace />} />
+              <Route path="general" element={null} />
+            </Route>
+          </Routes>,
+          { path: '/settings/general' },
+        ),
+      )
       expect(screen.getByText('General')).toBeInTheDocument()
       expect(screen.getByText('Theme')).toBeInTheDocument()
       expect(screen.getByText('Models')).toBeInTheDocument()

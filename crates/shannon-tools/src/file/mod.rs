@@ -80,36 +80,46 @@ async fn validate_write_path(sandbox: &PathSandbox, path: &str) -> ToolResult<Pa
 /// cap is a best-effort guard, not a hard guarantee.
 pub const MAX_SNAPSHOT_BYTES: u64 = 10 * 1024 * 1024;
 
-fn snapshot_for_undo(
-    fs: &dyn FileSystemProvider,
-    history: &Option<Arc<Mutex<history::FileHistoryManager>>>,
-    file_path: &str,
+/// Snapshot the pre-modify content of `file_path` so `/undo` can restore it.
+///
+/// §P2-14: the stat + read are synchronous (over SFTP: a network round-trip
+/// plus a helper thread per call), so the whole snapshot runs on tokio's
+/// blocking pool instead of parking the calling tool's async worker. Best
+/// effort by design — every failure path simply skips the snapshot.
+async fn snapshot_for_undo(
+    fs: std::sync::Arc<dyn FileSystemProvider>,
+    history: Option<Arc<Mutex<history::FileHistoryManager>>>,
+    file_path: String,
 ) {
     let Some(history) = history else {
         return;
     };
-    // Bound memory before reading: the history manager's storage-quota check
-    // only runs *after* content is in memory, so pre-filter oversized files
-    // here. 10 MB covers typical source files; large data/minified files are
-    // poor undo targets anyway. A benign TOCTOU exists between this stat and
-    // the read — the cap is a best-effort guard, not a hard guarantee.
-    let Ok(meta) = fs.metadata_blocking(Path::new(file_path)) else {
-        return;
-    };
-    if meta.len > MAX_SNAPSHOT_BYTES {
-        return;
-    }
-    // Only existing, readable text files carry restorable pre-modify state.
-    let Ok(old_content) = fs.read_text_blocking(Path::new(file_path)) else {
-        return;
-    };
-    if let Ok(mut mgr) = history.lock() {
-        let _ = mgr.record_snapshot(
-            Path::new(file_path),
-            &old_content,
-            history::FileOperation::Edit,
-        );
-    }
+    let _ = tokio::task::spawn_blocking(move || {
+        // Bound memory before reading: the history manager's storage-quota
+        // check only runs *after* content is in memory, so pre-filter
+        // oversized files here. 10 MB covers typical source files; large
+        // data/minified files are poor undo targets anyway. A benign TOCTOU
+        // exists between this stat and the read — the cap is a best-effort
+        // guard, not a hard guarantee.
+        let Ok(meta) = fs.metadata_blocking(Path::new(&file_path)) else {
+            return;
+        };
+        if meta.len > MAX_SNAPSHOT_BYTES {
+            return;
+        }
+        // Only existing, readable text files carry restorable pre-modify state.
+        let Ok(old_content) = fs.read_text_blocking(Path::new(&file_path)) else {
+            return;
+        };
+        if let Ok(mut mgr) = history.lock() {
+            let _ = mgr.record_snapshot(
+                Path::new(&file_path),
+                &old_content,
+                history::FileOperation::Edit,
+            );
+        }
+    })
+    .await;
 }
 
 /// Read tool implementation
@@ -129,7 +139,17 @@ impl Default for ReadTool {
 impl ReadTool {
     pub fn new() -> Self {
         Self {
-            description: "Read file contents from the local filesystem".to_string(),
+            description: "Read a file from the filesystem.\n\
+\n\
+Output lines are numbered cat -n style (\"{line_number}\\t{content}\"); cite\n\
+locations as file_path:line. Returns up to 2000 lines per call; large files\n\
+are truncated with a notice — use `offset`/`limit` to page through them (the\n\
+line numbers stay absolute to the file). Images (png/jpg/gif/webp) are\n\
+returned as attachments the model can view. Binary files are reported as\n\
+such instead of being dumped as mojibake. You MUST read a file before editing\n\
+it — Edit requires that old_string matches the file exactly, which you can\n\
+only know from a fresh Read."
+                .to_string(),
             sandbox: PathSandbox::new(),
             fs: crate::defaults::fs(),
         }
@@ -138,7 +158,17 @@ impl ReadTool {
     /// Create a ReadTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Read file contents from the local filesystem".to_string(),
+            description: "Read a file from the filesystem.\n\
+\n\
+Output lines are numbered cat -n style (\"{line_number}\\t{content}\"); cite\n\
+locations as file_path:line. Returns up to 2000 lines per call; large files\n\
+are truncated with a notice — use `offset`/`limit` to page through them (the\n\
+line numbers stay absolute to the file). Images (png/jpg/gif/webp) are\n\
+returned as attachments the model can view. Binary files are reported as\n\
+such instead of being dumped as mojibake. You MUST read a file before editing\n\
+it — Edit requires that old_string matches the file exactly, which you can\n\
+only know from a fresh Read."
+                .to_string(),
             sandbox,
             fs: crate::defaults::fs(),
         }
@@ -176,9 +206,14 @@ impl Tool for ReadTool {
                 "limit": {
                     "type": "integer",
                     "description": "Optional line limit"
+                },
+                "truncate_large_files": {
+                    "type": "boolean",
+                    "description": "Summarize files over 2000 lines to a head/tail preview (default: true); set false to return the full content"
                 }
             },
-            "required": ["file_path"]
+            "required": ["file_path"],
+            "additionalProperties": false
         })
     }
 
@@ -195,7 +230,7 @@ impl Tool for ReadTool {
         let mut input = read_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        let mut output = read::execute_with(input, self.fs.as_ref()).await?;
+        let mut output = read::execute_with(input, self.fs.clone()).await?;
         output
             .metadata
             .insert("file_path".to_string(), json!(display_path));
@@ -231,7 +266,15 @@ impl Default for WriteTool {
 impl WriteTool {
     pub fn new() -> Self {
         Self {
-            description: "Write content to a file, overwriting if it exists".to_string(),
+            description: "Writes `content` to a file, overwriting it entirely if it exists and\n\
+creating it (with any missing parent directories) if it does not.\n\
+\n\
+Prefer Edit for targeted changes to an existing file — Write replaces the\n\
+whole content and silently discards anything not included, so re-read the\n\
+file first if you only saw part of it. The write is atomic (temp file +\n\
+rename): a failure never leaves a partial file. Results report the byte\n\
+count written; content over 10 MB is rejected."
+                .to_string(),
             sandbox: PathSandbox::new(),
             fs: crate::defaults::fs(),
             history: None,
@@ -241,7 +284,15 @@ impl WriteTool {
     /// Create a WriteTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Write content to a file, overwriting if it exists".to_string(),
+            description: "Writes `content` to a file, overwriting it entirely if it exists and\n\
+creating it (with any missing parent directories) if it does not.\n\
+\n\
+Prefer Edit for targeted changes to an existing file — Write replaces the\n\
+whole content and silently discards anything not included, so re-read the\n\
+file first if you only saw part of it. The write is atomic (temp file +\n\
+rename): a failure never leaves a partial file. Results report the byte\n\
+count written; content over 10 MB is rejected."
+                .to_string(),
             sandbox,
             fs: crate::defaults::fs(),
             history: None,
@@ -288,14 +339,15 @@ impl Tool for WriteTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Absolute path to the file"
+                    "description": "Path to the file — absolute, or relative to the working directory"
                 },
                 "content": {
                     "type": "string",
-                    "description": "Content to write"
+                    "description": "Full new content for the file (overwrites the existing file entirely; prefer Edit for targeted changes)"
                 }
             },
-            "required": ["file_path", "content"]
+            "required": ["file_path", "content"],
+            "additionalProperties": false
         })
     }
 
@@ -307,7 +359,12 @@ impl Tool for WriteTool {
         let mut input = write_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        snapshot_for_undo(self.fs.as_ref(), &self.history, &input.file_path);
+        snapshot_for_undo(
+            self.fs.clone(),
+            self.history.clone(),
+            input.file_path.clone(),
+        )
+        .await;
         let mut output = write::execute_with(input, self.fs.as_ref()).await?;
         self.sandbox.remap_tool_output(&mut output);
         Ok(output)
@@ -335,7 +392,20 @@ impl Default for EditTool {
 impl EditTool {
     pub fn new() -> Self {
         Self {
-            description: "Perform exact string replacements in files".to_string(),
+            description:
+                "Performs exact string replacement in a file and returns the replacement\n\
+count, match locations and a unified diff.\n\
+\n\
+You MUST Read the file first: `old_string` must match the current content\n\
+byte-for-byte (including whitespace/indentation) and be UNIQUE in the file\n\
+unless `replace_all` is true — include enough surrounding lines to make a\n\
+short snippet unique. A missing or ambiguous match fails with the nearest\n\
+candidates shown. Fallback: when old_string is not in the current content\n\
+but IS in the file's git HEAD version (the file moved under you), the edit\n\
+is applied via a three-way merge; textual conflicts are returned in the\n\
+result instead of being silently overwritten. Use MultiEdit for batched\n\
+edits and Write only to replace a whole file."
+                    .to_string(),
             sandbox: PathSandbox::new(),
             fs: crate::defaults::fs(),
             process: crate::defaults::process(),
@@ -346,7 +416,20 @@ impl EditTool {
     /// Create an EditTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Perform exact string replacements in files".to_string(),
+            description:
+                "Performs exact string replacement in a file and returns the replacement\n\
+count, match locations and a unified diff.\n\
+\n\
+You MUST Read the file first: `old_string` must match the current content\n\
+byte-for-byte (including whitespace/indentation) and be UNIQUE in the file\n\
+unless `replace_all` is true — include enough surrounding lines to make a\n\
+short snippet unique. A missing or ambiguous match fails with the nearest\n\
+candidates shown. Fallback: when old_string is not in the current content\n\
+but IS in the file's git HEAD version (the file moved under you), the edit\n\
+is applied via a three-way merge; textual conflicts are returned in the\n\
+result instead of being silently overwritten. Use MultiEdit for batched\n\
+edits and Write only to replace a whole file."
+                    .to_string(),
             sandbox,
             fs: crate::defaults::fs(),
             process: crate::defaults::process(),
@@ -400,22 +483,27 @@ impl Tool for EditTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Absolute path to the file"
+                    "description": "Path to the file — absolute, or relative to the working directory"
                 },
                 "old_string": {
                     "type": "string",
-                    "description": "Text to replace"
+                    "description": "Exact text to replace — must match the file content byte-for-byte (including whitespace/indentation) and be UNIQUE in the file unless replace_all is true; include surrounding lines for context when the snippet is short. Read the file first."
                 },
                 "new_string": {
                     "type": "string",
-                    "description": "Replacement text"
+                    "description": "Replacement text (same length as needed — empty string deletes)"
                 },
                 "replace_all": {
                     "type": "boolean",
                     "description": "Replace all occurrences (default: false)"
+                },
+                "preview": {
+                    "type": "boolean",
+                    "description": "Compute and return the diff without writing the file (default: false)"
                 }
             },
-            "required": ["file_path", "old_string", "new_string"]
+            "required": ["file_path", "old_string", "new_string"],
+            "additionalProperties": false
         })
     }
 
@@ -427,7 +515,12 @@ impl Tool for EditTool {
         let mut input = edit_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        snapshot_for_undo(self.fs.as_ref(), &self.history, &input.file_path);
+        snapshot_for_undo(
+            self.fs.clone(),
+            self.history.clone(),
+            input.file_path.clone(),
+        )
+        .await;
         let mut output = edit::execute_with(input, self.fs.as_ref(), self.process.as_ref()).await?;
         // A3: the success message and diff header embed the file path —
         // re-render them into the sandbox-visible spelling.
@@ -540,7 +633,8 @@ impl Tool for MultiEditTool {
                     }
                 }
             },
-            "required": ["edits"]
+            "required": ["edits"],
+            "additionalProperties": false
         })
     }
 
@@ -559,7 +653,8 @@ impl Tool for MultiEditTool {
         for op in &multi_input.edits {
             if !snapshotted.contains(&op.file_path) {
                 snapshotted.push(op.file_path.clone());
-                snapshot_for_undo(self.fs.as_ref(), &self.history, &op.file_path);
+                snapshot_for_undo(self.fs.clone(), self.history.clone(), op.file_path.clone())
+                    .await;
             }
         }
 
@@ -586,7 +681,15 @@ impl Default for GlobTool {
 impl GlobTool {
     pub fn new() -> Self {
         Self {
-            description: "Fast file pattern matching tool that works with any codebase size"
+            description: "Fast file-pattern matching tool that works with any codebase size.\n\
+\n\
+Patterns are matched against paths RELATIVE to the search directory (so\n\
+`*.rs` matches only top-level files; use `**/*.rs` to recurse) and\n\
+gitignore-aware traversal skips ignored paths like `target/`. Results are\n\
+sorted by modification time (most recent first) with size/mtime metadata,\n\
+and capped at 100 — when a broad pattern is truncated the result says so,\n\
+so prefer a narrower pattern or a subdirectory `path` over enumerating\n\
+everything. Escaping patterns (`..`, absolute) are rejected."
                 .to_string(),
             sandbox: PathSandbox::new(),
             fs: crate::defaults::fs(),
@@ -596,7 +699,15 @@ impl GlobTool {
     /// Create a GlobTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Fast file pattern matching tool that works with any codebase size"
+            description: "Fast file-pattern matching tool that works with any codebase size.\n\
+\n\
+Patterns are matched against paths RELATIVE to the search directory (so\n\
+`*.rs` matches only top-level files; use `**/*.rs` to recurse) and\n\
+gitignore-aware traversal skips ignored paths like `target/`. Results are\n\
+sorted by modification time (most recent first) with size/mtime metadata,\n\
+and capped at 100 — when a broad pattern is truncated the result says so,\n\
+so prefer a narrower pattern or a subdirectory `path` over enumerating\n\
+everything. Escaping patterns (`..`, absolute) are rejected."
                 .to_string(),
             sandbox,
             fs: crate::defaults::fs(),
@@ -626,10 +737,20 @@ impl Tool for GlobTool {
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "File pattern to match (e.g., *.rs, src/**/*.py)"
+                    "description": "File pattern to match, relative to the search directory (e.g., *.rs for top-level, src/**/*.py to recurse)"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Optional directory to search in (defaults to the working directory)"
+                },
+                "exclude_pattern": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional glob patterns to exclude (e.g., [\"!target/**\"])"
                 }
             },
-            "required": ["pattern"]
+            "required": ["pattern"],
+            "additionalProperties": false
         })
     }
 
@@ -653,7 +774,7 @@ impl Tool for GlobTool {
             }
         }
 
-        let mut output = glob::execute_with(glob_input, self.fs.as_ref()).await?;
+        let mut output = glob::execute_with(glob_input, self.fs.clone()).await?;
         self.sandbox.remap_tool_output(&mut output);
         Ok(output)
     }
@@ -1154,8 +1275,8 @@ mod tests {
 
         assert_eq!(output.metadata["file_path"], "/workspace/a.txt");
         assert_eq!(
-            output.content, "hello",
-            "file content itself must not be rewritten"
+            output.content, "1\thello",
+            "file content itself must not be rewritten (only line-numbered)"
         );
     }
 
@@ -1171,10 +1292,15 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            output.metadata["file_path"],
-            host_path.to_string_lossy().to_string(),
-            "plain (no alias mount) scenario keeps host-path echo"
+        // The echo stays a host spelling — the raw input, or its canonical
+        // form (macOS resolves /var/… to /private/var/…). Aliasing off means
+        // it must NOT be rewritten to /workspace.
+        let echoed = output.metadata["file_path"].as_str().unwrap();
+        let canonical_input = std::fs::canonicalize(&host_path).unwrap();
+        let raw = host_path.to_string_lossy().to_string();
+        assert!(
+            echoed == raw.as_str() || std::path::Path::new(echoed) == canonical_input,
+            "plain (no alias mount) scenario keeps host-path echo, got: {echoed}"
         );
     }
 
@@ -1206,11 +1332,14 @@ mod tests {
             .await
             .unwrap();
         assert!(!output.is_error, "Write to /tmp must succeed");
-        // The temp root is not relocated by the command sandbox: echo stays.
-        assert_eq!(
-            output.metadata["file_path"],
-            tmp_target.to_string_lossy().to_string()
-        );
+        // The temp root renders as the sandbox-visible /tmp spelling: Linux
+        // host /tmp is already literal (identity); macOS folds
+        // /var/folders/…/T into the same tmpfs mount.
+        let expected_tmp_echo = match tmp_target.strip_prefix(std::env::temp_dir()) {
+            Ok(rest) => format!("/tmp/{}", rest.display()),
+            Err(_) => tmp_target.to_string_lossy().to_string(),
+        };
+        assert_eq!(output.metadata["file_path"], expected_tmp_echo);
         assert_eq!(std::fs::read_to_string(&tmp_target).unwrap(), "scratch");
         let _ = std::fs::remove_file(&tmp_target);
     }
@@ -1316,7 +1445,19 @@ mod tests {
             !output.content.contains(&host_str),
             "must not leak host paths"
         );
-        assert_eq!(output.metadata["files"][0]["path"], "/workspace/src/a.rs");
+        // Snapshot ordering is mtime-based and a.rs/b.rs share a timestamp
+        // granule — assert the alias-echoed set, not the order.
+        let paths: Vec<String> = output.metadata["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["path"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            paths.contains(&"/workspace/src/a.rs".to_string())
+                && paths.contains(&"/workspace/src/b.rs".to_string()),
+            "got: {paths:?}"
+        );
 
         // Bind-alias addressing: `/workspace` does not exist on the host, so
         // the canonical base the sandbox resolved must drive the walk.

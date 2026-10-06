@@ -4,7 +4,22 @@ Thanks for your interest. This monorepo ships three products that share one Rust
 
 ## Development setup
 
-Prerequisites: Rust 1.88+, pnpm 10+, bun latest. On Linux also: `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf`.
+Prerequisites: Rust 1.88+, pnpm 10+, bun latest. On Linux also: `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libgbm-dev libdrm-dev libpipewire-0.3-dev patchelf`.
+
+### Desktop build on Linux (libspa/pipewire)
+
+The three capture-related packages (`libgbm-dev libdrm-dev libpipewire-0.3-dev`) only affect compiling the `shannon-desktop` crate (via xcap → pipewire → libspa) and the `shannon-tools --features computer-use` / libei legs — the rest of the workspace builds and tests without them.
+
+**Symptom**: `cargo check --workspace` fails inside `~/.cargo/registry/src/…/libspa-0.10.1/` with ``error[E0425]: cannot find function `spa_meta_region_is_valid` in crate `spa_sys``` plus ~6 more errors (E0425 `spa_meta_first`, E0560/E0609 on `spa_video_info_raw.flags`, E0308).
+
+**Root cause**: `libspa-sys` 0.10.x declares only the `libspa-0.2`/`libpipewire-0.3` ABI via pkg-config (so any 0.3.x system package installs cleanly), but it bindgens your **system** SPA headers at build time while libspa 0.10.x's handwritten wrapper expects the `static inline` helpers and struct fields of newer pipewire. Ubuntu 22.04's `libspa-0.2-dev 0.3.48` (2022) predates them — an environment mismatch, not a repo bug; CI and release builds use working versions.
+
+**Workarounds** (pick one):
+
+1. Install a compatible `libpipewire-0.3-dev`/`libspa-0.2-dev` — Ubuntu 24.04's 1.0.x is verified working; 0.3.48 is verified broken.
+2. Skip the capture feature: `just check` detects this failure and retries automatically; the manual equivalents are `cargo check --workspace --exclude shannon-desktop` and `cargo check -p shannon-desktop --no-default-features --features tauri`.
+
+Verified matrix: Ubuntu 24.04 works (PipeWire 1.0.x headers — same as CI); Ubuntu 22.04 does not (see above). No version floor is claimed beyond these two data points.
 
 ```bash
 git clone https://github.com/diff-lab-com/shannon-agent.git
@@ -32,10 +47,43 @@ just ci
 - Add `#[serial]` to any new Rust test that mutates shared state (env vars, ~/.shannon, /tmp).
 - For TS, tests live next to source as `*.test.ts`. Use `pnpm test` per package.
 
+### Chat page (desktop/ui) — ChatScript test discipline
+
+The `/chat` page is covered by the scripted E2E layer (`docs/plans/2026-10-02-chat-testing-plan.md`):
+ChatScripts (YAML) replay deterministic AI event streams through the demo-mode
+ScriptedBackend, consumed by both Playwright (L2) and the Vitest state-machine
+suite (L1). Rules:
+
+- **Every chat-domain fix PR ships or updates a script.** A bug fix without a
+  failing-then-passing script anchor is not done (R2-lesson: per-step checks
+  missed what journeys catch).
+- **New `query:*` / `permission-*` / `budget:*` event fields** must update the
+  ChatScript schema (`src/lib/mock/scripted/schema.ts` + ajv) and at least one
+  script; the YAML/JSON parity test must stay green.
+- **Nightly fuzz findings** (`.github/workflows/chat-nightly.yml`) become fixed
+  scripts within 48h — see `KNOWN_FUZZ_WEDGES` in
+  `e2e/chat-script.fuzz.spec.ts` for the pattern (freeze the wedge,
+  write the flip condition, file the issue).
+- **`UNMOCKED_ALLOWLIST` / armed-vs-unarmed**: any new mock handler must keep
+  the un-scripted demo path byte-identical (covered by
+  `mock-handlers-coverage.test.ts` and the seed-handlers comparison tests).
+- **Rust touching desktop commands**: acceptance is the FOUR-piece gate —
+  `cargo check` + relevant `cargo nextest` + `cargo fmt --check` +
+  `cargo clippy --all-targets`. A fmt slip, a missing ACL entry in
+  `desktop/acl/app-permissions.json`, and a clippy warning have each landed
+  via this gap before.
+
+## Long-lived branches
+
+- Rebase onto `dev` **daily**. Parallel sessions merge to `dev` continuously —
+  a stale branch once burned five CI rounds before the base drift (a contract
+  change in an unrelated PR) was identified.
+
 ## Releases
 
-- Maintainer-driven only. Tag pattern: `vX.Y.Z` triggers release.yml + release-desktop.yml.
-- Pre-release tags `vX.Y.Z-rc.N` are NOT supported by cargo-dist in this monorepo (workspace version must match tag). For dry-runs, manually verify locally first.
+- Maintainer-driven only. Pushing a `vX.Y.Z` tag triggers the single `.github/workflows/release.yml` orchestrator, which produces exactly one GitHub Release containing all three products: the `shannon` CLI (per-target `cargo build` archives + sha256), the desktop app (Tauri, via tauri-action), and `shannon-gateway` (Bun compile). A version-guard job fails fast if the tag doesn't match the manifests' versions.
+- Pre-release tags (`vX.Y.Z-rc.N`, `vX.Y.Z-beta.N`) are supported: the guard compares the core version (tag minus the pre-release suffix) against the manifests. There is no dry-run workflow — verify a release build locally before tagging.
+- Distribution today: GitHub Releases (CLI archives + Tauri bundles + gateway binaries, all covered by `SHA256SUMS` and build-provenance attestations) plus the `install.sh`/`install.ps1` bootstrap scripts. Third-party channels (Homebrew/Winget/Scoop/AUR) are **not published** — placeholder manifests lived in `packaging/` until they were removed in 2026-09; re-introduce a channel only together with the CI automation that fills in real versions and checksums. cargo-dist is no longer used anywhere in the release path.
 
 ## Code of conduct
 

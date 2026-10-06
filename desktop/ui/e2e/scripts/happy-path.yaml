@@ -1,0 +1,32 @@
+# ChatScript: happy-path — 新用户首聊（plan §4 journey #1）。
+#
+# welcome → 输入「帮我写一首关于海的短诗」→ 3 个流式分片（中文 + emoji）→
+# usage → completed。断言在 spec（chat-script.happy-path.spec.ts）：气泡文本
+# === chunks 拼接、stop 按钮流式中出现、完成后复位、consoleErrors = 0。
+#
+# chunkDelayMs: 350 keeps the stream open ~0.7s so the streaming-state
+# assertions (stop button, typing cursor) are observable without flaking.
+name: happy-path
+description: 新用户首聊 — welcome → 提问 → 中文+emoji 分片流式 → usage → completed
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-happy
+      title: 海的诗
+      messages: []
+turns:
+  - user: 帮我写一首关于海的短诗
+    script:
+      - event: query:text
+        chunks:
+          - "好的，这是"
+          - "一首关于海的短诗：\n\n海浪"
+          - "轻拍沙滩 🌊"
+        chunkDelayMs: 350
+      - event: query:usage
+        payload:
+          input_tokens: 120
+          output_tokens: 48
+          cost_usd: 0.0021
+      - event: query:completed

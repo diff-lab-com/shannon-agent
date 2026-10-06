@@ -40,9 +40,9 @@ semantics.
 | `PermissionDenied` | ✓ | ✓ | Identical |
 | `UserPromptSubmit` | ✓ | ✓ | Identical |
 | `UserPromptExpansion` | ✓ | ✓ | Wired in `shannon-skills` executor after template substitution (P1-2a, b2b28f9b) |
-| `SessionStart` | ✓ | ✓ | Identical |
-| `SessionEnd` | ✓ | ✓ | Identical |
-| `Stop` | ✓ | ✓ | Identical |
+| `SessionStart` | ✓ | ✓ | Emitted by the engine (once per session, start of the first `process_query`; REPL fires it at startup and pre-marks the engine flag) |
+| `SessionEnd` | ✓ | ✓ | Emitted by the REPL at shutdown (engine sessions have no explicit close point) |
+| `Stop` | ✓ | ✓ | Emitted by the engine producer right before each `QueryEvent::Completed` (advisory; `should_continue` always `false`) |
 | `StopFailure` | ✓ | ✓ | Identical |
 | `SubagentStart` | ✓ | ✓ | Identical |
 | `SubagentStop` | ✓ | ✓ | Identical |
@@ -137,6 +137,13 @@ extend the fixture or the test will fail.
 - [x] Wire `UserPromptExpansion` in `shannon-skills` template expander (P1-2a, b2b28f9b)
 - [x] Wire `InstructionsLoaded` in `shannon-core` instruction loader (P1-2b, b2b28f9b)
 - [x] Wire `ConfigChange` in config reload path via `notify` v7 watcher (P1-2c, b2b28f9b)
+- [x] Mount the `HookManagerAdapter` on the query bus (arch review 2026-09-21): the
+  adapter existed but was never subscribed, so bus-published triggers
+  (`UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionStart`) were logged but never
+  executed. It now runs per query, fire-and-forget, no-op with no hooks configured.
+  `PostToolUse` payloads gained an `is_error` flag (serde-defaulted for old payloads);
+  `Stop` and `SessionStart` gained engine producers with decoders in
+  `query_engine::guard_nodes::decode_trigger`.
 - [ ] Evaluate `Setup` event for Shannon's `--prompt` mode (follow-up)
 - [ ] Defer `MessageDisplay` — needs rendering refactor
 - [ ] Defer `Elicitation`/`ElicitationResult` — needs MCP UI bridge

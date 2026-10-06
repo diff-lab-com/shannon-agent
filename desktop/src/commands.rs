@@ -3,6 +3,7 @@
 //! Each command is exposed via `#[tauri::command]` and invoked from
 //! JavaScript as `invoke("command_name", { args })`.
 
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use shannon_core::query_engine::{
     PermissionRequest as EnginePermissionRequest, QueryContext, QueryEngine, QueryEvent,
@@ -21,9 +22,6 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::commands_agents::resolve_working_dir;
-#[cfg(test)]
-use crate::commands_billing::iso_days_ago;
 use crate::commands_permissions::PendingPermission;
 use crate::config::{self, DesktopConfig};
 use crate::events::event_names;
@@ -31,20 +29,40 @@ use crate::events::{self};
 use crate::session_registry::SessionRegistry;
 use tokio_util::sync::CancellationToken;
 
-/// Parse approval mode string into ApprovalMode enum
-fn parse_approval_mode(mode_str: &str) -> ApprovalMode {
+/// Parse approval mode string into ApprovalMode enum. `pub(crate)` so the
+/// agent-teams bridge (`crate::agent_teams::enable`) can reuse the same
+/// case-insensitive mapping for sub-agent permission inheritance.
+pub(crate) fn parse_approval_mode(mode_str: &str) -> ApprovalMode {
+    // P2-1/P2-2: the engine owns the vocabulary (`from_str_ci` covers every
+    // canonical token plus the legacy aliases); the desktop only adds its
+    // own legacy 4-tier tier names.
+    if let Some(mode) = ApprovalMode::from_str_ci(mode_str) {
+        return mode;
+    }
     match mode_str.to_lowercase().as_str() {
-        "suggest" | "default" => ApprovalMode::Suggest,
-        "plan" => ApprovalMode::Plan,
-        "auto" => ApprovalMode::Auto,
-        "auto_edit" | "autoedit" => ApprovalMode::AutoEdit,
-        "full_auto" | "fullauto" => ApprovalMode::FullAuto,
-        "readonly" | "read-only" => ApprovalMode::Readonly,
-        "plan_ro" | "plan-ro" | "planreadonly" => ApprovalMode::PlanReadonly,
-        "bypass_permissions" | "bypasspermissions" => ApprovalMode::BypassPermissions,
-        "dont_ask" | "dontask" => ApprovalMode::DontAsk,
-        "confirm" => ApprovalMode::Suggest, // "confirm" maps to Suggest (ask each time)
-        _ => ApprovalMode::Suggest,         // Default to safe mode
+        "confirm" | "balanced" => ApprovalMode::Ask,
+        "permissive" => ApprovalMode::AutoEdit,
+        "strict" => ApprovalMode::Readonly,
+        _ => ApprovalMode::Ask, // Default to safe mode
+    }
+}
+
+/// Resolve the approval mode for an unattended path (background task,
+/// inbox routine, goal run, best-of-N batch — review §P1-2).
+///
+/// Security contract: FullAuto must require an explicit opt-in. When the
+/// caller does not pass an approval_mode string (or passes something we
+/// don't recognise), we default to the most conservative mode (Suggest),
+/// matching SECURITY.md's promise that unattended paths honour the user's
+/// chosen mode.
+pub(crate) fn unattended_approval_mode(approval_mode_str: Option<&str>) -> ApprovalMode {
+    match approval_mode_str.map(parse_approval_mode) {
+        // Recognised ladder tokens pass through unchanged; bypass/dontAsk and
+        // anything unrecognised — and the unset case — stay at the most
+        // conservative mode (SECURITY.md: unattended paths never inherit
+        // more power than the user configured).
+        Some(mode @ (ApprovalMode::FullAuto | ApprovalMode::AutoEdit | ApprovalMode::Plan)) => mode,
+        _ => ApprovalMode::Ask,
     }
 }
 
@@ -69,6 +87,21 @@ pub struct AppState {
     /// `registry.resolve_explicit_or_active` (multi-window), so they never
     /// read or move the pointer when a sessionId is supplied.
     pub(crate) registry: Arc<SessionRegistry>,
+    /// R5-1 — durable session-model-override sidecar
+    /// (`~/.shannon/desktop/session-model-overrides.json`). Loaded once here
+    /// (graceful on missing/corrupt), pruned memory-only against the L0
+    /// session log, and hydrated into `registry` so restored overrides are
+    /// live immediately; `set_session_model` / `clear_session_model` write
+    /// through it. `std::sync::Mutex` — the critical sections are pure
+    /// map edits + one small atomic file write, no `await` inside.
+    pub(crate) session_overrides:
+        std::sync::Mutex<crate::session_override_store::SessionOverrideSidecar>,
+    /// P2-5 — durable "temporary chat" sidecar
+    /// (`~/.shannon/desktop/session-memory-bypass.json`). Same load/prune/
+    /// hydrate/write-through contract as `session_overrides`; see
+    /// [`crate::session_memory_bypass`].
+    pub(crate) session_memory_bypass:
+        std::sync::Mutex<crate::session_memory_bypass::SessionMemoryBypassSidecar>,
     /// LLM client config — used to build clients on demand. P1.2-B:
     /// this is the single source of truth for the active `model` /
     /// `provider`; the legacy `Arc<Mutex<String>>` mirrors were
@@ -102,9 +135,34 @@ pub struct AppState {
     qe_config: Arc<RwLock<shannon_core::query_engine::QueryEngineConfig>>,
     /// Desktop config (persisted).
     pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
+    /// B2 — handle shared with the engine's `AgentTool`. Empty until the
+    /// user enables agent teams (`crate::agent_teams::enable` injects the
+    /// `TeamContext` here; `disable` revokes it). The tool consults this
+    /// handle on every `agent_spawn` call, so inject/revoke take effect
+    /// immediately without a restart.
+    pub(crate) agent_tool_context: Arc<std::sync::Mutex<Option<shannon_tools::AgentToolContext>>>,
     /// Pending permission requests (request_id -> sender + tool name, so
     /// "always allow" can persist a rule for the tool).
     pub(crate) pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
+    /// Settings R3 T8 — pending ask_user questions (request_id → oneshot
+    /// back to `DesktopQuestionHandler::ask_question`). The frontend's
+    /// `respond_ask_user` removes + sends; the auto-continue timeout path
+    /// removes + emits `ask-user-resolved`. `DashMap` (sync): the critical
+    /// sections are pure map edits, never held across an await.
+    pub(crate) pending_questions: Arc<DashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>>,
+    /// Settings R3 followup F2 — sessions with a live run (interactive
+    /// turn, goal run, batch branch, routine attempt, background task),
+    /// keyed by session id with a per-session run count. The
+    /// `DesktopQuestionHandler` reads it before emitting
+    /// `ask-user-request`: exactly one entry whose session is reachable
+    /// from the rail (in [`AppState::sessions`] — final-review C1) → the
+    /// payload carries that session id (the card is scoped to windows
+    /// viewing that session); zero, several, or rail-unreachable → `None`
+    /// (the card stays visible in every window — the pre-F2 behavior).
+    /// Runs register through [`ActiveSessionRunGuard`] at the same task
+    /// boundary as the T3 prevent-sleep guard. `DashMap` (sync): the
+    /// critical sections are pure map edits, never held across an await.
+    pub(crate) active_run_sessions: Arc<DashMap<String, usize>>,
     /// Session metadata for session list. (P0-4: kept on AppState for
     /// now; this is the *display* list (titles, message counts), not the
     /// per-session query state. Migrating this into the registry is
@@ -144,6 +202,11 @@ pub struct AppState {
     /// first use so a failing on-disk open degrades to an in-memory store
     /// (with a warning) instead of poisoning every inbox command.
     pub(crate) inbox_store: std::sync::OnceLock<Arc<shannon_core::inbox_store::InboxStore>>,
+    /// Project registry (`~/.shannon/projects.db`, P-E3). Lazily opened on
+    /// first use so a failing on-disk open degrades to an in-memory store
+    /// (with a warning) instead of poisoning every project command.
+    pub(crate) project_registry:
+        std::sync::OnceLock<Arc<shannon_core::project_registry::ProjectRegistry>>,
     /// Usage ledger (`~/.shannon/usage.jsonl`) — append-only token/cache/cost.
     pub(crate) usage_store: Arc<crate::commands_usage::UsageStore>,
     /// Shared memory store (`~/.shannon/memories/`, P2-4b). One instance per
@@ -176,6 +239,13 @@ pub struct AppState {
     /// loopback server is spawned; `Some(External)` when another engine
     /// was already serving on 33420.
     pub engine_mode: Arc<std::sync::RwLock<Option<crate::engine_discovery::EngineMode>>>,
+    /// Settings R3 T3 — whether THIS AppState currently holds the
+    /// always-on prevent-sleep refcount (`power_keep_awake`). The global
+    /// refcount itself is invisible to us (other runs hold their own
+    /// counts), so this flag is the only way to keep the always-on
+    /// start/stop pairs balanced (a blind `start` on every enable would
+    /// double-count and one `stop` would never release).
+    pub(crate) keep_awake_active: std::sync::atomic::AtomicBool,
 }
 
 /// Session metadata for session list.
@@ -195,10 +265,130 @@ pub(crate) struct SessionMeta {
 pub(crate) struct BackgroundTaskMeta {
     pub(crate) id: String,
     pub(crate) prompt: String,
-    pub(crate) status: String, // "running", "completed", "failed"
+    pub(crate) status: String, // "running", "completed", "failed", "cancelled"
     pub(crate) started_at: i64,
     pub(crate) completed_at: Option<i64>,
     pub(crate) output: String,
+    /// §P2-19: real cancellation for the task's query stream. The cancel
+    /// command triggers it; the spawned runner observes it (via
+    /// `tokio::select!`) and stops — the old code only flipped the status
+    /// string while the underlying query kept running to completion.
+    pub(crate) cancel: CancellationToken,
+}
+
+/// Terminal states for [`BackgroundTaskMeta::status`]. A task in any of
+/// these must never be re-transitioned (§P2-19 status guard).
+fn is_terminal_task_status(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "cancelled")
+}
+
+/// Cap for the prompt-as-title and error-as-`error` fields of the triage
+/// inbox item a failed background task writes (mirrors the inbox module's
+/// 500-char summary budget).
+const BACKGROUND_TASK_INBOX_MAX_CHARS: usize = 500;
+
+/// Truncate to at most `max` chars without splitting a UTF-8 codepoint
+/// (ellipsis-marked).
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max).collect();
+    format!("{cut}…")
+}
+
+/// Collapse to one line, then truncate to at most `max` chars — for fields
+/// rendered inline (the item title, the summary's error headline).
+fn inbox_single_line_truncated(s: &str, max: usize) -> String {
+    let joined = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_chars(&joined, max)
+}
+
+/// R2-P1-5 (W2-5) — terminal side effect of a background task that
+/// [`finalize_background_task`] reported as transitioned: **only a `failed`
+/// task** lands one triage inbox item (`source = background_task`), so the
+/// failure keeps a cross-page entry in the Triage inbox after it scrolls out
+/// of the Runs panel's recent-history slice. Successes and user cancels
+/// never write (the panel is their only surface — avoids noise); callers
+/// pass the terminal status straight through, which this gate re-checks.
+///
+/// The write is sync (SQLite store, mutex-guarded) so the spawned runner can
+/// call it inline; it returns whether an item was written (the runner emits
+/// `inbox-updated` only then).
+pub(crate) fn record_background_task_terminal(
+    inbox: &shannon_core::inbox_store::InboxStore,
+    task_id: &str,
+    prompt: &str,
+    started_at: i64,
+    status: &str,
+    error: Option<&str>,
+    finished_at: i64,
+) -> Result<bool, shannon_core::inbox_store::InboxStoreError> {
+    if status != "failed" {
+        return Ok(false);
+    }
+    let Some(error) = error.map(str::trim).filter(|e| !e.is_empty()) else {
+        return Ok(false);
+    };
+    // Headline: the error's last non-empty line is where stream failures
+    // summarize ("...: connection reset"), same convention as routine runs.
+    let headline = error
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or(error);
+    let duration_secs = (finished_at - started_at).max(0) / 1000;
+    let summary = format!(
+        "failed · took {duration_secs}s · {}",
+        inbox_single_line_truncated(headline, 200)
+    );
+    inbox.append_item(shannon_core::inbox_store::InboxItemNew {
+        source: shannon_core::inbox_store::SOURCE_BACKGROUND_TASK.to_string(),
+        source_id: Some(task_id.to_string()),
+        session_id: None,
+        title: inbox_single_line_truncated(prompt, 120),
+        summary,
+        error: Some(truncate_chars(error, BACKGROUND_TASK_INBOX_MAX_CHARS)),
+    })?;
+    Ok(true)
+}
+
+/// §P2-19 status guard: transition a background task into a terminal state
+/// (`completed` / `failed` / `cancelled`) — but only from `running`. A task
+/// already cancelled by the user must not be overwritten back to
+/// `completed` (the old finalize path did exactly that, so a cancelled task
+/// reported success), and a finished task must not be re-cancelled.
+///
+/// Returns `true` when the transition happened, which is also the signal to
+/// emit the terminal `background_task_update` event.
+pub(crate) fn finalize_background_task(
+    tasks: &mut [BackgroundTaskMeta],
+    id: &str,
+    status: &str,
+    output: String,
+) -> bool {
+    debug_assert!(
+        is_terminal_task_status(status),
+        "finalize_background_task requires a terminal status, got '{status}'"
+    );
+    if let Some(task) = tasks.iter_mut().find(|t| t.id == id) {
+        if is_terminal_task_status(&task.status) {
+            tracing::debug!(
+                task_id = id,
+                current = %task.status,
+                requested = %status,
+                "background task already terminal — finalize skipped"
+            );
+            return false;
+        }
+        task.status = status.to_string();
+        task.completed_at = Some(chrono_timestamp());
+        task.output = output;
+        true
+    } else {
+        false
+    }
 }
 
 /// A chat message displayed in the UI.
@@ -209,6 +399,21 @@ pub struct ChatMessage {
     pub timestamp: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_attachments: Option<Vec<FileAttachment>>,
+    /// D6 (keep the partial output): true on an assistant message that is a
+    /// CANCELLED run's partial answer — the "stopped" bubble marker. Absent
+    /// (`None`, serde-default for older clients / older logs) on every
+    /// completed message, so the wire shape is fully backward compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupted: Option<bool>,
+    /// OBS1 (unify the failed half): WHY an interrupted partial was cut
+    /// short — `"cancelled"` (user stop, D6) or `"failed"` (the turn failed
+    /// mid-step; the L0 log now keeps its streamed prefix the same way).
+    /// Absent on completed messages, on cancelled partials from pre-reason
+    /// logs, and from older wire producers; consumers read a bare
+    /// `interrupted` flag as "cancelled", so the wire stays backward
+    /// compatible in both directions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupted_reason: Option<String>,
 }
 
 /// File attachment for chat messages.
@@ -221,10 +426,49 @@ pub struct FileAttachment {
     pub media_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base64_data: Option<String>,
+    /// G3b P1-4 — per-file extraction summary for parseable documents
+    /// (pdf/docx/xlsx/pptx/ods/csv). Set by the send pipeline when the file
+    /// was parsed for the model; `None` for images/unparsed formats and for
+    /// messages sent before this field existed (`serde(default)` keeps old
+    /// persisted history deserializable). The UI renders it as a chip badge
+    /// and a FileCard detail (cache path + "view extracted text").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction: Option<AttachmentExtractionReport>,
+}
+
+/// G3b P1-4 — what the attachment parse pipeline produced for ONE file,
+/// reported to the frontend so extraction/truncation is user-visible instead
+/// of model-only. `path` matches the `FileAttachment.path` it belongs to;
+/// `kind` is the lowercased source extension ("pdf", "docx", ...).
+///
+/// `sections_total`/`sections_inlined` count sectioned documents (office
+/// formats); PDFs are not sectioned, so they report 0/0 and carry their
+/// story in `truncated` (>50 KiB of extracted text cut at the inline budget,
+/// full text cached) + `cache_path`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentExtractionReport {
+    pub path: String,
+    pub kind: String,
+    /// `false` when parsing failed — the model received a failure placeholder
+    /// naming the reason instead of text.
+    pub extracted: bool,
+    pub sections_total: usize,
+    pub sections_inlined: usize,
+    /// `true` when the inline injection had to cut content (office: sections
+    /// dropped from the 16 KiB window; pdf: >50 KiB trimmed at the budget).
+    pub truncated: bool,
+    /// Absolute path of `~/.shannon/cache/extracted/<sha256>.txt` holding the
+    /// full extracted text (present whenever the cache write succeeded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_path: Option<String>,
 }
 
 /// Detect media type from file extension.
-fn detect_media_type(path: &str) -> Option<String> {
+///
+/// P0-3: `pub(crate)` — the `check_attachment_paths` preflight reuses this
+/// exact image set so a path the composer marks OK cannot still be refused
+/// by a different extension→mime table on send.
+pub(crate) fn detect_media_type(path: &str) -> Option<String> {
     use std::path::Path;
     let ext = Path::new(path).extension()?.to_str()?;
     match ext.to_lowercase().as_str() {
@@ -246,6 +490,113 @@ fn detect_media_type(path: &str) -> Option<String> {
 /// @-reference FILE_CONTENT_LIMIT).
 const PDF_TEXT_INJECT_LIMIT: usize = 50 * 1024;
 
+/// Hard cap on PDF attachments on the real send path: a metadata precheck
+/// before the file is read or handed to `pdftotext`. (Images are capped at
+/// the shared `shannon_core::attachments::MAX_IMAGE_BYTES` instead.)
+/// P0-3: `pub(crate)` so the `check_attachment_paths` preflight applies the
+/// exact same caps and never disagrees with the send path.
+pub(crate) const MAX_PDF_BYTES: u64 = 100 * 1024 * 1024;
+
+/// What the PDF extraction pipeline produced for one attachment: the
+/// injection block plus the user-visible summary (G3b P1-4). Mirrors
+/// `document_parse::OfficeExtractionOutcome`; PDFs are not sectioned, so no
+/// section counts are reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PdfExtractionOutcome {
+    pub block: String,
+    /// `false` for the extraction-failure placeholder and for scanned PDFs
+    /// with no extractable text.
+    pub extracted: bool,
+    /// `true` when the extracted text exceeded the inline budget and was cut.
+    pub truncated: bool,
+    /// Cache file holding the FULL extracted text — written only when
+    /// truncated (a fitting text needs no escape hatch).
+    pub cache_path: Option<String>,
+}
+
+/// Build the PDF injection block + extraction summary for one attachment
+/// (pure over its inputs; the cache write is the only side effect, and only
+/// on the truncated path).
+///
+/// G3b P1-4 — aligns the PDF path with the office escape hatch: the inline
+/// block always carries the PDF's ABSOLUTE path (so the model can `Read` the
+/// original), and when the extracted text exceeds `PDF_TEXT_INJECT_LIMIT`
+/// the full text is written to `~/.shannon/cache/extracted/<sha256>.txt` via
+/// the SAME helper the office path uses, with the cache path + "use
+/// Read/Grep" hint injected so the model can page through the rest.
+pub(crate) fn pdf_extraction_outcome(
+    file_name: &str,
+    source_path: &std::path::Path,
+    size: u64,
+    pages: Option<u32>,
+    text: &str,
+) -> PdfExtractionOutcome {
+    let trimmed = text.trim();
+    let pages_meta = pages.map(|p| format!(", {p} pages")).unwrap_or_default();
+    // The absolute path rides EVERY block shape (failure, scanned, truncated
+    // or not) so the model can always try to Read the original file itself.
+    let source_line = format!(
+        "Source PDF: {} — use Read on it if you need the original file.",
+        source_path.to_string_lossy()
+    );
+    if crate::commands_files::is_pdf_unavailable_placeholder(trimmed) {
+        return PdfExtractionOutcome {
+            block: format!(
+                "Attached PDF \"{file_name}\" ({size} bytes{pages_meta}). {trimmed}\n{source_line}"
+            ),
+            extracted: false,
+            truncated: false,
+            cache_path: None,
+        };
+    }
+    if trimmed.is_empty() {
+        return PdfExtractionOutcome {
+            block: format!(
+                "Attached PDF \"{file_name}\" ({size} bytes{pages_meta}). No extractable text — the PDF is likely scanned/image-only; OCR is not available.\n{source_line}"
+            ),
+            extracted: false,
+            truncated: false,
+            cache_path: None,
+        };
+    }
+    let truncated = trimmed.len() > PDF_TEXT_INJECT_LIMIT;
+    // Escape hatch: the full text goes to the same extracted-cache the office
+    // path uses (hash of path+mtime, so re-saves rotate the name). Only the
+    // truncated case pays the write — a fitting text is already fully inline.
+    let cache_path = if truncated {
+        crate::document_parse::cache_extracted_text(source_path, trimmed)
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+    let mut end = PDF_TEXT_INJECT_LIMIT;
+    while !trimmed.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    let cut = &trimmed[..end];
+    let trunc_suffix = if truncated {
+        format!(
+            "\n*[Truncated — showing first {end} of {} bytes]*",
+            trimmed.len()
+        )
+    } else {
+        String::new()
+    };
+    let cache_line = match cache_path.as_deref() {
+        Some(path) => format!("\nFull extracted text: {path} — use Read/Grep on it for the rest."),
+        None if truncated => "\nFull extracted text: unavailable (cache write failed).".to_string(),
+        None => String::new(),
+    };
+    PdfExtractionOutcome {
+        block: format!(
+            "Attached PDF \"{file_name}\" ({size} bytes{pages_meta}). Extracted text:\n```text\n{cut}\n```{trunc_suffix}{cache_line}\n{source_line}"
+        ),
+        extracted: true,
+        truncated,
+        cache_path,
+    }
+}
+
 fn file_to_base64(path: &str) -> Result<(String, String), String> {
     use base64::Engine;
     use std::fs;
@@ -266,6 +617,14 @@ pub struct StatusResponse {
     pub querying: bool,
     pub message_count: usize,
     pub working_dir: String,
+    /// S3-1 (P-N11 "why this model is active"): the engine store's ACTIVE
+    /// model profile name (`providers.toml` `active_profile`). The global
+    /// default model IS that profile's pinned active target, so the pickers
+    /// can label the default row "pinned by profile X" without a second
+    /// round trip. `None` when the store carries no profiles map (legacy
+    /// files); the UI falls back to the plain "global default" label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_profile: Option<String>,
 }
 
 /// Model info for the model selector. The optional fields are populated
@@ -290,9 +649,42 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
     /// Whether this entry comes from the dynamic models.dev overlay rather
-    /// than the static catalog. Surfaces a freshness indicator in the UI.
+    /// than the static catalog. Superseded by `source` (S2-1) — kept on the
+    /// wire for older readers; always `None` from the current writer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dynamic: Option<bool>,
+    /// Vision (image input) capability from the merged catalog metadata
+    /// (static `MODEL_CATALOG` capabilities or the models.dev overlay's
+    /// input modalities). `None` = unknown — the UI renders no capability
+    /// dot rather than guessing (R2-3 honest metadata).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
+    /// S2-3 (裁定⑩): declared/catalog maximum output tokens per request.
+    /// `None` = unknown — the UI renders "—" rather than a fabricated cap.
+    /// A declared value wins over the catalog's curated estimate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u32>,
+    /// S2-1 (裁定③/S2-1 source badge): where this row's metadata came from —
+    /// `"catalog"` (curated static table), `"overlay"` (models.dev-only row)
+    /// or `"declared"` (synthesized from the provider's curated vault in
+    /// `providers.toml` with no catalog metadata behind it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// S2-4b (schema/wire only — no gating behavior yet): native tool-calling
+    /// support. `Some` only where the source is explicit (models.dev
+    /// `tool_call`, user declaration); `None` = the catalog doesn't curate
+    /// tool bits, so unknown — same honest-metadata contract as `vision`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<bool>,
+    /// S3-5 (P2-19): reasoning/thinking support. `Some(false)` is the ONLY
+    /// decisive verdict — the composer's effort sub-tier shows its
+    /// "effort steers thinking models" note on it. `Some(true)` from an
+    /// explicit source (models.dev reasoning modality, user declaration);
+    /// `None` = unknown (static catalog rows don't curate reasoning bits) —
+    /// the sub-tier renders normally, exactly like the engine's own pass-through
+    /// posture (effort params are sent and the PROVIDER arbitrates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
 }
 
 /// Tool info for the tools panel.
@@ -301,12 +693,106 @@ pub struct ToolInfo {
     pub name: String,
     pub description: String,
     pub enabled: bool,
+    /// Settings R3 T11 — whether the tool only performs read-only operations
+    /// (`Tool::is_read_only()` from the tool-interface trait). The UI's
+    /// Explore/Terminal/Changes call-grouping looks this up by name before
+    /// falling back to name heuristics. `serde(default)` keeps older wire
+    /// payloads (mock data, caches) deserializing as `true`, the conservative
+    /// grouping (a defaulted tool lands in the read-only Explore bucket).
+    #[serde(default = "default_true")]
+    pub read_only: bool,
+}
+
+/// `serde(default = ...)` helper for [`ToolInfo::read_only`].
+fn default_true() -> bool {
+    true
+}
+
+/// P0-3 — why an attachment path was refused by the send pipeline. The
+/// security boundary (`out_of_working_dir`) is the deliberate anti-
+/// exfiltration design; the fix is making the refusal VISIBLE, never
+/// widening the allow-list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectedAttachmentReason {
+    /// The path resolves outside the configured working directory.
+    OutOfWorkingDir,
+    /// The path does not exist, is unreadable, or has no usable file name.
+    Unresolvable,
+    /// The file exceeds the hard size cap for its type (image 10 MiB,
+    /// PDF 100 MiB).
+    TooLarge,
+    /// Preflight only (`check_attachment_paths`): no working directory is
+    /// configured, so the attachment domain is undefined. The send path
+    /// hard-rejects with an explicit error instead of using this variant.
+    NoWorkingDir,
+    /// R2-P1-2 attachment honesty — an image format the multimodal whitelist
+    /// never forwards (svg/bmp/tiff/…; see
+    /// the private `is_unsupported_image_extension`). Left alone, the file attached as
+    /// a display-only chip while its content silently never reached the
+    /// model — the exact "user thinks the model saw the picture" lie the
+    /// honesty contract forbids, so both gates refuse it instead.
+    UnsupportedType,
+}
+
+/// Image extensions the OS and file pickers treat as pictures but the vision
+/// send whitelist ([`is_vision_image_mime`]) never forwards to the model —
+/// svg (XML, not a raster the providers accept) plus the raster formats
+/// outside png/jpeg/gif/webp. One table shared by the send gate
+/// (`collect_attachments`) and the preflight
+/// (`classify_attachment_path`) so the two can never disagree about a path.
+pub(crate) const UNSUPPORTED_IMAGE_EXTENSIONS: &[&str] =
+    &["svg", "bmp", "ico", "tif", "tiff", "avif", "heic", "heif"];
+
+/// The exact mime set the multimodal path turns into image blocks. Single
+/// source of truth: `send_message`'s `image_blocks` builder filters with it
+/// and both attachment gates refuse everything image-like outside it.
+pub(crate) fn is_vision_image_mime(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    )
+}
+
+/// True when `path`'s extension names an image format the vision whitelist
+/// does not support — a file the user plausibly expects the model to see
+/// but that would otherwise ride the chat as a display-only chip. Matching
+/// is ASCII-case-insensitive, same as `detect_media_type`.
+pub(crate) fn is_unsupported_image_extension(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| {
+            UNSUPPORTED_IMAGE_EXTENSIONS
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        })
+}
+
+/// P0-3 — one attachment the send pipeline refused, reported to the frontend
+/// so the user sees a `<file> was not sent: <reason>` toast instead of watching the
+/// chip silently vanish.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RejectedAttachment {
+    pub path: String,
+    pub reason: RejectedAttachmentReason,
 }
 
 /// Response from send_message containing the query ID.
+///
+/// P0-3: `rejected_attachments` carries the per-file refusals (partial
+/// success — a send with at least one readable in-scope attachment still
+/// goes through). `serde(default)` keeps old payloads / callers that omit
+/// the field deserializable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendMessageResponse {
     pub query_id: String,
+    #[serde(default)]
+    pub rejected_attachments: Vec<RejectedAttachment>,
+    /// W3-4 — the memories injected into THIS turn's prompt (the citation
+    /// chip list; empty for the temporary-chat bypass / zero selections).
+    #[serde(default)]
+    pub injected_memories: Vec<crate::commands_memory::InjectedMemoryDto>,
 }
 
 impl Default for AppState {
@@ -315,7 +801,82 @@ impl Default for AppState {
     }
 }
 
+/// RAII registration of one live run on [`AppState::active_run_sessions`]
+/// (Settings R3 followup F2). Held for the whole run — interactive turn,
+/// goal run, batch branch, routine attempt, background task — at the same
+/// task boundary as the T3 `PreventSleepGuard`; dropping it decrements the
+/// session's run count and removes the entry at zero, so every exit path
+/// (completion, error, cancel, caught panic) unregisters exactly once and
+/// no phantom "active run" outlives its task.
+pub(crate) struct ActiveSessionRunGuard {
+    map: Arc<DashMap<String, usize>>,
+    session_id: String,
+}
+
+impl ActiveSessionRunGuard {
+    /// Register `session_id` as a live run. Refcounted per session so a
+    /// nested/overlapping pair of runs on one id keeps its entry until the
+    /// last run ends.
+    pub(crate) fn register(map: &Arc<DashMap<String, usize>>, session_id: String) -> Self {
+        *map.entry(session_id.clone()).or_insert(0) += 1;
+        Self {
+            map: map.clone(),
+            session_id,
+        }
+    }
+}
+
+impl std::ops::Drop for ActiveSessionRunGuard {
+    fn drop(&mut self) {
+        // Final-review M1 — decrement + removal as ONE entry operation. The
+        // old get_mut → remove pair released the shard lock between the two
+        // steps, so a concurrent `register` landing in that window (count
+        // back to 1..2) was still wiped by the follow-up `remove`,
+        // un-registering a live run. `remove_if_mut` holds the shard lock
+        // across the decrement and the removal.
+        self.map.remove_if_mut(&self.session_id, |_key, count| {
+            *count -= 1;
+            *count == 0
+        });
+    }
+}
+
 impl AppState {
+    /// F2 — the session id of the SOLE live run, or `None` when zero or
+    /// several runs are active. This is the ask_user card's scoping key:
+    /// unambiguous single run → the request is scoped to that session;
+    /// anything else → `None`, and the card falls back to visible-in-every-
+    /// window (the pre-F2 behavior) instead of guessing.
+    ///
+    /// Final-review C1 — the sole run's session must ALSO be reachable from
+    /// the UI, i.e. present in the [`AppState::sessions`] display list the
+    /// window rail renders. background/batch/routine runs register their
+    /// (usually hidden) sessions too, and those sessions never enter the
+    /// rail — so an unscoped stamp would route the ask_user card to a
+    /// session no window can show, and with 提问自动继续 off the question
+    /// would hang silently. Missing from the rail → `None` → the every-
+    /// window fallback. A contended `sessions` lock degrades the same way
+    /// (fail-open): the lock is only ever held for short snapshots, so this
+    /// is effectively never, and the fallback is the safe pre-F2 direction.
+    pub(crate) fn sole_active_run_session(&self) -> Option<String> {
+        if self.active_run_sessions.len() != 1 {
+            return None;
+        }
+        let run_session = self
+            .active_run_sessions
+            .iter()
+            .next()
+            .map(|entry| entry.key().clone())?;
+        // `sessions` is a tokio Mutex (kept across awaits elsewhere), and
+        // this fn is sync — `try_lock` keeps it sync; on contention we give
+        // up the scoping instead of blocking (None → every-window card).
+        let sessions = self.sessions.try_lock().ok()?;
+        sessions
+            .iter()
+            .any(|meta| meta.id == run_session)
+            .then_some(run_session)
+    }
+
     /// The L0 session store over this app's sessions directory (§4.6).
     ///
     /// Every session read/write outside the live query path projects from or
@@ -324,6 +885,13 @@ impl AppState {
         shannon_core::session_log::SessionStore::new(
             self.state_manager.sessions_dir().to_path_buf(),
         )
+    }
+
+    /// G1 P0-1.2 — the shared MCP process pool handle. `pub` accessor so the
+    /// bin crate's `main.rs` setup can seed the pool at startup (the field
+    /// itself stays crate-private).
+    pub fn mcp_pool(&self) -> Arc<McpProcessPool> {
+        self.mcp_pool.clone()
     }
 
     /// Create a new AppState, initializing the LLM client from env/config.
@@ -371,7 +939,14 @@ impl AppState {
                 None
             }
         };
-        let _agent_context = {
+        // B2 — the handle is kept in `AppState::agent_tool_context` (not
+        // discarded). It stays empty until the user enables agent teams in
+        // Settings (`agent_teams_enabled`, default off); `crate::agent_teams`
+        // then injects a `TeamContext` (TUI injection pattern,
+        // crates/shannon-ui/src/repl/mod.rs ~L828) and bridges the registry
+        // lifecycle to `subagent:start|stop` events. Until then `agent_spawn`
+        // keeps its zero-cost placeholder behavior.
+        let agent_context_handle = {
             let _ = &assembly;
             register_default_tools_with_providers(
                 &mut tool_registry,
@@ -393,18 +968,78 @@ impl AppState {
         )
         .expect("Failed to register preview_screenshot tool");
 
-        Self {
-            registry: Arc::new(SessionRegistry::new()),
+        // R5-1 — restore session model overrides across restarts (the R2-1
+        // deferred item). Load the sidecar (graceful on missing/corrupt),
+        // prune entries whose session no longer has an L0 log
+        // (`<sessions>/<uuid>/events.jsonl` — every desktop session gets one
+        // at `new_session`, so a missing log means the session was deleted),
+        // then hydrate the survivors into the registry so `get_session_model`
+        // and query-time resolution see them without any UI change.
+        //
+        // Strictly read-only: the prune is memory-only at load — the pruned
+        // set reaches disk on the next set/clear write-through (which
+        // re-prunes before saving). `AppState::new` also runs in unit tests;
+        // it must never write to the user's HOME.
+        let registry = Arc::new(SessionRegistry::new());
+        let state_manager = Arc::new(StateManager::new());
+        let mut override_sidecar =
+            crate::session_override_store::SessionOverrideSidecar::load_default();
+        if !override_sidecar.is_empty() {
+            let sessions_dir = state_manager.sessions_dir().to_path_buf();
+            // `prune` itself rejects non-UUID keys, so the liveness probe
+            // only checks the session's L0 log.
+            let pruned = override_sidecar.prune(|id| {
+                shannon_core::session_log::session_log_container_path(&sessions_dir, id).exists()
+            });
+            if pruned > 0 {
+                tracing::info!(
+                    pruned,
+                    kept = override_sidecar.len(),
+                    "pruned session model overrides for deleted sessions"
+                );
+            }
+            override_sidecar.apply_to_registry(&registry);
+        }
+        // P2-5 — same load/prune/hydrate for the "temporary chat" flags.
+        let mut memory_bypass_sidecar =
+            crate::session_memory_bypass::SessionMemoryBypassSidecar::load_default();
+        if !memory_bypass_sidecar.is_empty() {
+            let sessions_dir = state_manager.sessions_dir().to_path_buf();
+            let pruned = memory_bypass_sidecar.prune(|id| {
+                shannon_core::session_log::session_log_container_path(&sessions_dir, id).exists()
+            });
+            if pruned > 0 {
+                tracing::info!(
+                    pruned,
+                    kept = memory_bypass_sidecar.len(),
+                    "pruned session memory bypass flags for deleted sessions"
+                );
+            }
+            memory_bypass_sidecar.apply_to_registry(&registry);
+        }
+
+        // Settings R3 T3 — honor the persisted always-on keep-awake switch
+        // (`power_keep_awake`, default false, so unit tests that build an
+        // AppState never spawn a wake lock). Read before the local config
+        // moves into the Arc below.
+        let power_keep_awake_startup = desktop_config.power_keep_awake;
+        let state = Self {
+            registry,
+            session_overrides: std::sync::Mutex::new(override_sidecar),
+            session_memory_bypass: std::sync::Mutex::new(memory_bypass_sidecar),
             client_config: Arc::new(RwLock::new(client_config)),
+            agent_tool_context: agent_context_handle,
             provider_store: Arc::new(tokio::sync::Mutex::new(provider_store)),
             tools: Arc::new(tool_registry),
             permissions: Arc::new(RwLock::new(PermissionManager::new())),
-            state_manager: Arc::new(StateManager::new()),
+            state_manager,
             qe_config: Arc::new(RwLock::new(
                 shannon_core::query_engine::QueryEngineConfig::default(),
             )),
             desktop_config: Arc::new(RwLock::new(desktop_config)),
             pending_permissions: Arc::new(Mutex::new(HashMap::new())),
+            pending_questions: Arc::new(DashMap::new()),
+            active_run_sessions: Arc::new(DashMap::new()),
             sessions: Arc::new(Mutex::new(Vec::new())),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
             skill_registry: Arc::new(SkillRegistry::new()),
@@ -420,6 +1055,7 @@ impl AppState {
             preview,
             terminals: Arc::new(crate::terminal_commands::TerminalManager::new()),
             inbox_store: std::sync::OnceLock::new(),
+            project_registry: std::sync::OnceLock::new(),
             usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
             memory_store: crate::commands_memory::open_shared_store(),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),
@@ -435,6 +1071,37 @@ impl AppState {
             notifier: Arc::new(shannon_core::notifier::Notifier::new()),
             gateway_supervisor: Arc::new(tokio::sync::Mutex::new(None)),
             engine_mode: Arc::new(std::sync::RwLock::new(None)),
+            keep_awake_active: std::sync::atomic::AtomicBool::new(false),
+        };
+        // Settings R3 T3 — honor the persisted always-on keep-awake switch
+        // (`power_keep_awake`, default false, so unit tests that build an
+        // AppState never spawn a wake lock).
+        state.apply_keep_awake(power_keep_awake_startup);
+        state
+    }
+
+    /// Settings R3 T3 — apply the always-on keep-awake switch. Idempotent:
+    /// the [`AppState::keep_awake_active`] flag tracks whether WE hold a
+    /// refcount on the process-global prevent-sleep counter, so repeated
+    /// enables/disables stay balanced (a blind start/start would
+    /// double-count and one stop would never release). Called from
+    /// `AppState::new` (persisted `power_keep_awake`) and from
+    /// `configure('power.keep_awake')`.
+    pub(crate) fn apply_keep_awake(&self, enabled: bool) {
+        let was = self
+            .keep_awake_active
+            .swap(enabled, std::sync::atomic::Ordering::SeqCst);
+        match (enabled, was) {
+            (true, false) => {
+                shannon_core::prevent_sleep::start_prevent_sleep();
+                tracing::info!("keep-awake enabled — holding wake lock");
+            }
+            (false, true) => {
+                shannon_core::prevent_sleep::stop_prevent_sleep();
+                tracing::info!("keep-awake disabled — wake lock released");
+            }
+            // No state change — keep the refcount untouched.
+            _ => {}
         }
     }
 
@@ -497,6 +1164,237 @@ impl AppState {
     }
 }
 
+/// P0-3 — the explicit error for "attachments requested but no working
+/// directory configured". Stable leading sentence: the frontend surfaces the
+/// raw backend error in the chat error banner and the composer's preflight
+/// banner offers the Settings deep link.
+pub(crate) const NO_WORKING_DIR_ATTACHMENT_ERROR: &str = "No working directory is set — choose one in Settings before attaching files (attachments are restricted to the working directory)";
+
+/// R2-P2-2 — structured-tag protocol for the send-path hard errors that land
+/// in the chat error banner. The `String` invoke-rejection channel is frozen,
+/// so a tagged error carries a machine-readable kind on the SAME string:
+/// `shannon-error:<kind>|<original text>`. The frontend maps a known kind to
+/// localized copy; an unknown kind (or an untagged string from any other
+/// backend error — the tag is deliberately NOT rolled out beyond the send
+/// path) falls back to the original text verbatim, and an old frontend sees
+/// the unmodified original sentence after the prefix.
+pub(crate) fn tagged_error(kind: &str, original: &str) -> String {
+    format!("shannon-error:{kind}|{original}")
+}
+
+/// P0-3 — the working directory the attachment pipeline reads from.
+///
+/// Deliberately NO process-CWD fallback (unlike
+/// [`crate::commands_agents::resolve_working_dir`], whose fallback is fine
+/// for agent discovery): a Dock-launched GUI runs with CWD `/`, so falling
+/// back made the attachment allow-list launch-method dependent and the
+/// user's intent ("attach this file from Downloads") silently break. With
+/// no configured working dir the attachment domain is UNDEFINED — callers
+/// must reject with [`NO_WORKING_DIR_ATTACHMENT_ERROR`].
+pub(crate) fn require_attachment_working_dir(
+    configured: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    configured
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| tagged_error("no_working_dir", NO_WORKING_DIR_ATTACHMENT_ERROR))
+}
+
+/// B2-2 (P0-2) — the working directory a send runs in: the TARGET session's
+/// own `working_dir` when it has one, else the global `desktop_cfg.working_dir`.
+///
+/// The engine's directory chain is pinned separately via
+/// `QueryEngineConfig.working_directory` (see `send_message`); this resolver
+/// stays for the attachment domain. The global value is whatever the last
+/// `switch_session` / `change_working_dir` left behind (the "user's current
+/// project" UI pointer), so a multi-window send routed to a session in a
+/// different directory must not trust it. Sessions without their own wd keep
+/// the previous global-only behavior exactly.
+pub(crate) fn resolve_send_working_dir(
+    session_meta_wd: Option<&str>,
+    global: Option<&str>,
+) -> Option<String> {
+    session_meta_wd
+        .map(str::to_string)
+        .or_else(|| global.map(str::to_string))
+}
+
+/// P0-3 — resolve, gate and read the requested attachment paths.
+///
+/// The send pipeline's refusal bookkeeping, extracted from `send_message`
+/// so the three-state contract (inside / outside / unset-working-dir) is
+/// unit-testable without a Tauri runtime. Two visible behavior changes
+/// against the old loop:
+///   1. NO refusal is silent anymore — every dropped file is reported as a
+///      [`RejectedAttachment`] and travels back to the frontend with the
+///      response ("partial success": a send with at least one readable
+///      in-scope attachment still goes through).
+///   2. The image/PDF size caps refuse the single oversized FILE instead of
+///      hard-failing the whole send.
+///
+/// The security boundary itself is unchanged: paths outside the working
+/// directory are still refused, never widened.
+pub(crate) fn collect_attachments(
+    paths: &[String],
+    working_dir: &std::path::Path,
+) -> (Vec<FileAttachment>, Vec<RejectedAttachment>) {
+    let mut collected = Vec::with_capacity(paths.len());
+    let mut rejected = Vec::new();
+    for path in paths {
+        // Security: reject any attachment path that resolves outside the
+        // working directory. A compromised frontend must not be able to
+        // exfiltrate `~/.ssh/id_rsa`, `~/.shannon/desktop/config.json`, or
+        // any other sensitive file via the attachment pipeline. (One narrow,
+        // documented exception: `$SHANNON_HOME/cache/pasted/` — where the
+        // backend itself persists clipboard images the webview already
+        // holds. See `classify_path_in_working_dir` in lib.rs for why that
+        // is safe and how narrowly it is scoped.)
+        let canonical = match crate::classify_path_in_working_dir(path, working_dir) {
+            Ok(c) => c,
+            Err(crate::WorkingDirScopeError::OutsideWorkingDir(_)) => {
+                rejected.push(RejectedAttachment {
+                    path: path.clone(),
+                    reason: RejectedAttachmentReason::OutOfWorkingDir,
+                });
+                continue;
+            }
+            // Unresolvable (missing/broken symlink) or an unusable working
+            // directory config — the user cannot tell them apart from the
+            // path alone, both mean "this file could not be read".
+            Err(_) => {
+                rejected.push(RejectedAttachment {
+                    path: path.clone(),
+                    reason: RejectedAttachmentReason::Unresolvable,
+                });
+                continue;
+            }
+        };
+        let canonical_str = canonical.to_string_lossy().into_owned();
+        let Ok(meta) = std::fs::metadata(&canonical) else {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::Unresolvable,
+            });
+            continue;
+        };
+        // R2-P1-2 attachment honesty — image formats outside the vision
+        // whitelist (svg/bmp/tiff/…) are refused here, with the same
+        // `UnsupportedType` verdict the preflight shows at attach time.
+        // Collecting them would put a chip on the message whose content
+        // never reaches the model; the old image-blocks filter below then
+        // dropped them silently, with no rejected receipt at all.
+        if is_unsupported_image_extension(&canonical_str) {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::UnsupportedType,
+            });
+            continue;
+        }
+        // Hard size caps: images over the shared 10 MiB limit and PDFs over
+        // 100 MiB are refused per-file. The metadata check fires before any
+        // read; the post-read base64 gate below re-checks what was actually
+        // read.
+        let media_type = detect_media_type(&canonical_str);
+        if media_type
+            .as_deref()
+            .is_some_and(|m| m.starts_with("image/"))
+            && meta.len() > shannon_core::attachments::MAX_IMAGE_BYTES as u64
+        {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::TooLarge,
+            });
+            continue;
+        }
+        let is_pdf = canonical
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+        if is_pdf && meta.len() > MAX_PDF_BYTES {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::TooLarge,
+            });
+            continue;
+        }
+        let Some(name_str) = std::path::Path::new(&canonical)
+            .file_name()
+            .and_then(|name| name.to_str())
+        else {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::Unresolvable,
+            });
+            continue;
+        };
+        // Try to read file and convert to base64 for images
+        let (base64_data, media_type) = match file_to_base64(&canonical_str) {
+            Ok(pair) => pair,
+            Err(_) => {
+                rejected.push(RejectedAttachment {
+                    path: path.clone(),
+                    reason: RejectedAttachmentReason::Unresolvable,
+                });
+                continue;
+            }
+        };
+        // Second gate after the read: the base64 payload must still fit the
+        // shared image limit before it can enter the query.
+        if media_type.starts_with("image/")
+            && shannon_core::attachments::validate_base64_size(base64_data.len()).is_err()
+        {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::TooLarge,
+            });
+            continue;
+        }
+        collected.push(FileAttachment {
+            name: name_str.to_string(),
+            path: canonical_str.clone(),
+            size: meta.len(),
+            media_type: Some(media_type),
+            base64_data: Some(base64_data),
+            extraction: None,
+        });
+    }
+    (collected, rejected)
+}
+
+/// The next step of the desktop query stream: an engine event, the end of
+/// the stream, or a user cancellation that won the race (A-18).
+#[derive(Debug, PartialEq)]
+pub(crate) enum StreamStep<T> {
+    /// The engine produced its next event (or a stream-level error).
+    Event(T),
+    /// The stream ended normally (the loop's non-cancel exit).
+    Ended,
+    /// The cancellation token fired before the next event arrived.
+    Cancelled,
+}
+
+/// A-18 fix (R4 group 7): race the stream's next item against the
+/// cancellation token so a stop takes effect immediately — not at the next
+/// engine event boundary, which during a silent tool execution (no progress
+/// frames) could be tens of seconds away. `biased` + the cancel arm first
+/// keeps the old loop's check-before-dequeue order: a token that is already
+/// cancelled discards even a queued event. The engine side of the drop is
+/// audited for safety (see the loop comment in `send_message`'s task):
+/// `AbortOnDropStream` aborts the engine producer, and the Bash tool's
+/// spawn paths are `kill_on_drop(true)`.
+async fn stream_step<T>(
+    token: &CancellationToken,
+    next: impl std::future::Future<Output = Option<T>>,
+) -> StreamStep<T> {
+    tokio::select! {
+        biased;
+        _ = token.cancelled() => StreamStep::Cancelled,
+        event = next => match event {
+            Some(event) => StreamStep::Event(event),
+            None => StreamStep::Ended,
+        },
+    }
+}
+
 /// Send a user message and stream the AI response via Tauri events.
 ///
 /// P0-4 spike scope: `messages`, `querying`, `cancellation_token` and the
@@ -534,10 +1432,10 @@ pub async fn send_message(
     // gates on the same condition via `get_goal_run`; this is the backend
     // backstop. (Defence in depth; not a drive-by change.)
     if state.goal_runs.blocks_session(&session_id) {
-        return Err(
-            "A goal run is active on this session — pause or stop it from the Tasks page before sending messages"
-                .into(),
-        );
+        return Err(tagged_error(
+            "goal_run_active",
+            "A goal run is active on this session — pause or stop it from the Tasks page before sending messages",
+        ));
     }
 
     // P0-4: session-budget pre-turn guard (logic in the generic helper so
@@ -551,11 +1449,68 @@ pub async fn send_message(
         budget_bypass,
     )
     .await?;
+
+    // B2-2 (P0-2 / R8-① / R9-① 正解): the engine's host-dependent reads —
+    // project instructions (CLAUDE.md/AGENTS.md), the prompt env block, the
+    // repo-map root fallback, the memory project key and the default `cwd`
+    // of Bash spawns — all key off `QueryEngineConfig.working_directory`,
+    // pinned per engine instance below. No process-cwd flip happens here:
+    // the engine built for THIS send keeps the TARGET session's directory
+    // for its whole lifetime, so a concurrent send to a different-directory
+    // session, a switch mid-turn, or a background bash can no longer drag
+    // this turn's reads elsewhere (the B2-1 stopgap's three residual
+    // windows are gone with the process-singleton cwd itself).
+    //
+    // Sessions without their own working_dir leave `None`: the engine then
+    // falls back to the process cwd at read time (shannon-core's default),
+    // and the attachment domain below keeps resolving against the global
+    // config — exactly the pre-B2-1 behavior.
+    let session_working_dir = {
+        let sessions = state.sessions.lock().await;
+        sessions
+            .iter()
+            .find(|s| s.id == session_id.to_string())
+            .and_then(|meta| meta.working_dir.clone())
+    };
+
+    // Attachment collection + hard size caps run BEFORE the querying latch:
+    // the latch is only cleared when the spawned query task finishes, so a
+    // rejected send must happen before it is taken (mirrors the pre-turn
+    // budget guard above). Hard limits live here in the Rust backend — the
+    // 25 MiB preview cap in `commands_files` alone never guarded this path.
+    //
+    // P0-3: attachments require a CONFIGURED working directory — the
+    // process-CWD fallback of `resolve_working_dir` is deliberately NOT
+    // applied here (a Dock-launched GUI runs with CWD `/`, which made the
+    // attachment domain launch-method dependent and effectively meaningless).
+    // An unset working_dir is an explicit, actionable error instead.
+    let (mut attachments, rejected_attachments) = match file_paths.as_deref() {
+        None | Some([]) => (None, Vec::new()),
+        Some(paths) => {
+            let working_dir = {
+                let cfg = state.desktop_config.read().await;
+                // B2-1: the target session's own wd wins over the global
+                // pointer — the global value is whatever session was focused
+                // last (P0-2), which a multi-window send must not trust.
+                // Sessions without their own wd resolve exactly as before.
+                let resolved = resolve_send_working_dir(
+                    session_working_dir.as_deref(),
+                    cfg.working_dir.as_deref(),
+                );
+                require_attachment_working_dir(resolved.as_deref())
+            }?;
+            let (collected, rejected) = collect_attachments(paths, &working_dir);
+            (Some(collected), rejected)
+        }
+    };
     // Prevent concurrent queries — check and set in a single lock scope to avoid TOCTOU race
     {
         let mut querying = active_session.querying.lock().await;
         if *querying {
-            return Err("A query is already in progress".into());
+            return Err(tagged_error(
+                "query_in_progress",
+                "A query is already in progress",
+            ));
         }
         *querying = true;
     }
@@ -567,56 +1522,33 @@ pub async fn send_message(
         *token_guard = Some(cancel_token.clone());
     }
 
+    // B1-4 (P1-3): a stop that landed in the latch→token window above had
+    // nothing to fire — it was recorded as pending instead of being dropped.
+    // Consume it now that the token exists: cancelling immediately makes the
+    // freshly spawned loop take its Cancelled branch on the first stream
+    // step and emit `query:cancelled`, so the frontend's stop settles the
+    // normal way instead of waiting for a terminal event that would never
+    // have come.
+    if active_session.take_cancel_pending() {
+        tracing::warn!(
+            session_id = %session_id,
+            "cancel landed in the send latch→token window — cancelling the fresh run immediately"
+        );
+        cancel_token.cancel();
+    }
+
     // Add user message
     let now = chrono_timestamp();
-    // Resolve working directory once for attachment-path validation below.
-    let attachment_working_dir = resolve_working_dir(&state).await;
-    let attachments = file_paths.and_then(|paths| {
-        if paths.is_empty() {
-            None
-        } else {
-            Some(
-                paths
-                    .into_iter()
-                    .filter_map(|path| {
-                        // Security: reject any attachment path that resolves
-                        // outside the working directory. A compromised
-                        // frontend must not be able to exfiltrate
-                        // `~/.ssh/id_rsa`, `~/.shannon/desktop/config.json`,
-                        // or any other sensitive file via the attachment
-                        // pipeline.
-                        let canonical =
-                            crate::resolve_path_in_working_dir(&path, &attachment_working_dir)
-                                .ok()?;
-                        let canonical_str = canonical.to_string_lossy().into_owned();
-                        std::path::Path::new(&canonical)
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .and_then(|name_str| {
-                                std::fs::metadata(&canonical).ok().and_then(|meta| {
-                                    // Try to read file and convert to base64 for images
-                                    file_to_base64(&canonical_str).ok().map(
-                                        |(base64_data, media_type)| FileAttachment {
-                                            name: name_str.to_string(),
-                                            path: canonical_str.clone(),
-                                            size: meta.len(),
-                                            media_type: Some(media_type),
-                                            base64_data: Some(base64_data),
-                                        },
-                                    )
-                                })
-                            })
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        }
-    });
 
     // Route image attachments into the multimodal query path so the model
     // actually sees them. The `FileAttachment`s stored on the ChatMessage
     // below are display-only (chat history / UI chips); only these content
-    // blocks reach the LLM. SVG is excluded — vision providers accept
-    // png/jpeg/gif/webp only.
+    // blocks reach the LLM. R2-P1-2: formats outside the whitelist are no
+    // longer silently filtered here — `collect_attachments` refuses them up
+    // front with a reported `UnsupportedType` receipt (svg/bmp and friends,
+    // see `is_unsupported_image_extension`). This filter stays as
+    // defense-in-depth keyed on the SAME `is_vision_image_mime` table, so
+    // the two can never drift apart again.
     let image_blocks: Vec<shannon_engine::api::ContentBlock> = attachments
         .as_ref()
         .map(|list| {
@@ -624,10 +1556,7 @@ pub async fn send_message(
                 .filter_map(|att| {
                     let b64 = att.base64_data.as_ref()?;
                     let media_type = att.media_type.as_deref()?;
-                    if !matches!(
-                        media_type,
-                        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
-                    ) {
+                    if !is_vision_image_mime(media_type) {
                         return None;
                     }
                     Some(shannon_engine::api::ContentBlock::Image {
@@ -647,48 +1576,162 @@ pub async fn send_message(
     // when available (same helper the attachment preview uses); scanned PDFs
     // with no extractable text are called out explicitly so the model can
     // tell the user instead of guessing.
+    //
+    // Office Wave A2' fixes: the attachment record's `media_type` is
+    // "application/octet-stream" for PDFs (`detect_media_type` only knows
+    // image mimes), so the old media-type filter never matched and this
+    // whole block was dead — filter on extension instead. There is no page
+    // request at this entry point, so `pdftotext` stays whole-document; the
+    // `pdfinfo` page count is added as honest metadata (the byte truncation
+    // below already states exactly how much was cut).
+    //
+    // G3b P1-4: the block builder now also returns the per-file extraction
+    // summary (extracted / truncated / cache_path) — stashed per path and
+    // stamped onto the message's `FileAttachment`s below so the UI can show
+    // what actually reached the model.
     let mut attachment_blocks = image_blocks;
+    let mut extraction_by_path: std::collections::HashMap<String, AttachmentExtractionReport> =
+        std::collections::HashMap::new();
     {
-        let pdf_futs = attachments
+        let pdf_atts: Vec<(String, String, u64)> = attachments
             .as_ref()
             .map(|list| {
                 list.iter()
-                    .filter(|att| att.media_type.as_deref() == Some("application/pdf"))
-                    .map(|att| async move {
-                        let text = crate::commands_files::extract_pdf_text_best_effort(
-                            std::path::Path::new(&att.path),
-                        )
-                        .await;
-                        (att.name.clone(), att.size, text)
+                    .filter(|att| {
+                        std::path::Path::new(&att.path)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+                    })
+                    .map(|att| (att.name.clone(), att.path.clone(), att.size))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let pdf_futs = pdf_atts
+            .iter()
+            .map(|(name, path, size)| async move {
+                let p = std::path::Path::new(path.as_str());
+                let (text, pages) = tokio::join!(
+                    crate::commands_files::extract_pdf_text_best_effort(p),
+                    crate::commands_files::pdf_page_count_best_effort(p),
+                );
+                (name.clone(), path.clone(), *size, text, pages)
+            })
+            .collect::<Vec<_>>();
+        let extracted_pdfs = futures::future::join_all(pdf_futs).await;
+        // Block build + cache write are plain blocking I/O over the already
+        // extracted text — keep them off the async runtime like the office
+        // path below.
+        let built = tokio::task::spawn_blocking(move || {
+            extracted_pdfs
+                .into_iter()
+                .map(|(name, path, size, text, pages)| {
+                    let outcome = pdf_extraction_outcome(
+                        &name,
+                        std::path::Path::new(&path),
+                        size,
+                        pages,
+                        &text,
+                    );
+                    (path, outcome)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await;
+        if let Ok(built) = built {
+            for (path, outcome) in built {
+                extraction_by_path.insert(
+                    path.clone(),
+                    AttachmentExtractionReport {
+                        path,
+                        kind: "pdf".to_string(),
+                        extracted: outcome.extracted,
+                        sections_total: 0,
+                        sections_inlined: 0,
+                        truncated: outcome.truncated,
+                        cache_path: outcome.cache_path,
+                    },
+                );
+                attachment_blocks.push(shannon_engine::api::ContentBlock::Text {
+                    text: outcome.block,
+                });
+            }
+        }
+    }
+
+    // Office Wave A2' — docx/pptx/xlsx/ods/csv attachments reach the model
+    // as extracted, sectioned text on the same ContentBlock::Text path as
+    // the PDF blocks above. Parsing + cache write run on the blocking pool
+    // (a 50 MB CSV or 2 000-entry container must not stall the async
+    // runtime); guard trips and malformed containers become placeholder
+    // blocks that state the reason. The inline block carries the leading
+    // sections (16 KiB budget per file) plus the cache path
+    // (~/.shannon/cache/extracted/<sha256-of-path+mtime>.txt) so the model
+    // can page through the rest with its existing Read/Grep tools.
+    //
+    // G3b P1-4: the per-file extraction summary now rides along into
+    // `extraction_by_path` (sections total/inlined, truncated, cache path)
+    // the same way the PDF section feeds it.
+    {
+        let office_atts: Vec<(String, String, u64)> = attachments
+            .as_ref()
+            .map(|list| {
+                list.iter()
+                    .filter(|att| {
+                        crate::document_parse::is_office_document(std::path::Path::new(&att.path))
+                    })
+                    .map(|att| (att.name.clone(), att.path.clone(), att.size))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !office_atts.is_empty() {
+            let blocks = tokio::task::spawn_blocking(move || {
+                office_atts
+                    .into_iter()
+                    .map(|(name, path, size)| {
+                        let p = std::path::Path::new(&path);
+                        let kind = crate::document_parse::extension_lowercase(p)
+                            .unwrap_or_else(|| "office".to_string());
+                        let outcome =
+                            crate::document_parse::office_extraction_for_file(p, &name, size);
+                        (path, kind, outcome)
                     })
                     .collect::<Vec<_>>()
             })
-            .unwrap_or_default();
-        for (name, size, text) in futures::future::join_all(pdf_futs).await {
-            let trimmed = text.trim();
-            let body = if trimmed.is_empty() {
-                format!(
-                    "Attached PDF \"{name}\" ({size} bytes). No extractable text — the PDF is likely scanned/image-only; OCR is not available."
-                )
-            } else {
-                let mut end = PDF_TEXT_INJECT_LIMIT;
-                while !trimmed.is_char_boundary(end) && end > 0 {
-                    end -= 1;
+            .await;
+            if let Ok(blocks) = blocks {
+                for (path, kind, outcome) in blocks {
+                    extraction_by_path.insert(
+                        path.clone(),
+                        AttachmentExtractionReport {
+                            path,
+                            kind,
+                            extracted: outcome.extracted,
+                            sections_total: outcome.sections_total,
+                            sections_inlined: outcome.sections_inlined,
+                            truncated: outcome.truncated,
+                            cache_path: outcome.cache_path,
+                        },
+                    );
+                    attachment_blocks.push(shannon_engine::api::ContentBlock::Text {
+                        text: outcome.block,
+                    });
                 }
-                let truncated = &trimmed[..end];
-                let suffix = if trimmed.len() > end {
-                    format!(
-                        "\n*[Truncated — showing first {end} of {} bytes]*",
-                        trimmed.len()
-                    )
-                } else {
-                    String::new()
-                };
-                format!(
-                    "Attached PDF \"{name}\" ({size} bytes). Extracted text:\n```text\n{truncated}\n```{suffix}"
-                )
-            };
-            attachment_blocks.push(shannon_engine::api::ContentBlock::Text { text: body });
+            }
+        }
+    }
+
+    // G3b P1-4 — stamp the extraction summaries onto the attachments BEFORE
+    // the ChatMessage is recorded, so the metadata is durable in the session
+    // history and every conversation reload renders the FileCard details
+    // (cache path + view action) without an extra lookup.
+    if !extraction_by_path.is_empty() {
+        if let Some(list) = attachments.as_mut() {
+            for att in list.iter_mut() {
+                if let Some(report) = extraction_by_path.get(&att.path) {
+                    att.extraction = Some(report.clone());
+                }
+            }
         }
     }
 
@@ -702,6 +1745,8 @@ pub async fn send_message(
             content: message.clone(),
             timestamp: now,
             file_attachments: attachments,
+            interrupted: None,
+            interrupted_reason: None,
         });
         first
     };
@@ -715,23 +1760,51 @@ pub async fn send_message(
     // Promote the first user message to the session title while the title
     // is still the generated placeholder. User renames are never touched;
     // the UI refreshes its session rail off the emitted SESSIONS_UPDATED.
-    if first_user_message {
+    // `Some(derived)` = this send's session was just auto-titled, i.e. NOT
+    // user-renamed — the one gate the TitleGeneration slot consumer needs
+    // (legacy ①); `None` keeps that path completely out of the picture.
+    let first_query_title: Option<String> = if first_user_message {
         crate::commands_sessions::auto_title_from_first_message(
             &state,
             &app_handle,
             session_id,
             &message,
         )
-        .await;
-    }
+        .await
+    } else {
+        None
+    };
 
     let query_id = uuid::Uuid::new_v4();
     let qid_str = query_id.to_string();
 
     // Build the query engine
-    let client_config = state.client_config.read().await.clone();
+    // R2-1: session-level model override — a chip override on THIS session
+    // re-resolves provider/model/base_url/credential against the engine
+    // store; no override inherits the global `client_config` (the default).
+    let client_config = crate::commands_chat::resolve_client_config_for_session(
+        &state,
+        &active_session,
+        Some(&app_handle),
+    )
+    .await;
+    let effective_model = client_config.model.clone();
+    let effective_provider = client_config.provider.to_string();
     let client = LlmClient::new(client_config);
     let tools = state.tools.clone();
+
+    // G1 P0-1.3 — chat tool assembly: register every connected MCP server's
+    // tools (`tools/list`) into the shared registry as
+    // `mcp__<server>__<tool>`. The pool is seeded at app setup; when it is
+    // cold or has no healthy servers this is a zero-cost no-op (identical
+    // behavior to before). Repeat turns skip already-registered names.
+    let mcp_tools_registered = crate::mcp::assemble_mcp_tools(&state.mcp_pool, &tools).await;
+    if mcp_tools_registered > 0 {
+        tracing::debug!(
+            count = mcp_tools_registered,
+            "assembled MCP tools into chat registry"
+        );
+    }
 
     // Create PermissionManager from shared state with config-based approval mode
     let desktop_cfg = state.desktop_config.read().await;
@@ -769,15 +1842,85 @@ pub async fn send_message(
     // verdicts here; a forwarder task surfaces each as a Tauri
     // PERMISSION_REQUEST and maps the user's scoped answer back to a
     // PermissionChoice.
-    let (perm_tx, mut perm_rx) = tokio::sync::mpsc::unbounded_channel::<EnginePermissionRequest>();
+    // Bounded permission-request channel (review §P3-6): prompts are
+    // strictly sequential (the engine awaits each response), so the small
+    // bound only guards against a stopped consumer.
+    let (perm_tx, mut perm_rx) = tokio::sync::mpsc::channel::<EnginePermissionRequest>(
+        shannon_core::query_engine::PERMISSION_REQUEST_CHANNEL_CAPACITY,
+    );
 
     let _state_mgr = state.state_manager.clone();
     let _qe_config = state.qe_config.read().await.clone();
 
-    let mut engine = crate::commands_memory::attach_shared_memory(
-        QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+    // P2-5: session-level "temporary chat" — read the flag BEFORE the engine
+    // is built so the memory layer (injection + auto-extraction) is attached
+    // only when this session actually uses memory. The engine is rebuilt per
+    // turn, so a toggle takes effect on the next send without restart.
+    //
+    // B2-2: the TARGET session's working_dir rides along — with_working_directory
+    // pins the engine's whole host-dependent read chain (project instructions,
+    // env block, bash default cwd, repo map, memory project key) to the
+    // session's directory instead of the process cwd.
+    let memory_disabled = active_session.memory_disabled_snapshot();
+    // Settings R3 T6: the 「会话 → 自动压缩上下文」 switch rides into the
+    // per-message engine config. The engine is rebuilt every message, so a
+    // flip in Settings applies to the NEXT message without a restart.
+    let context_auto_compact = desktop_cfg.context_auto_compact;
+    // S3-3 utility tier slot: the compaction slot (providers.toml v2
+    // `auxiliary.compression`) resolves through the ORTHOGONAL resolver in
+    // `utility_tier` — it reads only the auxiliary map and its roster, never
+    // this session's override or the phase tiers (裁定⑦). `None` (slot
+    // unconfigured, the default) keeps the historical behavior byte-identical:
+    // the background compaction request rides the session's own client.
+    let auxiliary_compaction_client = crate::utility_tier::resolve_auxiliary_client(
+        &state,
+        shannon_types::provider_config::AuxRole::Compression,
+    )
+    .await;
+    let mut engine = crate::commands_memory::attach_shared_memory_if(
+        QueryEngine::with_defaults_arc_and_config(
+            client,
+            tools,
+            permissions,
+            StateManager::new(),
+            |config| config.auto_compact_enabled = context_auto_compact,
+        )
+        .with_auxiliary_compaction_client(auxiliary_compaction_client),
         &state.memory_store,
+        memory_disabled,
+        session_working_dir.as_deref(),
     );
+    // S3-5 (P2-19): the effort dial — the composer's picker sub-tier writes
+    // the desktop `effort_level` key; apply it to the per-turn engine exactly
+    // like the CLI does for `--effort` / REPL `/effort` (one `set_effort`
+    // per built engine). An unpersisted/junk value falls back to the engine
+    // default (Standard = byte-identical to the pre-dial behavior), so a bad
+    // write can never poison a send.
+    let effort_raw = state.desktop_config.read().await.effort_level.clone();
+    if let Some(level) = effort_raw
+        .as_deref()
+        .and_then(shannon_core::query_engine::EffortLevel::parse)
+    {
+        engine.set_effort(level);
+    }
+    // W3-4 — per-turn citation snapshot: the entries this turn's system
+    // prompt is about to inject. Computed right after the store is attached
+    // (which refreshes from disk), so it is the same store + frozen project
+    // key + shared selection pipeline the engine's own
+    // `format_for_injection` runs microseconds later in the spawned task —
+    // the chips therefore cite exactly what the prompt carried. Empty for
+    // the P2-5 temporary-chat bypass (no store attached) and for a
+    // zero-selection turn; the frontend renders no chips for an empty list.
+    let injected_memories = crate::commands_memory::turn_injected_memories(&engine, Some(&message));
+    // G1 Imp-3 — advertise installed skills in the system prompt: the same
+    // `format_skills_for_llm()` listing the REPL injects, plus the
+    // `/name` ↔ `skill_<name>` tool mapping, so a user's `/trigger` text
+    // resolves to the tool registered at startup. The engine is rebuilt per
+    // turn, so this never accumulates.
+    let skills_block = crate::skill_tools::skills_for_chat_prompt(&state.skill_registry);
+    if !skills_block.is_empty() {
+        engine.append_system_prompt(&skills_block);
+    }
     // Bind the engine to the REAL session and restore prior turns. Both the
     // L0 tee (events.jsonl path) and the conversation clone at the top of
     // process_query key off engine state — a fresh engine with a random id
@@ -805,7 +1948,9 @@ pub async fn send_message(
     }
 
     // Create query context
-    let model = state.client_config.read().await.model.clone();
+    // R2-1: metadata carries the EFFECTIVE model (override-aware), not the
+    // global one, so usage/billing rows attribute to what actually served.
+    let model = effective_model.clone();
     let message_for_skill_loop = message.clone();
     let context = QueryContext {
         query_id,
@@ -826,13 +1971,24 @@ pub async fn send_message(
     // P0-4: per-session flags live on the `Arc<SessionState>` clone.
     let app = app_handle.clone();
     let cancel_token_clone = cancel_token.clone();
-    let client_config_arc = state.client_config.clone();
+    // R2-1: usage attribution reads the snapshot taken for THIS query
+    // (override-aware) instead of the mutable global config — a mid-stream
+    // default switch elsewhere must not relabel the stream's usage rows.
+    let usage_model = effective_model.clone();
+    let usage_provider = effective_provider.clone();
     let usage_store_arc = state.usage_store.clone();
     let notifier_arc = state.notifier.clone();
     let session_for_task = active_session.clone();
     // P1-1: owner session stamped onto every `query:*` payload so
     // multi-window shells can filter streams per window.
     let session_id_str = session_for_task.session_id.to_string();
+    // T5 unified needs-attention stream: the `session_failed` inbox entry is
+    // written/resolved from inside the stream loop below (the same events
+    // the rail's red dot derives from). Capture the store + display title up
+    // front; every write is best-effort and never blocks the turn.
+    let inbox_for_events = state.inbox_store();
+    let session_title_for_inbox =
+        crate::inbox_session_events::session_display_title(&state, &session_id_str).await;
     // P0-4 mid-turn budget guard basis: spend already on the ledger before
     // this turn started. The streaming Usage handler folds each event's
     // cost into the guard, which enforces the cap (>=100% cancel +
@@ -845,19 +2001,23 @@ pub async fn send_message(
         )
     });
 
-    // P2-5b: per-session in-process fan-out. Every event the loop
-    // emits to the Tauri wire is also pushed onto `session_for_task`'s
-    // mpsc channel so a future in-process consumer (the thread
-    // switcher being built in a follow-up iteration) can subscribe to
-    // *this session's* stream without conflating it with siblings.
-    // Best-effort — channel send errors are silently ignored (the
-    // Tauri wire + `messages` buffer still cover the user-visible path).
-    let session = session_for_task.clone();
-    let session_for_inproc = session.clone();
-    let route_event = move |evt: crate::session_registry::SessionEvent| {
-        session_for_inproc.try_send_event(evt);
-    };
+    // R9-③ (B2-3): the per-session in-process event channel this loop
+    // used to additionally feed (`route_event` → `try_send_event`) is
+    // removed — it was unbounded with zero consumers, so every event
+    // payload accumulated for the process lifetime. `app.emit` below is
+    // the only event surface; a future SessionsPanel revival rebuilds the
+    // channel bounded-with-consumer per chat-upgrade P2-5b.
     let return_qid = qid_str.clone();
+    // Settings R3 T3 — block idle sleep while this turn streams
+    // (`power.block_sleep_during_tasks`, default on). Read before the
+    // spawn; the guard lives inside the task so every exit path (ok /
+    // error / cancel / caught panic) drops it exactly once.
+    let block_sleep = desktop_cfg.power_block_sleep_during_tasks;
+    // Settings R3 followup F2 — register this turn's session as the live
+    // run for the whole turn (same boundary as the prevent-sleep guard
+    // below), so an ask_user question raised mid-turn can be scoped to the
+    // session the user is actually looking at.
+    let active_runs_for_task = state.active_run_sessions.clone();
     // Engine→UI permission bridge: each prompt from the query pipeline
     // becomes a pending Tauri permission; the scoped user decision maps back
     // onto the engine's choice enum (AlwaysAllow also lands in the engine's
@@ -901,6 +2061,7 @@ pub async fn send_message(
                 300,
                 Some(session_id_for_permissions.clone()),
                 Some(wire_reason(&prompt.reason)),
+                Some(prompt.risk_reason.clone()),
             )
             .await;
             let choice = match decision {
@@ -916,6 +2077,28 @@ pub async fn send_message(
         }
     });
     tokio::spawn(async move {
+        use futures::FutureExt;
+        // Settings R3 T3 — hold the prevent-sleep refcount for the whole
+        // turn (only when `power.block_sleep_during_tasks` is on). RAII:
+        // the Option<Guard> drops — and releases the count — on every task
+        // exit, including a caught-panic unwind.
+        let _prevent_sleep_guard =
+            block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
+        // Settings R3 followup F2 — this session is the live run for the
+        // whole turn (RAII, unregistered on every exit incl. the
+        // caught-panic path below): the scoping key `DesktopQuestionHandler`
+        // stamps onto `ask-user-request` payloads.
+        let _active_run_guard = crate::commands::ActiveSessionRunGuard::register(
+            &active_runs_for_task,
+            session_id_str.clone(),
+        );
+        // P3 (streaming-panic hardening): a panic anywhere in the loop below
+        // used to unwind straight out of this task and skip the per-session
+        // flag reset at the bottom — the session stayed latched `querying`
+        // until restart. Catch the unwind (dev/test profiles; release runs
+        // panic=abort where the process dies anyway), emit a terminal
+        // `query:failed`, and ALWAYS run the reset afterwards.
+        let streamed = std::panic::AssertUnwindSafe(async {
         let stream = engine.process_query(context, Some(perm_tx)).await;
         let mut final_content = String::new();
 
@@ -925,26 +2108,92 @@ pub async fn send_message(
             std::collections::HashSet::new();
         // /rewind: file paths mutated by this turn's write/edit tool calls.
         let mut turn_files: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        // P1-⑤ telemetry: usage frames arrive per LLM request with no
+        // tool_use_id; approximate per-tool attribution collapses the usage
+        // observed while a tool call is the session's pending one.
+        let mut pending_tool_tokens: Option<(String, u64)> = None;
 
         // Consume the stream using futures::StreamExt
         use futures::StreamExt;
         let mut pin_stream = std::pin::pin!(stream);
 
-        while let Some(event_result) = pin_stream.next().await {
-            // Check for cancellation
-            if cancel_token_clone.is_cancelled() {
-                let _ = app.emit(
-                    event_names::QUERY_CANCELLED,
-                    events::QueryCancelledPayload {
-                        query_id: qid_str.clone(),
-                        session_id: Some(session_id_str.clone()),
-                    },
-                );
-                route_event(crate::session_registry::SessionEvent::Status(
-                    crate::session_registry::SessionEventStatus::Cancelled,
-                ));
-                break;
-            }
+        // A-18 fix (R4 group 7): the cancellation token now races the next
+        // engine event instead of being polled between events. The old
+        // `while let Some(ev) = next().await` + loop-top token check only
+        // observed a stop at the NEXT event boundary — during a silent tool
+        // execution or a long LLM stretch the stop appeared dead. Dropping
+        // the stream on cancel is safe: the engine wraps its producer in
+        // `AbortOnDropStream` (shannon-core `engine/events.rs`), so the drop
+        // aborts the producer task, and both Bash spawn paths run with
+        // `kill_on_drop(true)` (shannon-core `providers.rs`) — no orphaned
+        // child process.
+        loop {
+            let event_result = match crate::commands::stream_step(
+                &cancel_token_clone,
+                pin_stream.next(),
+            )
+            .await
+            {
+                // Cancellation wins over a pending event (`biased`, cancel
+                // arm first — the same check-first order the old loop-top
+                // guard had) and lands the moment the token fires.
+                crate::commands::StreamStep::Cancelled => {
+                    // D6 (keep the partial output): whatever the run already
+                    // streamed stays. Two durable traces, mirroring the
+                    // normal-completion bookkeeping:
+                    // ① the in-memory buffer gets the partial assistant
+                    //    message (flagged `interrupted`) so `get_conversation`
+                    //    and the visible session agree with the log;
+                    // ② the turn's /rewind checkpoint still records, so the
+                    //    partial bubble carries the rewind/regenerate
+                    //    affordances a completed turn would have.
+                    // The authoritative log trace itself is written by the
+                    // engine tee (an interrupted close finalizes the streamed
+                    // text as `assistant/message(interrupted: true,
+                    // reason: "cancelled")`), so a reload projection brings
+                    // the same partial back.
+                    if !final_content.is_empty() {
+                        let mut messages = session_for_task.messages.lock().await;
+                        messages.push(ChatMessage {
+                            role: "assistant".into(),
+                            content: final_content.clone(),
+                            timestamp: chrono_timestamp(),
+                            file_attachments: None,
+                            interrupted: Some(true),
+                            interrupted_reason: Some(
+                                shannon_types::session_event::AssistantMessagePayload
+                                    ::REASON_CANCELLED
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                    {
+                        let files: Vec<String> = turn_files.iter().cloned().collect();
+                        let prompt = message_for_skill_loop.clone();
+                        let working_dir = crate::commands_agents::resolve_working_dir(
+                            &app.state::<AppState>(),
+                        )
+                        .await;
+                        crate::commands_rewind::record_turn(
+                            &session_id.to_string(),
+                            rewind_turn_index,
+                            &files,
+                            &prompt,
+                            &working_dir,
+                        );
+                    }
+                    let _ = app.emit(
+                        event_names::QUERY_CANCELLED,
+                        events::QueryCancelledPayload {
+                            query_id: qid_str.clone(),
+                            session_id: Some(session_id_str.clone()),
+                        },
+                    );
+                    break;
+                }
+                crate::commands::StreamStep::Ended => break,
+                crate::commands::StreamStep::Event(event_result) => event_result,
+            };
 
             match event_result {
                 Ok(event) => match event {
@@ -955,9 +2204,6 @@ pub async fn send_message(
                             content,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::QueryText(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TEXT, payload);
                     }
                     QueryEvent::ToolUseRequest {
@@ -968,6 +2214,7 @@ pub async fn send_message(
                     } => {
                         tool_call_count += 1;
                         tool_names_used.insert(tool_name.clone());
+                        pending_tool_tokens = Some((tool_use_id.clone(), 0));
                         if let Some(path) =
                             crate::commands_rewind::mutated_file_path(&tool_name, &tool_input)
                         {
@@ -980,9 +2227,6 @@ pub async fn send_message(
                             tool_input,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::ToolStart(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TOOL_START, payload);
                     }
                     QueryEvent::ToolUseResult {
@@ -990,8 +2234,18 @@ pub async fn send_message(
                         tool_name,
                         result,
                         is_error,
+                        meta,
                         ..
                     } => {
+                        // P1-⑤: forward the engine's tool metadata (sandbox
+                        // classification) and collapse the usage frames that
+                        // arrived while this call was pending.
+                        let meta_val = if meta.is_null() { None } else { Some(*meta) };
+                        let tokens_used = pending_tool_tokens
+                            .take()
+                            .filter(|(pending_id, _)| *pending_id == tool_use_id)
+                            .map(|(_, tokens)| tokens)
+                            .filter(|tokens| *tokens > 0);
                         let payload = events::ToolResultPayload {
                             query_id: qid_str.clone(),
                             tool_use_id,
@@ -999,11 +2253,30 @@ pub async fn send_message(
                             result,
                             is_error,
                             session_id: Some(session_id_str.clone()),
+                            meta: meta_val,
+                            tokens_used,
                         };
-                        route_event(crate::session_registry::SessionEvent::ToolResult(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TOOL_RESULT, payload);
+                    }
+                    QueryEvent::Progress { query_id: _, message } => {
+                        // R5-2: the engine's retry observer (R3-1 failover /
+                        // R4-3 key rotation) renders its notices into
+                        // Progress events; they used to be dropped here, so
+                        // a successful failover looked like a silent stall.
+                        // Recognized notices ride the desktop-local
+                        // `query:notice` event with a machine-readable kind;
+                        // the UI renders them as subtle system lines (the
+                        // request continued — NOT an error). Plain progress
+                        // (API retries, bookkeeping) stays dropped.
+                        if let Some(kind) = crate::events::classify_retry_notice(&message) {
+                            let payload = crate::events::QueryNoticePayload {
+                                query_id: qid_str.clone(),
+                                kind,
+                                message,
+                                session_id: Some(session_id_str.clone()),
+                            };
+                            let _ = app.emit(crate::events::QUERY_NOTICE_EVENT, payload);
+                        }
                     }
                     QueryEvent::ToolProgress {
                         tool_use_id,
@@ -1020,9 +2293,6 @@ pub async fn send_message(
                             message: msg,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::ToolProgress(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_TOOL_PROGRESS, payload);
                     }
                     QueryEvent::Thinking { content, .. } => {
@@ -1031,9 +2301,6 @@ pub async fn send_message(
                             content,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::Thinking(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_THINKING, payload);
                     }
                     QueryEvent::Usage {
@@ -1044,12 +2311,16 @@ pub async fn send_message(
                         cache_read_tokens,
                         ..
                     } => {
+                        // P1-⑤ telemetry: attribute this usage frame to the
+                        // session's pending tool call, if any (approximate —
+                        // the frame itself carries no tool_use_id).
+                        if let Some((_, tokens)) = pending_tool_tokens.as_mut() {
+                            *tokens += input_tokens + output_tokens;
+                        }
                         // Persist to the local usage ledger. Best-effort:
                         // a log write failure must never break the stream.
-                        let cc_now = client_config_arc.read().await;
-                        let model_now = cc_now.model.clone();
-                        let provider_now = cc_now.provider.to_string();
-                        drop(cc_now);
+                        let model_now = usage_model.clone();
+                        let provider_now = usage_provider.clone();
                         let _ = usage_store_arc.append(&crate::commands_usage::record_event(
                             &model_now,
                             &provider_now,
@@ -1069,9 +2340,6 @@ pub async fn send_message(
                             cost_usd,
                             session_id: Some(session_id_str.clone()),
                         };
-                        route_event(crate::session_registry::SessionEvent::Usage(
-                            payload.clone(),
-                        ));
                         let _ = app.emit(event_names::QUERY_USAGE, payload);
 
                         // P0-4 mid-turn budget enforcement (logic in the
@@ -1102,6 +2370,8 @@ pub async fn send_message(
                                 },
                                 timestamp: chrono_timestamp(),
                                 file_attachments: None,
+                                interrupted: None,
+                                interrupted_reason: None,
                             });
                         }
 
@@ -1132,9 +2402,13 @@ pub async fn send_message(
                                 session_id: Some(session_id_str.clone()),
                             },
                         );
-                        route_event(crate::session_registry::SessionEvent::Status(
-                            crate::session_registry::SessionEventStatus::Completed,
-                        ));
+                        // T5: the turn succeeded — a previous failure entry
+                        // for this session is resolved (mark read).
+                        crate::inbox_session_events::resolve_session_failure(
+                            &inbox_for_events,
+                            &app,
+                            &session_id_str,
+                        );
                         crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Completed,
@@ -1244,23 +2518,69 @@ pub async fn send_message(
                             }
                         });
                     }
-                    QueryEvent::Failed { error, .. } => {
+                    QueryEvent::Failed {
+                        error,
+                        error_kind,
+                        ..
+                    } => {
+                        // OBS1 (unify the failed half with D6): whatever the
+                        // run already streamed stays. The engine tee finalizes
+                        // the open step as
+                        // `assistant/message(interrupted: true, reason:
+                        // "failed")` (the failure event closes the turn on the
+                        // log side), so a reload brings the partial back WITH
+                        // its failed marker; this buffer commit keeps
+                        // `get_conversation` and the visible session in
+                        // agreement with the log without a reload — the same
+                        // bookkeeping the cancel path does. No /rewind
+                        // checkpoint: failed turns never recorded one.
+                        if !final_content.is_empty() {
+                            let mut messages = session_for_task.messages.lock().await;
+                            messages.push(ChatMessage {
+                                role: "assistant".into(),
+                                content: final_content.clone(),
+                                timestamp: chrono_timestamp(),
+                                file_attachments: None,
+                                interrupted: Some(true),
+                                interrupted_reason: Some(
+                                    shannon_types::session_event::AssistantMessagePayload
+                                        ::REASON_FAILED
+                                        .to_string(),
+                                ),
+                            });
+                        }
                         let _ = app.emit(
                             event_names::QUERY_FAILED,
-                            events::QueryFailedPayload {
-                                query_id: qid_str.clone(),
-                                error: error.clone(),
-                                session_id: Some(session_id_str.clone()),
-                            },
+                            events::query_failed_payload(
+                                &qid_str,
+                                &error,
+                                Some(session_id_str.clone()),
+                                // S1-1: structured engine classification wins;
+                                // None → events.rs's transitional text fallback.
+                                error_kind.as_deref(),
+                            ),
                         );
-                        route_event(crate::session_registry::SessionEvent::Status(
-                            crate::session_registry::SessionEventStatus::Failed(error.clone()),
-                        ));
+                        // T5: the turn failed — surface it in the unified
+                        // needs-attention inbox (same source as the rail's
+                        // red dot; dedup: one entry per session).
+                        crate::inbox_session_events::record_session_failure(
+                            &inbox_for_events,
+                            &app,
+                            &session_id_str,
+                            &session_title_for_inbox,
+                            &error,
+                        );
                         crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Failed(error),
                             "query_failed",
                         );
+                        // B3-3 (P2-5): treat engine `Failed` as terminal instead
+                        // of trusting the implicit "Failed is always followed by
+                        // EOF" contract — the background loop already breaks on
+                        // it explicitly. If an engine ever kept streaming after
+                        // a failure, the run would stay querying forever.
+                        break;
                     }
                     // Ignore other events in MVP
                     _ => {}
@@ -1269,15 +2589,24 @@ pub async fn send_message(
                     let err_string = e.to_string();
                     let _ = app.emit(
                         event_names::QUERY_FAILED,
-                        events::QueryFailedPayload {
-                            query_id: qid_str.clone(),
-                            error: err_string.clone(),
-                            session_id: Some(session_id_str.clone()),
-                        },
+                        // Stream-level error: no typed ApiError in scope —
+                        // transitional text fallback classifies (see events.rs).
+                        events::query_failed_payload(
+                            &qid_str,
+                            &err_string,
+                            Some(session_id_str.clone()),
+                            None,
+                        ),
                     );
-                    route_event(crate::session_registry::SessionEvent::Status(
-                        crate::session_registry::SessionEventStatus::Failed(err_string.clone()),
-                    ));
+                    // T5: stream error — same needs-attention write as the
+                    // engine `Failed` event above.
+                    crate::inbox_session_events::record_session_failure(
+                        &inbox_for_events,
+                        &app,
+                        &session_id_str,
+                        &session_title_for_inbox,
+                        &err_string,
+                    );
                     crate::commands_notifications::fire_query_notification_logged(
                         &notifier_arc,
                         crate::commands_notifications::NotificationKind::Failed(err_string),
@@ -1287,7 +2616,47 @@ pub async fn send_message(
             }
         }
 
-        // Clear per-session querying flag and cancellation token.
+        })
+        .catch_unwind()
+        .await;
+
+        // A panic must not look like success or vanish: surface it as a
+        // terminal `query:failed` (same shape as the engine Failed arm).
+        if let Err(panic_payload) = streamed {
+            let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            tracing::error!(
+                query_id = %qid_str,
+                session_id = %session_id_str,
+                error = %panic_msg,
+                "streaming task panicked — emitting query:failed and resetting session state"
+            );
+            let _ = app.emit(
+                event_names::QUERY_FAILED,
+                // Panic: no classification possible — plain banner via fallback.
+                events::query_failed_payload(
+                    &qid_str,
+                    &panic_msg,
+                    Some(session_id_str.clone()),
+                    None,
+                ),
+            );
+            crate::commands_notifications::fire_query_notification_logged(
+                &notifier_arc,
+                crate::commands_notifications::NotificationKind::Failed(panic_msg),
+                "query_failed",
+            );
+        }
+
+        // Clear per-session querying flag and cancellation token. P3: this
+        // now runs on EVERY exit path — ok, engine error, cancel, and the
+        // caught panic above — instead of only falling off the end of the
+        // happy-path body.
         {
             let mut q = session_for_task.querying.lock().await;
             *q = false;
@@ -1296,10 +2665,39 @@ pub async fn send_message(
             let mut token_guard = session_for_task.cancellation_token.lock().await;
             *token_guard = None;
         }
+        // B1-4 (P1-3): a double-stop can leave a spurious pending-cancel
+        // behind (the first stop already fired the token; the second found
+        // None while the latch was still up). Clear the flag with the latch
+        // so it never outlives its querying epoch — the NEXT run must not
+        // inherit an old stop.
+        session_for_task.clear_cancel_pending();
+
+        // Legacy ① — the TitleGeneration utility slot's consumption point.
+        // This session's FIRST query has settled (this block runs on every
+        // exit path), and `first_query_title` being `Some` proves the Tier-1
+        // auto-title just retitled it (placeholder → derived), i.e. the
+        // session was never user-renamed. Fire-and-forget: one small LLM
+        // request to the SLOT target proposes a real title — it can never
+        // block the send path, never enter the event stream, and loses to a
+        // user rename both here (guard above) and in the apply-time
+        // compare-and-swap. Unconfigured slot → the task exits before any
+        // network call, so the default behavior stays byte-identical.
+        if let Some(expected_title) = first_query_title.clone() {
+            let exchange =
+                crate::session_title::first_exchange(&session_for_task.messages.lock().await);
+            crate::session_title::spawn_title_task(
+                app.clone(),
+                session_id,
+                expected_title,
+                exchange,
+            );
+        }
     });
 
     Ok(SendMessageResponse {
         query_id: return_qid,
+        rejected_attachments,
+        injected_memories,
     })
 }
 
@@ -1422,6 +2820,37 @@ pub(crate) fn chrono_timestamp() -> i64 {
         .as_millis() as i64
 }
 
+/// Build the background task's engine — shared by [`start_background_task`]'s
+/// spawn closure and its wire tests (legacy ②): the compaction utility slot
+/// resolved at spawn time is pinned onto the engine; `None` (slot
+/// unconfigured/dangling, the default) keeps the build byte-identical to the
+/// pre-slot behavior.
+fn background_task_engine(
+    client: LlmClient,
+    aux_compaction: Option<LlmClient>,
+    tools: Arc<ToolRegistry>,
+    permissions: PermissionManager,
+    memory_store: &crate::commands_memory::SharedMemoryStore,
+    context_auto_compact: bool,
+) -> QueryEngine {
+    crate::commands_memory::attach_shared_memory(
+        QueryEngine::with_defaults_arc_and_config(
+            client,
+            tools,
+            permissions,
+            StateManager::new(),
+            // Settings R3 T6: background tasks honor the same
+            // auto-compaction switch as interactive turns.
+            |config| config.auto_compact_enabled = context_auto_compact,
+        )
+        .with_auxiliary_compaction_client(aux_compaction),
+        memory_store,
+        // B2-2: background tasks have no session directory of their
+        // own — keep the process-cwd freeze (pre-B2-2 behavior).
+        None,
+    )
+}
+
 /// Start a new background task.
 #[tauri::command]
 pub async fn start_background_task(
@@ -1431,6 +2860,7 @@ pub async fn start_background_task(
 ) -> Result<String, String> {
     let task_id = uuid::Uuid::new_v4().to_string();
     let now = chrono_timestamp();
+    let cancel_token = CancellationToken::new();
 
     let task = BackgroundTaskMeta {
         id: task_id.clone(),
@@ -1439,6 +2869,7 @@ pub async fn start_background_task(
         started_at: now,
         completed_at: None,
         output: String::new(),
+        cancel: cancel_token.clone(),
     };
 
     // Add task to state
@@ -1454,6 +2885,9 @@ pub async fn start_background_task(
     let tasks_arc = state.background_tasks.clone();
     let app_handle_clone = app_handle.clone();
     let task_id_clone = task_id.clone();
+    // §P2-19: the runner observes this token so a user cancel actually
+    // breaks the query stream instead of only relabelling the status.
+    let task_cancel = cancel_token.clone();
     let client_config = state.client_config.read().await.clone();
     let tools = state.tools.clone();
     let _qe_config = state.qe_config.read().await.clone();
@@ -1461,26 +2895,64 @@ pub async fn start_background_task(
     let provider = client_config.provider.to_string();
     let usage_store = state.usage_store.clone();
     let approval_mode_str = state.desktop_config.read().await.approval_mode.clone();
+    // Settings R3 T3 — block idle sleep for the duration of this
+    // background task (same switch the interactive turn reads).
+    let block_sleep = state
+        .desktop_config
+        .read()
+        .await
+        .power_block_sleep_during_tasks;
+    // Settings R3 T6 — same auto-compaction switch the interactive turn
+    // reads; applies to this task's engine at spawn time.
+    let context_auto_compact = state.desktop_config.read().await.context_auto_compact;
+    // Settings R3 followup F2 — the task's own session, minted up front so
+    // the active-run registration inside the task and the QueryContext
+    // below carry the same id.
+    let task_session_id = uuid::Uuid::new_v4();
+    let active_runs_for_task = state.active_run_sessions.clone();
     // P2-4b: hand the shared memory handle to the spawned task — the runner
     // attaches it to its engine instead of leaving memory: None.
     let memory_store = state.memory_store.clone();
+    // R2-P1-5: a failed task writes its triage inbox item through the same
+    // store the inbox commands serve, so the failure outlives the panel.
+    let inbox_store = state.inbox_store();
+    // Legacy ② — the compaction utility slot (providers.toml v2
+    // `auxiliary.compression`), resolved at spawn time: the same snapshot
+    // semantics as `client_config` above. `None` (unconfigured/dangling,
+    // the default) keeps the engine — and therefore the task — byte-identical
+    // to the pre-slot build. The main client is untouched (裁定⑦).
+    let aux_compaction = crate::utility_tier::resolve_auxiliary_client(
+        &state,
+        shannon_types::provider_config::AuxRole::Compression,
+    )
+    .await;
 
     tokio::spawn(async move {
+        // Settings R3 T3 — hold the prevent-sleep refcount for the whole
+        // background task (RAII: released on every exit, incl. cancel).
+        let _prevent_sleep_guard =
+            block_sleep.then(shannon_core::prevent_sleep::PreventSleepGuard::new);
+        // Settings R3 followup F2 — the task's fresh session (minted below,
+        // before the QueryContext consumes it) is the live run while the
+        // task streams (RAII, released on every exit).
+        let _active_run_guard = crate::commands::ActiveSessionRunGuard::register(
+            &active_runs_for_task,
+            task_session_id.to_string(),
+        );
         // Build query engine for this task
         let client = LlmClient::new(client_config);
 
-        // Create PermissionManager — use configured approval mode for background tasks
+        // Create PermissionManager — use the configured approval mode for
+        // background tasks. review §P1-2: the previous default of FullAuto
+        // silently bypassed the user's global approval mode (typically
+        // Suggest/confirm) for every unattended path (background tasks,
+        // routines, goal runs, best-of-N batches). SECURITY.md promises
+        // that unattended paths honour the user's mode; FullAuto must
+        // require an explicit opt-in (the caller passes approval_mode_str =
+        // Some("full_auto") when that's intended). We default to Suggest
+        // when the caller didn't say anything.
         let mut permissions = PermissionManager::new();
-        let mode = approval_mode_str
-            .as_deref()
-            .and_then(|s| match s {
-                "full_auto" => Some(ApprovalMode::FullAuto),
-                "auto_edit" => Some(ApprovalMode::AutoEdit),
-                "auto" => Some(ApprovalMode::Auto),
-                "plan" => Some(ApprovalMode::Plan),
-                _ => None,
-            })
-            .unwrap_or(ApprovalMode::FullAuto);
+        let mode = crate::commands::unattended_approval_mode(approval_mode_str.as_deref());
         permissions.set_approval_mode(mode);
         // Honour persisted deny/allow rules (no interactive channel here —
         // background tasks run unattended, so prompts would auto-allow anyway).
@@ -1494,9 +2966,13 @@ pub async fn start_background_task(
             ));
         }
 
-        let engine = crate::commands_memory::attach_shared_memory(
-            QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+        let engine = background_task_engine(
+            client,
+            aux_compaction,
+            tools,
+            permissions,
             &memory_store,
+            context_auto_compact,
         );
 
         let query_id = uuid::Uuid::new_v4();
@@ -1508,7 +2984,9 @@ pub async fn start_background_task(
 
         let context = QueryContext {
             query_id,
-            session_id: uuid::Uuid::new_v4(),
+            // F2: minted before the spawn so the active-run registration
+            // above can carry it (see `task_session_id`).
+            session_id: task_session_id,
             user_message: prompt.clone(),
             attachments: Vec::new(),
             metadata: shannon_core::query_engine::QueryMetadata {
@@ -1522,80 +3000,139 @@ pub async fn start_background_task(
         };
 
         let mut final_output = String::new();
+        // §P2-19: keep the engine-side failure distinct from the terminal
+        // status — a Failed event used to fall through to "completed".
+        let mut task_error: Option<String> = None;
 
-        // Process the query and collect output
-        let stream = engine.process_query(context, None).await;
+        // Process the query and collect output. `tokio::select!` against the
+        // cancellation token means a user cancel breaks out of a pending
+        // `next()` immediately (§P2-19 fake-cancel fix).
         use futures::StreamExt;
+        let stream = engine.process_query(context, None).await;
         let mut pin_stream = std::pin::pin!(stream);
-
-        while let Some(event_result) = pin_stream.next().await {
-            match event_result {
-                Ok(event) => match event {
-                    QueryEvent::Text { content, .. } => {
-                        final_output.push_str(&content);
-                    }
-                    QueryEvent::Usage {
-                        input_tokens,
-                        output_tokens,
-                        cost_usd,
-                        cache_creation_tokens,
-                        cache_read_tokens,
-                        ..
-                    } => {
-                        // Persist to the local usage ledger. Best-effort: a log
-                        // write failure must never break the task. No QUERY_USAGE
-                        // emit here — background tasks aren't tied to a visible
-                        // chat, so a live-usage signal has no consumer and could
-                        // surface as a phantom UI update.
-                        let _ = usage_store.append(&crate::commands_usage::record_event(
-                            &model_for_usage,
-                            &provider,
-                            crate::commands_usage::UsageTotals {
+        loop {
+            tokio::select! {
+                _ = task_cancel.cancelled() => {
+                    tracing::info!(task_id = %task_id_clone, "background task cancelled");
+                    break;
+                }
+                event_result = pin_stream.next() => {
+                    let Some(event_result) = event_result else {
+                        break;
+                    };
+                    match event_result {
+                        Ok(event) => match event {
+                            QueryEvent::Text { content, .. } => {
+                                final_output.push_str(&content);
+                            }
+                            QueryEvent::Usage {
                                 input_tokens,
                                 output_tokens,
+                                cost_usd,
                                 cache_creation_tokens,
                                 cache_read_tokens,
-                                cost_usd,
-                            },
-                            None,
-                        ));
+                                ..
+                            } => {
+                                // Persist to the local usage ledger. Best-effort: a log
+                                // write failure must never break the task. No QUERY_USAGE
+                                // emit here — background tasks aren't tied to a visible
+                                // chat, so a live-usage signal has no consumer and could
+                                // surface as a phantom UI update.
+                                let _ = usage_store.append(&crate::commands_usage::record_event(
+                                    &model_for_usage,
+                                    &provider,
+                                    crate::commands_usage::UsageTotals {
+                                        input_tokens,
+                                        output_tokens,
+                                        cache_creation_tokens,
+                                        cache_read_tokens,
+                                        cost_usd,
+                                    },
+                                    None,
+                                ));
+                            }
+                            QueryEvent::Completed { .. } => break,
+                            QueryEvent::Failed { error, .. } => {
+                                final_output = format!("Task failed: {error}");
+                                task_error = Some(error);
+                                break;
+                            }
+                            _ => {}
+                        },
+                        Err(e) => {
+                            final_output = format!("Task error: {e}");
+                            task_error = Some(e.to_string());
+                            break;
+                        }
                     }
-                    QueryEvent::Completed { .. } => break,
-                    QueryEvent::Failed { error, .. } => {
-                        final_output = format!("Task failed: {error}");
-                        break;
-                    }
-                    _ => {}
-                },
-                Err(e) => {
-                    final_output = format!("Task error: {e}");
-                    break;
                 }
             }
         }
 
-        // Update task with results
-        let mut tasks = tasks_arc.lock().await;
-        if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id_clone) {
-            task.status = "completed".into();
-            task.completed_at = Some(chrono_timestamp());
-            task.output = final_output.clone();
+        // §P2-19: compute the terminal state, then apply it through the
+        // status guard. `cancelled` stays `cancelled` — when the user's
+        // cancel command already flipped the status (and emitted), the guard
+        // refuses the transition and no duplicate/misleading "completed"
+        // event is emitted. Engine failures now land as "failed" instead of
+        // reporting success.
+        let (terminal_status, terminal_output) = if task_cancel.is_cancelled() {
+            ("cancelled", final_output)
+        } else if task_error.is_some() {
+            ("failed", final_output)
+        } else {
+            ("completed", final_output)
+        };
+        let transitioned = {
+            let mut tasks = tasks_arc.lock().await;
+            finalize_background_task(
+                &mut tasks,
+                &task_id_clone,
+                terminal_status,
+                terminal_output.clone(),
+            )
+        };
+        if transitioned {
+            let finished_at = chrono_timestamp();
+            // R2-P1-5: a failed terminal state gets one triage inbox item
+            // (cross-page entry; the panel keeps only a recent slice).
+            // Successes/cancels are panel-only. Best-effort: a store failure
+            // warns and never breaks the finalize path below.
+            match record_background_task_terminal(
+                &inbox_store,
+                &task_id_clone,
+                &prompt,
+                now,
+                terminal_status,
+                task_error.as_deref(),
+                finished_at,
+            ) {
+                Ok(true) => {
+                    let _ =
+                        app_handle_clone.emit(event_names::INBOX_UPDATED, task_id_clone.clone());
+                }
+                Ok(false) => {}
+                Err(e) => tracing::warn!(
+                    task_id = %task_id_clone,
+                    error = %e,
+                    "background task: failed to write triage inbox item"
+                ),
+            }
+
+            // Emit update event
+            let _ = app_handle_clone.emit(
+                event_names::BACKGROUND_TASK_UPDATE,
+                events::BackgroundTaskUpdate {
+                    task_id: task_id_clone.clone(),
+                    status: terminal_status.into(),
+                    prompt,
+                    output: terminal_output,
+                    started_at: now,
+                    completed_at: Some(finished_at),
+                },
+            );
+
+            let _ = app_handle_clone.emit(event_names::BACKGROUND_TASKS_UPDATED, ());
         }
-
-        // Emit update event
-        let _ = app_handle_clone.emit(
-            event_names::BACKGROUND_TASK_UPDATE,
-            events::BackgroundTaskUpdate {
-                task_id: task_id_clone.clone(),
-                status: "completed".into(),
-                prompt,
-                output: final_output,
-                started_at: now,
-                completed_at: Some(chrono_timestamp()),
-            },
-        );
-
-        let _ = app_handle_clone.emit(event_names::BACKGROUND_TASKS_UPDATED, ());
     });
 
     Ok(task_id)
@@ -1630,6 +3167,11 @@ pub async fn cancel_background_task(
     let mut tasks = state.background_tasks.lock().await;
     if let Some(task) = tasks.iter_mut().find(|t| t.id == id) {
         if task.status == "running" {
+            // §P2-19: trigger real cancellation first — the spawned runner's
+            // `tokio::select!` observes this and stops the query stream.
+            // Flipping the status alone (the old behavior) left the query
+            // running to completion.
+            task.cancel.cancel();
             task.status = "cancelled".into();
             task.completed_at = Some(chrono_timestamp());
             task.output = "Task cancelled by user".into();
@@ -1659,6 +3201,109 @@ pub async fn cancel_background_task(
 
 #[cfg(test)]
 mod tests {
+    // === Settings R3 followup F2 — active-run registration ===
+
+    use crate::commands::SessionMeta;
+
+    /// Seed a `sessions` display-list entry (the rail's membership source
+    /// for the C1 reachability check) without a tokio runtime — the lock is
+    /// uncontended in these tests, so `try_lock` always wins.
+    fn seed_rail_session(state: &AppState, id: &str) {
+        state
+            .sessions
+            .try_lock()
+            .expect("sessions lock uncontended in test")
+            .push(SessionMeta {
+                id: id.to_string(),
+                title: "rail session".into(),
+                created_at: 0,
+                message_count: 0,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            });
+    }
+
+    #[test]
+    fn active_run_guard_registers_and_raii_unregisters() {
+        let state = AppState::new();
+        assert_eq!(state.sole_active_run_session(), None);
+
+        // C1: the reachability check needs the session on the rail.
+        seed_rail_session(&state, "11111111-1111-1111-1111-111111111111");
+
+        let guard = ActiveSessionRunGuard::register(
+            &state.active_run_sessions,
+            "11111111-1111-1111-1111-111111111111".to_string(),
+        );
+        assert_eq!(
+            state.sole_active_run_session().as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
+
+        // Overlapping second run on the SAME session: refcounted.
+        let guard2 = ActiveSessionRunGuard::register(
+            &state.active_run_sessions,
+            "11111111-1111-1111-1111-111111111111".to_string(),
+        );
+        assert_eq!(
+            state.sole_active_run_session().as_deref(),
+            Some("11111111-1111-1111-1111-111111111111"),
+            "still registered while a run overlaps"
+        );
+        drop(guard);
+        assert_eq!(
+            state.sole_active_run_session().as_deref(),
+            Some("11111111-1111-1111-1111-111111111111"),
+            "first drop must not unregister the overlapping run"
+        );
+        drop(guard2);
+        assert_eq!(state.sole_active_run_session(), None);
+    }
+
+    #[test]
+    fn sole_active_run_is_none_when_two_sessions_run_concurrently() {
+        let state = AppState::new();
+        let _ga = ActiveSessionRunGuard::register(&state.active_run_sessions, "a".to_string());
+        let _gb = ActiveSessionRunGuard::register(&state.active_run_sessions, "b".to_string());
+        assert_eq!(
+            state.sole_active_run_session(),
+            None,
+            "ambiguous (two runs) → None → every-window fallback"
+        );
+    }
+
+    /// Final-review C1 — a sole run whose session is NOT in the display
+    /// list (the background/batch/routine case: hidden session, never on
+    /// the rail) must fall back to `None` so the ask_user card stays
+    /// visible in every window instead of routing to an unreachable
+    /// session and hanging there.
+    #[test]
+    fn sole_run_on_a_rail_unreachable_session_falls_back_to_every_window() {
+        let state = AppState::new();
+        let _guard =
+            ActiveSessionRunGuard::register(&state.active_run_sessions, "ghost".to_string());
+        assert_eq!(
+            state.sole_active_run_session(),
+            None,
+            "session absent from the display list → None → every-window fallback"
+        );
+    }
+
+    /// Final-review C1 — the happy path is unchanged when the sole run's
+    /// session IS on the rail.
+    #[test]
+    fn sole_run_on_a_rail_session_is_scoped() {
+        let state = AppState::new();
+        seed_rail_session(&state, "sess-rail");
+        let _guard =
+            ActiveSessionRunGuard::register(&state.active_run_sessions, "sess-rail".to_string());
+        assert_eq!(
+            state.sole_active_run_session().as_deref(),
+            Some("sess-rail")
+        );
+    }
+
     /// Seed alternating user/assistant engine messages into a session's L0
     /// log (§4.6): desktop flows project history from this record only.
     fn seed_l0_messages(
@@ -1701,6 +3346,7 @@ mod tests {
                 );
                 w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
                     TurnEndPayload {
+                        llm_steps: None,
                         reason: TurnEndPayload::REASON_COMPLETED.into(),
                         usage: None,
                         error: None,
@@ -1733,12 +3379,48 @@ mod tests {
             content: "hello world".to_string(),
             timestamp: 1700000000,
             file_attachments: None,
+            interrupted: None,
+            interrupted_reason: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let deserialized: ChatMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.role, "user");
         assert_eq!(deserialized.content, "hello world");
         assert_eq!(deserialized.timestamp, 1700000000);
+    }
+
+    /// Settings R3 T11 — `read_only` is the UI grouping's lookup field.
+    /// Older wire payloads (mock data, caches) predate the field, so
+    /// `serde(default)` must deserialize them as `true` (the conservative
+    /// Explore bucket) while fresh payloads round-trip the real value.
+    #[test]
+    fn test_tool_info_read_only_defaults_true_for_older_payloads() {
+        let old = serde_json::json!({
+            "name": "Read",
+            "description": "Read a file",
+            "enabled": true,
+        });
+        let info: ToolInfo = serde_json::from_value(old).expect("old payload must deserialize");
+        assert!(info.read_only, "missing read_only must default to true");
+
+        let fresh = serde_json::json!({
+            "name": "Write",
+            "description": "Write a file",
+            "enabled": true,
+            "read_only": false,
+        });
+        let info: ToolInfo = serde_json::from_value(fresh).expect("fresh payload must deserialize");
+        assert!(!info.read_only, "explicit read_only must round-trip");
+
+        // And the serializer always emits the field for new consumers.
+        let json = serde_json::to_string(&ToolInfo {
+            name: "Bash".into(),
+            description: "run".into(),
+            enabled: true,
+            read_only: false,
+        })
+        .expect("ToolInfo serializes");
+        assert!(json.contains("\"read_only\":false"));
     }
 
     #[test]
@@ -1749,6 +3431,8 @@ mod tests {
                 content: "test".to_string(),
                 timestamp: 0,
                 file_attachments: None,
+                interrupted: None,
+                interrupted_reason: None,
             };
             assert_eq!(msg.role, *role);
         }
@@ -1762,6 +3446,7 @@ mod tests {
             querying: true,
             message_count: 42,
             working_dir: "/home/user".to_string(),
+            active_profile: Some("default".to_string()),
         };
         let json = serde_json::to_string(&resp).unwrap();
         let deserialized: StatusResponse = serde_json::from_str(&json).unwrap();
@@ -1781,11 +3466,26 @@ mod tests {
             price_out: None,
             tier: None,
             dynamic: None,
+            vision: Some(false),
+            max_output: Some(16_384),
+            source: Some("catalog".to_string()),
+            tools: None,
+            reasoning: Some(true),
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: ModelInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id, "gpt-4");
         assert_eq!(deserialized.context_window, 128_000);
+        assert_eq!(deserialized.max_output, Some(16_384));
+        assert_eq!(deserialized.source.as_deref(), Some("catalog"));
+        // Old readers (and old payloads): the new fields are optional with
+        // serde defaults — a payload without them deserializes cleanly.
+        let legacy: ModelInfo =
+            serde_json::from_str(r#"{"id":"m","name":"m","provider":"p","context_window":0}"#)
+                .unwrap();
+        assert_eq!(legacy.max_output, None);
+        assert_eq!(legacy.source, None);
+        assert_eq!(legacy.tools, None);
     }
 
     #[test]
@@ -1794,21 +3494,226 @@ mod tests {
             name: "bash".to_string(),
             description: "Execute shell commands".to_string(),
             enabled: true,
+            read_only: false,
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: ToolInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.name, "bash");
         assert!(deserialized.enabled);
+        assert!(!deserialized.read_only);
     }
 
     #[test]
     fn test_send_message_response_serialization() {
         let resp = SendMessageResponse {
             query_id: "abc-123".to_string(),
+            rejected_attachments: vec![RejectedAttachment {
+                path: "/etc/hosts".to_string(),
+                reason: RejectedAttachmentReason::OutOfWorkingDir,
+            }],
+            injected_memories: vec![crate::commands_memory::InjectedMemoryDto {
+                id: "m1".to_string(),
+                title: "use pnpm not npm".to_string(),
+                category: "preference".to_string(),
+                source_session_id: Some("sess-9".to_string()),
+            }],
         };
         let json = serde_json::to_string(&resp).unwrap();
+        // P0-3: the reason serializes as a snake_case tag the frontend can
+        // switch on.
+        assert!(json.contains("\"reason\":\"out_of_working_dir\""));
+        // W3-4: the citation list rides on the response (snake_case field,
+        // like query_id/rejected_attachments); each DTO's own fields are
+        // camelCase (InjectedMemoryDto) so the chips render the same shape
+        // the RightDock introspection returns.
+        assert!(json.contains("\"injected_memories\":[{"));
+        assert!(json.contains("\"sourceSessionId\":\"sess-9\""));
         let deserialized: SendMessageResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.query_id, "abc-123");
+        assert_eq!(deserialized.rejected_attachments.len(), 1);
+        assert_eq!(
+            deserialized.rejected_attachments[0].reason,
+            RejectedAttachmentReason::OutOfWorkingDir
+        );
+        assert_eq!(deserialized.injected_memories.len(), 1);
+        assert_eq!(deserialized.injected_memories[0].id, "m1");
+        // Back-compat: payloads / callers from before P0-3 omit the field.
+        let legacy: SendMessageResponse =
+            serde_json::from_str("{\"query_id\":\"abc-123\"}").unwrap();
+        assert!(legacy.rejected_attachments.is_empty());
+        assert!(legacy.injected_memories.is_empty());
+    }
+
+    // ── G3b P1-4: PDF escape hatch + extraction summary ─────────────────
+
+    /// Run `pdf_extraction_outcome` with the cache redirected at a temp
+    /// `SHANNON_HOME` (same save/restore pattern as the document_parse
+    /// tests), so the test never touches the real `~/.shannon`. Returns the
+    /// outcome plus the temp guard (the cache file lives inside it).
+    fn pdf_outcome_in_temp_cache(
+        source: &std::path::Path,
+        text: &str,
+        pages: Option<u32>,
+    ) -> (PdfExtractionOutcome, tempfile::TempDir) {
+        let cache_home = tempfile::tempdir().expect("cache tempdir");
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        unsafe { std::env::set_var("SHANNON_HOME", cache_home.path()) };
+        let outcome = pdf_extraction_outcome("report.pdf", source, 123_456, pages, text);
+        match prev_home {
+            Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
+            None => unsafe { std::env::remove_var("SHANNON_HOME") },
+        }
+        (outcome, cache_home)
+    }
+
+    #[test]
+    fn pdf_over_limit_truncates_caches_and_names_both_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("report.pdf");
+        std::fs::write(&source, b"%PDF-1.7 fake").unwrap();
+        // ~150 KiB > 50 KiB budget. Pre-trimmed so it equals what the
+        // pipeline caches (the cache holds the TRIMMED text).
+        let big = "word ".repeat(30_000).trim_end().to_string();
+        let (outcome, _cache_home) = pdf_outcome_in_temp_cache(&source, &big, Some(12));
+
+        assert!(outcome.extracted);
+        assert!(outcome.truncated);
+        let cache_path = outcome.cache_path.expect("truncated text must be cached");
+        // The injection block carries the cache path with the Read hint…
+        assert!(
+            outcome.block.contains(&format!(
+                "Full extracted text: {cache_path} — use Read/Grep on it for the rest."
+            )),
+            "{block}",
+            block = outcome.block
+        );
+        // …the absolute source path (truncated or not)…
+        assert!(
+            outcome.block.contains(&format!(
+                "Source PDF: {} — use Read on it",
+                source.to_string_lossy()
+            )),
+            "{block}",
+            block = outcome.block
+        );
+        // …the truncation note…
+        assert!(
+            outcome
+                .block
+                .contains("*[Truncated — showing first 51200 of"),
+            "{block}",
+            block = outcome.block
+        );
+        // …and the cached file really holds the FULL text.
+        let cached = std::fs::read_to_string(&cache_path).expect("cache readable");
+        assert_eq!(cached, big, "cache holds the untruncated text");
+        // The inline window stays at the budget.
+        assert!(
+            outcome.block.len() < big.len(),
+            "block is a prefix, not the whole text"
+        );
+    }
+
+    #[test]
+    fn pdf_under_limit_is_fully_inlined_and_never_cached() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("small.pdf");
+        std::fs::write(&source, b"%PDF-1.7 fake").unwrap();
+        let cache_home = tempfile::tempdir().expect("cache tempdir");
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        unsafe { std::env::set_var("SHANNON_HOME", cache_home.path()) };
+        let outcome = pdf_extraction_outcome("small.pdf", &source, 42, Some(2), "hello pdf body");
+        match prev_home {
+            Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
+            None => unsafe { std::env::remove_var("SHANNON_HOME") },
+        }
+        assert!(outcome.extracted);
+        assert!(!outcome.truncated);
+        assert!(
+            outcome.cache_path.is_none(),
+            "small PDF must not pay a cache write"
+        );
+        assert!(outcome.block.contains("```text\nhello pdf body\n```"));
+        assert!(!outcome.block.contains("Truncated"));
+        assert!(!outcome.block.contains("Full extracted text"));
+        // Absolute path still present so the model can Read proactively.
+        assert!(
+            outcome
+                .block
+                .contains(&format!("Source PDF: {}", source.to_string_lossy()))
+        );
+        // No cache file was created anywhere under the redirected home.
+        let cache_dir = cache_home.path().join("cache").join("extracted");
+        assert!(
+            !cache_dir.exists()
+                || std::fs::read_dir(&cache_dir)
+                    .expect("read dir")
+                    .next()
+                    .is_none(),
+            "no cache entries expected"
+        );
+    }
+
+    #[test]
+    fn pdf_placeholder_and_scanned_blocks_carry_the_source_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("scan.pdf");
+        std::fs::write(&source, b"%PDF-1.7 fake").unwrap();
+
+        // Extraction failure (pdftotext unavailable) keeps the placeholder
+        // framing and still names the absolute path.
+        let placeholder = crate::commands_files::pdf_unavailable_placeholder("pdftotext missing");
+        let failed = pdf_extraction_outcome("scan.pdf", &source, 7, None, &placeholder);
+        assert!(!failed.extracted);
+        assert!(!failed.truncated);
+        assert!(failed.cache_path.is_none());
+        assert!(failed.block.contains(&placeholder));
+        assert!(
+            failed
+                .block
+                .contains(&format!("Source PDF: {}", source.to_string_lossy()))
+        );
+
+        // Scanned PDF (no extractable text) — same contract.
+        let scanned = pdf_extraction_outcome("scan.pdf", &source, 7, Some(3), "   \n  ");
+        assert!(!scanned.extracted);
+        assert!(scanned.block.contains("No extractable text"));
+        assert!(
+            scanned
+                .block
+                .contains(&format!("Source PDF: {}", source.to_string_lossy()))
+        );
+    }
+
+    #[test]
+    fn pdf_extraction_report_round_trips_with_file_attachment() {
+        let report = AttachmentExtractionReport {
+            path: "/tmp/report.pdf".to_string(),
+            kind: "pdf".to_string(),
+            extracted: true,
+            sections_total: 0,
+            sections_inlined: 0,
+            truncated: true,
+            cache_path: Some("/home/u/.shannon/cache/extracted/abc.txt".to_string()),
+        };
+        let att = FileAttachment {
+            name: "report.pdf".to_string(),
+            path: "/tmp/report.pdf".to_string(),
+            size: 10,
+            media_type: None,
+            base64_data: None,
+            extraction: Some(report.clone()),
+        };
+        let json = serde_json::to_string(&att).unwrap();
+        assert!(json.contains("\"truncated\":true"));
+        assert!(json.contains("\"cache_path\""));
+        let back: FileAttachment = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.extraction, Some(report));
+        // Old persisted history (field absent) still deserializes.
+        let legacy: FileAttachment =
+            serde_json::from_str("{\"name\":\"a.pdf\",\"path\":\"/tmp/a.pdf\",\"size\":1}")
+                .unwrap();
+        assert!(legacy.extraction.is_none());
     }
 
     #[test]
@@ -1846,12 +3751,16 @@ mod tests {
                 content: "hello".to_string(),
                 timestamp: 100,
                 file_attachments: None,
+                interrupted: None,
+                interrupted_reason: None,
             });
             msgs.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: "hi".to_string(),
                 timestamp: 101,
                 file_attachments: None,
+                interrupted: None,
+                interrupted_reason: None,
             });
         }
         let msgs = session.messages.lock().await;
@@ -2129,6 +4038,316 @@ fn resolve_path_in_working_dir_rejects_missing_path() {
     assert!(err.contains("not found"));
 }
 
+// ── P0-3: attachment refusal visibility + working-dir requirement ────
+// Three-state contract of the send pipeline: inside (accepted), outside
+// (refused, reported), unset working dir (hard error, NO process-CWD
+// fallback).
+
+#[test]
+fn classify_path_in_working_dir_distinguishes_unresolvable_from_outside() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // A path that exists but sits outside the working dir → the boundary
+    // variant (the anti-exfiltration refusal the UI must call out).
+    let outside = crate::classify_path_in_working_dir("/etc/hosts", tmp.path())
+        .expect_err("absolute path outside working dir must be classified");
+    assert!(
+        matches!(outside, crate::WorkingDirScopeError::OutsideWorkingDir(_)),
+        "expected OutsideWorkingDir, got: {outside:?}"
+    );
+
+    // A missing path → Unresolvable, NOT "outside" (the file may simply
+    // have been moved; the message must not accuse the user of exfiltration).
+    let missing = crate::classify_path_in_working_dir("gone.txt", tmp.path())
+        .expect_err("missing path must be classified");
+    assert!(
+        matches!(missing, crate::WorkingDirScopeError::Unresolvable(_)),
+        "expected Unresolvable, got: {missing:?}"
+    );
+
+    // The legacy Display strings are pinned by tests/user-visible errors.
+    assert!(missing.to_string().contains("not found"));
+}
+
+#[test]
+fn collect_attachments_accepts_inside_and_reports_outside_and_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let inside = tmp.path().join("notes.txt");
+    std::fs::write(&inside, "hello").unwrap();
+
+    let (collected, rejected) = collect_attachments(
+        &[
+            inside.to_string_lossy().into_owned(),
+            "/etc/hosts".to_string(),
+            tmp.path().join("gone.txt").to_string_lossy().into_owned(),
+        ],
+        tmp.path(),
+    );
+
+    // Partial success: the in-scope file went through…
+    assert_eq!(collected.len(), 1, "inside file must be accepted");
+    assert_eq!(collected[0].name, "notes.txt");
+    // …and BOTH refusals are reported with their reason (never silent).
+    assert_eq!(rejected.len(), 2, "outside + missing must be reported");
+    assert_eq!(rejected[0].path, "/etc/hosts");
+    assert_eq!(
+        rejected[0].reason,
+        RejectedAttachmentReason::OutOfWorkingDir
+    );
+    assert!(rejected[1].path.ends_with("gone.txt"));
+    assert_eq!(rejected[1].reason, RejectedAttachmentReason::Unresolvable);
+}
+
+#[test]
+fn collect_attachments_reports_oversized_image_per_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A >10 MiB file with an image extension trips the metadata gate.
+    let big = tmp.path().join("big.png");
+    std::fs::write(
+        &big,
+        vec![0u8; shannon_core::attachments::MAX_IMAGE_BYTES + 1],
+    )
+    .unwrap();
+
+    let (collected, rejected) =
+        collect_attachments(&[big.to_string_lossy().into_owned()], tmp.path());
+
+    assert!(collected.is_empty(), "oversized image must not attach");
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].reason, RejectedAttachmentReason::TooLarge);
+}
+
+// ── R2-P1-2: attachment honesty for svg/bmp-class formats ───────────────
+
+#[test]
+fn collect_attachments_refuses_unsupported_image_types() {
+    let tmp = tempfile::tempdir().unwrap();
+    let svg = tmp.path().join("logo.svg");
+    std::fs::write(&svg, "<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
+    let bmp = tmp.path().join("scan.BMP");
+    std::fs::write(&bmp, b"BMfake").unwrap();
+    let png = tmp.path().join("real.png");
+    std::fs::write(
+        &png,
+        [
+            0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, // magic + tail
+            0, 0, 0, 13, b'I', b'H', b'D', b'R',
+        ],
+    )
+    .unwrap();
+
+    let (collected, rejected) = collect_attachments(
+        &[
+            svg.to_string_lossy().into_owned(),
+            bmp.to_string_lossy().into_owned(),
+            png.to_string_lossy().into_owned(),
+        ],
+        tmp.path(),
+    );
+
+    // Only the vision-whitelisted format survives…
+    assert_eq!(collected.len(), 1, "png must still attach");
+    assert_eq!(collected[0].name, "real.png");
+    // …and BOTH unsupported formats come back with an explicit receipt —
+    // the old behavior collected them and dropped them from the image
+    // blocks silently (no rejected_attachments entry at all).
+    assert_eq!(rejected.len(), 2, "svg + bmp must be reported");
+    assert_eq!(
+        rejected[0].reason,
+        RejectedAttachmentReason::UnsupportedType
+    );
+    assert!(rejected[0].path.ends_with("logo.svg"));
+    assert_eq!(
+        rejected[1].reason,
+        RejectedAttachmentReason::UnsupportedType
+    );
+    assert!(rejected[1].path.ends_with("scan.BMP"));
+}
+
+#[test]
+fn unsupported_image_predicate_and_vision_mime_share_one_table() {
+    // Case-insensitive on the extension (same convention as
+    // `detect_media_type`), dotless names never match.
+    assert!(is_unsupported_image_extension("a/icon.svg"));
+    assert!(is_unsupported_image_extension("a/icon.SVG"));
+    assert!(is_unsupported_image_extension("a/photo.bmp"));
+    assert!(is_unsupported_image_extension("a/photo.heic"));
+    assert!(!is_unsupported_image_extension("a/photo.png"));
+    assert!(!is_unsupported_image_extension("a/photo.jpeg"));
+    assert!(!is_unsupported_image_extension("notes.txt"));
+    assert!(!is_unsupported_image_extension("noext"));
+
+    // The image-blocks whitelist and the extension table must agree on the
+    // formats both accept: every detectable vision mime is a vision mime…
+    for (ext, mime) in [
+        ("png", "image/png"),
+        ("jpg", "image/jpeg"),
+        ("gif", "image/gif"),
+        ("webp", "image/webp"),
+    ] {
+        assert!(
+            is_vision_image_mime(mime),
+            "{ext} must stay vision-supported"
+        );
+        assert!(
+            !is_unsupported_image_extension(&format!("f.{ext}")),
+            "{ext} must not be flagged unsupported"
+        );
+    }
+    // …and svg's mime (the one `detect_media_type` knows) is NOT vision.
+    assert!(!is_vision_image_mime("image/svg+xml"));
+}
+
+#[test]
+fn unsupported_type_reason_serializes_as_snake_case_tag() {
+    let json = serde_json::to_string(&RejectedAttachmentReason::UnsupportedType).unwrap();
+    assert_eq!(json, "\"unsupported_type\"");
+}
+
+#[test]
+fn require_attachment_working_dir_rejects_unset_without_cwd_fallback() {
+    // P0-3: no configured working dir → the attachment domain is UNDEFINED.
+    // The old code fell back to the process CWD (CWD=/ for Dock launches),
+    // making every attach silently fail the scope check. Now: explicit
+    // error pointing at Settings; the process CWD is never consulted.
+    let err = require_attachment_working_dir(None)
+        .expect_err("unset working dir must hard-reject attachments");
+    assert!(
+        err.contains("No working directory is set"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        err.contains("Settings"),
+        "error must point at Settings, got: {err}"
+    );
+    // R2-P2-2: the same string carries the structured kind the frontend
+    // localizes — `shannon-error:<kind>|<original text>` — so an unknown
+    // kind / old frontend still shows the original sentence verbatim.
+    assert!(
+        err.starts_with("shannon-error:no_working_dir|"),
+        "missing structured tag, got: {err}"
+    );
+    // A configured value passes through untouched.
+    assert_eq!(
+        require_attachment_working_dir(Some("/tmp/proj")).unwrap(),
+        std::path::PathBuf::from("/tmp/proj")
+    );
+}
+
+#[test]
+fn resolve_send_working_dir_prefers_session_meta_over_global() {
+    // B2-2 (P0-2) priority: the TARGET session's own working_dir wins over
+    // the global pointer in every combination; sessions without their own
+    // wd fall back to the global value (previous behavior), and with
+    // neither there is no domain (the caller's unset handling applies).
+    // The same session-meta value is what `send_message` pins the engine
+    // with (`attach_shared_memory_if(.., session_working_dir.as_deref())`
+    // → `with_working_directory`), so this resolver and the engine's
+    // directory chain always agree.
+    assert_eq!(
+        resolve_send_working_dir(Some("/a/session"), Some("/a/global")),
+        Some("/a/session".to_string())
+    );
+    assert_eq!(
+        resolve_send_working_dir(Some("/a/session"), None),
+        Some("/a/session".to_string())
+    );
+    assert_eq!(
+        resolve_send_working_dir(None, Some("/a/global")),
+        Some("/a/global".to_string())
+    );
+    assert_eq!(resolve_send_working_dir(None, None), None);
+}
+
+#[test]
+fn send_attachment_domain_follows_session_wd_over_global() {
+    // The exact helper chain `send_message`'s attachment branch runs, driven
+    // over REAL directories: the global config points at `global_dir` while
+    // the target session's meta points at `session_dir` — the multi-window
+    // P0-2 shape. The attachment domain must follow the SESSION directory
+    // (file inside it accepted, the global-dir file rejected as out of
+    // scope), and a session WITHOUT its own wd must keep resolving against
+    // the global value exactly as before.
+    use RejectedAttachmentReason::OutOfWorkingDir;
+    let session_dir = tempfile::tempdir().unwrap();
+    let global_dir = tempfile::tempdir().unwrap();
+    let in_session = session_dir.path().join("notes.md");
+    let in_global = global_dir.path().join("other.md");
+    std::fs::write(&in_session, "session file").unwrap();
+    std::fs::write(&in_global, "global file").unwrap();
+    let session_wd = session_dir.path().to_string_lossy().into_owned();
+    let global_wd = global_dir.path().to_string_lossy().into_owned();
+
+    // Session wd wins: the domain is the session directory.
+    let resolved = resolve_send_working_dir(Some(&session_wd), Some(&global_wd));
+    let domain = require_attachment_working_dir(resolved.as_deref()).unwrap();
+    let (collected, rejected) = collect_attachments(&[in_session.display().to_string()], &domain);
+    assert!(rejected.is_empty(), "unexpected rejections: {rejected:?}");
+    assert_eq!(collected.len(), 1);
+    let (collected, rejected) = collect_attachments(&[in_global.display().to_string()], &domain);
+    assert!(collected.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].reason, OutOfWorkingDir);
+
+    // No session wd: unchanged global-only behavior.
+    let resolved = resolve_send_working_dir(None, Some(&global_wd));
+    let domain = require_attachment_working_dir(resolved.as_deref()).unwrap();
+    let (collected, rejected) = collect_attachments(&[in_global.display().to_string()], &domain);
+    assert!(rejected.is_empty(), "unexpected rejections: {rejected:?}");
+    assert_eq!(collected.len(), 1);
+}
+
+#[test]
+fn tagged_error_keeps_the_original_text_after_the_kind() {
+    // R2-P2-2 protocol shape: kind is machine-only ([a-z0-9_]), the original
+    // text survives verbatim after the first `|` (the frontend's unknown-kind
+    // fallback and old frontends both render it unchanged).
+    let err = tagged_error("query_in_progress", "A query is already in progress");
+    assert_eq!(
+        err,
+        "shannon-error:query_in_progress|A query is already in progress"
+    );
+    // A `|` inside the original text only ever splits on the FIRST one —
+    // the remainder stays part of the human-readable text.
+    let piped = tagged_error("goal_run_active", "pause | stop it");
+    assert_eq!(
+        piped.strip_prefix("shannon-error:goal_run_active|"),
+        Some("pause | stop it")
+    );
+}
+
+// --- Review §P0-3: harden the write-target helper the same way ---
+
+#[test]
+fn resolve_write_target_accepts_inside_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("new_file.txt");
+    let resolved = crate::resolve_write_target_in_working_dir("new_file.txt", tmp.path())
+        .expect("relative write target inside working dir should resolve");
+    assert_eq!(resolved, target);
+}
+
+#[test]
+fn resolve_write_target_rejects_absolute_outside_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = crate::resolve_write_target_in_working_dir("/etc/evil_cron", tmp.path())
+        .expect_err("absolute write target outside working dir must be rejected");
+    assert!(
+        err.contains("outside") || err.contains("not found"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn resolve_write_target_rejects_dotdot_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A `../foo` write target escapes the working dir because the
+    // canonicalized parent (the parent of tmp.path()) is outside tmp.path().
+    let err = crate::resolve_write_target_in_working_dir("../escape.txt", tmp.path())
+        .expect_err("dotdot traversal must be rejected");
+    assert!(err.contains("outside"), "unexpected error: {err}");
+}
+
 // ── Top-level unit tests for high-value pure functions ───────────────
 // These complement `mod tests` above. Kept at module scope so they can
 // invoke private helpers directly without going through `super::*`.
@@ -2137,27 +4356,36 @@ fn resolve_path_in_working_dir_rejects_missing_path() {
 mod pure_function_tests {
     use super::*;
 
-    // ── parse_approval_mode: covers all 11 variants + fallback ───────
+    // ── parse_approval_mode: one vocabulary + legacy aliases ────────────
 
     #[test]
     fn parse_approval_mode_maps_every_documented_alias() {
         use shannon_engine::permissions::ApprovalMode;
-        assert_eq!(parse_approval_mode("suggest"), ApprovalMode::Suggest);
-        assert_eq!(parse_approval_mode("default"), ApprovalMode::Suggest);
+        // Canonical tokens
+        assert_eq!(parse_approval_mode("ask"), ApprovalMode::Ask);
         assert_eq!(parse_approval_mode("plan"), ApprovalMode::Plan);
-        assert_eq!(parse_approval_mode("auto"), ApprovalMode::Auto);
+        assert_eq!(parse_approval_mode("auto-edit"), ApprovalMode::AutoEdit);
+        assert_eq!(parse_approval_mode("full-auto"), ApprovalMode::FullAuto);
+        assert_eq!(parse_approval_mode("readonly"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("dontAsk"), ApprovalMode::DontAsk);
+        assert_eq!(
+            parse_approval_mode("bypassPermissions"),
+            ApprovalMode::BypassPermissions
+        );
+        // Legacy aliases (stored desktop configs)
+        assert_eq!(parse_approval_mode("suggest"), ApprovalMode::Ask);
+        assert_eq!(parse_approval_mode("default"), ApprovalMode::Ask);
+        assert_eq!(parse_approval_mode("confirm"), ApprovalMode::Ask);
+        assert_eq!(parse_approval_mode("auto"), ApprovalMode::AutoEdit);
         assert_eq!(parse_approval_mode("auto_edit"), ApprovalMode::AutoEdit);
         assert_eq!(parse_approval_mode("autoedit"), ApprovalMode::AutoEdit);
         assert_eq!(parse_approval_mode("full_auto"), ApprovalMode::FullAuto);
         assert_eq!(parse_approval_mode("fullauto"), ApprovalMode::FullAuto);
-        assert_eq!(parse_approval_mode("readonly"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("full"), ApprovalMode::FullAuto);
         assert_eq!(parse_approval_mode("read-only"), ApprovalMode::Readonly);
-        assert_eq!(parse_approval_mode("plan_ro"), ApprovalMode::PlanReadonly);
-        assert_eq!(parse_approval_mode("plan-ro"), ApprovalMode::PlanReadonly);
-        assert_eq!(
-            parse_approval_mode("planreadonly"),
-            ApprovalMode::PlanReadonly
-        );
+        assert_eq!(parse_approval_mode("plan_ro"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("plan-ro"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("planreadonly"), ApprovalMode::Readonly);
         assert_eq!(
             parse_approval_mode("bypass_permissions"),
             ApprovalMode::BypassPermissions
@@ -2168,23 +4396,77 @@ mod pure_function_tests {
         );
         assert_eq!(parse_approval_mode("dont_ask"), ApprovalMode::DontAsk);
         assert_eq!(parse_approval_mode("dontask"), ApprovalMode::DontAsk);
-        assert_eq!(parse_approval_mode("confirm"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("ci"), ApprovalMode::DontAsk);
+        // Unknown falls back to the safe mode
+        assert_eq!(parse_approval_mode("garbage"), ApprovalMode::Ask);
+    }
+
+    // ---- review §P1-2: unattended approval mode requires explicit opt-in ----
+
+    #[test]
+    fn unattended_approval_mode_defaults_to_ask_not_fullauto() {
+        // SECURITY.md promises unattended paths honour the user's chosen
+        // mode. FullAuto must require explicit opt-in.
+        assert_eq!(
+            unattended_approval_mode(None),
+            ApprovalMode::Ask,
+            "no approval_mode_str must not silently promote to FullAuto"
+        );
+        assert_eq!(
+            unattended_approval_mode(Some("")),
+            ApprovalMode::Ask,
+            "empty approval_mode_str must not silently promote to FullAuto"
+        );
+        assert_eq!(
+            unattended_approval_mode(Some("garbage")),
+            ApprovalMode::Ask,
+            "unknown approval_mode_str must not silently promote to FullAuto"
+        );
+    }
+
+    #[test]
+    fn unattended_approval_mode_respects_explicit_opt_in() {
+        // Only an explicit "full_auto" string gets FullAuto.
+        assert_eq!(
+            unattended_approval_mode(Some("full_auto")),
+            ApprovalMode::FullAuto,
+        );
+        // Other explicit ladder tokens map to their mode.
+        assert_eq!(
+            unattended_approval_mode(Some("auto_edit")),
+            ApprovalMode::AutoEdit
+        );
+        assert_eq!(
+            unattended_approval_mode(Some("auto")),
+            ApprovalMode::AutoEdit
+        );
+        assert_eq!(unattended_approval_mode(Some("plan")), ApprovalMode::Plan);
+        // Bypass / dontAsk are never inherited by unattended paths.
+        assert_eq!(
+            unattended_approval_mode(Some("bypass_permissions")),
+            ApprovalMode::Ask,
+        );
+        assert_eq!(
+            unattended_approval_mode(Some("dont_ask")),
+            ApprovalMode::Ask,
+        );
     }
 
     #[test]
     fn parse_approval_mode_is_case_insensitive() {
         use shannon_engine::permissions::ApprovalMode;
-        assert_eq!(parse_approval_mode("SUGGEST"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("SUGGEST"), ApprovalMode::Ask);
         assert_eq!(parse_approval_mode("Plan"), ApprovalMode::Plan);
         assert_eq!(parse_approval_mode("FULL_AUTO"), ApprovalMode::FullAuto);
+        assert_eq!(parse_approval_mode("Auto-Edit"), ApprovalMode::AutoEdit);
     }
 
     #[test]
     fn parse_approval_mode_unknown_falls_back_to_suggest() {
         use shannon_engine::permissions::ApprovalMode;
-        assert_eq!(parse_approval_mode(""), ApprovalMode::Suggest);
-        assert_eq!(parse_approval_mode("yolo"), ApprovalMode::Suggest);
-        assert_eq!(parse_approval_mode("sudo"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode(""), ApprovalMode::Ask);
+        assert_eq!(parse_approval_mode("yolo"), ApprovalMode::Ask);
+        assert_eq!(parse_approval_mode("sudo"), ApprovalMode::Ask);
     }
 
     // ── detect_media_type ─────────────────────────────────────────────
@@ -2228,7 +4510,143 @@ mod pure_function_tests {
         assert!(detect_media_type("").is_none());
     }
 
+    // ── Office Wave A2' — send_message attachment injection ───────────
+
+    #[test]
+    fn office_extension_filter_matches_the_a2_prime_formats_only() {
+        // The send_message office branch routes on this predicate (the
+        // attachment record's media_type stays "application/octet-stream"
+        // for office files — detect_media_type only knows image mimes).
+        for name in ["a.docx", "b.pptx", "c.XLSX", "d.Ods", "e.CSV"] {
+            let p = std::path::Path::new(name);
+            assert!(
+                crate::document_parse::is_office_document(p),
+                "{name} must route to office injection"
+            );
+        }
+        for name in [
+            "a.doc", "b.xls", "c.ppt", "d.odt", "e.rtf", "f.pdf", "g.png",
+        ] {
+            let p = std::path::Path::new(name);
+            assert!(
+                !crate::document_parse::is_office_document(p),
+                "{name} must not route to office injection"
+            );
+        }
+    }
+
+    #[test]
+    fn office_attachment_injection_block_contract() {
+        // Locks the exact block send_message injects for an office
+        // attachment: header line, shown-range wording with the Read/Grep
+        // cache hint, and `[Section i/N]` markers — the same pipeline the
+        // PDF injection test relies on (helpers behind send_message).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("plan.docx");
+        let document_xml = concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>",
+            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">",
+            "<w:body>",
+            "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>Plan</w:t></w:r></w:p>",
+            "<w:p><w:r><w:t>Do the thing.</w:t></w:r></w:p>",
+            "</w:body></w:document>"
+        );
+        // Wrap in a real zip container (in-process, no binary fixture).
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            use std::io::Write as _;
+            use zip::write::SimpleFileOptions;
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            writer
+                .start_file("word/document.xml", SimpleFileOptions::default())
+                .expect("start_file");
+            writer.write_all(document_xml.as_bytes()).expect("write");
+            writer.finish().expect("finish");
+        }
+        let bytes = buffer.into_inner();
+        std::fs::write(&path, &bytes).expect("write docx");
+        let size = bytes.len() as u64;
+
+        // Redirect the cache at a temp SHANNON_HOME (same save/restore
+        // pattern as the commands_feedback tests). SAFETY: unique tempdir
+        // per test run; restored right after the call.
+        let cache_home = tempfile::tempdir().expect("cache tempdir");
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        unsafe { std::env::set_var("SHANNON_HOME", cache_home.path()) };
+        // This is the exact call the send_message office branch makes inside
+        // spawn_blocking.
+        let block =
+            crate::document_parse::office_extraction_for_file(&path, "plan.docx", size).block;
+        match prev_home {
+            Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
+            None => unsafe { std::env::remove_var("SHANNON_HOME") },
+        }
+        assert!(
+            block.starts_with(&format!(
+                "Attached Office document \"plan.docx\" ({size} bytes). Extracted text: 1 section(s)."
+            )),
+            "{block}"
+        );
+        assert!(
+            block
+                .lines()
+                .nth(1)
+                .expect("range line")
+                .starts_with("Showing all 1 sections. Full extracted text: "),
+            "{block}"
+        );
+        assert!(
+            block
+                .lines()
+                .nth(1)
+                .expect("range line")
+                .contains(" — use Read/Grep on it for the rest."),
+            "{block}"
+        );
+        assert!(
+            block.contains("[Section 1/1] Heading: Plan\nDo the thing."),
+            "{block}"
+        );
+        // The referenced cache file exists and holds the sectioned text.
+        let cache_path = block
+            .lines()
+            .nth(1)
+            .expect("range line")
+            .trim_start_matches("Showing all 1 sections. Full extracted text: ")
+            .trim_end_matches(" — use Read/Grep on it for the rest.");
+        assert_eq!(
+            std::fs::read_to_string(cache_path).expect("cache readable"),
+            "[Section 1/1] Heading: Plan\nDo the thing.\n"
+        );
+    }
+
+    #[test]
+    fn office_attachment_injection_failure_is_an_explaining_placeholder() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("junk.docx");
+        std::fs::write(&path, b"definitely not a zip container").expect("write");
+        let block = crate::document_parse::office_extraction_for_file(&path, "junk.docx", 29).block;
+        assert!(
+            block.starts_with(
+                "Attached Office document \"junk.docx\" (29 bytes). Text extraction failed: "
+            ),
+            "{block}"
+        );
+        assert!(block.contains("zip"), "{block}");
+    }
+
     // ── iso_days_ago ──────────────────────────────────────────────────
+    // Moved here from the removed `commands_billing` demo module (R2 F4);
+    // test-only helper used by the date-format assertions below.
+
+    fn iso_days_ago(days: i64) -> String {
+        use chrono::{DateTime, Days, Utc};
+        let now: DateTime<Utc> = Utc::now();
+        let target = now
+            .checked_sub_days(Days::new(days.max(0) as u64))
+            .unwrap_or(now);
+        target.format("%Y-%m-%d").to_string()
+    }
 
     #[test]
     fn iso_days_ago_returns_iso_date_string() {
@@ -2298,6 +4716,9 @@ mod build_client_config_tests {
         );
         ProviderConfigStore::from_config(ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            // R3-2: the engine grew an `active_profile` pointer (empty =
+            // `"default"`) — this fixture targets the default profile.
+            active_profile: String::new(),
             profiles,
             gateway: Default::default(),
         })
@@ -2318,6 +4739,7 @@ mod build_client_config_tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         }
     }
 
@@ -2408,8 +4830,10 @@ mod build_client_config_tests {
         let mut profile = anthropic_profile("BCC_UNSET", "https://api.anthropic.com");
         profile.default_max_tokens = Some(8192);
         let store = store_with_active(profile, "claude-sonnet-4-6");
-        let mut cfg = ShannonConfig::default();
-        cfg.max_tokens = Some(1024);
+        let cfg = ShannonConfig {
+            max_tokens: Some(1024),
+            ..ShannonConfig::default()
+        };
 
         let out =
             AppState::build_client_config(&store, &cfg).expect("active target should resolve");
@@ -2448,6 +4872,7 @@ mod build_client_config_tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         let store = store_with_active(profile, "llama3");
         let cfg = ShannonConfig::default();
@@ -2771,5 +5196,410 @@ mod budget_enforcement_tests {
         assert_eq!(counters.warned(), 0);
         assert!(!cancel.is_cancelled());
         unlisten_all(&app, &counters);
+    }
+
+    // ── §P2-19 background-task status guard ─────────────────────────────
+
+    fn bg_task(id: &str) -> BackgroundTaskMeta {
+        BackgroundTaskMeta {
+            id: id.to_string(),
+            prompt: "p".into(),
+            status: "running".into(),
+            started_at: 0,
+            completed_at: None,
+            output: String::new(),
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    #[test]
+    fn finalize_transitions_running_task_to_terminal() {
+        let mut tasks = vec![bg_task("t1")];
+        assert!(finalize_background_task(
+            &mut tasks,
+            "t1",
+            "completed",
+            "done".into()
+        ));
+        assert_eq!(tasks[0].status, "completed");
+        assert_eq!(tasks[0].output, "done");
+        assert!(tasks[0].completed_at.is_some());
+    }
+
+    #[test]
+    fn finalize_never_overwrites_a_cancelled_task() {
+        // §P2-19 core regression: the old finalize path unconditionally
+        // overwrote the status back to "completed" after a user cancel.
+        let mut tasks = vec![bg_task("t1")];
+        tasks[0].status = "cancelled".into();
+        tasks[0].output = "Task cancelled by user".into();
+
+        assert!(!finalize_background_task(
+            &mut tasks,
+            "t1",
+            "completed",
+            "done".into()
+        ));
+        assert_eq!(
+            tasks[0].status, "cancelled",
+            "cancelled must stay cancelled"
+        );
+        assert_eq!(tasks[0].output, "Task cancelled by user");
+    }
+
+    #[test]
+    fn finalize_never_overwrites_a_failed_or_completed_task() {
+        let mut tasks = vec![bg_task("t1"), bg_task("t2")];
+        tasks[0].status = "failed".into();
+        tasks[1].status = "completed".into();
+
+        assert!(!finalize_background_task(
+            &mut tasks,
+            "t1",
+            "cancelled",
+            "x".into()
+        ));
+        assert_eq!(tasks[0].status, "failed");
+        assert!(!finalize_background_task(
+            &mut tasks,
+            "t2",
+            "cancelled",
+            "x".into()
+        ));
+        assert_eq!(tasks[1].status, "completed");
+    }
+
+    #[test]
+    fn finalize_unknown_id_is_a_noop() {
+        let mut tasks = vec![bg_task("t1")];
+        assert!(!finalize_background_task(
+            &mut tasks,
+            "missing",
+            "completed",
+            "x".into()
+        ));
+        assert_eq!(tasks[0].status, "running");
+    }
+
+    // ── R2-P1-5: failed background task → triage inbox item ─────────────
+
+    fn bg_inbox() -> shannon_core::inbox_store::InboxStore {
+        shannon_core::inbox_store::InboxStore::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn failed_background_task_writes_one_inbox_item() {
+        let inbox = bg_inbox();
+        let wrote = record_background_task_terminal(
+            &inbox,
+            "bt-1",
+            "Refactor the parser module",
+            1_000,
+            "failed",
+            Some("engine stream broke\nfinal error: connection reset"),
+            61_000,
+        )
+        .unwrap();
+        assert!(wrote, "a failed terminal state must write an item");
+
+        let items = inbox
+            .list(
+                None,
+                Some(shannon_core::inbox_store::SOURCE_BACKGROUND_TASK),
+                10,
+            )
+            .unwrap();
+        assert_eq!(items.len(), 1, "exactly one item per failed task");
+        let item = &items[0];
+        assert_eq!(
+            item.source,
+            shannon_core::inbox_store::SOURCE_BACKGROUND_TASK
+        );
+        assert_eq!(item.source_id.as_deref(), Some("bt-1"));
+        assert_eq!(item.title, "Refactor the parser module");
+        // Duration (60s) + last-line error headline in the summary.
+        assert!(item.summary.contains("took 60s"), "{}", item.summary);
+        assert!(
+            item.summary.contains("connection reset"),
+            "{}",
+            item.summary
+        );
+        assert!(
+            !item.summary.contains("engine stream broke"),
+            "headline is the error's last line: {}",
+            item.summary
+        );
+        assert_eq!(
+            item.error.as_deref(),
+            Some("engine stream broke\nfinal error: connection reset")
+        );
+    }
+
+    #[test]
+    fn successful_or_cancelled_background_task_never_writes_inbox() {
+        let inbox = bg_inbox();
+        for status in ["completed", "cancelled"] {
+            let wrote =
+                record_background_task_terminal(&inbox, "bt-ok", "p", 0, status, None, 1_000)
+                    .unwrap();
+            assert!(!wrote, "{status} must not write an inbox item");
+        }
+        assert_eq!(
+            inbox
+                .list(
+                    None,
+                    Some(shannon_core::inbox_store::SOURCE_BACKGROUND_TASK),
+                    10
+                )
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn failed_background_task_without_error_text_writes_no_item() {
+        // A failure whose error text is empty/whitespace has nothing useful
+        // to triage on — the panel row (status + output) still shows it.
+        let inbox = bg_inbox();
+        for error in [None, Some(""), Some("   ")] {
+            let wrote =
+                record_background_task_terminal(&inbox, "bt-err", "p", 0, "failed", error, 1_000)
+                    .unwrap();
+            assert!(!wrote, "error {error:?} must not write an item");
+        }
+        assert_eq!(
+            inbox
+                .list(
+                    None,
+                    Some(shannon_core::inbox_store::SOURCE_BACKGROUND_TASK),
+                    10
+                )
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn background_task_inbox_fields_are_bounded_and_single_line() {
+        let inbox = bg_inbox();
+        let long_prompt = format!("{}\nsecond line", "x".repeat(500));
+        let long_error = "boom ".repeat(400);
+        record_background_task_terminal(
+            &inbox,
+            "bt-long",
+            &long_prompt,
+            0,
+            "failed",
+            Some(&long_error),
+            1_000,
+        )
+        .unwrap();
+        let item = &inbox
+            .list(
+                None,
+                Some(shannon_core::inbox_store::SOURCE_BACKGROUND_TASK),
+                10,
+            )
+            .unwrap()[0];
+        assert!(item.title.chars().count() <= 121, "{}", item.title);
+        assert!(!item.title.contains('\n'));
+        assert!(item.error.as_deref().unwrap().chars().count() <= 501);
+        assert!(!item.summary.contains('\n'));
+    }
+
+    #[test]
+    fn terminal_status_classification() {
+        assert!(!is_terminal_task_status("running"));
+        assert!(is_terminal_task_status("completed"));
+        assert!(is_terminal_task_status("failed"));
+        assert!(is_terminal_task_status("cancelled"));
+    }
+}
+
+// ── A-18 (R4 group 7): `stream_step` — the cancel-vs-event race ────────
+//
+// The send_message consume loop used to poll the cancellation token only
+// between engine events, so a stop during a silent tool execution (no
+// progress frames) did nothing until the tool finished. `stream_step` races
+// the token against the next event; these tests pin the three outcomes at
+// the same seam the loop consumes.
+
+#[cfg(test)]
+mod cancel_race_tests {
+    use super::*;
+
+    use futures::stream::{self, StreamExt as _};
+
+    fn a_progress_event(msg: &str) -> Result<QueryEvent, String> {
+        Ok(QueryEvent::Progress {
+            query_id: uuid::Uuid::nil(),
+            message: msg.to_string(),
+        })
+    }
+
+    /// The A-18 core: a stop lands IMMEDIATELY while the stream is silent
+    /// (a tool running with no progress frames, an LLM stretch) — the old
+    /// event-boundary poll would hang here forever. Bounded with a timeout
+    /// so a regression back to event-boundary polling fails fast instead of
+    /// hanging the suite.
+    #[tokio::test]
+    async fn cancel_fires_while_the_stream_is_silent() {
+        let token = CancellationToken::new();
+        // Cancel from the side once the race has begun (and reached its
+        // silent await).
+        let canceller = tokio::spawn({
+            let token = token.clone();
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                token.cancel();
+            }
+        });
+        let mut never_stream = std::pin::pin!(stream::pending::<Result<QueryEvent, String>>());
+        let never = never_stream.next();
+
+        let step = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream_step(&token, never),
+        )
+        .await
+        .expect("cancel must win while the stream never yields");
+        canceller.await.expect("canceller task");
+
+        assert!(
+            matches!(step, StreamStep::Cancelled),
+            "a stop must land while the engine is silent, got {step:?}"
+        );
+    }
+
+    /// No cancel: events still flow one by one and the stream end becomes
+    /// `Ended` — the loop's non-cancel exit is unchanged.
+    #[tokio::test]
+    async fn events_flow_and_the_end_is_ended_without_cancel() {
+        let token = CancellationToken::new();
+        let events = stream::iter(vec![a_progress_event("a"), a_progress_event("b")]);
+        let mut events = std::pin::pin!(events);
+
+        let first = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream_step(&token, events.next()),
+        )
+        .await
+        .expect("first event arrives");
+        assert!(
+            matches!(&first, StreamStep::Event(Ok(QueryEvent::Progress { message, .. })) if message == "a"),
+            "the first engine event must pass through, got {first:?}"
+        );
+
+        let second = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream_step(&token, events.next()),
+        )
+        .await
+        .expect("second event arrives");
+        assert!(
+            matches!(&second, StreamStep::Event(Ok(QueryEvent::Progress { message, .. })) if message == "b"),
+            "the second engine event must pass through, got {second:?}"
+        );
+
+        let end = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream_step(&token, events.next()),
+        )
+        .await
+        .expect("stream end arrives");
+        assert!(
+            matches!(end, StreamStep::Ended),
+            "a drained stream must map to Ended, got {end:?}"
+        );
+    }
+
+    /// `biased` + cancel-first keeps the old loop-top order: an already
+    /// cancelled token discards even a QUEUED event (the old guard checked
+    /// the token before dequeuing).
+    #[tokio::test]
+    async fn an_already_cancelled_token_discards_a_queued_event() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut source = std::pin::pin!(stream::iter(vec![a_progress_event("never surfaced")]));
+        let queued = source.next();
+
+        let step = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream_step(&token, queued),
+        )
+        .await
+        .expect("the race resolves");
+        assert!(
+            matches!(step, StreamStep::Cancelled),
+            "a queued event must not preempt a fired token (old loop-top order), got {step:?}"
+        );
+    }
+}
+
+/// Legacy ② — wire pins for the background-task runner's compaction utility
+/// slot: `background_task_engine` (the build shared with
+/// `start_background_task`'s spawn closure) carries the slot client resolved
+/// at spawn time, and stays byte-identical when the slot is unconfigured.
+#[cfg(test)]
+mod background_task_slot_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn configured_compaction_slot_rides_the_background_task_engine() {
+        use crate::utility_tier::test_support::{
+            SLOT_MODEL_ID, compression_slot_config, install_config,
+        };
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", true)).await;
+        let aux_compaction = crate::utility_tier::resolve_auxiliary_client(
+            &state,
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await
+        .expect("slot resolves");
+
+        let engine = background_task_engine(
+            LlmClient::new(LlmClientConfig::default()),
+            Some(aux_compaction),
+            Arc::new(ToolRegistry::new()),
+            PermissionManager::new(),
+            &state.memory_store,
+            true,
+        );
+        let pinned = engine
+            .auxiliary_compaction_client()
+            .expect("the task engine carries the slot client");
+        assert_eq!(pinned.model(), SLOT_MODEL_ID);
+        assert_eq!(pinned.base_url(), "http://127.0.0.1:1");
+    }
+
+    #[tokio::test]
+    async fn unconfigured_slot_leaves_the_background_task_engine_default() {
+        use crate::utility_tier::test_support::{compression_slot_config, install_config};
+
+        let state = AppState::new();
+        install_config(&state, compression_slot_config("http://127.0.0.1:1", false)).await;
+        let aux_compaction = crate::utility_tier::resolve_auxiliary_client(
+            &state,
+            shannon_types::provider_config::AuxRole::Compression,
+        )
+        .await;
+        assert!(aux_compaction.is_none(), "unconfigured slot → None");
+
+        let engine = background_task_engine(
+            LlmClient::new(LlmClientConfig::default()),
+            aux_compaction,
+            Arc::new(ToolRegistry::new()),
+            PermissionManager::new(),
+            &state.memory_store,
+            true,
+        );
+        assert!(
+            engine.auxiliary_compaction_client().is_none(),
+            "None pin = the pre-slot behavior"
+        );
     }
 }

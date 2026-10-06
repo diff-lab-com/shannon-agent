@@ -92,12 +92,48 @@ export function pairPopMessage(pairToken: string, devicePublicKeyB64Url: string)
   return `${pairToken}:${devicePublicKeyB64Url}`;
 }
 
-/** `shannon/device.resume` anti-replay: signs deviceId + timestamp. */
-export function resumeMessage(deviceId: string, timestampMs: number): string {
-  return `${deviceId}:${timestampMs}`;
+/** `shannon/device.resume` anti-replay: signs deviceId + timestamp.
+ *  When the client supplies a `nonce` (recommended — the gateway enforces
+ *  single-use per device within the skew window), it is bound into the signed
+ *  message so a captured signature can't be replayed even once. */
+export function resumeMessage(deviceId: string, timestampMs: number, nonce?: string): string {
+  return nonce === undefined ? `${deviceId}:${timestampMs}` : `${deviceId}:${timestampMs}:${nonce}`;
 }
 
-/** `shannon/approval/decide`: mandatory per-decision device signature. */
-export function approvalMessage(requestId: string, choice: "allow" | "deny"): string {
-  return `${requestId}:${choice}`;
+/** `shannon/approval/decide`: mandatory per-decision device signature (v1).
+ *  P3-3: a `session` scope is bound into the signed bytes (suffix `:session`)
+ *  so a captured once-decision cannot be replayed as a session grant; the
+ *  no-scope shape is byte-identical to the pre-P3-3 contract. */
+export function approvalMessage(
+  requestId: string,
+  choice: "allow" | "deny",
+  scope?: "once" | "session",
+): string {
+  const suffix = scope === "session" ? ":session" : "";
+  return `${requestId}:${choice}${suffix}`;
+}
+
+/**
+ * `shannon/approval/decide` v2 anti-replay window (±5 minutes), shared with the
+ * phone (`lib/src/protocol/methods.dart`) and the mock server — one value in
+ * three repos (docs/approval-decide-signing.md §3). Bounds a captured decision's
+ * replayability; v1 had no expiry at all.
+ */
+export const approvalDecideTimestampWindowMs = 300_000;
+
+/**
+ * `shannon/approval/decide` v2 (anti-replay): the decision is signed over the
+ * epoch-ms `timestamp` the phone attaches as a request param. The gateway
+ * rejects timestamps outside `approvalDecideTimestampWindowMs` BEFORE verifying,
+ * and never falls back to v1 verification for a timestamped request — the
+ * message bytes ARE the version (docs/approval-decide-signing.md §2/§6).
+ */
+export function approvalMessageV2(
+  requestId: string,
+  choice: "allow" | "deny",
+  timestampMs: number,
+  scope?: "once" | "session",
+): string {
+  const suffix = scope === "session" ? ":session" : "";
+  return `${requestId}:${choice}:${timestampMs}${suffix}`;
 }

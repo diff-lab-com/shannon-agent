@@ -67,21 +67,9 @@ pub struct ToolPermissionContext {
     /// Blocked rules
     pub blocked_rules: Vec<String>,
 
-    /// Approval mode
-    pub approval_mode: ApprovalMode,
-}
-
-/// Tool approval mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ApprovalMode {
-    /// Auto-approve all tools
-    Auto,
-
-    /// Manual approval for each tool
-    Manual,
-
-    /// Smart approval based on context
-    Smart,
+    /// Approval mode (P3-5: the engine's single `ApprovalMode` — the old
+    /// parallel `Auto | Manual | Smart` enum is gone).
+    pub approval_mode: shannon_engine::permissions::ApprovalMode,
 }
 
 /// Command execution context
@@ -166,7 +154,7 @@ impl Default for ToolPermissionContext {
         Self {
             always_allow_rules: HashMap::new(),
             blocked_rules: vec![],
-            approval_mode: ApprovalMode::Manual,
+            approval_mode: shannon_engine::permissions::ApprovalMode::Ask,
         }
     }
 }
@@ -205,7 +193,10 @@ mod tests {
         let ctx = ToolPermissionContext::default();
         assert!(ctx.always_allow_rules.is_empty());
         assert!(ctx.blocked_rules.is_empty());
-        assert_eq!(ctx.approval_mode, ApprovalMode::Manual);
+        assert_eq!(
+            ctx.approval_mode,
+            shannon_engine::permissions::ApprovalMode::Ask
+        );
     }
 
     #[test]
@@ -224,19 +215,6 @@ mod tests {
         assert!(ctx.messages.is_empty());
         assert!(ctx.options.model.is_none());
         assert!(!ctx.options.stream);
-    }
-
-    #[test]
-    fn approval_mode_serde_roundtrip() {
-        for mode in [
-            ApprovalMode::Auto,
-            ApprovalMode::Manual,
-            ApprovalMode::Smart,
-        ] {
-            let json = serde_json::to_string(&mode).unwrap();
-            let back: ApprovalMode = serde_json::from_str(&json).unwrap();
-            assert_eq!(mode, back);
-        }
     }
 
     #[test]

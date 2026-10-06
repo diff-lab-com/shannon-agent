@@ -22,12 +22,15 @@ export function TaskStep({ task, setTask, onContinue }: TaskStepProps) {
       footer={
         <>
           <span />
+          {/* Review 2026-09-16: this is a scroll anchor, not a submit — two
+              identical primary CTAs read as duplicate submits. */}
           <Button
             onClick={onContinue}
             disabled={task === null}
-            className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            variant="outline"
+            className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
           >
-            {intl.formatMessage({ id: 'welcome.task.continue' })}
+            {intl.formatMessage({ id: 'welcome.task.pickProvider' })}
           </Button>
         </>
       }

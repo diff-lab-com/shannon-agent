@@ -101,8 +101,7 @@ The app follows the standard Tauri v2 split:
    - `commands_mcp.rs` — MCP server lifecycle, skills, addons.
    - `commands_plugins.rs` — plugin marketplace + catalog upstreams.
    - `commands_agents.rs` — agent definitions + inter-agent message history.
-   - `commands_billing.rs` — billing demo data (plan, cost history,
-     invoices) plus `iso_days_ago` helper.
+   - `commands_usage.rs` — local usage stats aggregation (plan/cost-history demo data removed in R2 F4 — no billing backend; the usage ledger is the source of record)
    - `commands_permissions.rs` — permission request/respond commands.
    - `commands_files.rs` — text save, file diff/apply, file tree,
      working-dir info.
@@ -217,9 +216,22 @@ behavior is delegated to the engine crates.
   without an explicit reason.
 - **Coverage**: `vitest.config.ts` enforces 80% lines / 60% functions / 75%
   branches / 80% statements. Files explicitly excluded are listed there.
+- **Status feedback**: errors and loading states have exactly one component
+  each per scope — page-level `ui/error-state`, section-level `ui/banner`,
+  action failures toast; known layouts use Skeleton, inline waits use
+  `Spinner`/`LoadingState`. See `ui/docs/status-feedback.md` before inventing
+  a new error/loading pattern.
 - **CHANGELOG.md** is per-sprint, grouped by category (Features, Fixes,
   Accessibility, i18n, Dependencies). When bumping the engine pin, record
   what changed in the engine and why.
+- **材质规则（liquid glass）**：玻璃材质只用两个工具类 —— `glass-surface`
+  （常驻 chrome：Header/Footer/侧栏）与 `glass-overlay`（浮层：菜单/弹窗）。
+  禁止在 tsx 直写 `backdrop-filter` / `backdrop-blur-*`（scrim/veil 遮罩除外，
+  需行内注释说明豁免原因）。同屏 backdrop 元素预算 ≤4，由
+  `ui/e2e/glass-budget.spec.ts` 守护。
+- **令牌规则**：字号/阴影/间距/时长/宽度必须走刻度（`check-design-tokens`
+  已在 lint 链强制）；新的字号需求先在 `@theme` 里定义角色令牌再使用，
+  不要在组件里写裸值。
 - **Icon policy**: every icon uses Material Symbols (outlined). Size uses the
   `icon-xs|sm|md|lg|xl|2xl` utility classes (12/16/20/24/32/48 px) defined
   in `ui/src/index.css`. The font (`@fontsource-variable/material-symbols-outlined`)

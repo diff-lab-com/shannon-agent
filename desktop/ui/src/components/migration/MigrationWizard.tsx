@@ -11,6 +11,7 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { Modal, ModalBody } from '@/components/ui/modal'
 import { Spinner } from '@/components/ui/loading-state'
+import ErrorState from '@/components/ui/error-state'
 import * as api from '@/lib/tauri-api'
 import type {
   MigrationAsset,
@@ -60,6 +61,9 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
   // Per-item choice for existing, differing targets (rename is the safe default).
   const [conflictChoices, setConflictChoices] = useState<Record<string, 'overwrite' | 'rename' | 'skip'>>({})
   const [report, setReport] = useState<api.MigrationApplyReport | null>(null)
+  // P1-37: a failed scan used to be rendered as "nothing to import" — keep
+  // it distinct from the genuine empty state and offer a retry.
+  const [scanError, setScanError] = useState<string | null>(null)
 
   const requestIdRef = useRef(0)
 
@@ -69,6 +73,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
       setPhase('source')
       setSource(null)
       setScan(null)
+      setScanError(null)
       setPreviews({})
       setSelected({})
       setExpanded({})
@@ -81,6 +86,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
     async (src: MigrationSourceId) => {
       const requestId = ++requestIdRef.current
       setSource(src)
+      setScanError(null)
       setPhase('scanning')
       try {
         const result = await backend.migrationScan(src)
@@ -112,8 +118,11 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
         setPhase('review')
       } catch (e) {
         if (requestIdRef.current !== requestId) return
+        // P1-37: an IPC failure is not "nothing to import" — surface the
+        // error with a retry instead of faking an empty review list.
         console.error('migrationScan failed:', e)
-        setScan({ source: src, items: [], notFound: [], errors: [] })
+        setScan(null)
+        setScanError(e instanceof Error ? e.message : String(e))
         setPhase('review')
       }
     },
@@ -197,7 +206,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
                   data-testid={`migration-source-${s.id}`}
                   className="w-full text-left flex items-center gap-md p-lg rounded-xl border border-outline-variant/50 bg-surface-container-low hover:border-primary/60 hover:bg-surface-container cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                 >
-                  <span className="material-symbols-outlined text-primary text-[28px]" aria-hidden="true">{s.icon}</span>
+                  <span className="material-symbols-outlined text-primary icon-xl" aria-hidden="true">{s.icon}</span>
                   <span>
                     <span className="block font-headline-md text-on-surface">{t(s.labelKey)}</span>
                     <span className="block font-body-sm text-on-surface-variant mt-xs">{t(s.descKey)}</span>
@@ -209,14 +218,29 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
 
           {phase === 'scanning' && (
             <div className="flex flex-col items-center gap-md py-2xl" data-testid="migration-scanning">
-              <Spinner className="text-primary text-[28px]" />
+              <Spinner className="text-primary icon-xl" />
               <p className="font-body-md text-on-surface-variant">
                 {t('welcome.migration.scan.running', { source: source ?? '' })}
               </p>
             </div>
           )}
 
-          {phase === 'review' && scan && (
+          {phase === 'review' && scanError && (
+            <div data-testid="migration-scan-error">
+              <ErrorState
+                title={t('welcome.migration.scan.failed.title')}
+                description={t('welcome.migration.scan.failed.desc', { error: scanError, source: source ?? '' })}
+                action={{
+                  label: t('welcome.migration.scan.retry'),
+                  onClick: () => {
+                    if (source) void runScan(source)
+                  },
+                }}
+              />
+            </div>
+          )}
+
+          {phase === 'review' && scan && !scanError && (
             <div data-testid="migration-review">
               {scan.items.length === 0 ? (
                 <p className="font-body-md text-on-surface-variant py-xl text-center">
@@ -300,9 +324,9 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
                                     aria-expanded={isExpanded}
                                     aria-label={t('welcome.migration.review.expandAria', { name: asset.name })}
                                     data-testid={`migration-expand-${asset.id}`}
-                                    className="text-on-surface-variant hover:text-primary cursor-pointer rounded px-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                                    className="text-on-surface-variant hover:text-primary cursor-pointer rounded-sm px-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                                   >
-                                    <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                                    <span className="material-symbols-outlined icon-md" aria-hidden="true">
                                       {isExpanded ? 'expand_less' : 'expand_more'}
                                     </span>
                                   </button>
@@ -334,7 +358,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
                                       }))
                                     }
                                     data-testid={`migration-conflict-${asset.id}`}
-                                    className="font-label-sm bg-surface-container-low border border-outline-variant/50 rounded px-xs py-0.5 text-on-surface cursor-pointer"
+                                    className="font-label-sm bg-surface-container-low border border-outline-variant/50 rounded-sm px-xs py-0.5 text-on-surface cursor-pointer"
                                   >
                                     <option value="rename">{t('welcome.migration.conflict.rename')}</option>
                                     <option value="overwrite">{t('welcome.migration.conflict.overwrite')}</option>
@@ -375,7 +399,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
 
           {phase === 'applying' && (
             <div className="flex flex-col items-center gap-md py-2xl" data-testid="migration-applying">
-              <Spinner className="text-primary text-[28px]" />
+              <Spinner className="text-primary icon-xl" />
               <p className="font-body-md text-on-surface-variant">{t('welcome.migration.apply.running')}</p>
             </div>
           )}
@@ -393,7 +417,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
                 })}
                 className="flex gap-lg font-body-md text-on-surface bg-surface-container-low rounded-xl p-md"
               >
-                <span className="text-green-700 dark:text-green-400">
+                <span className="text-success">
                   ✓ {t('welcome.migration.result.imported', { count: report.imported })}
                 </span>
                 <span className="text-on-surface-variant">
@@ -424,7 +448,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
             variant="ghost"
             onClick={onClose}
             disabled={phase === 'scanning' || phase === 'applying'}
-            className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer rounded"
+            className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer rounded-sm"
           >
             {t('welcome.migration.later')}
           </Button>
@@ -434,7 +458,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
                 <Button
                   variant="ghost"
                   onClick={() => setPhase('source')}
-                  className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer rounded"
+                  className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer rounded-sm"
                 >
                   {t('welcome.migration.back')}
                 </Button>

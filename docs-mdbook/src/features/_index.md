@@ -1,6 +1,6 @@
 # Features
 
-Shannon Code provides a rich set of features organized into these categories:
+Shannon provides a rich set of features organized into these categories:
 
 - **[Tool System](tools.md)** — File operations, bash execution, search, image analysis
 - **[MCP Extensions](mcp.md)** — Model Context Protocol for extensibility

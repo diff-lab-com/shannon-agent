@@ -7,6 +7,36 @@ use rust_i18n::t;
 
 use super::Repl;
 
+/// Which agents UI a key event toggles (F34).
+///
+/// Ctrl+A used to be triple-shadowed in the main key match: only the first
+/// arm (agents panel toggle) ever ran, leaving the dashboard toggle and the
+/// readline start-of-line behavior dead code. The dispatch is now decided by
+/// this one function so there is exactly one binding per key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentUiToggle {
+    /// Agents panel dropdown — documented as Ctrl+A in the F1 key hints
+    /// (`ui.help_active_agents`), in `keybindings.rs`, and in `state.rs`.
+    Panel,
+    /// Agent dashboard expand/collapse — lives on Alt+A so it no longer
+    /// fights the documented Ctrl+A panel binding.
+    Dashboard,
+}
+
+/// Resolve the agents-UI toggle action for a key event, if any.
+pub(crate) fn agent_ui_toggle_for_key(key: &KeyEvent) -> Option<AgentUiToggle> {
+    if key.code != KeyCode::Char('a') {
+        return None;
+    }
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Some(AgentUiToggle::Panel);
+    }
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        return Some(AgentUiToggle::Dashboard);
+    }
+    None
+}
+
 /// Open an external editor ($VISUAL or $EDITOR, fallback to vi) with a temp file.
 /// Returns the edited content on success.
 fn open_external_editor(
@@ -247,8 +277,19 @@ pub fn handle_input(
             open_command_palette(repl);
             Ok(())
         }
-        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        // F34: Ctrl+A toggles the agents panel (the documented binding — F1
+        // key hints + keybindings.rs). The dashboard got Alt+A below; the
+        // readline start-of-line behavior stays on the documented Home key.
+        KeyCode::Char('a') if agent_ui_toggle_for_key(&key) == Some(AgentUiToggle::Panel) => {
             repl.state.agents_panel_visible = !repl.state.agents_panel_visible;
+            Ok(())
+        }
+        // F34: agent dashboard expand/collapse on a distinct key (Alt+A).
+        // This was previously a dead Ctrl+A arm that never ran.
+        KeyCode::Char('a') if agent_ui_toggle_for_key(&key) == Some(AgentUiToggle::Dashboard) => {
+            if let Some(ref mut dashboard) = repl.state.agent_dashboard {
+                dashboard.toggle_expand();
+            }
             Ok(())
         }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -402,13 +443,9 @@ pub fn handle_input(
             );
             Ok(())
         }
-        // Ctrl+A: toggle agent dashboard
-        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if let Some(ref mut dashboard) = repl.state.agent_dashboard {
-                dashboard.toggle_expand();
-            }
-            Ok(())
-        }
+        // F34: the dead Ctrl+A dashboard-toggle arm that used to live here
+        // was removed — dashboard expansion is on Alt+A (see the dispatch
+        // table in `agent_ui_toggle_for_key`).
         // Alt+F: toggle all tool messages collapsed/expanded
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
             repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
@@ -535,14 +572,9 @@ pub fn handle_input(
             update_auto_completions(repl);
             Ok(())
         }
-        // Ctrl+A: move to start of line (readline convention)
-        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let col = repl.prompt.cursor_position();
-            for _ in 0..col {
-                repl.prompt.cursor_left();
-            }
-            Ok(())
-        }
+        // F34: the dead Ctrl+A move-to-start-of-line arm that used to live
+        // here was removed. Start-of-line is on the documented Home key
+        // (and the /help readline list); Ctrl+A toggles the agents panel.
         KeyCode::Char(c) => {
             repl.prompt.add_char_smart(c);
             update_auto_completions(repl);
@@ -612,6 +644,16 @@ pub fn handle_input(
             if !repl.state.completion_suggestions.is_empty() {
                 repl.state.completion_suggestions.clear();
                 repl.state.completion_suggestion_index = 0;
+                return Ok(());
+            }
+            // P0-1: while an inline `!shell` job runs, Esc kills its whole
+            // process group and is consumed — it must not trigger the
+            // double-Esc /rewind or the vim insert→normal switch. Every
+            // overlay/dialog handler above already returned for its own keys,
+            // so an open overlay wins over the cancel (its Esc closes the
+            // overlay; the job keeps running and the next Esc cancels it).
+            if repl.state.shell_job.is_some() {
+                super::commands::cancel_inline_shell(repl);
                 return Ok(());
             }
             // Double-Esc on empty input triggers /undo
@@ -1098,7 +1140,14 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
             "preview",
             "--preview",
         ],
-        "permissions" | "perm" | "perms" => &["allow", "deny", "reset", "status"],
+        // R1-6 (decision ② step 1): /permissions manages permission profiles
+        // (the /profile command); the tool allow/deny view keeps /perms and
+        // /perm.
+        "permissions" => &["history", "list", "show", "set", "create"],
+        "perm" | "perms" => &["allow", "deny", "reset", "status"],
+        // R3-2: the provider/model profile manager (plural). /profile
+        // (singular) stays reserved for the permission-profile transition.
+        "profiles" => &["use", "new", "rename", "delete"],
         "plan" => &["create", "approve", "reject", "done", "status"],
         "review" => &["HEAD~1", "main...HEAD", "--staged", "--full"],
         "history" => &["--export"],
@@ -1687,7 +1736,7 @@ fn handle_tool_approval_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         Some(crate::widgets::tool_approval::ApprovalDecision::AllowOnce) => {
             repl.state.tool_approval.dismiss();
             // Forward to permission system
-            if let Some(ref tx) = repl.state.permission_response_tx.take() {
+            if let Some(tx) = repl.state.permission_response_tx.take() {
                 let _ = tx.send(shannon_engine::permissions::PermissionChoice::AllowOnce);
             }
             repl.state.permission_dialog = None;
@@ -1707,14 +1756,14 @@ fn handle_tool_approval_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 );
             }
             repl.state.tool_approval.dismiss();
-            if let Some(ref tx) = repl.state.permission_response_tx.take() {
+            if let Some(tx) = repl.state.permission_response_tx.take() {
                 let _ = tx.send(shannon_engine::permissions::PermissionChoice::AlwaysAllow);
             }
             repl.state.permission_dialog = None;
         }
         Some(crate::widgets::tool_approval::ApprovalDecision::Deny) => {
             repl.state.tool_approval.dismiss();
-            if let Some(ref tx) = repl.state.permission_response_tx.take() {
+            if let Some(tx) = repl.state.permission_response_tx.take() {
                 let _ = tx.send(shannon_engine::permissions::PermissionChoice::Deny);
             }
             repl.state.permission_dialog = None;
@@ -2115,6 +2164,12 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 ///
 /// Typed characters build the model id; Backspace deletes; Enter confirms the
 /// typed id (closing the picker) only when non-empty; Esc returns to the list.
+///
+/// Landing semantics differ by how the picker was opened (ruling ⑤
+/// follow-up): a picker forced open by `/provider <name>` (catalog-less
+/// target) confirms as `<target>/<typed id>` through the single switch path,
+/// while a plain `/model` picker keeps the id on the currently selected
+/// provider as before.
 fn handle_model_picker_manual_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Char(c) => {
@@ -2137,6 +2192,22 @@ fn handle_model_picker_manual_input(repl: &mut Repl, key: KeyEvent) -> Result<()
                 }
             });
             if let Some(id) = typed {
+                // Ruling ⑤ follow-up: a picker opened by a forced `/provider`
+                // switch carries the switch's target provider. A manually
+                // typed id confirmed here is that switch's explicit model, so
+                // it lands on the TARGET through the same shared path as
+                // `/provider <target> <id>` — never as a replacement id on
+                // the still-active pre-switch provider.
+                if let Some(target) = repl
+                    .state
+                    .model_picker
+                    .as_ref()
+                    .and_then(|mp| mp.switch_target().cloned())
+                {
+                    repl.state.model_picker = None;
+                    crate::repl::commands::apply_explicit_provider_model(repl, target, &id)?;
+                    return Ok(());
+                }
                 repl.state.model_picker = None;
                 repl.state.model = Some(id);
                 crate::repl::preferences::save_preferences(
@@ -2820,6 +2891,13 @@ fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 dashboard.enter_detail();
                 Ok(())
             }
+            // F34: 'o' toggles the overlay back to the compact bar (and,
+            // via Alt+A, back again) so the expand/collapse cycle is
+            // reachable from inside the dashboard too.
+            KeyCode::Char('o') => {
+                dashboard.toggle_expand();
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -2828,6 +2906,125 @@ fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ruling ⑤ follow-up (legacy ⑤): a picker forced open by
+    /// `/provider <catalog-less-target>` must land a manually typed id on
+    /// the switch TARGET through the single switch path — not as a
+    /// replacement id on the still-active pre-switch provider.
+    #[test]
+    fn force_picker_manual_input_lands_on_switch_target() {
+        use crate::widgets::select::ModelPickerWidget;
+        use shannon_engine::api::LlmProvider;
+
+        let mut repl = Repl::new().unwrap();
+        // Pre-switch state: Anthropic / Sonnet active.
+        repl.state.model = Some("claude-sonnet-4-20250514".to_string());
+        repl.state.selected_provider = Some(LlmProvider::Anthropic);
+
+        // The exact picker state the ForcePicker arm leaves behind
+        // (provider.rs): current-model picker focused onto the target.
+        let mut picker = ModelPickerWidget::new(repl.state.model.as_deref());
+        picker.focus_provider(&LlmProvider::Bedrock);
+        repl.state.model_picker = Some(picker);
+
+        // `i` opens manual entry; typed chars build the id; Enter confirms.
+        let key = |code: KeyCode| KeyEvent::new(code, KeyModifiers::NONE);
+        handle_input(&mut repl, key(KeyCode::Char('i')), None).unwrap();
+        for c in "my-bedrock-profile".chars() {
+            handle_input(&mut repl, key(KeyCode::Char(c)), None).unwrap();
+        }
+        handle_input(&mut repl, key(KeyCode::Enter), None).unwrap();
+
+        assert!(
+            repl.state.model_picker.is_none(),
+            "confirming closes the picker"
+        );
+        assert_eq!(
+            repl.state.selected_provider,
+            Some(LlmProvider::Bedrock),
+            "manual id in a forced picker must land on the switch target provider"
+        );
+        assert_eq!(repl.state.model, Some("my-bedrock-profile".to_string()));
+        // The shared explicit-path message (same as `/provider <name> <id>`),
+        // not the plain picker's "Model set to:" line.
+        let last = repl.chat.last_message().unwrap().content.clone();
+        assert!(last.contains("my-bedrock-profile"), "got {last}");
+        assert!(
+            !last.contains("Model set to:"),
+            "forced-picker confirm uses the provider-switch message: {last}"
+        );
+    }
+
+    /// The plain `/model` picker's manual entry keeps its pre-existing
+    /// semantics: the typed id replaces the model on the CURRENT provider,
+    /// which itself is untouched.
+    #[test]
+    fn plain_picker_manual_input_keeps_current_provider() {
+        use crate::widgets::select::ModelPickerWidget;
+        use shannon_engine::api::LlmProvider;
+
+        let mut repl = Repl::new().unwrap();
+        repl.state.model = Some("gpt-4o".to_string());
+        repl.state.selected_provider = Some(LlmProvider::OpenAI);
+        // Plain `/model` picker: constructed without focus_provider, so no
+        // switch target is recorded.
+        repl.state.model_picker = Some(ModelPickerWidget::new(Some("gpt-4o")));
+
+        let key = |code: KeyCode| KeyEvent::new(code, KeyModifiers::NONE);
+        handle_input(&mut repl, key(KeyCode::Char('i')), None).unwrap();
+        for c in "my-fine-tune".chars() {
+            handle_input(&mut repl, key(KeyCode::Char(c)), None).unwrap();
+        }
+        handle_input(&mut repl, key(KeyCode::Enter), None).unwrap();
+
+        assert!(repl.state.model_picker.is_none());
+        assert_eq!(repl.state.model, Some("my-fine-tune".to_string()));
+        assert_eq!(
+            repl.state.selected_provider,
+            Some(LlmProvider::OpenAI),
+            "a plain picker's manual id must keep the active provider"
+        );
+        let last = repl.chat.last_message().unwrap().content.clone();
+        assert!(
+            last.contains("Model set to: my-fine-tune"),
+            "plain picker keeps the model-set message: {last}"
+        );
+    }
+
+    /// F34: the Ctrl+A / Alt+A dispatch table. Ctrl+A belongs to the agents
+    /// panel (the documented binding); the dashboard toggle lives on Alt+A;
+    /// a plain 'a' must keep typing a character.
+    #[test]
+    fn test_agent_ui_toggle_dispatch() {
+        let k = |code: KeyCode, mods: KeyModifiers| crossterm::event::KeyEvent::new(code, mods);
+
+        assert_eq!(
+            agent_ui_toggle_for_key(&k(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+            Some(AgentUiToggle::Panel),
+            "Ctrl+A = agents panel (documented in F1 key hints)"
+        );
+        assert_eq!(
+            agent_ui_toggle_for_key(&k(KeyCode::Char('a'), KeyModifiers::ALT)),
+            Some(AgentUiToggle::Dashboard),
+            "Alt+A = dashboard expand/collapse"
+        );
+        assert_eq!(
+            agent_ui_toggle_for_key(&k(KeyCode::Char('a'), KeyModifiers::NONE)),
+            None,
+            "plain 'a' types a character"
+        );
+        assert_eq!(
+            agent_ui_toggle_for_key(&k(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+            None,
+            "other Ctrl+letters are not agents toggles"
+        );
+        // Only one toggle can ever match — no shadowed arms.
+        let key = k(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_ne!(
+            agent_ui_toggle_for_key(&key),
+            Some(AgentUiToggle::Dashboard)
+        );
+    }
 
     #[test]
     fn test_complete_command_args_compact() {
@@ -2920,6 +3117,7 @@ mod tests {
             "ci",
             "compact",
             "permissions",
+            "profiles",
             "plan",
             "review",
             "history",
@@ -2977,11 +3175,34 @@ mod tests {
             "credentials and creds should have same completions"
         );
 
-        let perm = complete_command_args("permissions", "");
-        let perm_alias = complete_command_args("perms", "");
+        // R1-6: /perms and /perm are still the same (tool) command, but
+        // /permissions moved to the permission-profile command — its
+        // completions are the profile subcommands instead.
+        let perm = complete_command_args("perms", "");
+        let perm_alias = complete_command_args("perm", "");
         assert_eq!(
             perm, perm_alias,
-            "permissions and perms should have same completions"
+            "perms and perm should have same completions"
+        );
+        assert_eq!(
+            perm,
+            vec![
+                "allow".to_string(),
+                "deny".to_string(),
+                "reset".to_string(),
+                "status".to_string()
+            ]
+        );
+        assert_eq!(
+            complete_command_args("permissions", ""),
+            vec![
+                "history".to_string(),
+                "list".to_string(),
+                "show".to_string(),
+                "set".to_string(),
+                "create".to_string()
+            ],
+            "/permissions should complete permission-profile subcommands"
         );
     }
 
@@ -3595,5 +3816,58 @@ mod tests {
         let diag = complete_command_args("diag", "");
         assert!(diag.contains(&"--full".to_string()));
         assert!(diag.contains(&"--json".to_string()));
+    }
+
+    /// P0-1 Esc precedence: with the /help overlay open while an inline
+    /// `!shell` job runs, Esc is consumed by the overlay's own handler — it
+    /// closes the overlay and must NOT kill the job. Only once no overlay is
+    /// left does Esc cancel the running job.
+    #[test]
+    fn esc_with_overlay_open_does_not_cancel_inline_shell_job() {
+        use crate::repl::commands::{poll_inline_shell_jobs, start_inline_shell};
+        use crate::repl::state::HelpOverlayState;
+
+        let mut repl = Repl::new().expect("test repl");
+        start_inline_shell(&mut repl, "sleep 30", 30);
+        assert!(repl.state.shell_job.is_some(), "job in flight");
+        let idx = repl.chat.message_count() - 1;
+        assert!(
+            repl.chat.messages[idx]
+                .content
+                .contains("running, Esc to cancel")
+        );
+
+        // /help overlay open on top of the running job: its Esc wins.
+        repl.state.help_overlay = Some(HelpOverlayState::default());
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_input(&mut repl, esc, None).expect("overlay Esc handled");
+        assert!(
+            repl.state.help_overlay.is_none(),
+            "overlay closed by its own Esc handler"
+        );
+        assert!(
+            repl.state.shell_job.is_some(),
+            "job must survive the overlay's Esc"
+        );
+        assert!(
+            repl.chat.messages[idx]
+                .content
+                .contains("running, Esc to cancel"),
+            "placeholder untouched while the job runs"
+        );
+
+        // Overlay gone: the next Esc is the job-cancel.
+        handle_input(&mut repl, esc, None).expect("job-cancel Esc handled");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while repl.state.shell_job.is_some() && std::time::Instant::now() < deadline {
+            poll_inline_shell_jobs(&mut repl);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(repl.state.shell_job.is_none(), "job settled after cancel");
+        assert!(
+            repl.chat.messages[idx].content.contains("cancelled"),
+            "placeholder finalized as cancelled: {:?}",
+            repl.chat.messages[idx].content
+        );
     }
 }

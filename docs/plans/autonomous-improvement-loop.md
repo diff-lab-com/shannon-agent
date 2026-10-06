@@ -231,7 +231,7 @@ artifacts/2026-08-19T1400+0800/iter-03/
   summary.json       # 本迭代全任务汇总(含每任务时序/token 观察指标)
   perf.json          # just perf 12 项阈值结果 + 基线对比(P1b 起)
   triage.json        # 分类 + 签名聚类
-  fix/               # 修复会话简报、claude 输出、patch、fix-report.md
+  fix/               # 修复会话简报、claude 输出、patch、docs/archive/reports/fix-report-*.md（已归档）
   report.md          # 人读报告
 ```
 
@@ -310,7 +310,7 @@ claude -p "$(cat artifacts/.../fix/brief-01.md)" \
 - **输入(迭代简报,brief-*.md)**:本批签名的最小复现(命令 + 工件路径)、相关日志片段(截断)、建议排查的代码区域(triage 的启发式定位)、**输出契约**(见下)、约束(不动公共 API、遵循 CLAUDE.md、必须加回归测试)。perf_regress 简报额外附基线数字与可复现的基准命令;outcome_fail 简报附 verify 失败输出与期望产出。
 - **输出契约**(修复器必须遵守,Supervisor 校验):
   1. 产出 ≥1 个 commit(message 前缀 `fix(dogfood): <signature>`);
-  2. 附带 `fix-report.md`:根因、改动点、验证方式;
+  2. 附带 `docs/archive/reports/fix-report-*.md（已归档）`:根因、改动点、验证方式;
   3. 为该签名添加一个**回归测试**(失败任务的浓缩版);CI 门会跑它。
   4. 无法修复时输出 `BLOCKED: <原因>` 而不是硬凑补丁——BLOCKED 签名转人工队列,不再消耗会话。
 - **隔离与防串扰**:修复器运行带 `--settings` 指向最小配置,避免继承用户级 hooks(已知坑:本机有 Edit/Write 后自动 commit 的 hook,会把多文件修复拆成碎片 commit);worktree 内 `git` 操作仅限 add/commit,**无 push 权限**(allowlist 不含 push)。

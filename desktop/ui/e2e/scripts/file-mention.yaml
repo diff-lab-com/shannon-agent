@@ -1,0 +1,24 @@
+# ChatScript: file-mention — wave-2 journey #16（方案 §9.4 J16）。
+#
+# composer @ 文件引用：候选来自 get_file_tree（demo 固定树：src/main.rs、
+# src/lib.rs、README.md）+ list_file_index（demo 索引 3 条）。工作目录即
+# demo config 的 /Users/demo/workspace/my-startup，树内路径已是相对形式。
+#
+# 价值锚点：mention 以纯文本插入（`@相对路径 `，TUI 语义，无附件管线、
+# 无预检），发送后消息文本包含 @path —— turn 1 就是这条发送的 scripted
+# 回合。断言在 spec（chat-script.file-mention.spec.ts）。
+name: file-mention
+description: "@ 文件引用 — 菜单/模糊排序/键盘选择/纯文本插入 → 发送后消息含 @path"
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-mention
+      title: File mention
+      messages: []
+turns:
+  - user: "check @src/main.rs"
+    script:
+      - event: query:text
+        chunks:
+          - "读到了 src/main.rs 的引用——这是纯文本 @path，不走附件管线"

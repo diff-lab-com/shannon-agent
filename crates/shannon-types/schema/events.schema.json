@@ -396,6 +396,13 @@
       "error": {
         "type": "string"
       },
+      "error_kind": {
+        "description": "S1-1: structured failure classification (\"auth\" | \"quota\" | \"rate_limit\" | \"authz\" | \"other\"), engine-classified from the typed error. Additive — must mirror src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "query_id": {
         "type": "string"
       },
@@ -467,8 +474,28 @@
           "null"
         ]
       },
+      "pinned": {
+        "default": false,
+        "description": "Settings R3 T7 mirror — must mirror src/events.rs exactly.",
+        "type": "boolean"
+      },
+      "running": {
+        "description": "P0 sidebar telemetry mirror — must mirror src/events.rs exactly.",
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
       "title": {
         "type": "string"
+      },
+      "updated_at": {
+        "description": "P0 sidebar telemetry mirror — must mirror src/events.rs exactly.",
+        "format": "int64",
+        "type": [
+          "integer",
+          "null"
+        ]
       },
       "working_dir": {
         "type": [
@@ -685,6 +712,9 @@
       "is_error": {
         "type": "boolean"
       },
+      "meta": {
+        "description": "P1-⑤ mirror — must mirror src/events.rs exactly."
+      },
       "query_id": {
         "type": "string"
       },
@@ -695,6 +725,15 @@
         "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
         "type": [
           "string",
+          "null"
+        ]
+      },
+      "tokens_used": {
+        "description": "P1-⑤ mirror — must mirror src/events.rs exactly.",
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": [
+          "integer",
           "null"
         ]
       },

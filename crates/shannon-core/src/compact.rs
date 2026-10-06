@@ -53,6 +53,7 @@ use shannon_engine::api::{Message, MessageContent};
 use shannon_engine::compact::helpers::{
     estimate_message_tokens, estimate_tokens, extract_text_content, looks_like_code,
 };
+use shannon_engine::compact::safe_split_point;
 
 /// Compression strategy chosen by the [`Selector`].
 ///
@@ -384,6 +385,13 @@ fn apply_strategy(
 /// `target_tokens`. `target_tokens` is computed from `original_tokens`
 /// so we make progress on every call even when the caller has not
 /// supplied an explicit per-call budget.
+///
+/// F4b: both cut points (the tail boundary and the greedy stop index) are
+/// aligned through the engine's pair-aware [`safe_split_point`] — a raw
+/// token-count boundary can land between an assistant `tool_use` and its
+/// matching user `tool_result`, orphaning one half and drawing a 400 from
+/// strict providers. A pair may extend the kept tail (or shrink the
+/// dropped window) slightly; wire legality wins over the exact count.
 fn run_token_based(
     messages: &[Message],
     original_tokens: usize,
@@ -405,8 +413,10 @@ fn run_token_based(
         .position(|m| m.role != "system")
         .unwrap_or(messages.len());
 
-    // Tail we always keep.
-    let tail_start = messages.len().saturating_sub(keep);
+    // Tail we always keep, aligned so the boundary never separates a
+    // tool_use from its tool_result (F4b).
+    let raw_tail_start = messages.len().saturating_sub(keep);
+    let tail_start = safe_split_point(messages, raw_tail_start).min(messages.len());
     if tail_start <= system_end {
         return CompactOutcome::noop(messages.to_vec(), original_tokens, decision.reason);
     }
@@ -428,6 +438,14 @@ fn run_token_based(
             break;
         }
         drop_until += 1;
+    }
+
+    // F4b: the greedy stop index is a pure token count — align it with the
+    // pair boundaries too, never beyond the middle window. Only applied
+    // when something is actually dropped so a no-progress call stays a
+    // no-op.
+    if drop_until > system_end {
+        drop_until = safe_split_point(messages, drop_until).min(middle_end);
     }
 
     // Build compacted list: system[..system_end] + surviving middle + tail.
@@ -938,6 +956,137 @@ mod tests {
         assert_eq!(outcome.compacted[0].role, "system");
         // Last 2 messages preserved.
         assert_eq!(outcome.compacted.last().unwrap().role, "user");
+    }
+
+    // -------- F4b: token-based compaction keeps tool pairs together --------
+
+    fn tool_use_msg(id: &str) -> Message {
+        use shannon_engine::api::ContentBlock;
+        Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: id.to_string(),
+                name: "bash".to_string(),
+                input: serde_json::json!({"command": "ls"}),
+            }]),
+        }
+    }
+
+    fn tool_result_msg(tool_use_id: &str, output: &str) -> Message {
+        use shannon_engine::api::{ContentBlock, ToolResultContent};
+        Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: tool_use_id.to_string(),
+                content: Some(ToolResultContent::Single(output.to_string())),
+                is_error: Some(false),
+            }]),
+        }
+    }
+
+    /// Count ToolUse + ToolResult blocks carrying `id` across the list.
+    fn occurrences_of_tool_id(messages: &[Message], id: &str) -> usize {
+        use shannon_engine::api::ContentBlock;
+        messages
+            .iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Blocks(blocks) => Some(blocks),
+                _ => None,
+            })
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter(|b| match b {
+                        ContentBlock::ToolUse { id: use_id, .. } => use_id == id,
+                        ContentBlock::ToolResult { tool_use_id, .. } => tool_use_id == id,
+                        _ => false,
+                    })
+                    .count()
+            })
+            .sum()
+    }
+
+    /// F4b regression: the token-based greedy window used to stop at a pure
+    /// token count, which can land between an assistant `tool_use` and its
+    /// matching user `tool_result` — the kept half then reaches the wire
+    /// orphaned and strict providers 400. The split must move onto a
+    /// pair-safe boundary so the pair is dropped (or kept) together.
+    #[test]
+    fn token_based_split_landing_mid_pair_keeps_pair_together() {
+        // 8 messages, ~24k estimated tokens, keep_recent = 2.
+        //
+        // idx 0  system             ~1 tok
+        // idx 1  user  (huge)       4000 tok
+        // idx 2  asst  tool_use     call_0 (small)
+        // idx 3  user  tool_result  call_0 (huge output, 4000 tok)
+        // idx 4  user  (huge)       4000 tok
+        // idx 5  asst  (huge)       4000 tok
+        // idx 6  user  (huge)       4000 tok  ─ tail (keep_recent = 2)
+        // idx 7  asst  (huge)       4000 tok ┘
+        //
+        // target = 70% of total ≈ 16807; the greedy projection first fits
+        // with drop_until = 3 — exactly on the tool_result, orphaning it
+        // (its tool_use at 2 would be dropped). Pair alignment must pull
+        // the stop back to 2 so the pair survives together.
+        let msgs = vec![
+            system_msg("system"),
+            user_msg(&"u".repeat(16000)),
+            tool_use_msg("call_0"),
+            tool_result_msg("call_0", &"r".repeat(16000)),
+            user_msg(&"f".repeat(16000)),
+            assistant_msg(&"a".repeat(16000)),
+            user_msg(&"g".repeat(16000)),
+            assistant_msg(&"h".repeat(16000)),
+        ];
+
+        let mut policy = Policy::default();
+        policy.keep_recent = 2;
+        let outcome = maybe_compact_with_policy(&msgs, 1000, policy);
+
+        assert_eq!(
+            outcome.strategy,
+            Strategy::TokenBased,
+            "test must exercise the token-based path: {outcome:?}"
+        );
+        assert!(outcome.did_compact, "compaction must have happened");
+
+        assert_eq!(
+            occurrences_of_tool_id(&outcome.compacted, "call_0"),
+            2,
+            "the tool_use/tool_result pair straddling the raw split must survive \
+             together (both halves or neither): {outcome:#?}"
+        );
+
+        // Every remaining tool_result must still have its declaring use
+        // earlier in the list, and vice versa.
+        let mut declared: Vec<String> = Vec::new();
+        let mut matched: Vec<String> = Vec::new();
+        for m in &outcome.compacted {
+            if let MessageContent::Blocks(blocks) = &m.content {
+                for b in blocks {
+                    use shannon_engine::api::ContentBlock;
+                    match b {
+                        ContentBlock::ToolUse { id, .. } => declared.push(id.clone()),
+                        ContentBlock::ToolResult { tool_use_id, .. } => {
+                            matched.push(tool_use_id.clone())
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        for id in &matched {
+            assert!(
+                declared.contains(id),
+                "orphaned tool_result {id} survived compaction"
+            );
+        }
+        for id in &declared {
+            assert!(
+                matched.contains(id),
+                "dangling tool_use {id} survived compaction"
+            );
+        }
     }
 
     // -------- Summary-based strategy --------

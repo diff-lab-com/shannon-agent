@@ -21,7 +21,7 @@ export default function CancelTaskModal({ open, onCancel, onConfirm }: CancelTas
     <Modal open={open} onClose={onCancel} size="sm">
       <ModalBody>
         <div className="flex items-center gap-sm mb-lg">
-          <span className="material-symbols-outlined text-error text-[24px]" aria-hidden="true">warning</span>
+          <span className="material-symbols-outlined text-error icon-lg" aria-hidden="true">warning</span>
           <h3 className="font-headline-md text-on-surface">{t('tasks.cancelTaskModal.title')}</h3>
         </div>
         <p className="text-body-sm text-on-surface-variant">{t('tasks.cancelTaskModal.confirmation')}</p>

@@ -8,9 +8,55 @@
 //! / `retry_operation()` async wrappers.
 
 use crate::api::error::ApiError;
+use crate::api::types::FailoverTarget;
+use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
+
+/// R3-1: hard cap on failover hops per request. Each configured fallback
+/// target gets the standard retry budget exactly once, and at most this many
+/// targets are tried — a long `fallback_models` list can never turn one
+/// request into an unbounded retry storm (roadmap risk note: "failover 与
+/// 重试/退避叠加 → 降级计数上限").
+pub const MAX_FAILOVER_TARGETS: usize = 3;
+
+/// What kind of pause a [`RetryNotice`] describes. The engine's event-stream
+/// observer renders the two kinds differently: [`RetryNoticeKind::Retry`]
+/// keeps the historical "API retry i/n (next try in Xs)" shape, while
+/// [`RetryNoticeKind::Failover`] renders the user-visible downgrade line
+/// "`falling back to <model>@<provider> (<reason>)`" (R3-1 — the downgrade
+/// must be visible AND replayable from the session event stream).
+/// [`RetryNoticeKind::KeyRotation`] renders
+/// "`rotating API key (i/N) for <provider> (<reason>)`" (R4-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetryNoticeKind {
+    /// Another attempt of the SAME target follows after `wait`.
+    Retry,
+    /// The current target is being abandoned and the NEXT configured
+    /// failover target is about to be tried (R3-1). Carries the target the
+    /// walk is degrading TO.
+    Failover {
+        /// Model id of the fallback target.
+        model: String,
+        /// Provider slug of the fallback target (e.g. `"anthropic"`).
+        provider: String,
+    },
+    /// R4-3: the current API key just failed with an auth/rate-limit error
+    /// and the NEXT key of the SAME provider is about to be tried. Emitted
+    /// before the rotated attempt so the event stream shows which key
+    /// position is in play.
+    KeyRotation {
+        /// 1-based position (within the provider's key list) of the key
+        /// being switched TO. Position 1 is the key the request started
+        /// with, so the first rotation emits `index = 2`.
+        index: u32,
+        /// Total number of keys available on the provider.
+        total: u32,
+        /// Provider slug the keys belong to (e.g. `"anthropic"`).
+        provider: String,
+    },
+}
 
 /// Details of one retry that is about to happen after a failed attempt.
 ///
@@ -27,10 +73,18 @@ pub struct RetryNotice {
     pub wait: Duration,
     /// Short display of what went wrong with the attempt.
     pub reason: String,
+    /// Whether the next step is another same-target retry or a failover hop.
+    pub kind: RetryNoticeKind,
 }
 
 /// Observer invoked before each retry sleep.
-pub type RetryObserver = Arc<dyn Fn(&RetryNotice) + Send + Sync>;
+///
+/// Returns a future the retry loop awaits before sleeping (review §P3-6): the
+/// engine's observer forwards the notice onto the **bounded** query-event
+/// channel, so a stalled consumer suspends the retry loop instead of letting
+/// events queue without bound — and the notice keeps its exact FIFO position
+/// relative to the events around it.
+pub type RetryObserver = Arc<dyn Fn(RetryNotice) -> BoxFuture<'static, ()> + Send + Sync>;
 
 /// Configuration for API retry behavior.
 #[derive(Debug, Clone)]
@@ -43,6 +97,24 @@ pub struct RetryConfig {
     pub max_backoff_ms: u64,
     /// HTTP status codes that are retryable.
     pub retryable_status_codes: Vec<u16>,
+    /// R3-1: explicit, user-authored failover chain (in order). Populated by
+    /// `shannon-core`'s `build_client_from_resolved` from the active
+    /// provider profile's `fallback_models` (bare ids stay on the same
+    /// provider; `provider/model`-qualified ids switch to that provider's
+    /// profile when it is connected). Empty = failover disabled — the
+    /// historical behavior. Never populated implicitly; Shannon does not
+    /// route.
+    pub fallbacks: Vec<FailoverTarget>,
+    /// R3-1: host-set suppression switch. When `true` the failover walk is
+    /// skipped entirely and the primary error surfaces as-is.
+    ///
+    /// Precedence contract with the desktop's session-level model override
+    /// (R2-1, `apply_session_override`): a session override means the user
+    /// explicitly pinned THIS model for THIS session, so silently degrading
+    /// to a different model would betray the pin. Hosts that re-target the
+    /// client config from a session override must set this flag (the engine
+    /// cannot infer "pinned" from a plain config value).
+    pub suppress_failover: bool,
 }
 
 impl Default for RetryConfig {
@@ -51,7 +123,9 @@ impl Default for RetryConfig {
             max_retries: 3,
             initial_backoff_ms: 1000,
             max_backoff_ms: 30_000,
-            retryable_status_codes: vec![429, 500, 502, 503, 504],
+            retryable_status_codes: vec![429, 500, 502, 503, 504, 529],
+            fallbacks: Vec::new(),
+            suppress_failover: false,
         }
     }
 }
@@ -63,7 +137,81 @@ impl RetryConfig {
             max_retries,
             initial_backoff_ms,
             max_backoff_ms,
-            retryable_status_codes: vec![429, 500, 502, 503, 504],
+            retryable_status_codes: vec![429, 500, 502, 503, 504, 529],
+            fallbacks: Vec::new(),
+            suppress_failover: false,
+        }
+    }
+
+    /// R3-1: which exhausted-retries errors warrant trying the failover
+    /// chain. Deliberately narrow (roadmap R3-1: "429/5xx/529 按序重试"):
+    ///
+    /// - `RateLimitExceeded` (429) — the retry budget bought nothing; the
+    ///   quota may be per-model, so another model can still succeed.
+    /// - `ApiError` with status ≥ 500 — server-side failure, 529
+    ///   (Anthropic `overloaded_error`) included.
+    ///
+    /// Everything else fails over NOWHERE:
+    /// - `AuthenticationFailed` (401) — a bad key is not healed by switching
+    ///   models; surface it so the user fixes the credential.
+    /// - timeouts / connect errors — the agent loop's A8 recovery ladder
+    ///   owns those (escalation + in-place continuation).
+    /// - `ProviderError` / 4xx — deterministic request problems; another
+    ///   target would just repeat them.
+    pub fn is_failover_eligible(&self, error: &ApiError) -> bool {
+        match error {
+            ApiError::RateLimitExceeded { .. } => true,
+            ApiError::ApiError { status, .. } => *status >= 500,
+            _ => false,
+        }
+    }
+
+    /// R4-3: which exhausted-retries errors warrant rotating to the NEXT API
+    /// key of the same provider. Deliberately narrow:
+    ///
+    /// - `AuthenticationFailed` (401) — the key itself is dead or over its
+    ///   quota; a different key can succeed. This is the Cherry-Studio-style
+    ///   trigger.
+    /// - `RateLimitExceeded` (429) that survived the full retry budget — a
+    ///   per-key quota may be exhausted while another key still has headroom.
+    /// - Auth-flavoured `ProviderError`s — several providers answer a bad or
+    ///   forbidden key with HTTP 403 and a structured body, which maps to
+    ///   `ProviderError` (not `AuthenticationFailed`). Only auth-ish error
+    ///   types/messages qualify; deterministic request errors (400/404, bad
+    ///   model id, ...) never rotate.
+    ///
+    /// Everything else stays on the current key: timeouts/connect errors are
+    /// the agent loop's business (and another key would not heal them);
+    /// 5xx/529 are server-side and key-independent.
+    ///
+    /// Note the asymmetry with [`Self::is_failover_eligible`]: rotation IS
+    /// triggered by authentication failures, failover is NOT — a bad key
+    /// cannot be healed by switching models, but it can be healed by
+    /// switching to another key of the same provider.
+    pub fn is_key_rotation_eligible(&self, error: &ApiError) -> bool {
+        match error {
+            ApiError::AuthenticationFailed | ApiError::RateLimitExceeded { .. } => true,
+            ApiError::ProviderError {
+                error_type,
+                message,
+                ..
+            } => {
+                let t = error_type.to_lowercase();
+                let m = message.to_lowercase();
+                let type_hit = t.contains("auth")
+                    || t.contains("forbidden")
+                    || t.contains("permission")
+                    || t.contains("invalid_api_key")
+                    || t.contains("unauthorized");
+                let msg_hit = m.contains("invalid api key")
+                    || m.contains("api key invalid")
+                    || m.contains("incorrect api key")
+                    || m.contains("unauthorized")
+                    || m.contains("forbidden")
+                    || m.contains("api key not valid");
+                type_hit || msg_hit
+            }
+            _ => false,
         }
     }
 
@@ -79,7 +227,15 @@ impl RetryConfig {
                 }
                 self.retryable_status_codes.contains(status)
             }
-            ApiError::HttpError(e) => e.is_timeout() || e.is_connect(),
+            // N1: Kind::Request ("error sending request") wraps mid-send
+            // network failures — DNS flaps, resets while the request is in
+            // flight. These are transient by nature and were previously
+            // classified NOT retryable (neither is_timeout() nor is_connect()
+            // is true for Kind::Request), so a single network blip killed the
+            // whole query at the first call (measured: 18 first-call deaths
+            // in the TB2.1 sweep, docs/backlog.md §一). Bounded by
+            // max_retries + exponential backoff.
+            ApiError::HttpError(e) => e.is_timeout() || e.is_connect() || e.is_request(),
             ApiError::Timeout => true,
             // Auth errors, invalid responses, and provider errors are not retryable
             ApiError::AuthenticationFailed
@@ -187,6 +343,7 @@ impl RetryPolicy {
     /// Retryable errors:
     /// - HTTP 429 (rate limit)
     /// - HTTP 500, 502, 503, 504 (server errors, except Ollama malformed output)
+    /// - HTTP 529 (Anthropic `overloaded_error`)
     /// - Network timeouts and connection errors
     /// - Explicit `Timeout` errors
     ///
@@ -318,12 +475,14 @@ where
                     wait
                 );
                 if let Some(observer) = observer {
-                    observer(&RetryNotice {
+                    observer(RetryNotice {
                         attempt: attempt + 1,
                         total_attempts: config.max_retries + 1,
                         wait,
                         reason: e.to_string(),
-                    });
+                        kind: RetryNoticeKind::Retry,
+                    })
+                    .await;
                 }
                 sleep(wait).await;
                 last_error = Some(e);
@@ -359,6 +518,145 @@ mod tests {
         assert_eq!(config.max_backoff_ms, 60_000);
     }
 
+    // ── R3-1: failover policy on RetryConfig ─────────────────────────────
+
+    #[test]
+    fn retry_config_defaults_have_no_failover() {
+        let config = RetryConfig::default();
+        assert!(
+            config.fallbacks.is_empty(),
+            "failover must be opt-in: default chain is empty"
+        );
+        assert!(
+            !config.suppress_failover,
+            "suppression defaults off (no session override)"
+        );
+    }
+
+    #[test]
+    fn failover_eligible_for_rate_limit_and_5xx() {
+        let config = RetryConfig::default();
+        assert!(config.is_failover_eligible(&ApiError::RateLimitExceeded {
+            retry_after_secs: None,
+        }));
+        for status in [500, 502, 503, 504, 529] {
+            assert!(
+                config.is_failover_eligible(&ApiError::ApiError {
+                    status,
+                    message: "server trouble".to_string(),
+                }),
+                "HTTP {status} must be failover-eligible"
+            );
+        }
+    }
+
+    #[test]
+    fn failover_never_triggered_by_auth_or_client_errors() {
+        let config = RetryConfig::default();
+        // 401: a bad key fails over nowhere useful — surface it.
+        assert!(!config.is_failover_eligible(&ApiError::AuthenticationFailed));
+        // Deterministic 4xx.
+        assert!(!config.is_failover_eligible(&ApiError::ApiError {
+            status: 400,
+            message: "bad request".to_string(),
+        }));
+        // Provider-reported errors and malformed responses.
+        assert!(!config.is_failover_eligible(&ApiError::ProviderError {
+            provider: "openai".to_string(),
+            error_type: "invalid_request_error".to_string(),
+            message: "nope".to_string(),
+            status: None,
+        }));
+        assert!(!config.is_failover_eligible(&ApiError::InvalidResponse("bad".to_string())));
+    }
+
+    // ── R4-3: key-rotation policy ─────────────────────────────────────────
+
+    #[test]
+    fn key_rotation_eligible_for_auth_and_rate_limit() {
+        let config = RetryConfig::default();
+        assert!(
+            config.is_key_rotation_eligible(&ApiError::AuthenticationFailed),
+            "401 is THE rotation trigger"
+        );
+        assert!(
+            config.is_key_rotation_eligible(&ApiError::RateLimitExceeded {
+                retry_after_secs: None,
+            })
+        );
+    }
+
+    #[test]
+    fn key_rotation_eligible_for_auth_flavoured_provider_errors() {
+        let config = RetryConfig::default();
+        // 403-class: structured auth errors that do not map to
+        // AuthenticationFailed.
+        for error_type in [
+            "authentication_error",
+            "invalid_api_key",
+            "forbidden",
+            "permission_denied",
+        ] {
+            assert!(
+                config.is_key_rotation_eligible(&ApiError::ProviderError {
+                    provider: "openai".to_string(),
+                    error_type: error_type.to_string(),
+                    message: "nope".to_string(),
+                    status: None,
+                }),
+                "ProviderError type '{error_type}' must rotate"
+            );
+        }
+        assert!(
+            config.is_key_rotation_eligible(&ApiError::ProviderError {
+                provider: "openai".to_string(),
+                error_type: "invalid_request_error".to_string(),
+                message: "Incorrect API key provided".to_string(),
+                status: None,
+            }),
+            "auth-ish message must rotate"
+        );
+    }
+
+    #[test]
+    fn key_rotation_not_eligible_for_other_errors() {
+        let config = RetryConfig::default();
+        // 5xx is server-side — another key cannot heal it (and failover owns it).
+        assert!(!config.is_key_rotation_eligible(&ApiError::ApiError {
+            status: 500,
+            message: "boom".to_string(),
+        }));
+        // Deterministic request problems.
+        assert!(!config.is_key_rotation_eligible(&ApiError::ApiError {
+            status: 400,
+            message: "bad request".to_string(),
+        }));
+        assert!(!config.is_key_rotation_eligible(&ApiError::ProviderError {
+            provider: "openai".to_string(),
+            error_type: "invalid_request_error".to_string(),
+            message: "max_tokens is required".to_string(),
+            status: None,
+        }));
+        assert!(!config.is_key_rotation_eligible(&ApiError::InvalidResponse("bad".to_string())));
+        assert!(!config.is_key_rotation_eligible(&ApiError::Timeout));
+    }
+
+    #[test]
+    fn failover_target_chain_round_trips_through_retry_config() {
+        use crate::api::LlmProvider;
+        let mut config = RetryConfig::default();
+        config.fallbacks.push(FailoverTarget {
+            model: "glm-5-flash".to_string(),
+            provider: LlmProvider::Zhipu,
+            base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
+            api_key: "k".to_string(),
+        });
+        let cloned = config.clone();
+        assert_eq!(cloned.fallbacks.len(), 1);
+        assert_eq!(cloned.fallbacks[0].provider, LlmProvider::Zhipu);
+        assert_eq!(cloned.fallbacks[0].model, "glm-5-flash");
+    }
+
     #[test]
     fn test_is_retryable_rate_limit() {
         let config = RetryConfig::default();
@@ -378,6 +676,20 @@ mod tests {
             status: 503,
             message: "Service Unavailable".to_string(),
         }));
+    }
+
+    #[test]
+    fn test_is_retryable_529_overloaded() {
+        // Anthropic signals overload with HTTP 529 (overloaded_error). It is
+        // transient and must be retried like the other 5xx server errors.
+        let config = RetryConfig::default();
+        assert!(
+            config.is_retryable(&ApiError::ApiError {
+                status: 529,
+                message: "Overloaded".to_string(),
+            }),
+            "529 overloaded_error should be retryable"
+        );
     }
 
     #[test]
@@ -471,8 +783,11 @@ mod tests {
         let config = RetryConfig::new(2, 1, 10);
         let notices: Arc<Mutex<Vec<RetryNotice>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = notices.clone();
-        let observer: RetryObserver = Arc::new(move |notice: &RetryNotice| {
-            sink.lock().unwrap().push(notice.clone());
+        let observer: RetryObserver = Arc::new(move |notice: RetryNotice| {
+            let sink = sink.clone();
+            Box::pin(async move {
+                sink.lock().unwrap().push(notice);
+            }) as futures::future::BoxFuture<'static, ()>
         });
 
         let mut calls = 0;
@@ -585,6 +900,7 @@ mod tests {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
             message: "can't find closing '}' symbol".to_string(),
+            status: None,
         };
         assert!(
             !config.is_retryable(&err),
@@ -599,6 +915,7 @@ mod tests {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
             message: "model 'foo' not found".to_string(),
+            status: None,
         };
         assert!(
             !config.is_retryable(&err),
@@ -613,6 +930,7 @@ mod tests {
             provider: "openai".to_string(),
             error_type: "invalid_request_error".to_string(),
             message: "max_tokens is required".to_string(),
+            status: None,
         };
         assert!(
             !config.is_retryable(&err),
@@ -650,6 +968,7 @@ mod tests {
                     provider: "openai".to_string(),
                     error_type: "invalid_request_error".to_string(),
                     message: "invalid api key".to_string(),
+                    status: None,
                 })
             }
         })
@@ -763,6 +1082,15 @@ mod tests {
     fn test_retry_policy_is_retryable_timeout() {
         let policy = RetryPolicy::default();
         assert!(policy.is_retryable(&ApiError::Timeout));
+    }
+
+    #[test]
+    fn test_retry_policy_is_retryable_529_overloaded() {
+        let policy = RetryPolicy::default();
+        assert!(policy.is_retryable(&ApiError::ApiError {
+            status: 529,
+            message: "Overloaded".to_string(),
+        }));
     }
 
     #[test]

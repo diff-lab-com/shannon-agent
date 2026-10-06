@@ -4,24 +4,26 @@
 // polling. Hidden entirely when there is nothing to show — the entry point
 // is the composer's /goal slash command, which surfaces runs here.
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useGoalRuns } from '@/hooks/goalRuns'
+import { projectKeyOf } from '@/components/SidebarSessions'
+import NewGoalDialog from './NewGoalDialog'
 import type { GoalRunDto, GoalRunStatus } from '@/types'
 
 /** MD3 badge classes per goal-run status (theme semantic tokens). */
 function goalStatusBadge(status: GoalRunStatus): { bg: string; dot: string; icon: string; labelId: string } {
   switch (status) {
     case 'running':
-      return { bg: 'bg-primary/10 text-primary border-primary/20', dot: 'bg-primary animate-pulse', icon: 'autorenew', labelId: 'goal.status.running' }
+      return { bg: 'bg-primary-container text-on-primary-container border-primary/20', dot: 'bg-primary animate-pulse', icon: 'autorenew', labelId: 'goal.status.running' }
     case 'paused':
-      return { bg: 'bg-tertiary/10 text-tertiary border-tertiary/20', dot: 'bg-tertiary', icon: 'pause_circle', labelId: 'goal.status.paused' }
+      return { bg: 'bg-tertiary-container text-on-tertiary-container border-tertiary/20', dot: 'bg-tertiary', icon: 'pause_circle', labelId: 'goal.status.paused' }
     case 'completed':
-      return { bg: 'bg-green-600/10 text-green-600 border-green-600/20', dot: 'bg-green-600', icon: 'check_circle', labelId: 'goal.status.completed' }
+      return { bg: 'bg-success-container text-on-success-container border-success/20', dot: 'bg-success', icon: 'check_circle', labelId: 'goal.status.completed' }
     case 'blocked':
-      return { bg: 'bg-error/10 text-error border-error/20', dot: 'bg-error', icon: 'block', labelId: 'goal.status.blocked' }
+      return { bg: 'bg-error-container text-on-error-container border-error/20', dot: 'bg-error', icon: 'block', labelId: 'goal.status.blocked' }
     case 'stopped':
       return { bg: 'bg-surface-container-high text-on-surface-variant border-outline-variant/30', dot: 'bg-outline-variant', icon: 'stop_circle', labelId: 'goal.status.stopped' }
     case 'interrupted':
@@ -59,19 +61,19 @@ export function GoalRunCard({ run, onPause, onResume, onStop, onUpdateObjective,
 
   return (
     <div
-      className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-sm bg-surface-container-lowest/80"
+      className="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-md shadow-e1"
       data-testid="goal-run-card"
       data-status={run.status}
     >
       <div className="flex items-start justify-between gap-md">
         <div className="flex items-start gap-md min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary shrink-0">
-            <span className="material-symbols-outlined text-[24px]">flag</span>
+          <div className="w-10 h-10 rounded-xl bg-primary-container flex items-center justify-center text-on-primary-container shrink-0">
+            <span className="material-symbols-outlined icon-lg">flag</span>
           </div>
           <div className="min-w-0">
             <h3 className="font-body-lg font-semibold text-on-surface truncate">{run.title}</h3>
             {editing ? (
-              <div className="mt-1 flex items-center gap-xs">
+              <div className="mt-xs flex items-center gap-xs">
                 <input
                   aria-label={t('goal.card.objectiveEditAria')}
                   className="flex-1 h-8 px-sm rounded-lg bg-surface-container-high border border-outline-variant/40 font-label-sm text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
@@ -104,10 +106,10 @@ export function GoalRunCard({ run, onPause, onResume, onStop, onUpdateObjective,
         </div>
         <div
           title={t(`goal.status.${run.status}`)}
-          className={cn('flex items-center gap-xs px-sm py-1 rounded-full border shrink-0', badge.bg)}
+          className={cn('flex items-center gap-xs px-sm py-xs rounded-full border shrink-0', badge.bg)}
         >
           <span className={cn('w-2 h-2 rounded-full', badge.dot)} />
-          <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">
+          <span className="font-label-sm text-label-xs font-bold uppercase tracking-wider">
             {t(badge.labelId)}
           </span>
         </div>
@@ -134,7 +136,7 @@ export function GoalRunCard({ run, onPause, onResume, onStop, onUpdateObjective,
         </div>
         <div>
           <dt className="text-on-surface-variant">{t('goal.card.session')}</dt>
-          <dd className="text-on-surface font-mono text-[11px] truncate">{run.sessionId.slice(0, 8)}</dd>
+          <dd className="text-on-surface font-mono text-label-xs truncate">{run.sessionId.slice(0, 8)}</dd>
         </div>
       </dl>
 
@@ -222,30 +224,69 @@ export function GoalRunCard({ run, onPause, onResume, onStop, onUpdateObjective,
   )
 }
 
-export default function GoalRunPanel({ onViewSession }: { onViewSession: (id: string) => void }) {
+function GoalRunPanelImpl({ onViewSession, projectDir }: { onViewSession: (id: string) => void; projectDir?: string | null }) {
   const intl = useIntl()
-  const { runs, pause, resume, stop, updateObjective } = useGoalRuns()
-  if (runs.length === 0) return null
+  const { runs, pause, resume, stop, updateObjective, start } = useGoalRuns()
+  const [creating, setCreating] = useState(false)
+  // P-U3: /tasks?project= — only runs rooted in that project (normalized
+  // workingDir match, the same key the rail's project tree groups by).
+  // Runs with no workingDir drop out while the filter is active.
+  const visibleRuns = useMemo(
+    () => (projectDir
+      ? runs.filter(r => projectKeyOf({ working_dir: r.workingDir }) === projectDir)
+      : runs),
+    [runs, projectDir],
+  )
 
   return (
     <section aria-labelledby="goal-runs-heading" className="mb-lg" data-testid="goal-run-panel">
-      <h2 id="goal-runs-heading" className="font-label-lg font-bold text-on-surface mb-sm flex items-center gap-xs">
-        <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">flag</span>
-        {intl.formatMessage({ id: 'goal.panel.heading' })}
-      </h2>
-      <div className="space-y-sm">
-        {runs.map(run => (
-          <GoalRunCard
-            key={run.sessionId}
-            run={run}
-            onPause={pause}
-            onResume={resume}
-            onStop={stop}
-            onUpdateObjective={updateObjective}
-            onViewSession={onViewSession}
-          />
-        ))}
+      <div className="flex items-center justify-between mb-sm">
+        <h2 id="goal-runs-heading" className="font-label-lg font-bold text-on-surface flex items-center gap-xs">
+          <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">flag</span>
+          {intl.formatMessage({ id: 'goal.panel.heading' })}
+        </h2>
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => setCreating(true)}
+          className="cursor-pointer inline-flex items-center gap-xs"
+          data-testid="goal-new-button"
+        >
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">add</span>
+          {intl.formatMessage({ id: 'goal.new.button' })}
+        </Button>
       </div>
+      {visibleRuns.length === 0 ? (
+        <p className="font-body-sm text-on-surface-variant px-sm py-md rounded-xl border border-outline-variant/30 bg-surface-container-lowest/60">
+          {intl.formatMessage({ id: 'goal.empty.description' })}
+        </p>
+      ) : (
+        <div className="space-y-sm">
+          {visibleRuns.map(run => (
+            <GoalRunCard
+              key={run.sessionId}
+              run={run}
+              onPause={pause}
+              onResume={resume}
+              onStop={stop}
+              onUpdateObjective={updateObjective}
+              onViewSession={onViewSession}
+            />
+          ))}
+        </div>
+      )}
+      {/* B3 (P2 顺带): start resolves to a boolean so the dialog can tell a
+          confirmed start from a failed one (hook toasts the failure) and
+          keep the form when the launch didn't take. */}
+      <NewGoalDialog
+        open={creating}
+        onClose={() => setCreating(false)}
+        onStart={async input => (await start(input)) !== null}
+      />
     </section>
   )
+}
+
+export default function GoalRunPanel({ onViewSession, projectDir }: { onViewSession: (id: string) => void; projectDir?: string | null }) {
+  return <GoalRunPanelImpl onViewSession={onViewSession} projectDir={projectDir} />
 }

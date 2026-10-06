@@ -1,0 +1,42 @@
+# ChatScript: queue-attachments-only — D9-b pin（chat-testing v2 §9.4）。
+#
+# QueueChips.tsx 的 attachmentsOnly 占位分支（纯附件排队项渲染「N attachments」
+# 计数文案）在 A-9 修复后是可达且被依赖的正面分支——本 journey 把它钉住：
+# 流式中（turn 0 长流）纯附件输入入队 → chip 渲染附件计数占位文案 →
+# 本轮 settle 后 drain 正常发送（turn 1 消费，sends payload message='' +
+# 附件路径）。
+#
+# 附件进 composer 走 demo 拖拽桥（tauri://drag-drop 经 __shannonMock.emit
+# → mergePaths）——原生存件对话框在 harness 里不可驱动。路径在 demo 工作
+# 目录内（无拒绝徽标）。
+name: queue-attachments-only
+description: D9-b pin — 流式中纯附件入队 → queue chip 附件计数占位 → drain 后正常发送
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-queue-att
+      title: Queue attachments only
+      messages: []
+turns:
+  # 长流式拉出入队窗口；被 drain 的纯附件发送消费 turn 1。
+  - user: 写一篇关于潮汐的长文
+    script:
+      - event: query:text
+        chunks:
+          - "潮汐之一，"
+          - "潮汐之二，"
+          - "潮汐之三，"
+          - "潮汐之四，"
+          - "潮汐之五，"
+          - "潮汐之六。"
+        chunkDelayMs: 500
+      - event: query:completed
+  - user: ""
+    attachments:
+      - /Users/demo/workspace/my-startup/report-draft.md
+    script:
+      - event: query:text
+        chunks:
+          - "回复：附件已收到。"
+      - event: query:completed

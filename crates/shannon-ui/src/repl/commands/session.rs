@@ -18,6 +18,69 @@ pub(crate) fn handle_sessions(repl: &mut Repl, _args: &str) -> Result<()> {
     Ok(())
 }
 
+/// `/search <query>` — full-text search across every stored session.
+///
+/// Read-only: skims each session's `events.jsonl` line-by-line via
+/// [`shannon_core::session_log::SessionStore::search_all_with_stats`] and
+/// renders the top hits (short session id + title/summary + timestamp +
+/// snippet), mirroring the other read-only inspectors (`/recall`, `/resume`).
+pub(crate) fn handle_search(repl: &mut Repl, args: &str) -> Result<()> {
+    let query = args.trim();
+    if query.is_empty() {
+        repl.chat.add_message(
+            ChatRole::System,
+            "Usage: /search <query>\n\nSearch every stored session's transcript (case-insensitive substring). Top hits show the session, time, and a snippet; use /resume <session-id> to open one.".to_string(),
+        );
+        return Ok(());
+    }
+
+    let outcome = repl
+        .l0_store()
+        .search_all_with_stats(query, shannon_core::session_log::DEFAULT_SEARCH_LIMIT);
+    let outcome = match outcome {
+        Ok(o) => o,
+        Err(e) => {
+            super::set_error(repl, &format!("searching sessions: {e}"));
+            return Ok(());
+        }
+    };
+
+    if outcome.hits.is_empty() {
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "No matches for \"{query}\" (searched {} sessions).",
+                outcome.sessions_total
+            ),
+        );
+        return Ok(());
+    }
+
+    let mut out = format!(
+        "Found {} hit(s) for \"{}\" (searched {} of {} sessions):\n",
+        outcome.hits.len(),
+        query,
+        outcome.sessions_scanned,
+        outcome.sessions_total,
+    );
+    for hit in &outcome.hits {
+        let short_id = &hit.session_id[..hit.session_id.len().min(8)];
+        let label = hit
+            .title
+            .as_deref()
+            .or(hit.summary.as_deref())
+            .unwrap_or("Untitled");
+        let when = hit.timestamp.as_deref().unwrap_or("unknown time");
+        out.push_str(&format!(
+            "\n  [{short_id}] {label} ({when})\n    {}",
+            hit.snippet
+        ));
+    }
+    out.push_str("\n\nUse /resume <session-id> to open a session.");
+    repl.chat.add_message(ChatRole::System, out);
+    Ok(())
+}
+
 pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
     let arg = args.trim();
     if arg.is_empty() {
@@ -630,8 +693,34 @@ struct CodeRewindOutcome {
     target_turn: usize,
     restored: Vec<String>,
     deleted: Vec<String>,
+    /// Files left untouched because no pre-session baseline proves they were
+    /// created by this session (E-2) — surfaced to the user.
+    skipped_no_baseline: Vec<String>,
     /// Files whose restore/delete I/O failed (permissions, disk full, …).
     failed: Vec<String>,
+}
+/// E-1: persist a conversation rewind to the authoritative L0 log.
+///
+/// The previous REPL rewind mutated only in-memory state, so resuming the
+/// session replayed exactly the turns the user had removed. The desktop path
+/// already called `SessionStore::truncate_to_turn`; the REPL now does the
+/// same (best-effort: failures are logged and do not abort the rewind).
+///
+/// `keep_turns` is a **turn** count — the turns still present in the engine's
+/// memory after the rewind (`QueryEngine::conversation_turn_count`), matching
+/// `truncate_to_turn`'s "keep the first N conversation turns" contract.
+/// (Passing the removed-*message* count here used to over-truncate the
+/// authoritative log by whole turns.)
+fn persist_log_truncation(repl: &Repl, keep_turns: usize) {
+    let Some(ref engine) = repl.query_engine else {
+        return;
+    };
+    if let Err(e) = repl
+        .l0_store()
+        .truncate_to_turn(&engine.session_id(), keep_turns)
+    {
+        tracing::warn!("rewind: failed to truncate session log: {e}");
+    }
 }
 
 /// Core code-rewind logic, factored out so it is unit-testable without env or
@@ -668,6 +757,7 @@ fn apply_code_rewind(
     }
 
     let mut restored: Vec<String> = Vec::new();
+    let mut skipped_no_baseline: Vec<String> = Vec::new();
     let mut deleted: Vec<String> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
 
@@ -696,6 +786,12 @@ fn apply_code_rewind(
                     failed.push(file.clone());
                 }
             },
+            RewindAction::SkipNoBaseline => {
+                // E-2: the file's earliest snapshot is a pre-modify capture, so
+                // it existed before this session — leave it on disk and tell
+                // the user instead of destroying possibly pre-existing work.
+                skipped_no_baseline.push(file.clone());
+            }
             RewindAction::NoChange => {}
         }
     }
@@ -703,6 +799,7 @@ fn apply_code_rewind(
     Ok(CodeRewindOutcome {
         target_turn,
         restored,
+        skipped_no_baseline,
         deleted,
         failed,
     })
@@ -720,7 +817,11 @@ fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, Str
     let outcome = apply_code_rewind(&checkpoints, index, &mut manager, &cwd)?;
 
     let mut summary = format!("Reverted code to turn {}.", outcome.target_turn);
-    if outcome.restored.is_empty() && outcome.deleted.is_empty() && outcome.failed.is_empty() {
+    if outcome.restored.is_empty()
+        && outcome.deleted.is_empty()
+        && outcome.failed.is_empty()
+        && outcome.skipped_no_baseline.is_empty()
+    {
         summary.push_str(" No files needed reverting (no recorded changes after this turn).");
     } else {
         if !outcome.restored.is_empty() {
@@ -730,6 +831,12 @@ fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, Str
             summary.push_str(&format!(
                 "\nDeleted (created after this turn): {}",
                 outcome.deleted.join(", ")
+            ));
+        }
+        if !outcome.skipped_no_baseline.is_empty() {
+            summary.push_str(&format!(
+                "\nLeft untouched (existed before this session — delete manually if unwanted): {}",
+                outcome.skipped_no_baseline.join(", ")
             ));
         }
         if !outcome.failed.is_empty() {
@@ -832,6 +939,10 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
                 repl.chat.rewind(turns_to_rewind);
                 if let Some(ref mut engine) = repl.query_engine {
                     engine.rewind_conversation(turns_to_rewind);
+                    // Truncate the L0 log to the turns that SURVIVE in memory
+                    // (a removed-message count would over-truncate by turns).
+                    let keep_turns = engine.conversation_turn_count();
+                    persist_log_truncation(repl, keep_turns);
                 }
             }
 
@@ -865,6 +976,10 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
 
             if let Some(ref mut engine) = repl.query_engine {
                 engine.rewind_conversation(turns);
+                // Truncate the L0 log to the turns that SURVIVE in memory
+                // (a removed-message count would over-truncate by turns).
+                let keep_turns = engine.conversation_turn_count();
+                persist_log_truncation(repl, keep_turns);
             }
 
             if removed > 0 {
@@ -895,11 +1010,9 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
 
     // Handle plan mode deactivation
     if args == "off" || args == "exit" || args == "end" {
-        if let Ok(mut flag) = repl.plan_mode_flag.write() {
-            *flag = false;
-        }
-        repl.state.plan.active = false;
-        repl.state.plan.approved = false;
+        // P0-2 / design §5: exiting restores the snapshotted ladder mode and
+        // clears plan approval.
+        repl.exit_plan_restore_mode("off");
         repl.chat.add_message(
             ChatRole::System,
             "Plan mode deactivated. Write operations are now enabled.".to_string(),
@@ -907,19 +1020,105 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Delegate to cost::handle_plan for all other cases (creates plan, status, approve, reject, etc.)
-    // and also activate the plan-mode flag so write tools are blocked.
+    // Delegate to cost::handle_plan for all other cases (creates plan, status,
+    // approve, reject, etc.). The create path inside cost.rs owns setting the
+    // plan-mode flag and `enter_plan_mode`; re-setting the flag here would
+    // re-block writes after an approval had lifted them.
     super::cost::handle_plan(repl, args)?;
-
-    // If a plan was created (active and has content), also set the engine flag
-    if repl.state.plan.active {
-        if let Ok(mut flag) = repl.plan_mode_flag.write() {
-            *flag = true;
-        }
-    }
 
     Ok(())
 }
+
+/// Wave 2 · `/handoff` — generate a handoff prompt instead of compacting.
+///
+/// Amp's "handoff over compaction" pattern: distill the current thread into
+/// an EDITABLE prompt for a brand-new session, preserving goals (constraints
+/// verbatim), file state, and the exact next step — without mutating the
+/// current session. The output is written to `.shannon/handoff-<ts>.md` and
+/// echoed; the user reviews it, starts a fresh session, and pastes it.
+pub(crate) fn handle_handoff(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_engine::compact::CompactEngine;
+
+    let Some(ref engine) = repl.query_engine else {
+        repl.chat
+            .add_message(ChatRole::System, "No query engine available.".to_string());
+        return Ok(());
+    };
+    let history = engine.conversation_history();
+    if history.is_empty() {
+        repl.chat
+            .add_message(ChatRole::System, "No conversation to hand off.".to_string());
+        return Ok(());
+    }
+    if args.trim() == "help" {
+        repl.chat.add_message(
+            ChatRole::System,
+            "/handoff — distill this session into a prompt for a fresh one.\n\
+             Output: .shannon/handoff-<timestamp>.md plus an echo here. Review it,\n\
+             start a new session, and paste it as your first message."
+                .to_string(),
+        );
+        return Ok(());
+    }
+
+    let client = engine.client().clone();
+    let rt_handle = repl.runtime.handle().clone();
+    let compact_engine = match CompactEngine::with_llm_summarizer_on_runtime(client, rt_handle) {
+        Ok(e) => e,
+        Err(_) => match CompactEngine::with_defaults() {
+            Ok(e) => e,
+            Err(e) => {
+                repl.chat
+                    .add_message(ChatRole::System, format!("Compact engine error: {e}"));
+                return Ok(());
+            }
+        },
+    };
+
+    // Handoff prompt: asks the summarizer for an actionable continuation
+    // prompt (not a transcript summary). Falls back to the rule-based
+    // summarizer's output shape when no LLM is available.
+    let max_tokens = 1200;
+    let summary = {
+        let summarizer = compact_engine.summarizer();
+        match summarizer.summarize(&history, max_tokens) {
+            Ok(s) => s,
+            Err(e) => {
+                repl.chat
+                    .add_message(ChatRole::System, format!("Handoff failed: {e}"));
+                return Ok(());
+            }
+        }
+    };
+
+    let handoff = format!("{HANDOFF_PREAMBLE}\n\n---\n\n{summary}\n\n---\n\n{HANDOFF_EPILOGUE}",);
+
+    // Persist for review.
+    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let out_dir = std::path::PathBuf::from(".shannon");
+    let _ = std::fs::create_dir_all(&out_dir);
+    let out_path = out_dir.join(format!("handoff-{ts}.md"));
+    let write_result = std::fs::write(&out_path, &handoff);
+
+    let mut msg = format!(
+        "Handoff prompt generated ({} chars).\n\n{}",
+        handoff.len(),
+        handoff
+    );
+    match write_result {
+        Ok(()) => msg.push_str(&format!("\n\nSaved to {} — review, edit freely, then start a new session and paste it as your first message.", out_path.display())),
+        Err(e) => msg.push_str(&format!(
+            "\n\n(could not save to {}: {e} — copy from above)",
+            out_path.display()
+        )),
+    }
+    repl.chat.add_message(ChatRole::System, msg);
+    Ok(())
+}
+
+const HANDOFF_PREAMBLE: &str = "You are continuing a task from a previous session. Below is a distilled handoff. Treat it as the authoritative context; ask nothing that it already answers.";
+const HANDOFF_EPILOGUE: &str =
+    "Begin by verifying the current state (files/tests) before continuing work.";
 
 pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_engine::compact::{CompactEngine, CompactStrategy};
@@ -1449,22 +1648,25 @@ pub(crate) fn handle_recap(repl: &mut Repl, _args: &str) -> Result<()> {
 /// /effort — Set or view the thinking effort level for the model.
 ///
 /// With no args: show current effort level.
-/// With args "low", "medium", "high": set the effort level.
+/// With args "low", "medium"/"standard", "high", "max": set the effort level.
+/// With "reset" or "off": clear back to the model default (`Standard`).
 pub(crate) fn handle_effort(repl: &mut Repl, args: &str) -> Result<()> {
-    let level = args.trim().to_lowercase();
+    let raw = args.trim();
 
-    if level.is_empty() {
+    if raw.is_empty() {
         match &repl.state.effort_level {
             Some(effort) => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    format!("Current effort level: {effort}\nUsage: /effort <low|medium|high>"),
+                    format!(
+                        "Current effort level: {effort}\nUsage: /effort <low|standard|high|max>"
+                    ),
                 );
             }
             None => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    "No effort level set (using model default).\nUsage: /effort <low|medium|high>"
+                    "No effort level set (using model default: standard).\nUsage: /effort <low|standard|high|max>"
                         .to_string(),
                 );
             }
@@ -1472,16 +1674,27 @@ pub(crate) fn handle_effort(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
-    match level.as_str() {
-        "low" | "medium" | "high" => {
-            repl.state.effort_level = Some(level.clone());
+    if raw.eq_ignore_ascii_case("reset") || raw.eq_ignore_ascii_case("off") {
+        repl.state.effort_level = None;
+        repl.chat.add_message(
+            ChatRole::System,
+            "Effort level cleared (using model default: standard).".to_string(),
+        );
+        return Ok(());
+    }
+
+    // Case-insensitive parse via the engine's EffortLevel; the canonical
+    // lowercase name is stored so the status bar and config dump stay stable.
+    match raw.parse::<shannon_core::query_engine::EffortLevel>() {
+        Ok(level) => {
+            repl.state.effort_level = Some(level.to_string());
             repl.chat
                 .add_message(ChatRole::System, format!("Effort level set to: {level}"));
         }
-        _ => {
+        Err(_) => {
             repl.chat.add_message(
                 ChatRole::System,
-                "Invalid effort level. Use: low, medium, or high.".to_string(),
+                "Invalid effort level. Use: low, medium, standard, high, or max.".to_string(),
             );
         }
     }

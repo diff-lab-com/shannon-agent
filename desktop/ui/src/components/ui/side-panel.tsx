@@ -60,7 +60,8 @@ export function SidePanel({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Backdrop
           className={cn(
-            'fixed inset-0 isolate z-modal bg-black/40 backdrop-blur-sm duration-100',
+            // Scrim (遮罩) — G1 exempt, kept as a direct backdrop-filter.
+            'fixed inset-0 isolate z-modal bg-black/40 backdrop-blur-sm duration-(--duration-fast)',
             'data-open:animate-in data-open:fade-in-0',
             'data-closed:animate-out data-closed:fade-out-0',
           )}
@@ -70,8 +71,12 @@ export function SidePanel({
           aria-modal="true"
           aria-label={ariaLabel ?? title}
           className={cn(
-            'fixed inset-y-0 right-0 z-modal h-full w-full bg-surface-container-lowest shadow-2xl border-l border-outline-variant/30 overflow-y-auto outline-none',
-            'duration-100',
+            // G3 (UI review 2026-09-29): drawer content joins the floating-layer
+            // glass-overlay family (bg/blur/border/shadow from the utility).
+            // Entrance stays fade+slide from the right — a right drawer rising
+            // from below would read wrong, so no animate-panel-in here.
+            'fixed inset-y-0 right-0 z-modal h-full w-full glass-overlay overflow-y-auto outline-none',
+            'duration-(--duration-fast)',
             'data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-right',
             'data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-right',
             className,

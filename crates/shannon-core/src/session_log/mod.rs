@@ -20,6 +20,8 @@ pub mod l0_subscriber;
 pub mod projections;
 pub mod reader;
 pub mod redaction;
+pub mod session_index;
+pub mod session_query;
 pub mod session_store;
 pub mod tee;
 pub mod writer;
@@ -33,9 +35,12 @@ pub use projections::{
 };
 pub use reader::{SessionEventIter, SessionLogReader};
 pub use redaction::{REDACTED, RedactionPolicy};
+pub use session_index::{SessionIndex, SessionIndexAccumulator};
+pub use session_query::{SessionQuery, SessionRef, SessionToolCall, ToolCallStat};
 pub use session_store::{
-    SessionSidecar, SessionStore, SessionStoreError, StoredGoal, StoredLoop, StoredRalph,
-    StoredSession, StoredSessionInfo, StoredSessionMeta, default_store,
+    DEFAULT_SEARCH_LIMIT, SessionCuration, SessionSearchHit, SessionSearchOutcome, SessionSidecar,
+    SessionStore, SessionStoreError, StoredGoal, StoredLoop, StoredRalph, StoredSession,
+    StoredSessionInfo, StoredSessionMeta, default_store,
 };
 pub use tee::{SessionTee, TeeHandle};
 pub use writer::{FlushPolicy, SessionLogWriter};
@@ -44,7 +49,7 @@ use std::path::{Path, PathBuf};
 
 use shannon_types::session_event::{
     AssistantChunkPayload, ErrorPayload, SessionEventBody, TokenUsage, ToolCallPayload,
-    ToolResultPayload, TurnEndPayload, TurnStartPayload,
+    ToolResultPayload, TurnEndPayload,
 };
 
 use crate::QueryEvent;
@@ -135,6 +140,25 @@ pub fn session_meta_container_path(dir: &Path, session_id: &str) -> PathBuf {
     dir.join(session_id).join("meta.json")
 }
 
+/// Resolve the derived-stats index sidecar for one session in a container:
+/// `<dir>/<session_id>/index.json` (audit E-9: a pure cache over
+/// `events.jsonl` that keeps `SessionStore::list` O(sessions); see
+/// [`session_index`]).
+pub fn session_index_container_path(dir: &Path, session_id: &str) -> PathBuf {
+    dir.join(session_id).join("index.json")
+}
+
+/// Resolve the curation sidecar for one session in a container:
+/// `<dir>/<session_id>/curation.json` (lifecycle flags such as `archived`;
+/// read via [`SessionStore::curation`], written via
+/// [`SessionStore::save_curation`]). Deliberately a separate file from
+/// `meta.json`: [`session_store::SessionSidecar`] is not `#[non_exhaustive]`,
+/// so growing it with a new field would be a breaking change for external
+/// struct-literal constructors.
+pub fn session_curation_path(dir: &Path, session_id: &str) -> PathBuf {
+    dir.join(session_id).join("curation.json")
+}
+
 /// Effective log container for an active engine: `SHANNON_HOME` relocates
 /// the whole Shannon root (legacy override, still beats everything); without
 /// it the sessions container owned by the caller's `StateManager` wins —
@@ -165,12 +189,18 @@ pub fn default_shannon_home() -> Result<PathBuf, SessionLogError> {
 /// Pure function: no I/O, no state. Returns `None` for `QueryEvent` variants
 /// that have no honest v1 vocabulary event:
 ///
+/// - `Started` — the engine broadcasts it as every query's first frame
+///   (P0-A3), but the durable turn boundary stays tee-owned: the producer
+///   records `turn/start` directly via [`SessionTee::record_turn_start`]
+///   with the real query id, one row per turn. Mapping the frame too would
+///   duplicate the boundary (with a `None` query id, no less).
 /// - `Usage` / `Cost` — the tee folds usage into `turn/end` instead (see
 ///   [`token_usage_from_event`]); token data is also carried by
 ///   `assistant/message` payloads.
 /// - `Completed` — the turn boundary is already emitted via `TurnStart` (from
-///   `Started`) and `TurnEnd` (from `TurnCompleted` / `Failed`); the session
-///   continues, and vocabulary v1 has no session/end event.
+///   the tee's `record_turn_start`) and `TurnEnd` (from `TurnCompleted` /
+///   `Failed`); the session continues, and vocabulary v1 has no session/end
+///   event.
 /// - `Progress` / `ToolProgress` / `Info` — transient UI progress, not part
 ///   of the durable record.
 /// - `ConversationUpdate` — the tee derives `assistant/message` from it when
@@ -180,9 +210,7 @@ pub fn default_shannon_home() -> Result<PathBuf, SessionLogError> {
 /// make a conscious mapping decision here.
 pub fn query_event_to_session_body(event: &QueryEvent) -> Option<SessionEventBody> {
     let body = match event {
-        QueryEvent::Started { .. } => {
-            SessionEventBody::TurnStart(TurnStartPayload { query_id: None })
-        }
+        QueryEvent::Started { .. } => return None,
         QueryEvent::Text { content, .. } => {
             SessionEventBody::AssistantChunk(AssistantChunkPayload {
                 delta: content.clone(),
@@ -225,6 +253,7 @@ pub fn query_event_to_session_body(event: &QueryEvent) -> Option<SessionEventBod
         }),
         QueryEvent::TurnCompleted { tokens_used, .. } => {
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: Some(1),
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: Some(TokenUsage {
                     input_tokens: 0,
@@ -330,8 +359,10 @@ pub fn token_usage_from_event(event: &QueryEvent) -> Option<TokenUsage> {
 /// - [`QueryEvent::Completed`] closes the open turn; [`QueryEvent::Failed`]
 ///   produces **two** inputs — the mapped `error` row and then the turn
 ///   boundary, in that order (dispatch them as one batch).
-/// - `Progress` / `ToolProgress` / `Info` / `Cost` / `ConversationUpdate`
-///   map to nothing (transient or folded elsewhere), same as before.
+/// - `Started` / `Progress` / `ToolProgress` / `Info` / `Cost` /
+///   `ConversationUpdate` map to nothing (the turn boundary is recorded
+///   directly by the producer via `record_turn_start`; the rest are
+///   transient or folded elsewhere), same as before.
 pub fn query_event_to_bus_inputs(event: &QueryEvent) -> Vec<crate::bus::BusInput> {
     use crate::bus::{BusEvent, BusInput, CoalesceInput};
 
@@ -391,16 +422,25 @@ mod tests {
         assert_eq!(path, PathBuf::from("/base/sessions/abc-123/events.jsonl"));
     }
 
+    /// P0-A3: the engine now broadcasts `Started` as every query's first
+    /// stream frame, but it must stay durable-record-silent — the producer's
+    /// direct `record_turn_start` call already writes the boundary, with the
+    /// real query id (the mapped payload was always `None`).
     #[test]
-    fn test_mapping_started_to_turn_start() {
-        let body = query_event_to_session_body(&QueryEvent::Started {
-            query_id: query_id(),
-        })
-        .unwrap();
-        assert!(matches!(
-            body,
-            SessionEventBody::TurnStart(TurnStartPayload { query_id: None })
-        ));
+    fn test_mapping_started_maps_to_nothing() {
+        assert!(
+            query_event_to_session_body(&QueryEvent::Started {
+                query_id: query_id()
+            })
+            .is_none()
+        );
+        // And through the bus-input seam: no inputs, no L0 rows.
+        assert!(
+            query_event_to_bus_inputs(&QueryEvent::Started {
+                query_id: query_id()
+            })
+            .is_empty()
+        );
     }
 
     #[test]
@@ -501,6 +541,7 @@ mod tests {
         let failed = query_event_to_session_body(&QueryEvent::Failed {
             query_id: query_id(),
             error: "boom".into(),
+            error_kind: None,
         })
         .unwrap();
         match failed {
@@ -527,7 +568,8 @@ mod tests {
     fn test_mapping_unmapped_variants_return_none() {
         assert!(
             query_event_to_session_body(&QueryEvent::Completed {
-                query_id: query_id()
+                query_id: query_id(),
+                outcome: Default::default(),
             })
             .is_none()
         );

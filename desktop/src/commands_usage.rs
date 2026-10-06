@@ -14,10 +14,8 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Local, TimeZone};
 use serde::{Deserialize, Serialize};
-
-use shannon_core::scheduled_runs::{ScheduledRun, ScheduledRunsStore};
 
 /// One usage event persisted to `usage.jsonl`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,8 +263,14 @@ pub struct UsageStats {
     pub by_day: Vec<BucketTotals>,
 }
 
+/// P1-14: bucket by the **local** calendar day, matching the per-row local
+/// timestamps the Usage page renders next to the chart. UTC labelling made
+/// e.g. UTC+8 spend between 00:00 and 08:00 land on "yesterday", so daily
+/// reconciliation never added up.
 fn day_label(ms: u64) -> String {
-    DateTime::<Utc>::from_timestamp_millis(ms as i64)
+    Local
+        .timestamp_millis_opt(ms as i64)
+        .single()
         .map(|dt| dt.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| ms.to_string())
 }
@@ -330,68 +334,19 @@ fn compute_stats(days: u32, records: &[UsageRecord], now_ms_value: u64) -> Usage
     }
 }
 
-/// Label used for spend that cannot be attributed to a specific model or
-/// provider — today, only scheduled-routine runs (which execute engine-side
-/// and carry no model/provider). Surfaced as its own bucket so the Usage
-/// breakdowns stay consistent with the headline totals.
-const SCHEDULED_LABEL: &str = "Scheduled tasks";
-
-/// Map a scheduled-routine run onto a usage record. Scheduled runs track a
-/// single lump `token_usage` (no input/output/cache split) and no
-/// model/provider, so the lump is counted under `input_tokens` and both
-/// attribution fields fall back to `SCHEDULED_LABEL`. Runs that tracked
-/// neither cost nor tokens (e.g. never reached the accounting point) are
-/// dropped.
-fn scheduled_run_to_record(run: &ScheduledRun) -> Option<UsageRecord> {
-    if run.cost_usd.is_none() && run.token_usage.is_none() {
-        return None;
-    }
-    Some(UsageRecord {
-        timestamp_ms: run.started_at.timestamp_millis().max(0) as u64,
-        model: SCHEDULED_LABEL.to_string(),
-        provider: SCHEDULED_LABEL.to_string(),
-        input_tokens: run.token_usage.unwrap_or(0),
-        output_tokens: 0,
-        cache_creation_tokens: 0,
-        cache_read_tokens: 0,
-        cost_usd: run.cost_usd.unwrap_or(0.0),
-        session_id: None,
-    })
-}
-
 /// Read the usage ledger and aggregate by model / provider / day.
 ///
 /// `days` is clamped to `[1, 365]`; records older than the window are
-/// excluded. Scheduled-routine spend (engine-side — the desktop never sees
-/// its Usage events) is merged in from the scheduled-runs store under
-/// `SCHEDULED_LABEL`. Stateless beyond the on-disk stores (paths are
-/// fixed), so it mirrors the billing commands rather than taking `AppState`.
+/// excluded. R2-W2-2: routine-run spend flows in through the ledger itself
+/// (every routine run writes session-attributed Usage events) and its run
+/// records now also carry cost/token totals — folding the JSONL mirror in
+/// here again would double-count that spend, so the legacy fold is gone.
+/// Stateless beyond the on-disk store (paths are fixed), mirroring the
+/// billing commands rather than taking `AppState`.
 #[tauri::command]
 pub async fn get_usage_stats(days: u32) -> Result<UsageStats, String> {
     let now = now_ms();
-    let mut records = UsageStore::new().load();
-
-    // Fold scheduled-routine spend into the same aggregation. compute_stats
-    // re-filters by the day window, so a slightly wider fetch here is
-    // harmless. The usage and scheduled-runs stores are independent: if the
-    // scheduled-runs store is unreadable we log it and proceed with chat
-    // usage rather than failing the whole page.
-    let days_clamped = days.clamp(1, 365);
-    let now_dt = DateTime::<Utc>::from_timestamp_millis(now as i64).unwrap_or_else(Utc::now);
-    let start = now_dt - Duration::days(days_clamped as i64);
-    match ScheduledRunsStore::new().list_by_time_range(start, now_dt) {
-        Ok(runs) => {
-            for run in &runs {
-                if let Some(r) = scheduled_run_to_record(run) {
-                    records.push(r);
-                }
-            }
-        }
-        Err(e) => tracing::warn!(
-            error = %e,
-            "scheduled-runs store unreadable; usage page will omit scheduled spend"
-        ),
-    }
+    let records = UsageStore::new().load();
 
     Ok(compute_stats(days, &records, now))
 }
@@ -556,9 +511,23 @@ mod tests {
     }
 
     #[test]
-    fn day_label_is_utc_date() {
-        // 2024-01-02T03:04:05Z = 1704169445000 ms.
-        assert_eq!(day_label(1_704_169_445_000), "2024-01-02");
+    fn day_label_uses_local_date() {
+        // P1-14: buckets follow the machine's local calendar day (the same
+        // day the Usage page's local-time column shows), not UTC. The
+        // expectation is derived through chrono itself so the test stays
+        // correct in every CI timezone.
+        let ms: i64 = 1_704_169_445_000; // 2024-01-02T03:04:05Z
+        let expected = Local
+            .timestamp_millis_opt(ms)
+            .single()
+            .expect("valid local timestamp")
+            .format("%Y-%m-%d")
+            .to_string();
+        assert_eq!(day_label(ms as u64), expected);
+        // Out-of-range input (year ~824k, past chrono's ±262143 ceiling)
+        // degrades to the raw millis rather than lying.
+        let beyond_chrono = 26_000_000_000_000_000u64;
+        assert_eq!(day_label(beyond_chrono), beyond_chrono.to_string());
     }
 
     #[test]
@@ -599,29 +568,6 @@ mod tests {
             80_000 - KEEP_RECORDS as u64
         );
         assert_eq!(loaded.last().unwrap().timestamp_ms, 79_999);
-    }
-
-    #[test]
-    fn scheduled_run_maps_to_usage_record() {
-        let mut run = ScheduledRun::start("t1", "Daily digest");
-        run.cost_usd = Some(0.42);
-        run.token_usage = Some(12_345);
-        let r = scheduled_run_to_record(&run).expect("tracked run maps to a record");
-        assert_eq!(r.model, SCHEDULED_LABEL);
-        assert_eq!(r.provider, SCHEDULED_LABEL);
-        assert_eq!(r.input_tokens, 12_345);
-        assert_eq!(r.output_tokens, 0);
-        assert_eq!(r.cache_creation_tokens, 0);
-        assert_eq!(r.cache_read_tokens, 0);
-        assert_eq!(r.cost_usd, 0.42);
-        assert!(r.timestamp_ms > 0);
-    }
-
-    #[test]
-    fn scheduled_run_without_tracking_is_dropped() {
-        // start() yields a Running run with no cost/tokens recorded yet.
-        let run = ScheduledRun::start("t2", "No-op");
-        assert!(scheduled_run_to_record(&run).is_none());
     }
 
     #[test]

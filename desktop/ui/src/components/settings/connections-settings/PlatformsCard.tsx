@@ -11,7 +11,7 @@ import * as api from '@/lib/tauri-api'
 import type { GatewayConfig, GatewayProcessState } from '@/types'
 import {
   PLATFORMS,
-  PLATFORM_LABEL,
+  PLATFORM_LABEL_KEY,
   SECRET_MODEL,
   platformStatus,
   readTrigger,
@@ -105,7 +105,7 @@ export function PlatformsCard({
       toast.success(t('settings.connections.saved'))
       markStale()
     } catch (e) {
-      toastError('keyring: save failed', e)
+      toastError(t('settings.connections.keyringSaveFailed'), e)
     } finally {
       onSavingChange(null)
     }
@@ -138,7 +138,7 @@ export function PlatformsCard({
       onConfigChange(written)
       markStale()
     } catch (e) {
-      toastError('gateway config: write failed', e)
+      toastError(t('settings.connections.configWriteFailed'), e)
     }
   }
 
@@ -162,7 +162,7 @@ export function PlatformsCard({
       onConfigChange(written)
       markStale()
     } catch (e) {
-      toastError('gateway config: write failed', e)
+      toastError(t('settings.connections.configWriteFailed'), e)
     }
   }
 
@@ -176,7 +176,7 @@ export function PlatformsCard({
       setNeedsRestart(false)
       toast.success(t('settings.connections.restart.restarted'))
     } catch (e) {
-      toastError('gateway supervisor: restart failed', e)
+      toastError(t('settings.connections.restart.failed'), e)
     } finally {
       setRestarting(false)
     }
@@ -200,7 +200,7 @@ export function PlatformsCard({
             >
               <div className="flex items-center justify-between gap-md">
                 <div className="flex items-center gap-sm">
-                  <span className="font-label-md text-on-surface">{PLATFORM_LABEL[p]}</span>
+                  <span className="font-label-md text-on-surface">{t(PLATFORM_LABEL_KEY[p])}</span>
                   <span
                     data-testid={`connection-status-${p}`}
                     className={cn('h-2 w-2 shrink-0 rounded-full', STATUS_DOT[status])}
@@ -223,7 +223,7 @@ export function PlatformsCard({
               </div>
               {SECRET_MODEL[p].map((s) => {
                 const present = hasSecret[s.key] ?? false
-                const label = `${t(s.labelKey)}${s.required ? '' : t('settings.connections.secret.optionalSuffix')} — ${PLATFORM_LABEL[p]}`
+                const label = `${t(s.labelKey)}${s.required ? '' : t('settings.connections.secret.optionalSuffix')} — ${t(PLATFORM_LABEL_KEY[p])}`
                 return (
                   <div key={s.key} className="flex flex-col gap-xs">
                     <div className="flex items-center gap-sm">

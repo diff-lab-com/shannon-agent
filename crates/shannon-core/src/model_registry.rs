@@ -17,7 +17,8 @@ pub mod dynamic;
 pub mod catalog;
 pub mod tier;
 
-pub use catalog::{MODEL_CATALOG, ModelCapabilities, ModelInfo, TierLabel};
+pub use catalog::tier_label_for_caps;
+pub use catalog::{MODEL_CATALOG, ModelCapabilities, ModelEntrySource, ModelInfo, TierLabel};
 pub use tier::{
     EffortLevel, ModelRouter, TaskType, is_model_alias, model_aliases, resolve_auto_tier,
     resolve_model, resolve_model_alias, resolve_tier,
@@ -39,15 +40,21 @@ pub fn models_for_provider(provider: LlmProvider) -> Vec<&'static ModelInfo> {
 /// the Phase B beta-header mapping keyed by model id). Dynamic entries are
 /// appended only when their id is not already present, deduplicating by id so a
 /// models.dev refresh never doubles a known model.
+///
+/// S2-1 (redteam 发现#9): the merge tags provenance — static rows keep their
+/// `Catalog` source, overlay-only rows are retagged `Overlay` so the desktop's
+/// source badge reflects where a row's metadata actually came from.
 pub fn merge_static_and_dynamic(provider: LlmProvider, dynamic: &[ModelInfo]) -> Vec<ModelInfo> {
+    use catalog::ModelEntrySource;
     let mut out: Vec<ModelInfo> = Vec::new();
     for m in MODEL_CATALOG.iter().filter(|m| m.provider == provider) {
         out.push(m.clone());
     }
     let known: std::collections::HashSet<&str> = out.iter().map(|m| m.id).collect();
-    for m in dynamic.iter().filter(|m| m.provider == provider) {
+    for mut m in dynamic.iter().filter(|m| m.provider == provider).cloned() {
         if !known.contains(m.id) {
-            out.push(m.clone());
+            m.source = ModelEntrySource::Overlay;
+            out.push(m);
         }
     }
     out
@@ -275,9 +282,20 @@ pub fn provider_display_name(p: &LlmProvider) -> &'static str {
     }
 }
 
+/// Last-resort context window for locally detected Ollama models when
+/// `ollama show` fails or reports nothing parseable. Kept from the old
+/// always-fabricated value (review 2026-09-29 P1-13) — it is now only a
+/// floor, not the norm.
+const OLLAMA_FALLBACK_CONTEXT: u32 = 4096;
+
 /// Attempt to detect locally running Ollama models via `ollama list`.
 ///
 /// Returns an empty Vec silently if Ollama is not installed or not running.
+///
+/// Each model's real context length is fetched with a single `ollama show
+/// <model>` call (review 2026-09-29 P1-13 — the previously hardcoded `4096`
+/// misled compaction budgets). A `show` failure or unparseable output falls
+/// back to `OLLAMA_FALLBACK_CONTEXT` and never breaks listing.
 pub fn detect_local_models() -> Vec<ModelInfo> {
     let output = match std::process::Command::new("ollama").arg("list").output() {
         Ok(o) => o,
@@ -297,25 +315,196 @@ pub fn detect_local_models() -> Vec<ModelInfo> {
         if name.is_empty() {
             continue;
         }
+        let context_window = ollama_show_context(&name).unwrap_or(OLLAMA_FALLBACK_CONTEXT) as usize;
         models.push(ModelInfo {
             id: Box::leak(name.clone().into_boxed_str()),
             display_name: Box::leak(name.into_boxed_str()),
             aliases: &[],
             provider: LlmProvider::Ollama,
-            context_window: 4096,
+            context_window,
             max_output: 4_096,
             cost_per_m_input: 0.0,
             cost_per_m_output: 0.0,
             capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
+            source: catalog::ModelEntrySource::Catalog,
         });
     }
 
     models
 }
 
+/// Read a model's context length via one `ollama show <model>` invocation.
+/// Returns `None` when the command fails or its output parses to nothing —
+/// callers fall back to `OLLAMA_FALLBACK_CONTEXT`.
+fn ollama_show_context(model: &str) -> Option<u32> {
+    let output = std::process::Command::new("ollama")
+        .arg("show")
+        .arg(model)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_ollama_show_context(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parse the context length out of `ollama show <model>` output.
+///
+/// Best-effort across Ollama versions (review 2026-09-29 P1-13). In order:
+///
+/// 1. `num_ctx <n>` — the runtime parameter, either as a `Parameters`
+///    section line (`num_ctx    4096`) or the `--modelfile` form
+///    (`PARAMETER num_ctx 4096`). This is the context the server will
+///    actually use, so it wins over the architectural maximum.
+/// 2. `context length <n>` — the model architecture's maximum from the
+///    modern `ollama show` header table.
+///
+/// Matching is case-insensitive and whitespace-tolerant; `0` is rejected as
+/// nonsense. Anything unrecognised yields `None` — never a guess.
+fn parse_ollama_show_context(output: &str) -> Option<u32> {
+    let mut context_length: Option<u32> = None;
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let lower: Vec<String> = tokens
+            .iter()
+            .map(|t| t.to_ascii_lowercase().trim_end_matches(':').to_string())
+            .collect();
+        for i in 0..lower.len() {
+            match lower[i].as_str() {
+                "num_ctx" => {
+                    if let Some(v) = lower
+                        .get(i + 1)
+                        .and_then(|t| t.parse::<u32>().ok())
+                        .filter(|v| *v > 0)
+                    {
+                        return Some(v);
+                    }
+                }
+                "context" if lower.get(i + 1).map(String::as_str) == Some("length") => {
+                    if let Some(v) = lower
+                        .get(i + 2)
+                        .and_then(|t| t.parse::<u32>().ok())
+                        .filter(|v| *v > 0)
+                    {
+                        context_length = Some(v);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    context_length
+}
+
 /// Return all model IDs from the catalog (for Tab completion).
 pub fn all_model_ids() -> Vec<&'static str> {
     MODEL_CATALOG.iter().map(|m| m.id).collect()
+}
+
+// ── Capability-lookup id matching (legacy ⑦, review 2026-10-05 #297) ──
+
+/// Segment delimiters recognized by [`is_capability_variant_of`]. A model id
+/// is read as delimiter-separated segments (`glm`, `4.5`, `air`), so a
+/// prefix relationship only counts when it lines up with segment edges.
+const ID_SEGMENT_DELIMITERS: [char; 4] = ['-', '_', '.', '/'];
+
+/// The FINAL rule for capability-prefix inheritance (legacy ⑦, #297):
+/// a catalog entry's metadata may be inherited by a differently-spelled id
+/// only when the two ids are equal, or one is a byte-prefix of the other
+/// **at a segment boundary** and the leftover tail is a purely numeric
+/// release suffix — a single delimiter followed by one or more digit-only
+/// segments separated by the same delimiters (`-20250514`, `-2024-08-06`,
+/// `_20251001`, `-6`).
+///
+/// Concretely, with entry `glm-4.5` in the catalog:
+/// - `glm-4.5-20250715` inherits (date snapshot of the same model);
+/// - `claude-sonnet-4-6-20260101` inherits from `claude-sonnet-4-6`
+///   (acceptance a — dated variants resolve);
+/// - `glm-4.5-air` does **not** inherit (acceptance b — `-air` carries a
+///   letter segment: a different, smaller product, not a snapshot);
+/// - `glm-4.5v` does not inherit either (`v` is glued on — not even a
+///   segment boundary).
+///
+/// Deliberately strict on purpose: capability bits gate real traffic
+/// (the R3-4 vision gate refuses on a known-false bit), so an id the rule
+/// cannot vouch for resolves to "unknown" and the callers' forward-compat
+/// path (no gate, no fabricated tier) takes over instead.
+///
+/// Both capability consumers — the vision lookup
+/// (`query_engine::engine::agent_loop::model_supports_vision`) and
+/// [`tier_label_for_id`] — resolve through this one predicate so the two
+/// can never drift again. Explicit `providers.toml` declarations stay
+/// authoritative ahead of any inheritance (exact-id only), and the billing
+/// path (`query_engine::types::find_pricing`) intentionally keeps its own
+/// substring semantics — this rule does not apply there.
+pub(crate) fn is_capability_variant_of(entry_id: &str, model_id: &str) -> bool {
+    if entry_id == model_id {
+        return true;
+    }
+    // One id must be a byte-prefix of the other. Both sides are valid
+    // UTF-8 and identical over the shared range, so the cut is a char
+    // boundary of the longer id and slicing is sound.
+    let tail = if model_id.len() > entry_id.len()
+        && model_id.as_bytes().starts_with(entry_id.as_bytes())
+    {
+        &model_id[entry_id.len()..]
+    } else if entry_id.len() > model_id.len()
+        && entry_id.as_bytes().starts_with(model_id.as_bytes())
+    {
+        &entry_id[model_id.len()..]
+    } else {
+        return false;
+    };
+    is_numeric_release_suffix(tail)
+}
+
+/// True when `tail` (the non-shared remainder of the longer id) is a
+/// numeric release suffix: one delimiter, then only digit segments. See
+/// [`is_capability_variant_of`] for the rule this implements.
+fn is_numeric_release_suffix(tail: &str) -> bool {
+    let Some(body) = tail.strip_prefix(ID_SEGMENT_DELIMITERS) else {
+        return false;
+    };
+    !body.is_empty()
+        && body
+            .split(ID_SEGMENT_DELIMITERS)
+            .all(|segment| !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Resolve `model_id` against `catalog` for capability lookups: exact id
+/// first, then the segment-boundary variant match of
+/// [`is_capability_variant_of`] (forward: the entry extends the query with
+/// a dated suffix, e.g. `gpt-4o` → `gpt-4o-2024-08-06`; reverse: the query
+/// extends the entry, e.g. `claude-sonnet-4-6-20260101` →
+/// `claude-sonnet-4-6`; longest entry wins, mirroring the historical stage
+/// order). Returns `None` when nothing vouches for the id — callers treat
+/// that as "capability unknown".
+///
+/// Legacy ⑦ (#297): replaces the old raw bidirectional `starts_with` scan
+/// that let `glm-4.5-air` inherit `glm-4.5`'s vision bit. Parameterized
+/// over the catalog slice so tests can pin the EXACT strategy against
+/// synthetic catalogs.
+pub(crate) fn find_capability_source<'a>(
+    catalog: &'a [ModelInfo],
+    model_id: &str,
+) -> Option<&'a ModelInfo> {
+    if let Some(info) = catalog.iter().find(|m| m.id == model_id) {
+        return Some(info);
+    }
+    // Forward: catalog entry extends the query id at a segment boundary.
+    if let Some(info) = catalog
+        .iter()
+        .find(|m| m.id.len() > model_id.len() && is_capability_variant_of(m.id, model_id))
+    {
+        return Some(info);
+    }
+    // Reverse: query id extends a catalog entry (strictly shorter, since a
+    // longer match would have been caught by the forward stage above);
+    // longest entry wins.
+    catalog
+        .iter()
+        .filter(|m| is_capability_variant_of(m.id, model_id))
+        .max_by_key(|m| m.id.len())
 }
 
 /// Conservative context-window fallback (200K) for internal budgets
@@ -385,30 +574,30 @@ pub fn model_info_for_alias(alias: &str) -> Option<&'static ModelInfo> {
 }
 
 /// Classify a model id into a routing tier via the catalog — the single
-/// source of truth for tier classification. Matches exact id first, then
-/// prefix (so short names like `"claude-sonnet-4"` resolve to
-/// `"claude-sonnet-4-20250514"`), mirroring [`context_window_for`]'s lookup
-/// strategy. Returns [`TierLabel::Unknown`] for anything not in the catalog.
+/// source of truth for tier classification. Resolves exact ids and
+/// segment-boundary dated variants (short names like `"claude-sonnet-4"`
+/// resolve to `"claude-sonnet-4-20250514"`) through the private
+/// `find_capability_source`, the same strategy as the vision capability
+/// lookup. Returns [`TierLabel::Unknown`] for anything not in the catalog.
+///
+/// R2-4: a per-model declaration from the active `providers.toml` v2 profile
+/// wins first — its declared capabilities feed the same heuristic the catalog
+/// entries use, so a custom openai-compatible model can be classified at all
+/// (the static catalog has no entry for it). A declaration without
+/// capabilities defers to the catalog below.
 ///
 /// UI layers (status bar, status card) call this instead of maintaining their
 /// own string-heuristic copies.
 pub fn tier_label_for_id(model_id: &str) -> TierLabel {
-    // Empty id would otherwise prefix-match the first catalog entry
-    // (`m.id.starts_with("")` is always true) — guard it explicitly.
+    // Empty id would otherwise read as a prefix of the first catalog
+    // entry — guard it explicitly.
     if model_id.is_empty() {
         return TierLabel::Unknown;
     }
-    if let Some(info) = model_info_for(model_id) {
-        return info.tier_label();
+    if let Some(label) = crate::declared_models::tier_label_for(model_id) {
+        return label;
     }
-    if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id.starts_with(model_id)) {
-        return info.tier_label();
-    }
-    if let Some(info) = MODEL_CATALOG
-        .iter()
-        .filter(|m| model_id.starts_with(m.id))
-        .max_by_key(|m| m.id.len())
-    {
+    if let Some(info) = find_capability_source(MODEL_CATALOG, model_id) {
         return info.tier_label();
     }
     TierLabel::Unknown
@@ -419,7 +608,53 @@ pub fn tier_label_for_id(model_id: &str) -> TierLabel {
 mod tests {
     use super::*;
     use shannon_engine::api::types::WireFormat;
-    use shannon_types::provider_config::{ProviderTiers, TierName};
+    use shannon_types::provider_config::{ModelCapability, ModelSpec, ProviderTiers, TierName};
+
+    #[test]
+    fn tier_label_for_id_honors_declared_capabilities() {
+        // R2-4: an openai-compatible model absent from the catalog can only
+        // be classified through its declared capabilities.
+        let mut spec = ModelSpec {
+            id: "shannon-declared-tier-model".to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: None,
+            cost_per_m_output: None,
+            capabilities: vec![ModelCapability::Coding, ModelCapability::Reasoning],
+        };
+        crate::declared_models::clear();
+        crate::declared_models::replace_from_specs(&[spec.clone()]);
+        assert_eq!(
+            tier_label_for_id("shannon-declared-tier-model"),
+            TierLabel::Standard,
+            "declared coding/reasoning classifies as Standard"
+        );
+
+        // Cheap flips it to Fast (same heuristic as catalog entries).
+        spec.capabilities = vec![ModelCapability::Cheap];
+        crate::declared_models::replace_from_specs(&[spec.clone()]);
+        assert_eq!(
+            tier_label_for_id("shannon-declared-tier-model"),
+            TierLabel::Fast
+        );
+
+        // A declaration without capabilities defers to the catalog.
+        spec.capabilities = vec![];
+        crate::declared_models::replace_from_specs(&[spec]);
+        assert_eq!(
+            tier_label_for_id("shannon-declared-tier-model"),
+            TierLabel::Unknown,
+            "capability-less declaration must not fabricate a tier"
+        );
+        crate::declared_models::clear();
+
+        // Catalog classification still works for catalog ids.
+        assert_eq!(
+            tier_label_for_id("claude-sonnet-4-20250514"),
+            TierLabel::Standard
+        );
+    }
 
     #[test]
     fn resolve_tier_anthropic_fast_uses_haiku() {
@@ -616,10 +851,10 @@ mod tests {
     // the function; the tests below pin each branch. They save/restore
     // the env vars because `parse_provider_slugs_env` is process-global.
 
-    /// RAII guard that snapshots `SHANNON_ENABLED_PROVIDERS` /
-    /// `SHANNON_DISABLED_PROVIDERS` on construction and restores them on
-    /// drop — keeps the env-mutating tests from leaking state into
-    /// siblings.
+    // RAII guard that snapshots `SHANNON_ENABLED_PROVIDERS` /
+    // `SHANNON_DISABLED_PROVIDERS` on construction and restores them on
+    // drop — keeps the env-mutating tests from leaking state into
+    // siblings.
 
     /// Serializes the env-mutating allowlist tests: set_var/remove_var are
     /// process-global and parallel siblings race otherwise.
@@ -906,8 +1141,10 @@ mod tests {
     fn resolve_auto_tier_respects_profile_override() {
         // A pinned providers.toml override for `standard` wins for auto too,
         // since auto delegates through resolve_tier.
-        let mut tiers = ProviderTiers::default();
-        tiers.standard = Some("claude-opus-4-20250115".to_string());
+        let tiers = ProviderTiers {
+            standard: Some("claude-opus-4-20250115".to_string()),
+            ..ProviderTiers::default()
+        };
         let (tier, id) =
             resolve_auto_tier(&LlmProvider::Anthropic, &tiers).expect("resolves via override");
         assert_eq!(tier, TierName::Standard);
@@ -1574,6 +1811,7 @@ mod tests {
             cost_per_m_input: 15.0,
             cost_per_m_output: 60.0,
             capabilities: ModelCapabilities::reasoning(),
+            source: catalog::ModelEntrySource::Catalog,
         };
         match id {
             "claude-haiku-4-5" => MODEL_CATALOG
@@ -1618,6 +1856,84 @@ mod tests {
     }
 
     #[test]
+    fn capability_variant_rule_is_dated_suffix_only() {
+        // Legacy ⑦ (#297) FINAL RULE, pinned directly on the shared
+        // predicate both capability lookups resolve through: prefix
+        // inheritance requires a segment boundary AND a purely numeric
+        // release suffix on the leftover tail.
+
+        // Dated snapshots of the same model — the legitimate inheritors.
+        assert!(is_capability_variant_of(
+            "claude-sonnet-4-6",
+            "claude-sonnet-4-6-20260101"
+        ));
+        assert!(is_capability_variant_of("glm-4.5", "glm-4.5-20250715"));
+        assert!(is_capability_variant_of("gpt-4o", "gpt-4o-2024-08-06"));
+        assert!(is_capability_variant_of("foo_bar", "foo_bar_2025"));
+
+        // Cross-product / letter extensions — must NOT inherit.
+        assert!(
+            !is_capability_variant_of("glm-4.5", "glm-4.5-air"),
+            "-air is a different product, not a snapshot"
+        );
+        assert!(!is_capability_variant_of("gpt-4o", "gpt-4o-mini"));
+        assert!(!is_capability_variant_of("glm-5.1", "glm-5.1-flash"));
+        assert!(
+            !is_capability_variant_of("glm-5.1", "glm-5.1-flash-x"),
+            "letter segments anywhere in the tail disqualify inheritance"
+        );
+        assert!(
+            !is_capability_variant_of("glm-4.5", "glm-4.5v"),
+            "glued tail is not even a segment boundary"
+        );
+        assert!(
+            !is_capability_variant_of("glm-4.5", "glm-4.5-air-20250715"),
+            "a date suffix cannot launder a letter segment before it"
+        );
+        // Symmetric: the entry may also be the LONGER side (short query →
+        // dated catalog entry).
+        assert!(is_capability_variant_of(
+            "claude-sonnet-4-20250514",
+            "claude-sonnet-4"
+        ));
+        // Equality is exact-match territory, still true here.
+        assert!(is_capability_variant_of("gpt-4o", "gpt-4o"));
+        // Unrelated ids.
+        assert!(!is_capability_variant_of("gpt-4o", "claude-sonnet-4"));
+    }
+
+    #[test]
+    fn tier_lookup_follows_the_variant_rule() {
+        // Declared models stay authoritative ahead of the catalog; make
+        // sure no declaration from a sibling test is visible here.
+        crate::declared_models::clear();
+
+        // Acceptance (a): the dated variant of claude-sonnet-4-6 inherits
+        // its tier (forward-compat for real-world dated ids).
+        assert_eq!(tier_label_for_id("claude-sonnet-4-6"), TierLabel::Standard);
+        assert_eq!(
+            tier_label_for_id("claude-sonnet-4-6-20260101"),
+            TierLabel::Standard,
+            "dated variant inherits the base entry's tier"
+        );
+
+        // Acceptance (b) on tier: a letter-suffixed cross-product id no
+        // longer inherits the nearest listed ancestor's tier — it is
+        // Unknown, exactly like any other capability-unknown id.
+        assert_eq!(
+            tier_label_for_id("glm-5.1-flash"),
+            TierLabel::Fast,
+            "exact entry still wins"
+        );
+        assert_eq!(
+            tier_label_for_id("glm-5.1-flash-x"),
+            TierLabel::Unknown,
+            "no inheritance across a letter segment"
+        );
+        crate::declared_models::clear();
+    }
+
+    #[test]
     fn tier_label_classifies_gemini_models() {
         let flash = find_model("gemini-2.5-flash").unwrap();
         assert_eq!(flash.tier_label(), TierLabel::Fast);
@@ -1640,6 +1956,7 @@ mod tests {
         // Phase A: providers that previously had zero catalog entries.
         let xai = models_for_provider(LlmProvider::Xai);
         assert!(!xai.is_empty(), "xAI should have models");
+        assert!(xai.iter().any(|m| m.id == "grok-4.6"));
         assert!(xai.iter().any(|m| m.id == "grok-4.5"));
         for provider in [
             LlmProvider::Perplexity,
@@ -1667,14 +1984,93 @@ mod tests {
         );
         // OpenAI GPT-5 alias resolves.
         assert!(model_info_for_alias("gpt5").is_some());
-        // grok alias → grok-4.5 (grok-4 retired).
+        // grok alias → grok-4.6 (current flagship; grok-4 retired).
         let grok = model_info_for_alias("grok").unwrap();
-        assert_eq!(grok.id, "grok-4.5");
-        // grok-4.5 (coding+reasoning) → Standard; grok-4.1-fast (speed+cheap) → Fast.
+        assert_eq!(grok.id, "grok-4.6");
+        // grok-4.6 (coding+reasoning) → Standard; grok-build-0.1
+        // (speed+cheap, replaces the retired grok-4.1-fast slot) → Fast.
         assert_eq!(grok.tier_label(), TierLabel::Standard);
         assert_eq!(
-            model_info_for("grok-4.1-fast").unwrap().tier_label(),
+            model_info_for("grok-build-0.1").unwrap().tier_label(),
             TierLabel::Fast
         );
+    }
+
+    // ── parse_ollama_show_context (review 2026-09-29 P1-13) ──────────────
+
+    /// Modern `ollama show` header-table shape (architecture maximum).
+    #[test]
+    fn parse_ollama_show_context_header_table() {
+        let output = "\
+  Model
+    architecture        llama
+    parameters          7.6B
+    context length      131072
+    embedding length    4096
+    quantization        Q4_K_M
+
+  Params
+    stop                \"<|user|>\"
+
+  System
+    You are a helpful assistant.
+";
+        assert_eq!(parse_ollama_show_context(output), Some(131_072));
+    }
+
+    /// `--modelfile` shape: `PARAMETER num_ctx <n>`.
+    #[test]
+    fn parse_ollama_show_context_modelfile_parameter() {
+        let output = "\
+# Modelfile generated by \"ollama show\"
+# To build a new Modelfile based on this, replace FROM with:
+# FROM llama3:latest
+FROM /usr/share/ollama/.ollama/models/blobs/sha256-...
+PARAMETER num_ctx 32768
+PARAMETER stop \"<|user|>\"
+";
+        assert_eq!(parse_ollama_show_context(output), Some(32_768));
+    }
+
+    /// A `Parameters`-section `num_ctx` is the *effective* runtime context
+    /// and wins over the larger architectural maximum.
+    #[test]
+    fn parse_ollama_show_context_num_ctx_wins_over_context_length() {
+        let output = "\
+  Model
+    architecture        qwen3
+    context length      40960
+
+  Parameters
+    num_ctx             8192
+    temperature         0.7
+";
+        assert_eq!(parse_ollama_show_context(output), Some(8_192));
+    }
+
+    /// Case/whitespace tolerance for older or hand-tuned output.
+    #[test]
+    fn parse_ollama_show_context_is_case_insensitive() {
+        assert_eq!(
+            parse_ollama_show_context("  Context Length:  8192\n"),
+            Some(8192)
+        );
+        assert_eq!(parse_ollama_show_context("NUM_CTX=16384\n"), None);
+        assert_eq!(parse_ollama_show_context("num_ctx   16384"), Some(16_384));
+    }
+
+    #[test]
+    fn parse_ollama_show_context_rejects_garbage_and_zero() {
+        assert_eq!(parse_ollama_show_context(""), None);
+        assert_eq!(parse_ollama_show_context("no useful data here"), None);
+        // "embedding length" must not match the "context length" pattern.
+        assert_eq!(
+            parse_ollama_show_context("embedding length    4096\n"),
+            None
+        );
+        // A non-numeric or zero value is never guessed.
+        assert_eq!(parse_ollama_show_context("context length unknown\n"), None);
+        assert_eq!(parse_ollama_show_context("context length 0\n"), None);
+        assert_eq!(parse_ollama_show_context("num_ctx 0\n"), None);
     }
 }

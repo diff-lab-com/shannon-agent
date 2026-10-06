@@ -10,6 +10,8 @@ export interface ConfirmDialogProps {
   destructive?: boolean
   busy?: boolean
   busyLabel?: string
+  /** Disable only the confirm action while keeping cancel available. */
+  confirmDisabled?: boolean
   onConfirm: () => void
   onCancel: () => void
 }
@@ -23,6 +25,7 @@ export function ConfirmDialog({
   destructive = false,
   busy = false,
   busyLabel = '…',
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -59,7 +62,7 @@ export function ConfirmDialog({
           {cancelLabel}
         </Button>
         <Button
-          disabled={busy}
+          disabled={busy || confirmDisabled}
           className={`px-md py-sm rounded-xl text-on-primary cursor-pointer disabled:opacity-50 ${
             destructive ? 'bg-error hover:bg-error/90' : 'bg-primary hover:bg-primary/90'
           }`}

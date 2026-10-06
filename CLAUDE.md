@@ -48,6 +48,8 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 | `shannon-server` | axum-based HTTP API server exposing Shannon sessions (REST + SSE) | [metrics.md](./docs/metrics.md) |
 | `shannon-stability-attr` | Proc-macro `#[stable_api]` / `#[unstable_api]` attribute markers feeding `docs/STABILITY.md` | n/a |
 | `shannon-remote` | Remote execution worlds: SSH hosts (system ssh + SFTP) and Docker containers (`docker exec`) as `ProcessProvider`/`FileSystemProvider` implementations; `DynamicWorld` hot-swap; `/remote` TUI command, `--target` CLI flag, Settings→Remotes desktop page | [design](./docs/plans/2026-09-04-remote-connections-design.md) |
+| `shannon-browser` | System-browser detection, browser providers, and the shared chromiumoxide session behind the `local-browser` feature — used by browser tools and remote worlds | n/a |
+| `shannon-plugin-api` | Content-transform middleware contract between the engine and plugins (secret-guard); version-locked to releases, not workspace-inherited | n/a |
 
 ### First-Screen UX
 
@@ -129,6 +131,15 @@ Titles / branch lineage persist in a `<uuid>/meta.json` sidecar.
 
 **YAML scenarios**: `tests/scenarios/*.yaml` — 10 declarative test scenarios
 
+### Install → usable acceptance
+
+Every installable surface (MCP stdio/remote, skills, agents, data sources) must
+pass the five-step chain in
+[docs/dev/install-to-usable-acceptance.md](./docs/dev/install-to-usable-acceptance.md) —
+安装 → 重启/热加载 → 列表态 → 聊天内可见 → 可调用 — before shipping an
+installer/loader change. Per-step unit tests passing is not enough; the whole
+chain must be asserted end-to-end (the R2 url-only lesson).
+
 ### Recording Real API Fixtures
 
 ```bash
@@ -143,7 +154,7 @@ just replay
 
 ### HIGH — Shannon has partial support
 
-- **Permission auto-mode**: 9 `ApprovalMode` variants with `PermissionClassifier` (2928 lines) wired into `PermissionRuleChecker`. `LlmPermissionClassifier` wraps the rule-based classifier with async LLM fallback for ambiguous cases (confidence < 0.7, Medium+ risk). 4-tier precedence: hard_deny > soft_deny > allow > explicit intent. LLM classification disabled by default, enabled via `with_llm()`.
+- **Permission modes (2026-10-05 convergence)**: 7 `ApprovalMode` variants in a 4+3 UI model — autonomy ladder `ask` → `auto-edit` → `full-auto` (Shift+Tab cycles; engine default `auto-edit`), plan workflow tier (entered via `/plan`, snapshots/restores the ladder mode, approval promotes to the full-auto floor), and expert modes `readonly` / `dontAsk` (never waits — denies instead) / `bypassPermissions` (deny rules still bind; root refusal + `SHANNON_DISABLE_BYPASS=1` kill switch). Settings `permissions.allow/ask/deny` are a rule layer effective in every mode (P1-1); `permissions.defaultMode` seeds the startup mode (project-level bypass/dontask ignored); `permission_profile` config/env now actually applies (P1-3). `permissions.max_auto_approvals` / `--max-auto-approvals` breaker → headless exit 8. Design: docs/plans/2026-10-04-permission-mode-naming-design.md.
 - **Non-interactive/CI mode**: `--prompt` flag with FullAuto permissions (auto-approve non-critical, deny critical). NDJSON streaming, tool restrictions, exit codes. `--schema` flag accepts file path or inline JSON Schema for structured output validation. Deep link support via `shannon://prompt?text=<encoded>` and `shannon://resume?id=<uuid>` URL scheme with `--register-url-scheme`/`--unregister-url-scheme` commands.
 - **MCP tool search**: `tools/list` works with deferred schema loading. MCP webhook/channel support with `WebhookRegistry` (HMAC-SHA256 signing, event filtering, persistence), `EventPublisher` (non-blocking delivery, retry with exponential backoff), and event firing from `McpProcessPool` (ServerConnected/Disconnected, ToolCallStarted/Completed, NotificationReceived).
 - **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. 32 event types fully wired: SubagentStart/Stop, WorktreeCreate/Remove, PreCompact/PostCompact, ConfigChange, TaskCreated/TaskCompleted, plus all original events. Hook events automatically trigger matching routines via `TriggeredRoutineRegistry`.
@@ -199,3 +210,4 @@ Computer use (desktop automation via `computer-use` feature flag). Browser autom
 - The `mockito` server matchers are order-dependent when using `.expect(N)`.
 - `LlmClientConfig` must include `max_stream_reconnects` field (all constructors have it).
 - `#[allow(dead_code)]` annotations in production code: ~96 remaining (re-count 2026-08-08 via `grep -r "allow(dead_code)" crates/ | wc -l`; was 61 — the count drifts as code grows, re-run before quoting). All annotated with `// KEEP: <reason>` comments. Categories: cross-platform stubs, deserialized fields, command template dynamic dispatch, test-only utilities, struct ownership, watcher lifecycle fields. The four modules a prior review flagged as dead-code sinks (`coordinator.rs`, `compact.rs`, `doctor.rs`, `ui_adapter.rs`) now carry **zero** such annotations.
+- On Linux hosts with old pipewire (e.g. Ubuntu 22.04 / libspa 0.3.48), `cargo check --workspace` fails inside `libspa-0.10.x` (`E0425 … in crate `spa_sys``, `spa_video_info_raw.flags`) because libspa-sys bindgens the **system** headers at build time — an environment mismatch, not a repo bug. Use `just check` (auto-falls back to `--exclude shannon-desktop` + desktop `--no-default-features --features tauri`); see CONTRIBUTING.md → "Desktop build on Linux (libspa/pipewire)".

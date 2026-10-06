@@ -22,9 +22,9 @@ pub mod types;
 pub use error::ApiError;
 
 pub use types::{
-    ClaudeClientConfig, ContentBlock, ContentDelta, ImageSource, LlmClientConfig, LlmProvider,
-    Message, MessageContent, MessageDeltaDelta, MessageRequest, MessageResponse, StreamEvent,
-    SystemContentBlock, ToolDefinition, ToolResultContent, Usage,
+    ClaudeClientConfig, ContentBlock, ContentDelta, FailoverTarget, ImageSource, LlmClientConfig,
+    LlmProvider, Message, MessageContent, MessageDeltaDelta, MessageRequest, MessageResponse,
+    StreamEvent, SystemContentBlock, ToolDefinition, ToolResultContent, Usage,
 };
 
 pub use retry::{RetryConfig, RetryPolicy};
@@ -179,6 +179,8 @@ mod tests {
     #[test]
     fn test_client_creation() {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             provider: LlmProvider::Anthropic,
             ..Default::default()
@@ -206,6 +208,7 @@ mod tests {
     #[test]
     fn test_client_add_header() {
         let mut client = LlmClient::new(LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Custom,
             ..Default::default()
         });
@@ -221,6 +224,8 @@ mod tests {
     #[test]
     fn test_auth_headers_anthropic() {
         let client = LlmClient::new(LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "sk-ant-test".to_string(),
             api_version: "2023-06-01".to_string(),
             provider: LlmProvider::Anthropic,
@@ -242,6 +247,8 @@ mod tests {
     #[test]
     fn test_auth_headers_openai() {
         let client = LlmClient::new(LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "sk-oai-test".to_string(),
             provider: LlmProvider::OpenAI,
             ..Default::default()
@@ -266,6 +273,7 @@ mod tests {
         let mut extra = HashMap::new();
         extra.insert("X-Auth".to_string(), "token123".to_string());
         let client = LlmClient::new(LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Custom,
             extra_headers: extra,
             ..Default::default()
@@ -283,6 +291,7 @@ mod tests {
     #[test]
     fn test_endpoint_url_anthropic() {
         let client = LlmClient::new(LlmClientConfig {
+            thinking_type: None,
             base_url: "https://api.anthropic.com".to_string(),
             provider: LlmProvider::Anthropic,
             ..Default::default()
@@ -296,6 +305,7 @@ mod tests {
     #[test]
     fn test_endpoint_url_openai() {
         let client = LlmClient::new(LlmClientConfig {
+            thinking_type: None,
             base_url: "https://api.openai.com".to_string(),
             provider: LlmProvider::OpenAI,
             ..Default::default()
@@ -310,6 +320,72 @@ mod tests {
     fn test_endpoint_url_ollama() {
         let client = LlmClient::new(LlmClientConfig::ollama_default());
         assert_eq!(client.endpoint_url(), "http://localhost:11434/api/chat");
+    }
+
+    // --- Azure deployment/api-version wire pins (S2-6, review P-N14) ---
+    //
+    // Azure's chat-completions route is path-routed by deployment and
+    // requires an explicit versioned query. The exact wire shape is frozen
+    // here:
+    // {base}/openai/deployments/{deployment}/chat/completions?api-version={v}
+
+    /// Deterministic Azure config for the URL pins (no env reads).
+    fn azure_pin_config(base_url: &str, model: &str, api_version: &str) -> LlmClientConfig {
+        LlmClientConfig {
+            thinking_type: None,
+            base_url: base_url.to_string(),
+            model: model.to_string(),
+            api_version: api_version.to_string(),
+            provider: LlmProvider::Azure,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_endpoint_url_azure_deployment_and_default_api_version() {
+        // Deployment name = model id; an empty api_version falls back to the
+        // default so a default-built config still produces a requestable URL
+        // (pre-S2-6 this composed `{base}/openai/deployments/` — no
+        // deployment, no query — which could only 404).
+        let client = LlmClient::new(azure_pin_config(
+            "https://my-resource.openai.azure.com",
+            "gpt-4o",
+            "",
+        ));
+        assert_eq!(
+            client.endpoint_url(),
+            "https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21"
+        );
+    }
+
+    #[test]
+    fn test_endpoint_url_azure_explicit_api_version_wins() {
+        let client = LlmClient::new(azure_pin_config(
+            "https://my-resource.openai.azure.com/",
+            "gpt-5",
+            "2026-03-01-preview",
+        ));
+        // The explicit version replaces the default; a trailing slash on the
+        // base_url must not double into the path.
+        assert_eq!(
+            client.endpoint_url(),
+            "https://my-resource.openai.azure.com/openai/deployments/gpt-5/chat/completions?api-version=2026-03-01-preview"
+        );
+    }
+
+    #[test]
+    fn test_endpoint_url_azure_trims_whitespace_deployment() {
+        // A deployment id pasted with surrounding whitespace must not break
+        // the path (same treatment every other provider's id gets).
+        let client = LlmClient::new(azure_pin_config(
+            "https://r.openai.azure.com",
+            " gpt-4o-mini ",
+            "",
+        ));
+        assert_eq!(
+            client.endpoint_url(),
+            "https://r.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2024-10-21"
+        );
     }
 
     // --- Message Serialization Tests ---
@@ -353,6 +429,7 @@ mod tests {
     #[test]
     fn test_message_request_serialization() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 4096,
             system: None,
@@ -409,6 +486,8 @@ mod tests {
     #[test]
     fn test_backward_compat_claude_client() {
         let client: ClaudeClient = ClaudeClient::new(LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test".to_string(),
             ..Default::default()
         });

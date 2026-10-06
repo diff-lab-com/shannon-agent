@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { useIntl, type PrimitiveType } from 'react-intl'
+import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import ErrorState from '@/components/ui/error-state'
 import { Modal } from '@/components/ui/modal'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Input } from '@/components/ui/input'
@@ -11,6 +13,7 @@ import * as api from '@/lib/tauri-api'
 import type { BuiltinProfileInfo, CustomProfileInfo, ProfilesList } from '@/types'
 import { useCatalog } from '@/context/CatalogContext'
 import { toastError } from '@/lib/errorToast'
+import EffectBadge from '@/components/settings/EffectBadge'
 
 // ─── Rule-list input validation (P1-3) ──────────────────────────────────────
 
@@ -47,6 +50,21 @@ export function validateRuleInput(raw: string): string | null {
 
 type RuleGroup = 'auto_approve' | 'confirm' | 'deny'
 
+/// Single source of truth for rule-group → i18n title/hint keys. NB: the key
+/// segment for auto_approve is `auto`, not the group name —拼接 group 名会
+/// 渲染出原始键字符串（react-intl missing-message 回退）。
+const RULE_GROUP_TITLE_KEYS: Record<RuleGroup, string> = {
+  auto_approve: 'settings.permissions.editor.auto.title',
+  confirm: 'settings.permissions.editor.confirm.title',
+  deny: 'settings.permissions.editor.deny.title',
+}
+
+const RULE_GROUP_HINT_KEYS: Record<RuleGroup, string> = {
+  auto_approve: 'settings.permissions.editor.auto.hint',
+  confirm: 'settings.permissions.editor.confirm.hint',
+  deny: 'settings.permissions.editor.deny.hint',
+}
+
 interface EditorState {
   /** Original name when editing (rename = save under the new name). */
   originalName: string | null
@@ -66,17 +84,78 @@ const EMPTY_EDITOR: EditorState = {
   deny: [],
 }
 
+/** Whether the editor state drifted from its opening snapshot (dirty guard). */
+function editorModified(a: EditorState, b: EditorState): boolean {
+  return (
+    a.name !== b.name ||
+    a.description !== b.description ||
+    a.auto_approve.join('\n') !== b.auto_approve.join('\n') ||
+    a.confirm.join('\n') !== b.confirm.join('\n') ||
+    a.deny.join('\n') !== b.deny.join('\n')
+  )
+}
+
+/**
+ * X3 权限就近直达 — deep-link scope filter.
+ *
+ * `/settings/permissions?scope=mcp%3A<server>` narrows the rule view to the
+ * rules targeting that MCP server. Rule syntax uses `mcp__<server>__*` while
+ * the scope query uses the friendlier `mcp:<server>` form (URL-encoded in
+ * transit), so the server segment maps to a `mcp__<server>__` rule prefix.
+ */
+interface ScopedRuleHit {
+  profile: string
+  group: RuleGroup
+  rule: string
+}
+
+function scopeToPrefix(scope: string): string | null {
+  if (!scope.startsWith('mcp:')) return null
+  const server = scope.slice('mcp:'.length).trim()
+  if (server === '') return null
+  return `mcp__${server}__`
+}
+
+export function collectScopedRules(
+  profiles: ProfilesList | null,
+  prefix: string | null,
+): ScopedRuleHit[] {
+  if (!prefix || !profiles) return []
+  const hits: ScopedRuleHit[] = []
+  const lower = prefix.toLowerCase()
+  for (const p of profiles.custom) {
+    for (const group of ['auto_approve', 'confirm', 'deny'] as RuleGroup[]) {
+      for (const rule of p[group]) {
+        if (rule.toLowerCase().startsWith(lower)) {
+          hits.push({ profile: p.name, group, rule })
+        }
+      }
+    }
+  }
+  return hits
+}
+
 /** P1-3 Settings → 权限配置 (permission profiles + command sandbox). */
 export default function PermissionsSettings() {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) =>
     intl.formatMessage({ id }, values)
   const { config, refreshConfig } = useCatalog()
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // X3: `?scope=mcp%3A<server>` — server-scoped rule filter (cleared via the
+  // chip in the scoped panel below).
+  const rawScope = searchParams.get('scope')
+  const scopePrefix = rawScope ? scopeToPrefix(rawScope) : null
 
   const [profiles, setProfiles] = useState<ProfilesList | null>(null)
   const [loading, setLoading] = useState(true)
+  // P1-13: a failed load must not render as "no permission tiers exist" —
+  // it renders an explicit error state with a retry.
+  const [loadError, setLoadError] = useState<unknown>(null)
   const [activating, setActivating] = useState<string | null>(null)
   const [editor, setEditor] = useState<EditorState | null>(null)
+  const [savingProfile, setSavingProfile] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [sandboxBusy, setSandboxBusy] = useState(false)
@@ -87,10 +166,18 @@ export default function PermissionsSettings() {
     api
       .listPermissionProfiles()
       .then((list) => {
-        if (active) setProfiles(list)
+        if (active) {
+          setProfiles(list)
+          setLoadError(null)
+        }
       })
-      .catch(() => {
-        if (active) setProfiles({ builtin: [], custom: [] })
+      .catch((e) => {
+        if (active) {
+          // Deliberately NOT set to an empty list: the builtin tiers come
+          // from the same response, so a failure would render as "the system
+          // has no permission profiles at all".
+          setLoadError(e)
+        }
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -109,6 +196,17 @@ export default function PermissionsSettings() {
     () => config?.sandbox?.mode ?? 'off',
     [config?.sandbox?.mode],
   )
+
+  const scopedHits = useMemo(
+    () => collectScopedRules(profiles, scopePrefix),
+    [profiles, scopePrefix],
+  )
+
+  const clearScope = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('scope')
+    setSearchParams(next, { replace: true })
+  }
 
   const handleActivate = async (name: string | null) => {
     setActivating(name ?? '__clear__')
@@ -152,8 +250,15 @@ export default function PermissionsSettings() {
   }
 
   const handleSaveProfile = async () => {
-    if (!editor) return
+    if (!editor || savingProfile) return
+    const originalName = editor.originalName
+    const wasActive = originalName != null && activeProfile === originalName
+    const renamed = originalName != null && originalName !== editor.name.trim()
+    setSavingProfile(true)
     try {
+      // The backend treats the payload name as the filename, so a rename is
+      // save-under-new-name + delete-old (automation_commands.rs:353-355).
+      // Save first: if this fails the old profile is still intact.
       await api.saveCustomProfile({
         name: editor.name,
         description: editor.description || undefined,
@@ -161,11 +266,23 @@ export default function PermissionsSettings() {
         confirm: editor.confirm,
         deny: editor.deny,
       })
+      if (renamed && originalName != null) {
+        // P1-12: deactivate a renamed active profile before the delete so
+        // active_permission_profile never keeps pointing at the removed file.
+        if (wasActive) await api.activatePermissionProfile(null)
+        await api.deleteCustomProfile(originalName)
+        // Keep the renamed profile active — the user was editing their live
+        // configuration, not switching away from it.
+        if (wasActive) await api.activatePermissionProfile(editor.name)
+      }
+      if (renamed || wasActive) await refreshConfig()
       toast.success(t('settings.permissions.toast.saved', { name: editor.name }))
       setEditor(null)
       loadProfiles()
     } catch (e) {
       toastError(t('settings.permissions.toast.saveFailed'), e)
+    } finally {
+      setSavingProfile(false)
     }
   }
 
@@ -203,8 +320,84 @@ export default function PermissionsSettings() {
           <Spinner />
           <span className="sr-only">{t('settings.permissions.loading')}</span>
         </div>
+      ) : loadError != null ? (
+        <ErrorState
+          title={t('settings.permissions.loadFailed.title')}
+          description={t('settings.permissions.loadFailed.description')}
+          action={{
+            label: t('settings.permissions.loadFailed.retry'),
+            onClick: () => {
+              setLoading(true)
+              loadProfiles()
+            },
+          }}
+        />
       ) : (
         <>
+          {/* X3: server-scoped rule view, opened from an MCP server row's
+              「工具权限」 deep link. Clearable chip + matched rules, or an
+              add-rule nudge when the server has none. */}
+          {rawScope && scopePrefix && (
+            <section
+              aria-label={t('settings.permissions.scope.filterLabel')}
+              data-testid="permissions-scope-panel"
+              className="space-y-sm p-md rounded-xl border border-primary/30 bg-primary/5"
+            >
+              <div className="flex items-center gap-sm flex-wrap">
+                <h3 className="font-title-sm text-on-surface font-semibold">
+                  {t('settings.permissions.scope.resultsTitle', { scope: rawScope })}
+                </h3>
+                <span className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold">
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                    filter_alt
+                  </span>
+                  {rawScope}
+                  <button
+                    type="button"
+                    aria-label={t('settings.permissions.scope.clear')}
+                    title={t('settings.permissions.scope.clear')}
+                    className="ml-xs inline-flex items-center justify-center rounded-full hover:bg-primary/20 cursor-pointer"
+                    onClick={clearScope}
+                  >
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                      close
+                    </span>
+                  </button>
+                </span>
+              </div>
+              {scopedHits.length === 0 ? (
+                <div className="flex flex-col gap-sm">
+                  <p className="text-body-sm text-on-surface-variant">
+                    {t('settings.permissions.scope.empty')}
+                  </p>
+                  <Button
+                    className="flex items-center gap-xs px-md py-sm rounded-lg bg-primary text-on-primary font-label-md self-start"
+                    onClick={() => setEditor({ ...EMPTY_EDITOR })}
+                  >
+                    <span className="material-symbols-outlined icon-md" aria-hidden="true">add</span>
+                    {t('settings.permissions.scope.addCta')}
+                  </Button>
+                </div>
+              ) : (
+                <ul className="space-y-xs">
+                  {scopedHits.map((hit) => (
+                    <li
+                      key={`${hit.profile}-${hit.group}-${hit.rule}`}
+                      className="flex items-center gap-sm flex-wrap"
+                    >
+                      <code className="font-mono text-body-sm text-on-surface bg-surface-container px-sm py-xs rounded-sm">
+                        {hit.rule}
+                      </code>
+                      <span className="text-label-sm text-on-surface-variant">
+                        {hit.profile} · {t(RULE_GROUP_TITLE_KEYS[hit.group])}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
           {/* Built-in tiers */}
           <section aria-label={t('settings.permissions.builtin.aria')} className="space-y-sm">
             <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.builtin.title')}</h3>
@@ -250,7 +443,7 @@ export default function PermissionsSettings() {
                       <div className="flex items-center gap-sm">
                         <span className="font-title-sm text-on-surface font-semibold truncate">{p.name}</span>
                         {activeProfile === p.name && (
-                          <span className="px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold uppercase tracking-wider">
+                          <span className="px-sm py-xs rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold uppercase tracking-wider">
                             {t('settings.permissions.activeBadge')}
                           </span>
                         )}
@@ -298,7 +491,7 @@ export default function PermissionsSettings() {
                         className={cn(
                           'px-md py-sm rounded-lg font-label-md',
                           activeProfile === p.name
-                            ? 'bg-primary/10 text-primary'
+                            ? 'bg-primary-container text-on-primary-container'
                             : 'bg-primary text-on-primary',
                         )}
                         disabled={activeProfile === p.name || activating != null}
@@ -339,13 +532,12 @@ export default function PermissionsSettings() {
               ))}
             </div>
             <p className="text-label-md text-on-surface-variant flex items-center gap-xs">
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">science</span>
+              <span className="material-symbols-outlined icon-sm" aria-hidden="true">science</span>
               {t('settings.permissions.sandbox.landlockNote')}
             </p>
-            <p className="text-label-md text-warning flex items-center gap-xs">
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">restart_alt</span>
-              {t('settings.permissions.sandbox.restartNote')}
-            </p>
+            {/* Settings R3 (T1): the free-text restart note became the shared
+                semantics badge so every card states effect timing the same way. */}
+            <EffectBadge kind="restart-app" />
           </section>
 
           {/* Rule syntax guide */}
@@ -369,6 +561,7 @@ export default function PermissionsSettings() {
           onCancel={() => setEditor(null)}
           onSave={() => void handleSaveProfile()}
           valid={editorValid}
+          saving={savingProfile}
         />
       )}
 
@@ -421,16 +614,18 @@ function BuiltinCard({
         </span>
         <span className="font-title-sm text-on-surface font-semibold capitalize">{profile.id}</span>
         {active && (
-          <span className="ml-auto px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold uppercase tracking-wider">
+          <span className="ml-auto px-sm py-xs rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold uppercase tracking-wider">
             {t('settings.permissions.activeBadge')}
           </span>
         )}
       </div>
-      <p className="text-body-sm text-on-surface-variant">{profile.description}</p>
+      <p className="text-body-sm text-on-surface-variant">
+        {profileDescription(t, profile.id, profile.description)}
+      </p>
       <ul className="text-label-md text-on-surface-variant space-y-xs">
         {flags.map(([on, key]) => (
           <li key={key} className="flex items-center gap-xs">
-            <span className={cn('material-symbols-outlined text-[14px]', on ? 'text-primary' : 'text-on-surface-variant/60')} aria-hidden="true">
+            <span className={cn('material-symbols-outlined icon-sm', on ? 'text-primary' : 'text-on-surface-variant/60')} aria-hidden="true">
               {on ? 'check_circle' : 'radio_button_unchecked'}
             </span>
             {t(key)}
@@ -445,7 +640,7 @@ function BuiltinCard({
       <Button
         className={cn(
           'mt-auto px-md py-sm rounded-lg font-label-md',
-          active ? 'bg-primary/10 text-primary' : 'bg-primary text-on-primary',
+          active ? 'bg-primary-container text-on-primary-container' : 'bg-primary text-on-primary',
         )}
         disabled={active || busy}
         onClick={onActivate}
@@ -456,26 +651,63 @@ function BuiltinCard({
   )
 }
 
+// R2-P2-14: the engine ships English profile descriptions; map the well-known
+// builtin ids to i18n keys so every locale renders localized text. Unknown
+// ids (future engine profiles) fall back to the engine-provided string.
+function profileDescription(
+  t: (id: string) => string,
+  id: string,
+  engineDescription: string,
+): string {
+  const known: Record<string, string> = {
+    strict: 'settings.permissions.builtin.desc.strict',
+    balanced: 'settings.permissions.builtin.desc.balanced',
+    permissive: 'settings.permissions.builtin.desc.permissive',
+  }
+  const key = known[id]
+  if (!key) return engineDescription
+  const translated = t(key)
+  return translated === key ? engineDescription : translated
+}
+
 function ProfileEditorModal({
   editor,
   onChange,
   onCancel,
   onSave,
   valid,
+  saving,
 }: {
   editor: EditorState
   onChange: (next: EditorState) => void
   onCancel: () => void
   onSave: () => void
   valid: boolean
+  saving: boolean
 }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const groups: Array<{ key: RuleGroup; titleKey: string; hintKey: string }> = [
-    { key: 'auto_approve', titleKey: 'settings.permissions.editor.auto.title', hintKey: 'settings.permissions.editor.auto.hint' },
-    { key: 'confirm', titleKey: 'settings.permissions.editor.confirm.title', hintKey: 'settings.permissions.editor.confirm.hint' },
-    { key: 'deny', titleKey: 'settings.permissions.editor.deny.title', hintKey: 'settings.permissions.editor.deny.hint' },
-  ]
+  const groups: Array<{ key: RuleGroup; titleKey: string; hintKey: string }> = (
+    ['auto_approve', 'confirm', 'deny'] as RuleGroup[]
+  ).map((key) => ({
+    key,
+    titleKey: RULE_GROUP_TITLE_KEYS[key],
+    hintKey: RULE_GROUP_HINT_KEYS[key],
+  }))
+
+  // P2: the modal holds unsaved edits — Esc / backdrop / the X must not
+  // silently throw them away once something changed.
+  const [openingState] = useState<EditorState>(editor)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const dirty = editorModified(openingState, editor)
+
+  const requestClose = () => {
+    if (dirty) {
+      setConfirmDiscard(true)
+      return
+    }
+    onCancel()
+  }
 
   const addRule = (group: RuleGroup, value: string) => {
     if (value.trim() === '') return
@@ -488,7 +720,9 @@ function ProfileEditorModal({
   return (
     <Modal
       open
-      onClose={onCancel}
+      onClose={requestClose}
+      closeOnEscape={!dirty}
+      closeOnBackdrop={!dirty}
       title={
         editor.originalName
           ? t('settings.permissions.editor.titleEdit')
@@ -532,17 +766,28 @@ function ProfileEditorModal({
         ))}
       </div>
       <div className="flex justify-end gap-md pt-md">
-        <Button variant="ghost" className="px-md py-sm rounded-lg font-label-md" onClick={onCancel}>
+        <Button variant="ghost" className="px-md py-sm rounded-lg font-label-md" onClick={requestClose} disabled={saving}>
           {t('settings.permissions.editor.cancel')}
         </Button>
         <Button
           className="px-md py-sm rounded-lg bg-primary text-on-primary font-label-md"
-          disabled={!valid}
+          disabled={!valid || saving}
           onClick={onSave}
         >
-          {t('settings.permissions.editor.save')}
+          {saving ? t('settings.permissions.editor.saving') : t('settings.permissions.editor.save')}
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        title={t('ui.modal.discard.title')}
+        message={t('ui.modal.discard.message')}
+        confirmLabel={t('ui.modal.discard.confirm')}
+        cancelLabel={t('ui.modal.discard.cancel')}
+        destructive
+        onConfirm={onCancel}
+        onCancel={() => setConfirmDiscard(false)}
+      />
     </Modal>
   )
 }
@@ -563,6 +808,9 @@ function RuleGroupEditor({
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const [draft, setDraft] = useState('')
+  // B6-37: announce rule validation errors (role=alert + aria-invalid +
+  // aria-describedby) instead of a silently-appearing hint paragraph.
+  const errorId = useId()
   const errorKey = draft === '' ? null : validateRuleInput(draft)
 
   return (
@@ -573,13 +821,13 @@ function RuleGroupEditor({
         <ul className="space-y-xs">
           {rules.map((rule, index) => (
             <li key={`${rule}-${index}`} className="flex items-center gap-sm">
-              <code className="font-mono text-body-sm text-on-surface bg-surface-container px-sm py-xs rounded flex-1 truncate">
+              <code className="font-mono text-body-sm text-on-surface bg-surface-container px-sm py-xs rounded-sm flex-1 truncate">
                 {rule}
               </code>
               <Button
                 variant="ghost"
                 aria-label={t('settings.permissions.editor.removeRule')}
-                className="p-xs rounded text-on-surface-variant hover:text-error"
+                className="p-xs rounded-sm text-on-surface-variant hover:text-error"
                 onClick={() => onRemove(index)}
               >
                 <span className="material-symbols-outlined icon-sm" aria-hidden="true">close</span>
@@ -594,6 +842,8 @@ function RuleGroupEditor({
           onChange={(e) => setDraft(e.target.value)}
           placeholder="Bash(git push *)"
           aria-label={title}
+          aria-invalid={errorKey != null || undefined}
+          aria-describedby={errorKey != null ? errorId : undefined}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && errorKey == null && draft.trim() !== '') {
               onAdd(draft)
@@ -613,7 +863,9 @@ function RuleGroupEditor({
           {t('settings.permissions.editor.addRule')}
         </Button>
       </div>
-      {errorKey && <p className="text-label-sm text-error">{t(errorKey)}</p>}
+      {errorKey && (
+        <p id={errorId} role="alert" className="text-label-sm text-error">{t(errorKey)}</p>
+      )}
     </fieldset>
   )
 }

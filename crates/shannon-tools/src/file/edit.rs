@@ -58,6 +58,14 @@ pub struct EditInput {
     /// Preview mode: compute and return the diff without writing the file.
     #[serde(default)]
     pub preview: bool,
+
+    /// review §P2-14: when the three-way merge produces conflict markers,
+    /// the tool no longer writes them to disk unless the caller sets
+    /// `apply_conflicts: true`. Default false — the merged preview is
+    /// returned in `metadata.merged_preview` so the caller can re-issue
+    /// with the field set once they've seen the conflicts.
+    #[serde(default)]
+    pub apply_conflicts: bool,
 }
 
 /// Metadata about a single replacement location
@@ -134,6 +142,16 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
     haystack.matches(needle).count()
 }
 
+/// Normalize any mix of CRLF/LF line endings in `s` to CRLF.
+fn normalize_crlf(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
+/// Normalize any mix of CRLF/LF line endings in `s` to LF.
+fn normalize_lf(s: &str) -> String {
+    s.replace("\r\n", "\n")
+}
+
 /// Core editing logic — synchronous, testable without async runtime.
 pub fn perform_edit(
     content: &str,
@@ -150,7 +168,19 @@ pub fn perform_edit(
         return Err(EditError::IdenticalStrings);
     }
 
-    if !content.contains(old_string) {
+    // Line-ending normalization: the model supplies LF-only strings (its
+    // normal output form; Read strips CRLF via `lines()`), so on a CRLF
+    // file every multi-line edit would fail with "old_string not found" —
+    // and a matching single-line edit would splice LF lines into a CRLF
+    // file. Normalize needle and replacement to the file's dominant style
+    // before matching, keeping the write-back byte-for-byte consistent.
+    let (old_string, new_string) = if content.contains("\r\n") {
+        (normalize_crlf(old_string), normalize_crlf(new_string))
+    } else {
+        (normalize_lf(old_string), normalize_lf(new_string))
+    };
+
+    if !content.contains(old_string.as_str()) {
         // Build a helpful error message with context snippets
         let mut msg = "old_string not found in file content.".to_string();
         // Show first few lines of file for context
@@ -178,7 +208,7 @@ pub fn perform_edit(
                 old_string.len()
             )
         } else {
-            old_string.to_string()
+            old_string.clone()
         };
         msg.push_str(&format!(
             "\n\nold_string ({} bytes):\n{}",
@@ -188,11 +218,11 @@ pub fn perform_edit(
         return Err(EditError::NotFound(msg));
     }
 
-    let total_matches = count_occurrences(content, old_string);
+    let total_matches = count_occurrences(content, &old_string);
 
     if !replace_all && total_matches > 1 {
         // Report all match locations so the user can disambiguate
-        let offsets = find_all_occurrences(content, old_string);
+        let offsets = find_all_occurrences(content, &old_string);
         let locations: Vec<ReplacementLocation> = offsets
             .iter()
             .map(|&off| {
@@ -223,7 +253,7 @@ pub fn perform_edit(
     if replace_all {
         replacements = total_matches;
         // Build new content tracking positions
-        let offsets = find_all_occurrences(content, old_string);
+        let offsets = find_all_occurrences(content, &old_string);
         locations = offsets
             .iter()
             .map(|&off| {
@@ -231,25 +261,81 @@ pub fn perform_edit(
                 ReplacementLocation { line, column: col }
             })
             .collect();
-        new_content = content.replace(old_string, new_string);
+        new_content = content.replace(&old_string, &new_string);
     } else {
         replacements = 1;
-        let offset = content.find(old_string).ok_or_else(|| {
+        let offset = content.find(old_string.as_str()).ok_or_else(|| {
             EditError::NotFound(
                 "old_string not found (race condition or encoding mismatch)".to_string(),
             )
         })?;
         let (line, col) = byte_offset_to_line_col(content, offset);
         locations = vec![ReplacementLocation { line, column: col }];
-        new_content = content.replacen(old_string, new_string, 1);
+        new_content = content.replacen(&old_string, &new_string, 1);
     };
 
     Ok((new_content, replacements, locations))
 }
 
-/// Compute diff hunks between old and new content using a simple LCS approach.
-/// Returns structured hunks suitable for rendering via DiffRenderer.
-#[allow(unused_assignments)]
+/// Compute the line-level edit script between `old` and `new` using the
+/// Myers diff algorithm from the `similar` crate (O(nd) time, O(n) memory).
+///
+/// review §P2-9: replaces the previous O(m·n) LCS table that allocated
+/// ~20 GB for a 50k-line file. Same `Vec<(char, &str)>` shape as the old
+/// LCS backtrack so the downstream hunk-grouping code stays untouched.
+fn compute_edit_script<'a>(old_lines: &[&'a str], new_lines: &[&'a str]) -> Vec<(char, &'a str)> {
+    use similar::{Algorithm, DiffOp, capture_diff_slices};
+    let ops = capture_diff_slices(Algorithm::Myers, old_lines, new_lines);
+    let mut edits: Vec<(char, &str)> = Vec::with_capacity(old_lines.len() + new_lines.len());
+    for op in ops {
+        match op {
+            DiffOp::Equal {
+                old_index,
+                new_index: _,
+                len,
+            } => {
+                for k in 0..len {
+                    edits.push(('=', old_lines[old_index + k]));
+                }
+            }
+            DiffOp::Delete {
+                old_index,
+                old_len,
+                new_index: _,
+            } => {
+                for k in 0..old_len {
+                    edits.push(('-', old_lines[old_index + k]));
+                }
+            }
+            DiffOp::Insert {
+                old_index: _,
+                new_index,
+                new_len,
+            } => {
+                for k in 0..new_len {
+                    edits.push(('+', new_lines[new_index + k]));
+                }
+            }
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                for k in 0..old_len {
+                    edits.push(('-', old_lines[old_index + k]));
+                }
+                for k in 0..new_len {
+                    edits.push(('+', new_lines[new_index + k]));
+                }
+            }
+        }
+    }
+    edits
+}
+
+/// Compute diff hunks between old and new content. Returns structured
+/// hunks suitable for rendering via DiffRenderer.
 pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
@@ -257,10 +343,10 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
     let m = old_lines.len();
     let n = new_lines.len();
 
-    // Guard against O(m*n) memory explosion on files with many short lines.
-    // Fall back to a simple whole-file replacement diff for large inputs.
-    const MAX_LINES_FOR_LCS: usize = 50_000;
-    if m > MAX_LINES_FOR_LCS || n > MAX_LINES_FOR_LCS {
+    // Guard against pathological inputs. Myers is O(n) memory regardless
+    // of size; the cap is a CPU sanity check only.
+    const MAX_LINES_FOR_DIFF: usize = 200_000;
+    if m > MAX_LINES_FOR_DIFF || n > MAX_LINES_FOR_DIFF {
         if old_lines == new_lines {
             return Vec::new();
         }
@@ -275,35 +361,10 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
         }];
     }
 
-    // Build LCS table
-    let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    for i in 1..=m {
-        for j in 1..=n {
-            if old_lines[i - 1] == new_lines[j - 1] {
-                dp[i][j] = dp[i - 1][j - 1] + 1;
-            } else {
-                dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
-            }
-        }
-    }
-
-    // Backtrack to find edit script
-    let mut edits: Vec<(char, &str)> = Vec::new();
-    let (mut i, mut j) = (m, n);
-    while i > 0 || j > 0 {
-        if i > 0 && j > 0 && old_lines[i - 1] == new_lines[j - 1] {
-            edits.push(('=', old_lines[i - 1]));
-            i -= 1;
-            j -= 1;
-        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
-            edits.push(('+', new_lines[j - 1]));
-            j -= 1;
-        } else {
-            edits.push(('-', old_lines[i - 1]));
-            i -= 1;
-        }
-    }
-    edits.reverse();
+    // Replace the LCS table with a Myers diff via similar. The result is a
+    // Vec<(op, line)> edit script that downstream hunk-grouping already
+    // knows how to consume.
+    let edits = compute_edit_script(&old_lines, &new_lines);
 
     // Build hunks from edit script with context lines
     const CONTEXT: usize = 3;
@@ -356,10 +417,7 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
                 if !in_hunk {
                     // Start new hunk with leading context
                     in_hunk = true;
-                    hunk_old_start = old_line + 1;
-                    hunk_new_start = new_line + 1;
                     changes_in_hunk = 0;
-                    context_after_change = 0;
                     current_lines.clear();
                     // Add preceding context
                     let ctx_start = old_line.saturating_sub(CONTEXT);
@@ -393,7 +451,6 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
                 if !in_hunk {
                     in_hunk = true;
                     changes_in_hunk = 0;
-                    context_after_change = 0;
                     current_lines.clear();
                     let ctx_start = old_line.saturating_sub(CONTEXT);
                     for (k, line) in old_lines
@@ -817,6 +874,7 @@ pub async fn execute_with(
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::await_holding_lock)]
 mod tests {
+
     use super::*;
     use std::io::Write;
 
@@ -868,6 +926,59 @@ mod tests {
         let result = perform_edit(content, "missing", "replacement", false);
         let err = result.unwrap_err().to_string();
         assert!(err.contains("old_string not found"));
+    }
+
+    #[test]
+    fn test_crlf_multiline_edit_matches_with_lf_input() {
+        // The model supplies LF-only strings; a CRLF file must still match
+        // and the replacement must keep the file's CRLF style.
+        let content = "fn main() {\r\n    let x = 1;\r\n}\r\n";
+        let result = perform_edit(
+            content,
+            "fn main() {\n    let x = 1;\n}",
+            "fn main() {\n    let x = 42;\n}",
+            false,
+        );
+        let (new_content, replacements, _) = result.unwrap();
+        assert_eq!(replacements, 1);
+        assert_eq!(new_content, "fn main() {\r\n    let x = 42;\r\n}\r\n");
+    }
+
+    #[test]
+    fn test_crlf_replace_all_keeps_line_endings() {
+        let content = "a = 1\r\nb = 2\r\nc = 3\r\n";
+        let result = perform_edit(content, " = ", " := ", true);
+        let (new_content, replacements, _) = result.unwrap();
+        assert_eq!(replacements, 3);
+        assert_eq!(new_content, "a := 1\r\nb := 2\r\nc := 3\r\n");
+    }
+
+    #[test]
+    fn test_crlf_input_against_crlf_file_still_matches() {
+        // Strings that already carry CRLF (e.g. round-tripped) are not
+        // double-converted — normalize_crlf folds any mix to plain CRLF.
+        let content = "one\r\ntwo\r\n";
+        let result = perform_edit(content, "one\r\ntwo", "one\r\nTWO", false);
+        let (new_content, replacements, _) = result.unwrap();
+        assert_eq!(replacements, 1);
+        assert_eq!(new_content, "one\r\nTWO\r\n");
+    }
+
+    #[test]
+    fn test_crlf_old_string_against_lf_file_matches() {
+        // The reverse mismatch: CRLF needle on an LF file.
+        let content = "one\ntwo\n";
+        let result = perform_edit(content, "one\r\ntwo", "one\nTWO", false);
+        let (new_content, replacements, _) = result.unwrap();
+        assert_eq!(replacements, 1);
+        assert_eq!(new_content, "one\nTWO\n");
+    }
+
+    #[test]
+    fn test_lf_file_edit_does_not_introduce_cr() {
+        let content = "one\ntwo\n";
+        let (new_content, _, _) = perform_edit(content, "one\ntwo", "one\nTWO", false).unwrap();
+        assert!(!new_content.contains('\r'));
     }
 
     #[test]
@@ -953,6 +1064,7 @@ mod tests {
             new_string: "LINE_TWO".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -971,6 +1083,7 @@ mod tests {
             new_string: "FOO".to_string(),
             replace_all: true,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         assert!(result.is_ok());
@@ -991,6 +1104,7 @@ mod tests {
             new_string: "bar".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         assert!(result.is_err());
@@ -1007,6 +1121,7 @@ mod tests {
             new_string: "replacement".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -1022,6 +1137,7 @@ mod tests {
             new_string: "FOO".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -1179,6 +1295,7 @@ mod tests {
             new_string: "REPLACED".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -1199,6 +1316,7 @@ mod tests {
             new_string: "println!(\"new\");".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -1218,6 +1336,7 @@ mod tests {
             new_string: "FOO".to_string(),
             replace_all: true,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -1235,6 +1354,7 @@ mod tests {
             new_string: "goodbye".to_string(),
             replace_all: false,
             preview: true,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         assert!(result.is_ok());
@@ -1257,6 +1377,7 @@ mod tests {
             new_string: "println!(\"new\");".to_string(),
             replace_all: false,
             preview: true,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         assert!(result.is_ok());
@@ -1272,9 +1393,6 @@ mod tests {
     // These tests change the process working directory (via `set_current_dir`) so
     // that `git show HEAD:<relative-path>` inside `get_git_head_version` resolves
     // correctly. A static mutex serialises them to avoid parallel-cwd races.
-
-    use std::sync::Mutex;
-    static CWD_MUTEX: Mutex<()> = Mutex::new(());
 
     /// Helper: create a temp git repo, commit an initial file, return TempDir.
     /// The repo root can be used as cwd so that `git show HEAD:<file>` works.
@@ -1328,21 +1446,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_no_git() {
-        let _lock = CWD_MUTEX.lock().unwrap();
-
         // Non-git temp directory — no HEAD version available
         let dir = tempfile::TempDir::new().unwrap();
         tokio::fs::write(dir.path().join("test.txt"), "hello world")
             .await
             .unwrap();
 
-        let saved_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd_guard = crate::test_support::CwdGuard::acquire(dir.path());
 
         let result =
             attempt_merge_fallback("test.txt", "hello world", "hello", "goodbye", false).await;
-
-        std::env::set_current_dir(&saved_cwd).unwrap();
 
         match result {
             MergeFallbackResult::NotAvailable(msg) => {
@@ -1359,12 +1472,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_base_lacks_old_string() {
-        let _lock = CWD_MUTEX.lock().unwrap();
-
         let dir = init_git_repo_with_file("test.txt", "original content").await;
 
-        let saved_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd_guard = crate::test_support::CwdGuard::acquire(dir.path());
 
         let result = attempt_merge_fallback(
             "test.txt",
@@ -1374,8 +1484,6 @@ mod tests {
             false,
         )
         .await;
-
-        std::env::set_current_dir(&saved_cwd).unwrap();
 
         match result {
             MergeFallbackResult::NotAvailable(msg) => {
@@ -1392,8 +1500,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_clean_merge() {
-        let _lock = CWD_MUTEX.lock().unwrap();
-
         // base   = "line1\nline2\nline3\n"
         // ours   = "line1\nline2\nMODIFIED3\n"  (external change on line3)
         // theirs = "line1\nreplaced\nline3\n"   (edit: line2 → replaced)
@@ -1406,13 +1512,10 @@ mod tests {
             .await
             .unwrap();
 
-        let saved_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd_guard = crate::test_support::CwdGuard::acquire(dir.path());
 
         let result =
             attempt_merge_fallback("test.txt", disk_content, "line2", "replaced", false).await;
-
-        std::env::set_current_dir(&saved_cwd).unwrap();
 
         match result {
             MergeFallbackResult::Applied {
@@ -1441,8 +1544,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_conflict_merge() {
-        let _lock = CWD_MUTEX.lock().unwrap();
-
         // base   = "line1\nline2\nline3\n"
         // ours   = "line1\nchanged_by_us\nline3\n"
         // theirs = "line1\nchanged_by_edit\nline3\n"
@@ -1455,14 +1556,11 @@ mod tests {
             .await
             .unwrap();
 
-        let saved_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd_guard = crate::test_support::CwdGuard::acquire(dir.path());
 
         let result =
             attempt_merge_fallback("test.txt", disk_content, "line2", "changed_by_edit", false)
                 .await;
-
-        std::env::set_current_dir(&saved_cwd).unwrap();
 
         match result {
             MergeFallbackResult::Applied {
@@ -1490,8 +1588,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_merge_fallback_integration() {
-        let _lock = CWD_MUTEX.lock().unwrap();
-
         // Integration: commit a file, modify it externally, call execute() with
         // old_string from the committed version. Direct edit fails (old_string not
         // in current content) → merge fallback path is triggered.
@@ -1504,8 +1600,7 @@ mod tests {
             .await
             .unwrap();
 
-        let saved_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd_guard = crate::test_support::CwdGuard::acquire(dir.path());
 
         let input = EditInput {
             file_path: "test.txt".to_string(),
@@ -1513,10 +1608,9 @@ mod tests {
             new_string: "replaced_line2".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
-
-        std::env::set_current_dir(&saved_cwd).unwrap();
 
         assert!(
             result.is_ok(),

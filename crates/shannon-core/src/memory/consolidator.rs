@@ -14,8 +14,11 @@ use super::types::SessionMemoryConfig;
 pub struct ConsolidationResult {
     /// Number of duplicate memories merged.
     pub duplicates_merged: usize,
-    /// Number of stale memories removed.
+    /// Number of stale memories invalidated (bi-temporal close).
     pub stale_removed: usize,
+    /// Number of contradictory pairs resolved (older fact invalidated).
+    #[serde(default)]
+    pub conflicts_resolved: usize,
     /// Total memories before consolidation.
     pub before_count: usize,
     /// Total memories after consolidation.
@@ -45,32 +48,42 @@ impl MemoryConsolidator {
         }
     }
 
-    /// Run consolidation on the given memory store.
+    /// Run consolidation on the given memory store, **scoped to `project`**.
     ///
-    /// 1. Merges duplicates (keeps the entry with higher confidence).
-    /// 2. Removes entries older than the configured TTL.
+    /// 1. Merges duplicates (keeps the higher source trust, then confidence).
+    /// 2. Bi-temporally invalidates entries older than the configured TTL.
     /// 3. Enforces per-category caps.
+    /// 4. Resolves contradictions within the project (newer fact wins; the
+    ///    older is invalidated, not deleted).
+    ///
+    /// Every phase is scoped to `project`: consolidation used to sweep the
+    /// whole store and delete other projects' entries (review 2026-09 P0).
     pub fn consolidate(
         &self,
         store: &mut MemoryStore,
+        project: &str,
         config: &SessionMemoryConfig,
     ) -> Result<ConsolidationResult, MemoryError> {
         let before_count = store.len();
 
         // Phase 1: Merge duplicates
-        let duplicates_merged = store.merge_duplicates(self.similarity_threshold)?;
+        let duplicates_merged = store.merge_duplicates(self.similarity_threshold, project)?;
 
-        // Phase 2: Remove stale entries
-        let stale_removed = store.remove_stale(config.memory_ttl)?;
+        // Phase 2: Invalidate stale entries
+        let stale_removed = store.remove_stale(config.memory_ttl, project)?;
 
         // Phase 3: Enforce per-category caps
-        store.enforce_category_caps(config.max_memories_per_category);
+        store.enforce_category_caps(config.max_memories_per_category, project);
+
+        // Phase 4: Resolve contradictions (newer fact wins)
+        let conflicts_resolved = store.resolve_conflicts(project)?;
 
         let after_count = store.len();
 
         Ok(ConsolidationResult {
             duplicates_merged,
             stale_removed,
+            conflicts_resolved,
             before_count,
             after_count,
         })
@@ -108,6 +121,7 @@ mod tests {
             access_count,
             source_session_id: None,
             source_kind: None,
+            valid_until: None,
         }
     }
 
@@ -166,7 +180,7 @@ mod tests {
             .unwrap();
         let config = SessionMemoryConfig::default();
         let consolidator = MemoryConsolidator::default();
-        let result = consolidator.consolidate(&mut store, &config).unwrap();
+        let result = consolidator.consolidate(&mut store, "p", &config).unwrap();
         assert_eq!(result.before_count, 2);
         assert_eq!(result.duplicates_merged, 1);
         assert_eq!(result.after_count, 1);
@@ -200,7 +214,7 @@ mod tests {
         store.add(fresh).unwrap();
         let config = SessionMemoryConfig::default();
         let consolidator = MemoryConsolidator::default();
-        let result = consolidator.consolidate(&mut store, &config).unwrap();
+        let result = consolidator.consolidate(&mut store, "p", &config).unwrap();
         assert_eq!(result.stale_removed, 1);
         assert_eq!(result.after_count, 1);
     }
@@ -227,7 +241,9 @@ mod tests {
             ..SessionMemoryConfig::default()
         };
         let consolidator = MemoryConsolidator::default();
-        let result = consolidator.consolidate(&mut store, &config).unwrap();
+        let result = consolidator
+            .consolidate(&mut store, "proj", &config)
+            .unwrap();
         assert!(result.after_count <= 2);
     }
 
@@ -237,7 +253,7 @@ mod tests {
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         let config = SessionMemoryConfig::default();
         let consolidator = MemoryConsolidator::default();
-        let result = consolidator.consolidate(&mut store, &config).unwrap();
+        let result = consolidator.consolidate(&mut store, "p", &config).unwrap();
         assert_eq!(result.before_count, 0);
         assert_eq!(result.duplicates_merged, 0);
         assert_eq!(result.stale_removed, 0);
@@ -288,7 +304,7 @@ mod tests {
             ..SessionMemoryConfig::default()
         };
         let consolidator = MemoryConsolidator::default();
-        let result = consolidator.consolidate(&mut store, &config).unwrap();
+        let result = consolidator.consolidate(&mut store, "p", &config).unwrap();
         assert_eq!(result.before_count, 4);
         assert_eq!(result.duplicates_merged, 1);
         assert_eq!(result.stale_removed, 1);
@@ -300,6 +316,7 @@ mod tests {
         let result = ConsolidationResult {
             duplicates_merged: 2,
             stale_removed: 1,
+            conflicts_resolved: 0,
             before_count: 10,
             after_count: 7,
         };

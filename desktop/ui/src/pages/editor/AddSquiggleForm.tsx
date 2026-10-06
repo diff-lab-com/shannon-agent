@@ -38,7 +38,7 @@ export default function AddSquiggleForm({
   return (
     <form
       onSubmit={onAddSquiggle}
-      className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-sm flex flex-col gap-sm"
+      className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-e1 flex flex-col gap-sm"
     >
       <h3 className="font-label-md text-on-surface">{t('editor.addSquiggle')}</h3>
       <div className="grid grid-cols-4 gap-sm">

@@ -6,7 +6,7 @@ section: getting-started
 
 # Architecture
 
-Shannon Code is organized as a Cargo workspace with 12 crates, each with a single responsibility.
+Shannon is organized as a Cargo workspace with 12 crates, each with a single responsibility.
 
 ## System Overview
 

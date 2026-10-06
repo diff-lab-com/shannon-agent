@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { useIntl } from 'react-intl'
 import {
@@ -16,12 +16,52 @@ import SkillDetailDrawer from "./SkillDetailDrawer";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { AgentAuthoredBadge } from "@/components/self-improve/SkillBadge";
 import LoadingState from "@/components/ui/loading-state";
+import ErrorState from "@/components/ui/error-state";
 import { usePagedVisible } from "@/hooks/usePagedVisible";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const CATALOG_PAGE_SIZE = 24;
+
+// B0 P0-6: catalog names come from upstream HTTP — enforce the same shape
+// the backend sanitizes to before an install can be attempted.
+const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/;
+
+/**
+ * office Wave 3 C7: tags that mark a catalog entry as office/productivity —
+ * document handling, spreadsheets, tabular data and the scripting/data
+ * tooling office flows lean on. Grouped under a pinned "Productivity"
+ * heading in the catalog; everything else keeps the original list. Tag
+ * matching is case-insensitive; skills without matching tags are untouched.
+ */
+const PRODUCTIVITY_TAGS: ReadonlySet<string> = new Set([
+  "documents", "document", "docs", "pdf", "docx", "word", "pptx", "ppt",
+  "slides", "powerpoint", "xlsx", "excel", "csv", "spreadsheet",
+  "spreadsheets", "sheets", "office", "data", "python", "email", "notes",
+  "writing",
+]);
+
+export function isProductivitySkill(entry: { tags: string[] }): boolean {
+  return entry.tags.some((t) => PRODUCTIVITY_TAGS.has(t.toLowerCase()));
+}
+
+/**
+ * G1 P0-2.3 directory honesty: a native entry the runtime cannot execute
+ * yet (backend flags it `in_development`). Installing it would only write a
+ * stub SKILL.md, so the UI renders it as "planned — not installable".
+ */
+export function isInDevelopmentSkill(entry: {
+  metadata?: Record<string, unknown> | null
+}): boolean {
+  return entry.metadata?.in_development === true;
+}
+
+/** P1-22: a catalog description with newlines could inject extra YAML
+ *  frontmatter fields — collapse it to a single line before interpolating. */
+function singleLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
 
 /**
  * P3 Skills tab — federated catalog + install/remove.
@@ -45,9 +85,12 @@ export default function Skills() {
 
   const [installed, setInstalled] = useState<InstalledSkill[]>([]);
   const [installedLoading, setInstalledLoading] = useState(true);
+  // B3 P1-17: failed list reads surface as error states, not as "none".
+  const [installedError, setInstalledError] = useState<string | null>(null);
 
   const [agentAuthored, setAgentAuthored] = useState<AgentAuthoredSkill[]>([]);
   const [agentAuthoredLoading, setAgentAuthoredLoading] = useState(true);
+  const [agentAuthoredError, setAgentAuthoredError] = useState<string | null>(null);
   const [installedFilter, setInstalledFilter] = useState<"all" | "curated" | "agent">("all");
 
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -78,14 +121,28 @@ export default function Skills() {
 
   const refreshInstalled = () => {
     listInstalledSkillPlugins()
-      .then(setInstalled)
+      .then((rows) => {
+        setInstalled(rows);
+        setInstalledError(null);
+      })
+      .catch((err) => {
+        setInstalledError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => setInstalledLoading(false));
   };
 
   const refreshAgentAuthored = () => {
     listAgentAuthoredSkills()
-      .then(setAgentAuthored)
-      .catch(() => setAgentAuthored([]))
+      .then((rows) => {
+        setAgentAuthored(rows);
+        setAgentAuthoredError(null);
+      })
+      .catch((err) => {
+        // B3 P1-17: was a silent `.catch(() => set([]))` — a dead read was
+        // indistinguishable from "no agent-authored skills".
+        setAgentAuthored([]);
+        setAgentAuthoredError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => setAgentAuthoredLoading(false));
   };
 
@@ -113,12 +170,23 @@ export default function Skills() {
   }, []);
 
   async function handleInstall(entry: SkillCatalogEntry) {
+    // G1 P0-2.3 — backend-level guard behind the disabled button: a planned
+    // skill must never install (its runtime does not exist yet).
+    if (isInDevelopmentSkill(entry)) {
+      setFeedback({ id: entry.id, msg: t('extensions.skills.inDevelopmentHint'), ok: false });
+      return;
+    }
+    if (!SAFE_NAME_RE.test(entry.name)) {
+      setFeedback({ id: entry.id, msg: t('extensions.skills.invalidName', { name: entry.name }), ok: false });
+      return;
+    }
     setBusyId(entry.id);
     setFeedback(null);
     try {
       if (entry.source.type === 'native') {
         // Built-in skill — write a stub SKILL.md using its description.
-        const body = `---\nname: ${entry.name}\ndescription: ${entry.description}\n---\n# ${entry.name}\n\n${entry.description}\n`;
+        const description = singleLine(entry.description);
+        const body = `---\nname: ${entry.name}\ndescription: ${description}\n---\n# ${entry.name}\n\n${entry.description}\n`;
         await installNativeSkill(entry.name, body);
       } else if (entry.source.type === 'git_hub_repo') {
         const repo = entry.source.repo;
@@ -161,10 +229,23 @@ export default function Skills() {
       )
     : catalog;
 
-  const catalogPage = usePagedVisible(filtered, CATALOG_PAGE_SIZE);
+  // C7: office/productivity entries are pinned to the top of the catalog
+  // under their own group heading; the rest keep the original order. The
+  // pagination slices the reordered list, so "Show more" semantics hold.
+  // G1 P0-2.3: the pinned group only holds INSTALLABLE skills — planned
+  // entries keep the original (unpinned) position below.
+  const isInstallableProductivity = (e: SkillCatalogEntry) =>
+    isProductivitySkill(e) && !isInDevelopmentSkill(e);
+  const ordered =
+    filtered.some(isInstallableProductivity)
+      ? [...filtered.filter(isInstallableProductivity), ...filtered.filter((e) => !isInstallableProductivity(e))]
+      : filtered;
+
+  const catalogPage = usePagedVisible(ordered, CATALOG_PAGE_SIZE);
+  const firstProductivityIdx = catalogPage.slice.findIndex(isInstallableProductivity);
 
   return (
-    <div className="p-lg max-w-6xl mx-auto space-y-xl">
+    <div className="p-lg max-w-medium mx-auto space-y-xl">
       <header>
         <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.skills.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
@@ -195,16 +276,30 @@ export default function Skills() {
             ) : (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
-                  {catalogPage.slice.map((entry) => (
-                    <SkillCard
-                      key={entry.id}
-                      entry={entry}
-                      installed={installedNames.has(entry.name)}
-                      busy={busyId === entry.id}
-                      feedback={feedback?.id === entry.id ? feedback : null}
-                      onInstall={() => handleInstall(entry)}
-                      onOpenDetail={() => setDetailEntry(entry)}
-                    />
+                  {catalogPage.slice.map((entry, i) => (
+                    <Fragment key={entry.id}>
+                      {i === firstProductivityIdx && (
+                        <div
+                          className="col-span-full flex items-center gap-sm mt-sm first:mt-0"
+                          data-testid="skills-productivity-group"
+                        >
+                          <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">work</span>
+                          <h4 className="text-label-lg font-bold text-primary uppercase tracking-wide">
+                            {t('extensions.skills.group.productivity')}
+                          </h4>
+                          <span className="text-label-xs text-on-surface-variant">
+                            {filtered.filter(isInstallableProductivity).length}
+                          </span>
+                        </div>
+                      )}
+                      <SkillCard
+                        entry={entry}
+                        installed={installedNames.has(entry.name)}
+                        busy={busyId === entry.id}
+                        feedback={feedback?.id === entry.id ? feedback : null}
+                        onInstall={() => handleInstall(entry)}
+                        onOpenDetail={() => setDetailEntry(entry)}
+                      />                    </Fragment>
                   ))}
                 </div>
                 {catalogPage.hasMore && (
@@ -250,7 +345,7 @@ export default function Skills() {
                 className={cn(
                   "px-sm py-xs rounded-full text-label-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
                   installedFilter === opt.id
-                    ? 'bg-primary/10 text-primary'
+                    ? 'bg-primary-container text-on-primary-container'
                     : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
                 )}
               >
@@ -261,6 +356,21 @@ export default function Skills() {
         </div>
         {installedLoading || agentAuthoredLoading ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.skills.loadingInstalled')}</div>
+        ) : installedError || agentAuthoredError ? (
+          <div className="border border-outline-variant/30 rounded-2xl bg-surface-container-lowest/50">
+            <ErrorState
+              icon="extension"
+              title={t('extensions.skills.installedLoadFailed')}
+              description={installedError ?? agentAuthoredError ?? ''}
+              action={{
+                label: t('common.retry'),
+                onClick: () => {
+                  refreshInstalled();
+                  refreshAgentAuthored();
+                },
+              }}
+            />
+          </div>
         ) : filteredInstalled.length === 0 ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">
             {installedFilter === "agent"
@@ -281,7 +391,7 @@ export default function Skills() {
                   i !== filteredInstalled.length - 1 && "border-b border-outline-variant/15",
                 )}
                 >
-                  <span className="material-symbols-outlined text-primary text-[20px]">{isAgentAuthored ? 'auto_fix' : 'extension'}</span>
+                  <span className="material-symbols-outlined text-primary icon-md">{isAgentAuthored ? 'auto_fix' : 'extension'}</span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-xs">
                       <span className="font-bold text-label-md text-on-surface truncate">{skill.name}</span>
@@ -353,6 +463,9 @@ function SkillCard({
   const t = (id: string) => intl.formatMessage({ id })
 
   const trustLabel = TRUST_LABELS[entry.trust];
+  // G1 P0-2.3 — planned entries are not installable: no stub SKILL.md that
+  // would silently do nothing at runtime.
+  const inDevelopment = isInDevelopmentSkill(entry);
   return (
     <div className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/40 flex flex-col">
       <div className="flex items-start justify-between mb-xs gap-xs">
@@ -365,9 +478,15 @@ function SkillCard({
         >
           <h4 className="font-bold text-label-md text-on-surface hover:underline truncate">{entry.name}</h4>
         </Button>
-        <span className={cn("text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0", trustLabel.cls)}>
-          {t(trustLabel.key)}
-        </span>
+        {inDevelopment ? (
+          <span className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-surface-container-highest text-on-surface-variant">
+            {t('extensions.skills.inDevelopment')}
+          </span>
+        ) : (
+          <span className={cn("text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0", trustLabel.cls)}>
+            {t(trustLabel.key)}
+          </span>
+        )}
       </div>
       <Button
         variant="ghost"
@@ -402,15 +521,21 @@ function SkillCard({
             {t('extensions.skills.view')}
           </a>
         )}
-        <Button
-          type="button"
-          size="sm"
-          onClick={onInstall}
-          disabled={busy || installed}
-          className="disabled:cursor-not-allowed"
-        >
-          {busy ? "…" : installed ? t('extensions.skills.installed') : t('extensions.skills.install')}
-        </Button>
+        {inDevelopment ? (
+          <div className="text-label-xs text-on-surface-variant self-center">
+            {t('extensions.skills.inDevelopmentHint')}
+          </div>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            onClick={onInstall}
+            disabled={busy || installed}
+            className="disabled:cursor-not-allowed"
+          >
+            {busy ? "…" : installed ? t('extensions.skills.installed') : t('extensions.skills.install')}
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -418,7 +543,7 @@ function SkillCard({
 
 const TRUST_LABELS: Record<SkillCatalogEntry['trust'], { key: string; cls: string }> = {
   verified: { key: 'extensions.skills.trust.verified', cls: "bg-primary-container text-on-primary-container" },
-  official: { key: 'extensions.skills.trust.official', cls: "bg-secondary-container text-on-secondary-container" },
+  official: { key: 'extensions.skills.trust.official', cls: "bg-primary text-on-primary" },
   community: { key: 'extensions.skills.trust.community', cls: "bg-tertiary-container/50 text-on-tertiary-container" },
   unknown: { key: 'extensions.skills.trust.unknown', cls: "bg-surface-container-highest text-on-surface-variant" },
 };

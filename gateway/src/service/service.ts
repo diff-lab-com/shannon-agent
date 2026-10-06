@@ -594,7 +594,10 @@ function readHealthEndpoint(cfgPath: string): string | null {
     const parsed = JSON.parse(raw) as { mobile?: { host?: string; port?: number } };
     if (parsed.mobile?.port) {
       const host = parsed.mobile.host ?? "127.0.0.1";
-      return `${host}:${parsed.mobile.port}`;
+      // WP-15 P1-5: a wildcard bind isn't dialable as-is on every platform —
+      // probe the loopback form instead so the health badge reflects reality.
+      const probeHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+      return `${probeHost}:${parsed.mobile.port}`;
     }
   } catch {
     /* ignore malformed config for health purposes */

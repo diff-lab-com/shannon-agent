@@ -1,30 +1,24 @@
 // Step 3 — final summary + workspace picker + shortcuts + dev mode opt-in
-// + optional Documents skills list. Extracted from Welcome.tsx (T3.1).
+// + documents-capabilities card. Extracted from Welcome.tsx (T3.1).
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { WelcomeCard } from './components'
-import { DOCUMENTS_SKILLS_AVAILABLE, PROVIDERS, SHORTCUT_ROWS, TASKS, type TaskId, type DocumentsSkill } from './constants'
+import { PROVIDERS, SHORTCUT_ROWS, TASKS, type TaskId } from './constants'
 import { DocumentsSkillsList } from './DocumentsSkillsList'
-
-interface SkillState {
-  status: 'idle' | 'installing' | 'installed' | 'failed'
-  error?: string
-}
 
 interface DoneStepProps {
   task: TaskId
   provider: string
-  enabledToolCount: number
+  /** B5-33 (decision 4-B): recommendations, not activations — tool config
+   *  lives in Settings, so the summary must not claim "enabled". */
+  recommendedToolCount: number
   pickedDir: string | null
   fallbackWorkingDir: string | null
   devMode: boolean
   setDevMode: React.Dispatch<React.SetStateAction<boolean>>
-  skillState: Record<string, SkillState>
   onPickDirectory: () => void
   onBack: () => void
   onFinish: () => void
-  onInstallSkill: (skill: DocumentsSkill) => void
-  onBrowseFeaturedSkills: () => void
   /** P1-6 — opens the migration wizard (import from Claude Code / ZCode). */
   onOpenMigration?: () => void
 }
@@ -32,17 +26,14 @@ interface DoneStepProps {
 export function DoneStep({
   task,
   provider,
-  enabledToolCount,
+  recommendedToolCount,
   pickedDir,
   fallbackWorkingDir,
   devMode,
   setDevMode,
-  skillState,
   onPickDirectory,
   onBack,
   onFinish,
-  onInstallSkill,
-  onBrowseFeaturedSkills,
   onOpenMigration,
 }: DoneStepProps) {
   const intl = useIntl()
@@ -53,7 +44,7 @@ export function DoneStep({
       subtitle={intl.formatMessage({ id: 'welcome.done.subtitle' })}
       footer={
         <>
-          <Button variant="ghost" onClick={onBack} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
+          <Button variant="ghost" onClick={onBack} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded-sm">
             {intl.formatMessage({ id: 'welcome.done.back' })}
           </Button>
           <Button
@@ -70,16 +61,16 @@ export function DoneStep({
         <div className="font-label-sm text-on-surface-variant mb-xs">{intl.formatMessage({ id: 'welcome.done.setup.label' })}</div>
         <ul className="space-y-xs text-body-sm text-on-surface">
           <li className="flex items-center gap-sm">
-            <span className="material-symbols-outlined text-[18px] text-primary">{currentTask.icon}</span>
+            <span className="material-symbols-outlined icon-md text-primary">{currentTask.icon}</span>
             <span>{intl.formatMessage({ id: currentTask.labelKey })}</span>
           </li>
           <li className="flex items-center gap-sm">
-            <span className="material-symbols-outlined text-[18px] text-primary">memory</span>
+            <span className="material-symbols-outlined icon-md text-primary">memory</span>
             <span>{PROVIDERS.find(p => p.id === provider)?.label ?? provider}</span>
           </li>
           <li className="flex items-center gap-sm">
-            <span className="material-symbols-outlined text-[18px] text-primary">build</span>
-            <span>{intl.formatMessage({ id: 'welcome.done.setup.tools' }, { count: enabledToolCount })}</span>
+            <span className="material-symbols-outlined icon-md text-primary">build</span>
+            <span>{intl.formatMessage({ id: 'welcome.done.setup.tools' }, { count: recommendedToolCount })}</span>
           </li>
         </ul>
       </div>
@@ -95,7 +86,7 @@ export function DoneStep({
           onClick={onPickDirectory}
           className="px-md py-sm bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 rounded-lg font-label-md text-on-surface cursor-pointer transition-colors flex items-center gap-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
         >
-          <span className="material-symbols-outlined text-[18px]">folder_open</span>
+          <span className="material-symbols-outlined icon-md">folder_open</span>
           {pickedDir
             ? intl.formatMessage({ id: 'welcome.done.workingDir.chooseOther' })
             : intl.formatMessage({ id: 'welcome.done.workingDir.choose' })}
@@ -110,7 +101,7 @@ export function DoneStep({
           return (
             <div key={s.actionKey} className="flex items-center justify-between py-xs">
               <span className="font-body-sm text-on-surface-variant">{intl.formatMessage({ id: s.actionKey })}</span>
-              <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono shrink-0">{keys}</kbd>
+              <kbd className="text-label-xs px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono shrink-0">{keys}</kbd>
             </div>
           )
         })}
@@ -120,7 +111,7 @@ export function DoneStep({
           { id: 'welcome.done.shortcuts.help' },
           {
             key: (chunks: React.ReactNode) => (
-              <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono">{chunks}</kbd>
+              <kbd className="text-label-xs px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono">{chunks}</kbd>
             ),
           },
         )}
@@ -150,7 +141,7 @@ export function DoneStep({
           className="mt-md flex items-center gap-md p-md rounded-xl border border-outline-variant/50 hover:border-primary/50 transition-all"
           data-testid="welcome-migration-entry"
         >
-          <span className="material-symbols-outlined text-primary text-[22px]" aria-hidden="true">move_in</span>
+          <span className="material-symbols-outlined text-primary icon-lg" aria-hidden="true">move_in</span>
           <div className="flex-1">
             <div className="font-headline-md text-on-surface">{intl.formatMessage({ id: 'welcome.migration.entry.title' })}</div>
             <div className="font-body-sm text-on-surface-variant mt-xs">
@@ -168,15 +159,10 @@ export function DoneStep({
         </div>
       )}
 
-      {/* P2.4 — Documents skill recommendations. Hidden until the skill
-          repos are published. */}
-      {DOCUMENTS_SKILLS_AVAILABLE && (
-        <DocumentsSkillsList
-          skillState={skillState}
-          onInstall={onInstallSkill}
-          onBrowseLater={onBrowseFeaturedSkills}
-        />
-      )}
+      {/* Office Wave 1 A3' — self-probing documents-capabilities card (the
+          community-skill install list it replaced advertised unpublished
+          repos; the card is honest in both probe outcomes). */}
+      <DocumentsSkillsList />
     </WelcomeCard>
   )
 }

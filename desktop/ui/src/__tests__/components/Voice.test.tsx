@@ -60,7 +60,12 @@ function installMediaRecorder() {
   return { teardown, instances }
 }
 
-describe('useVoice hook (stub fallback without MediaRecorder)', () => {
+// F-voice-gate: without MediaRecorder the factory falls back to the stub
+// provider, which now (honestly) reports isSupported() === false — so the
+// hook's `supported` is false and ChatInput hides the mic. The stub's
+// start/stop remain drivable directly (jsdom tests), they just no longer
+// pretend to be a usable STT backend.
+describe('useVoice hook — stub fallback (unsupported environment)', () => {
   beforeEach(() => {
     // jsdom has no MediaRecorder by default → factory falls back to the stub.
     delete (globalThis as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
@@ -76,18 +81,16 @@ describe('useVoice hook (stub fallback without MediaRecorder)', () => {
         <div data-testid="supported">{v.supported ? 'yes' : 'no'}</div>
         <button onClick={() => void v.startRecording()}>start</button>
         <button onClick={() => void v.stopRecording()}>stop</button>
-        <button onClick={() => void v.speak('hi')}>speak</button>
-        <button onClick={() => v.stopSpeaking()}>stopSpeak</button>
         <button onClick={() => v.reset()}>reset</button>
       </div>
     )
   }
 
-  it('starts idle with empty partial and reports supported (stub fallback)', () => {
+  it('starts idle with empty partial and reports unsupported (stub fallback)', () => {
     renderWithI18n(<VoiceProbe />)
     expect(screen.getByTestId('state')).toHaveTextContent('idle')
     expect(screen.getByTestId('partial')).toHaveTextContent('empty')
-    expect(screen.getByTestId('supported')).toHaveTextContent('yes')
+    expect(screen.getByTestId('supported')).toHaveTextContent('no')
   })
 
   it('startRecording transitions to recording state', async () => {
@@ -114,19 +117,9 @@ describe('useVoice hook (stub fallback without MediaRecorder)', () => {
     expect(onTranscript).toHaveBeenCalledWith('This is a stub transcript. Real STT backend not configured.')
   })
 
-  it('speak sets state to speaking', async () => {
-    renderWithI18n(<VoiceProbe />)
-    fireEvent.click(screen.getByText('speak'))
-    expect(screen.getByTestId('state')).toHaveTextContent('speaking')
-  })
-
-  it('stopSpeaking returns to idle', async () => {
-    renderWithI18n(<VoiceProbe />)
-    fireEvent.click(screen.getByText('speak'))
-    fireEvent.click(screen.getByText('stopSpeak'))
-    expect(screen.getByTestId('state')).toHaveTextContent('idle')
-  })
-
+  // B4 P2-5: the TTS surface (speak/stopSpeaking + the 'speaking' state) was
+  // removed — the hook is speech-to-text only, so only STT transitions are
+  // observable.
   it('reset clears state', async () => {
     renderWithI18n(<VoiceProbe />)
     fireEvent.click(screen.getByText('start'))
@@ -226,11 +219,5 @@ describe('VoiceOrb', () => {
     const { container } = renderWithI18n(<VoiceOrb state="recording" />)
     const orb = container.querySelector('[role="presentation"]')
     expect(orb?.className).toContain('bg-error')
-  })
-
-  it('applies primary styling for speaking state', () => {
-    const { container } = renderWithI18n(<VoiceOrb state="speaking" />)
-    const orb = container.querySelector('[role="presentation"]')
-    expect(orb?.className).toContain('bg-primary')
   })
 })

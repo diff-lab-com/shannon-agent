@@ -21,9 +21,10 @@
 use schemars::JsonSchema;
 use schemars::schema::{InstanceType, RootSchema, Schema, SchemaObject, SingleOrVec};
 use shannon_api_protocol::{
-    ApprovalDecision, ApprovalRespondRequest, HealthResponse, MessageAttachment, ModelInfo,
-    ModelsResponse, PROTOCOL_VERSION, QueryRequest, QueryResponse, ToolEntry, ToolsListResponse,
-    UsageInfo, WsClientMessage, WsServerMessage,
+    AgentRef, ApprovalDecision, ApprovalRespondRequest, HealthResponse, MessageAttachment,
+    ModelInfo, ModelsResponse, PROTOCOL_VERSION, QueryRequest, QueryResponse, RiskInfo, RiskScope,
+    SessionSummary, SseEventName, ToolEntry, ToolsListResponse, TranscriptMessage, UsageInfo,
+    WsClientMessage, WsServerMessage,
 };
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -63,10 +64,24 @@ struct TypeEntry {
 /// Shared render context — the schemars `definitions` table is used to
 /// resolve `$ref` strings into named TS interfaces.
 struct Ctx<'a> {
-    #[allow(dead_code)]
+    // The definitions table is the extension point for cross-type $ref
+    // resolution; today's renderers resolve references straight off each
+    // schema object instead of this map.
+    #[allow(dead_code)] // KEEP: defs — cross-type $ref resolution extension point
     defs: &'a std::collections::BTreeMap<String, Schema>,
 }
 
+/// Protocol types published to TypeScript, in emission order. Review §P2-7:
+/// this list is guarded by the `codegen_drift` test
+/// `every_pub_protocol_type_is_emitted`, which fails when a `pub struct` or
+/// `pub enum` in the crate root is missing from here — extend this list (and
+/// regenerate) whenever a type is added.
+///
+/// Note `QueryEvent` (the SSE *payload* shape) is deliberately absent: it
+/// lives in `shannon-core` and references engine types, so the leaf protocol
+/// crate cannot carry its schema. The SSE event *names* — the part that
+/// actually drifted between servers (review §P2-6) — are published via
+/// [`shannon_api_protocol::SseEventName`].
 fn collect_entries() -> Vec<TypeEntry> {
     vec![
         entry_struct::<MessageAttachment>("MessageAttachment"),
@@ -79,7 +94,14 @@ fn collect_entries() -> Vec<TypeEntry> {
         entry_struct::<ToolEntry>("ToolEntry"),
         entry_struct::<ToolsListResponse>("ToolsListResponse"),
         entry_struct::<ApprovalRespondRequest>("ApprovalRespondRequest"),
-        entry_enum_simple("ApprovalDecision"),
+        entry_enum_simple::<ApprovalDecision>("ApprovalDecision"),
+        entry_enum_simple::<SseEventName>("SseEventName"),
+        // R2-W2 session-enumeration + approval-enrichment payload types.
+        entry_struct::<SessionSummary>("SessionSummary"),
+        entry_struct::<TranscriptMessage>("TranscriptMessage"),
+        entry_struct::<AgentRef>("AgentRef"),
+        entry_struct::<RiskInfo>("RiskInfo"),
+        entry_enum_simple::<RiskScope>("RiskScope"),
         entry_tagged_enum::<WsClientMessage>("WsClientMessage"),
         entry_tagged_enum::<WsServerMessage>("WsServerMessage"),
     ]
@@ -101,13 +123,14 @@ fn entry_tagged_enum<T: JsonSchema>(ts_name: &'static str) -> TypeEntry {
     }
 }
 
-/// `ApprovalDecision` is a plain enum (no `tag`) — its schemars rendering is
-/// a `oneOf` over single-string values, which we materialise as a union of
-/// string literals to match the wire shape exactly.
-fn entry_enum_simple(ts_name: &'static str) -> TypeEntry {
+/// Plain unit-only enums (`ApprovalDecision`, `SseEventName`) — their
+/// schemars rendering is a `oneOf` over single-string values, which we
+/// materialise as a union of string literals to match the wire shape
+/// exactly.
+fn entry_enum_simple<T: JsonSchema>(ts_name: &'static str) -> TypeEntry {
     TypeEntry {
         ts_name,
-        root: schemars::schema_for!(ApprovalDecision),
+        root: schemars::schema_for!(T),
         is_struct: false,
     }
 }
@@ -375,8 +398,12 @@ fn extract_tag(vobj: &SchemaObject) -> Result<String, GenError> {
     Err(GenError::new("could not extract tag value"))
 }
 
+/// `sessions.list` → `SessionsList`. The split covers every separator that
+/// can appear in a serde tag ('_' for snake_case, '.' for the dotted R2-W2
+/// frame names, '-' for future namespaced tags), so the emitted interface
+/// names stay valid TS identifiers (`WsClientMessageSessionHistory`, …).
 fn to_pascal(s: &str) -> String {
-    s.split('_')
+    s.split(['_', '.', '-'])
         .filter(|p| !p.is_empty())
         .map(|p| {
             let mut c = p.chars();
@@ -404,6 +431,16 @@ fn ts_type_for_schema(schema: &Schema, optional: bool, ctx: &Ctx<'_>) -> Result<
     if let Some(reference) = obj.reference.as_ref() {
         if let Some(name) = reference.strip_prefix("#/definitions/") {
             return Ok(name.to_string());
+        }
+    }
+    // schemars 0.8 nests a `$ref` under `allOf` when the property carries
+    // its own metadata (e.g. a doc comment):
+    // `{"description": …, "allOf": [{"$ref": "#/definitions/X"}]}`. Unwrap
+    // the single-entry case so the referenced type still renders by name
+    // instead of degrading to `unknown`.
+    if let Some(all_of) = obj.subschemas.as_ref().and_then(|s| s.all_of.as_ref()) {
+        if all_of.len() == 1 {
+            return ts_type_for_schema(&all_of[0], optional, ctx);
         }
     }
     let base = ts_type_for_object(obj, ctx)?;

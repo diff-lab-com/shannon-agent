@@ -70,7 +70,10 @@ mod reconciliation {
             requests_used: 3,
             requests_limit: 10,
         });
-        events.push(QueryEvent::Completed { query_id: q });
+        events.push(QueryEvent::Completed {
+            query_id: q,
+            outcome: Default::default(),
+        });
 
         // Bulk turns so the stream passes a few thousand events total:
         // repeated small probe events also cover chunk-flush batching parity.
@@ -168,6 +171,7 @@ mod reconciliation {
         events.push(QueryEvent::Failed {
             query_id: q,
             error: "boom: rate limited".into(),
+            error_kind: None,
         });
         events
     }

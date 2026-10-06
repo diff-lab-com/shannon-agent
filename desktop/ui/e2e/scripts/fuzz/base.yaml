@@ -1,0 +1,63 @@
+# ChatScript: fuzz-baseline (R5 chat-testing plan §5.2) — the LEGAL order the
+# fuzz mutator (scripts/fuzz-mutate.mjs) derives every mutant from.
+#
+# Shape: text chunks → thinking → tool-start → tool-progress → tool-result →
+# usage → completed, over TWO seeded sessions (so the cross-session mutants
+# can aim events at a session that really exists). The spec
+# (chat-script.fuzz.spec.ts) also runs this script UNMUTATED as the control:
+# if the control itself is red, the harness — not a mutant — is broken.
+name: fuzz-baseline
+description: R5 fuzz 基线 — 合法事件顺序 + 双种子会话；所有 fuzz 变异的源
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: fuzz-sess-a
+      title: Fuzz A
+      messages: []
+    - id: fuzz-sess-b
+      title: Fuzz B
+      messages: []
+turns:
+  - user: 跑一个 fuzz 基线回合
+    script:
+      - event: query:text
+        chunks:
+          - "基线开始。"
+          - "工具调用即将执行。"
+        chunkDelayMs: 60
+      - event: query:thinking
+        payload:
+          content: "先查看目录，再决定下一步。"
+      - event: query:tool-start
+        payload:
+          tool_use_id: fuzz-tool-1
+          tool_name: Bash
+          tool_input:
+            command: "ls"
+      - event: query:tool-progress
+        payload:
+          tool_use_id: fuzz-tool-1
+          progress: 0.5
+          message: "halfway"
+      - event: query:tool-result
+        payload:
+          tool_use_id: fuzz-tool-1
+          result: "total 0"
+          is_error: false
+      - event: query:usage
+        payload:
+          input_tokens: 10
+          output_tokens: 5
+          cost_usd: 0.0001
+      - event: query:completed
+  # Turn 2 exists for the fuzz spec's bridge probe: after the mutated/late
+  # events, a SECOND scripted send must still settle — proof the session
+  # stayed usable. Mutants only rebase turn 1 (see rebase() in the mutator).
+  - user: 再补一小句
+    script:
+      - event: query:text
+        chunks:
+          - "好的，收尾。"
+        chunkDelayMs: 60
+      - event: query:completed

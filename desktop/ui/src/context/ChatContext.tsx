@@ -13,26 +13,148 @@
 
 import { createContext, useContext, type ReactNode } from 'react'
 import type { CheckpointInfo, CompactSessionResult, FeedbackRating } from '@/lib/tauri-api'
+import type { RunProcessState } from '@/lib/runProcess'
 import type { ChatMessage, ToolCall, UsagePayload } from '@/types'
+
+/** B1 §4-9: a prompt held back while its session was still streaming. */
+export interface PromptQueueItem {
+  id: number
+  text: string
+  attachments: string[]
+}
+
+/** S2-4a (review 2026-10-05 P-N9): a send held back for the vision
+ *  confirm bar — the message carries image attachments and the effective
+ *  model is KNOWN to lack vision. Rendered above the message list until
+ *  the user picks an action (switch / send anyway / dismiss). */
+export interface VisionConfirmState {
+  /** The model the send would have used (named in the bar). */
+  model: string
+  /** One-click switch candidate, `null` = no candidate → notice-only. */
+  suggestion: { provider: string; model: string; name: string } | null
+}
+
+/** S2-4b (review 2026-10-05 P-N9): a send held back for the tools
+ *  confirm bar — the send rides tools (every desktop send does) and the
+ *  effective model is KNOWN to lack tool calling. Same three outcomes and
+ *  the same render-facing shape as the vision bar. */
+export interface ToolsConfirmState {
+  /** The model the send would have used (named in the bar). */
+  model: string
+  /** One-click switch candidate, `null` = no candidate → notice-only. */
+  suggestion: { provider: string; model: string; name: string } | null
+}
+
+/**
+ * R5-2: an in-stream retry notice surfaced in the conversation as a subtle
+ * system-style line — the engine failed over (R3-1) or rotated the
+ * provider's API key (R4-3) and the request CONTINUED, so this is
+ * informational (muted, small, distinct icon per kind), never an error
+ * banner. `message` is the verbatim engine line; `label` is resolved at
+ * render time from `kind` (i18n).
+ */
+export interface StreamNotice {
+  id: number
+  kind: 'failover' | 'key_rotation'
+  message: string
+}
 
 export interface ChatContextValue {
   messages: ChatMessage[]
   streamingText: string
   thinkingText: string
+  /**
+   * B1 P1-5: query state of the VISIBLE session only (windowSessionId ??
+   * currentSessionId). A background session's run no longer disables this
+   * session's composer — the full per-session map stays internal.
+   */
   isQuerying: boolean
   activeToolCalls: ToolCall[]
+  /**
+   * P2-19: live progress of the visible session's currently-running tool,
+   * from QUERY_TOOL_PROGRESS — `progress` (0..=100, normalized once from
+   * the backend's 0..=1 fraction; absent when the backend reports the
+   * indeterminate −1) and/or `progress_message` (backend-authored text).
+   * Null before the first progress event of a run, on every new tool
+   * start, when the run settles (completed/failed/cancelled), on new
+   * sends and on session switches. Mirrors what RunStatusLine's pill shows.
+   */
+  toolProgress: { progress?: number; message?: string } | null
+  /**
+   * R5-2: retry notices (failover / key rotation) observed during the
+   * visible session's CURRENT turn, newest last. Per-session bucketed like
+   * the stream text (a background session's notices never bleed into the
+   * visible list); survives the run's completion so the user can still see
+   * how the answer was served, cleared on the session's next send, on
+   * session switch (projection) and when the session is deleted.
+   */
+  streamNotices: StreamNotice[]
   usage: UsagePayload | null
+  /**
+   * GB P2-3: 「过程四要素」 aggregation of the visible session's current/most
+   * recent run (summary line, @refs/attachments/tool-read sources, produced
+   * files, plan is fetched by the panel). Pure-event-stream derived —
+   * see lib/runProcess. `status !== 'idle'` is what makes the dock's 运行
+   * tab appear; content survives until the session's next send.
+   */
+  runProcess: RunProcessState
   /**
    * `options.budgetBypass` is the "continue (ignore once)" choice from the
    * budget-exceeded banner — it exempts exactly that send's pre-turn
    * budget check (the mid-turn cap stays enforced backend-side).
+   *
+   * Resolves `false` when the backend rejected the send before recording
+   * it (budget guard, concurrent-query guard, goal-owned guard) — callers
+   * that hand off state to the send (edit commit, queue drain) branch on
+   * it instead of assuming success.
    */
   sendMessage: (
     message: string,
     filePaths?: string[],
     options?: { budgetBypass?: boolean },
-  ) => Promise<void>
+  ) => Promise<boolean>
   cancelQuery: () => Promise<void>
+  /**
+   * S-3/A-18 companion (R4 group 7): a cancel command is in flight for the
+   * VISIBLE session (stop pressed, run not settled yet). The composer's
+   * stop button renders a disabled "cancelling" state — a second press
+   * during teardown is a backend no-op and must not look like one.
+   */
+  isCancelInFlight: boolean
+  /** B1 §4-9: this session's FIFO of prompts queued while streaming. */
+  promptQueue: PromptQueueItem[]
+  /** Append to the visible session's queue. False when the queue is full
+   *  (an overflow toast is raised here; the caller keeps the draft). */
+  enqueuePrompt: (text: string, attachments: string[]) => boolean
+  /** Take the head of the visible session's queue (drain step). */
+  dequeuePrompt: () => PromptQueueItem | null
+  /** Remove one queued item by id (queue chip dismiss). */
+  removeQueuedPrompt: (id: number) => void
+  /** GB P2-10a: move one queued item within the FIFO (chips' up/down);
+   *  `delta` −1 = toward the head (sends sooner), +1 = toward the tail. */
+  moveQueuedPrompt: (id: number, delta: -1 | 1) => void
+  /** S2-4a: the held send's confirm state, `null` when nothing is held. */
+  visionConfirm: VisionConfirmState | null
+  /** S2-4a: resolve the held send. `'switch'` pins the suggested model on
+   *  the target session first, then delivers; `'send-anyway'` delivers
+   *  untouched (the engine gate answers if it must); `'dismiss'` drops the
+   *  held payload. All three close the bar. */
+  resolveVisionConfirm: (choice: 'switch' | 'send-anyway' | 'dismiss') => Promise<void>
+  /** S2-4a: drop the held payload without sending; closes the bar. */
+  dismissVisionConfirm: () => void
+  /** S2-4b: the held send's tools confirm state, `null` when nothing is
+   *  held. Both bars can never show at once — a vision resolution
+   *  re-enters `sendMessage` (with `visionConfirmed`), where the tools
+   *  gate runs next if it also fires. */
+  toolsConfirm: ToolsConfirmState | null
+  /** S2-4b: resolve the held send. `'switch'` pins the suggested model on
+   *  the target session first, then delivers; `'send-anyway'` delivers
+   *  untouched (the engine stays the final word — it has no tools gate
+   *  today, so "anyway" is exactly the historical behavior); `'dismiss'`
+   *  drops the held payload. All three close the bar. */
+  resolveToolsConfirm: (choice: 'switch' | 'send-anyway' | 'dismiss') => Promise<void>
+  /** S2-4b: drop the held payload without sending; closes the bar. */
+  dismissToolsConfirm: () => void
   /** /rewind: completed checkpoints for the current session (turn indices). */
   checkpoints: CheckpointInfo[]
   /** Rewind to before `turnIndex`: drops that turn and everything after. */
@@ -43,10 +165,15 @@ export interface ChatContextValue {
   feedback: Record<string, FeedbackRating>
   /** Set/clear a message's rating (null clears). Optimistic, then persisted. */
   recordFeedback: (key: string, rating: FeedbackRating | null) => Promise<void>
-  /** U2: ContextPanel open state lives here so the global Header (in
-   * Layout, outside the /chat route) can toggle the panel that Chat renders. */
+  /** U2: dock open state lives here so the global Header (in Layout,
+   * outside the /chat route) can toggle the dock that Chat renders.
+   * B1 P1-13: persisted to `shannon.dock.open` — every path below funnels
+   * through the same persisted setter.
+   * P1-⑦: Chat also sets it directly — RightDock auto-docks itself on
+   * plan-mode entry / artifact detection / a "Diff" click. */
   contextPanelOpen: boolean
   toggleContextPanel: () => void
+  setContextPanelOpen: (open: boolean) => void
 }
 
 export const ChatContext = createContext<ChatContextValue | null>(null)

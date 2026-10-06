@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import { MemoryRouter } from 'react-router-dom'
 import Usage from '@/pages/Usage'
+import { AppProvider } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 import type { UsageStats } from '@/types'
 
@@ -27,7 +28,12 @@ function renderUsage() {
   return render(
     <I18nProvider>
       <MemoryRouter>
-        <Usage />
+        {/* CurrentSessionCostPanel consumes useSessions — provide the
+            context (AppProvider hosts the SessionContext.Provider) so the
+            page mounts standalone in tests. */}
+        <AppProvider>
+          <Usage />
+        </AppProvider>
       </MemoryRouter>
     </I18nProvider>,
   )
@@ -39,18 +45,38 @@ describe('Usage page', () => {
     vi.mocked(api.getUsageStats).mockReset()
   })
 
-  it('renders totals and breakdowns when data is present', async () => {
+  it('renders totals and charts when data is present (overview)', async () => {
     vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
     renderUsage()
 
     await waitFor(() => {
       expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument()
     })
-    expect(screen.getByText('By model')).toBeInTheDocument()
-    expect(screen.getByText('By provider')).toBeInTheDocument()
-    expect(screen.getByText('By day')).toBeInTheDocument()
-    expect(screen.getByText('anthropic')).toBeInTheDocument()
-    expect(screen.getByText('2024-01-02')).toBeInTheDocument()
+    // Overview is the default surface — assert the chart titles, not the
+    // audit-mode table headers.
+    expect(screen.getByText('Daily tokens')).toBeInTheDocument()
+    expect(screen.getByText('Tokens by provider')).toBeInTheDocument()
+    // 2024-01-02 still appears in the chart's x-axis labels (MM-DD slice).
+    expect(screen.getByText('01-02')).toBeInTheDocument()
+  })
+
+  it('switches to audit tables when the toggle is pressed', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    renderUsage()
+
+    await waitFor(() => {
+      expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument()
+    })
+    // B6-37: the mode toggle is an aria-pressed button pair (it never
+    // implemented the tab keyboard pattern).
+    fireEvent.click(screen.getByRole('button', { name: /Audit \(table\)/ }))
+    await waitFor(() => {
+      expect(screen.getByText('By model')).toBeInTheDocument()
+      expect(screen.getByText('By provider')).toBeInTheDocument()
+      expect(screen.getByText('By day')).toBeInTheDocument()
+      expect(screen.getByText('anthropic')).toBeInTheDocument()
+      expect(screen.getByText('2024-01-02')).toBeInTheDocument()
+    })
   })
 
   it('shows the empty state when nothing is recorded yet', async () => {

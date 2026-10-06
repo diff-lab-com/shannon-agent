@@ -343,3 +343,55 @@ pub async fn delete_agent_definition(
     }
     Ok(false)
 }
+
+// ── B2 follow-up — sub-agent registry listing ─────────────────────────────
+
+/// DTO mirroring `shannon_agents::SubAgent` for the desktop frontend.
+/// Re-exported as `SubAgentDto` to keep the wire shape distinct from the
+/// engine type — the desktop panel only needs a few fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentDto {
+    pub id: String,
+    pub name: String,
+    pub team: Option<String>,
+    pub status: String,
+    pub turns_used: u32,
+    pub max_turns: u32,
+    pub model: String,
+    pub created_at_ms: i64,
+}
+
+/// List all sub-agents currently registered in the agent-teams context.
+/// Returns an empty list (not an error) when the user has not enabled
+/// agent teams — the UI panel renders its empty state and stays quiet.
+#[tauri::command]
+pub async fn list_subagents(state: tauri::State<'_, AppState>) -> Result<Vec<SubAgentDto>, String> {
+    // Clone the registry out of the mutex before any `.await` — the
+    // `std::sync::MutexGuard` is not `Send` and would otherwise poison
+    // the async fn's `Send` bound that `tauri::generate_handler!`
+    // requires.
+    let registry = {
+        let ctx_guard = state
+            .agent_tool_context
+            .lock()
+            .expect("agent tool context lock poisoned");
+        match ctx_guard.as_ref() {
+            Some(ctx) => ctx.registry.clone(),
+            None => return Ok(Vec::new()),
+        }
+    };
+    let agents = registry.list_agents().await;
+    Ok(agents
+        .into_iter()
+        .map(|a| SubAgentDto {
+            id: a.id,
+            name: a.name,
+            team: a.team,
+            status: a.status.to_string(),
+            turns_used: a.turns_used,
+            max_turns: a.config.max_turns,
+            model: a.config.model,
+            created_at_ms: a.created_at.timestamp_millis(),
+        })
+        .collect())
+}

@@ -11,6 +11,7 @@ import {
   type SendOpts,
 } from "../types.js";
 import { type AdapterConfig } from "../../config/types.js";
+import { PLATFORM_HTTP_TIMEOUT_MS } from "../../lib/netTimeouts.js";
 
 /**
  * Discord adapter (Bot API v10 + Gateway WebSocket).
@@ -278,6 +279,8 @@ export function createDiscordAdapter(
   async function getGatewayUrl(): Promise<string> {
     const res = await fetchImpl(`${apiBaseUrl}/gateway/bot`, {
       headers: { authorization: `Bot ${token}` },
+      // review §P2-23: bound startup probes instead of hanging start().
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`discord gateway/bot failed: HTTP ${res.status}`);
     const data = (await res.json()) as { url?: string };
@@ -324,6 +327,8 @@ export function createDiscordAdapter(
         type: 6, // UPDATE_MESSAGE
         data: { content: ix.data?.custom_id?.startsWith("allow") ? "✅ Approved" : "❌ Denied" },
       }),
+      // review §P2-23: best-effort ack must not hang on a stalled API.
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
     });
   }
 
@@ -391,6 +396,8 @@ export function createDiscordAdapter(
       method: req.method,
       headers: req.headers,
       body: req.body,
+      // review §P2-23: platform API calls must not hang the session lane.
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
@@ -407,7 +414,12 @@ export function createDiscordAdapter(
   ): Promise<MessageReceipt> {
     if (!token) throw new Error("discord: start() not called or token missing");
     const req = buildEditMessageRequest({ token, apiBaseUrl, channelId: target.chatId, messageId, content });
-    const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, body: req.body });
+    const res = await fetchImpl(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new Error(`discord edit failed: HTTP ${res.status} ${detail}`);

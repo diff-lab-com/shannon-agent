@@ -742,13 +742,61 @@ mod tests {
         assert_eq!(picker.current_tier_idx, 2);
 
         picker.next_tier();
+        assert_eq!(picker.current_tier_idx, 3);
+
+        picker.next_tier();
         assert_eq!(picker.current_tier_idx, 0, "should wrap around");
 
         picker.prev_tier();
-        assert_eq!(picker.current_tier_idx, 2, "should wrap to Pro from Fast");
+        assert_eq!(picker.current_tier_idx, 3, "should wrap to Pro from All");
 
         picker.prev_tier();
-        assert_eq!(picker.current_tier_idx, 1);
+        assert_eq!(picker.current_tier_idx, 2);
+    }
+
+    #[test]
+    fn picker_all_tier_tab_restores_unfiltered_catalog() {
+        let mut picker = ModelPickerWidget::new(None);
+        // Jump to Anthropic if available; otherwise just confirm on whatever
+        // provider tab the picker opened with.
+        if let Some(idx) = picker
+            .providers
+            .iter()
+            .position(|p| *p == LlmProvider::Anthropic)
+        {
+            picker.current_provider_idx = idx;
+            picker.refresh_models();
+        }
+
+        // The picker opens on the "All" tab — the unfiltered catalog.
+        assert_eq!(picker.current_tier_idx, 0);
+        let total = picker.models.len();
+        assert!(total > 0, "expected at least one model in the catalog");
+
+        // Cycle into a tier tab (subset), then all the way back to All: the
+        // unfiltered catalog must be restored, not eroded by repeated
+        // filtering of the already-filtered list.
+        picker.next_tier();
+        assert!(
+            picker.models.len() <= total,
+            "tier filter must be a subset of the catalog"
+        );
+        for _ in 1..TIER_COUNT {
+            picker.next_tier();
+        }
+        assert_eq!(picker.current_tier_idx, 0, "cycle wraps back to All");
+        assert_eq!(
+            picker.models.len(),
+            total,
+            "All tab restores the full catalog"
+        );
+
+        // Backwards works the same way: All → Pro (filtered) → All (full).
+        picker.prev_tier();
+        assert_eq!(picker.current_tier_idx, TIER_COUNT - 1);
+        picker.next_tier();
+        assert_eq!(picker.current_tier_idx, 0);
+        assert_eq!(picker.models.len(), total);
     }
 
     #[test]
@@ -769,7 +817,7 @@ mod tests {
         assert!(total > 0, "expected at least one model for the provider");
 
         // Standard tier should be a strict subset
-        picker.current_tier_idx = 1;
+        picker.current_tier_idx = 2;
         picker.refresh_models_for_tier();
         assert!(
             picker.models.len() <= total,
@@ -849,6 +897,59 @@ mod tests {
     }
 
     #[test]
+    fn picker_focus_provider_opens_target_tab() {
+        // S2-6 ruling ⑤: the forced picker must open pre-tabbed at the
+        // target provider, not at the current model's owner.
+        let mut picker = ModelPickerWidget::new(Some("claude-sonnet-4-20250514"));
+        assert_eq!(
+            picker.selected_model().map(|m| m.provider.clone()),
+            Some(LlmProvider::Anthropic),
+            "constructor opens the current model's owner tab"
+        );
+
+        picker.focus_provider(&LlmProvider::OpenAI);
+        assert_eq!(
+            picker.selected_model().map(|m| m.provider.clone()),
+            Some(LlmProvider::OpenAI),
+            "focus_provider retabs + reloads the model list"
+        );
+
+        // A second focus moves cleanly (idempotent retab, no stale list).
+        picker.focus_provider(&LlmProvider::Bedrock);
+        assert_eq!(
+            picker.selected_model().map(|m| m.provider.clone()),
+            Some(LlmProvider::Bedrock),
+            "re-focusing retabs again"
+        );
+    }
+
+    #[test]
+    fn focus_provider_records_switch_target_for_manual_entry() {
+        // Ruling ⑤ follow-up: the forced picker must remember the switch
+        // target so the manual-id hatch (`i` + Enter) lands the typed id on
+        // the target provider instead of the still-active pre-switch one.
+        // A plain `/model` picker records no target and keeps the old
+        // manual-entry semantics.
+        let plain = ModelPickerWidget::new(None);
+        assert!(
+            plain.switch_target().is_none(),
+            "a plain /model picker has no switch target"
+        );
+
+        let mut forced = ModelPickerWidget::new(Some("claude-sonnet-4-20250514"));
+        assert!(
+            forced.switch_target().is_none(),
+            "constructor alone records no switch target"
+        );
+        forced.focus_provider(&LlmProvider::Bedrock);
+        assert_eq!(
+            forced.switch_target(),
+            Some(&LlmProvider::Bedrock),
+            "focus_provider records the forced switch target"
+        );
+    }
+
+    #[test]
     fn model_cost_label_honest_about_unknown() {
         use shannon_core::model_registry::{ModelCapabilities, ModelInfo};
         use shannon_engine::api::LlmProvider;
@@ -868,6 +969,7 @@ mod tests {
             cost_per_m_input: 3.0,
             cost_per_m_output: 15.0,
             capabilities: ModelCapabilities::empty(),
+            source: shannon_core::model_registry::ModelEntrySource::Catalog,
         };
         let label = model_cost_label(&paid);
         assert!(label.contains("$3.00"), "paid model shows rate: {label}");
@@ -888,6 +990,7 @@ mod tests {
             cost_per_m_input: 0.0,
             cost_per_m_output: 0.0,
             capabilities: ModelCapabilities::empty(),
+            source: shannon_core::model_registry::ModelEntrySource::Catalog,
         };
         let label = model_cost_label(&dynamic);
         assert!(
@@ -910,6 +1013,7 @@ mod tests {
             cost_per_m_input: 0.0,
             cost_per_m_output: 0.0,
             capabilities: ModelCapabilities::empty(),
+            source: shannon_core::model_registry::ModelEntrySource::Catalog,
         };
         let label = model_cost_label(&local);
         assert!(
@@ -970,7 +1074,7 @@ const MAX_VISIBLE_MODELS: usize = 10;
 ///
 /// Navigate with:
 /// - `←` / `→` — switch provider tab
-/// - `Tab` / `BackTab` — cycle tier tab (Fast → Standard → Pro)
+/// - `Tab` / `BackTab` — cycle tier tab (All → Fast → Standard → Pro)
 /// - `↑` / `↓` / `j` / `k` — select model
 /// - `Enter` — confirm selection
 /// - `Esc` — cancel
@@ -990,12 +1094,19 @@ pub struct ModelPickerWidget {
     local_models: Vec<ModelInfo>,
     /// The model ID currently in use (shown with ✓ marker).
     current_model_id: Option<String>,
-    /// Index of the currently active tier tab (0 = Fast, 1 = Standard, 2 = Pro).
+    /// Index of the currently active tier tab (0 = All, 1 = Fast, 2 = Standard,
+    /// 3 = Pro). "All" shows the unfiltered catalog.
     pub current_tier_idx: usize,
     /// Manual model-id entry mode (escape hatch for models outside the catalog).
     manual_mode: bool,
     /// Typed model id while in manual entry mode.
     manual_input: String,
+    /// The provider a forced `/provider` switch is targeting (ruling ⑤
+    /// ForcePicker context). When set, a manually typed id confirmed with
+    /// Enter lands on **this** provider (`<target>/<typed id>`) instead of
+    /// the still-active pre-switch one. Plain `/model` pickers leave it
+    /// `None` and keep the typed id on the current provider.
+    switch_target: Option<LlmProvider>,
 }
 
 /// Honest cost label for a model shown in the picker detail line.
@@ -1017,8 +1128,8 @@ fn model_cost_label(model: &ModelInfo) -> String {
     }
 }
 
-/// Number of tier tabs (Fast, Standard, Pro).
-pub const TIER_COUNT: usize = 3;
+/// Number of tier tabs (All, Fast, Standard, Pro).
+pub const TIER_COUNT: usize = 4;
 
 impl ModelPickerWidget {
     /// Create a new model picker, optionally highlighting `current_model`.
@@ -1045,6 +1156,7 @@ impl ModelPickerWidget {
             current_tier_idx: 0,
             manual_mode: false,
             manual_input: String::new(),
+            switch_target: None,
         };
 
         // Find the provider of the current model to open the right tab
@@ -1098,13 +1210,13 @@ impl ModelPickerWidget {
         self.scroll_offset = 0;
     }
 
-    /// Cycle to the next tier tab (Fast → Standard → Pro → Fast).
+    /// Cycle to the next tier tab (All → Fast → Standard → Pro → All).
     pub fn next_tier(&mut self) {
         self.current_tier_idx = (self.current_tier_idx + 1) % TIER_COUNT;
         self.refresh_models_for_tier();
     }
 
-    /// Cycle to the previous tier tab (Fast → Pro → Standard → Fast).
+    /// Cycle to the previous tier tab (All → Pro → Standard → Fast → All).
     pub fn prev_tier(&mut self) {
         self.current_tier_idx = if self.current_tier_idx == 0 {
             TIER_COUNT - 1
@@ -1114,14 +1226,23 @@ impl ModelPickerWidget {
         self.refresh_models_for_tier();
     }
 
-    /// Filter the current model list to those matching the selected tier.
+    /// Rebuild the model list for the current tier tab.
+    ///
+    /// Reloads the provider's unfiltered catalog first, then applies the tier
+    /// filter — filtering the already-filtered list would lose every other
+    /// tier, making the cycle one-way. Index 0 is the "All" tab: the
+    /// unfiltered catalog, so the picker can always get back to everything
+    /// (R1-5).
     fn refresh_models_for_tier(&mut self) {
-        let tier_label = match self.current_tier_idx {
-            0 => TierLabel::Fast,
-            1 => TierLabel::Standard,
-            _ => TierLabel::Pro,
-        };
-        self.models.retain(|m| m.tier_label() == tier_label);
+        self.refresh_models();
+        if self.current_tier_idx > 0 {
+            let tier_label = match self.current_tier_idx {
+                1 => TierLabel::Fast,
+                2 => TierLabel::Standard,
+                _ => TierLabel::Pro,
+            };
+            self.models.retain(|m| m.tier_label() == tier_label);
+        }
         self.selected_idx = 0;
         self.scroll_offset = 0;
     }
@@ -1182,6 +1303,38 @@ impl ModelPickerWidget {
             self.current_provider_idx = 0;
         }
         self.refresh_models();
+    }
+
+    /// Open the picker on `provider`'s tab (S2-6 ruling ⑤: a catalog-less
+    /// `/provider` switch forces the picker pre-tabbed at the target so the
+    /// user lands an explicit model instead of silently keeping the old one).
+    ///
+    /// `provider` is also recorded as the picker's [`switch_target`](Self::switch_target):
+    /// this picker exists because a switch onto `provider` was forced, so a
+    /// manually typed model id confirmed with Enter must land on `provider`
+    /// (`<target>/<typed id>`), not on the still-active pre-switch one. The
+    /// target is recorded even when the tab lookup below no-ops (a provider
+    /// filtered out of the tabs by `SHANNON_*_PROVIDERS` still steers manual
+    /// entry — the explicit-id grammar passes regardless of tab coverage).
+    ///
+    /// No-op on the tab position when the provider has no tab (filtered out
+    /// by the `SHANNON_*_PROVIDERS` allowlist/denylist) — the picker then
+    /// stays on the tab it was constructed on. A tab whose catalog is empty
+    /// renders as an empty list; the manual-entry hatch (`i`) and the Esc
+    /// cancel are always available.
+    pub fn focus_provider(&mut self, provider: &LlmProvider) {
+        self.switch_target = Some(provider.clone());
+        if let Some(idx) = self.providers.iter().position(|p| p == provider) {
+            self.current_provider_idx = idx;
+            self.refresh_models();
+        }
+    }
+
+    /// The provider this picker's manual-id entry lands on, when it was
+    /// opened by a forced `/provider` switch (ruling ⑤); `None` for a plain
+    /// `/model` picker (manual ids keep the current provider).
+    pub fn switch_target(&self) -> Option<&LlmProvider> {
+        self.switch_target.as_ref()
     }
 
     /// Get the currently selected model info.
@@ -1299,8 +1452,8 @@ impl ModelPickerWidget {
             lines.push(Line::from(""));
         }
 
-        // ── Tier tabs (Fast / Standard / Pro) ──
-        let tiers = ["Fast", "Standard", "Pro"];
+        // ── Tier tabs (All / Fast / Standard / Pro) ──
+        let tiers = ["All", "Fast", "Standard", "Pro"];
         let tier_spans: Vec<Span> = tiers
             .iter()
             .enumerate()
@@ -1419,8 +1572,18 @@ impl ModelPickerWidget {
         // ── Manual entry line (escape hatch for catalog-external models) ──
         if self.manual_mode {
             lines.push(Line::from(""));
+            // A forced-switch picker (ruling ⑤) shows the landing provider as
+            // a pasteable prefix: the typed id becomes `<target>/<id>`, not a
+            // replacement on the still-active provider.
+            let prefix = match self.switch_target.as_ref() {
+                Some(target) => format!(
+                    "{}/",
+                    shannon_core::provider_resolver::llm_provider_id(target)
+                ),
+                None => String::new(),
+            };
             lines.push(Line::from(Span::styled(
-                format!(" Model ID: {}▏", self.manual_input),
+                format!(" Model ID: {prefix}{}▏", self.manual_input),
                 Style::default()
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),

@@ -35,6 +35,68 @@ pub struct AnalyzeImageInput {
     pub prompt: String,
 }
 
+/// Maximum number of images accepted in one `AnalyzeImages` batch (C-ImgBatch).
+///
+/// Caps a single tool call so one model turn cannot balloon the request body
+/// (and the follow-up vision turn) without bound. Batches larger than this
+/// are rejected with `InvalidInput` so the model can split them.
+pub const MAX_BATCH_IMAGES: usize = 20;
+
+/// Input parameters for the `AnalyzeImages` batch tool (C-ImgBatch).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AnalyzeImagesInput {
+    /// Absolute paths to the image files to analyze (1..=[`MAX_BATCH_IMAGES`]).
+    #[serde(default)]
+    pub paths: Vec<String>,
+
+    /// What to analyze or describe about each image. `question` is accepted
+    /// as an alias for call-site compatibility.
+    #[serde(default, alias = "question")]
+    pub prompt: Option<String>,
+}
+
+/// Per-image entry in the `AnalyzeImages` output payload.
+#[derive(Debug, Serialize)]
+struct BatchImageEntry {
+    /// 1-based position of this image within the batch.
+    index: usize,
+    /// Source file path.
+    source: String,
+    /// MIME type (e.g. "image/png").
+    media_type: String,
+    /// File size in bytes.
+    size: u64,
+    /// Base64-encoded image data.
+    data: String,
+}
+
+/// Output payload for `AnalyzeImages` (C-ImgBatch).
+///
+/// The query engine detects `metadata["type"] == "images"` and expands the
+/// `images` array into interleaved `## <path>` text headings and
+/// `ContentBlock::Image` blocks inside a **single** tool_result, so the whole
+/// batch reaches the LLM as one vision request instead of one request per
+/// image. `report` carries the same per-image sectioning as plain text for
+/// adapters that flatten tool_result images (see the tool's doc comment).
+#[derive(Debug, Serialize)]
+struct BatchImageAnalysisOutput {
+    /// Type identifier for downstream detection ("images").
+    #[serde(rename = "type")]
+    output_type: String,
+
+    /// Number of images in the batch.
+    count: usize,
+
+    /// The user's analysis prompt (applied to every image).
+    prompt: String,
+
+    /// Per-image sectioned manifest (`## <path>` per line) in batch order.
+    report: String,
+
+    /// The loaded images, in batch order.
+    images: Vec<BatchImageEntry>,
+}
+
 /// Output structure for image analysis results
 #[derive(Debug, Serialize)]
 struct ImageAnalysisOutput {
@@ -360,6 +422,208 @@ impl Tool for AnalyzeImageTool {
                 map.insert("size".to_string(), json!(size));
                 map.insert("source".to_string(), json!(source));
                 map.insert("prompt".to_string(), json!(analyze_input.prompt));
+                map
+            },
+        })
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    fn category(&self) -> &str {
+        "multimodal"
+    }
+}
+
+/// AnalyzeImages tool: batch variant of [`AnalyzeImageTool`] (C-ImgBatch).
+///
+/// # Motivation
+///
+/// Image-heavy evaluation tasks (gcode-to-text, extract-moves-from-video)
+/// made the model call `AnalyzeImage` once per image — one LLM vision turn
+/// per image, compounding to 300k+ tokens per task. This tool accepts up to
+/// [`MAX_BATCH_IMAGES`] paths in a **single** tool call.
+///
+/// # How the single-request path works
+///
+/// The tool never calls the LLM itself; it loads every image and returns a
+/// payload tagged `metadata["type"] = "images"` with an `images[]` array.
+/// The query engine (`ToolResultEntry::to_tool_result_content` in
+/// shannon-core) expands that array into interleaved `## <path>` text
+/// headings and `ContentBlock::Image` blocks inside **one** `tool_result`
+/// content array — the Anthropic wire format passes those through verbatim,
+/// so one tool call becomes exactly one vision request containing all N
+/// images (previously: N tool calls and N vision turns).
+///
+/// # Known limitation (degraded providers)
+///
+/// The OpenAI/Ollama/Gemini adapters flatten `tool_result` content to text
+/// (`convert_message_for_openai` / `serialize_gemini_request`), dropping
+/// image blocks — true for the pre-existing single-image path as well. On
+/// those providers the model receives the sectioned text manifest (`report`)
+/// without the image pixels; the tool output therefore labels the request
+/// path so the degradation is visible. Follow-ups: (1) teach the
+/// OpenAI/Gemini adapters to emit multi-image tool results, (2) per-batch
+/// pixel budget / downscaling to bound request size.
+pub struct AnalyzeImagesTool {
+    description: String,
+    /// Filesystem world backing local image loads (§4.11).
+    fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+}
+
+impl Default for AnalyzeImagesTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AnalyzeImagesTool {
+    pub fn new() -> Self {
+        Self {
+            description: "Analyze multiple image files in ONE call (batch). Each image is sent to the LLM as part of a single vision request, with results organized under a '## <path>' heading per image. Accepts up to 20 paths; use this instead of calling AnalyzeImage repeatedly. Supports PNG, JPEG, GIF, WebP, BMP, ICO, and TIFF formats.".to_string(),
+            fs: crate::defaults::fs(),
+        }
+    }
+
+    /// Inject a filesystem world override (sandbox/remote assemblies).
+    pub fn with_fs(
+        mut self,
+        fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+    ) -> Self {
+        self.fs = fs;
+        self
+    }
+
+    /// Build the per-image sectioned manifest (`## <path>` per image).
+    fn build_report(entries: &[BatchImageEntry]) -> String {
+        entries
+            .iter()
+            .map(|e| {
+                format!(
+                    "## {source}\n(image {index} of {count}, {media_type})",
+                    source = e.source,
+                    index = e.index,
+                    count = entries.len(),
+                    media_type = e.media_type,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+}
+
+#[async_trait]
+impl Tool for AnalyzeImagesTool {
+    fn name(&self) -> &str {
+        "AnalyzeImages"
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "minItems": 1,
+                    "maxItems": MAX_BATCH_IMAGES,
+                    "description": "Absolute paths to the image files to analyze, in order. Results are sectioned per image under a '## <path>' heading."
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "What to analyze or describe about each image (applied to every image in the batch)"
+                },
+                "question": {
+                    "type": "string",
+                    "description": "Alias for prompt"
+                }
+            },
+            "required": ["paths", "prompt"]
+        })
+    }
+
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
+        let analyze_input: AnalyzeImagesInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid analyze_images input: {e}")))?;
+
+        // Validate batch size BEFORE touching the filesystem so oversized
+        // batches fail fast and cheaply (C-ImgBatch avalanche guard).
+        if analyze_input.paths.is_empty() {
+            return Err(ToolError::InvalidInput(
+                "paths must contain at least one image path".to_string(),
+            ));
+        }
+        if analyze_input.paths.len() > MAX_BATCH_IMAGES {
+            return Err(ToolError::InvalidInput(format!(
+                "Too many images: {} (max {MAX_BATCH_IMAGES}). Split the batch into smaller AnalyzeImages calls.",
+                analyze_input.paths.len()
+            )));
+        }
+
+        // Validate prompt is not empty (accept `question` via serde alias).
+        let prompt = analyze_input
+            .prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| ToolError::InvalidInput("prompt must not be empty".to_string()))?;
+
+        // Load every image up-front; fail fast on the first bad path so the
+        // model can correct it instead of receiving a partial batch.
+        let mut entries = Vec::with_capacity(analyze_input.paths.len());
+        for (i, path) in analyze_input.paths.iter().enumerate() {
+            let (base64_data, media_type, size) =
+                AnalyzeImageTool::load_from_file_with(self.fs.as_ref(), path)
+                    .await
+                    .map_err(|e| {
+                        ToolError::ExecutionFailed(format!(
+                            "Failed to load image {i} of {}: {path}: {e}",
+                            analyze_input.paths.len()
+                        ))
+                    })?;
+            entries.push(BatchImageEntry {
+                index: i + 1,
+                source: path.clone(),
+                media_type: media_type.to_string(),
+                size,
+                data: base64_data,
+            });
+        }
+
+        let report = Self::build_report(&entries);
+        let count = entries.len();
+
+        let output = BatchImageAnalysisOutput {
+            output_type: "images".to_string(),
+            count,
+            prompt: prompt.to_string(),
+            report,
+            images: entries,
+        };
+
+        let json_output = serde_json::to_string_pretty(&output).map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to serialize batch image data: {e}"))
+        })?;
+
+        let sources: Vec<serde_json::Value> =
+            analyze_input.paths.iter().map(|p| json!(p)).collect();
+
+        Ok(ToolOutput {
+            content: json_output,
+            is_error: false,
+            metadata: {
+                let mut map = HashMap::new();
+                // "images" (plural) marks the batch payload the engine expands
+                // into multiple image blocks within a single tool_result.
+                map.insert("type".to_string(), json!("images"));
+                map.insert("count".to_string(), json!(count));
+                map.insert("sources".to_string(), json!(sources));
+                map.insert("prompt".to_string(), json!(prompt));
                 map
             },
         })
@@ -727,5 +991,211 @@ mod tests {
     fn test_tool_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<AnalyzeImageTool>();
+    }
+
+    // ── AnalyzeImages batch tool (C-ImgBatch) ────────────────────────
+
+    /// Minimal valid 1x1 PNG (signature + IHDR + IDAT + IEND).
+    fn minimal_png() -> Vec<u8> {
+        vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x62, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE5, 0x27, 0xDE, 0xFC, 0x00, 0x00,
+            0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ]
+    }
+
+    #[test]
+    fn test_analyze_images_tool_defaults() {
+        let tool = AnalyzeImagesTool::new();
+        assert_eq!(tool.name(), "AnalyzeImages");
+        assert!(tool.description().contains("ONE call"));
+        assert!(tool.is_read_only());
+        assert_eq!(tool.category(), "multimodal");
+        assert_eq!(AnalyzeImagesTool::default().name(), "AnalyzeImages");
+    }
+
+    #[test]
+    fn test_analyze_images_schema() {
+        let tool = AnalyzeImagesTool::new();
+        let schema = tool.input_schema();
+        assert_eq!(schema["properties"]["paths"]["type"], "array");
+        assert_eq!(schema["properties"]["paths"]["items"]["type"], "string");
+        assert_eq!(schema["properties"]["paths"]["maxItems"], MAX_BATCH_IMAGES);
+        assert!(schema["properties"]["prompt"].is_object());
+        assert!(schema["properties"]["question"].is_object());
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.contains(&json!("paths")));
+        assert!(required.contains(&json!("prompt")));
+    }
+
+    #[test]
+    fn test_analyze_images_input_parses_paths_and_question_alias() {
+        // Canonical `prompt` field
+        let input: AnalyzeImagesInput =
+            serde_json::from_value(json!({"paths": ["/a.png"], "prompt": "describe"}))
+                .expect("parse prompt form");
+        assert_eq!(input.paths, vec!["/a.png"]);
+        assert_eq!(input.prompt.as_deref(), Some("describe"));
+
+        // `question` alias (task spec shape: { paths, question? })
+        let input: AnalyzeImagesInput =
+            serde_json::from_value(json!({"paths": ["/a.png"], "question": "what is this?"}))
+                .expect("parse question alias");
+        assert_eq!(input.prompt.as_deref(), Some("what is this?"));
+
+        // Missing prompt parses (validated at execute time)
+        let input: AnalyzeImagesInput =
+            serde_json::from_value(json!({"paths": ["/a.png"]})).expect("parse no prompt");
+        assert!(input.prompt.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_images_over_limit_rejected() {
+        let tool = AnalyzeImagesTool::new();
+        let paths: Vec<String> = (0..=MAX_BATCH_IMAGES)
+            .map(|i| format!("/tmp/img{i}.png"))
+            .collect();
+        assert_eq!(paths.len(), MAX_BATCH_IMAGES + 1);
+        let result = tool
+            .execute(json!({ "paths": paths, "prompt": "describe" }))
+            .await;
+        match result {
+            Err(ToolError::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("Too many images") && msg.contains("20"),
+                    "Expected over-limit message, got: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput over-limit, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_analyze_images_empty_paths_rejected() {
+        let tool = AnalyzeImagesTool::new();
+        let result = tool
+            .execute(json!({ "paths": [], "prompt": "describe" }))
+            .await;
+        match result {
+            Err(ToolError::InvalidInput(msg)) => {
+                assert!(msg.contains("at least one"), "got: {msg}");
+            }
+            other => panic!("Expected InvalidInput empty paths, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_analyze_images_empty_prompt_rejected() {
+        let tool = AnalyzeImagesTool::new();
+        let result = tool
+            .execute(json!({ "paths": ["/tmp/a.png"], "prompt": "   " }))
+            .await;
+        match result {
+            Err(ToolError::InvalidInput(msg)) => {
+                assert!(msg.contains("prompt"), "got: {msg}");
+            }
+            other => panic!("Expected InvalidInput empty prompt, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_analyze_images_batch_output_is_sectioned_per_image() {
+        let png = minimal_png();
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let p1 = dir.path().join("img1.png");
+        let p2 = dir.path().join("img2.png");
+        tokio::fs::write(&p1, &png).await.expect("write img1");
+        tokio::fs::write(&p2, &png).await.expect("write img2");
+        let path1 = p1.to_string_lossy().to_string();
+        let path2 = p2.to_string_lossy().to_string();
+
+        let tool = AnalyzeImagesTool::new();
+        let result = tool
+            .execute(json!({
+                "paths": [path1, path2],
+                "prompt": "Describe each image"
+            }))
+            .await
+            .expect("batch execute should succeed");
+
+        assert!(!result.is_error);
+        assert_eq!(result.metadata.get("type"), Some(&json!("images")));
+        assert_eq!(result.metadata.get("count"), Some(&json!(2)));
+        assert_eq!(result.metadata.get("sources"), Some(&json!([path1, path2])));
+
+        let content: serde_json::Value =
+            serde_json::from_str(&result.content).expect("content should be valid JSON");
+        assert_eq!(content["type"], "images");
+        assert_eq!(content["count"], 2);
+        assert_eq!(content["prompt"], "Describe each image");
+
+        // Per-image sectioning: a `## <path>` heading for every image.
+        let report = content["report"].as_str().unwrap();
+        assert!(report.contains(&format!("## {path1}")), "report: {report}");
+        assert!(report.contains(&format!("## {path2}")), "report: {report}");
+
+        // Images array preserves batch order and decodable data.
+        let images = content["images"].as_array().unwrap();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0]["source"], path1.as_str());
+        assert_eq!(images[1]["source"], path2.as_str());
+        assert_eq!(images[0]["media_type"], "image/png");
+        assert_eq!(images[0]["index"], 1);
+        assert_eq!(images[1]["index"], 2);
+        let engine = base64::engine::general_purpose::STANDARD;
+        for img in images {
+            let decoded = engine
+                .decode(img["data"].as_str().unwrap())
+                .expect("decode base64");
+            assert_eq!(decoded, png);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_analyze_images_missing_file_fails_with_path_context() {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let good = dir.path().join("good.png");
+        tokio::fs::write(&good, minimal_png()).await.expect("write");
+        let bad = dir.path().join("missing.png");
+
+        let tool = AnalyzeImagesTool::new();
+        let result = tool
+            .execute(json!({
+                "paths": [good.to_string_lossy(), bad.to_string_lossy()],
+                "prompt": "describe"
+            }))
+            .await;
+        match result {
+            Err(ToolError::ExecutionFailed(msg)) => {
+                assert!(
+                    msg.contains(bad.to_string_lossy().as_ref()),
+                    "Expected failing path in error, got: {msg}"
+                );
+            }
+            other => panic!("Expected ExecutionFailed, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_analyze_images_non_image_file_rejected() {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let txt = dir.path().join("notes.txt");
+        tokio::fs::write(&txt, b"not an image")
+            .await
+            .expect("write");
+
+        let tool = AnalyzeImagesTool::new();
+        let result = tool
+            .execute(json!({ "paths": [txt.to_string_lossy()], "prompt": "describe" }))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_analyze_images_tool_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<AnalyzeImagesTool>();
     }
 }

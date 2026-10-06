@@ -6,21 +6,28 @@
 
 #[cfg(feature = "tauri")]
 fn main() {
+    use shannon_desktop::ask_user_handler;
     use shannon_desktop::commands;
     use shannon_desktop::commands_agents;
-    use shannon_desktop::commands_billing;
+    use shannon_desktop::commands_artifact;
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
     use shannon_desktop::commands_connections;
+    use shannon_desktop::commands_diagnostics;
+    use shannon_desktop::commands_dream;
     use shannon_desktop::commands_feedback;
     use shannon_desktop::commands_files;
+    use shannon_desktop::commands_keys;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_memory;
     use shannon_desktop::commands_mobile_pairing;
+    use shannon_desktop::commands_models;
     use shannon_desktop::commands_notifications;
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
+    use shannon_desktop::commands_profiles;
+    use shannon_desktop::commands_projects;
     use shannon_desktop::commands_remote;
     use shannon_desktop::commands_rewind;
     use shannon_desktop::commands_routine_templates;
@@ -33,9 +40,12 @@ fn main() {
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
     use shannon_desktop::commands_voice_models;
+    use shannon_desktop::companion_window_commands;
+    use shannon_desktop::desktop_logging;
     use shannon_desktop::engine_discovery;
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
     use shannon_desktop::extensions_commands;
+    use shannon_desktop::gateway_pairing;
     use shannon_desktop::loopback_api;
     use shannon_desktop::migration_commands;
     use shannon_desktop::persona_pack_commands;
@@ -43,38 +53,99 @@ fn main() {
     use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
     use shannon_desktop::terminal_commands;
-    use shannon_desktop::workspace_commands;
+    use shannon_desktop::usage_governance;
+    use shannon_desktop::utility_tier;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     };
-    use tauri_plugin_updater::UpdaterExt;
 
     // E5: tracing-subscriber with JSON exporter for offline performance
     // analysis. SHANNON_LOG_FORMAT=json → newline-delimited JSON to stderr;
     // any other value (or unset) → pretty human-readable output.
+    //
+    // Batch 3 B: a rolling redacted file sink keeps logs at
+    // ~/.shannon/logs/ — `shannon desktop` detaches from its terminal, so
+    // stderr alone meant production runs left nothing behind for support.
     let log_format = std::env::var("SHANNON_LOG_FORMAT").unwrap_or_default();
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,shannon_desktop=debug"));
+
+    let log_dir = shannon_core::data_meta::home().join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    desktop_logging::cleanup_retention(&log_dir, 7);
+    desktop_logging::install_panic_hook(&log_dir);
+    let (non_blocking, log_guard) = tracing_appender::non_blocking(
+        tracing_appender::rolling::daily(&log_dir, "shannon-desktop.log"),
+    );
+    // Held for the process lifetime: dropping the guard detaches the file
+    // worker and loses still-buffered lines.
+    let _log_guard = log_guard;
+
+    // File sink: WARN and above (stderr stays the verbose surface). Every
+    // line is redacted through the session-log policy before hitting disk.
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(desktop_logging::RedactingMakeWriter::new(non_blocking))
+        .with_ansi(false)
+        .with_target(true)
+        .with_filter(tracing_subscriber::EnvFilter::new("warn"));
+
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
+    use tracing_subscriber::prelude::*;
+    // `.json()` returns a different concrete type than the text layer and
+    // stacked filtered layers turn the registry generic concrete — box each
+    // layer so both branches share one assembly.
     if log_format.eq_ignore_ascii_case("json") {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .json()
-            .with_target(true)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        tracing_subscriber::registry()
+            .with(stderr_layer.json().with_filter(env_filter.clone()).boxed())
+            .with(file_layer.boxed())
             .init();
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_target(true)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        tracing_subscriber::registry()
+            .with(stderr_layer.with_filter(env_filter).boxed())
+            .with(file_layer.boxed())
             .init();
     }
 
-    tauri::Builder::default()
+    // Data-version gate (Phase 1, advisory here): a data directory written
+    // by a NEWER build is logged loudly but does not block startup — the
+    // desktop ships its own CLI sidecar, self-downgrades are rare, and a
+    // window that refuses to open with no UI affordance beats a silent one.
+    // The CLI/serve entrypoints hard-refuse instead; see data_meta. The
+    // marker itself never moves backwards, so this path cannot downgrade
+    // the record that the gate keys off.
+    match shannon_core::data_meta::check() {
+        shannon_core::data_meta::Compatibility::Downgrade { data_version }
+            if std::env::var_os("SHANNON_ALLOW_DOWNGRADE").is_none() =>
+        {
+            tracing::error!(
+                data_version = %data_version,
+                running = env!("CARGO_PKG_VERSION"),
+                "Shannon data directory was written by a newer version — continuing in advisory mode (set SHANNON_ALLOW_DOWNGRADE=1 to silence)"
+            );
+        }
+        _ => {}
+    }
+    shannon_core::data_meta::record_current_version();
+
+    // Settings R3 T3 — hardware-acceleration escape hatch (B3). Must run
+    // BEFORE the tauri::Builder: the webview backend reads these env vars
+    // exactly once, when the first window's webview is created. Reads the
+    // persisted config straight from disk (free function, no AppState yet).
+    let startup_config = shannon_desktop::config::load_config();
+    shannon_desktop::config::apply_hardware_acceleration_env(&startup_config);
+    // Settings R3 T4 (B1) — corporate-network trio (proxy / NO_PROXY /
+    // custom CA). Same early window: the gateway sidecar + MCP stdio
+    // children inherit this process env wholesale, and the engine/desktop
+    // reqwest builders read SHANNON_CA_BUNDLE when first built.
+    shannon_desktop::config::apply_network_env(&startup_config);
+
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -82,20 +153,92 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::send_message,
             commands_chat::get_conversation,
+            commands_chat::get_active_session_id,
             commands_chat::list_models,
             commands_chat::get_provider_allowlist,
             commands_chat::get_status,
             commands_chat::cancel_query,
+            // B1-4 (P1-3) — the stop watchdog's reconciliation read
+            // (per-session latch, no entry materialization).
+            commands_chat::get_session_querying,
             commands_chat::list_tools,
+            // R2-1 — session-level model override (composer chip): picking a
+            // model in the chip only re-targets the current session; the
+            // chip's "Set as default" keeps using the global `configure`.
+            commands_chat::set_session_model,
+            commands_chat::clear_session_model,
+            commands_chat::get_session_model,
+            // S3-2 (P-N10) — active session-override count for the Settings
+            // profile-switch confirm ("N sessions still use override
+            // models").
+            commands_chat::count_session_model_overrides,
+            // S2-4a (P-N9) — pre-send vision pre-check: the UI asks before
+            // pointing image attachments at a model KNOWN to lack vision,
+            // with a one-click switch candidate. The engine gate stays the
+            // final backstop.
+            commands_chat::check_vision_send,
+            // S2-4b (P-N9) — pre-send tool-capability pre-check: the UI
+            // asks before pointing a tools-carrying send (every desktop
+            // send) at a model KNOWN to lack tool calling, with a one-click
+            // switch candidate. Unknown capability never prompts; sessions
+            // whose send carries no tools report "not applicable".
+            commands_chat::check_tools_send,
+            // P2-5 — session-level "temporary chat" (no-memory bypass).
+            commands_chat::set_session_memory_bypass,
+            commands_chat::get_session_memory_bypass,
+            // S3-6 — pre-send cost estimate for the composer: billing-grade
+            // token counting + pricing (the same estimator/pricer the engine
+            // and the usage ledger run), display-only.
+            commands_chat::estimate_send_cost,
             commands_config::configure,
             commands_config::get_config,
             commands_config::detect_provider_from_env,
             commands_config::test_provider_connection,
             commands_config::test_all_providers,
+            // R2-2 — Settings "Refresh model catalog" (models.dev overlay,
+            // same path as the CLI `/model refresh`).
+            commands_config::refresh_model_catalog,
+            // 2026-09-29 provider review §3-A/B — reliable activation signal
+            // for the UI gates (config.provider is dead, ADR-0005), in-modal
+            // credential test, and live /models listing for the modal.
+            commands_config::get_provider_status,
+            commands_config::test_provider_credentials,
+            commands_config::fetch_provider_models,
             commands_config::list_providers,
             commands_config::save_provider,
             commands_config::delete_provider,
             commands_config::set_active_provider,
+            // R3-2 (desktop slice) — provider model-profile list / switch /
+            // create in Settings → Models. R5 adds the deferred rename +
+            // delete slices.
+            commands_profiles::list_provider_profiles,
+            commands_profiles::create_provider_profile,
+            commands_profiles::set_active_provider_profile,
+            commands_profiles::rename_provider_profile,
+            commands_profiles::delete_provider_profile,
+            // S2-1 (模型仓固化) — persist the AddProviderModal fetch
+            // curation into the provider slot's `models` declarations.
+            commands_models::set_provider_models,
+            // S3-4 (推荐降级链) — one-click recommended fallback chain:
+            // candidates-only computation + the explicit-confirmation write
+            // into the provider slot's `fallback_models` (never automatic).
+            commands_models::recommend_fallback_chain,
+            commands_models::set_provider_fallback_models,
+            // S3-3 (utility tier 槽位化) — compaction + session-summary
+            // auxiliary slots (providers.toml v2 `auxiliary`). The write
+            // path never touches `active_target`; the compaction slot feeds
+            // the background summarizer through the orthogonal resolver in
+            // `utility_tier` (裁定⑦ — the interactive precedence chain is
+            // untouched).
+            utility_tier::get_utility_slots,
+            utility_tier::set_utility_slot,
+            // R4-3 (desktop slice) — per-provider multi-key management
+            // (Settings → Models "API keys" panel; same credential store
+            // the CLI's `providers keys` drives).
+            commands_keys::list_provider_keys,
+            commands_keys::add_provider_key,
+            commands_keys::remove_provider_key,
+            commands_keys::activate_provider_key,
             // T5 — gateway social connections (OS keyring + gateway config.json)
             commands_connections::gateway_set_secret,
             commands_connections::gateway_get_secret,
@@ -123,10 +266,38 @@ fn main() {
             // C1① — semi-automatic update check (GitHub latest → open page)
             commands_surface::check_app_update,
             commands_surface::open_release_page,
+            // Settings R3 — read-only data-directory line in Settings → About
+            commands_surface::get_shannon_home,
+            // Settings R3 T3 — platform + keep-awake capability probe for
+            // the General settings' System cards.
+            commands_surface::get_power_capabilities,
+            // Batch-3 follow-up — export-diagnostics bundle (local logs +
+            // crash reports + bundled `shannon doctor --json --deep` zip).
+            commands_diagnostics::export_diagnostics,
+            // 2026-09-25 open pipeline (docs/plans/2026-09-25-desktop-chat-ui-
+            // open-and-artifact-design.md §4 P0-A / P1-D / P1-E)
+            commands_surface::open_external,
+            commands_surface::open_with_default_app,
+            // Office Wave 1 — python3/pandoc/LibreOffice availability probe
+            // for the built-in document skills
+            commands_surface::probe_host_runtime,
+            commands_surface::reveal_in_folder,
+            commands_surface::open_artifact_externally,
+            commands_surface::probe_url_frameable,
+            // 2026-09-26 round2 §5-1 A — artifact:// interactive HTML
+            // (registry-backed custom protocol, sandboxed iframe rendering)
+            commands_artifact::register_interactive_artifact,
+            commands_artifact::unregister_interactive_artifact,
             // P1.3 — mobile device pairing (Design D shared-file channel)
             commands_mobile_pairing::mobile_generate_pair_token,
+            commands_mobile_pairing::mobile_tls_status,
+            commands_mobile_pairing::mobile_set_tls,
             commands_mobile_pairing::mobile_list_paired_devices,
             commands_mobile_pairing::mobile_revoke_device,
+            // T9 — desktop approval entry for IM pairing requests (talks to
+            // the running gateway's mobile listener over its HTTP RPC skin)
+            gateway_pairing::gateway_pairing_pending,
+            gateway_pairing::gateway_pairing_approve,
             // D4 — cloud speech-to-text (voice input)
             commands_voice::transcribe_audio,
             commands_voice::get_stt_config,
@@ -146,6 +317,7 @@ fn main() {
             commands_sessions::new_session,
             commands_sessions::list_sessions,
             commands_sessions::search_sessions,
+            commands_sessions::get_session_plan,
             commands_sessions::load_session,
             commands_sessions::export_session,
             commands_sessions::switch_session,
@@ -155,8 +327,21 @@ fn main() {
             commands_sessions::rename_session,
             commands_sessions::duplicate_session,
             commands_sessions::branch_session,
+            // 卡A — session archive MVP (curation flag + archived lens)
+            commands_sessions::archive_session,
+            commands_sessions::unarchive_session,
+            commands_sessions::list_archived_sessions,
+            // Settings R3 T7 — session pin (curation sidecar flag)
+            commands_sessions::set_session_pinned,
             // §4.14 — Turn Timeline panel data source
             commands_sessions::trace_timeline,
+            // P-E3 — project registry (adopt-not-migrate)
+            commands_projects::list_projects,
+            commands_projects::register_project,
+            commands_projects::rename_project,
+            commands_projects::set_project_appearance,
+            commands_projects::archive_project,
+            commands_projects::unarchive_project,
             // E2 skill loop — task evaluation and skill proposal management
             commands_skill_loop::skill_loop_evaluate,
             commands_skill_loop::skill_loop_generate,
@@ -169,11 +354,25 @@ fn main() {
             commands_skill_candidates::refine_skill_candidate,
             commands_skill_candidates::list_agent_authored_skills,
             skill_pattern_detection::trigger_skill_pattern_detection,
+            // Dream pass — manual trigger + shadow-proposal review surface
+            commands_dream::run_dream_pass,
+            commands_dream::list_dream_proposals,
+            commands_dream::read_dream_report,
+            commands_dream::read_dream_state,
+            commands_dream::apply_dream_proposal,
+            commands_dream::discard_dream_proposal,
             commands_permissions::request_permission,
             commands_permissions::respond_permission,
+            // Settings R3 T8 — answer a pending ask-user question card.
+            ask_user_handler::respond_ask_user,
             commands_slash::get_session_context_stats,
             commands_slash::get_session_git_diff,
             commands_slash::compact_session,
+            // Slash backends for the dream-distill feature (Task 4 adds the
+            // menu entries; /dream writes review-gated proposals only,
+            // /detect-skills is heuristic-only).
+            commands_slash::dream_slash,
+            commands_slash::detect_slash,
             commands_usage::get_session_usage,
             commands_rewind::list_checkpoints,
             commands_rewind::rewind_session,
@@ -183,9 +382,19 @@ fn main() {
             commands_files::get_file_diff,
             commands_files::apply_diff,
             commands_files::save_text_file,
+            // G5 P0-8 — backend-driven save dialog + write (timeline export
+            // to user-chosen paths outside the working directory).
+            commands_files::save_text_file_via_dialog,
+            // Office Wave 1 — save-as copy for converted office documents
+            commands_files::copy_file,
+            // Office Wave 2 B9' — registered-files shelf (~/.shannon/desktop/file-index.json)
+            commands_files::list_file_index,
+            commands_files::register_file_index_entry,
+            commands_files::set_file_index_favorite,
             commands_mcp::add_mcp_server,
             commands_mcp::remove_mcp_server,
             commands_mcp::restart_mcp_server,
+            commands_mcp::set_mcp_server_enabled,
             commands_mcp::get_mcp_server_config,
             commands_mcp::list_mcp_servers,
             commands_mcp::list_skills,
@@ -200,6 +409,7 @@ fn main() {
             extensions_commands::install_mcp_oauth_authorize_url,
             extensions_commands::install_mcp_oauth_complete,
             extensions_commands::install_mcp_oauth_loopback,
+            extensions_commands::reauthenticate_mcp_server,
             extensions_commands::uninstall_mcp_server,
             // Extensions hub P3 — Skills catalog + installer
             extensions_commands::list_skill_catalog,
@@ -238,6 +448,8 @@ fn main() {
             commands_plugins::update_plugin,
             commands_plugins::list_plugin_marketplace,
             commands_plugins::list_catalog_upstreams,
+            // X5 trust preview — inspect a plugin source before install
+            commands_plugins::inspect_plugin_source,
             commands::start_background_task,
             commands::get_background_tasks,
             commands::cancel_background_task,
@@ -245,6 +457,8 @@ fn main() {
             commands_agents::list_agent_definitions,
             commands_agents::create_agent_definition,
             commands_agents::delete_agent_definition,
+            // B2 follow-up — live sub-agent registry listing (Tasks page panel).
+            commands_agents::list_subagents,
             // Inter-agent message history (Phase D C3)
             commands_agents::list_agent_messages,
             commands_agents::list_agent_message_teams,
@@ -253,8 +467,22 @@ fn main() {
             commands_tasks::update_task,
             commands_files::get_file_tree,
             commands_files::get_working_dir_info,
+            // D5 方案① — welcome card workspace probe (Cargo.toml /
+            // package.json / pyproject.toml / go.mod stat sweep, no model
+            // calls) behind the suggestions.enabled presentation toggle.
+            commands_files::detect_workspace_markers,
             commands_files::read_attachment,
             commands_files::read_attachments,
+            // P0-3 preflight — the composer flags refused attachments at
+            // attach time instead of the send silently dropping them.
+            commands_files::check_attachment_paths,
+            // G3b P1-6 — composer clipboard-image paste: validated bytes to
+            // ~/.shannon/cache/pasted, then the normal attachment pipeline.
+            commands_files::save_pasted_image,
+            // 2026-09-25 open pipeline (§4 P0-B / P1-C) — file-ref existence
+            // probes and capped text reads for disk artifacts
+            commands_files::path_exists,
+            commands_files::read_text_file,
             // Scheduled tasks, triage, history, triggered routines (Sprint 2)
             shannon_desktop::scheduled_commands::list_scheduled_tasks,
             shannon_desktop::scheduled_commands::create_scheduled_task,
@@ -271,6 +499,8 @@ fn main() {
             shannon_desktop::scheduled_commands::archive_triage_item,
             shannon_desktop::scheduled_commands::get_triage_stats,
             shannon_desktop::scheduled_commands::list_task_executions,
+            // P2-8 — cross-agent run table (OPC "runs" view).
+            shannon_desktop::scheduled_commands::list_agent_runs,
             shannon_desktop::scheduled_commands::get_execution_detail,
             shannon_desktop::scheduled_commands::list_triggered_routines,
             shannon_desktop::scheduled_commands::toggle_triggered_routine,
@@ -302,11 +532,16 @@ fn main() {
             shannon_desktop::cost_commands::get_session_budget,
             shannon_desktop::cost_commands::get_session_context_breakdown,
             shannon_desktop::cost_commands::get_usage_by_session,
+            // X7 — per-extension (skill / MCP tool) invocation + token stats
+            shannon_desktop::cost_commands::get_extension_stats,
             // P1-1 — session multi-window (frozen contract)
             session_window_commands::open_session_window,
             session_window_commands::list_session_windows,
             session_window_commands::close_session_window,
             session_window_commands::reveal_session_in_main,
+            // Office Wave 3 C3 — companion Quick Capture window (frozen contract)
+            companion_window_commands::open_companion_window,
+            companion_window_commands::set_companion_always_on_top,
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,
@@ -331,12 +566,14 @@ fn main() {
             commands_notifications::get_webhook_config,
             commands_notifications::save_webhook_config,
             commands_notifications::clear_webhook_config,
-            // P0-c — billing demo data (UI shows "Demo mode" banner)
-            commands_billing::get_billing_plan,
-            commands_billing::get_cost_history,
-            commands_billing::get_billing_history,
+            // P1-7 — one-shot test payload to the configured webhook
+            commands_notifications::test_webhook,
             // Usage statistics — local usage ledger aggregation
             commands_usage::get_usage_stats,
+            // P2-1/P2-6 — usage governance (monthly budget % + 80/100%
+            // threshold alerts) + pre-task cost estimate
+            usage_governance::get_usage_governance,
+            usage_governance::estimate_task_cost,
             // P2.1 — persistent memory layer (wraps shannon_core::memory::MemoryStore)
             commands_memory::list_memory_projects,
             commands_memory::list_memories,
@@ -346,7 +583,10 @@ fn main() {
             commands_memory::search_memories,
             commands_memory::get_memory_stats,
             commands_memory::get_memory_source,
+            // P2-5 — "which memories did this turn use" (ContextBreakdownCard).
+            commands_memory::get_session_injected_memories,
             commands_memory::get_memory_graph,
+            commands_memory::promote_memory_to_instruction,
             // P1-5 C-1 — dev-server preview (frozen contract) + log ring.
             preview_commands::preview_detect,
             preview_commands::preview_start,
@@ -368,10 +608,26 @@ fn main() {
             terminal_commands::terminal_resize,
             terminal_commands::terminal_kill,
             terminal_commands::terminal_list,
-            // P1-5 C-2 — draggable panel workspace (frozen contract).
-            workspace_commands::workspace_get_layout,
-            workspace_commands::workspace_set_layout,
+            // P3-1 — terminal settings (`[terminal]` in config.toml).
+            terminal_commands::terminal_get_settings,
+            terminal_commands::terminal_set_settings,
+            // US6 — per-terminal replay history (in-memory ring).
+            terminal_commands::terminal_history,
         ])
+        // 2026-09-26 round2 §5-1 A — the `artifact://` custom protocol:
+        // interactive HTML artifacts are served from a bounded in-memory
+        // registry so the sandboxed iframe gets its own strict response CSP
+        // (real scripts, opaque origin) instead of inheriting the app CSP
+        // through srcdoc. The handler is sync and memcpy-fast; the registry
+        // is managed below so `try_state` always resolves after startup.
+        .register_uri_scheme_protocol(commands_artifact::ARTIFACT_SCHEME, |ctx, request| match ctx
+            .app_handle()
+            .try_state::<commands_artifact::InteractiveArtifactRegistry>()
+        {
+            Some(registry) => commands_artifact::serve_artifact_request(registry.inner(), request),
+            None => commands_artifact::not_found_response(),
+        })
+        .manage(commands_artifact::InteractiveArtifactRegistry::default())
         // P1-1 — session window lifecycle: a destroyed `session-*` window
         // (titlebar close, close_session_window, OS teardown) drops its
         // registry entry and refreshes the persisted restore list.
@@ -387,6 +643,10 @@ fn main() {
                     preview_commands::shutdown_on_exit(&state);
                     // P1-5 D — PTY process trees must never outlive the app.
                     terminal_commands::shutdown_on_exit(&state);
+                    // Audit P1-5 — the supervised gateway must not outlive
+                    // the app either (stop() is idempotent; the tray Quit
+                    // path may already have stopped it).
+                    commands_connections::shutdown_gateway_on_exit(&state);
                 }
                 // 主窗口关闭 = 退出应用 (existing semantic, P1-1): persist the
                 // open-session list for next-launch restore, then close the
@@ -403,6 +663,15 @@ fn main() {
                 tauri::async_runtime::spawn(async move {
                     if let Some(state) = app.try_state::<commands::AppState>() {
                         session_window_commands::cleanup_destroyed_window(&state, &label).await;
+                        // P3-2 — a destroyed session window must not leak
+                        // the PTYs its terminal panel spawned: reap every
+                        // session attributed to this window label. The
+                        // main window's own destroyed path already does
+                        // `kill_all` above.
+                        let killed = terminal_commands::kill_window_sessions(&state, &label);
+                        if killed > 0 {
+                            tracing::info!(%label, killed, "reaped terminals of destroyed session window");
+                        }
                     }
                 });
             }
@@ -414,6 +683,17 @@ fn main() {
             // AppHandle (attached as early as possible so a shell spawned
             // before any command runs can already stream).
             terminal_commands::attach_sink(&state, app.handle().clone());
+            // G1 P0-2.1 — installed (hub + project) and bundled skills become
+            // model-callable `skill_<id>` tools before the first message.
+            // Log-and-skip inside; never fatal.
+            let skill_tools = shannon_desktop::skill_tools::register_for_state(&state);
+            tracing::info!(count = skill_tools, "startup skill tool registration complete");
+            // Settings R3 T8 — the GUI has no stdin: swap the terminal
+            // `ask_user_question` handler for the desktop event round-trip
+            // (AskUserCard + `respond_ask_user`). Fatal on failure, same as
+            // the default-tool registration above.
+            ask_user_handler::register_for_state(&state, app.handle().clone())
+                .expect("Failed to register desktop ask_user handler");
             app.manage(state);
 
             // P1-1 — reopen the session windows that were open at last
@@ -429,7 +709,114 @@ fn main() {
             // binding isn't consumed by the block_on future (rustc's
             // `async move` capture moves the original by value).
             let app_handle_for_block = app_handle.clone();
+            let app_handle_for_seed = app_handle.clone();
             tauri::async_runtime::block_on(async move {
+                // F5 (R7-④ batch 2) — probe the OS keyring once and install
+                // the process-global secret store. This must precede every
+                // store read/migration: on probe failure the process degrades
+                // to the F3 0600 plaintext files, loudly (one warn per
+                // affected domain inside init_global) and visibly (the
+                // settings pages' credential-storage line).
+                let storage = shannon_desktop::secret_store::init_global();
+
+                // G1 P0-1.1 / P1-9 — one-time, idempotent migrations before
+                // anything reads the stores: legacy
+                // `~/.shannon/desktop/mcp-servers.json` → unified
+                // `settings.json#mcpServers`, and legacy
+                // `~/.shannon/agents/<plugin>/agent.md` directories → flat
+                // `<plugin>.toml` definitions. Both never fatal.
+                shannon_desktop::config::migrate_legacy_mcp_servers();
+                shannon_desktop::extensions::migrate_legacy_agent_dirs();
+
+                // F5 — idempotent credential migrations into the keyring
+                // (MCP OAuth token blocks + data-source password/token
+                // fields). Keyring write failures keep the 0600 plaintext
+                // and warn; loading is never blocked.
+                let mcp_migrated = shannon_desktop::config::migrate_mcp_oauth_secrets();
+                let ds_migrated = shannon_desktop::extensions::migrate_data_source_secrets();
+                if mcp_migrated > 0 || ds_migrated > 0 {
+                    tracing::info!(
+                        backend = ?storage,
+                        mcp_oauth = mcp_migrated,
+                        data_sources = ds_migrated,
+                        "credential keyring migration pass complete"
+                    );
+                }
+
+                // P1-18 residue — corruption-warning parity with the
+                // CLI/TUI: when `~/.shannon/providers.toml` exists but fails
+                // the provider-config schema, the desktop's reads silently
+                // degrade to "nothing connected" and writes to the file are
+                // refused. The CLI warns on every provider command and the
+                // REPL prints the same line at startup; the desktop (no
+                // stderr surface) logs the same warning once, at startup,
+                // where the support log picks it up.
+                if let Some(err) = shannon_core::provider_config_store::parse_error(None) {
+                    tracing::warn!(
+                        error = %err,
+                        "~/.shannon/providers.toml exists but is not a valid provider config; \
+                         it is being ignored until fixed (writes to it are refused)"
+                    );
+                }
+
+                // G1 P0-1.2 — seed the MCP process pool in the BACKGROUND.
+                // Startup must not block on server handshakes: a single
+                // hung server would hold the first window for up to the
+                // pool's connection timeout (30s) per server. Timing
+                // semantics: setup does NOT wait for the pool; a chat turn
+                // sent before seeding finishes simply assembles zero MCP
+                // tools (assemble_mcp_tools no-ops on a cold pool), and the
+                // next turn after the pool is up registers them.
+                let pool = state_ref.mcp_pool();
+                tauri::async_runtime::spawn(async move {
+                    // F6 (R7-④ batch 2) — persist every OAuth token rotation
+                    // (401-triggered refresh, tool calls included) into the
+                    // keyring immediately, not just at connect time. Must be
+                    // installed before seeding so handshake-time rotations go
+                    // through the same serialized, debounced writer.
+                    shannon_desktop::mcp::install_token_rotation_hook(&pool).await;
+                    // W2-A: a corrupt settings.json is an error, never a
+                    // silent empty list — log loudly (the MCP settings page
+                    // surfaces the same error in its UI state).
+                    let mcp_servers = match shannon_desktop::config::load_mcp_servers() {
+                        Ok(servers) => servers,
+                        Err(e) => {
+                            tracing::error!(
+                                error = %e,
+                                "Skipping MCP pool seed: settings.json failed to load"
+                            );
+                            return;
+                        }
+                    };
+                    if mcp_servers.is_empty() {
+                        return;
+                    }
+                    let seed =
+                        shannon_desktop::mcp::seed_pool_from_config(&pool, mcp_servers).await;
+                    tracing::info!(
+                        servers = seed.servers_started.len(),
+                        tools = seed.total_tools,
+                        "MCP process pool seeded (background)"
+                    );
+                    // W3-B (A2): one desktop notification when a stored OAuth
+                    // credential was rejected even after a refresh attempt —
+                    // the row sits in the "needs re-authentication" state and
+                    // the user gets an actionable ping instead of silence.
+                    if !seed.needs_auth_servers.is_empty() {
+                        use tauri_plugin_notification::NotificationExt;
+                        let names = seed.needs_auth_servers.join(", ");
+                        let _ = app_handle_for_seed
+                            .notification()
+                            .builder()
+                            .title("MCP sign-in expired")
+                            .body(format!(
+                                "{names} could not reconnect with the saved login. \
+                                 Open Extensions → MCP Servers → Re-authenticate."
+                            ))
+                            .show();
+                    }
+                });
+
                 // Q4-A — before hosting our own loopback engine API server,
                 // probe 127.0.0.1:33420. If another engine (typically the
                 // shannon CLI REPL or another desktop instance) is already
@@ -445,6 +832,23 @@ fn main() {
                     *slot = Some(engine_mode);
                 }
                 tracing::info!(?engine_mode, "engine discovery complete");
+
+                // B2 — when the persisted Settings toggle is on, inject the
+                // agent-teams context so `agent_spawn` executes real
+                // sub-agents and bridges lifecycle events to the frontend.
+                // Failure is non-fatal: the tool keeps placeholder behavior
+                // and the user can retry from Settings.
+                if shannon_desktop::agent_teams::config_enabled(state_ref.inner()).await {
+                    if let Err(e) = shannon_desktop::agent_teams::enable(
+                        state_ref.inner(),
+                        app_handle_for_block.clone(),
+                    )
+                    .await
+                    {
+                        tracing::warn!("agent teams enable failed: {e}");
+                    }
+                }
+
                 if engine_mode == engine_discovery::EngineMode::Hosted {
                     // P0.1 — spawn the loopback engine API server BEFORE the
                     // gateway so its `engine.wsUrl` (ws://127.0.0.1:33420/api/ws)
@@ -479,6 +883,44 @@ fn main() {
                     app_handle.clone(),
                 );
             }
+
+            // T7 — run history: import the legacy JSONL runs into the
+            // authoritative SQLite `routine_runs` table (best-effort,
+            // idempotent) so the History view keeps showing pre-existing
+            // history after the read-source switch. Runs off the UI path.
+            {
+                let backfill_state: tauri::State<'_, commands::AppState> = app.state();
+                shannon_desktop::inbox_commands::spawn_run_history_backfill(backfill_state.inner());
+            }
+
+            // Dream pass — nightly scheduler (default off: `dream_enabled`
+            // gates every wake). Detached task, wakes every 30 min and fires
+            // a 7-day pass only inside the 1–5 local-hour window when the
+            // last pass is ≥24h old; all errors log-only.
+            commands_dream::spawn_night_dream(app.handle().clone());
+
+            // Dream pass — startup catch-up (卡C, track 2 of the dual-track
+            // scheduler): one-shot, ~10 min after setup, fires the same
+            // 7-day pass when dream is enabled, the last pass is ≥24h old,
+            // and no session query is running. Covers machines that are
+            // never on during the nightly window; log-only like track 1.
+            commands_dream::spawn_catchup_dream(app.handle().clone());
+
+            // 卡A — session GC: daily archived-aware retention pass. Inert
+            // unless the user enables it in config (`session_gc_enabled`,
+            // plus a `session_retention_days` window — the defaults keep
+            // "never auto-delete"); every outcome is log-only.
+            {
+                let gc_state: tauri::State<'_, commands::AppState> = app.state();
+                commands_sessions::spawn_session_gc(gc_state.inner());
+            }
+
+            // Settings R3 T7 — auto-archive: 6h scan that archives 已完成
+            // (`!running && 无未读 inbox`), unpinned sessions past the
+            // retention window. Inert unless the user enables it in config
+            // (`session.auto_archive_enabled`, default false); per-session
+            // `session-auto-archived` events let the UI toast each archive.
+            commands_sessions::spawn_auto_archive(app.handle().clone());
 
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and
@@ -540,22 +982,11 @@ fn main() {
                     let _ = app.emit("focus-input", ());
                 });
 
-            // Listen for check-updates events from frontend
-            let handle = app.handle().clone();
-            let _ = app.listen("check-updates", move |_event| {
-                let handle = handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Ok(Some(update_info)) = handle.updater()?.check().await {
-                        let payload = serde_json::json!({
-                            "version": update_info.version,
-                            "date": update_info.date.map(|d| d.to_string()),
-                            "body": update_info.body
-                        });
-                        let _ = handle.emit("update-available", payload);
-                    }
-                    Ok::<(), tauri_plugin_updater::Error>(())
-                });
-            });
+            // B1-15 (review decision 6): the updater plugin and its
+            // check-updates wiring are removed — the placeholder pubkey +
+            // third-party endpoint were a half-enabled state that could
+            // never deliver a verified update. Reintroduce with the release
+            // pipeline when it exists.
 
             // System tray configuration.
             //
@@ -564,29 +995,40 @@ fn main() {
             // current desktop config, and a background task refreshes the tray
             // whenever the provider/model changes (`configure('model')` and
             // `set_active_provider` both emit `CONFIG_UPDATED`).
-            let initial_label = tray_status_label(app.handle());
-            let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
+            // G7 i18n (P1-8): tray labels follow the OS language (the in-app
+            // locale switch lives in the webview's localStorage, which the
+            // backend cannot see — see tray_texts below). The in-app switch
+            // taking effect in the tray requires an app restart; accepted
+            // trade-off, documented in the journey-fixes report.
+            let tray_strs = tray_texts(&detect_tray_lang());
+            let initial_label = tray_status_label(app.handle(), &tray_strs);
+            let show_item = MenuItemBuilder::with_id("show", tray_strs.show).build(app)?;
             let new_session_item =
-                MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
-            let check_updates_item =
-                MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
+                MenuItemBuilder::with_id("new-session", tray_strs.new_session).build(app)?;
+            // Office Wave 3 C3 — companion Quick Capture entry. The frontend
+            // has no main-window chrome surface for it this wave (the global
+            // shortcut belongs to useKeyboardShortcuts, another owner), so
+            // the tray is the summon path; `open_companion_window` stays
+            // invocable for the future shortcut/UI wiring.
+            let companion_item =
+                MenuItemBuilder::with_id("companion", tray_strs.companion).build(app)?;
             let status_item = MenuItemBuilder::with_id("status", initial_label.clone())
                 .enabled(false)
                 .build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", tray_strs.quit).build(app)?;
 
             let menu = MenuBuilder::new(app)
                 .items(&[
                     &status_item,
                     &show_item,
                     &new_session_item,
-                    &check_updates_item,
+                    &companion_item,
                     &quit_item,
                 ])
                 .build()?;
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)
-                .tooltip(format!("Shannon AI Assistant — {initial_label}"))
+                .tooltip(format!("{} — {initial_label}", tray_strs.tooltip_app))
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "show" => {
@@ -600,11 +1042,21 @@ fn main() {
                         // Trigger new session via event
                         let _ = app.emit("new-session", ());
                     }
-                    "check-updates" => {
-                        // Trigger update check via event
-                        let _ = app.emit("check-updates", ());
+                    "companion" => {
+                        // Office Wave 3 C3 — create or focus the companion
+                        // Quick Capture window (dedupe lives in the command's
+                        // inner helper; failures are log-only here).
+                        if let Err(e) = companion_window_commands::open_companion_window_inner(app)
+                        {
+                            tracing::warn!(error = %e, "failed to open companion window");
+                        }
                     }
                     "quit" => {
+                        // Audit P1-5: a tray Quit must also stop the managed
+                        // gateway — `app.exit(0)` alone orphaned the child.
+                        if let Some(state) = app.try_state::<commands::AppState>() {
+                            commands_connections::shutdown_gateway_on_exit(&state);
+                        }
                         app.exit(0);
                     }
                     _ => (),
@@ -635,34 +1087,38 @@ fn main() {
             let _ = app.listen(
                 shannon_desktop::events::event_names::CONFIG_UPDATED,
                 move |_| {
-                    let label = tray_status_label(&refresh_handle);
-                    if let Err(e) = rebuild_tray_menu(&refresh_handle, &label) {
+                    let texts = tray_texts(&detect_tray_lang());
+                    let label = tray_status_label(&refresh_handle, &texts);
+                    if let Err(e) = rebuild_tray_menu(&refresh_handle, &texts, &label) {
                         tracing::warn!(error = %e, "tray refresh: failed to rebuild menu");
                     }
                 },
             );
 
-            // Auto-update check on startup
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Ok(Some(update_info)) = handle.updater()?.check().await {
-                    // Emit update-available event for frontend
-                    let payload = serde_json::json!({
-                        "version": update_info.version,
-                        "date": update_info.date.map(|d| d.to_string()),
-                        "body": update_info.body
-                    });
-                    let _ = handle.emit("update-available", payload);
-                } else {
-                    tracing::info!("No updates available or update check failed");
-                }
-                Ok::<(), tauri_plugin_updater::Error>(())
-            });
+            // B1-15: the startup auto-update check went away with the
+            // updater plugin (decision 6 — placeholder pubkey made every
+            // signed-update check fail verification anyway).
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        // Settings R3 T3 — build + run separately (instead of the
+        // `Builder::run(context)` shorthand) so the RunEvent hook below can
+        // release the prevent-sleep wake lock on exit.
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    // Settings R3 T3 — App::run takes the RunEvent callback (unlike the
+    // `Builder::run(context)` shorthand used before, which registered an
+    // empty one) so the hook below can release the prevent-sleep wake lock
+    // on exit: the always-on keep-awake refcount plus any count an
+    // in-flight run still holds. The global force-stop drops every counter
+    // to zero and releases the platform backend (caffeinate / systemd-inhibit
+    // child killed, Windows PowerRequest cleared). Runs on the main thread
+    // after the loop returns; `App::run` never returns Ok/Err — it exits.
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            shannon_core::prevent_sleep::force_stop_prevent_sleep();
+        }
+    });
 }
 
 #[cfg(not(feature = "tauri"))]
@@ -681,6 +1137,170 @@ fn main() {
 #[cfg(feature = "tauri")]
 const TRAY_ID: &str = "main";
 
+// ---------------------------------------------------------------------------
+// Tray i18n (G7 / P1-8)
+// ---------------------------------------------------------------------------
+//
+// The tray is a native menu the webview i18n layer cannot reach. The in-app
+// locale lives in the webview's `localStorage` (`shannon.locale`), invisible
+// to the backend, so instead of inventing a config round-trip the tray
+// follows the OS language (env override first, matching
+// `shannon_core::i18n::detect_system_locale`'s priority). A user who switches
+// the language in-app sees the tray update after restarting the app — an
+// accepted trade-off, noted in the journey-fixes report.
+
+/// All tray strings for one language. `&'static str` tables, no allocation.
+#[cfg(feature = "tauri")]
+struct TrayTexts {
+    show: &'static str,
+    new_session: &'static str,
+    companion: &'static str,
+    quit: &'static str,
+    /// Prepended to `"{provider} / {model}"` in the disabled status row.
+    status_prefix: &'static str,
+    /// App name portion of the tray tooltip.
+    tooltip_app: &'static str,
+}
+
+/// Tray languages the desktop UI also supports (`src/i18n` SUPPORTED_LOCALES):
+/// en, zh-CN, zh-TW, ja, ko, es, fr, de, pt-BR, ru. [`tray_texts`] matches on
+/// these strings directly; the constant backs the test that walks them all.
+#[cfg(all(test, feature = "tauri"))]
+const TRAY_LANGS: &[&str] = &[
+    "en", "zh-CN", "zh-TW", "ja", "ko", "es", "fr", "de", "pt-BR", "ru",
+];
+
+/// Normalize a BCP-47/POSIX locale tag to a tray language, or `None` when the
+/// language is not supported (the caller falls through / defaults to `en`).
+/// Handles `zh_CN.UTF-8`, `zh-Hant-TW`, `pt-BR`, `fr`, … — zh picks
+/// Traditional for TW/HK/MO/Hant, Simplified otherwise.
+#[cfg(feature = "tauri")]
+fn normalize_tray_lang(raw: &str) -> Option<String> {
+    let lowered = raw.to_lowercase();
+    let mut subs = lowered.split(['_', '-', '.']);
+    let primary = subs.next()?.to_string();
+    if primary == "zh" {
+        for sub in subs {
+            match sub {
+                "hant" | "tw" | "hk" | "mo" => return Some("zh-TW".to_string()),
+                "hans" | "cn" | "sg" => return Some("zh-CN".to_string()),
+                _ => {}
+            }
+        }
+        return Some("zh-CN".to_string());
+    }
+    match primary.as_str() {
+        "en" | "ja" | "ko" | "es" | "fr" | "de" | "ru" => Some(primary),
+        "pt" => Some("pt-BR".to_string()),
+        _ => None,
+    }
+}
+
+/// Detect the tray language: `SHANNON_LANG` env override → OS locale → `en`.
+#[cfg(feature = "tauri")]
+fn detect_tray_lang() -> String {
+    if let Ok(lang) = std::env::var("SHANNON_LANG") {
+        if let Some(normalized) = normalize_tray_lang(&lang) {
+            return normalized;
+        }
+    }
+    if let Some(loc) = sys_locale::get_locale() {
+        if let Some(normalized) = normalize_tray_lang(&loc) {
+            return normalized;
+        }
+    }
+    "en".to_string()
+}
+
+/// Localized tray strings for one of [`TRAY_LANGS`] (unknown → English).
+#[cfg(feature = "tauri")]
+fn tray_texts(lang: &str) -> TrayTexts {
+    match lang {
+        "zh-CN" => TrayTexts {
+            show: "显示 Shannon",
+            new_session: "新建会话",
+            companion: "快速记录",
+            quit: "退出",
+            status_prefix: "状态：",
+            tooltip_app: "Shannon AI 助手",
+        },
+        "zh-TW" => TrayTexts {
+            show: "顯示 Shannon",
+            new_session: "新增會話",
+            companion: "快速擷取",
+            quit: "結束",
+            status_prefix: "狀態：",
+            tooltip_app: "Shannon AI 助理",
+        },
+        "ja" => TrayTexts {
+            show: "Shannon を表示",
+            new_session: "新規セッション",
+            companion: "クイックキャプチャ",
+            quit: "終了",
+            status_prefix: "状態: ",
+            tooltip_app: "Shannon AI アシスタント",
+        },
+        "ko" => TrayTexts {
+            show: "Shannon 표시",
+            new_session: "새 세션",
+            companion: "빠른 캡처",
+            quit: "종료",
+            status_prefix: "상태: ",
+            tooltip_app: "Shannon AI 어시스턴트",
+        },
+        "es" => TrayTexts {
+            show: "Mostrar Shannon",
+            new_session: "Nueva sesión",
+            companion: "Captura rápida",
+            quit: "Salir",
+            status_prefix: "Estado: ",
+            tooltip_app: "Asistente de IA Shannon",
+        },
+        "fr" => TrayTexts {
+            show: "Afficher Shannon",
+            new_session: "Nouvelle session",
+            companion: "Capture rapide",
+            quit: "Quitter",
+            status_prefix: "État : ",
+            tooltip_app: "Assistant IA Shannon",
+        },
+        "de" => TrayTexts {
+            show: "Shannon anzeigen",
+            new_session: "Neue Sitzung",
+            companion: "Schnellerfassung",
+            quit: "Beenden",
+            status_prefix: "Status: ",
+            tooltip_app: "Shannon KI-Assistent",
+        },
+        "pt-BR" => TrayTexts {
+            show: "Mostrar Shannon",
+            new_session: "Nova sessão",
+            companion: "Captura rápida",
+            quit: "Sair",
+            status_prefix: "Status: ",
+            tooltip_app: "Assistente de IA Shannon",
+        },
+        "ru" => TrayTexts {
+            show: "Показать Shannon",
+            new_session: "Новая сессия",
+            companion: "Быстрая заметка",
+            quit: "Выход",
+            status_prefix: "Состояние: ",
+            tooltip_app: "ИИ-ассистент Shannon",
+        },
+        // "en" and every unknown tag (normalize_tray_lang never emits an
+        // unsupported tag, so reaching here means "unknown" — English it is).
+        _ => TrayTexts {
+            show: "Show Shannon",
+            new_session: "New Session",
+            companion: "Quick Capture",
+            quit: "Quit",
+            status_prefix: "Status: ",
+            tooltip_app: "Shannon AI Assistant",
+        },
+    }
+}
+
 /// Build the human-readable status label shown in the tray menu and tooltip.
 ///
 /// Reads `provider` / `model` from the live `state.client_config` (which
@@ -692,8 +1312,10 @@ const TRAY_ID: &str = "main";
 /// P1.2-B (ADR-0005): the previous implementation read the singular
 /// `DesktopConfig.{provider,model}` fields, which are gone — the engine
 /// store is now the source of truth.
+///
+/// G7 (P1-8): the `"Status: "` prefix is localized via [`TrayTexts`].
 #[cfg(feature = "tauri")]
-fn tray_status_label(app: &tauri::AppHandle) -> String {
+fn tray_status_label(app: &tauri::AppHandle, texts: &TrayTexts) -> String {
     use shannon_desktop::commands;
     use tauri::Manager;
     let cc = app
@@ -703,10 +1325,7 @@ fn tray_status_label(app: &tauri::AppHandle) -> String {
         Some(c) => (c.provider.to_string(), c.model),
         None => (String::from("anthropic"), String::from("claude-sonnet-4-6")),
     };
-    if provider.is_empty() || model.is_empty() {
-        return format!("Status: {provider} / {model}");
-    }
-    format!("Status: {provider} / {model}")
+    format!("{}{provider} / {model}", texts.status_prefix)
 }
 
 /// Rebuild the tray's menu and tooltip with an updated status label. Looks up
@@ -715,6 +1334,7 @@ fn tray_status_label(app: &tauri::AppHandle) -> String {
 #[cfg(feature = "tauri")]
 fn rebuild_tray_menu(
     app: &tauri::AppHandle,
+    texts: &TrayTexts,
     label: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -724,26 +1344,92 @@ fn rebuild_tray_menu(
         .tray_by_id(TRAY_ID)
         .ok_or_else(|| "tray icon not found".to_string())?;
 
-    let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
-    let new_session_item = MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
-    let check_updates_item =
-        MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
+    let show_item = MenuItemBuilder::with_id("show", texts.show).build(app)?;
+    let new_session_item = MenuItemBuilder::with_id("new-session", texts.new_session).build(app)?;
+    // G7 fix: the refresh path previously dropped the companion item, so the
+    // Quick Capture entry vanished from the tray after the first config
+    // update — the rebuilt menu now mirrors the initial one item-for-item.
+    let companion_item = MenuItemBuilder::with_id("companion", texts.companion).build(app)?;
     let status_item = MenuItemBuilder::with_id("status", label)
         .enabled(false)
         .build(app)?;
-    let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+    let quit_item = MenuItemBuilder::with_id("quit", texts.quit).build(app)?;
 
     let menu = MenuBuilder::new(app)
         .items(&[
             &status_item,
             &show_item,
             &new_session_item,
-            &check_updates_item,
+            &companion_item,
             &quit_item,
         ])
         .build()?;
 
     tray.set_menu(Some(menu))?;
-    tray.set_tooltip(Some(format!("Shannon AI Assistant — {label}")))?;
+    tray.set_tooltip(Some(format!("{} — {label}", texts.tooltip_app)))?;
     Ok(())
+}
+
+#[cfg(all(test, feature = "tauri"))]
+mod tray_i18n_tests {
+    use super::*;
+
+    /// Every supported language gets a full, distinct label set.
+    #[test]
+    fn tray_texts_covers_all_ui_locales() {
+        for lang in TRAY_LANGS {
+            let t = tray_texts(lang);
+            assert!(!t.show.is_empty(), "{lang}: empty show");
+            assert!(!t.new_session.is_empty(), "{lang}: empty new_session");
+            assert!(!t.companion.is_empty(), "{lang}: empty companion");
+            assert!(!t.quit.is_empty(), "{lang}: empty quit");
+            assert!(!t.status_prefix.is_empty(), "{lang}: empty status_prefix");
+            assert!(!t.tooltip_app.is_empty(), "{lang}: empty tooltip_app");
+        }
+    }
+
+    #[test]
+    fn tray_texts_english_fallback_for_unknown() {
+        let t = tray_texts("klingon");
+        assert_eq!(t.show, "Show Shannon");
+        assert_eq!(t.quit, "Quit");
+    }
+
+    #[test]
+    fn normalize_maps_posix_and_bcp47_tags() {
+        assert_eq!(normalize_tray_lang("en_US.UTF-8").as_deref(), Some("en"));
+        assert_eq!(normalize_tray_lang("zh_CN").as_deref(), Some("zh-CN"));
+        assert_eq!(normalize_tray_lang("zh-Hant-TW").as_deref(), Some("zh-TW"));
+        assert_eq!(normalize_tray_lang("zh-HK").as_deref(), Some("zh-TW"));
+        assert_eq!(normalize_tray_lang("zh-Hans").as_deref(), Some("zh-CN"));
+        assert_eq!(normalize_tray_lang("zh").as_deref(), Some("zh-CN"));
+        assert_eq!(normalize_tray_lang("pt-BR").as_deref(), Some("pt-BR"));
+        assert_eq!(normalize_tray_lang("pt").as_deref(), Some("pt-BR"));
+        assert_eq!(normalize_tray_lang("ja-JP").as_deref(), Some("ja"));
+        assert_eq!(normalize_tray_lang("fr").as_deref(), Some("fr"));
+        assert_eq!(normalize_tray_lang("de-AT").as_deref(), Some("de"));
+        assert_eq!(normalize_tray_lang("ru_RU").as_deref(), Some("ru"));
+    }
+
+    #[test]
+    fn normalize_rejects_unsupported_languages() {
+        assert_eq!(normalize_tray_lang("ar"), None);
+        assert_eq!(normalize_tray_lang("hi"), None);
+        assert_eq!(normalize_tray_lang(""), None);
+    }
+
+    #[test]
+    fn detect_env_override_wins() {
+        // Edition 2024: set_var/remove_var are unsafe (env is process-global).
+        // This module is the only reader/writer of SHANNON_LANG.
+        // SAFETY: no other test thread reads SHANNON_LANG concurrently.
+        unsafe { std::env::set_var("SHANNON_LANG", "zh_TW") };
+        assert_eq!(detect_tray_lang(), "zh-TW");
+        // Unsupported override falls through to the OS locale (unknown in
+        // CI, so the documented `en` fallback).
+        unsafe { std::env::set_var("SHANNON_LANG", "not-a-lang") };
+        let lang = detect_tray_lang();
+        assert!(TRAY_LANGS.contains(&lang.as_str()));
+        unsafe { std::env::remove_var("SHANNON_LANG") };
+    }
 }

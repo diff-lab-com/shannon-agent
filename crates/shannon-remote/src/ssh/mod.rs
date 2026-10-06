@@ -28,7 +28,9 @@ pub(crate) fn unsupported_transport() -> std::io::Error {
 
 /// Build the ssh target for ignored integration tests from the environment
 /// (`SHANNON_TEST_SSH_HOST/_PORT/_USER/_WORKSPACE`; defaults localhost:22).
-#[cfg(test)]
+// Its callers are the unix-gated integration tests; on Windows the ssh
+// transport does not exist and the helper would be dead code.
+#[cfg(all(test, unix))]
 pub(crate) fn test_ssh_target() -> crate::target::RemoteTarget {
     use crate::target::{RemoteTarget, TargetKind};
     let host = std::env::var("SHANNON_TEST_SSH_HOST").unwrap_or_else(|_| "localhost".into());

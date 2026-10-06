@@ -3,7 +3,7 @@
  *
  * Source of truth: `shannon-api-protocol` (Rust).
  * Generator:     `cargo run -p shannon-api-protocol --bin gen-ts`.
- * Protocol:      v0.6.0
+ * Protocol:      v0.8.0
  *
  * Field names, casing, and discriminated unions match the serde-derived
  * Rust types 1:1. Anything that mutates must mutate there first and be
@@ -18,6 +18,7 @@ export interface MessageAttachment {
 }
 
 export interface QueryRequest {
+  approval_mode: string | null;
   attachments: MessageAttachment[] | null;
   model: string | null;
   prompt: string;
@@ -45,6 +46,7 @@ export interface HealthResponse {
 
 export interface ModelInfo {
   id: string;
+  name?: string | null;
   provider: string;
 }
 
@@ -69,7 +71,59 @@ export interface ApprovalRespondRequest {
 export type ApprovalDecision =
   | "allow_once"
   | "always_allow"
+  | "always_allow_session"
   | "deny";
+
+export type SseEventName =
+  | "completed"
+  | "conversation_update"
+  | "cost"
+  | "error"
+  | "failed"
+  | "info"
+  | "progress"
+  | "rate_limit"
+  | "started"
+  | "text"
+  | "thinking"
+  | "tool_progress"
+  | "tool_use_request"
+  | "tool_use_result"
+  | "turn_completed"
+  | "usage"
+  | "warning";
+
+export interface SessionSummary {
+  created_at: string;
+  preview: string | null;
+  session_id: string;
+  title: string | null;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  turn_count: number;
+  updated_at: string;
+}
+
+export interface TranscriptMessage {
+  content: string;
+  role: string;
+  ts: string;
+}
+
+export interface AgentRef {
+  id: string | null;
+  name: string | null;
+}
+
+export interface RiskInfo {
+  reversible: boolean;
+  scope: RiskScope;
+}
+
+export type RiskScope =
+  | "local"
+  | "repo"
+  | "system";
 
 export interface WsClientMessageQuery {
   type: "query";
@@ -87,15 +141,35 @@ export interface WsClientMessageInfo {
 export interface WsClientMessageCancel {
   type: "cancel";
 }
+export interface WsClientMessageApprovalMode {
+  type: "approval.mode";
+  mode: string;
+}
+export interface WsClientMessageSessionsList {
+  type: "sessions.list";
+}
+export interface WsClientMessageSessionHistory {
+  type: "session.history";
+  before?: string | null;
+  limit?: number | null;
+  session_id: string;
+}
 
 export type WsClientMessage =
   | WsClientMessageQuery
   | WsClientMessageClear
   | WsClientMessageInfo
-  | WsClientMessageCancel;
+  | WsClientMessageCancel
+  | WsClientMessageApprovalMode
+  | WsClientMessageSessionsList
+  | WsClientMessageSessionHistory;
 
 export interface WsServerMessageText {
   type: "text";
+  content: string;
+}
+export interface WsServerMessageThinking {
+  type: "thinking";
   content: string;
 }
 export interface WsServerMessageToolUse {
@@ -127,12 +201,15 @@ export interface WsServerMessageCancelled {
 }
 export interface WsServerMessageApprovalRequest {
   type: "approval_request";
+  agent?: AgentRef | null;
   description: string;
   diff_preview?: string | null;
   is_destructive: boolean;
   request_id: string;
+  risk?: RiskInfo | null;
   tool_input: unknown;
   tool_name: string;
+  ts?: number | null;
 }
 export interface WsServerMessageSessionInfo {
   type: "session_info";
@@ -144,9 +221,26 @@ export interface WsServerMessageError {
   type: "error";
   message: string;
 }
+export interface WsServerMessageApprovalMode {
+  type: "approval.mode";
+  error?: string | null;
+  mode: string;
+  ok: boolean;
+}
+export interface WsServerMessageSessionsSnapshot {
+  type: "sessions.snapshot";
+  sessions: SessionSummary[];
+}
+export interface WsServerMessageSessionTranscript {
+  type: "session.transcript";
+  has_more: boolean;
+  messages: TranscriptMessage[];
+  session_id: string;
+}
 
 export type WsServerMessage =
   | WsServerMessageText
+  | WsServerMessageThinking
   | WsServerMessageToolUse
   | WsServerMessageToolResult
   | WsServerMessageUsage
@@ -155,6 +249,9 @@ export type WsServerMessage =
   | WsServerMessageCancelled
   | WsServerMessageApprovalRequest
   | WsServerMessageSessionInfo
-  | WsServerMessageError;
+  | WsServerMessageError
+  | WsServerMessageApprovalMode
+  | WsServerMessageSessionsSnapshot
+  | WsServerMessageSessionTranscript;
 
-export const PROTOCOL_VERSION = "0.6.0" as const;
+export const PROTOCOL_VERSION = "0.8.0" as const;

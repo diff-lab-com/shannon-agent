@@ -1,19 +1,23 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { createTtsSpeaker, type TtsSpeaker } from '@/lib/voice/tts'
 import {
   createVoiceProvider,
   defaultVoiceConfig,
   type VoiceProvider,
+  type VoiceProviderConfig,
   type VoiceProviderError,
 } from '@/lib/voice'
 
-export type VoiceState = 'idle' | 'recording' | 'transcribing' | 'speaking'
+// B4 P2-5: the former TTS half of this hook (speak/stopSpeaking, the
+// cross-instance speaker cancellation and lib/voice/tts.ts) had zero
+// callers — assistant-voice playback is deferred as a future feature.
+// The hook is speech-to-text only now.
+
+export type VoiceState = 'idle' | 'recording' | 'transcribing'
 
 export interface UseVoiceOptions {
   onTranscript?: (text: string) => void
   /** Non-silent provider failures (rejected mic, bad key, network, …). */
   onError?: (message: string) => void
-  lang?: string
   /**
    * P2-5e: force a specific STT provider. When unset, the hook
    * falls back to the cloud provider (default). Local recordings
@@ -41,25 +45,31 @@ export interface UseVoiceResult {
   supported: boolean
   startRecording: () => Promise<void>
   stopRecording: () => Promise<void>
-  speak: (text: string) => Promise<void>
-  stopSpeaking: () => void
   reset: () => void
 }
 
-// Track the active TTS speaker across hook instances so that a new
-// useVoice mount cancels any utterance that is still playing. Without
-// this, navigating away from a spoken assistant reply leaves the audio
-// running in the background.
-let activeSpeaker: TtsSpeaker | null = null
-function claimSpeaker(speaker: TtsSpeaker) {
-  if (activeSpeaker && activeSpeaker !== speaker) {
-    activeSpeaker.cancel()
-  }
-  activeSpeaker = speaker
+// B1-5 P1-5: identity of the resolved STT config — everything the
+// factory branches on, string-normalized (`null`/`undefined` both
+// collapse to ''), so any provider/model/language change produces a
+// new value.
+function buildSignature(
+  provider: 'cloud' | 'local',
+  local?: UseVoiceOptions['local'],
+): string {
+  return [provider, local?.model ?? '', local?.language ?? ''].join('|')
+}
+
+function configFor(
+  provider: 'cloud' | 'local',
+  local?: UseVoiceOptions['local'],
+): VoiceProviderConfig {
+  return provider === 'local'
+    ? { kind: 'local' as const, local: local ?? { model: null, language: null } }
+    : defaultVoiceConfig()
 }
 
 export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
-  const { onTranscript, onError, lang = 'en-US', provider = 'cloud', local } = options
+  const { onTranscript, onError, provider = 'cloud', local } = options
   const [state, setState] = useState<VoiceState>('idle')
   const [partialTranscript, setPartialTranscript] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -69,27 +79,29 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const errorRef = useRef(onError)
   errorRef.current = onError
 
-  // Build the provider once. The kind is resolved from
-  // `options.provider` (P2-5e). When the local provider is
-  // selected and MediaRecorder is unavailable, the factory
-  // falls back to the stub — same fallback semantics as the
-  // cloud provider.
+  // Build the provider lazily on first render. The kind is resolved
+  // from `options.provider` (P2-5e). When the local provider is
+  // selected and MediaRecorder is unavailable, the factory falls back
+  // to the stub — same fallback semantics as the cloud provider. The
+  // stub reports `isSupported() === false` (F-voice-gate), so a
+  // fallback environment surfaces here as `supported: false` and the
+  // UI hides the mic.
+  // B1-5 P1-5: this first build is only the starting point — ChatInput
+  // renders before the config has loaded (cold start straight into
+  // /chat), so it can resolve to plain cloud even for local-STT
+  // users. Each build is stamped with the config signature and
+  // rebuilt by the effect below whenever that signature drifts.
   const providerRef = useRef<VoiceProvider | null>(null)
+  const builtSigRef = useRef<string | null>(null)
   if (!providerRef.current) {
-    const config = provider === 'local'
-      ? { kind: 'local' as const, local: local ?? { model: null, language: null } }
-      : defaultVoiceConfig()
-    providerRef.current = createVoiceProvider(config)
+    providerRef.current = createVoiceProvider(configFor(provider, local))
+    builtSigRef.current = buildSignature(provider, local)
   }
-  const supported = providerRef.current.isSupported()
-
-  const ttsRef = useRef<TtsSpeaker | null>(null)
-  if (!ttsRef.current) {
-    ttsRef.current = createTtsSpeaker({
-      lang,
-      onError: (msg) => setError(`Speech synthesis error: ${msg}`),
-    })
-  }
+  // `supported` is state rather than a per-render providerRef read so
+  // a rebuilt provider re-reports it (the effect refreshes it on every
+  // rebuild). Initialized from the first build so first-render output
+  // is identical to the pre-B1-5 lazy-read behavior.
+  const [supported, setSupported] = useState(() => providerRef.current?.isSupported() ?? false)
 
   const handleError = useCallback((err: VoiceProviderError) => {
     if (!err.silent) {
@@ -99,14 +111,34 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   }, [])
 
   useEffect(() => {
-    const speaker = ttsRef.current!
-    claimSpeaker(speaker)
-    return () => {
-      providerRef.current?.abort()
-      speaker.cancel()
-      if (activeSpeaker === speaker) activeSpeaker = null
-    }
+    return () => { providerRef.current?.abort() }
   }, [])
+
+  // B1-5 P1-5: rebuild the provider whenever the resolved config
+  // changes (config arriving late after a cold start, or the user
+  // flipping Settings → Voice). Deliberately dependency-free: a
+  // change seen mid-capture is deferred, and every path back to
+  // `idle` renders — so running on every commit behind a cheap
+  // signature compare is the simplest wiring that can't miss the
+  // post-idle rebuild. Deliberately dependency-free: runs behind a cheap
+  // signature compare on every commit (the deps suggestion would skip the
+  // post-idle rebuild this relies on).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const signature = buildSignature(provider, local)
+    if (builtSigRef.current === signature) return
+    if (state !== 'idle') {
+      // A capture is in flight — aborting here would cut off the
+      // user's audio mid-recording. Skip now; the commit that lands
+      // back on idle (onEnd) picks the rebuild up.
+      return
+    }
+    providerRef.current?.abort()
+    const next = createVoiceProvider(configFor(provider, local))
+    providerRef.current = next
+    builtSigRef.current = signature
+    setSupported(next.isSupported())
+  })
 
   const startRecording = useCallback(async () => {
     setError(null)
@@ -156,22 +188,6 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     // completes; nothing to do here synchronously.
   }, [])
 
-  const speak = useCallback(async (text: string) => {
-    setError(null)
-    const speaker = ttsRef.current!
-    setState('speaking')
-    if (!speaker.isSupported()) {
-      setError('Speech synthesis not supported in this browser')
-      return
-    }
-    speaker.speak(text)
-  }, [])
-
-  const stopSpeaking = useCallback(() => {
-    ttsRef.current?.cancel()
-    setState('idle')
-  }, [])
-
   const reset = useCallback(() => {
     providerRef.current?.abort()
     setState('idle')
@@ -179,5 +195,5 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     setError(null)
   }, [])
 
-  return { state, partialTranscript, error, supported, startRecording, stopRecording, speak, stopSpeaking, reset }
+  return { state, partialTranscript, error, supported, startRecording, stopRecording, reset }
 }

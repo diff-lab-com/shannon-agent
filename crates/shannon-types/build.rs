@@ -206,6 +206,12 @@ pub struct ToolResultPayload {
     /// must mirror src/events.rs exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// P1-⑤ mirror — must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
+    /// P1-⑤ mirror — must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_used: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -285,6 +291,12 @@ pub struct QueryFailedPayload {
     /// must mirror src/events.rs exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+
+    /// S1-1: structured failure classification ("auth" | "quota" |
+    /// "rate_limit" | "authz" | "other"), engine-classified from the typed
+    /// error. Additive — must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
 }
 
 /// P1-3 mirror of `src/events.rs::PermissionReason` — frozen camelCase wire
@@ -329,6 +341,15 @@ pub struct SessionInfo {
     pub parent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_point: Option<usize>,
+    /// P0 sidebar telemetry mirror — must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running: Option<bool>,
+    /// P0 sidebar telemetry mirror — must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
+    /// Settings R3 T7 mirror — must mirror src/events.rs exactly.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -545,6 +566,38 @@ pub struct ProviderTiers {
     pub pro: Option<String>,
 }
 
+/// R2-4 mirror — must match src/provider_config.rs exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ModelCapability {
+    Reasoning,
+    Coding,
+    Speed,
+    Cheap,
+    Vision,
+    ToolUse,
+}
+
+/// R2-4 mirror — must match src/provider_config.rs exactly.
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSpec {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_per_m_input: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_per_m_output: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<ModelCapability>,
+}
+
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderProfile {
@@ -565,6 +618,9 @@ pub struct ProviderProfile {
     pub quirks: ProviderQuirks,
     #[serde(default)]
     pub tiers: ProviderTiers,
+    /// R2-4: per-model metadata declarations (must mirror src/).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
@@ -603,10 +659,18 @@ pub struct ModelProfile {
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct ProviderModelConfig {
     pub version: u32,
+    /// R3-2: the named profile in-process resolution uses (must mirror src/;
+    /// skipped when empty so pre-R3-2 files keep their exact shape).
+    #[serde(default, skip_serializing_if = "is_default_active_profile")]
+    pub active_profile: String,
     pub profiles: HashMap<String, ModelProfile>,
     /// B3 契约：网关多 profile 路由（默认 off，字节级等同单 profile）
     #[serde(default)]
     pub gateway: GatewayConfig,
+}
+
+fn is_default_active_profile(s: &String) -> bool {
+    s.is_empty() || s == "default"
 }
 
 /// C1 两层凭据解析：默认 Shared（沿用旧单 profile 语义）

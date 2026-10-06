@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { Menu } from '@base-ui/react/menu';
 import { useIntl, type PrimitiveType } from 'react-intl';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -9,13 +11,17 @@ import { useCatalog } from '@/context/CatalogContext';
 import { useChat } from '@/context/ChatContext';
 import { useSessions } from '@/context/SessionContext';
 import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
-import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
 import { useSidebar } from './Layout';
 import * as api from '@/lib/tauri-api';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { toastError } from '@/lib/errorToast';
 import { useSessionBudget } from '@/hooks/useSessionBudget';
 import { ExecutionModeSwitcher } from '@/components/chat/ExecutionModeSwitcher';
+import { PhaseTierSwitcher } from '@/components/chat/PhaseTierSwitcher';
+import AskUserCard from '@/components/chat/AskUserCard';
+import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow';
+import { modelWhyFor, type ModelWhyContext } from '@/lib/modelWhy';
+import { writeGlobalModelDefault } from '@/lib/modelSwitch';
 
 const TITLE_MAP: [string, string][] = [
   ['/opc/task', 'header.title.opcTask'],
@@ -25,10 +31,10 @@ const TITLE_MAP: [string, string][] = [
   ['/extensions', 'header.title.extensions'],
   ['/memory', 'header.title.memory'],
   ['/triage', 'header.title.triage'],
-  ['/editor', 'header.title.editor'],
   ['/quickfix', 'header.title.quickfix'],
   ['/welcome', 'header.title.welcome'],
   ['/usage', 'header.title.usage'],
+  ['/timeline', 'header.title.timeline'],
   ['/chat', 'header.title.chat'],
 ]
 
@@ -39,39 +45,182 @@ function getTitleKey(pathname: string): string {
   return 'header.title.chat'
 }
 
+/**
+ * The non-chat header model selector (w4 refactor/header-menus-baseui).
+ * Decision 1 (review P1-2 / B1-8): the config's `model` key stores the
+ * catalog ID — `provider_resolver` passes the stored string through as the
+ * API `model` parameter verbatim; legacy display_name values on disk are
+ * normalized back to the id inside `configure('model')`
+ * (commands_config.rs `normalize_model_id`). Header remains the only model
+ * switcher outside /chat; the composer chip owns /chat.
+ */
+function HeaderModelSelector() {
+  const intl = useIntl();
+  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values);
+  const { status, config, models, refreshConfig, refreshStatus } = useCatalog();
+  const [open, setOpen] = useState(false);
+  // S1-5: the empty-catalog entry deep-links to the model settings page.
+  const navigate = useNavigate();
+
+  const handleModelSwitch = async (modelId: string) => {
+    const model = models.find(m => m.id === modelId)
+    if (!model) return
+    try {
+      // S3-1 (P-N23): the shared model+provider double write — the same
+      // helper the Settings quick switcher and the chip's global branch use.
+      await writeGlobalModelDefault(model)
+      await refreshConfig()
+      await refreshStatus()
+      setOpen(false)
+      toast.success(t('header.model.toast.switched', { model: model.name }))
+    } catch (e) { toastError(t('header.model.failed'), e) }
+  }
+
+  // S3-1 (P-N11): the same why-active derivation the composer chip uses —
+  // minus the session dimension (no session context on non-chat routes; the
+  // R2-1 route-ownership convention keeps the override label chat-only).
+  const modelList = models ?? [];
+  const whyCtx: ModelWhyContext = {
+    override: null,
+    approvalMode: (config as Record<string, unknown> | undefined)?.approval_mode as string | undefined ?? null,
+    planTier: (config as Record<string, unknown> | undefined)?.plan_tier as string | undefined ?? null,
+    actTier: (config as Record<string, unknown> | undefined)?.act_tier as string | undefined ?? null,
+    globalModel: status?.model ?? null,
+    activeProfile: status?.active_profile ?? null,
+  };
+
+  return (
+    // highlightItemOnHover={false} keeps CSS :hover (bg-primary/5, the
+    // pre-Base-UI hover paint) separate from the keyboard's data-highlighted
+    // (primary-container) — zero visual drift, per fix round 1.
+    <Menu.Root open={open} onOpenChange={setOpen} modal={false} highlightItemOnHover={false}>
+      <Menu.Trigger
+        render={
+          <Button
+            variant="ghost"
+            aria-label={t('header.model.select')}
+            className="flex items-center gap-sm px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
+          >
+            <span className={cn('w-2 h-2 rounded-full shrink-0', status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')}></span>
+            <span className="font-mono font-label-sm text-label-sm whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
+            <span className="material-symbols-outlined icon-sm">expand_more</span>
+          </Button>
+        }
+      />
+      {/* S1-5 (P-N16①): the menu renders even with an empty catalog — the
+          old `models.length > 0` gate made clicking the trigger a silent
+          no-op exactly when the user needs a pointer to Settings. */}
+        <Menu.Portal>
+          {/* z-modal rides the POSITIONER — same convention + token scale as
+              the two chat switchers (ui/select.tsx). S3-1: widened to fit
+              the shared row's meta (price/vision/badges) — the parity the
+              composer chip already had (P-N11). */}
+          <Menu.Positioner align="end" sideOffset={8} className="isolate z-modal">
+            <Menu.Popup
+              role="listbox"
+              aria-labelledby={undefined}
+              aria-label={t('header.model.select')}
+              className="glass-overlay animate-panel-in w-[360px] rounded-xl py-sm outline-none"
+            >
+              {/* S3-1 (P-N11): the precedence line, same wording family as
+                  the chip picker's — the chain is global, the surfaces say
+                  it once each. */}
+              {modelList.length > 0 && (
+                <div
+                  role="presentation"
+                  data-testid="header-model-priority-line"
+                  className="px-md pb-xs font-label-xs text-on-surface-variant"
+                >
+                  {t('header.model.priorityLine')}
+                </div>
+              )}
+              {models.length === 0 ? (
+                // Empty catalog: one explanatory entry that deep-links to the
+                // model settings page (same navigation the auth banner uses).
+                <Menu.Item
+                  role="option"
+                  aria-selected={false}
+                  label={t('header.model.emptyCatalog')}
+                  data-testid="header-model-empty"
+                  className="flex w-full cursor-pointer items-center gap-sm px-md py-sm text-left outline-none transition-colors text-on-surface-variant hover:bg-primary/5 data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container"
+                  onClick={() => navigate('/settings/models')}
+                >
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">add</span>
+                  <span className="font-label-md">{t('header.model.emptyCatalog')}</span>
+                </Menu.Item>
+              ) : (
+                models.map(m => (
+                  <Menu.Item
+                    key={m.id}
+                    role="option"
+                    aria-selected={m.id === status?.model}
+                    label={m.name}
+                    // A failed switch keeps the menu open for a retry — the
+                    // close happens in handleModelSwitch on success only.
+                    closeOnClick={false}
+                    className={cn(
+                      'flex w-full cursor-pointer items-center justify-between gap-sm px-md py-sm text-left outline-none transition-colors',
+                      m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5',
+                      'data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container',
+                    )}
+                    onClick={() => void handleModelSwitch(m.id)}
+                  >
+                    {/* S3-1 (P-N11): shared row renderer — the Header now
+                        reads at the same density as the composer chip
+                        (context · price, vision dot, source badge,
+                        why-active label). `compact` keeps the tools icon
+                        off the narrower Header menu. */}
+                    <ModelPickerRowContent
+                      model={m}
+                      why={modelWhyFor(m, whyCtx, modelList)}
+                      compact
+                    />
+                  </Menu.Item>
+                ))
+              )}
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+    </Menu.Root>
+  );
+}
+
 export function Header() {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const location = useLocation();
   const navigate = useNavigate();
-  const { status, models, permissionRequest, respondPermission, refreshConfig, refreshStatus } = useCatalog();
+  const { permissionRequest, respondPermission } = useCatalog();
   const { sessions, currentSessionId, windowSessionId } = useSessions();
-  const { contextPanelOpen, toggleContextPanel } = useChat();
+  const { contextPanelOpen, toggleContextPanel, isQuerying, isCancelInFlight, cancelQuery } = useChat();
   const { toggle: toggleSidebar } = useSidebar();
   // P1-1 window mode: this window is a dedicated session window (slim
   // chrome; header carries「在主窗口打开」+「关闭窗口」).
   const isWindowMode = windowSessionId != null;
-  const [modelOpen, setModelOpen] = useState(false);
-  const modelRef = useRef<HTMLDivElement>(null);
-  const [modelFocus, setModelFocus] = useState(-1);
+  // B1-13 (review P1-8): after a route change, focus moves to the page
+  // title (tabIndex=-1 below) and an aria-live region announces it, so
+  // screen-reader users learn the page switched.
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const [routeAnnouncement, setRouteAnnouncement] = useState('');
+  const prevPathRef = useRef(location.pathname);
+  useEffect(() => {
+    if (prevPathRef.current === location.pathname) return
+    prevPathRef.current = location.pathname
+    const el = titleRef.current
+    if (!el) return
+    el.focus()
+    setRouteAnnouncement(el.textContent?.trim() ?? '')
+  }, [location.pathname]);
 
-  const { candidates, refetch } = usePendingSkillCandidates();
-  const [approvalOpen, setApprovalOpen] = useState(false);
+  // IA T3 (审批面收敛): the bell keeps surfacing the pending skill-candidate
+  // count, but it no longer hijacks the click into an approval dialog —
+  // notifications of every kind land on /triage, the single review surface
+  // until 任务 3 ships the extended pending area.
+  const { candidates } = usePendingSkillCandidates();
   const pendingCount = candidates.length;
 
   const handleBellClick = () => {
-    if (pendingCount > 0) setApprovalOpen(true)
-    else navigate('/triage')
-  }
-
-  const onApprovalClose = () => {
-    setApprovalOpen(false)
-    refetch()
-  }
-
-  const advanceCandidate = () => {
-    if (candidates.length <= 1) setApprovalOpen(false)
-    refetch()
+    navigate('/triage')
   }
 
   // U2: on /chat the header carries the current session title instead of the
@@ -87,33 +236,15 @@ export function Header() {
   const { budget: sessionBudget, usage: sessionUsage } = useSessionBudget(chatSessionId);
   const isOpcTask = location.pathname.includes('/opc/task');
 
-  // Click outside to close model selector
-  useEffect(() => {
-    if (!modelOpen) return
-    const handleClick = (e: MouseEvent) => {
-      if (modelRef.current && !modelRef.current.contains(e.target as Node)) {
-        setModelOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [modelOpen])
-
-  // U2: absorbed ChatInput's dual-write — configure the model NAME plus its
-  // provider (the config's `model` key holds a name, not the catalog id).
-  // Header is now the only model switcher in the app.
-  const handleModelSwitch = async (modelId: string) => {
-    const model = models.find(m => m.id === modelId)
-    if (!model) return
-    try {
-      await api.configure({ key: 'model', value: model.name })
-      await api.configure({ key: 'provider', value: model.provider })
-      await refreshConfig()
-      await refreshStatus()
-      setModelOpen(false)
-      toast.success(t('header.model.toast.switched', { model: model.name }))
-    } catch (e) { toastError(t('header.model.failed'), e) }
-  }
+  // Decision 1 (review P1-2 / B1-8): the config's `model` key stores the
+  // catalog ID. The old "U2 config stores the name" convention is retired —
+  // `provider_resolver` passes the stored string through as the API `model`
+  // parameter verbatim and display_name ≠ id for most catalog models, so the
+  // name-writing path failed for every such model. Legacy display_name
+  // values already on disk are normalized back to the id inside
+  // `configure('model')` (commands_config.rs `normalize_model_id`).
+  // Header remains the only model switcher outside /chat; the composer chip
+  // owns /chat. (The switch itself lives in HeaderModelSelector below.)
 
   // P1-1: focus the main window and have it switch to this window's
   // session (backend focuses `main` and emits `session-window:reveal`).
@@ -128,48 +259,67 @@ export function Header() {
     api.closeSessionWindow(getCurrentWindow().label).catch(e => toastError(t('windowMode.close.failed'), e))
   }
 
+  // G5 P1-11: in-app entry for the companion Quick Capture window — until
+  // now only the tray menu could summon it (the backend command existed and
+  // was registered, with no chrome surface wired to it).
+  const handleOpenCompanion = () => {
+    api.openCompanionWindow().catch(e => toastError(t('header.companion.failed'), e))
+  }
+
   return (
     <>
-      <header className="fixed top-0 right-0 z-header flex justify-between items-center h-16 px-lg bg-surface/80 backdrop-blur-md shadow-sm border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
+      {/* G1: persistent chrome bar — glass-surface (was a hand-rolled
+          bg-surface/80+[backdrop-filter] that bypassed the utility's inset
+          highlight, hairline and contain:paint). */}
+      <header className="glass-surface fixed top-0 right-0 z-header flex justify-between items-center h-16 px-lg" style={{ left: 'var(--sidebar-w)' }}>
+        {/* md:hidden hamburger — Tauri minWidth=800 keeps the desktop window
+            above the 768px breakpoint, so this mobile branch is only
+            reachable in pure-browser `pnpm dev` and in
+            e2e/mobile-drawer.spec.ts (pins 375×812), which drives it. */}
         {!isWindowMode && (
-          <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
+          <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-sm mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
             <span className="material-symbols-outlined icon-lg">menu</span>
           </Button>
         )}
         <div className="flex items-center gap-md relative w-full overflow-hidden">
           {isOpcTask ? (
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-primary text-[28px]">auto_awesome</span>
-              <h2 className="font-headline-md text-[24px] font-extrabold text-primary whitespace-nowrap">{title}</h2>
+            <div className="flex items-center gap-sm">
+              <span className="material-symbols-outlined text-primary icon-xl">auto_awesome</span>
+              {/* B1-13: programmatic focus target on route change (no visible
+                  ring — the aria-live announcement below carries the signal). */}
+              <h2 ref={titleRef} tabIndex={-1} className="font-headline-md text-headline-md font-extrabold text-primary whitespace-nowrap outline-none">{title}</h2>
             </div>
           ) : (
-            <h2 className="font-headline-md text-[24px] font-extrabold text-on-surface whitespace-nowrap">{title}</h2>
+            <h2 ref={titleRef} tabIndex={-1} className="font-headline-md text-headline-md font-extrabold text-on-surface whitespace-nowrap outline-none">{title}</h2>
           )}
 
           {isOpcTask && (
-            <div className="ml-auto mr-lg flex items-center gap-2 bg-surface-container-low px-3 py-1.5 rounded-full border border-outline-variant/20 shrink-0">
+            <div className="ml-auto mr-lg flex items-center gap-sm bg-surface-container-low px-3 py-1.5 rounded-full border border-outline-variant/20 shrink-0">
                <span className="w-2 h-2 rounded-full bg-tertiary"></span>
-               <span className="font-label-sm text-[12px] text-on-surface-variant whitespace-nowrap">{t('header.syncStatus')}</span>
+               <span className="font-label-sm text-label-sm text-on-surface-variant whitespace-nowrap">{t('header.syncStatus')}</span>
             </div>
           )}
         </div>
-        <div className="flex items-center gap-lg shrink-0 pl-4 border-l border-outline-variant/20 md:border-none md:pl-0">
+        {/* Review 2026-09-16: on phones this cluster forced 579px of unshrinkable
+            width and pushed the whole app into horizontal overflow; mode/model
+            pickers live in the composer chips anyway. */}
+        <div className="hidden md:flex items-center gap-lg shrink-0 pl-md border-l border-outline-variant/20 md:border-none md:pl-0">
           {/* P1-1 window mode: identify the dedicated window and offer the
               two window controls from the task brief. */}
           {isWindowMode && (
             <div className="flex items-center gap-sm">
               <span
-                className="hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold uppercase tracking-wider"
+                className="hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold uppercase tracking-wider"
                 title={t('windowMode.badge.title')}
               >
-                <span className="material-symbols-outlined text-[14px]" aria-hidden="true">picture_in_picture</span>
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">picture_in_picture</span>
                 {t('windowMode.badge')}
               </span>
               <Button
                 variant="ghost"
                 aria-label={t('windowMode.openInMain.aria')}
                 title={t('windowMode.openInMain.title')}
-                className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+                className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
                 onClick={handleOpenInMain}
               >
                 <span className="material-symbols-outlined icon-md" aria-hidden="true">open_in_new</span>
@@ -178,7 +328,7 @@ export function Header() {
                 variant="ghost"
                 aria-label={t('windowMode.close.aria')}
                 title={t('windowMode.close.title')}
-                className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-error transition-colors"
+                className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-error transition-colors"
                 onClick={handleCloseWindow}
               >
                 <span className="material-symbols-outlined icon-md" aria-hidden="true">close</span>
@@ -191,10 +341,10 @@ export function Header() {
             <Button
               variant="ghost"
               aria-label={t('header.contextPanel.toggle')}
-              title={t('header.contextPanel.toggle')}
+              title={`${t('header.contextPanel.toggle')} (Ctrl+\\)`}
               aria-expanded={contextPanelOpen}
               aria-pressed={contextPanelOpen}
-              className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+              className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
               onClick={toggleContextPanel}
             >
               <span className="material-symbols-outlined icon-md" aria-hidden="true">
@@ -206,6 +356,7 @@ export function Header() {
           {isChat && sessionBudget != null && sessionBudget > 0 && (
             <span
               role="status"
+              data-testid="budget-badge"
               aria-label={t('budget.badge.aria', {
                 spent: `$${(sessionUsage?.cost_usd ?? 0).toFixed(2)}`,
                 budget: `$${sessionBudget.toFixed(2)}`,
@@ -215,75 +366,64 @@ export function Header() {
                 budget: `$${sessionBudget.toFixed(2)}`,
               })}
               className={cn(
-                'hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full font-mono font-label-sm text-[11px] border tabular-nums',
+                'hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full font-mono font-label-sm text-label-xs border tabular-nums',
                 (sessionUsage?.cost_usd ?? 0) >= sessionBudget
-                  ? 'bg-error/10 text-error border-error/30'
+                  ? 'bg-error-container text-on-error-container border-error/30'
                   : (sessionUsage?.cost_usd ?? 0) >= sessionBudget * 0.8
-                    ? 'bg-warning/10 text-warning border-warning/30'
+                    ? 'bg-warning-container text-on-warning-container border-warning/30'
                     : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30'
               )}
             >
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">payments</span>
+              <span className="material-symbols-outlined icon-sm" aria-hidden="true">payments</span>
               {(sessionUsage?.cost_usd ?? 0).toFixed(2)} / ${sessionBudget.toFixed(2)}
             </span>
           )}
           {/* P1-3: execution-mode switcher (严格/平衡/宽松/自定义) — chat
               header only, kept next to the model selector. */}
           {isChat && <ExecutionModeSwitcher />}
-          {/* Model selector */}
-          <div className="relative" ref={modelRef}>
-            <Button
-              variant="ghost"
-              aria-label={t('header.model.select')}
-              className="flex items-center gap-sm px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
-              onClick={() => { setModelOpen(!modelOpen); setModelFocus(-1) }}
-            >
-              <span className={cn('w-2 h-2 rounded-full shrink-0', status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')}></span>
-              <span className="font-mono font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
-              <span className="material-symbols-outlined icon-sm">expand_more</span>
-            </Button>
-            {modelOpen && models.length > 0 && (
-              <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-xl z-modal py-sm" role="listbox" onKeyDown={e => {
-                if (e.key === 'ArrowDown') { e.preventDefault(); setModelFocus(f => Math.min(f + 1, models.length - 1)) }
-                else if (e.key === 'ArrowUp') { e.preventDefault(); setModelFocus(f => Math.max(f - 1, 0)) }
-                else if (e.key === 'Enter' && modelFocus >= 0) { handleModelSwitch(models[modelFocus].id) }
-                else if (e.key === 'Escape') { setModelOpen(false) }
-              }}>
-                {models.map((m, i) => (
-                  <Button
-                    key={m.id}
-                    variant="ghost"
-                    role="option"
-                    aria-selected={m.id === status?.model}
-                    className={cn(
-                      'w-full justify-between px-md py-sm h-auto rounded-none',
-                      i === modelFocus ? 'bg-primary/10 text-primary' : m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5'
-                    )}
-                    onClick={() => handleModelSwitch(m.id)}
-                    onMouseEnter={() => setModelFocus(i)}
-                  >
-                    <span className="font-mono font-label-md truncate">{m.name}</span>
-                    <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>
-                  </Button>
-                ))}
-              </div>
-            )}
-          </div>
+          {/* R3-3: plan/act model-tier pair (规划/执行档位) — chat header
+              only. Global preference; per-session overrides (R2-1) always
+              win over it. */}
+          {isChat && <PhaseTierSwitcher />}
+          {/* Model selector — non-chat pages only: on /chat the composer
+              model chip is the single surface (issue: 三处模型名重复).
+              Both write the same config keys, so switching stays in sync.
+              w4 refactor/header-menus-baseui: this used to be the family's
+              last INLINE menu — trapped inside the same glass header
+              stacking context the two chat switchers had to be portalled
+              out of (#250 only covered /chat, so on /settings the dropdown
+              was one resize away from clipping). It is a Base UI Menu now:
+              body-level portal + z-modal positioner, automatic re-anchor on
+              sidebar resize, and Base UI's full keyboard contract (typeahead
+              included) replacing the hand-rolled focus index. The
+              listbox/option roles carry over (single-value selection). */}
+          {!isChat && <HeaderModelSelector />}
 
-          {/* U6: the bell tooltip says where it leads — the skill-approval
-              dialog when something is pending, Triage otherwise. */}
-          <Button variant="ghost" aria-label={t('header.notifications')} title={pendingCount > 0 ? t('header.notifications.pending', { count: pendingCount }) : t('header.notifications.aria')} aria-haspopup={pendingCount > 0 ? 'dialog' : undefined} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={handleBellClick}>
+          {/* U6/IA T3: the bell tooltip says where it leads — /triage, with
+              the pending skill count when one exists. The click is never
+              hijacked into a modal. */}
+          <Button variant="ghost" aria-label={t('header.notifications')} title={pendingCount > 0 ? t('header.notifications.pending', { count: pendingCount }) : t('header.notifications.aria')} className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={handleBellClick}>
             <span className="material-symbols-outlined icon-md" aria-hidden="true">notifications</span>
             {pendingCount > 0 && (
               <span
                 aria-hidden="true"
-                className="absolute top-0 right-0 min-w-[16px] h-4 px-[4px] rounded-full bg-error text-on-error text-[10px] font-bold flex items-center justify-center leading-none"
+                className="absolute top-0 right-0 min-w-[16px] h-4 px-[4px] rounded-full bg-error text-on-error text-label-2xs font-bold flex items-center justify-center leading-none"
               >
                 {pendingCount > 9 ? '9+' : pendingCount}
               </span>
             )}
           </Button>
-          <Button variant="ghost" aria-label={t('header.help')} title={t('header.help.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>
+          {/* G5 P1-11: open the companion Quick Capture window. */}
+          <Button
+            variant="ghost"
+            aria-label={t('header.companion.aria')}
+            title={t('header.companion.aria')}
+            className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+            onClick={handleOpenCompanion}
+          >
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">picture_in_picture</span>
+          </Button>
+          <Button variant="ghost" aria-label={t('header.help')} title={t('header.help.aria')} className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>
             <span className="material-symbols-outlined icon-md" aria-hidden="true">help</span>
           </Button>
           {/* U6: the avatar is no longer a dead icon — it opens Settings. */}
@@ -294,20 +434,36 @@ export function Header() {
             className="h-8 w-8 rounded-full overflow-hidden bg-surface-container flex items-center justify-center ring-2 ring-primary/10 hover:bg-surface-container-high transition-colors"
             onClick={() => navigate('/settings')}
           >
-            <span className="material-symbols-outlined text-on-surface-variant text-[18px]" aria-hidden="true">person</span>
+            <span className="material-symbols-outlined text-on-surface-variant icon-md" aria-hidden="true">person</span>
           </Button>
         </div>
       </header>
+      {/* B1-13: route-change announcement — the visually hidden live region
+          fires after focus landed on the page title above. */}
+      <div aria-live="polite" role="status" className="sr-only">
+        {routeAnnouncement ? t('nav.routeChanged.aria', { title: routeAnnouncement }) : ''}
+      </div>
 
-      {/* Permission Modal — alertdialog because it demands immediate attention */}
+      {/* Permission Modal — alertdialog because it demands immediate attention.
+          G1: no className override — the old bg-black/30+backdrop-blur-sm landed
+          on the POPUP (not the backdrop) and double-scrimmed it; the Modal now
+          carries the unified glass-overlay panel + its own scrim backdrop.
+          KNOWN_A11Y_DEBT ① (aria-dialog-name, fixed): the h3 title renders as
+          a Base UI Dialog.Title, so the Popup's aria-labelledby resolves to it
+          and the alertdialog carries an accessible name. `testId` anchors the
+          popup for e2e (e2e/helpers/testids.ts: permissionDialog). */}
       {permissionRequest && (
       <Modal
         open
-        onClose={() => respondPermission(permissionRequest.request_id, false)}
+        onClose={() => respondPermission(permissionRequest.request_id, false).catch(() => {})}
         size="md"
         role="alertdialog"
         showCloseButton={false}
-        className="bg-black/30 backdrop-blur-sm"
+        // P0-A2 (axe aria-dialog-name): the popup carries its own custom
+        // header, so name the dialog from the visible h3 (accname resolves
+        // through aria-labelledby) instead of the built-in title block.
+        ariaLabelledBy="header-perm-request-title"
+        testId="permission-dialog"
       >
         <div className="p-xl">
             <div className="flex items-center gap-md mb-lg">
@@ -315,7 +471,7 @@ export function Header() {
                 <span className="material-symbols-outlined text-on-tertiary-container">shield</span>
               </div>
               <div className="flex-1">
-                <h3 className="font-headline-sm text-on-surface font-bold">{t('header.permRequest.title')}</h3>
+                <h3 id="header-perm-request-title" className="font-headline-sm text-on-surface font-bold">{t('header.permRequest.title')}</h3>
                 <p className="text-body-sm text-on-surface-variant">{t('header.permRequest.subtitle')}</p>
               </div>
               {/* U3: four distinguishable risk tiers — critical=error,
@@ -324,9 +480,9 @@ export function Header() {
               <span
                 aria-label={t('header.permRequest.risk.aria', { level: t(`header.permRequest.risk.${permissionRequest.risk}`) })}
                 className={cn('px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider',
-                  permissionRequest.risk === 'critical' ? 'bg-error/10 text-error' :
-                  permissionRequest.risk === 'high' ? 'bg-secondary/10 text-secondary' :
-                  'bg-tertiary/10 text-tertiary'
+                  permissionRequest.risk === 'critical' ? 'bg-error-container text-on-error-container' :
+                  permissionRequest.risk === 'high' ? 'bg-secondary-container text-on-secondary-container' :
+                  'bg-tertiary-container text-on-tertiary-container'
                 )}>{t(`header.permRequest.risk.${permissionRequest.risk}`)}</span>
             </div>
             <div className="p-md bg-surface-container-low rounded-xl mb-lg space-y-sm">
@@ -360,32 +516,78 @@ export function Header() {
                 </span>
               </div>
             )}
+            {/* P3-1: the engine's free-text risk explanation (policy-table
+                basis, budget notice, …) — additive, absent on legacy
+                payloads. */}
+            {permissionRequest.riskReason && (
+              <div className="text-label-sm text-on-surface-variant mb-lg px-md">
+                {permissionRequest.riskReason}
+              </div>
+            )}
             {/* U3 follow-up: "Always allow" persists an allow rule for the
                 tool (respond_permission scope="always_tool" → user
                 settings.json permissions.allow). The engine's rule checker
                 consumes those rules (Deny > Ask > Allow). */}
             <div className="flex gap-md">
-              <Button autoFocus className="flex-1 py-sm bg-surface-container text-on-surface rounded-xl hover:bg-surface-container-high transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, false)}>
+              <Button autoFocus className="flex-1 py-sm bg-surface-container text-on-surface rounded-xl hover:bg-surface-container-high transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, false).catch(() => {})}>
                 {t('header.permRequest.deny')}
               </Button>
-              <Button className="flex-1 py-sm border border-primary/40 bg-transparent text-primary rounded-xl hover:bg-primary/10 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true, { scope: 'always_tool' })}>
+              <Button className="flex-1 py-sm border border-primary/40 bg-transparent text-primary rounded-xl hover:bg-primary/10 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true, { scope: 'always_tool' }).catch(() => {})}>
                 {t('header.permRequest.allowAlways')}
               </Button>
-              <Button className="flex-1 py-sm bg-primary text-on-primary rounded-xl hover:shadow-md hover:shadow-primary/30 active:scale-95 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true)}>
+              <Button className="flex-1 py-sm bg-primary text-on-primary rounded-xl hover:shadow-md hover:shadow-primary/30 active:scale-95 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true).catch(() => {})}>
                 {t('header.permRequest.allowOnce')}
               </Button>
             </div>
           </div>
       </Modal>
       )}
-
-      <SkillApprovalModal
-        open={approvalOpen}
-        candidate={candidates[0] ?? null}
-        onClose={onApprovalClose}
-        onApproved={advanceCandidate}
-        onRejected={advanceCandidate}
-      />
+      {/* Settings R3 T8 — the desktop ask_user question dialog, mounted in
+          the same surface slot as the approval modal above (the
+          permission-request card's render position). Self-contained: it
+          listens for `ask-user-request` / `ask-user-resolved` and answers
+          through `respond_ask_user` — renders nothing while no question is
+          pending. */}
+      <AskUserCard />
+      {/* S-3 fix (R4 group 7): while the approval dialog waits, the modal
+          scrim sits above the composer and the composer's glass surface is a
+          `contain: paint` stacking context — its stop button can never rise
+          above the scrim, so a user who wants to abandon the whole query
+          (not just deny this one prompt) had no reachable stop. Mount a stop
+          control ABOVE the scrim for exactly that window (dialog open + the
+          visible session still running). Safe against accidental Deny: the
+          dialog only closes on a press whose target IS the dialog's own
+          backdrop element (Base UI useDialogRoot outsidePress), which this
+          button never is; Escape still maps to Deny (decision D6, unchanged).
+          The control vanishes once the run settles; keyboard users keep the
+          Escape path (pointer reachability is the fix, not the a11y tree). */}
+      {permissionRequest && isQuerying && createPortal(
+        // z-flash-above, not z-flash: the dialog's portal reaches the body
+        // after this one (layout-effect created), so an equal z would let
+        // the scrim paint on top and swallow the click again.
+        <div className="fixed inset-x-0 bottom-6 z-flash-above flex justify-center pointer-events-none">
+          <Button
+            aria-label={t('header.stopWhileWaiting.aria')}
+            title={t('header.stopWhileWaiting.aria')}
+            // Test seam: the dialog's aria-modal masking blinds role queries
+            // to everything outside the popup, so e2e anchors via testid.
+            data-testid="header-stop-while-waiting"
+            // P0-A2 (axe color-contrast 4.41:1): bg-error/80 alpha-composited
+            // over the scrim too dark for text-on-error in the default dark
+            // theme. Opaque bg-error passes AA in both matrix themes
+            // (6.46:1 light/dark) and is a strict improvement in every theme.
+            className="pointer-events-auto bg-error text-on-error px-md py-sm rounded-xl active:scale-95 transition-all font-label-md flex items-center gap-xs disabled:opacity-60 disabled:cursor-wait"
+            onClick={() => void cancelQuery()}
+            disabled={isCancelInFlight}
+          >
+            <span className={cn('material-symbols-outlined icon-md', isCancelInFlight && 'animate-spin')}>
+              {isCancelInFlight ? 'progress_activity' : 'stop'}
+            </span>
+            {t('header.stopWhileWaiting.label')}
+          </Button>
+        </div>,
+        document.body,
+      )}
     </>
   );
 }

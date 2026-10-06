@@ -1,6 +1,6 @@
 [package]
 name = "shannon-desktop"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Shannon — your AI workspace (Tauri desktop app)"
@@ -11,7 +11,7 @@ homepage = "https://github.com/diff-lab-com/shannon-agent"
 
 [features]
 default = ["tauri", "preview-capture"]
-tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-updater", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
+tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-opener", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
 # P1-5 C-1 — native window/monitor screenshot capture backing
 # `preview_capture` / the `preview_screenshot` engine tool (xcap, the same
 # capture path the computer-use tool uses). Opt-out for CI matrices that
@@ -32,6 +32,9 @@ computer-use = ["shannon-tools/computer-use"]
 computer-use-libei = ["shannon-tools/computer-use-libei"]
 computer-use-wayland = ["shannon-tools/computer-use-wayland"]
 computer-use-x11rb = ["shannon-tools/computer-use-x11rb"]
+# T14 — built-in browser tools (chromiumoxide CDP). Enabled by the Windows
+# release bundle together with computer-use (release.yml nsis leg).
+local-browser = ["shannon-tools/local-browser"]
 
 [dependencies]
 # Shannon engine crates — provided by the unified workspace (no git, no SSH, no rev, no patch).
@@ -46,13 +49,14 @@ shannon-skills .workspace = true
 shannon-agents .workspace = true
 
 serde = { version = "1.0", features = ["derive"] }
-notify = { version = "7", features = ["macos_kqueue"] }
+notify = "7"
 serde_json = "1.0"
 tokio = { version = "1.43", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 anyhow = "1.0"
 thiserror = "2.0"
 tracing = "0.1"
+tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -64,6 +68,10 @@ gethostname = "1"  # QR pairing endpoint: advertise the desktop as <hostname>.lo
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service"] }
 libc = "0.2"  # macOS launchctl probe (gateway_service_probe::default_probe) + dev e2e
 toml = "0.8"
+# G7 i18n (P1-8) — tray menu labels follow the OS language. sys-locale 0.3 is
+# already resolved in Cargo.lock via shannon-core, so this direct dep
+# introduces no new package (same pattern as tar/flate2/regex above).
+sys-locale = { workspace = true }
 lsp-types = "0.95"
 url = "2"
 async-trait = "0.1"
@@ -78,16 +86,38 @@ sha2 = "0.10"
 rand = "0.8"
 qrcode = "0.14"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Office Wave A2' — minimal office-document parsing for send_message text
+# injection. roxmltree (pull parser over xmlparser) reads the OOXML document
+# parts out of the zip container; calamine reads xlsx/ods cell values
+# (formula results included); csv handles plain CSV. All three are pure-Rust,
+# MIT/Apache-2.0 dual-licensed, and reuse the zip 2.x already resolved for the
+# workspace (no second zip major in the tree).
+roxmltree = { workspace = true }
+calamine = { workspace = true }
+csv = { workspace = true }
 percent-encoding = "2"
 # P2-2 — persona/profile pack (.tar.gz). Both crates are already resolved in
 # Cargo.lock via transitive dependencies (tar 0.4.46, flate2 1.1.9), so these
 # direct deps introduce no new packages — they only reuse the locked versions.
 tar = "0.4"
 flate2 = "1"
+# Dream-pass redaction (`commands_dream`). Same situation as tar/flate2: regex
+# 1.x is already resolved in Cargo.lock via shannon-core, so this direct dep
+# introduces no new package.
+regex = "1.11"
+
+# Office Wave 2 B3 — Email (IMAP) data source fetcher. See the workspace
+# Cargo.toml for why imap is pinned to 2.4.1 with TLS supplied by
+# rustls-connector 0.23 (same rustls 0.23/ring the workspace already locks),
+# and why rustls-connector is declared directly (socket timeouts before the
+# TLS handshake).
+imap = { workspace = true }
+mailparse = { workspace = true }
+rustls-connector = { workspace = true }
 
 tauri = { version = "2", optional = true, features = ["tray-icon"] }
 tauri-plugin-shell = { version = "2", optional = true }
-tauri-plugin-updater = { version = "2", optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
 tauri-plugin-global-shortcut = { version = "2", optional = true }
 tauri-plugin-window-state = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
@@ -105,7 +135,7 @@ hound = { version = "3", optional = true }
 
 # P1-5 C-1 — `preview_capture` screenshot source (see `preview-capture`
 # feature). xcap version matches shannon-tools' computer-use feature.
-xcap = { version = "0.0.13", optional = true }
+xcap = { version = "0.9", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 
 # P1-5 D — integrated terminal PTY sessions. Same crate (and version) the

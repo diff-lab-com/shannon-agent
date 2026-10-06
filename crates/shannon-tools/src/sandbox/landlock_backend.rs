@@ -22,7 +22,10 @@
 //! ## Non-Linux builds
 //!
 //! A stub keeps [`probe_new`] available on all platforms; it fails closed
-//! with [`SandboxError::Unsupported`] (surfaced loudly by callers).
+//! with [`SandboxError::Unsupported`] (surfaced loudly by callers). The
+//! Linux-only guts below stay compiled for structure and the stub's tests,
+//! so non-Linux builds relax the dead-code lints they would trip.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
 
 use shannon_tool_interface::sandbox::{
     ChildWorldInit, DegradeNotice, SANDBOX_DENIED_PREFIX, SandboxError, SandboxPolicy,
@@ -609,7 +612,11 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     #[test]
     fn non_linux_probe_fails_closed() {
-        let err = probe_new(Arc::new(policy(false))).expect_err("must fail closed");
+        // `expect_err` would need `Ok`-side Debug, which the trait object
+        // does not implement; let-else asserts the same without formatting.
+        let Err(err) = probe_new(Arc::new(policy(false))) else {
+            panic!("stub hosts must fail closed");
+        };
         assert!(matches!(err, SandboxError::Unsupported { .. }));
     }
 

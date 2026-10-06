@@ -5,7 +5,7 @@
 //! **one shared** [`MemoryStore`] handle (`Arc<RwLock<..>>`); every engine the
 //! desktop constructs (interactive send, background task, slash diagnostics,
 //! and the goal/batch/inbox unattended runners) attaches that same handle via
-//! [`attach_shared_memory`], so memory injection and auto-extraction converge
+//! `attach_shared_memory`, so memory injection and auto-extraction converge
 //! on a single in-process instance.
 //!
 //! The commands below operate on that shared instance (lock per command, no
@@ -77,16 +77,59 @@ pub(crate) fn refresh_shared_store(store: &SharedMemoryStore) {
 /// written since the app started is visible to this engine's injection path,
 /// then threads a clone of the shared handle into the engine. All six desktop
 /// engine construction sites call this — pass the handle, never rebuild.
-pub(crate) fn attach_shared_memory(engine: QueryEngine, store: &SharedMemoryStore) -> QueryEngine {
+///
+/// B2-2 (P0-2): `session_wd` pins the engine's whole working-directory
+/// chain (memory project key, project instructions, env block, repo map,
+/// bash default cwd) to the TARGET session's directory. `None` keeps the
+/// B2-1 construction-time freeze of the process cwd — the callers without
+/// a session directory (background tasks, slash diagnostics, batch, goal,
+/// routine runs) resolve exactly as before.
+pub(crate) fn attach_shared_memory(
+    engine: QueryEngine,
+    store: &SharedMemoryStore,
+    session_wd: Option<&str>,
+) -> QueryEngine {
     refresh_shared_store(store);
-    engine.with_memory_arc(store.clone())
+    let engine = engine.with_memory_arc(store.clone());
+    pin_working_directory(engine, session_wd)
+}
+
+/// [`attach_shared_memory`] with the session-level "temporary chat" bypass
+/// (P2-5): `disabled = true` returns the engine WITHOUT the shared store, so
+/// the per-turn injection (`agent_loop`'s `format_for_injection`) and the
+/// post-turn auto-extraction both skip — nothing enters or leaves the memory
+/// layer for this session. The working directory is still pinned so the
+/// engine config stays identical apart from the memory handle.
+pub(crate) fn attach_shared_memory_if(
+    engine: QueryEngine,
+    store: &SharedMemoryStore,
+    disabled: bool,
+    session_wd: Option<&str>,
+) -> QueryEngine {
+    if disabled {
+        return pin_working_directory(engine, session_wd);
+    }
+    attach_shared_memory(engine, store, session_wd)
+}
+
+/// Pin the engine's working directory: the session's own `wd` when it has
+/// one, else the B2-1 construction-time freeze of the process cwd.
+fn pin_working_directory(engine: QueryEngine, session_wd: Option<&str>) -> QueryEngine {
+    match session_wd {
+        Some(wd) => engine.with_working_directory(wd),
+        None => {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            engine.with_working_directory(cwd)
+        }
+    }
 }
 
 /// Parse a category string ("preference" / "pattern" / "decision" / "error"
 /// / "context") into the engine enum. Case-insensitive. Unknown values fall
 /// back to [`MemoryCategory::Context`] rather than erroring so the UI doesn't
-/// hard-fail on legacy data.
-fn parse_category(s: &str) -> MemoryCategory {
+/// hard-fail on legacy data. Shared with the dream pass (`commands_dream`),
+/// which materializes `add` proposals into real entries.
+pub(crate) fn parse_category(s: &str) -> MemoryCategory {
     match s.to_ascii_lowercase().as_str() {
         "preference" => MemoryCategory::Preference,
         "pattern" => MemoryCategory::Pattern,
@@ -143,7 +186,13 @@ fn source_session_of(store: &MemoryStore, memory_id: &str) -> Option<String> {
 pub async fn list_memory_projects(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
-    let store = &state.memory_store;
+    memory_project_labels(&state.memory_store)
+}
+
+/// Distinct project labels that have at least one memory entry, sorted —
+/// the shared enumeration behind `list_memory_projects` and the project
+/// registry's first-seed adoption (P-E3, `commands_projects`).
+pub(crate) fn memory_project_labels(store: &SharedMemoryStore) -> Result<Vec<String>, String> {
     refresh_shared_store(store);
     let guard = store.read().map_err(|e| e.to_string())?;
     let mut projects: Vec<String> = all_entries(&guard)
@@ -211,15 +260,74 @@ pub async fn create_memory(
     )?;
     let store = &state.memory_store;
     let mut guard = store.write().map_err(|e| e.to_string())?;
-    guard.add(entry.clone()).map_err(|e| e.to_string())?;
+    // add_or_update (not raw add) so hand-created entries go through the
+    // same dedup + secret-redaction choke point as every other write path.
+    let (_outcome, id) = guard
+        .add_or_update_with_id(entry)
+        .map_err(|e| e.to_string())?;
     guard.save().map_err(|e| e.to_string())?;
-    Ok(entry)
+    let stored = guard
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("saved memory {id} vanished"))?;
+    Ok(stored)
 }
 
-/// Update an existing memory entry's mutable fields (content, tags, category).
+/// Apply a partial update to one memory entry (pure store logic — unit-tested).
+///
+/// `content` / `tags` / `category` are updated in place. A `project` change is
+/// a **move**, not a field write: persistence is per-project JSONL
+/// (`{project_hash}.jsonl`), so mutating `entry.project` through `get_mut`
+/// would leave the stale original line in the old project's file and the
+/// entry would resurrect there on the next `load()` (file read order decides
+/// the winner). Moves go through [`MemoryStore::move_entry`], which rewrites
+/// the old project's file and appends the entry to the new one while keeping
+/// the id stable.
+pub(crate) fn apply_memory_update(
+    store: &mut MemoryStore,
+    id: &str,
+    content: Option<String>,
+    tags: Option<Vec<String>>,
+    category: Option<MemoryCategory>,
+    project: Option<String>,
+) -> Result<MemoryEntry, String> {
+    let existing = store
+        .get(id)
+        .ok_or_else(|| format!("memory {id} not found"))?
+        .clone();
+
+    if matches!(&project, Some(p) if *p != existing.project) {
+        // Move first (rewrites the old project file, appends under the new
+        // one), then fall through to the in-place field edits below — the
+        // entry is now under the new project in memory and on disk.
+        let target = project.as_deref().unwrap_or(existing.project.as_str());
+        store.move_entry(id, target).map_err(|e| e.to_string())?;
+        return apply_memory_update(store, id, content, tags, category, None);
+    }
+
+    let entry = store
+        .get_mut(id)
+        .ok_or_else(|| format!("memory {id} not found"))?;
+    if let Some(c) = content {
+        entry.content = c;
+    }
+    if let Some(t) = tags {
+        entry.tags = t;
+    }
+    if let Some(c) = category {
+        entry.category = c;
+    }
+    Ok(entry.clone())
+}
+
+/// Update an existing memory entry's mutable fields (content, tags, category,
+/// project).
 ///
 /// Only fields supplied as `Some(...)` are updated; `None` leaves the existing
 /// value intact. Returns the updated entry or an error if the ID is unknown.
+/// Decision 3-A (B3-24): `project` is honored — editing a memory from the UI
+/// can move it between projects (see `apply_memory_update` for why a move
+/// is delete + re-add).
 #[tauri::command]
 pub async fn update_memory(
     state: tauri::State<'_, AppState>,
@@ -227,26 +335,17 @@ pub async fn update_memory(
     content: Option<String>,
     tags: Option<Vec<String>>,
     category: Option<String>,
+    project: Option<String>,
 ) -> Result<MemoryEntryDto, String> {
     let store = &state.memory_store;
+    // Reload from disk first: without this, entries written by the CLI (or a
+    // migration) after app start report "not found" until restart.
+    refresh_shared_store(store);
     let mut guard = store.write().map_err(|e| e.to_string())?;
-    {
-        let entry = guard
-            .get_mut(&id)
-            .ok_or_else(|| format!("memory {id} not found"))?;
-        if let Some(c) = content {
-            entry.content = c;
-        }
-        if let Some(t) = tags {
-            entry.tags = t;
-        }
-        if let Some(c) = category {
-            entry.category = parse_category(&c);
-        }
-        let updated = entry.clone();
-        guard.save().map_err(|e| e.to_string())?;
-        Ok(updated)
-    }
+    let category = category.map(|c| parse_category(&c));
+    let updated = apply_memory_update(&mut guard, &id, content, tags, category, project)?;
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(updated)
 }
 
 /// Delete a memory by ID. Returns `true` if the entry existed.
@@ -287,7 +386,6 @@ pub async fn search_memories(
 pub struct MemorySourceDto {
     pub session_id: String,
 }
-
 #[tauri::command]
 pub async fn get_memory_source(
     state: tauri::State<'_, AppState>,
@@ -299,6 +397,94 @@ pub async fn get_memory_source(
     refresh_shared_store(store);
     let guard = store.read().map_err(|e| e.to_string())?;
     Ok(source_session_of(&guard, &memory_id).map(|sid| MemorySourceDto { session_id: sid }))
+}
+
+// ─── Injected-memory introspection (P2-5: "which memories did this turn use") ─
+
+/// One injected memory as the ContextBreakdownCard renders it: a display
+/// title plus the provenance fields the source-jump needs. `Deserialize` is
+/// derived only so `SendMessageResponse` can carry the same DTO back with
+/// `#[serde(default)]` (W3-4); the command itself never deserializes one.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InjectedMemoryDto {
+    pub id: String,
+    pub title: String,
+    /// `preference | pattern | decision | error | context`.
+    pub category: String,
+    /// Session that produced the entry — the jump target. `None` for
+    /// manual entries / legacy imports (no jump).
+    pub source_session_id: Option<String>,
+}
+
+/// The entries injected into THIS session's current context (same selection
+/// `send_message`'s system prompt uses), newest/relevant-first. The title is
+/// the entry's first line, capped — the full text stays in the Memory page.
+///
+/// Reuses the live/stashed engine via `restored_engine`, so the P2-5
+/// "temporary chat" bypass is naturally honored: a bypassed session's engine
+/// carries no memory store and this returns an empty list.
+#[tauri::command]
+pub async fn get_session_injected_memories(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<InjectedMemoryDto>, String> {
+    let uuid =
+        uuid::Uuid::parse_str(session_id.trim()).map_err(|e| format!("invalid sessionId: {e}"))?;
+    let engine = crate::commands_slash::restored_engine(&state, uuid).await?;
+    // The injection path ranks candidates against the CURRENT user message;
+    // mirror that with the restored history's last user turn (None for a
+    // brand-new session, where nothing is injected anyway).
+    let last_user_message = engine.conversation_messages().iter().rev().find_map(|m| {
+        match (m.role.as_str(), &m.content) {
+            ("user", shannon_engine::api::MessageContent::Text(text)) => Some(text.clone()),
+            _ => None,
+        }
+    });
+    Ok(turn_injected_memories(
+        &engine,
+        last_user_message.as_deref(),
+    ))
+}
+
+/// The per-turn citation snapshot (W3-4): the entries THIS turn's system
+/// prompt injects, as DTOs. Shared by `get_session_injected_memories` (the
+/// RightDock introspection replay) and `send_message` (which calls it right
+/// after building the turn's engine — same store, same frozen project key,
+/// same shared selection pipeline as the engine's own
+/// `format_for_injection`, so the citation can never name an entry the
+/// prompt did not carry). Empty when no store is attached (the P2-5
+/// "temporary chat" bypass) or nothing qualified — the frontend renders no
+/// citation chips for an empty list.
+pub(crate) fn turn_injected_memories(
+    engine: &QueryEngine,
+    query: Option<&str>,
+) -> Vec<InjectedMemoryDto> {
+    engine
+        .injected_memories(query)
+        .into_iter()
+        .map(|selected| InjectedMemoryDto {
+            id: selected.entry.id,
+            title: injected_memory_title(&selected.entry.content),
+            category: selected.entry.category.to_string(),
+            source_session_id: selected.entry.source_session_id,
+        })
+        .collect()
+}
+
+/// First line of a memory's content as the display title, char-capped at
+/// [`INJECTED_MEMORY_TITLE_MAX_CHARS`] on a char boundary (CJK-safe).
+fn injected_memory_title(content: &str) -> String {
+    const INJECTED_MEMORY_TITLE_MAX_CHARS: usize = 80;
+    let first_line = content.lines().next().unwrap_or("").trim();
+    if first_line.chars().count() <= INJECTED_MEMORY_TITLE_MAX_CHARS {
+        return first_line.to_string();
+    }
+    let mut end = INJECTED_MEMORY_TITLE_MAX_CHARS;
+    while !first_line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &first_line[..end])
 }
 
 /// Aggregate counts per category and per project. Used by the UI to render
@@ -556,6 +742,95 @@ pub async fn get_memory_graph(
     Ok(build_memory_graph(project.as_deref(), &entries))
 }
 
+/// Append a memory entry's content to the project's `CLAUDE.md` under a
+/// `## Memories` section, then delete the entry from the store. Promotion is
+/// the right exit for stable facts (per the memory governance review):
+/// instruction files are user-owned, cached in the prompt prefix, and
+/// version-controlled — the store is for working, machine-curated facts.
+/// Returns the instruction file path written.
+#[tauri::command]
+pub async fn promote_memory_to_instruction(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    id: String,
+) -> Result<String, String> {
+    // Pure helper is unit-tested below.
+    let store = &state.memory_store;
+    refresh_shared_store(store);
+    let entry = {
+        let guard = store.read().map_err(|e| e.to_string())?;
+        guard
+            .project_memories_all(&project)
+            .into_iter()
+            .find(|e| e.id == id)
+            .ok_or_else(|| format!("memory {id} not found in {project}"))?
+    };
+
+    let project_dir = std::path::PathBuf::from(&project);
+    if !project_dir.is_dir() {
+        return Err(format!("project directory does not exist: {project}"));
+    }
+    let file = project_dir.join("CLAUDE.md");
+    let existing = if file.exists() {
+        std::fs::read_to_string(&file).map_err(|e| format!("reading {}: {e}", file.display()))?
+    } else {
+        String::new()
+    };
+    let updated = append_memory_bullet(&existing, &entry.content);
+    std::fs::write(&file, &updated).map_err(|e| format!("writing {}: {e}", file.display()))?;
+
+    // The fact now lives in instructions; remove it from the store so it is
+    // not injected twice.
+    {
+        let mut guard = store.write().map_err(|e| e.to_string())?;
+        guard.delete(&entry.id).map_err(|e| e.to_string())?;
+        guard.save().map_err(|e| e.to_string())?;
+    }
+    Ok(file.display().to_string())
+}
+
+/// Insert `- <content>` under a `## Memories` section of a CLAUDE.md body,
+/// creating the section (and a minimal file header) when absent. Idempotent
+/// per content: appending identical content twice is still the caller's
+/// responsibility.
+fn append_memory_bullet(existing: &str, content: &str) -> String {
+    let section = "## Memories";
+    if let Some(pos) = existing.find(section) {
+        // Append at the END of the Memories section (just before the next
+        // "## " header or EOF) so existing bullets keep their order.
+        let after_header = existing[pos..]
+            .find('\n')
+            .map(|i| pos + i + 1)
+            .unwrap_or(existing.len());
+        let rest = &existing[after_header..];
+        let section_end = rest
+            .find("\n## ")
+            .map(|i| after_header + i + 1) // keep the newline before the next header
+            .unwrap_or(existing.len());
+        let mut out = String::with_capacity(existing.len() + content.len() + 3);
+        out.push_str(&existing[..section_end]);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&format!("- {content}\n"));
+        out.push_str(&existing[section_end..]);
+        out
+    } else {
+        let mut out = String::with_capacity(existing.len() + content.len() + 32);
+        if !existing.is_empty() {
+            out.push_str(existing);
+            if !existing.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+        out.push_str(section);
+        out.push_str("\n\n");
+        out.push_str(&format!("- {content}\n"));
+        out
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -604,6 +879,26 @@ mod tests {
     }
 
     #[test]
+    fn injected_memory_title_first_line_capped_cjk_safe() {
+        assert_eq!(
+            injected_memory_title("use pnpm not npm\nsecond line"),
+            "use pnpm not npm"
+        );
+        assert_eq!(injected_memory_title("  trimmed  "), "trimmed");
+        assert_eq!(injected_memory_title(""), "");
+        // >80 bytes: capped on a CHAR boundary with an ellipsis — the walk
+        // never splits a multi-byte char, so a 3-byte CJK char yields
+        // floor(80/3)=26 chars and a 2-byte Latin-1 char 40.
+        let long = "记".repeat(100);
+        let title = injected_memory_title(&long);
+        assert_eq!(title.chars().count(), 27, "26 capped chars + ellipsis");
+        assert!(title.ends_with('…'));
+        assert_eq!(injected_memory_title(&"é".repeat(90)).chars().count(), 41);
+        // Short multi-byte content is never truncated at all.
+        assert_eq!(injected_memory_title(&"记".repeat(10)), "记".repeat(10));
+    }
+
+    #[test]
     fn attach_shared_memory_attaches_one_shared_handle() {
         use shannon_core::query_engine::QueryEngine;
         use shannon_engine::api::client::LlmClient;
@@ -624,6 +919,7 @@ mod tests {
                     StateManager::new(),
                 ),
                 &shared,
+                None,
             )
         };
         let engine_a = build();
@@ -655,9 +951,158 @@ mod tests {
             .unwrap()
             .read()
             .unwrap()
-            .format_for_injection(&project)
+            .format_for_injection(&project, None)
             .expect("injection text");
         assert!(injected.contains("desktop injects this"));
+    }
+
+    #[test]
+    fn attach_shared_memory_if_disabled_leaves_engine_without_memory() {
+        use shannon_core::query_engine::QueryEngine;
+        use shannon_engine::api::client::LlmClient;
+        use shannon_engine::api::types::LlmClientConfig;
+        use shannon_engine::permissions::PermissionManager;
+        use shannon_engine::state::StateManager;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let shared = open_shared_store_at(dir.path().to_path_buf());
+
+        let build = || {
+            QueryEngine::with_defaults_arc(
+                LlmClient::new(LlmClientConfig::default()),
+                std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+                PermissionManager::new(),
+                StateManager::new(),
+            )
+        };
+        // P2-5: disabled → no store attached, so injection AND extraction
+        // skip for the session (agent_loop reads `self.memory`).
+        let bypassed = attach_shared_memory_if(build(), &shared, true, None);
+        assert!(
+            bypassed.memory().is_none(),
+            "bypassed engine must carry no memory store"
+        );
+
+        // enabled → same shared handle as attach_shared_memory (P2-4b).
+        let attached = attach_shared_memory_if(build(), &shared, false, None);
+        let handle = attached.memory().cloned().expect("attached");
+        assert!(
+            std::sync::Arc::ptr_eq(&handle, &shared),
+            "enabled path must attach the shared store instance"
+        );
+    }
+
+    #[test]
+    fn attach_shared_memory_if_pins_session_working_directory() {
+        // B2-2 (P0-2 正解): the send path threads the TARGET session's wd
+        // into the engine — the exact call `send_message` makes with
+        // `session_working_dir.as_deref()`. The whole host-dependent read
+        // chain (memory project key, project instructions, env block, bash
+        // default cwd, repo map) keys off this value, so the pin must land
+        // on `engine.config.working_directory` verbatim.
+        use shannon_core::query_engine::QueryEngine;
+        use shannon_engine::api::client::LlmClient;
+        use shannon_engine::api::types::LlmClientConfig;
+        use shannon_engine::permissions::PermissionManager;
+        use shannon_engine::state::StateManager;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let shared = open_shared_store_at(dir.path().join("memories"));
+        let build = || {
+            QueryEngine::with_defaults_arc(
+                LlmClient::new(LlmClientConfig::default()),
+                std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+                PermissionManager::new(),
+                StateManager::new(),
+            )
+        };
+
+        // Session wd present → pinned (memory attached and bypassed alike).
+        let pinned = attach_shared_memory_if(build(), &shared, false, Some("/tmp/session-b22"));
+        assert_eq!(
+            pinned.working_directory(),
+            Some(std::path::Path::new("/tmp/session-b22"))
+        );
+        let bypassed = attach_shared_memory_if(build(), &shared, true, Some("/tmp/session-b22"));
+        assert_eq!(
+            bypassed.working_directory(),
+            Some(std::path::Path::new("/tmp/session-b22")),
+            "the temporary-chat path pins the session wd too"
+        );
+
+        // No session wd → the construction-time process-cwd freeze the other
+        // five engine build points rely on (pre-B2-2 behavior).
+        let fallback = attach_shared_memory_if(build(), &shared, false, None);
+        assert_eq!(
+            fallback.working_directory(),
+            std::env::current_dir().ok().as_deref()
+        );
+    }
+
+    #[test]
+    fn turn_injected_memories_empty_without_store_or_entries() {
+        use shannon_core::query_engine::QueryEngine;
+        use shannon_engine::api::client::LlmClient;
+        use shannon_engine::api::types::LlmClientConfig;
+        use shannon_engine::permissions::PermissionManager;
+        use shannon_engine::state::StateManager;
+
+        let build = || {
+            QueryEngine::with_defaults_arc(
+                LlmClient::new(LlmClientConfig::default()),
+                std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+                PermissionManager::new(),
+                StateManager::new(),
+            )
+        };
+        // W3-4 citation snapshot: a bypassed (no-store) engine — exactly the
+        // shape `attach_shared_memory_if(.., true)` returns — yields an empty
+        // list, which the frontend renders as zero chips.
+        let bypassed = build();
+        assert!(turn_injected_memories(&bypassed, Some("anything")).is_empty());
+
+        // An attached but empty store also yields nothing (0-injection turn).
+        let dir = tempfile::TempDir::new().unwrap();
+        let shared = open_shared_store_at(dir.path().to_path_buf());
+        let attached = attach_shared_memory(build(), &shared, None);
+        assert!(turn_injected_memories(&attached, Some("anything")).is_empty());
+    }
+
+    #[test]
+    fn turn_injected_memories_names_seeded_entries_with_provenance() {
+        use shannon_core::query_engine::QueryEngine;
+        use shannon_engine::api::client::LlmClient;
+        use shannon_engine::api::types::LlmClientConfig;
+        use shannon_engine::permissions::PermissionManager;
+        use shannon_engine::state::StateManager;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let shared = open_shared_store_at(dir.path().to_path_buf());
+        // Pin the project key explicitly (with_working_directory) instead of
+        // reading the process cwd: parallel tests legitimately flip the
+        // process cwd, and the key must not race between the engine freeze
+        // and the seeding below.
+        const PROJECT_KEY: &str = "/fixed/w3c-project";
+        let engine = attach_shared_memory(
+            QueryEngine::with_defaults_arc(
+                LlmClient::new(LlmClientConfig::default()),
+                std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+                PermissionManager::new(),
+                StateManager::new(),
+            ),
+            &shared,
+            None,
+        )
+        .with_working_directory(PROJECT_KEY);
+        let mut entry = MemoryEntry::new(PROJECT_KEY, MemoryCategory::Preference, "use pnpm");
+        entry.source_session_id = Some("sess-9".to_string());
+        shared.write().unwrap().add(entry).unwrap();
+
+        let dtos = turn_injected_memories(&engine, Some("pnpm"));
+        assert_eq!(dtos.len(), 1);
+        assert_eq!(dtos[0].title, "use pnpm");
+        assert_eq!(dtos[0].category, "preference");
+        assert_eq!(dtos[0].source_session_id.as_deref(), Some("sess-9"));
     }
 
     #[test]
@@ -830,5 +1275,156 @@ mod tests {
         let g2 = build_memory_graph(None, &entries);
         assert_eq!(g1.nodes, g2.nodes);
         assert_eq!(g1.edges.len(), g2.edges.len());
+    }
+
+    #[test]
+    fn append_memory_bullet_creates_section_when_absent() {
+        let out = append_memory_bullet("", "use pnpm not npm");
+        assert!(out.starts_with("## Memories"), "{out}");
+        assert!(out.contains("- use pnpm not npm"), "{out}");
+    }
+
+    #[test]
+    fn append_memory_bullet_inserts_after_existing_section_header() {
+        let existing = "# Project\n\nSome intro.\n\n## Memories\n\n- old fact\n\n## Notes\n\nnote";
+        let out = append_memory_bullet(existing, "new fact");
+        let new_pos = out.find("- new fact").unwrap();
+        let old_pos = out.find("- old fact").unwrap();
+        let notes_pos = out.find("## Notes").unwrap();
+        assert!(new_pos > old_pos, "appended after old bullet");
+        assert!(new_pos < notes_pos, "stays inside the Memories section");
+    }
+
+    #[test]
+    fn append_memory_bullet_handles_file_without_trailing_newline() {
+        let out = append_memory_bullet("# Title", "fact");
+        assert!(out.contains("# Title"));
+        assert!(out.contains("## Memories"));
+        assert!(out.contains("- fact"));
+    }
+
+    // --- apply_memory_update (B3-24: update_memory supports `project`) ---
+
+    fn store_with_seeded_entry(dir: &tempfile::TempDir) -> (MemoryStore, String) {
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let mut e = entry("proj-a", MemoryCategory::Context, "moveable fact");
+        e.tags = vec!["alpha".to_string()];
+        store.add(e).unwrap();
+        let id = store.project_memories_all("proj-a")[0].id.clone();
+        (store, id)
+    }
+
+    #[test]
+    fn apply_memory_update_partial_fields_in_place() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, id) = store_with_seeded_entry(&dir);
+
+        let updated = apply_memory_update(
+            &mut store,
+            &id,
+            Some("edited fact".to_string()),
+            Some(vec!["beta".to_string()]),
+            Some(MemoryCategory::Decision),
+            None,
+        )
+        .unwrap();
+        assert_eq!(updated.content, "edited fact");
+        assert_eq!(updated.tags, vec!["beta".to_string()]);
+        assert_eq!(updated.category, MemoryCategory::Decision);
+        assert_eq!(updated.project, "proj-a", "project untouched without Some");
+        assert_eq!(store.get(&id).unwrap().content, "edited fact");
+    }
+
+    #[test]
+    fn apply_memory_update_none_fields_leave_entry_intact() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, id) = store_with_seeded_entry(&dir);
+
+        let updated = apply_memory_update(&mut store, &id, None, None, None, None).unwrap();
+        assert_eq!(updated.content, "moveable fact");
+        assert_eq!(updated.project, "proj-a");
+    }
+
+    #[test]
+    fn apply_memory_update_unknown_id_errors() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, _) = store_with_seeded_entry(&dir);
+        let err = apply_memory_update(&mut store, "missing", None, None, None, None);
+        assert!(err.is_err(), "unknown id must error, not silently no-op");
+    }
+
+    #[test]
+    fn apply_memory_update_moves_entry_between_projects() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, id) = store_with_seeded_entry(&dir);
+
+        let moved = apply_memory_update(
+            &mut store,
+            &id,
+            None,
+            None,
+            None,
+            Some("proj-b".to_string()),
+        )
+        .unwrap();
+        assert_eq!(moved.project, "proj-b");
+        assert_eq!(moved.id, id, "the entry keeps its identity across a move");
+        assert!(
+            store.project_memories_all("proj-a").is_empty(),
+            "old project no longer holds the entry"
+        );
+        assert_eq!(store.project_memories_all("proj-b").len(), 1);
+    }
+
+    #[test]
+    fn apply_memory_update_project_move_is_durable_across_reload() {
+        // The regression this guards against: an in-place project write would
+        // leave the original JSONL line behind, and the next load() (which
+        // streams every project file) could resurrect the entry under the
+        // old project. The move must go through delete + re-add.
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, id) = store_with_seeded_entry(&dir);
+        apply_memory_update(
+            &mut store,
+            &id,
+            None,
+            None,
+            None,
+            Some("proj-b".to_string()),
+        )
+        .unwrap();
+
+        let mut reloaded = MemoryStore::new(dir.path().to_path_buf());
+        reloaded.load().unwrap();
+        assert!(
+            reloaded.project_memories_all("proj-a").is_empty(),
+            "stale proj-a line must not survive a reload"
+        );
+        let proj_b = reloaded.project_memories_all("proj-b");
+        assert_eq!(proj_b.len(), 1);
+        assert_eq!(proj_b[0].id, id);
+        assert_eq!(proj_b[0].content, "moveable fact");
+        assert_eq!(proj_b[0].tags, vec!["alpha".to_string()]);
+    }
+
+    #[test]
+    fn apply_memory_update_move_with_field_edits_applies_both() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, id) = store_with_seeded_entry(&dir);
+
+        let moved = apply_memory_update(
+            &mut store,
+            &id,
+            Some("moved + edited".to_string()),
+            None,
+            Some(MemoryCategory::Decision),
+            Some("proj-b".to_string()),
+        )
+        .unwrap();
+        assert_eq!(moved.project, "proj-b");
+        assert_eq!(moved.content, "moved + edited");
+        assert_eq!(moved.category, MemoryCategory::Decision);
+        assert_eq!(store.project_memories_all("proj-a").len(), 0);
+        assert_eq!(store.project_memories_all("proj-b").len(), 1);
     }
 }

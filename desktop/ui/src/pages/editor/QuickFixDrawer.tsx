@@ -10,10 +10,13 @@ import type { DrawerDiag } from './types'
 interface QuickFixDrawerProps {
   t: (id: string, values?: Record<string, string | number | boolean>) => string
   drawer: DrawerDiag
+  /** P1-35: called after a code action rewrote the file on disk — the host
+   *  must re-read the file so the editor draft can't clobber the fix. */
+  onApplied?: () => void
   onClose: () => void
 }
 
-export default function QuickFixDrawer({ t, drawer, onClose }: QuickFixDrawerProps) {
+export default function QuickFixDrawer({ t, drawer, onApplied, onClose }: QuickFixDrawerProps) {
   return (
     <SidePanel
       open
@@ -25,9 +28,7 @@ export default function QuickFixDrawer({ t, drawer, onClose }: QuickFixDrawerPro
       <SidePanelBody className="p-md flex flex-col gap-sm">
         <LspQuickFixPanel
           diagnostic={drawer}
-          onApplied={() => {
-            /* nothing — panel shows its own confirmation */
-          }}
+          onApplied={onApplied}
           onClose={onClose}
         />
       </SidePanelBody>

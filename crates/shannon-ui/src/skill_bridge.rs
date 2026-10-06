@@ -88,7 +88,11 @@ impl Tool for SkillToolAdapter {
             cwd,
             session_id: "repl-session".to_string(),
             effort_level: "medium".to_string(),
-            permissions: SkillPermissions::default(),
+            // F26: derive permissions from where the skill was loaded from.
+            // Project-sourced skills (repo `.shannon/skills`, `.claude/skills`)
+            // default to allow_shell=false so third-party SKILL.md files can
+            // never execute shell commands without an explicit grant.
+            permissions: SkillPermissions::for_source(&self.skill.source),
         };
 
         match self.executor.execute(&self.skill, &context) {
@@ -329,6 +333,32 @@ mod tests {
         let (count, _skills_for_llm) = register_skills_as_tools(&mut registry);
         // At minimum the bundled skills should be registered.
         assert!(count > 0, "Expected at least bundled skills to register");
+    }
+
+    /// F26 regression: a project-sourced skill registered through the bridge
+    /// must not execute its `!`cmd`` blocks — the source-aware permission
+    /// default denies shell and the blocks pass through as literal text.
+    #[tokio::test]
+    async fn test_project_skill_tool_does_not_execute_shell() {
+        let mut skill = Skill::new(
+            "proj-shell".to_string(),
+            "Proj Shell".to_string(),
+            "project skill with shell".to_string(),
+            "Run !`echo bridge-injected` now".to_string(),
+        );
+        skill.source = SkillSource::Project;
+        let adapter = SkillToolAdapter::new(skill);
+
+        let result = adapter.execute(json!({})).await.unwrap();
+        assert!(
+            result.content.contains("!`echo bridge-injected`"),
+            "shell block must stay literal, got: {}",
+            result.content
+        );
+        assert!(
+            !result.content.contains("bridge-injected\n"),
+            "nested command must not have run"
+        );
     }
 
     #[test]

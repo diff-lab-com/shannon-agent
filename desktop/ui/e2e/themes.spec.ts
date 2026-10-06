@@ -96,6 +96,12 @@ test('every theme passes axe color-contrast on the chat page', async ({ page }) 
       id,
     )
     await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))))
+    // Kill color transitions before axe reads painted text: `transition-colors`
+    // lingers ~150ms after the theme swap, and on a busy runner the double-rAF
+    // above still lands mid-transition (seen as tokyo-night flakes locally).
+    await page.addStyleTag({
+      content: '*, *::before, *::after { transition: none !important; animation: none !important; }',
+    })
     const results = await new AxeBuilder({ page })
       .withRules(['color-contrast'])
       .analyze()

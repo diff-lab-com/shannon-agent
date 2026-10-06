@@ -13,13 +13,18 @@ import { GradientText } from '@/components/reactbits/GradientText'
 import { Stepper } from './welcome/components'
 import { TaskStep } from './welcome/TaskStep'
 import { ModelStep } from './welcome/ModelStep'
-import { ToolsStep } from './welcome/ToolsStep'
 import { DoneStep } from './welcome/DoneStep'
 import MigrationWizard from '@/components/migration/MigrationWizard'
-import { TASKS, type TaskId, type DocumentsSkill } from './welcome/constants'
+import { TASKS, type TaskId } from './welcome/constants'
 import type { ProvidersFile } from '@/types'
 
 export const WELCOME_SEEN_KEY = 'shannon.hasSeenWelcome'
+
+// Two-step onboarding (UI audit §3.1: competitors onboard in 2 screens).
+// Screen 1 combines task + model; the task's recommended tools are shown
+// on the Done step as honest copy (B5-33, decision 4-B: Welcome never
+// flips tool config — that stays in Settings).
+const WELCOME_STEP_LABELS = ['welcome.step.task', 'welcome.step.done']
 
 export function shouldShowWelcome(loading: boolean, hasProvider: boolean): boolean {
   if (typeof window === 'undefined') return false
@@ -43,7 +48,6 @@ export default function Welcome() {
   const [provider, setProvider] = useState<string>('anthropic')
   const [saving, setSaving] = useState(false)
   const [pickedDir, setPickedDir] = useState<string | null>(null)
-  const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({})
   const [devMode, setDevMode] = useState(false)
   // True once a usable provider was detected from the environment (API key
   // present, or a local engine like Ollama that needs no key).
@@ -51,9 +55,6 @@ export default function Welcome() {
   const envCheckedRef = useRef(false)
   const [providerSaved, setProviderSaved] = useState(false)
   const [showAddProviderModal, setShowAddProviderModal] = useState(false)
-  const [skillState, setSkillState] = useState<
-    Record<string, { status: 'idle' | 'installing' | 'installed' | 'failed'; error?: string }>
-  >({})
   // P1-6 — migration wizard overlay (import from Claude Code / ZCode),
   // reachable from the final Welcome step.
   const [migrationOpen, setMigrationOpen] = useState(false)
@@ -66,7 +67,9 @@ export default function Welcome() {
   // gate (previously this dead-ended env-key users on non-recommended
   // providers and forced manual API-key entry).
   const canAdvanceFromModel = providerSaved || envProviderReady
-  const enabledToolCount = Object.values(enabledTools).filter(Boolean).length
+  // Decision 4-B: the summary states a recommendation, not a fact — tools
+  // are enabled in Settings, never from the Welcome flow.
+  const recommendedToolCount = currentTask.tools.length
 
   // On mount, probe the shell for a pre-configured provider so the user can
   // skip the API-key entry step. Only fires once — the ref guards against
@@ -104,13 +107,9 @@ export default function Welcome() {
       if (active) {
         setProvider(active.kind)
       }
-      // Pre-check tools recommended for this task so the user can opt in/out.
-      const initial: Record<string, boolean> = {}
-      for (const t of currentTask.tools) initial[t] = true
-      setEnabledTools(prev => ({ ...initial, ...prev }))
       setShowAddProviderModal(false)
       setProviderSaved(true)
-      setStep(2)
+      setStep(1)
     } catch (e) {
       toastError(intl.formatMessage({ id: 'welcome.toast.provider.failed' }), e)
     } finally {
@@ -151,114 +150,88 @@ export default function Welcome() {
     }
   }
 
-  const advanceFromTask = () => {
-    if (task === null) return
-    // Default provider to the task recommendation when advancing.
-    setProvider(currentTask.recommendedProvider)
-    setStep(1)
-  }
-
   const advanceFromModel = () => {
     if (!canAdvanceFromModel) return
-    // Pre-check tools recommended for this task so the user can opt in/out.
-    const initial: Record<string, boolean> = {}
-    for (const t of currentTask.tools) initial[t] = true
-    setEnabledTools(prev => ({ ...initial, ...prev }))
-    setStep(2)
-  }
-
-  const toggleTool = (id: string) => {
-    setEnabledTools(prev => ({ ...prev, [id]: !prev[id] }))
-  }
-
-  const installDocumentsSkill = async (skill: DocumentsSkill) => {
-    setSkillState(prev => ({ ...prev, [skill.id]: { status: 'installing' } }))
-    try {
-      await api.installSkillFromRepo(skill.id, skill.repo, skill.ref)
-      setSkillState(prev => ({ ...prev, [skill.id]: { status: 'installed' } }))
-      toast.success(intl.formatMessage({ id: 'welcome.skills.toast.installed' }, { name: intl.formatMessage({ id: skill.labelKey }) }))
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setSkillState(prev => ({ ...prev, [skill.id]: { status: 'failed', error: msg } }))
-      toastError(intl.formatMessage({ id: 'welcome.skills.toast.failed' }, { name: intl.formatMessage({ id: skill.labelKey }) }), e)
-    }
-  }
-
-  const openSettingsGeneral = () => {
-    markWelcomeSeen()
-    navigate('/settings/general')
-  }
-
-  const openFeaturedSkills = () => {
-    markWelcomeSeen()
-    navigate('/extensions/featured')
+    setStep(1)
   }
 
   return (
     <div className="min-h-screen bg-background text-on-surface flex flex-col">
-      <header className="flex items-center justify-between px-xl py-lg">
-        <div className="flex items-center gap-sm">
-          <span className="material-symbols-outlined text-primary">auto_awesome</span>
-          <GradientText
-            text={intl.formatMessage({ id: 'app.name' })}
-            className="font-headline-md"
-          />
+      {/* 2026-09 review: the hero used to be only the brand mark + skip
+          button — looked like an empty header. A two-line tagline + intro
+          paragraph gives first-run users a reason to slow down and pick
+          a meaningful starting point (not just "Skip →"). */}
+      <header className="flex flex-col gap-lg px-xl pt-xl pb-md max-w-narrow mx-auto w-full">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-sm">
+            <span className="material-symbols-outlined text-primary icon-xl">auto_awesome</span>
+            <GradientText
+              text={intl.formatMessage({ id: 'app.name' })}
+              className="font-headline-md text-headline-md"
+            />
+          </div>
+          <Button
+            variant="ghost"
+            onClick={finish}
+            className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded-sm px-xs"
+            aria-label={intl.formatMessage({ id: 'welcome.skipAria' })}
+          >
+            {intl.formatMessage({ id: 'welcome.skip' })}
+          </Button>
         </div>
-        <Button
-          variant="ghost"
-          onClick={finish}
-          className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded px-xs"
-          aria-label={intl.formatMessage({ id: 'welcome.skipAria' })}
-        >
-          {intl.formatMessage({ id: 'welcome.skip' })}
-        </Button>
+        <div className="text-center max-w-2xl mx-auto">
+          <h1 className="font-headline-md text-on-surface text-[28px] leading-tight mb-sm">
+            {intl.formatMessage({ id: 'welcome.hero.tagline' })}
+          </h1>
+          <p className="text-on-surface-variant font-body-md leading-relaxed">
+            {intl.formatMessage({ id: 'welcome.hero.subtitle' })}
+          </p>
+        </div>
       </header>
 
-      <main className="flex-1 flex items-center justify-center px-xl py-xl">
+      <main className="flex-1 flex items-start justify-center px-xl py-md">
         <div className="w-full max-w-xl">
-          <Stepper step={step} />
+          <Stepper step={step} labels={WELCOME_STEP_LABELS} />
 
           {step === 0 && (
-            <TaskStep task={task} setTask={setTask} onContinue={advanceFromTask} />
+            <>
+              <TaskStep
+                task={task}
+                setTask={setTask}
+                onContinue={() => {
+                  // Task picked: guide the eye down to the model section
+                  // instead of navigating away (single-screen flow).
+                  document.getElementById('welcome-model-section')
+                    ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                }}
+              />
+              {task !== null && (
+                <div id="welcome-model-section" className="mt-lg scroll-mt-lg">
+                  <ModelStep
+                    task={task}
+                    saving={saving}
+                    canContinue={canAdvanceFromModel}
+                    onOpenAddProvider={() => setShowAddProviderModal(true)}
+                    onBack={() => setTask(null)}
+                    onContinue={advanceFromModel}
+                  />
+                </div>
+              )}
+            </>
           )}
 
           {step === 1 && task !== null && (
-            <ModelStep
-              task={task}
-              saving={saving}
-              canContinue={canAdvanceFromModel}
-              onOpenAddProvider={() => setShowAddProviderModal(true)}
-              onBack={() => setStep(0)}
-              onContinue={advanceFromModel}
-            />
-          )}
-
-          {step === 2 && task !== null && (
-            <ToolsStep
-              task={task}
-              enabledTools={enabledTools}
-              toggleTool={toggleTool}
-              onBack={() => setStep(1)}
-              onContinue={() => setStep(3)}
-              onOpenSettings={openSettingsGeneral}
-            />
-          )}
-
-          {step === 3 && task !== null && (
             <DoneStep
               task={task}
               provider={provider}
-              enabledToolCount={enabledToolCount}
+              recommendedToolCount={recommendedToolCount}
               pickedDir={pickedDir}
               fallbackWorkingDir={config?.working_dir ?? null}
               devMode={devMode}
               setDevMode={setDevMode}
-              skillState={skillState}
               onPickDirectory={pickDirectory}
-              onBack={() => setStep(2)}
+              onBack={() => setStep(0)}
               onFinish={finish}
-              onInstallSkill={installDocumentsSkill}
-              onBrowseFeaturedSkills={openFeaturedSkills}
               onOpenMigration={() => setMigrationOpen(true)}
             />
           )}

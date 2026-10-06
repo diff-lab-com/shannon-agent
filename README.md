@@ -1,38 +1,91 @@
-# Shannon Code
+# Shannon
 
 > **Note:** The unified `shannon` CLI replaces the former `shannon-code` product from earlier releases. Install paths, subcommands, and configuration are unchanged — only the binary name changed.
 
 <div align="center">
 
-**A high-performance, open-source AI-assisted coding tool, written in Rust**
+**Open source. Total control. Keys never leave your machine.**
+
+The open-source AI agent workspace — terminal, headless, server, and desktop,
+one Rust engine, any LLM provider.
 
 [![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-see%20metrics.md-brightgreen.svg)](./docs/metrics.md)
-<!-- metrics:start:badge -->[![Crates](https://img.shields.io/badge/crates-20-blue.svg)](./docs/metrics.md)<!-- metrics:end:badge -->
+<!-- metrics:start:badge -->[![Crates](https://img.shields.io/badge/crates-22-blue.svg)](./docs/metrics.md)<!-- metrics:end:badge -->
 
-[English](#what-is-shannon-code) | [中文文档](./README.zh-CN.md) | [Documentation](https://shannon-agent.github.io/shannon-code/)
+[English](#what-is-shannon) | [中文文档](./README.zh-CN.md) | [Documentation](https://shannon-agent.github.io/shannon-code/)
 
 </div>
 
 ---
 
-## What is Shannon Code?
+## What is Shannon?
 
-Shannon Code is a fully open-source, Rust-based AI coding assistant that works with **any LLM provider** — Anthropic, OpenAI, Ollama, DeepSeek, or any OpenAI-compatible endpoint. It provides a rich terminal UI, powerful tool orchestration, multi-agent coordination, and the Model Context Protocol (MCP) for extensibility.
+Shannon is a fully open-source (Apache-2.0), Rust-based **AI agent workspace** that runs on your machine and works with **any LLM provider** — Anthropic, OpenAI, DeepSeek, Z.ai (GLM), Ollama, or any OpenAI-compatible endpoint. One engine, four surfaces: an interactive terminal UI, headless mode for scripts and CI, a local engine server, and a desktop app.
 
-Unlike closed-source alternatives, Shannon Code has **no hidden billing injections**, **no cache-destroying dynamic headers**, and **no vendor lock-in**. <!-- metrics:start:intro -->Every line of code is auditable, and every behavior is verified by **11,752 automated tests**.<!-- metrics:end:intro -->
+Two commitments shape every design decision:
 
-**Key differentiators:**
+### 1. Open source, total control
 
-| Feature | Shannon Code | Typical closed-source tools |
-|---------|-------------|---------------------------|
-| LLM providers | Anthropic, OpenAI, Ollama, any OpenAI-compatible | Single vendor |
-| Cost transparency | No hidden fees or cache manipulation | Dynamic billing headers inflate costs 10-20x |
-<!-- metrics:start:diffrow -->| Test coverage | **11,752** tests across 20 workspace members | Often zero tests |<!-- metrics:end:diffrow -->
-| Extensibility | MCP protocol, plugin system, skills framework | Limited or closed |
-| Agent orchestration | Multi-agent teams, worktree isolation, `/batch` PRs | Basic or none |
-| Code auditability | Every line visible in source code | Black box |
+- **Every line auditable** — Apache-2.0, no black boxes. <!-- metrics:start:intro -->Every line of code is auditable, and every behavior is verified by **over 12,000 automated tests**.<!-- metrics:end:intro -->
+- **Every agent action replayable** — sessions are event-sourced: each turn lands in an append-only `events.jsonl`, and `shannon trace show / replay / diff / export` lets you reconstruct exactly what happened, like a dashcam for your agents.
+- **Every cost visible** — BYOK pay-per-use with session budget caps, context breakdown by category, cache hit-rate visibility, and no subscription quotas.
+- **No vendor lock-in** — switch providers anytime; upstream price hikes and model retirements don't strand you. Claude Code ecosystem compatible: `CLAUDE.md`, `.claude/` agents, skills, hooks, and `.mcp.json` work out of the box.
+
+### 2. Keys never leave your machine
+
+- **Your API keys talk directly to the provider you choose** — no middleman server, no cloud-side credential pool. LLM credentials stay in `0600` files under `~/.shannon/credentials/` on your machine; IM channel credentials live in the OS keyring.
+- **Outbound secret scanning** — the built-in `secret-guard` (audit mode by default, `redact` opt-in; on the `shannon-plugin-api` content-transform contract) scans outgoing messages for secret-shaped content and logs or rewrites them before they reach the model. Rewrites are byte-stable, so your prompt cache keeps hitting.
+- **OS-level sandboxing** — Landlock (Linux), macOS Seatbelt, and bubblewrap providers, plus a rule-based + LLM-assisted permission system with strict/balanced/permissive/custom profiles and per-action confirmation for high-risk tools.
+- **Prompt-injection scanning and signature verification** for skills and MCP servers; webhook events are HMAC-SHA256 signed.
+- **No telemetry by default** — there is no telemetry pipeline at all. The one automatic outbound call besides your provider is a release-availability check (at most once per 24h; disable with `SHANNON_FEATURE_UPDATE_CHECK=0`). Local voice input (whisper.rs) never sends audio anywhere.
+
+**How Shannon compares** (as of 2026-09; sources in [docs/competitive-research-2026-09.md](docs/competitive-research-2026-09.md)):
+
+| | Shannon | Cloud subscription agents (Claude Code, Codex, Grok Bot) | Open-source peers (Hermes, Codex CLI, Grok Build) |
+|---|---|---|---|
+| License | Apache-2.0, fully open | Proprietary | Open source |
+| Execution | Local-first, your machine | Cloud VMs / sandboxes | Local |
+| Key & secret handling | Outbound secret scanning + injection scanning; credentials stay on-machine | Vendor-managed cloud credential stores | Varies |
+| LLM providers | Any (BYOK) | Single vendor | Multi / any |
+| Cost model | Pay-per-use + budget caps + visible breakdown | Subscription quotas / credits | BYOK |
+| Auditability | Event-sourced sessions, `trace` replay/diff | Varies, often black box | Varies |
+<!-- metrics:start:diffrow -->| Test coverage | **12,000+** tests across 22 workspace members | n/a (closed source) | Varies |<!-- metrics:end:diffrow -->
+| Surfaces | Terminal + headless + server + desktop, one engine | Vary | Vary |
+
+---
+
+## One engine, four surfaces
+
+One install, four ways in (every desktop installer bundles the `shannon` CLI too):
+
+| Entry | What |
+|---|---|
+| `shannon` | Interactive TUI / REPL (default) |
+| `shannon -p "..."` | Headless scripting — NDJSON streaming, `--schema` structured output |
+| `shannon serve` | Engine daemon on `:33420` — the API surface gateway/mobile connect to |
+| `shannon desktop` | Desktop app — `--install` downloads the platform bundle on demand |
+
+Sessions are portable across surfaces: start in the terminal, continue on the desktop, approve from your phone.
+
+### Shannon (Terminal)
+
+The terminal-native coding agent: rich TUI with diff viewer and markdown rendering, tool orchestration, multi-agent teams with worktree isolation, MCP extensibility, and full replayability via `shannon trace`.
+
+### Shannon Desktop
+
+<p align="center">
+  <img src="docs/design/ui-audit-2026-09/screenshots/themes/chat-tokyo-night.png" alt="Shannon Desktop — default tokyo-night theme" width="600" />
+  <br/><sub>Default theme (tokyo-night). More: <a href="docs/design/ui-audit-2026-09/THEME-GALLERY.md">12-theme gallery</a></sub>
+</p>
+
+A native desktop workspace built on **Tauri 2 + React 19 — not Electron**. Two modes for two audiences:
+
+- **Simple mode** — for everyone: chat with inline tool calls you can approve or revoke one by one, drag-and-drop attachments, voice input (cloud or fully local), scheduled tasks with calendar and dependency views, and a triage inbox for everything your agents did while you were away.
+- **Advanced mode** — for developers: Connectors (MCP servers, skills, agents), multi-panel workspace with integrated terminal, git worktree management, memory graph, and Mission Control multi-agent orchestration.
+
+Plus: mobile pairing (scan a QR code to dispatch and approve tasks from your phone), IM channels (Telegram / Discord / Slack / 飞书 / 钉钉), system tray, global shortcuts, an update checker that points you at the latest installer, and 12 themes.
 
 ---
 
@@ -40,28 +93,61 @@ Unlike closed-source alternatives, Shannon Code has **no hidden billing injectio
 
 ### Multi-Provider LLM Support
 
-Connect to any LLM with a single config file:
+BYOK, no middleman: connect a provider once and Shannon stores the key locally (`0600`), probes it, and hot-reloads — no env vars required afterwards:
 
 | Provider | Models | Setup |
 |----------|--------|-------|
-| Anthropic | Claude Sonnet, Opus, Haiku | `provider = "anthropic"` |
-| OpenAI | GPT-4o, GPT-4, GPT-3.5 | `provider = "openai"` |
-| Ollama | Llama, Mistral, Qwen, etc. | `provider = "ollama"` (auto-detect) |
-| DeepSeek | DeepSeek Chat, Coder | `provider = "openai"` + `base_url` |
-| Any OpenAI-compatible | Any model | `provider = "openai"` + `base_url` |
+| Anthropic | Claude Sonnet / Opus / Haiku families | `/connect anthropic <key>` — [guide](docs/providers/anthropic.md) |
+| OpenAI | GPT-4o and newer | `/connect openai <key>` — [guide](docs/providers/openai.md) |
+| Ollama | Llama, Mistral, Qwen, etc. (local) | `/connect ollama` (auto-detect) — [guide](docs/providers/ollama.md) |
+| DeepSeek | DeepSeek Chat / Coder | `/connect deepseek <key>` — [guide](docs/providers/deepseek.md) |
+| Z.ai (GLM) | GLM family | `/connect glm <key>` — [guide](docs/providers/glm-zai.md) |
+| Kimi / MiniMax / OpenRouter + 15 more | — | `/connect <slug> <key>` — [provider index](docs/providers/index.md) · [reference](docs/configuration.md#provider-reference) |
 
 Anthropic prompt caching is supported with three-layer cache breakpoint injection for maximum efficiency.
 
+### Goals & Autonomous Tasks
+
+Hand your agent an objective, not just a prompt:
+
+- **`/goal`** — persistent goals with automatic resumption; the engine keeps working across context compaction, detects `GOAL_COMPLETE` / `GOAL_BLOCKED`, and backs off (30m → 1h → 2h) on blocked retries
+- **Budget caps** — `--budget $N` hard limits spending; anti-spin and stall-strike guards stop runaway loops
+- **`/loop` / `/ralph`** — autonomous iteration loops sharing the same guards
+- **Triage inbox** — results and blockers land in the desktop triage page; continue in the original session with one click
+
+### Automation & Triggers
+
+- **Routines** — cron-scheduled, one-shot, and event-triggered tasks
+- **API endpoint triggers** — `shannon serve` exposes a per-routine trigger URL with HMAC-SHA256 verification ("point your Slack alert at your agent")
+- **GitHub event triggers** — react to issues and CI events
+- **IM channels** — Telegram / Discord / Slack / 飞书 / 钉钉 inbound: DMs answer directly, group chats respond to @mentions; progress and results push back to the original chat
+- **Mobile dispatch** — pair by QR code, dispatch and approve tasks from your phone
+
+### Office & Knowledge-Worker Workflows
+
+For non-coders, the same engine delivers finished documents, not just chat ([product story](docs/product/office-agent-story.md)):
+
+- **Built-in document skills** — `/docx-report`, `/xlsx-table`, `/ppt-outline`, `/meeting-minutes`, and `/style-extract` (extract brand fonts/colors/layouts from an existing .pptx/.docx) produce real files with zero dependencies; engine-native `write_xlsx` generates spreadsheets with formulas even without python3
+- **Scheduled delivery** — routines hand finished .docx/.xlsx/.pptx artifacts to the triage inbox and route them via IM webhooks or IMAP drafts; Shannon does not send email directly
+- **Data-source grounded** — configured IMAP/Obsidian sources feed briefings with source attribution; transcript files (.srt/.vtt/.txt) become structured meeting minutes
+
+### Multi-Agent Orchestration
+
+- **Team coordination** — `TeamCreate`, `SendMessage`, task assignment and tracking
+- **Worktree isolation** — each agent works in its own git worktree
+- **Per-agent config** — override model, tools, and working directory per agent
+- **`/batch` best-of-N** — decompose a task, spawn parallel worktree-isolated attempts, compare diffs side by side, adopt the winner
+- **Agent dashboard** — real-time status in TUI and desktop
+
 ### Tool System
 
-A comprehensive suite of built-in tools for code manipulation:
-
 - **File operations** — Read, Edit, Write, MultiEdit with three-way merge and conflict resolution
-- **Code analysis** — Syntax highlighting, symbol navigation (LSP), diff rendering
+- **Code analysis** — Syntax highlighting, symbol navigation (LSP), diff rendering, repository symbol map
 - **Git integration** — Status, diff, log, commit, branch management
-- **Command execution** — Sandboxed Bash with streaming output and timeout control
-- **Web search** — Real-time information retrieval
-- **Image analysis** — Screenshot understanding and visual reasoning
+- **Command execution** — Sandboxed Bash with streaming output and timeout control, plus background process tools
+- **Web & browser** — Web search, local browser automation (drive your installed browser; no bundled binaries)
+- **Computer use** — Screenshot understanding with vision models, controlled input injection, per-action confirmation; AppleScript/Shortcuts tools on macOS
+- **Image & document analysis** — Screenshot understanding, batch image analysis, PDF text extraction
 - **Notebook editing** — Jupyter notebook cell read/edit/insert/delete
 
 ### MCP (Model Context Protocol)
@@ -74,78 +160,64 @@ Full MCP implementation compatible with Claude Code's MCP ecosystem:
 - **Resource management**: Subscribe to resource updates, handle notifications
 - **Webhook support**: HMAC-SHA256 signed events with retry and persistence
 - **Configuration**: `.mcp.json` (project-level) or `~/.claude/settings.json`
+- **SaaS integrations**: GitHub, Slack, Jira, Notion, Linear MCP servers included
 
-### Multi-Agent Orchestration
+### Session, Context & Memory
 
-Coordinate multiple AI agents for complex tasks:
-
-- **Team coordination** — `TeamCreate`, `SendMessage`, task assignment and tracking
-- **Worktree isolation** — Each agent works in its own git worktree
-- **Per-agent config** — Override model, tools, and working directory per agent
-- **`/batch` command** — Decompose tasks, create worktrees, spawn agents, create PRs in parallel
-- **Agent dashboard** — Real-time status view with `AgentBarWidget` and `AgentsPanel`
-
-### Permission System
-
-Sophisticated safety controls with multiple modes:
-
-- **Rule-based classifier** — Pattern matching for known safe/dangerous operations
-- **LLM auto-classifier** — Async fallback for ambiguous cases (confidence < 0.7)
-- **Permission profiles** — Strict, Balanced, Permissive, or Custom (loadable from `.shannon/profiles/*.toml`)
-- **4-tier precedence** — Hard deny > Soft deny > Allow > Explicit intent
-- **Approval workflows** — Interactive confirmation for risky operations
-
-### Session & Context Management
-
-- **Session persistence** — Event-sourced: every turn lands in an
-  append-only `events.jsonl` per session; resume, search, replay, and diff
-  are all projections of that single authoritative log. Inspect any session
-  with `shannon trace show / replay / diff / export`. (Breaking since
-  v0.11.0-dev: legacy `sessions/<uuid>.json` snapshots and transcript files
-  are no longer read — see CHANGELOG.)
-- **Context compression** — Auto-compact, micro-compact, conversation phase tracking
-- **Memory system** — Persistent memory store with auto-extraction and consolidation
-- **Extended context** — Phase-based budget reallocation (Initialization → Active → Extended → Critical)
-- **Checkpoint/Undo** — Git-based file checkpointing with diff preview before revert
+- **Event-sourced sessions** — every turn lands in an append-only `events.jsonl` per session; resume, search, replay, and diff are all projections of that single authoritative log (`shannon trace show / replay / diff / export`)
+- **Context compression** — auto-compact, micro-compact, conversation phase tracking, token budget watchdog (`SHANNON_TOKEN_BUDGET`)
+- **Memory system** — persistent memory with provenance, desktop memory page, auto-extraction and consolidation
+- **Checkpoint/Undo** — Git-based file checkpointing with diff preview before revert (`/rewind`)
 - **Plan mode** — Structured planning with approval workflows
+
+### Permission Modes
+
+What the agent may do without asking is governed by an approval mode — a 4+3 model (design: [docs/plans/2026-10-04-permission-mode-naming-design.md](docs/plans/2026-10-04-permission-mode-naming-design.md)):
+
+Autonomy ladder (terminal `Shift+Tab` cycles these three; desktop composer pill mirrors it):
+
+| Mode | Behavior |
+|---|---|
+| `ask` (aliases: `default`, `suggest`) | Reads run freely; every other tool asks first. |
+| `auto-edit` (aliases: `acceptEdits`, `auto`) | File edits run without asking; commands still ask. **This is the engine default.** |
+| `full-auto` | Everything below critical risk runs automatically. |
+
+Workflow tier (single-column, entered via `/plan` — never in the cycle):
+
+| Mode | Behavior |
+|---|---|
+| `plan` | Read-only until you approve the plan; approval unlocks plan-scoped auto-run (critical-risk operations and deny rules still bind). Exiting restores your previous mode. |
+
+Expert modes (explicit `/mode` in the terminal; Settings → General → "Advanced" in the desktop):
+
+| Mode | Behavior |
+|---|---|
+| `readonly` | Read-only analysis — no writes, no bash. |
+| `dontAsk` | Never waits: allow-listed tools and reads pass, everything else is **denied** (CI posture; pair with `--allowed-tools`). |
+| `bypassPermissions` | Skips all checks except deny rules. Guardrailed: refused as root, `SHANNON_DISABLE_BYPASS=1` kill switch, first-use confirmation. |
+
+Allow / ask / deny rules in `settings.json` (`permissions.allow/ask/deny`) layer on top and are effective in **every** mode — deny rules even under `bypassPermissions`. `permissions.defaultMode` picks your startup mode (project files may not set bypass/dontAsk). The `permissions.max_auto_approvals` breaker (default off) forces a human decision after N consecutive auto-approvals; headless runs exit with code 8 when it trips.
 
 ### Plugin & Skill System
 
-Extend Shannon with plugins and skills:
-
-- **Plugin discovery** — Load from `.shannon/plugins/` with manifest parsing
-- **Tool plugins** — MCP-based tool discovery and registration
-- **Command plugins** — Register as slash commands in the REPL
-- **Skill plugins** — Prompt templates triggered by slash commands
+- **`shannon-plugin-api`** — a content-transform middleware contract between engine and plugins, with four invariants: byte-stable determinism (prompt-cache safe), one-way flow, idempotence, and explicit failure semantics. The built-in `secret-guard` plugin is the first implementation.
+- **Plugin discovery** — load from `.shannon/plugins/` with manifest parsing
+- **Command plugins** — register as slash commands in the REPL
+- **Skill plugins** — prompt templates triggered by slash commands, compatible with `.claude/skills/*/SKILL.md`
 - **Hook system** — 32+ events (tool execution, compaction, config changes, agent lifecycle)
 
 ### Remote Targets (SSH / Docker)
 
 Run the entire toolchain on a remote machine or inside a container:
 
-- **SSH hosts** — reuse `~/.ssh/config` (aliases, agent, ProxyJump); files go
-  over SFTP, commands over the multiplexed ssh connection. First-connect
-  trust uses the standard known_hosts TOFU flow.
-- **Docker containers** — attach to a running container (`docker exec`);
-  optionally through an SSH hop (`ssh_target`) for remote daemons.
-- **Management** — `/remote` in the TUI, `--target <name>` headless, or
-  Settings → Remotes in the desktop app. Targets live in
-  `~/.shannon/remotes.toml` (no credentials stored; system ssh owns auth).
+- **SSH hosts** — reuse `~/.ssh/config` (aliases, agent, ProxyJump); files go over SFTP, commands over the multiplexed ssh connection. First-connect trust uses the standard known_hosts TOFU flow.
+- **Docker containers** — attach to a running container (`docker exec`); optionally through an SSH hop (`ssh_target`) for remote daemons.
+- **Management** — `/remote` in the TUI, `--target <name>` headless, or Settings → Remotes in the desktop app. Targets live in `~/.shannon/remotes.toml` (no credentials stored; system ssh owns auth).
 
 ```bash
 /remote use build-box          # TUI: switch this session to a target
 shannon --target build-box -p "run the test suite"   # headless
 ```
-
-### IM Channel Integration
-
-Route messages from Telegram / Discord / Slack / Feishu / DingTalk into Shannon as tasks
-from the desktop "Social Connections" settings (see the
-[IM channels integration guide](docs/integrations/im-channels.md), Chinese):
-
-- **Inbound triggers** — DMs answer directly; group chats need an @mention or a `/shannon` prefix (configurable)
-- **Lifecycle push** — task start / completion / failure reported back to the original chat
-- **Security baseline** — credentials only in the OS keyring, webhook signatures verified, sensitive operations confirmed back in IM
 
 ### Internationalization
 
@@ -153,15 +225,20 @@ from the desktop "Social Connections" settings (see the
 - Community-contributable locale files in `locales/` directory
 - UI language switchable at runtime
 
-### VS Code Extension
+---
 
-A companion extension for VS Code is available in `editors/vscode/`:
+## Security & Privacy
 
-- WebView chat panel with Markdown rendering
-- Diff viewer for reviewing file changes (accept/reject)
-- NDJSON subprocess communication with `shannon --prompt`
-- Status bar indicator for connection state
-- Configuration sync between VS Code settings and Shannon CLI
+Shannon is local-first: state lives in `~/.shannon/`, and nothing leaves your machine except the model API calls you configure.
+
+| Layer | What it does |
+|---|---|
+| **Credentials** | Provider API keys stay on your machine and talk directly to the provider you choose. IM channel and integration credentials live in the OS keyring. No middleman server ever holds your keys. |
+| **Secret redaction** | The `secret-guard` plugin (via `shannon-plugin-api`) redacts secrets from outbound messages before they reach the model and restores them for local tool execution — byte-stable, so prompt caching keeps working. Session-level redaction policies via `~/.shannon/redaction.toml`. |
+| **Sandboxing** | Landlock (Linux), macOS Seatbelt, and bubblewrap providers; manifest-driven sandbox enforcement for file writes; experimental `/sandbox` flag. |
+| **Permissions** | Rule-based classifier + LLM-assisted classification (confidence < 0.7 falls back), strict/balanced/permissive/custom profiles, 4-tier precedence, interactive approval for risky operations, per-action confirmation for high-risk tools (computer use, AppleScript). |
+| **Supply chain** | Prompt-injection scanning and signature verification for skills and MCP servers; `cargo-deny` and `cargo-semver-checks` gates in CI. |
+| **Telemetry** | None by default; any usage signal is strictly opt-in. Local voice input (whisper.rs) sends audio nowhere. |
 
 ---
 
@@ -178,8 +255,10 @@ curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/downloa
 # Server / headless — CLI only, no sudo
 curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | SHANNON_COMPONENTS=cli sh
 
-# Or with cargo (requires Rust 1.88+)
-cargo install --git https://github.com/diff-lab-com/shannon-agent.git
+# Or with cargo (requires Rust 1.88+) — the repo is a virtual Cargo
+# workspace, so a bare `cargo install --git` has no root binary to build;
+# pin the tag and pick the CLI binary explicitly.
+cargo install --git https://github.com/diff-lab-com/shannon-agent.git --tag v0.12.0 --locked --bin shannon
 ```
 
 <details>
@@ -191,51 +270,38 @@ cargo install --git https://github.com/diff-lab-com/shannon-agent.git
 
 </details>
 
-One install, four ways in (every desktop installer bundles the `shannon` CLI too):
-
-| Entry | What |
-|---|---|
-| `shannon` | Interactive TUI / REPL (default) |
-| `shannon -p "..."` | Headless scripting — NDJSON streaming, `--schema` structured output |
-| `shannon serve` | Engine daemon on `:33420` — the API surface gateway/mobile connect to |
-| `shannon desktop` | Desktop app — `--install` downloads the platform bundle on demand |
-
 ### 2. Configure
 
-Set your API key and preferred model:
+Connect a provider — the key stays on your machine and is used to talk directly to your chosen provider:
 
 ```bash
-# Option A: Environment variable (fastest)
+shannon            # start the TUI, then:
+/connect anthropic sk-ant-...    # stores the key, probes it, opens the model picker
+```
+
+Alternatives:
+
+```bash
+# Environment variable (headless / CI)
 export SHANNON_API_KEY="sk-ant-..."
 export SHANNON_MODEL="claude-sonnet-4-20250514"
 
-# Option B: Config file (persistent)
-mkdir -p ~/.shannon
-cat > ~/.shannon/config.toml << 'EOF'
-provider = "anthropic"
-api_key = "sk-ant-..."
-model = "claude-sonnet-4-20250514"
-max_tokens = 8192
-EOF
+# Non-interactive provider setup
+shannon providers add anthropic --kind anthropic --model claude-sonnet-4-6
+export ANTHROPIC_API_KEY="sk-ant-..."
 ```
+
+API keys are never written to config files — a flat `api_key = "..."` in `config.toml` is ignored by design. Keys live in `~/.shannon/credentials/` (`0600`) or the environment. Per-provider guides: [docs/providers/](docs/providers/index.md) · full reference: [docs/configuration.md](docs/configuration.md).
 
 <details>
 <summary>Other providers</summary>
 
-**OpenAI / DeepSeek / Any compatible:**
-```bash
-cat > ~/.shannon/config.toml << 'EOF'
-provider = "openai"
-model = "gpt-4o"
-api_key = "sk-..."
-base_url = "https://api.openai.com/v1"
-EOF
-```
+**DeepSeek / GLM / Kimi / MiniMax / OpenRouter** — same one-liner in the TUI, e.g. `/connect deepseek <key>`, `/connect glm <key>`. Headless: `shannon providers add <id> --kind <kind> --model <model> [--base-url <url>]` plus the provider's `*_API_KEY` env var. See [docs/providers/index.md](docs/providers/index.md).
 
 **Ollama (local, no API key needed):**
 ```bash
 ollama serve
-export SHANNON_MODEL="llama3"
+/connect ollama
 ```
 
 </details>
@@ -280,8 +346,9 @@ def verify(raw_body: bytes, sig_header: str, secret: str) -> bool:
 
 ```bash
 shannon                          # Interactive REPL
-shannon /path/to/project         # Open in a project directory
+cd /path/to/project && shannon   # Open in a project directory
 shannon --resume                  # Resume last session
+shannon desktop                   # Or launch the desktop app
 ```
 
 That's it. Type your question and press Enter.
@@ -295,7 +362,36 @@ shannon --prompt "List TODOs" --schema schema.json  # Structured JSON output
 echo "fix this bug" | shannon --pipe           # Pipe mode
 shannon --prompt "refactor" --allowed-tools Read,Edit,Bash,Grep --max-turns 10  # CI
 shannon --prompt "fix lint" --diff-only         # Only output diff
+shannon --goal "make CI green"                  # Autonomous goal (spending cap: /goal "..." --budget N inside the REPL)
 ```
+
+</details>
+
+<details>
+<summary>Headless NDJSON output (<code>--output-format json-stream</code>)</summary>
+
+`--output-format json-stream` writes one NDJSON event per line to stdout, in a
+single unified envelope:
+
+```jsonl
+{"type":"start","prompt":"...","model":"...","session_id":"<uuid>"}
+{"type":"text_delta","content":"..."}
+{"type":"tool_call","name":"Read","input":{...}}
+{"type":"tool_result","name":"Read","output":"...","success":true}
+{"type":"progress","message":"..."}
+{"type":"warning","message":"..."}
+{"type":"error","message":"..."}
+{"type":"done","exit_code":0,"turns_used":3,"tokens_used":1234,"tokens_in":800,"tokens_out":434,"infra_failure":true}
+```
+
+Exactly one `done` line ends the run: integer `exit_code` (0 success, 1 error,
+2 max turns, 3 timeout, 4 rate limited, 5 context overflow, 6 permission
+denied, 7 no progress), `turns_used`, `tokens_used` plus the split
+`tokens_in`/`tokens_out` ledger fields, and `infra_failure` (`true` only when
+an infra-class exit produced an empty patch; omitted otherwise). Progress and
+diagnostics always go to stderr, never stdout. The pre-unification
+`tool_use`/`is_error`/bare-`done` schema remains available for old consumers
+via `--emit-legacy-output-events` (deprecated migration flag).
 
 </details>
 
@@ -312,8 +408,9 @@ shannon --prompt "fix lint" --diff-only         # Only output diff
 | `/undo <n>` | Preview and revert to checkpoint |
 | `/rewind` | Rewind conversation and/or code |
 | `/diff` | Show file diff viewer |
-| `/batch` | Parallel worktree-isolated PR creation |
+| `/batch` | Parallel worktree-isolated PR creation (best-of-N) |
 | `/team` | Manage agent teams |
+| `/goal` | Set a persistent, self-resuming goal |
 | `/remote` | Connect SSH hosts / Docker containers as execution targets |
 | `/cost` | Show token usage and cost |
 | `/search` | Search conversation history |
@@ -358,8 +455,9 @@ Add MCP servers in `.mcp.json` (project-level) or `~/.claude/settings.json`:
 | `SHANNON_MAX_TOKENS` | Maximum output tokens |
 | `SHANNON_TEMPERATURE` | Sampling temperature (0.0-1.0) |
 | `SHANNON_PERMISSION_PROFILE` | Permission profile: `strict`, `balanced`, `permissive` |
+| `SHANNON_TOKEN_BUDGET` | Session token budget watchdog |
 
-Fallback: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are auto-detected.
+Fallback: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are auto-detected (Anthropic also honors `CLAUDE_API_KEY` and `ANTHROPIC_AUTH_TOKEN`).
 
 </details>
 
@@ -370,23 +468,29 @@ Fallback: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are auto-detected.
 ```
 shannon-agent/
 ├── crates/
-│   ├── shannon-core/          # Core engine: API client, query engine, permissions, state
-│   ├── shannon-tools/         # Tool implementations: file ops, git, search, notebook
-│   ├── shannon-agents/        # Agent system: coordinator, dispatcher, executor
+│   ├── shannon-core/          # Core engine: state, sessions, memory, permissions, secret guard
+│   ├── shannon-engine/        # LLM API clients, streaming, compaction/context budget
+│   ├── shannon-tools/         # Tool implementations: file ops, git, browser, computer use
 │   ├── shannon-ui/            # Terminal UI: REPL, widgets, rendering
+│   ├── shannon-agents/        # Multi-agent: teams, worktree isolation
 │   ├── shannon-mcp/           # MCP protocol: transport, server, client, process pool
+│   ├── shannon-mcp-saas/      # SaaS MCP servers (GitHub, Slack, Jira, Notion, Linear)
 │   ├── shannon-commands/      # Slash commands: built-in command registry
 │   ├── shannon-skills/        # Skills framework: discovery, loading, execution
+│   ├── shannon-plugin-api/    # Plugin content-transform contract (secret-guard)
+│   ├── shannon-server/        # HTTP API server (shannon serve)
+│   ├── shannon-remote/        # Remote execution worlds (SSH hosts, Docker)
+│   ├── shannon-repomap/       # Repository symbol map (tree-sitter)
+│   ├── shannon-cli/           # CLI entry point (shannon binary)
+│   ├── shannon-agent/         # Out-of-process agent (JSON-RPC over stdin/stdout)
+│   ├── shannon-api-protocol/  # Wire protocol (serde types + TS codegen)
 │   ├── shannon-types/         # Shared type definitions
 │   ├── shannon-tool-interface/# Tool trait definitions
 │   ├── shannon-codegen/       # Code generation utilities
-│   ├── shannon-cli/           # CLI entry point (shannon binary)
-│   ├── shannon-agent/         # Out-of-process agent (JSON-RPC over stdin/stdout)
-│   └── shannon-api-protocol/  # Wire protocol (serde types + TS codegen)
-├── desktop/                   # Shannon Desktop (Tauri + React 19)
+│   └── shannon-stability-attr/# Stability attribute macros
+├── desktop/                   # Shannon Desktop (Tauri 2 + React 19)
 │   └── ui/                    # Frontend (React, Vite, Tailwind)
 ├── gateway/                   # Shannon Gateway (TypeScript platform bridge)
-├── editors/vscode/            # VS Code extension
 ├── skills/                    # Bundled skill definitions
 ├── locales/                   # i18n translations (10 languages)
 ├── tests/scenarios/           # YAML declarative test scenarios
@@ -420,7 +524,7 @@ git config core.hooksPath .githooks
 
 This enables:
 - **pre-commit**: auto-format staged `.rs` files with `cargo fmt`.
-- **pre-push**: run `scripts/local-check.sh` — `cargo fmt --check`, `cargo build --workspace`, `cargo clippy`. Catches issues CI would reject (like the landlock rustdoc failure that blocked semver-checks in PR #60).
+- **pre-push**: run `scripts/local-check.sh` — `cargo fmt --check`, `cargo build --workspace`, `cargo clippy`.
 
 Bypass for WIP pushes: `git push --no-verify` or `PRE_PUSH_QUICK=1 git push` (fmt + build only, skip clippy).
 
@@ -452,11 +556,11 @@ Artifacts go to `target/dist/` as `.tar.gz` (Linux/macOS) or `.zip` (Windows).
 <!-- metrics:start:table -->
 | Metric | Value |
 |--------|-------|
-| Total Rust code | 418,458 lines |
-| Source files | 624 |
-| Total tests (nextest, runnable) | **11,752** |
-| Crates (workspace members) | 20 (19 crates + desktop) |
-| Crates with zero tests | 2 (`shannon-server`, `shannon-stability-attr`) |
+| Total Rust code | 527,094 lines |
+| Source files | 758 |
+| Total tests (nextest, runnable) | **12,000+** |
+| Crates (workspace members) | 22 (21 crates + desktop) |
+| Crates with zero tests | 1 (`shannon-stability-attr`) |
 | CI lint | `cargo clippy --workspace -- -D warnings` (zero warnings) |
 <!-- metrics:end:table -->
 
@@ -465,25 +569,27 @@ Per-crate test counts:
 <!-- metrics:start:crates -->
 | Crate | Tests | Responsibility |
 |-------|-------|----------------|
-| `shannon-core` | 3,766 | API client, query engine, permissions, tools, state |
-| `shannon-tools` | 1,630 | Tool implementations: file ops, git, search, notebook |
-| `shannon-ui` | 1,497 | Terminal UI, REPL, widgets, rendering |
-| `shannon-engine` | 1,113 | LLM API client, streaming, compaction/context budget, permissions |
-| `shannon-agents` | 897 | Multi-agent coordination: teams, worktree isolation |
-| `shannon-desktop` | 599 | Tauri desktop app shell and commands |
-| `shannon-mcp` | 578 | MCP protocol: transport, server, client, process pool |
-| `shannon-cli` | 486 | CLI entry point (`shannon` binary) |
-| `shannon-commands` | 416 | Built-in slash commands |
+| `shannon-core` | 3,897 | API client, query engine, permissions, tools, state |
+| `shannon-tools` | 1,780 | Tool implementations: file ops, git, search, notebook |
+| `shannon-ui` | 1,529 | Terminal UI, REPL, widgets, rendering |
+| `shannon-engine` | 1,162 | LLM API client, streaming, compaction/context budget, permissions |
+| `shannon-desktop` | 913 | Tauri desktop app shell and commands |
+| `shannon-agents` | 907 | Multi-agent coordination: teams, worktree isolation |
+| `shannon-mcp` | 581 | MCP protocol: transport, server, client, process pool |
+| `shannon-cli` | 502 | CLI entry point (`shannon` binary) |
+| `shannon-commands` | 435 | Built-in slash commands |
+| `shannon-skills` | 189 | Skills framework: discovery, loading, execution |
 | `shannon-mcp-saas` | 185 | SaaS MCP servers (GitHub, Slack, Jira, Notion, Linear) |
-| `shannon-skills` | 172 | Skills framework: discovery, loading, execution |
 | `shannon-codegen` | 100 | Code generation utilities |
-| `shannon-types` | 84 | Shared type definitions |
+| `shannon-types` | 88 | Shared type definitions |
 | `shannon-agent` | 65 | Out-of-process agent (JSON-RPC over stdin/stdout) |
-| `shannon-remote` | 55 | Remote execution worlds (SSH hosts, Docker) |
+| `shannon-remote` | 59 | Remote execution worlds (SSH hosts, Docker) |
+| `shannon-api-protocol` | 43 | Wire protocol (serde types + TS codegen) |
 | `shannon-tool-interface` | 42 | Tool trait definitions |
-| `shannon-api-protocol` | 37 | Wire protocol (serde types + TS codegen) |
-| `shannon-repomap` | 30 | Repository symbol map for LLM context (tree-sitter) |
-| `shannon-server` | 0 | HTTP API server (`shannon serve`) |
+| `shannon-server` | 39 | HTTP API server (`shannon serve`) |
+| `shannon-repomap` | 32 | Repository symbol map for LLM context (tree-sitter) |
+| `shannon-browser` | 9 | — |
+| `shannon-plugin-api` | 5 | — |
 | `shannon-stability-attr` | 0 | Stability attribute macros |
 <!-- metrics:end:crates -->
 
@@ -496,6 +602,14 @@ Per-crate test counts:
 
 ---
 
+## Documentation
+
+- **User & developer docs**: [shannon-agent.github.io/shannon-code](https://shannon-agent.github.io/shannon-code/)
+- **Security & privacy**: see [Security & Privacy](#security--privacy) above and the docs site
+- **Contributing**: [CONTRIBUTING.md](CONTRIBUTING.md) · [Security policy](SECURITY.md)
+
+---
+
 ## License
 
 [Apache License 2.0](LICENSE)
@@ -504,7 +618,7 @@ Per-crate test counts:
 
 ## Disclaimer
 
-Shannon Code is an independent, clean-room reimplementation of AI-assisted coding tool concepts, built from publicly available documentation, open specifications (such as the [Model Context Protocol](https://modelcontextprotocol.io)), and general software engineering principles. Not affiliated with any other AI coding tool vendor. Intended for educational and research purposes.
+Shannon is an independent, clean-room reimplementation of AI-assisted coding tool concepts, built from publicly available documentation, open specifications (such as the [Model Context Protocol](https://modelcontextprotocol.io)), and general software engineering principles. Not affiliated with any other AI coding tool vendor. Intended for educational and research purposes.
 
 ---
 

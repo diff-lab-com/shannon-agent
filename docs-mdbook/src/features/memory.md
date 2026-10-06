@@ -1,6 +1,6 @@
 # Memory
 
-Shannon Code includes a persistent memory system that stores information across conversations.
+Shannon includes a persistent memory system that stores information across conversations.
 
 ## Memory Store
 

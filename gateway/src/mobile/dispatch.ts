@@ -7,6 +7,7 @@
  * vs. E2E-encrypted binary through the relay) is fully abstracted.
  */
 
+import { sharedPushSeq } from "./seq.js";
 import { WebSocket } from "ws";
 
 import type { Logger } from "../adapters/types.js";
@@ -79,7 +80,14 @@ export async function dispatchMessage(
     if (outcome.kind === "stream") {
       for await (const ev of outcome.stream) {
         if (ctx.socket.readyState !== WebSocket.OPEN) return;
-        send(serializeFrame(notification(ev)));
+        // WP-15 T4: stream frames carry the push cursor as well, so the
+        // phone's live-sync sees one monotonic seq across all notifications.
+        const seq = sharedPushSeq.next();
+        // §O4: record the frame under the caller's device session so a drop
+        // mid-query replays on resume. Unbound sockets (open/dev mode) have
+        // no device stream to attribute to — skip.
+        if (ctx.sessionId != null) ctx.replay?.record(ctx.sessionId, seq, ev);
+        send(serializeFrame(notification(ev, seq)));
       }
     }
     send(serializeFrame(successResponse(raw.id, outcome.result)));
@@ -116,6 +124,10 @@ function errorResponse(
   return { jsonrpc: JSONRPC_VERSION, id, error };
 }
 
-function notification(event: ShannonEvent): ShannonEventNotification {
-  return { jsonrpc: JSONRPC_VERSION, method: "shannon/event", params: event };
+function notification(event: ShannonEvent, seq?: number): ShannonEventNotification {
+  return {
+    jsonrpc: JSONRPC_VERSION,
+    method: "shannon/event",
+    params: seq === undefined ? event : { seq, ...event },
+  };
 }

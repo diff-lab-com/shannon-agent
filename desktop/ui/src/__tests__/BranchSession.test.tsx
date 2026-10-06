@@ -3,6 +3,7 @@ import { render, screen, fireEvent, within, waitFor } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom'
 import * as api from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
+import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
 import Chat from '@/pages/Chat'
 
 const ctx = vi.hoisted(() => ({
@@ -15,6 +16,8 @@ const ctx = vi.hoisted(() => ({
   thinkingText: '',
   isQuerying: false,
   activeToolCalls: [] as any[],
+  // R5-2 — in-stream retry notices (failover / key rotation).
+  streamNotices: [] as any[],
   usage: null as any,
   sessions: [
     { id: 'session-1', title: 'Test Session', created_at: 0, message_count: 3 },
@@ -31,6 +34,11 @@ const ctx = vi.hoisted(() => ({
   switchSession: vi.fn(),
   renameSession: vi.fn(),
   refreshSessions: vi.fn(),
+  // B1 §4-9 — prompt queue surface consumed by Chat + ComposerPanel.
+  promptQueue: [] as any[],
+  enqueuePrompt: vi.fn().mockReturnValue(true),
+  dequeuePrompt: vi.fn().mockReturnValue(null),
+  removeQueuedPrompt: vi.fn(),
 }))
 
 vi.mock('@/context/ChatContext', () => ({
@@ -47,7 +55,9 @@ function renderChat() {
   return render(
     <I18nProvider>
       <MemoryRouter>
-        <Chat />
+        <ArtifactProvider>
+          <Chat />
+        </ArtifactProvider>
       </MemoryRouter>
     </I18nProvider>
   )

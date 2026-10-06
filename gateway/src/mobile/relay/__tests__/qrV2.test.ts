@@ -85,6 +85,43 @@ describe("generateQrV2Payload", () => {
     expect(payload["v"]).toBe(2);
     expect(payload["mode"]).toBe("relay");
   });
+
+  // Cross-repo contract (shannon-mobile pairing_controller M13 pre-check):
+  // the phone rejects relay payloads missing relayEndpoint/relaySessionId;
+  // hostE2EPubKey is the v0.3 X25519 handshake key (present on new gateways,
+  // absent on legacy ones — the phone tolerates both). This pin keeps the
+  // gateway's QR shape and the phone's validator from drifting apart.
+  it("emits exactly the field set the phone's relay validator expects", () => {
+    const payload = generateQrV2Payload({
+      scheme: "wss",
+      host: "192.168.1.100",
+      port: 33430,
+      pairToken: "tok",
+      expiresAt: 123,
+      relayUrl: "wss://relay.shannon.example",
+      relaySessionId: "sid",
+      hostE2EPubKey: "x25519-pub-b64url",
+    });
+
+    const keys = Object.keys(payload).sort();
+    expect(keys).toEqual(
+      [
+        "exp",
+        "host",
+        "hostE2EPubKey",
+        "mode",
+        "port",
+        "relayEndpoint",
+        "relaySessionId",
+        "scheme",
+        "token",
+        "v",
+      ].sort(),
+    );
+    // The two fields the phone hard-requires are present and non-empty.
+    expect(String(payload["relayEndpoint"]).length).toBeGreaterThan(0);
+    expect(String(payload["relaySessionId"]).length).toBeGreaterThan(0);
+  });
 });
 
 describe("generateRelaySessionId", () => {

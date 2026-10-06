@@ -30,8 +30,21 @@ use shannon_types::session_event::{
 };
 use tempfile::TempDir;
 
+/// Process-lifetime hermetic HOME for the spawned binary: the headless
+/// startup gate reads `~/.shannon/meta.json`, so a developer home last
+/// written by a NEWER build aborts the binary with the downgrade refusal
+/// before the trace behavior under test ever runs.
+fn hermetic_home() -> &'static std::path::Path {
+    static HOME: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| TempDir::new().expect("create hermetic test home"))
+        .path()
+}
+
 fn shannon_bin() -> Command {
-    Command::cargo_bin("shannon").expect("shannon binary")
+    let mut cmd = Command::cargo_bin("shannon").expect("shannon binary");
+    cmd.env("HOME", hermetic_home());
+    cmd.env("USERPROFILE", hermetic_home());
+    cmd
 }
 
 // ── Deterministic fixture ──────────────────────────────────────────────
@@ -97,6 +110,7 @@ fn seed(container: &std::path::Path) {
             cost_usd: Some(0.02),
         }),
         error: None,
+        llm_steps: None,
     }));
 
     w.close().unwrap();
@@ -193,6 +207,8 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
         registry.register(Box::new(Echo)).unwrap();
 
         let client_cfg = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "k".into(),
             base_url: server.url(),
             model: "claude-sonnet-4-20250514".into(),
@@ -217,10 +233,16 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
         let state_dir = mgr.sessions_dir().to_path_buf();
 
         let session_id = Uuid::new_v4();
-        let mut engine = shannon_core::query_engine::QueryEngine::with_session_id(
+        // N-1: unattended queries carry no approval channel, so interactive
+        // approval now fails closed. This test exercises trace/replay
+        // plumbing, not permissions — run FullAuto like headless mode so the
+        // low-risk `echo` tool executes.
+        let mut permissions = PermissionManager::new();
+        permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
+        let engine = shannon_core::query_engine::QueryEngine::with_session_id(
             shannon_engine::api::LlmClient::new(client_cfg),
             registry,
-            PermissionManager::new(),
+            permissions,
             mgr,
             QueryEngineConfig::default(),
             session_id,
@@ -274,12 +296,14 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
         insta::assert_snapshot!("replay_mockito_session", rendered);
 
         // Broadcast integrity: the live stream carried both request texts and
-        // the tool round-trip (the engine never broadcasts `Started`, which is
-        // a tee-owned boundary).
-        assert!(matches!(
-            broadcast.first(),
-            Some(QueryEvent::Started { .. })
-        ) || !broadcast.is_empty());
+        // the tool round-trip. Since P0-A3 the engine's FIRST broadcast frame
+        // is `Started` (the query acknowledgment); the durable tee boundary
+        // stays tee-owned, so the replay above is unchanged by it.
+        assert!(
+            matches!(broadcast.first(), Some(QueryEvent::Started { .. })),
+            "the first live frame must be Started, got {:?}",
+            broadcast.first()
+        );
         assert!(broadcast.iter().any(|e| matches!(
             e,
             QueryEvent::Text { content, .. } if content == "Listing."

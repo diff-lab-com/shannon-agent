@@ -12,25 +12,31 @@ interface SkillDetailDrawerProps {
   onInstall: () => void
 }
 
-function formatLastUpdated(ts: string | null): string {
+/** B6-36: format in the app locale (was `toLocaleDateString()`, which follows
+ *  the OS locale and diverges from the language picked in Shannon). */
+function formatLastUpdated(ts: string | null, locale: string): string {
   if (!ts) return ''
   const d = new Date(ts)
   if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleDateString()
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'short' }).format(d)
 }
 
-function describeSource(entry: SkillCatalogEntry): string {
+/** B6-36: the source line used to hardcode English ("Built-in", "Featured
+ *  vendor", "@ main"). Every shape now resolves through the locale files;
+ *  repo names, urls and git refs stay verbatim — they are identifiers. */
+function describeSource(entry: SkillCatalogEntry, intl: ReturnType<typeof useIntl>): string {
   switch (entry.source.type) {
     case 'native':
-      return 'Built-in'
+      return intl.formatMessage({ id: 'extensions.skills.drawer.source.builtin' })
     case 'mcp_registry':
-      return `Registry · ${entry.source.publisher}`
+      return intl.formatMessage({ id: 'extensions.skills.drawer.source.registry' }, { publisher: entry.source.publisher })
     case 'featured_vendor':
-      return 'Featured vendor'
-    case 'git_hub_repo': {
-      const refPart = entry.source.ref_ ? `@ ${entry.source.ref_}` : '@ main'
-      return `${entry.source.repo} ${refPart}`
-    }
+      return intl.formatMessage({ id: 'extensions.skills.drawer.source.featuredVendor' })
+    case 'git_hub_repo':
+      return intl.formatMessage(
+        { id: 'extensions.skills.drawer.source.gitHub' },
+        { repo: entry.source.repo, ref: entry.source.ref_ ?? 'main' },
+      )
     case 'custom':
       return entry.source.url
   }
@@ -38,7 +44,7 @@ function describeSource(entry: SkillCatalogEntry): string {
 
 const TRUST_LABELS: Record<SkillCatalogEntry['trust'], { cls: string }> = {
   verified: { cls: 'bg-primary-container text-on-primary-container' },
-  official: { cls: 'bg-secondary-container text-on-secondary-container' },
+  official: { cls: 'bg-primary text-on-primary' },
   community: { cls: 'bg-tertiary-container/50 text-on-tertiary-container' },
   unknown: { cls: 'bg-surface-container-highest text-on-surface-variant' },
 }
@@ -57,7 +63,7 @@ export default function SkillDetailDrawer({
   if (!entry) return null
   const trust = TRUST_LABELS[entry.trust]
   const trustTextKey = `extensions.skills.trust.${entry.trust}`
-  const lastUpdated = formatLastUpdated(entry.last_updated)
+  const lastUpdated = formatLastUpdated(entry.last_updated, intl.locale)
 
   return (
     <SidePanel
@@ -117,7 +123,7 @@ export default function SkillDetailDrawer({
               <dd className="font-label-md text-on-surface flex items-center gap-xs">
                 {entry.stars != null ? (
                   <>
-                    <span className="material-symbols-outlined text-[14px]">star</span>
+                    <span className="material-symbols-outlined icon-sm">star</span>
                     {entry.stars}
                   </>
                 ) : na}
@@ -128,7 +134,7 @@ export default function SkillDetailDrawer({
                 {t('extensions.skills.drawer.source')}
               </dt>
               <dd className="font-label-md text-on-surface font-mono break-all">
-                {describeSource(entry)}
+                {describeSource(entry, intl)}
               </dd>
             </div>
             {lastUpdated && (
@@ -168,7 +174,7 @@ export default function SkillDetailDrawer({
                     rel="noreferrer"
                     className="text-label-md text-link hover:underline break-all inline-flex items-center gap-xs"
                   >
-                    <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                    <span className="material-symbols-outlined icon-sm">open_in_new</span>
                     {entry.homepage_url}
                   </a>
                 </dd>
@@ -178,14 +184,21 @@ export default function SkillDetailDrawer({
         </dl>
 
         <div className="mt-xl flex gap-sm">
-          <Button
-            type="button"
-            onClick={onInstall}
-            disabled={busy || installed}
-            className="flex-1 px-md py-sm rounded-lg hover:bg-primary/90 disabled:cursor-not-allowed"
-          >
-            {busy ? '…' : installed ? t('extensions.skills.installedBtn') : t('extensions.skills.installBtn')}
-          </Button>
+          {entry.metadata?.in_development === true ? (
+            // G1 P0-2.3 — planned entry: no stub install, an honest notice.
+            <div className="flex-1 text-label-sm text-on-surface-variant bg-surface-container-high rounded-lg px-md py-sm">
+              {t('extensions.skills.inDevelopmentHint')}
+            </div>
+          ) : (
+            <Button
+              type="button"
+              onClick={onInstall}
+              disabled={busy || installed}
+              className="flex-1 px-md py-sm rounded-lg hover:bg-primary/90 disabled:cursor-not-allowed"
+            >
+              {busy ? '…' : installed ? t('extensions.skills.installedBtn') : t('extensions.skills.installBtn')}
+            </Button>
+          )}
         </div>
       </SidePanelBody>
     </SidePanel>

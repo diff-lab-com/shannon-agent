@@ -1,11 +1,13 @@
 //! Unified configuration system with priority-based merging.
 //!
-//! Configuration sources (highest to lowest priority):
-//! 1. CLI arguments (explicit overrides)
-//! 2. Environment variables (`SHANNON_*`)
-//! 3. Project-local config (`.shannon.toml`)
-//! 4. Global config (`~/.shannon/config.toml`)
-//! 5. Default values
+//! Configuration layers (highest to lowest priority; the six-source merge
+//! [`ConfigBuilder::build`] performs and `config_dump` prints per-layer):
+//! 1. CLI arguments (the per-invocation overlay)
+//! 2. Connected profile (`~/.shannon/providers.toml`, written by `/connect`)
+//! 3. Environment variables (`SHANNON_*`)
+//! 4. Project-local config (`.shannon.toml`)
+//! 5. Global config (`~/.shannon/config.toml`)
+//! 6. Built-in default values
 //!
 //! ## v2-native (N1 / C-fields)
 //! As of N1, [`ShannonConfig`] carries only the multi-provider/model
@@ -84,6 +86,57 @@ pub struct ShannonConfig {
     pub provider_model: shannon_types::provider_config::ProviderModelConfig,
 }
 
+/// `[secret_guard]` config section (blueprint artifact c, Phase 2).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct SecretGuardSection {
+    /// `"audit"` (default since v0.11.0 when unset) | `"redact"` | `"off"`
+    /// to disable entirely.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Plugin failure behavior — reserved for Phase 3: `"open"` (default) |
+    /// `"closed"`.
+    #[serde(default)]
+    pub fail_mode: Option<String>,
+}
+
+impl SecretGuardSection {
+    /// Load this section from the same config files [`ConfigBuilder`] reads
+    /// (`~/.shannon/config.toml`, then a `.shannon.toml` override). Kept
+    /// independent of `ShannonConfig` so the secret-guard's process-wide
+    /// one-shot init does not depend on the merged-config call path.
+    pub fn load() -> Self {
+        Self::load_from(&[
+            dirs::home_dir()
+                .map(|home| home.join(".shannon").join("config.toml"))
+                .unwrap_or_default(),
+            std::path::PathBuf::from(".shannon.toml"),
+        ])
+    }
+
+    /// Layered parse: later files override earlier ones; broken files are
+    /// skipped (same degrade-not-fail posture as the rest of the loader).
+    fn load_from(paths: &[std::path::PathBuf]) -> Self {
+        let mut section = Self::default();
+        for path in paths {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let Ok(value) = toml::from_str::<toml::Value>(&text) else {
+                continue;
+            };
+            if let Ok(parsed) = value
+                .get("secret_guard")
+                .cloned()
+                .unwrap_or(toml::Value::Boolean(false))
+                .try_into::<Self>()
+            {
+                section = parsed;
+            }
+        }
+        section
+    }
+}
+
 /// `[hooks]` config section: inbound webhook endpoints (P2-7).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HooksConfig {
@@ -152,6 +205,24 @@ impl ShannonConfig {
             hooks: other.hooks.clone().or_else(|| self.hooks.clone()),
             provider_model,
         }
+    }
+
+    /// P1-3: the configured `permission_profile` string.
+    ///
+    /// Precedence: `SHANNON_PERMISSION_PROFILE` env override, then the
+    /// `permission_profile` key from `~/.shannon/config.toml` / `.shannon.toml`.
+    pub fn configured_permission_profile() -> Option<String> {
+        if let Ok(v) = std::env::var("SHANNON_PERMISSION_PROFILE") {
+            if !v.trim().is_empty() {
+                return Some(v.trim().to_string());
+            }
+        }
+        ConfigBuilder::new()
+            .load_global_toml()
+            .load_local_toml()
+            .build()
+            .permission_profile
+            .filter(|s| !s.trim().is_empty())
     }
 
     /// Parse the `permission_profile` field into a `PermissionProfile`.
@@ -589,6 +660,7 @@ impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
         tracing::warn!("No v2 provider resolved — defaulting to Ollama localhost:11434");
         Self {
             api_key: String::new(),
+            alternate_api_keys: Vec::new(),
             base_url: "http://localhost:11434".to_string(),
             model: "llama3".to_string(),
             max_tokens: cfg.max_tokens.map(|v| v as u32).unwrap_or(4096),
@@ -603,6 +675,7 @@ impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
+            thinking_type: shannon_engine::api::types::thinking_type_from_env(),
         }
     }
 }
@@ -625,17 +698,45 @@ pub fn build_client_from_resolved(
 ) -> shannon_engine::api::LlmClientConfig {
     use shannon_engine::api::{LlmClientConfig, LlmProvider, RetryConfig};
 
+    // R2-4: whichever profile actually drove this client construction owns
+    // the per-model metadata registry (pricing / context / tier overrides).
+    // Replacement, not accumulation — a provider switch re-registers here.
+    // S2-5: the declarations bind to the active provider slot so the tier
+    // scan can attribute them correctly.
+    crate::declared_models::replace_for_provider(&rt.provider, &rt.profile.models);
+
     let provider = rt.provider;
     let base_url = rt.profile.base_url.clone();
     let model = rt.model_id.to_string();
-    let api_key = crate::provider_resolver::resolve_credential(&rt.profile.credential);
+    // R4-3: resolve ALL keys the profile's credential stands for, in
+    // rotation order. `api_key` (slot 0) is the active key — the exact value
+    // the single-key `resolve_credential` used to return, so single-key
+    // behavior is unchanged; the remainder feed the engine's key-rotation
+    // walk. Failover targets below deliberately keep resolving the ACTIVE
+    // key only: rotation is a primary-provider concern.
+    let resolved_keys = crate::provider_resolver::resolve_credential_keys(&rt.profile.credential);
+    let api_key = resolved_keys.first().cloned().unwrap_or_default();
+    let alternate_api_keys = resolved_keys.into_iter().skip(1).collect::<Vec<String>>();
 
     // Decision: explicit config override > profile default > engine fallback.
-    let max_tokens = cfg
+    let mut max_tokens = cfg
         .max_tokens
         .map(|v| v as u32)
         .or(rt.profile.default_max_tokens)
         .unwrap_or(4096);
+    // S2-3 (裁定⑩): a declared `max_output` on the ACTIVE model is a real
+    // endpoint constraint — clamp the request ceiling down to it. Clamp only:
+    // a declaration never *raises* the ceiling (a model without a configured
+    // default keeps the 4096 fallback even when it could take more).
+    if let Some(spec) = rt
+        .profile
+        .models
+        .iter()
+        .find(|m| m.id == rt.model_id)
+        .and_then(|m| m.max_output)
+    {
+        max_tokens = max_tokens.min(spec);
+    }
     let timeout_seconds = cfg.timeout.unwrap_or(if provider == LlmProvider::Ollama {
         300
     } else {
@@ -645,11 +746,31 @@ pub fn build_client_from_resolved(
         LlmProvider::Anthropic => {
             std::env::var("ANTHROPIC_API_VERSION").unwrap_or_else(|_| "2023-06-01".to_string())
         }
+        // S2-6: Azure's deployments route requires an explicit versioned
+        // query on every request (`endpoint_url` appends it); leave empty and
+        // the client falls back to `AZURE_DEFAULT_API_VERSION` — seeding the
+        // env override here keeps the value visible in config dumps/debug.
+        LlmProvider::Azure => std::env::var("AZURE_OPENAI_API_VERSION")
+            .unwrap_or_else(|_| shannon_engine::api::types::AZURE_DEFAULT_API_VERSION.to_string()),
         _ => String::new(),
+    };
+
+    // R3-1: resolve the profile's explicit `fallback_models` into the
+    // client's failover chain. Empty list → `RetryConfig::default()` exactly
+    // as before (failover stays opt-in; Shannon does not route).
+    let fallbacks = resolve_failover_chain(&cfg.provider_model, &rt.profile.id, rt.model_id);
+    let retry_config = if fallbacks.is_empty() {
+        RetryConfig::default()
+    } else {
+        RetryConfig {
+            fallbacks,
+            ..RetryConfig::default()
+        }
     };
 
     LlmClientConfig {
         api_key,
+        alternate_api_keys,
         base_url,
         model,
         max_tokens,
@@ -657,19 +778,160 @@ pub fn build_client_from_resolved(
         api_version,
         provider,
         extra_headers: rt.profile.extra_headers.clone(),
-        retry_config: RetryConfig::default(),
+        retry_config,
         fallback_provider: None,
         fallback_base_url: None,
         max_stream_reconnects: 3,
         budget_tokens: None,
         reasoning_effort: None,
         enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
+        thinking_type: shannon_engine::api::types::thinking_type_from_env(),
     }
+}
+
+/// R3-1: resolve the active provider profile's explicit `fallback_models`
+/// list into concrete failover targets for the client config.
+///
+/// Resolution rules (per item, in list order):
+/// - **Bare id** (`"glm-5-flash"`) → same provider: the active provider
+///   profile's provider/base_url/credential with just the model swapped.
+/// - **Qualified id** (`"deepseek/deepseek-v4-flash"`) → switch provider:
+///   the named provider's profile in the SAME named `ModelProfile`
+///   (resolved via [`shannon_types::provider_config::ProviderModelConfig::active_profile_key`],
+///   R3-2-aware) supplies kind/base_url/credential. "Connected" means
+///   exactly that — the provider must be in the roster; an unknown or
+///   unconnected provider slug is **skipped with a warning**, never an
+///   error (config hygiene must not block the session).
+/// - The active target itself, empty ids, and anything beyond
+///   [`shannon_engine::api::retry::MAX_FAILOVER_TARGETS`] entries are
+///   skipped (with a log line) — the chain can never exceed the engine cap.
+///
+/// `provider_model` is the config `rt` was resolved from; passing a
+/// mismatched pair simply resolves against the named roster (pure function,
+/// unit-tested in isolation).
+pub fn resolve_failover_chain(
+    provider_model: &shannon_types::provider_config::ProviderModelConfig,
+    active_provider_id: &str,
+    active_model_id: &str,
+) -> Vec<shannon_engine::api::FailoverTarget> {
+    use crate::provider_resolver::{
+        llm_provider_from_id, llm_provider_from_slug, resolve_provider,
+    };
+    use shannon_engine::api::retry::MAX_FAILOVER_TARGETS;
+
+    let Some(mp) = provider_model
+        .profiles
+        .get(provider_model.active_profile_key())
+    else {
+        return Vec::new();
+    };
+    let Some(active) = mp.providers.iter().find(|p| p.id == active_provider_id) else {
+        return Vec::new();
+    };
+    if active.fallback_models.is_empty() {
+        return Vec::new();
+    }
+
+    let active_provider = llm_provider_from_id(&active.id)
+        .unwrap_or_else(|| resolve_provider(&active.kind, &active.base_url));
+
+    let mut targets = Vec::new();
+    for raw in &active.fallback_models {
+        let id = raw.trim();
+        if id.is_empty() {
+            continue;
+        }
+        if targets.len() >= MAX_FAILOVER_TARGETS {
+            tracing::debug!(
+                skipped = %id,
+                cap = MAX_FAILOVER_TARGETS,
+                "failover chain capped — remaining fallback_models ignored"
+            );
+            break;
+        }
+
+        // Qualified `provider/model` switches provider; bare stays.
+        let (owner, model_id) = match id.split_once('/') {
+            Some((provider_part, model_part)) => {
+                let slug = provider_part.trim();
+                // Exact profile id first, then any profile that canonicalizes
+                // to the same LlmProvider ("glm" ↔ "zhipu" vocabularies).
+                let resolved = mp.providers.iter().find(|p| p.id == slug).or_else(|| {
+                    let want = llm_provider_from_slug(slug)?;
+                    mp.providers
+                        .iter()
+                        .find(|p| llm_provider_from_id(&p.id).is_some_and(|pp| pp == want))
+                });
+                (resolved, model_part.trim())
+            }
+            None => (Some(active), id),
+        };
+
+        let Some(owner_profile) = owner else {
+            tracing::warn!(
+                fallback = %id,
+                active_provider = %active.id,
+                "fallback_models entry names an unconnected provider — skipped \
+                 (add the provider to the profile roster to enable this failover)"
+            );
+            continue;
+        };
+        if model_id.is_empty() {
+            tracing::warn!(fallback = %id, "fallback_models entry has an empty model — skipped");
+            continue;
+        }
+
+        let owner_provider = llm_provider_from_id(&owner_profile.id)
+            .unwrap_or_else(|| resolve_provider(&owner_profile.kind, &owner_profile.base_url));
+        if owner_provider == active_provider && model_id == active_model_id.trim() {
+            tracing::debug!(fallback = %id, "fallback_models entry is the active target — skipped");
+            continue;
+        }
+
+        targets.push(shannon_engine::api::FailoverTarget {
+            model: model_id.to_string(),
+            provider: owner_provider,
+            base_url: owner_profile.base_url.clone(),
+            api_key: crate::provider_resolver::resolve_credential(&owner_profile.credential),
+        });
+    }
+    targets
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+
+    #[test]
+    fn secret_guard_section_loads_layered_and_degrades() {
+        let dir = std::env::temp_dir().join(format!(
+            "sg-section-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let global = dir.join("config.toml");
+        let local = dir.join(".shannon.toml");
+        std::fs::write(&global, "[secret_guard]\nmode = \"audit\"\n").unwrap();
+        std::fs::write(&local, "[secret_guard]\nmode = \"redact\"\n").unwrap();
+        let section = SecretGuardSection::load_from(&[global.clone(), local.clone()]);
+        assert_eq!(
+            section.mode.as_deref(),
+            Some("redact"),
+            "local overrides global"
+        );
+
+        // A type-broken local section is skipped; the global value survives.
+        std::fs::write(&local, "[secret_guard]\nmode = 7\n").unwrap();
+        let section = SecretGuardSection::load_from(&[global, local]);
+        assert_eq!(
+            section.mode.as_deref(),
+            Some("audit"),
+            "degrade keeps global"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
     use super::*;
     use shannon_engine::api::{LlmClientConfig, LlmProvider};
     use shannon_types::provider_config::{
@@ -698,6 +960,7 @@ mod tests {
         );
         ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
             profiles,
             gateway: Default::default(),
         }
@@ -718,7 +981,350 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         }
+    }
+
+    /// R2-4: building a client from a resolved target must (re)register that
+    /// profile's per-model declarations — this is the binding that makes the
+    /// declared pricing/context values authoritative at the engine's lookup
+    /// boundaries for whichever provider actually drives the session.
+    #[test]
+    fn build_client_from_resolved_registers_declared_models() {
+        use shannon_types::provider_config::ModelSpec;
+        let mut profile = anthropic_profile("K");
+        profile.models.push(ModelSpec {
+            id: "shannon-binding-test-model".to_string(),
+            display_name: None,
+            context_window: Some(77_777),
+            max_output: None,
+            cost_per_m_input: Some(1.25),
+            cost_per_m_output: Some(10.0),
+            capabilities: vec![],
+        });
+        let cfg = ShannonConfig {
+            provider_model: v2_default_profile(profile, "shannon-binding-test-model"),
+            ..Default::default()
+        };
+        let rt = crate::provider_resolver::resolve_active_target(&cfg.provider_model)
+            .expect("active target resolves");
+        crate::declared_models::clear();
+        let _client = build_client_from_resolved(&cfg, rt);
+        // Registered: pricing + context lookups now see the declaration.
+        assert_eq!(
+            crate::declared_models::context_window_for("shannon-binding-test-model"),
+            Some(77_777)
+        );
+        assert!(
+            crate::declared_models::pricing_for("shannon-binding-test-model").is_some(),
+            "declared pricing must be registered by client construction"
+        );
+        // A model absent from the declaration is not registered.
+        assert_eq!(crate::declared_models::lookup("other-model"), None);
+        crate::declared_models::clear();
+    }
+
+    /// S2-3 (裁定⑩): a declared `max_output` on the ACTIVE model is a real
+    /// endpoint constraint — the request `max_tokens` ceiling is clamped
+    /// DOWN to it, never raised.
+    #[test]
+    fn build_client_from_resolved_clamps_max_tokens_to_declared_max_output() {
+        use shannon_types::provider_config::ModelSpec;
+
+        let declared = |max_output: Option<u32>| {
+            let mut profile = anthropic_profile("K");
+            profile.models.push(ModelSpec {
+                id: "clamped-model".to_string(),
+                display_name: None,
+                context_window: None,
+                max_output,
+                cost_per_m_input: None,
+                cost_per_m_output: None,
+                capabilities: vec![],
+            });
+            ShannonConfig {
+                provider_model: v2_default_profile(profile, "clamped-model"),
+                ..Default::default()
+            }
+        };
+
+        // 1. The declared value beats the engine fallback (4096 → 1024).
+        let cfg = declared(Some(1_024));
+        let rt = crate::provider_resolver::resolve_active_target(&cfg.provider_model)
+            .expect("active target resolves");
+        let client = build_client_from_resolved(&cfg, rt);
+        assert_eq!(
+            client.max_tokens, 1_024,
+            "fallback 4096 must clamp down to the declared cap"
+        );
+
+        // 2. The declared value beats the desktop/config override too.
+        let cfg = ShannonConfig {
+            max_tokens: Some(8_192),
+            ..declared(Some(2_048))
+        };
+        let rt = crate::provider_resolver::resolve_active_target(&cfg.provider_model)
+            .expect("active target resolves");
+        let client = build_client_from_resolved(&cfg, rt);
+        assert_eq!(client.max_tokens, 2_048, "config override must clamp down");
+
+        // 3. Clamp only — a declaration NEVER raises the ceiling: a model
+        // with a large declared cap but no configured default keeps 4096.
+        let cfg = declared(Some(65_536));
+        let rt = crate::provider_resolver::resolve_active_target(&cfg.provider_model)
+            .expect("active target resolves");
+        let client = build_client_from_resolved(&cfg, rt);
+        assert_eq!(
+            client.max_tokens, 4096,
+            "declaration must not raise the default"
+        );
+    }
+
+    /// S2-5: client construction binds the declarations to the resolved
+    /// provider, so the tier scan can attribute declared models correctly
+    /// (the profile-level `replace_from_specs` legacy path is
+    /// provider-agnostic; this is the provider-aware upgrade).
+    #[test]
+    fn build_client_from_resolved_binds_declarations_to_the_provider() {
+        use shannon_engine::api::LlmProvider;
+        use shannon_types::provider_config::ModelSpec;
+
+        let mut profile = anthropic_profile("K");
+        profile.models.push(ModelSpec {
+            id: "bound-declared-model".to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: Some(9.0),
+            cost_per_m_output: Some(9.0),
+            capabilities: vec![shannon_types::provider_config::ModelCapability::Reasoning],
+        });
+        let cfg = ShannonConfig {
+            provider_model: v2_default_profile(profile, "bound-declared-model"),
+            ..Default::default()
+        };
+        crate::declared_models::clear();
+        let rt = crate::provider_resolver::resolve_active_target(&cfg.provider_model)
+            .expect("active target resolves");
+        assert_eq!(rt.provider, LlmProvider::Anthropic);
+        let _client = build_client_from_resolved(&cfg, rt);
+
+        // Bound to Anthropic → the Anthropic tier scan sees it.
+        let candidates = crate::declared_models::tier_candidates(&LlmProvider::Anthropic);
+        assert!(
+            candidates.iter().any(|c| c.id == "bound-declared-model"),
+            "declared model must be a tier candidate for its own provider"
+        );
+        // ...and no other provider's scan does.
+        assert!(
+            !crate::declared_models::tier_candidates(&LlmProvider::OpenAI)
+                .iter()
+                .any(|c| c.id == "bound-declared-model"),
+            "declared models must not leak across providers"
+        );
+        crate::declared_models::clear();
+    }
+
+    // ── R3-1: fallback_models resolution ─────────────────────────────────
+
+    /// A deepseek-style profile with an inline (env-free) credential so the
+    /// tests never touch process env.
+    fn deepseek_profile() -> ProviderProfile {
+        ProviderProfile {
+            id: "deepseek".to_string(),
+            kind: ProviderKind::Deepseek,
+            display_name: "DeepSeek".to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
+            models_url: None,
+            credential: CredentialRef::InlineLegacy {
+                masked: "sk-ds-test".to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+            models: Vec::new(),
+        }
+    }
+
+    /// A v2 config whose `"default"` profile carries `providers` with the
+    /// named provider slot active at `(provider_id, model_id)`.
+    fn v2_multi_provider_config(
+        providers: Vec<ProviderProfile>,
+        active_provider_id: &str,
+        model_id: &str,
+    ) -> ProviderModelConfig {
+        assert!(
+            providers.iter().any(|p| p.id == active_provider_id),
+            "active provider must be in the roster"
+        );
+        ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
+            profiles: HashMap::from([(
+                "default".to_string(),
+                ModelProfile {
+                    name: "default".to_string(),
+                    active_target: ActiveTarget {
+                        provider_id: active_provider_id.to_string(),
+                        model_id: model_id.to_string(),
+                        scope: Scope::Global,
+                    },
+                    providers,
+                    auxiliary: HashMap::new(),
+                    credential_scope: CredentialScope::Shared,
+                },
+            )]),
+            gateway: Default::default(),
+        }
+    }
+
+    fn profile_with_fallbacks(mut p: ProviderProfile, fallbacks: &[&str]) -> ProviderProfile {
+        p.fallback_models = fallbacks.iter().map(|s| s.to_string()).collect();
+        p
+    }
+
+    #[test]
+    fn resolve_failover_chain_bare_id_stays_on_active_provider() {
+        let active = profile_with_fallbacks(anthropic_profile("K"), &["claude-haiku-4-5"]);
+        let pm = v2_multi_provider_config(vec![active], "anthropic", "claude-sonnet-4-6");
+        let chain = resolve_failover_chain(&pm, "anthropic", "claude-sonnet-4-6");
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].model, "claude-haiku-4-5");
+        assert_eq!(chain[0].provider, LlmProvider::Anthropic);
+        assert_eq!(chain[0].base_url, "https://api.anthropic.com");
+        assert_eq!(
+            chain[0].api_key, "",
+            "env credential var K is unset in tests — resolved empty is fine, the walk inherits"
+        );
+    }
+
+    #[test]
+    fn resolve_failover_chain_qualified_id_switches_provider() {
+        let active = profile_with_fallbacks(
+            anthropic_profile("K"),
+            &["deepseek/deepseek-v4-flash", "glm-5-flash"],
+        );
+        let ds = deepseek_profile();
+        let pm = v2_multi_provider_config(vec![active, ds], "anthropic", "claude-sonnet-4-6");
+        let chain = resolve_failover_chain(&pm, "anthropic", "claude-sonnet-4-6");
+        assert_eq!(chain.len(), 2, "bare + qualified both resolve");
+        assert_eq!(chain[0].model, "deepseek-v4-flash");
+        assert_eq!(chain[0].provider, LlmProvider::DeepSeek);
+        assert_eq!(chain[0].base_url, "https://api.deepseek.com");
+        assert_eq!(
+            chain[0].api_key, "sk-ds-test",
+            "qualified hops resolve the OWNING profile's credential"
+        );
+        // Bare id keeps the active provider's identity + endpoint.
+        assert_eq!(chain[1].model, "glm-5-flash");
+        assert_eq!(chain[1].provider, LlmProvider::Anthropic);
+        assert_eq!(chain[1].base_url, "https://api.anthropic.com");
+    }
+
+    #[test]
+    fn resolve_failover_chain_skips_unconnected_provider_with_warning() {
+        let active = profile_with_fallbacks(
+            anthropic_profile("K"),
+            &["nosuch/some-model", "glm-5-flash"],
+        );
+        let pm = v2_multi_provider_config(vec![active], "anthropic", "claude-sonnet-4-6");
+        let chain = resolve_failover_chain(&pm, "anthropic", "claude-sonnet-4-6");
+        // The unknown qualified id is skipped (warning, not error); the bare
+        // id still resolves.
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].model, "glm-5-flash");
+    }
+
+    #[test]
+    fn resolve_failover_chain_caps_at_engine_limit() {
+        let active =
+            profile_with_fallbacks(anthropic_profile("K"), &["m1", "m2", "m3", "m4", "m5"]);
+        let pm = v2_multi_provider_config(vec![active], "anthropic", "claude-sonnet-4-6");
+        let chain = resolve_failover_chain(&pm, "anthropic", "claude-sonnet-4-6");
+        assert_eq!(
+            chain.len(),
+            shannon_engine::api::retry::MAX_FAILOVER_TARGETS,
+            "the chain can never exceed the engine cap"
+        );
+        assert_eq!(
+            chain.iter().map(|t| t.model.as_str()).collect::<Vec<_>>(),
+            vec!["m1", "m2", "m3"],
+            "order is the author's list order"
+        );
+    }
+
+    #[test]
+    fn resolve_failover_chain_skips_empty_and_self_entries() {
+        let active = profile_with_fallbacks(
+            anthropic_profile("K"),
+            &["", "  ", "claude-sonnet-4-6", "anthropic/claude-sonnet-4-6"],
+        );
+        let pm = v2_multi_provider_config(vec![active], "anthropic", "claude-sonnet-4-6");
+        let chain = resolve_failover_chain(&pm, "anthropic", "claude-sonnet-4-6");
+        assert!(
+            chain.is_empty(),
+            "empty ids and the active target itself must not become hops"
+        );
+    }
+
+    #[test]
+    fn resolve_failover_chain_accepts_provider_slug_vocabulary() {
+        // The profile is stored under the slug "glm" but the fallback names
+        // "zhipu/model" — both canonicalize to LlmProvider::Zhipu.
+        let mut glm = deepseek_profile();
+        glm.id = "glm".to_string();
+        glm.kind = ProviderKind::OpenAiCompatible;
+        glm.base_url = "https://open.bigmodel.cn/api/paas/v4".to_string();
+        let active = profile_with_fallbacks(anthropic_profile("K"), &["zhipu/glm-5-flash"]);
+        let pm = v2_multi_provider_config(vec![active, glm], "anthropic", "claude-sonnet-4-6");
+        let chain = resolve_failover_chain(&pm, "anthropic", "claude-sonnet-4-6");
+        assert_eq!(chain.len(), 1, "slug vocabularies canonicalize");
+        assert_eq!(chain[0].model, "glm-5-flash");
+        assert_eq!(chain[0].base_url, "https://open.bigmodel.cn/api/paas/v4");
+    }
+
+    /// End-to-end: `build_client_from_resolved` carries the resolved chain
+    /// on the client's retry config; an empty `fallback_models` keeps the
+    /// exact `RetryConfig::default()` (failover stays opt-in).
+    #[test]
+    fn build_client_from_resolved_wires_failover_chain() {
+        let active =
+            profile_with_fallbacks(anthropic_profile("K"), &["deepseek/deepseek-v4-flash"]);
+        let ds = deepseek_profile();
+        let pm = v2_multi_provider_config(vec![active, ds], "anthropic", "claude-sonnet-4-6");
+        let cfg = ShannonConfig {
+            provider_model: pm,
+            ..Default::default()
+        };
+        let rt = crate::provider_resolver::resolve_active_target(&cfg.provider_model)
+            .expect("active target resolves");
+        let client = build_client_from_resolved(&cfg, rt);
+        let chain = &client.retry_config.fallbacks;
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].provider, LlmProvider::DeepSeek);
+        assert_eq!(chain[0].model, "deepseek-v4-flash");
+        assert!(!client.retry_config.suppress_failover);
+
+        // Empty list → byte-default retry config (no failover).
+        let pm2 = v2_multi_provider_config(
+            vec![anthropic_profile("K")],
+            "anthropic",
+            "claude-sonnet-4-6",
+        );
+        let cfg2 = ShannonConfig {
+            provider_model: pm2,
+            ..Default::default()
+        };
+        let rt2 = crate::provider_resolver::resolve_active_target(&cfg2.provider_model)
+            .expect("active target resolves");
+        let client2 = build_client_from_resolved(&cfg2, rt2);
+        assert!(client2.retry_config.fallbacks.is_empty());
+        assert_eq!(
+            client2.retry_config.max_retries,
+            shannon_engine::api::RetryConfig::default().max_retries
+        );
     }
 
     #[test]
@@ -910,6 +1516,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         let cfg = ShannonConfig {
             provider_model: v2_default_profile(provider, "glm-4"),

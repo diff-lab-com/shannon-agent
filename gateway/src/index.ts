@@ -13,6 +13,8 @@
 import { bootstrap, type AdapterFactory } from "./bootstrap.js";
 import { loadConfig } from "./config/loader.js";
 import { createConsoleLogger } from "./logger.js";
+import { configPathForProfile } from "./service/service.js";
+import { type Logger } from "./adapters/types.js";
 
 import { createSlackAdapter } from "./adapters/slack/slackAdapter.js";
 import { createTelegramAdapter } from "./adapters/telegram/telegramAdapter.js";
@@ -71,15 +73,63 @@ function parseProfile(argv: string[]): string | undefined {
   return undefined;
 }
 
-/** Load config (optionally from --config / --profile) and run until signaled. */
-async function runGateway(extraArgs: string[]): Promise<void> {
-  const logger = createConsoleLogger("info");
-
+/**
+ * Resolve the config path for `run` from its args (review F43).
+ *
+ * `install --profile <p>` writes a unit that launches `run --profile <p>` —
+ * the run path used to ignore the flag and boot with the DEFAULT config,
+ * silently misconfiguring the primary headless deployment. The resolution
+ * reuses the service module's `configPathForProfile` (single source of
+ * truth); an explicit `--config` wins, with a warning.
+ */
+export function resolveRunConfigPath(extraArgs: string[]): {
+  configPath?: string;
+  warning?: string;
+} {
   let configPath: string | undefined;
   const cfgIdx = extraArgs.indexOf("--config");
   if (cfgIdx >= 0 && cfgIdx + 1 < extraArgs.length) {
     configPath = extraArgs[cfgIdx + 1];
   }
+  const profile = parseProfile(extraArgs);
+  if (configPath && profile) {
+    return {
+      configPath,
+      warning: `both --config and --profile given; --config wins (--profile ${profile} ignored)`,
+    };
+  }
+  if (profile) return { configPath: configPathForProfile(profile) };
+  return {};
+}
+
+/**
+ * Review F40 defense-in-depth: the gateway fans out many async turns across
+ * every adapter, and a single escaped rejection (engine hiccup mid-turn) must
+ * never kill all of them. `unhandledRejection` → log and keep serving (a
+ * rejection leaves no corrupt process state); `uncaughtException` → log and
+ * exit(1) — state MAY be corrupt, and the service unit's Restart=on-failure
+ * brings the process back.
+ */
+export function installFatalHandlers(logger: Logger): void {
+  process.on("unhandledRejection", (reason: unknown) => {
+    logger.error(
+      `unhandled promise rejection: ${(reason as Error)?.message ?? String(reason)} — gateway stays up`,
+    );
+  });
+  process.on("uncaughtException", (err: Error) => {
+    logger.error(`uncaught exception: ${err.stack ?? err.message}; exiting`);
+    process.exit(1);
+  });
+}
+
+/** Load config (optionally from --config / --profile) and run until signaled. */
+async function runGateway(extraArgs: string[]): Promise<void> {
+  const logger = createConsoleLogger("info");
+  installFatalHandlers(logger);
+
+  // Review F43: honor the `--profile <p>` the service unit passes.
+  const { configPath, warning } = resolveRunConfigPath(extraArgs);
+  if (warning) logger.warn(warning);
 
   const config = loadConfig(configPath);
 
@@ -190,7 +240,10 @@ async function main(): Promise<void> {
 
   // `run` is the explicit entry point used by the service unit; bare invocation
   // (no subcommand) is kept for dev/direct use and behaves identically.
-  if (!sub || sub === "run") {
+  // WP-15 P1-3: an argv[2] that starts with `-` (e.g. `tsx src/index.ts --config
+  // X`) is a flag of the bare invocation, not an unknown subcommand — fall
+  // through to runGateway with the full argv instead of rejecting it.
+  if (!sub || sub === "run" || sub.startsWith("-")) {
     const rest = sub === "run" ? process.argv.slice(3) : process.argv.slice(2);
     await runGateway(rest);
     return;
@@ -203,7 +256,30 @@ async function main(): Promise<void> {
   process.exit(2);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Entry-point guard. The previous string-compare against
+// `file://${process.argv[1]}` silently failed when the binary was compiled
+// by Bun: on POSIX `argv[1]` matches `file://…`, but on Windows the path is
+// `B:\~BUN\root\…` (backslashes + drive letter) which the file:// URL
+// scheme never produces, so `main()` was never invoked and the compiled
+// Windows binary just exited 0. We prefer `pathToFileURL` (Node) or
+// `Bun.main` (Bun) for the comparison, falling back to the legacy string
+// check for older runtimes.
+import { pathToFileURL } from "node:url";
+declare const Bun: { main: string } | undefined;
+const isMainModule = (() => {
+  if (typeof Bun !== "undefined") {
+    // Bun: Bun.main is the absolute path of the entry script.
+    return Bun.main === process.argv[1];
+  }
+  // Node: compare against a properly-formed file URL of argv[1].
+  if (typeof process.argv[1] !== "string") return false;
+  try {
+    return pathToFileURL(process.argv[1]).href === import.meta.url;
+  } catch {
+    return import.meta.url === `file://${process.argv[1]}`;
+  }
+})();
+if (isMainModule) {
   main().catch((err: unknown) => {
     console.error("shannon-gateway failed to start:", err);
     process.exit(1);

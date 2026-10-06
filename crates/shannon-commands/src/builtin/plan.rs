@@ -20,10 +20,11 @@ You are now in **Plan Mode** — a read-only exploration and planning mode.
 - Create detailed implementation plans
 - Review code for issues
 - Explore dependencies and relationships
+- Run the project's own read-only build/check commands — use whatever toolchain the project uses (e.g. `make`, `npm run`, `go build`, `pytest --collect-only`, `cargo check`); there is no hardcoded default
 
 ## What You Cannot Do
 - Edit or write files
-- Run commands that modify state (git commit, cargo build --release, etc.)
+- Run commands that modify state (git commit, build/package/install, etc.)
 - Create or delete files
 - Modify configuration
 
@@ -81,7 +82,7 @@ pub fn command() -> Command {
             user_facing_name: None,
         },
         progress_message: "Exploring codebase...".to_string(),
-        content_length: 3000,
+        content_length: 1688,
         arg_names: vec!["task".to_string()],
         allowed_tools: vec![
             "Read".to_string(),
@@ -90,8 +91,6 @@ pub fn command() -> Command {
             "Bash(git log:*)".to_string(),
             "Bash(git diff:*)".to_string(),
             "Bash(git show:*)".to_string(),
-            "Bash(cargo check:*)".to_string(),
-            "Bash(cargo test -- --list:*)".to_string(),
             "Bash(find:*)".to_string(),
             "Bash(ls:*)".to_string(),
             "Bash(cat:*)".to_string(),
@@ -116,5 +115,42 @@ mod tests {
         let cmd = command();
         assert_eq!(cmd.name(), "plan");
         assert!(cmd.aliases().contains(&"explore".to_string()));
+    }
+
+    #[test]
+    fn test_plan_allowed_tools_are_language_agnostic() {
+        let cmd = command();
+        let allowed_tools = match &cmd {
+            Command::Prompt(p) => p.allowed_tools.clone(),
+            _ => panic!("plan must be a prompt command"),
+        };
+        // R1-1: no hardcoded Rust toolchain entries — plan mode is
+        // language-agnostic and the prompt tells the model to use the
+        // project's own build/check commands.
+        assert!(
+            !allowed_tools.iter().any(|t| t.contains("cargo")),
+            "plan allowed_tools must not hardcode cargo: {allowed_tools:?}"
+        );
+        // Read-only allowlist must stay narrow (no bare Bash).
+        assert!(
+            !allowed_tools.iter().any(|t| t == "Bash"),
+            "plan mode must not allow bare Bash"
+        );
+    }
+
+    #[test]
+    fn test_plan_prompt_directs_to_project_toolchain() {
+        assert!(PLAN_PROMPT.contains("the project's own read-only build/check commands"));
+        assert!(!PLAN_PROMPT.contains("cargo build --release"));
+    }
+
+    #[test]
+    fn test_plan_content_length_matches_template_bytes() {
+        let cmd = command();
+        let content_length = match &cmd {
+            Command::Prompt(p) => p.content_length,
+            _ => panic!("plan must be a prompt command"),
+        };
+        assert_eq!(content_length, PLAN_PROMPT.len());
     }
 }

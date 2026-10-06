@@ -7,7 +7,7 @@
 //!
 //! # Process discipline (mirrors task-2 / inbox_commands)
 //!
-//! The dev-server child process is owned by the [`PreviewManager`] that
+//! The dev-server child process is owned by the `PreviewManager` that
 //! lives on `AppState`:
 //!
 //! * exactly one preview instance — a second `preview_start` returns the
@@ -382,7 +382,11 @@ impl PreviewCaptureSource for AppWindowCapture {
         let window = xcap::Window::all()
             .map_err(|e| format!("window enumeration failed: {e}"))?
             .into_iter()
-            .find(|w| w.app_name().to_lowercase().contains("shannon"));
+            .find(|w| {
+                w.app_name()
+                    .map(|name| name.to_lowercase().contains("shannon"))
+                    .unwrap_or(false)
+            });
         if let Some(image) = window.and_then(|w| w.capture_image().ok()) {
             return encode(image);
         }
@@ -1086,6 +1090,8 @@ impl shannon_tools::preview::PreviewAccess for ManagerPreviewAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the unix-gated PreviewManager tests decode the base64 fixture.
+    #[cfg(unix)]
     use base64::Engine as _;
     use std::net::TcpListener;
     use std::sync::Arc;

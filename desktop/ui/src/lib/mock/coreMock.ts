@@ -1,13 +1,33 @@
 // Drop-in replacement for @tauri-apps/api/core when running in mock mode.
 // Vite alias swaps '@tauri-apps/api/core' → this module when VITE_MOCK_MODE=1.
 // See vite.config.ts and src/lib/mock/README.md.
+//
+// R1 chat-testing infra: besides command interception this module now also
+// wires the Tauri v2 EVENT bridge (src/lib/mock/eventBridge.ts — the real
+// @tauri-apps/api/event walks window.__TAURI_INTERNALS__, which the alias
+// can't reach) and the scripted player (src/lib/mock/scripted/) that replays
+// ChatScript turns through it. See scripted/index.ts for the console API.
 import { handlers } from './handlers'
+import { registerEventCallback } from './eventBridge'
+import { chatPlayer, initScriptedBackend } from './scripted'
 
 export interface InvokeArgs {
   [key: string]: unknown
 }
 
 export async function invoke<T = unknown>(cmd: string, args?: InvokeArgs): Promise<T> {
+  if (cmd === 'configure') console.log('[mock] invoke configure', JSON.stringify(args))
+  // Scripted-backend hooks — notify the player of lifecycle commands, and
+  // let it OWN `send_message` while a script is armed (it replays the next
+  // turn's events; returning null falls through to the default handler).
+  if (cmd === 'send_message') {
+    const scripted = chatPlayer.handleSendMessage(args as { sessionId?: string | null } | undefined)
+    if (scripted) return scripted as T
+  } else if (cmd === 'cancel_query') {
+    chatPlayer.handleCancelQuery()
+  } else if (cmd === 'respond_permission') {
+    chatPlayer.handleRespondPermission(args ?? {})
+  }
   const handler = handlers[cmd]
   if (handler) {
     try {
@@ -24,7 +44,8 @@ export async function invoke<T = unknown>(cmd: string, args?: InvokeArgs): Promi
   // fallback — this is just defense in depth).
   const detail = `[mock] unhandled Tauri command: "${cmd}". Add it to src/lib/mock/handlers.ts.`
   console.error(detail)
-  throw new Error('This feature is not available in demo mode.')
+  const zh = navigator.language.startsWith('zh')
+  throw new Error(zh ? '演示模式下该功能不可用。' : 'This feature is not available in demo mode.')
 }
 
 // Re-export other things from @tauri-apps/api/core that the app might use,
@@ -35,22 +56,45 @@ export async function convertFileSrc(filePath: string): Promise<string> {
   return `file://${filePath}`
 }
 
-export function transformCallback(): number {
-  return Math.floor(Math.random() * 1_000_000)
+// R1: real registration (was: random number — every demo-mode listen()
+// silently failed). Same signature as core.js v2.11: (callback?, once?) → id,
+// and the id now resolves a callback that eventBridge.dispatchEvent invokes
+// with `{ event, id, payload }` (the shape the real backend delivers, and
+// what `once()` needs for its self-unlisten).
+export function transformCallback(callback?: (response: unknown) => void, once?: boolean): number {
+  return registerEventCallback(callback ?? null, once)
 }
 
-// Install the visible DEMO MODE badge once on module load (browser only)
+// Wire the event bridge + scripted backend (idempotent). Must run at module
+// init — before React mounts — so `plugin:event|listen` handlers exist when
+// AppContext first subscribes and a `__SHANNON_SCRIPT__` boot script seeds
+// the store before the app's first fetch.
+initScriptedBackend(invoke)
+
+// Install the visible DEMO MODE badge once on module load (browser only).
+// Audit §P2-1 (round 6): restyled from a loud violet pill to a low-contrast
+// dev-marker so reviewers don't mistake it for a finished production
+// element. Still serves its job: anyone running `pnpm demo` instantly knows
+// the binary isn't talking to a real Tauri backend.
+// axe-ci (Visual Audit): also pinned contrast to WCAG AA (≥4.5:1) on a
+// solid background, and tagged aria-hidden + role="presentation" so the
+// dev-only marker is excluded from a11y scans entirely — it isn't real
+// product chrome and shouldn't be measured as if it were.
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   const ready = () => {
     if (document.querySelector('[data-mock-badge]')) return
     const badge = document.createElement('div')
     badge.setAttribute('data-mock-badge', '')
-    badge.textContent = 'DEMO MODE'
+    badge.setAttribute('aria-hidden', 'true')
+    badge.setAttribute('role', 'presentation')
+    badge.textContent = 'DEMO MODE · mock backend'
     badge.style.cssText = [
-      'position:fixed', 'bottom:12px', 'left:12px', 'z-index:9999',
-      'background:#7c3aed', 'color:white', 'font:600 11px/1 system-ui, sans-serif',
-      'padding:4px 10px', 'border-radius:999px', 'letter-spacing:0.05em',
-      'box-shadow:0 2px 8px rgba(124,58,237,0.4)', 'pointer-events:none',
+      'position:fixed', 'bottom:10px', 'left:10px', 'z-index:9999',
+      'background:rgba(60,60,72,0.92)', 'color:#f1f1f4',
+      'font:500 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace',
+      'padding:3px 8px', 'border-radius:6px', 'letter-spacing:0.04em',
+      'border:1px solid rgba(60,60,72,0.92)',
+      'pointer-events:none', 'user-select:none',
     ].join(';')
     document.body.appendChild(badge)
   }

@@ -12,6 +12,8 @@ import {
   type SendOpts,
 } from "../types.js";
 import { type AdapterConfig } from "../../config/types.js";
+import { readWebhookBodyOr413 } from "../../lib/webhookBody.js";
+import { PLATFORM_HTTP_TIMEOUT_MS } from "../../lib/netTimeouts.js";
 
 /**
  * Slack adapter (Events API + Web API).
@@ -192,8 +194,14 @@ export function normalizeSlackEvent(payload: unknown): SlackInboundResult {
       message: {
         platform: "slack",
         chatId: ev.channel,
-        // A thread message carries thread_ts; a top-level message does not.
-        threadId: typeof ev.thread_ts === "string" ? ev.thread_ts : ev.ts,
+        // review §P2-24: a thread message carries thread_ts; a top-level
+        // message does NOT. Using ev.ts as the fallback threadId made
+        // every top-level channel message its own session — the engine
+        // never carried context forward between messages in the same
+        // channel. Top-level messages should sit on the channel base
+        // session (threadId undefined); thread replies attach to the
+        // parent's ts.
+        threadId: typeof ev.thread_ts === "string" ? ev.thread_ts : undefined,
         senderId: ev.user,
         senderName: ev.user,
         text: typeof ev.text === "string" ? ev.text : "",
@@ -358,7 +366,9 @@ export function createSlackAdapter(cfg: AdapterConfig, ctx: AdapterContext): Cha
   }
 
   async function handlePost(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const raw = await readBody(req);
+    // review §P2-23: bound the raw body before signature verification.
+    const raw = await readWebhookBodyOr413(req, res);
+    if (raw === null) return;
     if (req.url == null || new URL(req.url, "http://localhost").pathname !== webhookPath) {
       res.statusCode = 404;
       res.end();
@@ -428,6 +438,7 @@ export function createSlackAdapter(cfg: AdapterConfig, ctx: AdapterContext): Cha
           for (const ref of mediaRefs) {
             try {
               const fileRes = await fetchImpl(ref.url, {
+                signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
                 headers: { authorization: `Bearer ${botToken}` },
               });
               if (!fileRes.ok) throw new Error(`HTTP ${fileRes.status}`);
@@ -466,7 +477,13 @@ export function createSlackAdapter(cfg: AdapterConfig, ctx: AdapterContext): Cha
       threadTs: target.threadId,
       blocks,
     });
-    const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, body: req.body });
+    const res = await fetchImpl(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      // review §P2-23: platform API calls must not hang the session lane.
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new Error(`slack postMessage failed: HTTP ${res.status} ${detail}`);
@@ -487,7 +504,12 @@ export function createSlackAdapter(cfg: AdapterConfig, ctx: AdapterContext): Cha
       ts: messageId,
       text,
     });
-    const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, body: req.body });
+    const res = await fetchImpl(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new Error(`slack update failed: HTTP ${res.status} ${detail}`);
@@ -569,18 +591,6 @@ export function createSlackAdapter(cfg: AdapterConfig, ctx: AdapterContext): Cha
       return { baseChatId: rawId };
     },
   };
-}
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
-  });
 }
 
 function header(req: IncomingMessage, name: string): string | undefined {

@@ -5,7 +5,7 @@
 //! startup on the shared `Notifier` (with `Cooldown` + `minimum_level`) stored
 //! on `AppState`, so all query-event firing sites share the same dedup state.
 
-use shannon_core::notifier::{Notification, NotificationHandler, NotificationLevel, NotifierError};
+use shannon_core::notifier::{Notification, NotificationHandler, NotifierError};
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
@@ -33,8 +33,10 @@ impl NotificationHandler for TauriNotificationHandler {
         // handlers on the same Notifier are unaffected, so away-from-desk
         // delivery still fires.
         let prefs = crate::commands_notifications::NotificationPrefs::load();
-        let is_error = matches!(n.level, NotificationLevel::Error);
-        if !prefs.master_enabled || prefs.within_dnd_window() || !prefs.allows_level(is_error) {
+        // Three-way per-kind routing (settings-r3 T5): completed / failed /
+        // needs_attention each honor their own toggle; master + DND gate
+        // everything.
+        if !prefs.master_enabled || prefs.within_dnd_window() || !prefs.allows_level(n.kind) {
             return Ok(());
         }
         self.app

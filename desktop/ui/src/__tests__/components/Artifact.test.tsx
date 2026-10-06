@@ -5,7 +5,21 @@ import { ThemeProvider } from '@/context/ThemeContext'
 import { detectArtifacts } from '@/components/artifact/detectArtifact'
 import { ArtifactProvider, useArtifact } from '@/components/artifact/ArtifactContext'
 import { ArtifactChip } from '@/components/artifact/ArtifactChip'
-import { ArtifactPanel } from '@/components/artifact/ArtifactPanel'
+
+// Review §P2-17: mock the lazily-imported bundled mermaid so these tests
+// don't pull the real (heavy) mermaid bundle into jsdom. `vi.hoisted` is
+// required because vi.mock factories are hoisted above file-level consts.
+const { mermaidMock } = vi.hoisted(() => ({
+  mermaidMock: { initialize: vi.fn(), render: vi.fn() },
+}))
+vi.mock('mermaid', () => ({ default: mermaidMock }))
+
+/** Batch D4: ArtifactPanel was retired — the dock (RightDock) hosts open
+ *  artifacts, so these tests observe the context through a probe. */
+function ArtifactProbe() {
+  const { artifacts, activeId } = useArtifact()
+  return <div data-testid="artifact-probe" data-count={artifacts.length} data-active={activeId ?? ''} />
+}
 
 const HTML_FIXTURE = `<!DOCTYPE html>
 <html>
@@ -93,6 +107,57 @@ describe('detectArtifacts', () => {
   })
 })
 
+// B3 §P1-10/§P2-24: stable content-hash ids, ~~~ fences, htm tag, and
+// content-derived titles for SVG/mermaid.
+describe('detectArtifacts — B3 robustness', () => {
+  it('assigns stable content-hash ids: same content converges, different content differs', () => {
+    const md = `\`\`\`svg\n${SVG_FIXTURE}\n\`\`\``
+    const [a] = detectArtifacts(md)
+    const [b] = detectArtifacts(md)
+    expect(a.id).toMatch(/^svg:/)
+    expect(a.id).toBe(b.id)
+    const [c] = detectArtifacts(`\`\`\`svg\n<svg xmlns="http://www.w3.org/2000/svg"></svg>\n\`\`\``)
+    expect(c.id).not.toBe(a.id)
+    // CRLF vs LF and outer whitespace are normalized away.
+    const [d] = detectArtifacts(`\`\`\`svg\n${SVG_FIXTURE.replace(/\n/g, '\r\n')}\n\`\`\`\n`)
+    expect(d.id).toBe(a.id)
+  })
+
+  it('detects ~~~ fences', () => {
+    const md = `~~~svg\n${SVG_FIXTURE}\n~~~`
+    const out = detectArtifacts(md)
+    expect(out).toHaveLength(1)
+    expect(out[0].kind).toBe('svg')
+  })
+
+  it('detects the htm language tag as html', () => {
+    const md = '```htm\n<html><body><p>' + 'line\n'.repeat(6) + '</p></body></html>\n```'
+    const out = detectArtifacts(md)
+    expect(out).toHaveLength(1)
+    expect(out[0].kind).toBe('html')
+  })
+
+  it('does not report a ~~~ sequence inside a ``` fence body twice', () => {
+    const body = `${SVG_FIXTURE}\n~~~svg\n<svg></svg>\n~~~`
+    const md = `\`\`\`svg\n${body}\n\`\`\``
+    const out = detectArtifacts(md)
+    expect(out).toHaveLength(1)
+  })
+
+  it('extracts an SVG title from <title> and falls back to <text>', () => {
+    const withTitle = detectArtifacts('```svg\n<svg><title>Revenue 2026</title><rect/></svg>\n```')
+    expect(withTitle[0].title).toBe('Revenue 2026')
+    const withText = detectArtifacts('```svg\n<svg><text x="0" y="0">Quarterly Report</text></svg>\n```')
+    expect(withText[0].title).toBe('Quarterly Report')
+    expect(detectArtifacts('```svg\n<svg><rect/></svg>\n```')[0].title).toBe('')
+  })
+
+  it('extracts a mermaid title from the first node label', () => {
+    const out = detectArtifacts('```mermaid\nflowchart LR\nA[Checkout Flow] --> B{Paid?}\n```')
+    expect(out[0].title).toBe('Checkout Flow')
+  })
+})
+
 describe('ArtifactContext', () => {
   function Probe() {
     const { artifacts, activeId, open, close, closeAll } = useArtifact()
@@ -152,6 +217,107 @@ describe('ArtifactContext', () => {
   })
 })
 
+// B3 §P1-14 / §P1-11: session-scoped chat tabs + provider-level auto-open
+// bookkeeping that survives virtualized chip remounts.
+describe('ArtifactContext — B3 scoping & autoOpen dedup', () => {
+  const CHAT = { kind: 'html' as const, source: '<p>chat</p>', title: 'Chat doc', confidence: 'high' as const, origin: 'chat' as const, id: 'html:abc' }
+  const DISK = { kind: 'document' as const, source: '# d', title: 'Disk doc', confidence: 'high' as const, origin: 'disk' as const, path: '/tmp/d.md', id: 'disk:/tmp/d.md' }
+  const WEB = { kind: 'web' as const, source: 'https://example.com', title: 'https://example.com', confidence: 'high' as const, id: 'web:https://example.com' }
+
+  function ScopeProbe() {
+    const { artifacts, open, closeChatArtifacts } = useArtifact()
+    return (
+      <div>
+        <div data-testid="ids">{artifacts.map(a => a.id).join(',')}</div>
+        <button onClick={() => { open(CHAT); open(DISK); open(WEB) }}>seed</button>
+        <button onClick={() => closeChatArtifacts()}>sweep</button>
+      </div>
+    )
+  }
+
+  it('closeChatArtifacts removes chat tabs, keeps disk and web tabs', () => {
+    render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <ScopeProbe />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    fireEvent.click(screen.getByText('seed'))
+    expect(screen.getByTestId('ids')).toHaveTextContent('html:abc')
+    expect(screen.getByTestId('ids')).toHaveTextContent('disk:/tmp/d.md')
+    expect(screen.getByTestId('ids')).toHaveTextContent('web:https://example.com')
+    fireEvent.click(screen.getByText('sweep'))
+    expect(screen.getByTestId('ids').textContent).toBe('disk:/tmp/d.md,web:https://example.com')
+  })
+
+  it('autoOpenOnce opens an id exactly once across chip remounts', () => {
+    const artifact = { kind: 'svg' as const, source: '<svg><text>remount</text></svg>', title: 'R', confidence: 'high' as const }
+
+    function ChipAndProbe() {
+      const { autoOpenOnce, artifacts } = useArtifact()
+      return (
+        <div>
+          <button onClick={() => autoOpenOnce(artifact)}>fire</button>
+          <div data-testid="count">{artifacts.length}</div>
+        </div>
+      )
+    }
+
+    // Simulates two virtualization cycles of the same chip: fresh component
+    // instances, same provider — the old per-mount firedRef re-fired here.
+    const { rerender } = render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <ChipAndProbe />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    fireEvent.click(screen.getByText('fire'))
+    expect(screen.getByTestId('count')).toHaveTextContent('1')
+    rerender(
+      <I18nProvider>
+        <ArtifactProvider>
+          <ChipAndProbe />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    fireEvent.click(screen.getByText('fire'))
+    expect(screen.getByTestId('count')).toHaveTextContent('1')
+  })
+
+  it('closeChatArtifacts re-arms auto-open for a fresh session', () => {
+    const artifact = { kind: 'svg' as const, source: '<svg><text>session</text></svg>', title: 'S', confidence: 'high' as const, origin: 'chat' as const }
+
+    function ChipAndProbe() {
+      const { autoOpenOnce, artifacts, closeChatArtifacts } = useArtifact()
+      return (
+        <div>
+          <button onClick={() => autoOpenOnce(artifact)}>fire</button>
+          <button onClick={() => closeChatArtifacts()}>sweep</button>
+          <div data-testid="count">{artifacts.length}</div>
+        </div>
+      )
+    }
+
+    render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <ChipAndProbe />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    fireEvent.click(screen.getByText('fire'))
+    expect(screen.getByTestId('count')).toHaveTextContent('1')
+    // Session switch sweeps the tab — and with it the auto-open marker —
+    // so the next session's identical chip may open once again.
+    fireEvent.click(screen.getByText('sweep'))
+    expect(screen.getByTestId('count')).toHaveTextContent('0')
+    fireEvent.click(screen.getByText('fire'))
+    expect(screen.getByTestId('count')).toHaveTextContent('1')
+  })
+})
+
 describe('ArtifactChip', () => {
   function renderChip(kind: 'html' | 'svg' = 'html') {
     return render(
@@ -172,88 +338,22 @@ describe('ArtifactChip', () => {
     expect(screen.getByText('Test artifact')).toBeInTheDocument()
   })
 
-  it('clicking the chip opens the panel context', async () => {
+  it('clicking the chip opens it in the artifact context', async () => {
     const { container } = render(
       <I18nProvider>
         <ArtifactProvider>
           <ArtifactChip artifact={{ kind: 'html', source: '<p>hi</p>', title: 'Test artifact', confidence: 'high' }} />
-          <ArtifactPanel />
+          <ArtifactProbe />
         </ArtifactProvider>
       </I18nProvider>,
     )
-    expect(container.querySelector('[role="complementary"]')).toBeNull()
+    expect(screen.getByTestId('artifact-probe')).toHaveAttribute('data-count', '0')
     const button = screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ })
     fireEvent.click(button)
     await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
+      expect(screen.getByTestId('artifact-probe')).toHaveAttribute('data-count', '1')
     })
-  })
-})
-
-describe('ArtifactPanel F2 polish', () => {
-  beforeEach(() => {
-    localStorage.clear()
-  })
-
-  function renderWithArtifact() {
-    return render(
-      <I18nProvider>
-        <ArtifactProvider>
-          <ArtifactChip artifact={{ kind: 'html', source: '<p>hi</p>', title: 'Test artifact', confidence: 'high' }} />
-          <ArtifactPanel />
-        </ArtifactProvider>
-      </I18nProvider>,
-    )
-  }
-
-  it('shows fullscreen toggle button after panel opens', async () => {
-    const { container } = renderWithArtifact()
-    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
-    await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
-    })
-    expect(screen.getByRole('button', { name: 'Enter fullscreen' })).toBeInTheDocument()
-  })
-
-  it('toggles fullscreen mode on button click', async () => {
-    const { container } = renderWithArtifact()
-    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
-    await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
-    })
-    const fsBtn = screen.getByRole('button', { name: 'Enter fullscreen' })
-    fireEvent.click(fsBtn)
-    expect(screen.getByRole('button', { name: 'Exit fullscreen' })).toBeInTheDocument()
-    const panel = container.querySelector('[role="complementary"]') as HTMLElement
-    expect(panel.className).toContain('fixed')
-    expect(localStorage.getItem('shannon.artifact.fullscreen')).toBe('1')
-  })
-
-  it('shows auto-open toggle button', async () => {
-    const { container } = renderWithArtifact()
-    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
-    await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
-    })
-    const toggle = screen.getByRole('button', { name: 'Toggle auto-open on detection' })
-    expect(toggle.getAttribute('aria-pressed')).toBe('false')
-    fireEvent.click(toggle)
-    expect(toggle.getAttribute('aria-pressed')).toBe('true')
-    expect(localStorage.getItem('shannon.artifact.autoOpen')).toBe('1')
-  })
-
-  it('persists width to localStorage after resize', async () => {
-    const { container } = renderWithArtifact()
-    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
-    await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
-    })
-    const handle = container.querySelector('[aria-label="Drag to resize panel"]') as HTMLElement
-    expect(handle).toBeTruthy()
-    fireEvent.pointerDown(handle)
-    fireEvent.pointerMove(window, { clientX: 200 })
-    fireEvent.pointerUp(window)
-    expect(localStorage.getItem('shannon.artifact.panelWidth')).toBeTruthy()
+    expect(container).toBeTruthy()
   })
 })
 
@@ -266,89 +366,141 @@ describe('ArtifactContext keyboard shortcut', () => {
     render(
       <I18nProvider>
         <ArtifactProvider>
-          <ArtifactPanel />
+          <ArtifactProbe />
         </ArtifactProvider>
       </I18nProvider>,
     )
     const evt = new KeyboardEvent('keydown', { key: 'A', shiftKey: true, ctrlKey: true, bubbles: true })
     window.dispatchEvent(evt)
+    expect(screen.getByTestId('artifact-probe')).toHaveAttribute('data-count', '0')
   })
 
-  it('Ctrl+Shift+A cycles active artifact when panel has items', async () => {
-    const { container } = render(
+  it('Ctrl+Shift+A cycles active artifact when artifacts are open', async () => {
+    render(
       <I18nProvider>
         <ArtifactProvider>
           <ArtifactChip artifact={{ kind: 'html', source: '<p>a</p>', title: 'A', confidence: 'high' }} />
           <ArtifactChip artifact={{ kind: 'svg', source: '<svg/>', title: 'B', confidence: 'high' }} />
-          <ArtifactPanel />
+          <ArtifactProbe />
         </ArtifactProvider>
       </I18nProvider>,
     )
     const buttons = screen.getAllByRole('button', { name: /Open .+ artifact:/ })
     fireEvent.click(buttons[0])
     await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
+      expect(screen.getByTestId('artifact-probe')).toHaveAttribute('data-count', '1')
     })
-    const panel = container.querySelector('[role="complementary"]') as HTMLElement
     fireEvent.click(buttons[1])
     await waitFor(() => {
-      expect(panel.querySelector('.truncate')?.textContent).toBe('B')
+      expect(screen.getByTestId('artifact-probe')).toHaveAttribute('data-count', '2')
     })
+    const before = screen.getByTestId('artifact-probe').getAttribute('data-active')
     const evt = new KeyboardEvent('keydown', { key: 'A', shiftKey: true, ctrlKey: true, bubbles: true })
     window.dispatchEvent(evt)
     await waitFor(() => {
-      const afterTitle = panel.querySelector('.truncate')?.textContent
-      expect(['A', 'B']).toContain(afterTitle)
+      const after = screen.getByTestId('artifact-probe').getAttribute('data-active')
+      expect(after).toBeTruthy()
+      expect(after).not.toBe(before)
     })
   })
 })
 
 describe('HtmlRenderer security', () => {
-  it('renders iframe with sandbox attribute', async () => {
+  it('renders a fully-sandboxed iframe — honest-static, no scripts (B3 §P1-9)', async () => {
     const { HtmlRenderer } = await import('@/components/artifact/HtmlRenderer')
     const { container } = render(<HtmlRenderer source="<p>hi</p>" />)
     const iframe = container.querySelector('iframe')
     expect(iframe).toBeTruthy()
-    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts')
-    expect(iframe?.getAttribute('sandbox')?.includes('allow-same-origin')).toBe(false)
+    // Empty sandbox: opaque origin, script execution impossible. The old
+    // `allow-scripts` only ever produced a silently static page (srcdoc
+    // inherits the parent CSP), so the posture is now truthful.
+    expect(iframe?.getAttribute('sandbox')).toBe('')
   })
 
-  it('injects strict CSP meta tag', async () => {
+  it('injects a strict CSP meta without script-src', async () => {
     const { HtmlRenderer } = await import('@/components/artifact/HtmlRenderer')
     const { container } = render(<HtmlRenderer source="<p>hi</p>" />)
     const iframe = container.querySelector('iframe')
     const srcDoc = iframe?.getAttribute('srcdoc') ?? ''
     expect(srcDoc).toContain("Content-Security-Policy")
     expect(srcDoc).toContain("default-src 'none'")
+    // The old script-src 'unsafe-inline' could never re-grant scripts
+    // under the intersecting parent policy — it must stay gone.
+    expect(srcDoc).not.toContain('script-src')
+    expect(srcDoc).toContain('style-src')
+  })
+
+  it('injects into case-variant / attribute-carrying <head> tags once', async () => {
+    const { HtmlRenderer } = await import('@/components/artifact/HtmlRenderer')
+    const source = '<!DOCTYPE html><HTML><HEAD id="x"><meta charset="utf-8"></HEAD><body></body></html>'
+    const { container } = render(<HtmlRenderer source={source} />)
+    const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
+    expect(srcDoc).toContain('<HEAD id="x"><meta http-equiv="Content-Security-Policy"')
+    expect(srcDoc.match(/Content-Security-Policy/g)).toHaveLength(1)
+  })
+
+  it('injects after <html …> when no <head> exists', async () => {
+    const { HtmlRenderer } = await import('@/components/artifact/HtmlRenderer')
+    const source = '<html lang="zh"><body><p>x</p></body></html>'
+    const { container } = render(<HtmlRenderer source={source} />)
+    const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
+    expect(srcDoc).toContain('<html lang="zh"><head><meta http-equiv="Content-Security-Policy"')
+  })
+
+  it('wraps fragments without any html/head scaffold', async () => {
+    const { HtmlRenderer } = await import('@/components/artifact/HtmlRenderer')
+    const { container } = render(<HtmlRenderer source="<p>x</p>" />)
+    const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
+    expect(srcDoc.startsWith('<!DOCTYPE html><html><head>')).toBe(true)
+    expect(srcDoc.endsWith('<p>x</p></body></html>')).toBe(true)
   })
 })
 
+// Review §P2-17: mermaid is a bundled npm dependency (lazy chunk), and the
+// iframe only receives the rendered SVG under a script-less CSP — no CDN.
 describe('MermaidRenderer', () => {
-  it('renders iframe with sandbox attribute', async () => {
-    const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
-    const { container } = render(<ThemeProvider><MermaidRenderer source="graph TD\nA-->B" /></ThemeProvider>)
-    const iframe = container.querySelector('iframe')
-    expect(iframe).toBeTruthy()
-    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts')
-    expect(iframe?.getAttribute('sandbox')?.includes('allow-same-origin')).toBe(false)
+  beforeEach(() => {
+    mermaidMock.initialize.mockReset()
+    mermaidMock.render.mockReset()
+    mermaidMock.render.mockResolvedValue({ svg: '<svg id="mmd-fixture"></svg>' })
   })
 
-  it('injects CSP allowing only the mermaid CDN', async () => {
+  it('renders a fully-sandboxed iframe (no scripts allowed)', async () => {
     const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
     const { container } = render(<ThemeProvider><MermaidRenderer source="graph TD\nA-->B" /></ThemeProvider>)
+    const iframe = await waitFor(() => {
+      const el = container.querySelector('iframe')
+      expect(el).toBeTruthy()
+      return el
+    })
+    // The srcdoc is static SVG — the sandbox must not allow scripts.
+    expect(iframe?.getAttribute('sandbox')).toBe('')
+  })
+
+  it('injects a strict CSP with no script-src and no CDN', async () => {
+    const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
+    const { container } = render(<ThemeProvider><MermaidRenderer source="graph TD\nA-->B" /></ThemeProvider>)
+    await waitFor(() => {
+      expect(container.querySelector('iframe')).toBeTruthy()
+    })
     const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
     expect(srcDoc).toContain('Content-Security-Policy')
-    expect(srcDoc).toContain('cdn.jsdelivr.net/npm/mermaid@11')
     expect(srcDoc).toContain("default-src 'none'")
+    expect(srcDoc).not.toContain('script-src')
+    expect(srcDoc).not.toContain('cdn.jsdelivr.net')
   })
 
-  it('embeds source as JSON-encoded string', async () => {
+  it('renders the mermaid output (strict security level) into the iframe', async () => {
     const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
     const { container } = render(<ThemeProvider><MermaidRenderer source="graph TD\nA-->B" /></ThemeProvider>)
+    await waitFor(() => {
+      expect(mermaidMock.initialize).toHaveBeenCalledWith(
+        expect.objectContaining({ securityLevel: 'strict' }),
+      )
+    })
+    expect(mermaidMock.render).toHaveBeenCalledWith(expect.any(String), 'graph TD\\nA-->B')
     const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
-    expect(srcDoc).toContain('graph TD')
-    expect(srcDoc).toContain('securityLevel')
-    expect(srcDoc).toContain('strict')
+    expect(srcDoc).toContain('<svg id="mmd-fixture"></svg>')
   })
 })
 
@@ -387,27 +539,29 @@ describe('DocumentRenderer', () => {
   })
 })
 
-describe('CodeBlock', () => {
-  it('renders source inside pre/code', async () => {
-    const { CodeBlock } = await import('@/components/artifact/CodeBlock')
-    const { container } = render(<CodeBlock source="const x = 1" kind="document" />)
+describe('CodeBlock (shared primitive — batch D3)', () => {
+  it('renders source inside pre/code with the language chrome', async () => {
+    const { CodeBlock } = await import('@/components/code/CodeBlock')
+    const { container } = render(
+      <I18nProvider>
+        <CodeBlock code="const x = 1" language="javascript" />
+      </I18nProvider>
+    )
     expect(container.querySelector('pre')).toBeTruthy()
-    expect(container.querySelector('code.hljs')).toBeTruthy()
+    expect(container.querySelector('code')).toBeTruthy()
+    // copy affordance lives in the header chrome
+    expect(container.querySelector('button')).toBeTruthy()
   })
 
-  it('escapes HTML characters in output', async () => {
-    const { CodeBlock } = await import('@/components/artifact/CodeBlock')
-    const { container } = render(<CodeBlock source={'<script>alert(1)</script>'} />)
-    const html = container.querySelector('code')?.innerHTML ?? ''
-    expect(html).not.toContain('<script>')
+  it('escapes HTML characters in highlighted output', async () => {
+    const { CodeBlock } = await import('@/components/code/CodeBlock')
+    const { container } = render(
+      <I18nProvider>
+        <CodeBlock code={'<script>alert(1)</script>'} />
+      </I18nProvider>
+    )
+    const html = container.querySelector('pre')?.innerHTML ?? ''
+    expect(html).not.toContain('<script>alert')
     expect(html).toContain('&lt;')
-    expect(html).toContain('script')
-  })
-
-  it('highlights known language tokens', async () => {
-    const { CodeBlock } = await import('@/components/artifact/CodeBlock')
-    const { container } = render(<CodeBlock source={'const x = 1'} />)
-    const html = container.querySelector('code')?.innerHTML ?? ''
-    expect(html).toContain('hljs-')
   })
 })

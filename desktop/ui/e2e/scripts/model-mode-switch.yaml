@@ -1,0 +1,76 @@
+# ChatScript: model-mode-switch — journey #17（W2 §9.4，gap G3+G4）。
+#
+# 会话级模型 override 旅程：seed 预置 session.modelOverride（chip 显示
+# "· session" 后缀）+ config.approvalMode = bypass_permissions（审批 pill 的
+# rawLabel 诚实回显）。断言在 spec（chat-script.model-mode.spec.ts）：
+#   - chip 后缀 / Set as default 晋级（get_config.model）/ Reset 回继承；
+#   - effort 档 label（chip 上的 "· Deep"）；
+#   - ExecutionModeSwitcher 切 strict 写 approval_mode（mock 映射 suggest →
+#     pill 回到 Balanced 表项）+ strict 下同一工具的审批弹窗仍然出现（G4）；
+#   - PhaseTierSwitcher 切 Act 档写 plan/act_tier 配置键；
+#   - **切换后下一 turn 才生效**：snapshot().sends[i].model 记录的是发送时刻
+#     的会话 override（player stamped）——turn0=seeded haiku，turn1=chip 新选
+#     的 gpt-5，turn2（Reset 后）=null（回继承）。
+name: model-mode-switch
+description: 模型/模式切换 — session override 后缀 → Set as default → Reset 回继承；effort/执行模式/相位档位；strict 审批弹窗（G4）；sends 快照的 model 字段钉死下一 turn 生效
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-model
+      title: Model switch
+      messages: []
+      modelOverride:
+        provider: anthropic
+        model: claude-haiku-4-5-20251001
+turns:
+  - user: "第一轮：确认会话当前用的模型"
+    script:
+      - event: query:text
+        chunks:
+          - "本轮请求仍由会话 override 的 "
+          - "claude-haiku-4-5-20251001 服务。"
+        chunkDelayMs: 200
+      - event: query:completed
+  # 第二轮在 spec 里先完成 chip 切换（gpt-5）/effort/相位档位/执行模式，
+  # 然后发送 —— strict 模式下同一工具的审批弹窗照常出现（G4），allow 后收敛。
+  - user: "第二轮：切换模型后这条才用新模型，并触发一次工具审批"
+    script:
+      - event: query:text
+        chunks:
+          - "本轮请求已切到 "
+          - "gpt-5 服务，需要先写一个文件。"
+        chunkDelayMs: 200
+      - event: permission-request
+        payload:
+          request_id: pr-model-1
+          tool: Bash
+          risk: critical
+          input:
+            command: "rm -rf build"
+          reason:
+            source: rule
+            ruleName: "destructive-command"
+      - event: query:tool-start
+        payload:
+          tool_use_id: tool-model-1
+          tool_name: Bash
+          tool_input:
+            command: "rm -rf build"
+      - event: query:tool-result
+        payload:
+          tool_use_id: tool-model-1
+          result: "Permission denied: user rejected the Bash command"
+          is_error: true
+      # Park so the dialog-allow → error card convergence is observable.
+      - waitFor: ui
+      - event: query:completed
+  # 第三轮在 spec 里先 Reset（clear-override）—— 发送时刻 override 已清空，
+  # sends[2].model 回到 null（继承全局默认）。
+  - user: "第三轮：Reset 之后这条回到继承的默认模型"
+    script:
+      - event: query:text
+        chunks:
+          - "本轮请求回到全局默认模型（override 已清空）。"
+        chunkDelayMs: 200
+      - event: query:completed

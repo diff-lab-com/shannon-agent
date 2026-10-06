@@ -41,7 +41,7 @@ export default function EfficiencyCard({ percentage, variant = 'full' }: Efficie
         </div>
       </div>
       <div className="absolute -right-8 -bottom-8 opacity-20 transform rotate-12 pointer-events-none">
-        <span className="material-symbols-outlined text-[120px]" style={{ fontVariationSettings: "'FILL' 1" }}>auto_awesome</span>
+        <span className="material-symbols-outlined icon-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>auto_awesome</span>
       </div>
     </div>
   )

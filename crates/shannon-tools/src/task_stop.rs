@@ -143,6 +143,7 @@ mod tests {
             metadata: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             blocked_by: Vec::new(),
+            origin: crate::todo::ORIGIN_TASK.to_string(),
         }
     }
 

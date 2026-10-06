@@ -1,23 +1,36 @@
-import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { lazy, Suspense, useEffect, useRef } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { AppProvider } from './context/AppContext';
-import { ThemeProvider } from './context/ThemeContext';
+import { ThemeProvider, useTheme, themeModeOf } from './context/ThemeContext';
 import { I18nProvider } from './i18n';
+import { ArtifactProvider } from './components/artifact/ArtifactContext';
+import { ArtifactLinkHost } from './components/artifact/ArtifactLinkHost';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { LinkContextMenuHost } from './components/shared/LinkContextMenu';
 import { Layout } from './components/Layout';
+// Office Wave 3 C3 — companion Quick Capture window receiver + fallback route.
+import {
+  isMainWindowLocation,
+  useCompanionPromptListener,
+} from './lib/companionBridge';
+import { pushComposerDraft } from './lib/composerBridge';
 
 const Welcome = lazy(() => import('./pages/Welcome'));
 const Chat = lazy(() => import('./pages/Chat'));
+// Office Wave 3 C3 — companion Quick Capture (standalone chrome-less page:
+// the companion window's whole UI, and a fallback in the main window).
+const CompanionPage = lazy(() => import('./pages/CompanionPage'));
 const Tasks = lazy(() => import('./pages/Tasks'));
 const Triage = lazy(() => import('./pages/Triage'));
 const Extensions = lazy(() => import('./pages/Extensions'));
 const Settings = lazy(() => import('./pages/Settings'));
 const OPC = lazy(() => import('./pages/OPC'));
 const OPCTask = lazy(() => import('./pages/OPCTask'));
-const Editor = lazy(() => import('./pages/Editor'));
 const Memory = lazy(() => import('./pages/Memory'));
 const Usage = lazy(() => import('./pages/Usage'));
+// office Wave 2 B9' — reference-style file library.
+const FilesPage = lazy(() => import('./pages/FilesPage'));
 // §4.14 — Turn Timeline (inside-of-a-turn visualization over the L0 log).
 const TurnTimeline = lazy(() => import('./pages/TurnTimeline'));
 const SkillProposalsManager = lazy(() => import('./components/skills/SkillProposalsManager'));
@@ -28,6 +41,8 @@ const Skills = lazy(() => import('./components/extensions/Skills'));
 const Agents = lazy(() => import('./components/extensions/Agents'));
 const Plugins = lazy(() => import('./components/extensions/Plugins'));
 const Installed = lazy(() => import('./components/extensions/Installed'));
+// IA X1: Extensions → Pending — the single skill-review surface (评审裁决 #2).
+const Pending = lazy(() => import('./components/extensions/Pending'));
 const GeneralSettings = lazy(() => import('./components/settings/GeneralSettings'));
 const ThemeSettings = lazy(() => import('./components/settings/ThemeSettings'));
 const ModelsSettings = lazy(() => import('./components/settings/ModelsSettings'));
@@ -36,14 +51,83 @@ const NotificationsSettings = lazy(() => import('./components/settings/Notificat
 const ConnectionsSettings = lazy(() => import('./components/settings/ConnectionsSettings'));
 const RemotesSettings = lazy(() => import('./components/settings/RemotesSettings'));
 const PermissionsSettings = lazy(() => import('./components/settings/PermissionsSettings'));
+// Settings R3 (T1) — 网络/会话/关于 sections + the advanced dev-mode guard.
+const NetworkSettings = lazy(() => import('./components/settings/NetworkSettings'));
+const SessionSettings = lazy(() => import('./components/settings/SessionSettings'));
+const AboutSettings = lazy(() => import('./components/settings/AboutSettings'));
+const RequireDevMode = lazy(() => import('./components/settings/RequireDevMode'));
 
 // P2-5a spike: dev-only test page for the assistant-ui runtime adapter.
 // Loaded here so `Chat.tsx` (production) and its component tree stay untouched.
 // Production routing never exposes this; gating happens at the route level
 // below via `import.meta.env.DEV`.
 
-function PageLoader() {
-  return <div className="flex-1 flex items-center justify-center"><span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span></div>;
+// G4 (UI review 2026-09-29): the Toaster follows the APP's resolved theme
+// (was theme="system" → a dark OS + light app theme rendered inverted toasts)
+// and drops richColors in favor of semantic container/on-container token
+// pairs per type (success=success, error=error, warning=warning,
+// info=info — every pair is AA-validated per theme by the generator;
+// success/warning/info used to approximate with primary/tertiary/secondary
+// containers before those hues became real tokens).
+// The glass surface itself comes from the [data-sonner-toast] block in
+// index.css (sonner's injected stylesheet is unlayered, so plain utilities
+// in classNames alone cannot win the cascade there).
+function ThemedToaster() {
+  const { resolvedTheme } = useTheme()
+  return (
+    <Toaster
+      position="bottom-right"
+      closeButton
+      theme={themeModeOf(resolvedTheme)}
+      toastOptions={{
+        classNames: {
+          toast: 'glass-overlay',
+          success: 'bg-success-container text-on-success-container',
+          error: 'bg-error-container text-on-error-container',
+          warning: 'bg-warning-container text-on-warning-container',
+          info: 'bg-info-container text-on-info-container',
+          description: 'opacity-80',
+        },
+      }}
+    />
+  )
+}
+
+/**
+ * Office Wave 3 C3 — main-window receiver for the companion Quick Capture
+ * window. Cross-window leg: the companion emits
+ * `shannon:companion-prompt` targeted at `main` (Tauri event — the only
+ * thing that crosses webviews). In-window leg: the Wave 2 composer draft
+ * bridge (`pushComposerDraft`, window CustomEvent). Trust contract intact:
+ * the capture lands as a DRAFT, never auto-sent.
+ *
+ * Mounted app-level (inside the router) so it exists regardless of route.
+ * Exported named for tests.
+ */
+export function CompanionPromptBridge() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const locationRef = useRef(location);
+  useEffect(() => {
+    locationRef.current = location;
+  });
+  useCompanionPromptListener((text) => {
+    // `emitTo` already scopes delivery to `main`; this guard additionally
+    // keeps session windows inert if a window's boot URL is ambiguous and
+    // skips the main window when IT is showing the /companion fallback page
+    // (its own Send would otherwise navigate itself away mid-capture).
+    if (!isMainWindowLocation()) return;
+    // G5 P1-11b: no timing bet. pushComposerDraft parks the text in the
+    // pending-draft queue whenever the composer is not mounted — any other
+    // route, /chat still lazy-loading, or the main window booting after the
+    // companion — and ChatInput flushes the queue on subscribe. Navigating
+    // to /chat here is what mounts it. ChatInput APPENDS drafts and the
+    // queue is one-shot, so no retry loop is needed and none of the text
+    // can duplicate.
+    if (locationRef.current.pathname !== '/chat') navigate('/chat');
+    pushComposerDraft(text);
+  });
+  return null;
 }
 
 export default function App() {
@@ -51,11 +135,30 @@ export default function App() {
     <I18nProvider>
     <ThemeProvider>
       <AppProvider>
+        {/* Batch D4: app-scoped artifact context — Settings toggles autoOpen
+            while Chat's dock consumes it, so the provider wraps both. */}
+        <ArtifactProvider>
         <ErrorBoundary>
         <BrowserRouter>
-          <Suspense fallback={<PageLoader />}>
+          {/* P0-A: global right-click menu for external links (panel/browser). */}
+          <LinkContextMenuHost />
+          {/* P0-B/P1-C/P1-E: links→web tabs, file chips→artifact tabs. */}
+          <ArtifactLinkHost />
+          {/* Office Wave 3 C3: companion Quick Capture prompts → composer drafts. */}
+          <CompanionPromptBridge />
+          {/* B1-16: the route-level Suspense lives in Layout (around the
+              Outlet) so lazy chunks no longer unmount the whole shell; this
+              top-level boundary only exists for /welcome and stays null. */}
+          <Suspense fallback={null}>
             <Routes>
               <Route path="/welcome" element={<Welcome />} />
+              {/* Office Wave 3 C3 — companion Quick Capture. Standalone like
+                  /welcome (no Layout chrome): this is the companion window's
+                  whole UI; the main window only ever renders it as a manual
+                  fallback. The CompanionPromptBridge above ignores prompts
+                  while a window shows this route, so the fallback page never
+                  navigates itself away mid-capture. */}
+              <Route path="/companion" element={<CompanionPage />} />
               <Route element={<Layout />}>
                 <Route path="/" element={<Navigate to="/chat" replace />} />
                 {/* Legacy route redirects — keep old bookmarks/links working. */}
@@ -64,6 +167,7 @@ export default function App() {
                 <Route path="/quick-inject" element={<Navigate to="/tasks" replace />} />
                 <Route path="/background-tasks" element={<Navigate to="/tasks" replace />} />
                 <Route path="/chat" element={<Chat />} />
+                <Route path="/files" element={<FilesPage />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/triage" element={<Triage />} />
                 <Route path="/usage" element={<Usage />} />
@@ -86,15 +190,16 @@ export default function App() {
                   <Route path="datasources" element={<DataSources />} />
                   <Route path="plugins" element={<Plugins />} />
                   <Route path="installed" element={<Installed />} />
+                  {/* IA X1: 待处理 — skill proposals awaiting review + errors. */}
+                  <Route path="pending" element={<Pending />} />
                 </Route>
                 <Route path="/opc" element={<OPC />} />
                 <Route path="/opc/task" element={<OPCTask />} />
                 <Route path="/opc/task/:id" element={<OPCTask />} />
-                {/* IA: the Editor keeps a standalone route (palette +
-                    mod+5 entry points); QuickFix is chat-inline only — its
-                    old route had no navigation entry, deep links fall back
-                    to /chat via the catch-all. */}
-                <Route path="/editor" element={<Editor />} />
+                {/* Editor standalone page retired (audit §3.8): file editing
+                    lives in the chat-inline EditorPanel (mod+5 / palette /
+                    /editor slash open it there). Deep links redirect. */}
+                <Route path="/editor" element={<Navigate to="/chat" replace />} />
                 <Route path="/memory" element={<Memory />} />
                 <Route path="/timeline/:id" element={<TurnTimeline />} />
                 <Route path="/settings" element={<Settings />}>
@@ -103,21 +208,36 @@ export default function App() {
                   <Route path="theme" element={<ThemeSettings />} />
                   <Route path="models" element={<ModelsSettings />} />
                   <Route path="permissions" element={<PermissionsSettings />} />
-                  <Route path="advanced" element={<AdvancedSettings />} />
+                  {/* Settings R3 (T1) — 网络/会话 skeletons + 关于 (absorbs
+                      the update check from the dev-gated 高级). */}
+                  <Route path="network" element={<NetworkSettings />} />
+                  <Route path="session" element={<SessionSettings />} />
                   <Route path="notifications" element={<NotificationsSettings />} />
                   <Route path="connections" element={<ConnectionsSettings />} />
                   <Route path="remotes" element={<RemotesSettings />} />
+                  <Route path="about" element={<AboutSettings />} />
+                  {/* 高级 stays dev-only — deep links from a simple-mode
+                      session redirect to General (RequireDevMode). */}
+                  <Route
+                    path="advanced"
+                    element={
+                      <RequireDevMode>
+                        <AdvancedSettings />
+                      </RequireDevMode>
+                    }
+                  />
                 </Route>
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Route>
             </Routes>
           </Suspense>
-        <Toaster position="bottom-right" richColors closeButton theme="system" />
+        <ThemedToaster />
         <Suspense fallback={null}>
           <SkillProposalsManager />
         </Suspense>
         </BrowserRouter>
         </ErrorBoundary>
+        </ArtifactProvider>
       </AppProvider>
     </ThemeProvider>
     </I18nProvider>

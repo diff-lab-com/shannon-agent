@@ -74,9 +74,13 @@ describe('Modal', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('locks body scroll when open', () => {
+  it('locks page scroll when open', () => {
     const { unmount } = render(<Modal open={true} onClose={() => {}} title="X"><p>y</p></Modal>)
-    expect(document.body.style.overflow).toBe('hidden')
+    // Base UI ≥1.8 locks the *actual* scroll container (html when it owns the
+    // scroller, body otherwise) instead of always writing body.style.overflow.
+    const scroller = [document.documentElement, document.body]
+      .some(el => /hidden|clip/.test(el.style.overflowY || el.style.overflow))
+    expect(scroller).toBe(true)
     unmount()
   })
 

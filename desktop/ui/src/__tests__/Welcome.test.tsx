@@ -35,6 +35,8 @@ vi.mock('@/lib/tauri-api', () => ({
   configure: vi.fn().mockResolvedValue(undefined),
   seedSampleData: vi.fn().mockResolvedValue({ tasks_seeded: 3 }),
   detectProviderFromEnv: vi.fn().mockResolvedValue(null),
+  // Office Wave 1 A3' — DocumentsSkillsList probes the host on mount.
+  probeHostRuntime: vi.fn().mockResolvedValue({ python3: true, pythonVersion: 'Python 3.12.3', pandoc: false, libreoffice: false }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   saveProvider: vi.fn().mockResolvedValue({
     active_provider_id: 'anthropic-main',
@@ -103,7 +105,7 @@ describe('markWelcomeSeen', () => {
   })
 })
 
-describe('Welcome component — 4-step flow', () => {
+describe('Welcome component — 2-step flow', () => {
   beforeEach(() => {
     window.localStorage.clear()
     vi.mocked(api.detectProviderFromEnv).mockResolvedValue(null)
@@ -129,10 +131,12 @@ describe('Welcome component — 4-step flow', () => {
     expect(screen.getByText('General')).toBeInTheDocument()
   })
 
-  it('starts with no task selected and Continue disabled', () => {
+  it('starts with no task selected and the provider anchor disabled', () => {
     wrap()
     expect(screen.getByRole('button', { name: /General/ })).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.getByText('Continue →')).toBeDisabled()
+    // Review 2026-09-16: step-0 button is a scroll anchor to the provider
+    // card ('Pick a provider ↓'), not a second submit.
+    expect(screen.getByText('Pick a provider ↓')).toBeDisabled()
   })
 
   it('marks task as pressed when clicked', () => {
@@ -158,7 +162,6 @@ describe('Welcome component — 4-step flow', () => {
   it('advances to Model step with Add provider button', () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     expect(screen.getByText('Choose your AI provider')).toBeInTheDocument()
     expect(screen.getByTestId('welcome-add-provider')).toBeInTheDocument()
     // Legacy picker surface is gone.
@@ -167,11 +170,12 @@ describe('Welcome component — 4-step flow', () => {
     expect(screen.queryByLabelText('API key')).not.toBeInTheDocument()
   })
 
-  it('Back button on Model step returns to Task step', () => {
+  it('Back button on Model section collapses back to task-only screen', () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
+    expect(screen.getByText('Choose your AI provider')).toBeInTheDocument()
     fireEvent.click(screen.getByText('← Back'))
+    expect(screen.queryByText('Choose your AI provider')).not.toBeInTheDocument()
     expect(screen.getByText('What will you use Shannon for?')).toBeInTheDocument()
   })
 
@@ -179,14 +183,12 @@ describe('Welcome component — 4-step flow', () => {
     wrap()
     // General picked → recommends Anthropic
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     expect(screen.getByText(/For General, we recommend Anthropic\./)).toBeInTheDocument()
   })
 
   it('disables Continue on Model step until provider saved or env key detected', () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     const continueButtons = screen.getAllByRole('button', { name: /Continue/ })
     const modelContinue = continueButtons[continueButtons.length - 1]
     expect(modelContinue).toBeDisabled()
@@ -196,7 +198,6 @@ describe('Welcome component — 4-step flow', () => {
   it('opens AddProviderModal when the Add provider button is clicked', () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     expect(screen.queryByTestId('add-provider-modal')).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('welcome-add-provider'))
     expect(screen.getByTestId('add-provider-modal')).toBeInTheDocument()
@@ -205,7 +206,6 @@ describe('Welcome component — 4-step flow', () => {
   it('closes AddProviderModal when the modal cancel button is clicked', () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     fireEvent.click(screen.getByTestId('welcome-add-provider'))
     expect(screen.getByTestId('add-provider-modal')).toBeInTheDocument()
     // Cancel button renders inside the modal — pick the last button labelled
@@ -218,18 +218,18 @@ describe('Welcome component — 4-step flow', () => {
   it('calls saveProvider + setActiveProvider when modal saves, then advances to Tools step', async () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => {
       expect(api.saveProvider).toHaveBeenCalled()
       expect(api.setActiveProvider).toHaveBeenCalledWith('anthropic-main')
     })
-    // After saving, we land on the Tools step (Step 2).
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
+    // After saving, we land on the Done step (tools use task defaults now).
+    await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
   })
 
-  // Step 2 — Tools (unchanged surface; reached by the modal-save path above)
-  it('advances through Model step to Tools step when env has key for recommended provider', async () => {
+  // Model step — env-key users go straight through to Done (tools are
+  // prefilled from the task's recommendations in the 2-step flow).
+  it('advances to Done step when env has key for recommended provider', async () => {
     vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
       provider: 'anthropic',
       has_api_key: true,
@@ -238,86 +238,70 @@ describe('Welcome component — 4-step flow', () => {
     // env detection fires on mount; let it resolve.
     await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => {
       const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
       const modelContinue = continueBtns[continueBtns.length - 1]
       expect(modelContinue).not.toBeDisabled()
     })
     fireEvent.click(screen.getAllByRole('button', { name: /Continue/ }).at(-1)!)
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-  })
-
-  it('shows Recommended badge on task-relevant tools', async () => {
-    wrap()
-    // Pick Code task → recommends filesystem/git/playwright
-    fireEvent.click(screen.getByRole('button', { name: /Build apps, write scripts, debug and refactor\./ }))
-    fireEvent.click(screen.getByText('Continue →'))
-    await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-    expect(screen.getAllByText('Recommended').length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('toggles tool checkbox off when clicked', async () => {
-    wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
-    await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-    const fsCheckbox = await waitFor(() => screen.getByLabelText('Enable Filesystem') as HTMLInputElement)
-    // Initially checked for general task (filesystem recommended)
-    const initial = fsCheckbox.checked
-    fireEvent.click(fsCheckbox)
-    expect(fsCheckbox.checked).toBe(!initial)
+    await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
   })
 
   // Step 3 — Done
   it('reaches Done step with summary and shortcuts', async () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     expect(screen.getByText('Your setup')).toBeInTheDocument()
     expect(screen.getByText('Shortcuts')).toBeInTheDocument()
+  })
+
+  // B5-33 (decision 4-B): the summary states a recommendation — it must not
+  // claim tools were "enabled", since Welcome never persists tool config.
+  it('Done step states the tool recommendation honestly (B5-33)', async () => {
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+      provider: 'anthropic',
+      has_api_key: true,
+    })
+    wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    await waitFor(() => {
+      const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
+      expect(continueBtns[continueBtns.length - 1]).not.toBeDisabled()
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: /Continue/ }).at(-1)!)
+    await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
+    // General task recommends 2 tools, phrased as a recommendation.
+    expect(screen.getByText('2 recommended tools — enable them in Settings')).toBeInTheDocument()
+    expect(screen.queryByText(/tools? enabled/i)).not.toBeInTheDocument()
   })
 
   it('Done step shows chosen task in summary', async () => {
     wrap()
     // Pick Writing task
     fireEvent.click(screen.getByRole('button', { name: /Draft docs, articles, posts, and emails\./ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText('Writing')).toBeInTheDocument())
   })
 
   it('Done step shows Start using Shannon button', async () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByRole('button', { name: /Start using Shannon/ })).toBeInTheDocument())
   })
 
-  it('Stepper labels all 4 steps', () => {
+  it('Stepper labels the two steps', () => {
     wrap()
-    const stepper = screen.getByLabelText(/Step 1 of 4: Task/)
+    const stepper = screen.getByLabelText(/Step 1 of 2: Task/)
     expect(stepper).toBeInTheDocument()
   })
 
   it('Done step shows advanced mode checkbox unchecked by default', async () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     const cb = screen.getByLabelText('Enable advanced features') as HTMLInputElement
     expect(cb).toBeInTheDocument()
@@ -327,10 +311,7 @@ describe('Welcome component — 4-step flow', () => {
   it('toggles advanced mode checkbox on click', async () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     const cb = screen.getByLabelText('Enable advanced features') as HTMLInputElement
     fireEvent.click(cb)
@@ -340,10 +321,7 @@ describe('Welcome component — 4-step flow', () => {
   it('writes SIDEBAR_MODE_KEY=dev on finish when advanced mode checked', async () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     fireEvent.click(screen.getByLabelText('Enable advanced features'))
     fireEvent.click(screen.getByRole('button', { name: /Start using Shannon/ }))
@@ -353,10 +331,7 @@ describe('Welcome component — 4-step flow', () => {
   it('does NOT write SIDEBAR_MODE_KEY when advanced mode unchecked', async () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /Start using Shannon/ }))
     expect(window.localStorage.getItem('shannon-sidebar-mode')).toBeNull()
@@ -365,10 +340,7 @@ describe('Welcome component — 4-step flow', () => {
   it('calls seedSampleData on finish (onboarding sample data)', async () => {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /Start using Shannon/ }))
     await waitFor(() => {
@@ -426,7 +398,6 @@ describe('Welcome — env provider detection (T7.A)', () => {
     // envProviderReady is set; the Step 1 Continue button should be enabled
     // without requiring manual provider setup (task = general, picked above).
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => {
       const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
       const modelContinue = continueBtns[continueBtns.length - 1]
@@ -447,7 +418,6 @@ describe('Welcome — env provider detection (T7.A)', () => {
     vi.mocked(api.setActiveProvider).mockRejectedValueOnce(new Error('activate boom'))
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     fireEvent.click(screen.getByTestId('welcome-add-provider'))
     // Switch kind to anthropic + fill label so the modal can submit.
     const kindSelect = screen.getByRole('combobox') as HTMLSelectElement
@@ -474,10 +444,7 @@ describe('Welcome — env provider detection (T7.A)', () => {
   async function reachDoneStep() {
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
   }
 
@@ -543,11 +510,10 @@ describe('Welcome — env provider detection (T7.A)', () => {
 
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
 
-    // Walk back to Model step (still inside the wizard).
+    // Walk back to the combined task+model screen (still inside the wizard).
     fireEvent.click(screen.getByText('← Back'))
     fireEvent.click(screen.getByTestId('welcome-add-provider'))
 
@@ -563,6 +529,6 @@ describe('Welcome — env provider detection (T7.A)', () => {
       // Both saves fired setActiveProvider — the second with the new id.
       expect(api.setActiveProvider).toHaveBeenCalledWith('openai-main')
     })
-    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
   })
 })

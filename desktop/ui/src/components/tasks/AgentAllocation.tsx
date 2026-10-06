@@ -52,11 +52,11 @@ export default function AgentAllocation({ agents }: AgentAllocationProps) {
   if (allocs.length === 0) return null
   return (
     <div className="bg-surface-container-low rounded-2xl p-lg border border-outline-variant/20">
-      <h4 className="font-headline-md text-[16px] text-on-surface mb-md">{t('tasks.agentAllocation.title')}</h4>
+      <h4 className="font-headline-md text-body-md text-on-surface mb-md">{t('tasks.agentAllocation.title')}</h4>
       <div className="space-y-sm">
         {allocs.map(a => (
           <div key={a.name}>
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-xs">
               <span className="text-body-sm text-on-surface-variant">{a.name}</span>
               <span className={cn('font-label-md', a.textColor)}>{a.pct}%</span>
             </div>

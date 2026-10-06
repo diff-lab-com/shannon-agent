@@ -1,0 +1,22 @@
+id = "daily-news-briefing"
+name = "Daily news briefing"
+description = "Every day at 08:30, use WebSearch (and the browser tools when a page needs reading) to pull the latest news for your configured topics and write a short briefing. Requires web access; replace the {{topics}} placeholder when instantiating."
+category = "productivity"
+trigger_type = "cron"
+cron_expr = "30 8 * * *"
+timezone = ""
+prompt = """
+Compile today's news briefing. Search the web (WebSearch; open promising pages with the
+browser/WebFetch tools to confirm the headline actually says what it claims) for the
+latest news about: {{topics}}.
+
+Replace {{topics}} when instantiating this template with your real topics, e.g.
+"AI regulation, Rust language, fusion energy". Keep 3-5 topics; a longer list makes the
+briefing shallow.
+
+Write the briefing to output/news-briefing-<YYYYMMDD>.md: one section per topic with
+2-4 bullets (what happened, why it matters, source link + date for every bullet), then
+a one-line "watch list" of what to track tomorrow. Only include items you could verify
+against a fetched page — skip anything sourced from a snippet alone, and say so if a
+topic produced nothing worth reporting.
+"""

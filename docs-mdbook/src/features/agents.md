@@ -1,6 +1,6 @@
 # Multi-Agent Orchestration
 
-Shannon Code supports multi-agent workflows for complex tasks that benefit from parallel execution.
+Shannon supports multi-agent workflows for complex tasks that benefit from parallel execution.
 
 ## /batch Command
 

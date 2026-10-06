@@ -161,6 +161,11 @@ pub struct ChatWidget {
     pub active_model: Option<String>,
     /// Active tier label for status card (e.g., "fast"/"standard"/"pro"). `None` if unknown.
     pub active_tier: Option<String>,
+    /// First-run setup guidance (review P0-1/P0-2): render the unconfigured-
+    /// provider hint card on the welcome screen while onboarding is active and
+    /// no provider is configured. Set each frame from `draw_frame` via
+    /// [`ChatWidget::set_setup_hint`].
+    setup_hint: bool,
     /// Cached welcome-screen StatusCard inputs — avoids per-frame disk I/O and
     /// catalog rebuilds (ADR-0008 P3-1). See [`StatusCardCache`].
     status_card_cache: std::sync::Mutex<Option<StatusCardCache>>,
@@ -233,8 +238,16 @@ impl ChatWidget {
             active_provider: None,
             active_model: None,
             active_tier: None,
+            setup_hint: false,
             status_card_cache: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Show/hide the first-run setup guidance card on the empty-chat welcome
+    /// screen. Recomputed per frame by `draw_frame`
+    /// (`onboarding_active && repl.provider_unconfigured()`).
+    pub fn set_setup_hint(&mut self, show: bool) {
+        self.setup_hint = show;
     }
 
     /// Set the active provider/model/tier used by the welcome-screen StatusCard.
@@ -852,39 +865,59 @@ impl ChatWidget {
                     border,
                 )]),
                 ratatui::text::Line::from(""),
-                ratatui::text::Line::from(vec![ratatui::text::Span::styled(
-                    "  Try asking:",
-                    muted,
-                )]),
-                ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
-                    ratatui::text::Span::styled(
-                        "\"Explain the architecture of this project\"",
-                        dim,
-                    ),
-                ]),
-                ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
-                    ratatui::text::Span::styled(
-                        "\"Fix the failing tests in the auth module\"",
-                        dim,
-                    ),
-                ]),
-                ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
-                    ratatui::text::Span::styled("\"Add error handling to the API client\"", dim),
-                ]),
-                ratatui::text::Line::from(""),
-                ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled("  ", b),
-                    ratatui::text::Span::styled("/help", accent),
-                    ratatui::text::Span::styled(" commands  ", muted),
-                    ratatui::text::Span::styled("/config", accent),
-                    ratatui::text::Span::styled(" settings  ", muted),
-                    ratatui::text::Span::styled("/theme", accent),
-                    ratatui::text::Span::styled(" appearance", muted),
-                ]),
             ];
+
+            // First-run setup guidance (review P0-1/P0-2): rendered alongside
+            // the StatusCard while onboarding is active and nothing is
+            // configured, so a fresh user sees the `/connect` exit ramp
+            // instead of a bare welcome screen.
+            if self.setup_hint {
+                use rust_i18n::t;
+                let hint_accent = b
+                    .fg(theme.warning)
+                    .add_modifier(ratatui::style::Modifier::BOLD);
+                welcome_lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+                    t!("ui.setup_hint.title").to_string(),
+                    hint_accent,
+                )));
+                for key in [
+                    "ui.setup_hint.connect",
+                    "ui.setup_hint.local",
+                    "ui.setup_hint.help",
+                ] {
+                    welcome_lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+                        t!(key).to_string(),
+                        dim,
+                    )));
+                }
+                welcome_lines.push(ratatui::text::Line::from(""));
+            }
+
+            welcome_lines.push(ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled("  Try asking:", muted),
+            ]));
+            welcome_lines.push(ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
+                ratatui::text::Span::styled("\"Explain the architecture of this project\"", dim),
+            ]));
+            welcome_lines.push(ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
+                ratatui::text::Span::styled("\"Fix the failing tests in the auth module\"", dim),
+            ]));
+            welcome_lines.push(ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
+                ratatui::text::Span::styled("\"Add error handling to the API client\"", dim),
+            ]));
+            welcome_lines.push(ratatui::text::Line::from(""));
+            welcome_lines.push(ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled("  ", b),
+                ratatui::text::Span::styled("/help", accent),
+                ratatui::text::Span::styled(" commands  ", muted),
+                ratatui::text::Span::styled("/config", accent),
+                ratatui::text::Span::styled(" settings  ", muted),
+                ratatui::text::Span::styled("/theme", accent),
+                ratatui::text::Span::styled(" appearance", muted),
+            ]));
 
             // Keyboard shortcuts row (only if enough vertical space)
             if welcome_area.height >= 16 {

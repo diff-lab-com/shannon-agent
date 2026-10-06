@@ -45,6 +45,8 @@
 **总量**：P0 ≈ 3 周（1-2 人）；P0+P1 ≈ 2.5-3 人月；P2 已取舍（P2-6 否决，其余保留）。
 
 > **评审决议（2026-09-05）**：VS Code 扩展永久放弃；IM 渠道 5 个（Telegram/Discord/Slack/飞书/钉钉）一次性全做、不拆小批；其余按调研建议执行（GitHub 触发器拆出 P0-3 → P2-7；工作区分期顺序为多窗口→预览自检→面板化→集成终端；billing Demo 隐藏不做真计费；SQLite 仅收件箱/automation 运行记录）。
+>
+> **修订注记（2026-09-29，办公线 P2-3）**：依据《办公场景竞品调研》§10 v2（[docs/research/2026-09-29-office-scenario-competitive-research.md](./research/2026-09-29-office-scenario-competitive-research.md)）及对抗性审查（[docs/reviews/2026-09-29-office-plan-adversarial-review.md](./reviews/2026-09-29-office-plan-adversarial-review.md)），P2-3「2-3 个社区级 docx/xlsx skills 试水」按框架扩展：**Wave 1（附件拒收明确化/产物卡片/自有办公技能复活/诚实化 UI/附件空态卡）+ Wave 1.5（最小文档解析·分页注入/pdf.js 预览）立即排入**；**Wave 2（混合生成执行环境/自动化结果路由/数据源接线/PPT 降维版/办公模板包/引用式文件库/作用域 diff/转写导入纪要）设 traction 门**——Wave 1 上线后 KPI（附件处理成功率/办公产物生成成功率/routine 办公交付打开率）达标再裁决。B4（录音纪要流水线）经决策移除，以转写导入（B4'）替代。B5/B6 类目在 P0-3 收件箱语义之上做增量，不另起炉灶。
 
 ---
 

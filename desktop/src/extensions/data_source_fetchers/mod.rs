@@ -1,4 +1,5 @@
-//! D3 Data source fetchers — HTTP implementations for Notion/Linear/GitHub/Jira.
+//! D3 Data source fetchers — implementations for Notion/Linear/GitHub/Jira,
+//! plus the local Obsidian vault (filesystem) and IMAP mail (Office Wave 2 B3).
 //!
 //! Each fetcher implements the `DataSourceFetcher` trait, which takes a
 //! config map (already loaded from `~/.shannon/data-sources/<slug>.toml`) and
@@ -11,9 +12,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub mod github;
+pub mod imap;
 pub mod jira;
 pub mod linear;
 pub mod notion;
+pub mod obsidian;
 
 /// Normalized result shape shared across all data sources.
 #[derive(Debug, Serialize)]
@@ -81,16 +84,20 @@ pub trait DataSourceFetcher: Send + Sync {
 
 /// Dispatch to the right fetcher based on `kind`.
 ///
-/// Adapters marked "config-only" (Slack, Discord, Telegram, RSS, iCal)
-/// install and persist configuration today; their query path is stubbed
-/// and returns a "coming soon" error. This lets the catalog surface them
-/// without degrading the install/configure UX.
+/// Office Wave 2 B3 — `obsidian` and `email_imap` have real fetchers now
+/// (previously they rode the "coming soon" stub). The remaining config-only
+/// adapters (Slack, Discord, Telegram, RSS, iCal) install and persist
+/// configuration today; their query path is stubbed and returns a "coming
+/// soon" error. This lets the catalog surface them without degrading the
+/// install/configure UX.
 pub fn dispatch(kind: &str) -> Result<Arc<dyn DataSourceFetcher>, DataSourceError> {
     match kind {
         "notion" => Ok(Arc::new(notion::NotionFetcher)),
         "linear" => Ok(Arc::new(linear::LinearFetcher)),
         "github_issues" => Ok(Arc::new(github::GitHubFetcher)),
         "jira" => Ok(Arc::new(jira::JiraFetcher)),
+        "obsidian" => Ok(Arc::new(obsidian::ObsidianFetcher)),
+        "email_imap" => Ok(Arc::new(imap::ImapFetcher)),
         "slack" | "discord" | "telegram" | "rss" | "ical" => {
             Err(DataSourceError::UpstreamError(format!(
                 "Query for '{kind}' is coming soon; configuration has been saved and will be used once the fetcher ships."
@@ -106,10 +113,30 @@ mod tests {
 
     #[test]
     fn dispatch_returns_known_fetchers() {
-        assert!(dispatch("notion").is_ok());
-        assert!(dispatch("linear").is_ok());
-        assert!(dispatch("github_issues").is_ok());
-        assert!(dispatch("jira").is_ok());
+        for kind in [
+            "notion",
+            "linear",
+            "github_issues",
+            "jira",
+            // Office Wave 2 B3 — real fetchers behind these two.
+            "obsidian",
+            "email_imap",
+        ] {
+            assert!(dispatch(kind).is_ok(), "dispatch({kind}) should succeed");
+        }
+    }
+
+    #[test]
+    fn dispatch_still_stubs_config_only_kinds() {
+        for kind in ["slack", "discord", "telegram", "rss", "ical"] {
+            match dispatch(kind) {
+                Err(DataSourceError::UpstreamError(msg)) => {
+                    assert!(msg.contains("coming soon"), "got: {msg}");
+                }
+                Err(other) => panic!("Expected UpstreamError for {kind}, got {other:?}"),
+                Ok(_) => panic!("Expected coming-soon stub for {kind}, got a real fetcher"),
+            }
+        }
     }
 
     #[test]

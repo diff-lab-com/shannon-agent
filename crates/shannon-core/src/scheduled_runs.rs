@@ -83,6 +83,12 @@ pub struct ScheduledRun {
     /// Total token usage (None if not tracked).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_usage: Option<u64>,
+    /// R7-①: how the run was started (mirror of the SQLite `routine_runs`
+    /// tag). `None` on lines written before the field existed — the desktop
+    /// history backfill imports those as untagged `routine_runs` rows, which
+    /// the consecutive-failure streak counts as scheduled (conservative).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<crate::inbox_store::RunTrigger>,
     /// Revision number for last-write-wins semantics (incremented on updates).
     #[serde(default)]
     pub revision: u32,
@@ -90,6 +96,10 @@ pub struct ScheduledRun {
 
 impl ScheduledRun {
     /// Create a new run record with status = Running and a fresh UUID.
+    ///
+    /// Untagged (`trigger = None`) by design — the legacy core drain path
+    /// and the tests use this constructor directly; the desktop executor
+    /// (`spawn_routine_run`) stamps the R7-① trigger right after `start`.
     pub fn start(task_id: &str, task_name: &str) -> Self {
         Self {
             run_id: uuid::Uuid::new_v4().to_string()[..8].to_string(),
@@ -101,6 +111,7 @@ impl ScheduledRun {
             error_message: None,
             cost_usd: None,
             token_usage: None,
+            trigger: None,
             revision: 0,
         }
     }

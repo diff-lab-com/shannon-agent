@@ -6,8 +6,11 @@
 //! directory that already holds any `*.json` file is a no-op.
 
 use serde::{Deserialize, Serialize};
+use tauri::State;
 
+use crate::commands::AppState;
 use crate::commands::chrono_timestamp;
+use crate::commands_tasks::{anchored_tasks_dir_base, configured_working_dir};
 
 /// Report returned by `seed_sample_data` so the UI can tell the user what landed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,18 +44,25 @@ const SAMPLE_TASKS: &[(&str, &str, &str, &str, &[&str])] = &[
     ),
 ];
 
-/// Write sample tasks to `.claude/tasks/` on first run.
+/// Write sample tasks to the task board's `.claude/tasks/` on first run.
 ///
 /// No-op when the directory already contains any `*.json` file (idempotent).
 /// Creates the directory if missing. Returns the count of tasks written.
+///
+/// R2-W2 顺手项: the directory anchors exactly where [`crate::commands_tasks::list_tasks`]
+/// reads (`anchored_tasks_dir_base` — the configured `working_dir`, else `~`),
+/// not the desktop process CWD — otherwise the seeded samples never surface
+/// on the board whenever the anchor differs from the CWD.
 #[tauri::command]
-pub async fn seed_sample_data() -> Result<SeedReport, String> {
-    seed_sample_data_in(std::path::Path::new(".claude/tasks")).await
+pub async fn seed_sample_data(state: State<'_, AppState>) -> Result<SeedReport, String> {
+    let base = anchored_tasks_dir_base(configured_working_dir(&state).await.as_deref())?;
+    seed_sample_data_in(&base.join(".claude").join("tasks")).await
 }
 
-/// Path-parameterised core. The Tauri command above hard-codes `.claude/tasks`
-/// (the location `list_tasks` reads from); tests call this with a tempdir so
-/// they don't race on the process working directory.
+/// Path-parameterised core. The Tauri command above anchors the tasks
+/// directory with [`anchored_tasks_dir_base`] (the same walk `list_tasks`
+/// reads); tests call this with a tempdir so they don't race on the process
+/// working directory.
 async fn seed_sample_data_in(tasks_dir: &std::path::Path) -> Result<SeedReport, String> {
     std::fs::create_dir_all(tasks_dir).map_err(|e| format!("create tasks dir: {e}"))?;
 

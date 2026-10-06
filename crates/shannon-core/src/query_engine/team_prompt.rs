@@ -53,13 +53,14 @@ TeamTaskCreate({
 
 ## Spawning Teammates
 
-Use the `Agent` tool with `team_name` to spawn a teammate:
+Spawn a teammate with the `Agent` tool (`operation: \"Spawn\"`), then let it
+claim tasks from the shared board:
 ```
 Agent({
-  prompt: \"You are a backend specialist. Check TaskList, claim an available task, and execute it.\",
-  team_name: \"my-team\",
-  name: \"backend-dev\",
-  subagent_type: \"general-purpose\"
+  operation: \"Spawn\",
+  agent_type: \"backend-dev\",
+  task: \"Check TaskList, claim an available task, and execute it.\",
+  context: { \"team\": \"my-team\" }
 })
 ```
 

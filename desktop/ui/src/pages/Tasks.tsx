@@ -17,8 +17,8 @@
 // useScheduledTasks() and rendered into the calendar (next_fire_at). The
 // legacy background-task / agent data still comes from useCatalog().
 
-import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useMemo, useState, useEffect } from 'react'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -29,9 +29,14 @@ import { useSessions } from '@/context/SessionContext'
 import * as api from '@/lib/tauri-api'
 import { useScheduledTasks, useTaskExecutions } from '@/hooks/scheduled-tasks'
 import { useBatchRuns } from '@/hooks/batchRuns'
-import type { CreateTaskPayload } from '@/types'
+import { useProjectDeepLink } from '@/hooks/projectDeepLink'
+import ProjectFilterChip from '@/components/ProjectFilterChip'
+import { projectKeyOf } from '@/components/SidebarSessions'
+import type { CreateTaskPayload, ScheduledRoutine } from '@/types'
 import { type FilterStatus, statusMatchesFilter, TASKS_PER_PAGE } from '@/components/tasks/shared'
+import { useSidebarMode } from '@/components/Sidebar'
 import { Banner } from '@/components/ui/banner'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import TasksHeader from '@/components/tasks/TasksHeader'
 import RoutineTemplatesBrowser from '@/components/routines/RoutineTemplatesBrowser'
 import TasksFilters from '@/components/tasks/TasksFilters'
@@ -45,6 +50,7 @@ import TaskDetailDrawer from '@/components/tasks/TaskDetailDrawer'
 import RoutineDetailDrawer from '@/components/tasks/RoutineDetailDrawer'
 import CancelTaskModal from '@/components/tasks/CancelTaskModal'
 import TaskExecutionLog from '@/components/tasks/TaskExecutionLog'
+import BackgroundTasksPanel from '@/components/tasks/BackgroundTasksPanel'
 import EfficiencyCard from '@/components/tasks/EfficiencyCard'
 import AgentAllocation from '@/components/tasks/AgentAllocation'
 import HistoryView from '@/components/tasks/HistoryView'
@@ -52,26 +58,49 @@ import WorktreePanel from '@/components/tasks/WorktreePanel'
 import GoalRunPanel from '@/components/tasks/GoalRunPanel'
 import BatchRunPanel from '@/components/tasks/BatchRunPanel'
 import BatchForm from '@/components/tasks/BatchForm'
+import SubagentPanel from '@/components/tasks/SubagentPanel'
+import WebhookTriggerCard from '@/components/tasks/WebhookTriggerCard'
 import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 
 // IA (2026-09): tabs map to user jobs, not implementation panels —
-// active work / recurring routines / execution pipelines / history / worktrees.
-// Previously every panel (DAG, templates, hook pipeline, execution log)
-// stacked on one scrolling page.
-type Tab = 'active' | 'routines' | 'pipelines' | 'history' | 'worktrees'
+// active work / history / routines / pipelines / worktrees. Active + history
+// lead because users check live status and recent results far more often than
+// they configure scheduled pipelines. In Simple mode only the universal two
+// (active / history) are surfaced; the developer-only surfaces (routines /
+// pipelines / worktrees) move behind the Dev-mode toggle so casual users
+// don't have to learn the task-ops taxonomy before they can find their tasks.
+type Tab = 'active' | 'history' | 'routines' | 'pipelines' | 'worktrees'
+const SIMPLE_TABS: readonly Tab[] = ['active', 'history']
+const DEV_TABS: readonly Tab[] = ['active', 'history', 'routines', 'pipelines', 'worktrees']
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useCatalog()
   const { switchSession, currentSessionId } = useSessions()
   const navigate = useNavigate()
+  const location = useLocation()
+  const [mode] = useSidebarMode()
   const { tasks: scheduledTasks, create: createScheduled, refresh: refreshScheduled } = useScheduledTasks()
   // P2-5: recent executions across all routines — drives the "queued for
   // off-peak window" status chip on the routines DAG nodes.
-  const { executions } = useTaskExecutions()
+  // B3 P1-25: the refresh handle is kept so routine edits (off-peak window,
+  // dependencies) re-pull the execution list too — no event exists for
+  // scheduled-task changes, so the editors' onUpdated callback is the wire.
+  const { executions, refresh: refreshExecutions } = useTaskExecutions()
   // P1-2: start action for the batch form (the live cards in BatchRunPanel
   // keep their own subscription, mirroring the goal-run split).
   const { start: startBatch } = useBatchRuns()
+  // P-U3: /tasks?project=<encoded path> — scope the page to one project.
+  // Drives the removable chip, the 例行 tab's working_dir filter, the
+  // goal-run cards (dto.workingDir) and the execution history (joined
+  // through its routine's working_dir).
+  const { projectKey, projectLabel, clearProject } = useProjectDeepLink()
+  // I2 (review fix): the project menu's 新建例行 deep-links here with
+  // ?project=…&new=routine — distinct from 查看自动化's plain URL. The
+  // marker opens the create-schedule form, then is drained (replace
+  // navigation) so a refresh doesn't re-open it.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const newRoutineMarker = searchParams.get('new') === 'routine'
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
@@ -96,6 +125,9 @@ export default function Tasks() {
   const [newTaskPrompt, setNewTaskPrompt] = useState('')
   const [taskPage, setTaskPage] = useState(1)
   const [cancelTarget, setCancelTarget] = useState<string | null>(null)
+  // R2-P1-4: routine the user asked to run while it is paused — held here
+  // until the confirm dialog resolves.
+  const [pausedRunTarget, setPausedRunTarget] = useState<ScheduledRoutine | null>(null)
 
   const selectedTask = selectedTaskId
     ? tasks.find(t => t.id === selectedTaskId) ?? backgroundTasks.find(t => t.task_id === selectedTaskId) ?? null
@@ -103,6 +135,17 @@ export default function Tasks() {
   const selectedRoutine = selectedRoutineId
     ? scheduledTasks.find(r => r.id === selectedRoutineId) ?? null
     : null
+
+  // IA T2 (互链闭环): Triage cards link here with { openRoutineId } in the
+  // router state — open that routine's drawer, then drain the state so a
+  // refresh doesn't re-open it.
+  useEffect(() => {
+    const openRoutineId = (location.state as { openRoutineId?: string } | null)?.openRoutineId
+    if (openRoutineId) {
+      setSelectedRoutineId(openRoutineId)
+      navigate(location.pathname, { replace: true })
+    }
+  }, [location.state, location.pathname, navigate])
 
   // P2-5: ids of routines whose latest run is queued for their off-peak
   // execution window (list_task_executions returns newest first).
@@ -123,6 +166,22 @@ export default function Tasks() {
     for (const t of tasks) if (t.team) set.add(t.team)
     return Array.from(set).sort()
   }, [tasks])
+
+  // P-U3: routines scoped to the deep-linked project (working_dir matches the
+  // normalized project key). Routines with no working_dir drop out while the
+  // filter is active — they are not the project's automations.
+  const scopedRoutines = useMemo(() => {
+    if (!projectKey) return scheduledTasks
+    return scheduledTasks.filter(r => projectKeyOf({ working_dir: r.working_dir }) === projectKey)
+  }, [scheduledTasks, projectKey])
+
+  // P-U3: task_id → routine working_dir join for the execution-history tab
+  // (rows only know the routine id; the project lives on the routine).
+  const routineDirById = useMemo(() => {
+    const m: Record<string, string | null | undefined> = {}
+    for (const r of scheduledTasks) m[r.id] = r.working_dir
+    return m
+  }, [scheduledTasks])
 
   const filteredTasks = tasks.filter(t => {
     if (!statusMatchesFilter(t.status, activeFilter)) return false
@@ -153,10 +212,26 @@ export default function Tasks() {
     } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.create')); toastError(t('tasks.toast.failed.create'), e) }
   }
 
+  // I2: 新建例行 marker → open the create form, drain the marker param.
+  useEffect(() => {
+    if (!newRoutineMarker) return
+    setShowSchedule(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('new')
+    setSearchParams(next, { replace: true })
+  }, [newRoutineMarker, searchParams, setSearchParams])
+
   const handleCreateSchedule = async (payload: CreateTaskPayload) => {
     try {
       setErrorMsg(null)
-      const created = await createScheduled(payload)
+      // I2 (review fix): a routine created from a project deep link must
+      // land HOUSED in that project — default working_dir to the active
+      // ?project= key when the form didn't set one. Without it the routine
+      // is unhoused and instantly vanishes from the scopedRoutines view.
+      const created = await createScheduled({
+        ...payload,
+        working_dir: payload.working_dir ?? projectKey ?? undefined,
+      })
       if (created) {
         if (created.trigger_type === 'webhook') {
           toast.success(t('tasks.toast.webhookReady'))
@@ -178,22 +253,37 @@ export default function Tasks() {
     await refreshTasks()
   }
 
-  const handleRunNow = async (id: string) => {
-    setRunning(id)
+  // P1-23: `running` is a real pending flag now — it tracks the in-flight
+  // trigger call and clears when it settles (previously a fixed 1.5s
+  // setTimeout faked success and leaked a timer across unmounts).
+  //
+  // R2-P1-4: RunNow is routine-only. Catalog (board) cards hide the entry
+  // entirely — the old fallback fed the card title to the engine as a fake
+  // "Execute task: X" prompt while bypassing the assign/allocation form.
+  // A paused routine asks for confirmation before a manual run.
+  const routineIds = useMemo(() => new Set(scheduledTasks.map(r => r.id)), [scheduledTasks])
+
+  const runRoutineNow = async (routine: ScheduledRoutine) => {
+    setRunning(routine.id)
     try {
       setErrorMsg(null)
-      const routine = scheduledTasks.find(task => task.id === id)
-      if (routine) {
-        await api.triggerTaskNow(id)
-        toast.success(intl.formatMessage({ id: 'tasks.toast.triggered' }, { name: routine.name }))
-      } else {
-        const fallbackTitle = tasks.find(task => task.id === id)?.title ?? id
-        await api.startBackgroundTask(intl.formatMessage({ id: 'tasks.toast.executeTask' }, { name: fallbackTitle }))
-        toast.success(t('tasks.toast.started'))
-      }
+      await api.triggerTaskNow(routine.id)
+      toast.success(intl.formatMessage({ id: 'tasks.toast.triggered' }, { name: routine.name }))
       await refreshTasks()
     } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.run')); toastError(t('tasks.toast.failed.run'), e) }
-    setTimeout(() => setRunning(null), 1500)
+    finally {
+      setRunning(null)
+    }
+  }
+
+  const handleRunNow = async (id: string) => {
+    const routine = scheduledTasks.find(task => task.id === id)
+    if (!routine) return
+    if (!routine.enabled) {
+      setPausedRunTarget(routine)
+      return
+    }
+    await runRoutineNow(routine)
   }
 
   // P0-2: open the session a goal run is driving in the chat page.
@@ -209,7 +299,13 @@ export default function Tasks() {
 
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
-      <div className="max-w-[1200px] mx-auto px-lg py-xl">
+      <div className="max-w-medium mx-auto px-lg py-xl">
+        {/* E2E (extensions.spec.ts) and screen readers look up the Tasks page
+            by its h1 — the visible h1/h2 was retired in P0-3 (the global app
+            Header carries the page name now), but a sr-only h1 keeps the page
+            self-identifying for AT, axe, and the smoke test without forcing
+            the design to re-adopt a visible page title. */}
+        <h1 className="sr-only">{t('tasks.tasksHeader.title')}</h1>
         <TasksHeader
           showFilters={showFilters}
           onToggleFilters={() => setShowFilters(!showFilters)}
@@ -223,11 +319,20 @@ export default function Tasks() {
           teams={teams}
           teamFilter={teamFilter}
           onTeamFilterChange={setTeamFilter}
+          mode={mode}
         />
 
-        {/* P2.2: Active / History / Worktrees tab switcher */}
+        {/* P-U3: project deep-link chip — × strips ?project= and the page
+            falls back to the unscoped view. */}
+        {projectKey && projectLabel && (
+          <ProjectFilterChip label={projectLabel} onRemove={clearProject} />
+        )}
+
+        {/* P2.2: Active / History / Worktrees tab switcher — Simple mode
+            only shows the two universal tabs; the dev-only surfaces move
+            behind the sidebar Dev-mode toggle. */}
         <div role="tablist" aria-label={t('tasks.tabs.aria')} className="flex gap-xs mb-lg border-b border-outline-variant/30">
-          {(['active', 'routines', 'pipelines', 'history', 'worktrees'] as const).map(tabId => {
+          {(mode === 'dev' ? DEV_TABS : SIMPLE_TABS).map(tabId => {
             const selected = tab === tabId
             return (
               <Button
@@ -236,9 +341,13 @@ export default function Tasks() {
                 variant="ghost"
                 aria-selected={selected}
                 onClick={() => setTab(tabId)}
+                title={t(`tasks.tab.${tabId}.title`)}
                 className={cn(
-                  'h-auto px-md py-sm font-label-md text-[13px] font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-none',
-                  selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface',
+                  'h-auto px-md py-sm font-label-md text-label-sm font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-none',
+                  // G7: text-link — selected accent tab must clear AA on every
+                  // theme (bare text-primary fails 4.5:1 on light surfaces in
+                  // gruvbox-light / solarized-light / solarized).
+                  selected ? 'border-primary text-link' : 'border-transparent text-on-surface-variant hover:text-on-surface',
                 )}
               >
                 {t(`tasks.tab.${tabId}`)}
@@ -247,13 +356,29 @@ export default function Tasks() {
           })}
         </div>
 
+        {/* ADR-0013 D1/D4: the two dev-only tabs ride DIFFERENT automation
+            systems — Routines = scheduled store (clock/webhook, persistent),
+            Pipelines = project hook config (agent lifecycle events). One
+            line under the tab row states trigger + storage, so the tab
+            names stop implying a shared pipeline store. */}
+        {(tab === 'routines' || tab === 'pipelines') && (
+          <p className="text-on-surface-variant font-body-sm max-w-prose mb-lg">
+            {t(`tasks.tab.${tab}.subtitle`)}
+          </p>
+        )}
+
         {tab === 'history' ? (
-          <HistoryView onGoToActive={() => setTab('active')} />
+          <HistoryView
+            onGoToActive={() => setTab('active')}
+            projectDir={projectKey}
+            routineDirById={routineDirById}
+          />
         ) : tab === 'worktrees' ? (
           <WorktreePanel />
         ) : tab === 'routines' ? (
           <div className="space-y-gutter">
-            <ScheduleDAGView routines={scheduledTasks} onSelectRoutine={setSelectedRoutineId} queuedTaskIds={queuedRoutineIds} />
+            <ScheduleDAGView routines={scopedRoutines} onSelectRoutine={setSelectedRoutineId} queuedTaskIds={queuedRoutineIds} />
+            <WebhookTriggerCard routines={scopedRoutines} />
             <RoutineTemplatesBrowser onInstantiated={() => void refreshScheduled()} />
           </div>
         ) : tab === 'pipelines' ? (
@@ -263,6 +388,9 @@ export default function Tasks() {
           </div>
         ) : (
           <>
+        {/* 操作员视图（§5-1 裁决）— the panels below (batch cards, goal runs,
+            subagent inventory) are the operator surfaces; stay out of scope
+            for the nav/IA redesign unless the proposal says otherwise. */}
         {/* P1-2: best-of-N batch cards (live per-branch chips) + form. */}
         <BatchRunPanel />
 
@@ -279,8 +407,13 @@ export default function Tasks() {
           />
         )}
 
-        {/* P0-2: live goal-run cards sit above the regular task list. */}
-        <GoalRunPanel onViewSession={handleViewGoalSession} />
+        {/* P0-2: live goal-run cards sit above the regular task list.
+            P-U3: scoped to the deep-linked project when ?project= is set. */}
+        <GoalRunPanel onViewSession={handleViewGoalSession} projectDir={projectKey} />
+
+        {/* B2 follow-up: live sub-agent inventory (system-wide). Hidden
+            when the user has not enabled agent teams. */}
+        <SubagentPanel />
 
         {errorMsg && (
           <Banner
@@ -313,6 +446,11 @@ export default function Tasks() {
 
         {showFilters && <TasksFilters active={activeFilter} onChange={setActiveFilter} />}
 
+        {/* P1-3: in-flight background tasks in EVERY mode — they used to be
+            visible only in the dev-only Pipelines tab, so a Simple-mode run
+            was created-then-invisible. Renders nothing while idle. */}
+        <BackgroundTasksPanel />
+
         {dagView ? (
           <TaskDAGView tasks={tasks} onSelectTask={setSelectedTaskId} />
         ) : calendarView ? (
@@ -337,6 +475,7 @@ export default function Tasks() {
               totalPages={taskTotalPages}
               onPageChange={setTaskPage}
               runningId={running}
+              runnableIds={routineIds}
               onSelectTask={setSelectedTaskId}
               onRunNow={handleRunNow}
               onCancelTask={setCancelTarget}
@@ -371,12 +510,36 @@ export default function Tasks() {
         routine={selectedRoutine}
         routines={scheduledTasks}
         onClose={() => setSelectedRoutineId(null)}
-        onUpdated={() => {/* useScheduledTasks auto-refreshes via its own hook */}}
+        // B3 P1-25: the editors save via update_scheduled_task directly, so
+        // without this wire the drawer, DAG, calendar and queued-chips all
+        // kept showing the pre-edit values until a full page remount.
+        onUpdated={() => {
+          void refreshScheduled()
+          void refreshExecutions()
+        }}
       />
       <CancelTaskModal
         open={cancelTarget !== null}
         onCancel={() => setCancelTarget(null)}
         onConfirm={() => cancelTarget && handleCancelTask(cancelTarget)}
+      />
+      {/* R2-P1-4: a paused routine must opt in to a manual run — say so
+          before the engine fires it off-schedule. */}
+      <ConfirmDialog
+        open={pausedRunTarget !== null}
+        title={t('tasks.runNow.pausedTitle')}
+        message={intl.formatMessage(
+          { id: 'tasks.runNow.pausedMessage' },
+          { name: pausedRunTarget?.name ?? '' },
+        )}
+        confirmLabel={t('tasks.runNow.pausedConfirm')}
+        cancelLabel={t('tasks.runNow.pausedCancel')}
+        onConfirm={() => {
+          const routine = pausedRunTarget
+          setPausedRunTarget(null)
+          if (routine) void runRoutineNow(routine)
+        }}
+        onCancel={() => setPausedRunTarget(null)}
       />
     </div>
   )

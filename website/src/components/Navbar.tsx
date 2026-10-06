@@ -37,9 +37,11 @@ export default function Navbar({ lang, onLangChange }: NavbarProps) {
       height: 'var(--nav-height)',
       display: 'flex',
       alignItems: 'center',
-      background: scrolled ? 'rgba(15, 15, 20, 0.92)' : 'var(--bg)',
-      backdropFilter: scrolled ? 'saturate(1.4) blur(12px)' : 'none',
-      borderBottom: scrolled ? '1px solid var(--line)' : '1px solid transparent',
+      background: scrolled ? 'var(--glass-bg)' : 'var(--bg)',
+      WebkitBackdropFilter: scrolled ? 'var(--glass-blur)' : 'none',
+      backdropFilter: scrolled ? 'var(--glass-blur)' : 'none',
+      borderBottom: scrolled ? '1px solid var(--glass-border)' : '1px solid transparent',
+      boxShadow: scrolled ? 'var(--glass-highlight)' : 'none',
       transition: 'background 0.2s, border-color 0.2s, backdrop-filter 0.2s',
     }}>
       <div style={{
@@ -65,7 +67,7 @@ export default function Navbar({ lang, onLangChange }: NavbarProps) {
             fontSize: 14,
             fontWeight: 700,
           }}>S</div>
-          <span style={{ fontWeight: 600, fontSize: 16 }}>Shannon Code</span>
+          <span style={{ fontWeight: 600, fontSize: 16 }}>Shannon</span>
         </a>
 
         <div className={`nav-links${menuOpen ? ' open' : ''}`} style={{
@@ -90,7 +92,7 @@ export default function Navbar({ lang, onLangChange }: NavbarProps) {
           >
             {lang === 'en' ? '中文' : 'EN'}
           </button>
-          <a href="https://github.com/shannon-agent/shannon-code" target="_blank" rel="noopener noreferrer"
+          <a href="https://github.com/diff-lab-com/shannon-agent" target="_blank" rel="noopener noreferrer"
             style={navLinkStyle}>{t.nav.github}</a>
           <a href={BASE + 'docs/getting-started'} className="btn-primary" style={{ fontSize: 14, padding: '8px 18px' }}
             onClick={() => setMenuOpen(false)}>{t.nav.getStarted}</a>

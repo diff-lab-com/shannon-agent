@@ -1,4 +1,7 @@
 import { useState, useEffect } from 'react'
+import { useNavigate, NavLink } from 'react-router-dom'
+import { getVersion } from '@tauri-apps/api/app'
+import { homeDir, join } from '@tauri-apps/api/path'
 import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
@@ -7,17 +10,21 @@ import { Switch } from '@/components/ui/switch'
 import { Modal } from '@/components/ui/modal'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useCatalog } from '@/context/CatalogContext'
-import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal'
+import { save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { VoiceSttSettings } from '@/components/settings/VoiceSttSettings'
 import { VoiceLocalSettings } from '@/components/settings/VoiceLocalSettings'
+import { TerminalSettings } from '@/components/settings/TerminalSettings'
+import { setRemoteImagesAllowed } from '@/lib/remoteImages'
+import { useRemoteImagesAllowed } from '@/hooks/useRemoteImagesAllowed'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
-import type { SkillCandidate, CliInstallStatus, AppUpdateInfo } from '@/lib/tauri-api'
+import type { SkillCandidate, CliInstallStatus } from '@/lib/tauri-api'
 import { cn } from '@/lib/utils'
 
 export default function AdvancedSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+  const navigate = useNavigate()
   const { refreshConfig, config } = useCatalog()
   const [memoryEnabled, setMemoryEnabled] = useState(config?.memory_enabled ?? true)
   const [telemetryEnabled, setTelemetryEnabled] = useState(config?.telemetry_enabled ?? false)
@@ -25,28 +32,38 @@ export default function AdvancedSettings() {
   const [debugConsole, setDebugConsole] = useState(config?.debug_console ?? false)
   const [skillLoopEnabled, setSkillLoopEnabled] = useState(config?.skill_loop_enabled ?? false)
   const [skillDetectionEnabled, setSkillDetectionEnabled] = useState(config?.skill_detection_enabled ?? true)
+  // Dream pass (梦境提炼): nightly idle-time distillation + its L3 refine
+  // step. Both default off; review remains the only write path.
+  const [dreamEnabled, setDreamEnabled] = useState(config?.dream_enabled ?? false)
+  const [dreamSkillDistillEnabled, setDreamSkillDistillEnabled] = useState(config?.dream_skill_distill_enabled ?? false)
+  // B2: real sub-agent execution toggle (agent teams). Live effect — no
+  // restart needed (the backend injects/revokes the context per call).
+  const [agentTeamsEnabled, setAgentTeamsEnabled] = useState(config?.agent_teams_enabled ?? false)
   // P2-5: `offpeak.model_override` — model used for routine executions that
   // start inside their off-peak execution window. Empty input = disabled.
   const [offpeakModel, setOffpeakModel] = useState(config?.offpeak?.model_override ?? '')
   const [savingOffpeak, setSavingOffpeak] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [resetting, setResetting] = useState(false)
-  const [showLogs, setShowLogs] = useState(false)
+  // P2: the real app version (the old "System Logs" modal hardcoded v0.1.0).
+  const [appVersion, setAppVersion] = useState<string | null>(null)
   const [showApiKeys, setShowApiKeys] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
 
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => { /* jsdom / denied ACL — show no version */ })
+  }, [])
+
+  // IA T3 (审批面收敛) + X1: this page no longer mounts a second
+  // SkillApprovalModal. We keep the toggle + pending count, and the
+  // 「查看待审」entry links to /extensions/pending — the single skill-review
+  // surface shipped by 任务 3 (评审裁决 #2).
   const [candidates, setCandidates] = useState<SkillCandidate[]>([])
-  const [candidateIndex, setCandidateIndex] = useState(0)
-  const [approvalOpen, setApprovalOpen] = useState(false)
 
   // ADR-0011 B3 — bundled `shannon` CLI exposure (non-shadowing install).
   const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null)
   const [installingCli, setInstallingCli] = useState(false)
-
-  // C1① — semi-automatic update check (GitHub latest → open download page).
-  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null)
-  const [checkingUpdate, setCheckingUpdate] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -68,13 +85,68 @@ export default function AdvancedSettings() {
     setOffpeakModel(config?.offpeak?.model_override ?? '')
   }, [config?.offpeak?.model_override])
 
+  useEffect(() => {
+    setAgentTeamsEnabled(config?.agent_teams_enabled ?? false)
+  }, [config?.agent_teams_enabled])
+
+  // Dream pass switches follow the persisted config on refresh.
+  useEffect(() => {
+    setDreamEnabled(config?.dream_enabled ?? false)
+  }, [config?.dream_enabled])
+
+  useEffect(() => {
+    setDreamSkillDistillEnabled(config?.dream_skill_distill_enabled ?? false)
+  }, [config?.dream_skill_distill_enabled])
+
+  // P1-10: the six core switches follow the persisted config on refresh too
+  // (same pattern as the dream switches) — otherwise a failed write, another
+  // settings surface, or a factory reset leaves the toggle lying.
+  useEffect(() => {
+    setMemoryEnabled(config?.memory_enabled ?? true)
+  }, [config?.memory_enabled])
+
+  useEffect(() => {
+    setTelemetryEnabled(config?.telemetry_enabled ?? false)
+  }, [config?.telemetry_enabled])
+
+  useEffect(() => {
+    setEncryptionEnabled(config?.encryption_enabled ?? true)
+  }, [config?.encryption_enabled])
+
+  useEffect(() => {
+    setDebugConsole(config?.debug_console ?? false)
+  }, [config?.debug_console])
+
+  useEffect(() => {
+    setSkillLoopEnabled(config?.skill_loop_enabled ?? false)
+  }, [config?.skill_loop_enabled])
+
+  useEffect(() => {
+    setSkillDetectionEnabled(config?.skill_detection_enabled ?? true)
+  }, [config?.skill_detection_enabled])
+
+  // 卡A GC — session storage management moved to Settings → 会话 (Settings
+  // R3 T6); this page keeps only the cross-link below. The toggle states and
+  // the retention handler went with the card.
+
+  // P2-4 (R9-④): the remote-image allow switch lives in the frontend-local
+  // store — the hook both reads and (through the store) persists, so the
+  // switch can't lie the way a config-backed toggle can after a failed write.
+  const remoteImagesAllowed = useRemoteImagesAllowed()
+
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
     try {
       await api.configure({ key, value: String(value) })
       await refreshConfig()
       toast.success(intl.formatMessage({ id: 'settings.advanced.toggled' }, { key: key.replace(/_/g, ' '), state: value ? t('settings.advanced.enabled') : t('settings.advanced.disabled') }))
-    } catch (e) { toastError(t('settings.advanced.updateFailed'), e) }
+    } catch (e) {
+      // P1-10: don't leave the switch lying — re-read the persisted config
+      // so the config→state sync effects put the toggle back where the disk
+      // says it belongs.
+      toastError(t('settings.advanced.updateFailed'), e)
+      refreshConfig().catch(() => {})
+    }
   }
 
   const handleClearCache = async () => {
@@ -85,7 +157,14 @@ export default function AdvancedSettings() {
 
   const handleFactoryReset = async () => {
     setResetting(true)
-    try { await api.configure({ key: 'factory_reset', value: 'true' }); toast.success(t('settings.advanced.resetComplete')) } catch (e) { toastError(t('settings.advanced.resetFailed'), e) }
+    try {
+      await api.configure({ key: 'factory_reset', value: 'true' })
+      // The reset rewrites the config file — re-read it so every toggle on
+      // this page snaps back to the restored defaults instead of the stale
+      // pre-reset UI state.
+      await refreshConfig()
+      toast.success(t('settings.advanced.resetComplete'))
+    } catch (e) { toastError(t('settings.advanced.resetFailed'), e) }
     setResetting(false)
     setShowResetConfirm(false)
   }
@@ -106,27 +185,53 @@ export default function AdvancedSettings() {
     setInstallingCli(false)
   }
 
-  const handleCheckUpdate = async () => {
-    setCheckingUpdate(true)
+  // Settings R3 (T1): the「版本与更新」card moved to Settings → 关于 (the
+  // non-dev-gated section) — only the check-update / release-page handlers
+  // went with it. This page keeps the developer options (logs / diagnostics
+  // / API keys / factory reset).
+
+  // P2: replace the fake "System Logs" modal (a hardcoded one-liner with a
+  // made-up version) with an honest entry point: the Shannon state directory
+  // under $HOME holds the on-disk logs (session events, usage ledger,
+  // scheduled runs); the desktop's own runtime log goes to stderr.
+  const handleOpenLogsDir = async () => {
     try {
-      const info = await api.checkAppUpdate()
-      setUpdateInfo(info)
-      if (info.updateAvailable && info.latestVersion) {
-        toast.success(intl.formatMessage({ id: 'settings.advanced.updateAvailableBadge' }, { version: info.latestVersion }))
-      }
+      const dir = await join(await homeDir(), '.shannon')
+      await api.openWithDefaultApp(dir)
     } catch (e) {
-      toastError(t('settings.advanced.updateCheckFailed'), e)
+      toastError(t('settings.advanced.openLogsDirFailed'), e)
     }
-    setCheckingUpdate(false)
   }
 
-  const handleOpenReleasePage = async () => {
-    if (!updateInfo) return
+  // Batch-3 follow-up: bundle local logs + crash reports + a fresh
+  // `shannon doctor --json --deep` into one zip (save dialog picks the
+  // destination; nothing is uploaded). Companion to handleOpenLogsDir.
+  const [exportingDiagnostics, setExportingDiagnostics] = useState(false)
+  const handleExportDiagnostics = async () => {
+    let target: string | null = null
     try {
-      await api.openReleasePage(updateInfo.releaseUrl)
+      target = await saveDialog({
+        defaultPath: `shannon-diagnostics-${new Date().toISOString().slice(0, 10)}.zip`,
+        filters: [{ name: 'Zip', extensions: ['zip'] }],
+      })
     } catch (e) {
-      toastError(t('settings.advanced.updateOpenFailed'), e)
+      toastError(t('settings.advanced.exportDiagnosticsFailed'), e)
+      return
     }
+    if (!target) return // user cancelled
+    setExportingDiagnostics(true)
+    try {
+      const result = await api.exportDiagnostics(target)
+      toast.success(
+        intl.formatMessage(
+          { id: 'settings.advanced.exportDiagnosticsDone' },
+          { path: result.path },
+        ),
+      )
+    } catch (e) {
+      toastError(t('settings.advanced.exportDiagnosticsFailed'), e)
+    }
+    setExportingDiagnostics(false)
   }
 
   // P2-5: persist `offpeak.model_override` (frozen config key). An empty
@@ -143,29 +248,21 @@ export default function AdvancedSettings() {
     setSavingOffpeak(false)
   }
 
-  function advanceCandidate() {
-    setCandidates((prev) => {
-      const next = prev.slice(1)
-      if (next.length === 0) setApprovalOpen(false)
-      return next
-    })
-  }
+  // Settings R3 T6: the GC retention gear moved to 会话 with its card —
+  // handleRetentionChange went with it.
 
   return (
     <div className="pb-xl">
-      <div className="mb-xl">
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-sm">{t('settings.advanced.title')}</h2>
-        <p className="text-on-surface-variant font-body-md">{t('settings.advanced.subtitle')}</p>
-      </div>
+      <p className="text-on-surface-variant font-body-md mb-xl">{t('settings.advanced.subtitle')}</p>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-gutter">
         {/* Skill Extraction */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-tertiary/10 rounded-lg text-tertiary flex items-center justify-center">
+            <div className="p-sm bg-tertiary-container rounded-lg text-on-tertiary-container flex items-center justify-center">
               <span className="material-symbols-outlined">auto_awesome</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.skillLoop.title')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.skillLoop.title')}</h3>
             {candidates.length > 0 && (
               <span className="ml-auto px-sm py-[2px] rounded-full bg-tertiary-container text-on-tertiary-container text-label-xs font-bold">
                 {intl.formatMessage({ id: 'settings.skillLoop.pendingCount' }, { count: candidates.length })}
@@ -175,23 +272,23 @@ export default function AdvancedSettings() {
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.skillLoop.description')}</p>
           <div className="flex items-center justify-between gap-md">
             <div>
-              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.skillLoop.enabled')}</div>
-              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.skillLoop.enabledDesc')}</div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.skillLoop.enabled')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.skillLoop.enabledDesc')}</div>
             </div>
-            <Switch checked={skillLoopEnabled} onCheckedChange={v => handleToggle('skill_loop_enabled', v, setSkillLoopEnabled)} className="shrink-0" />
+            <Switch checked={skillLoopEnabled} onCheckedChange={v => handleToggle('skill_loop_enabled', v, setSkillLoopEnabled)} className="shrink-0" aria-label={t('settings.skillLoop.enabled')} />
           </div>
           <div className="flex items-center justify-between gap-md mt-md">
             <div>
-              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.skillLoop.detectionEnabled')}</div>
-              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.skillLoop.detectionEnabledDesc')}</div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.skillLoop.detectionEnabled')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.skillLoop.detectionEnabledDesc')}</div>
             </div>
-            <Switch checked={skillDetectionEnabled} onCheckedChange={v => handleToggle('skill_detection_enabled', v, setSkillDetectionEnabled)} className="shrink-0" />
+            <Switch checked={skillDetectionEnabled} onCheckedChange={v => handleToggle('skill_detection_enabled', v, setSkillDetectionEnabled)} className="shrink-0" aria-label={t('settings.skillLoop.detectionEnabled')} />
           </div>
           {candidates.length > 0 && (
             <Button
               variant="ghost"
-              className="w-full mt-md py-sm border border-tertiary/30 rounded-lg text-tertiary font-label-md font-bold text-[14px] hover:bg-tertiary-container/30 transition-colors cursor-pointer"
-              onClick={() => { setCandidateIndex(0); setApprovalOpen(true) }}
+              className="w-full mt-md py-sm border border-tertiary/30 rounded-lg text-tertiary font-label-md font-bold text-body-sm hover:bg-tertiary-container/30 transition-colors cursor-pointer"
+              onClick={() => navigate('/extensions/pending')}
             >
               <span className="material-symbols-outlined icon-sm mr-xs">rate_review</span>
               {t('settings.skillLoop.review')}
@@ -199,73 +296,155 @@ export default function AdvancedSettings() {
           )}
         </div>
 
-        {/* Memory Management */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+        {/* Dream distillation (梦境提炼) — nightly idle-time pass + its L3
+            refine step, both default off, review-gated writes only. */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="dream-card">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
+              <span className="material-symbols-outlined">bedtime</span>
+            </div>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.dream.title')}</h3>
+          </div>
+          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.dream.description')}</p>
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.dream.enabled')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.dream.enabledDesc')}</div>
+            </div>
+            <Switch checked={dreamEnabled} onCheckedChange={v => handleToggle('dream_enabled', v, setDreamEnabled)} className="shrink-0" aria-label={t('settings.dream.enabled')} />
+          </div>
+          <div className="flex items-center justify-between gap-md mt-md">
+            <div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.dream.distillEnabled')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.dream.distillEnabledDesc')}</div>
+            </div>
+            <Switch checked={dreamSkillDistillEnabled} onCheckedChange={v => handleToggle('dream_skill_distill_enabled', v, setDreamSkillDistillEnabled)} className="shrink-0" aria-label={t('settings.dream.distillEnabled')} />
+          </div>
+        </div>
+
+        {/* 卡A GC — 会话存储管理 moved to Settings → 会话 (Settings R3 T6):
+            leave a cross-link where the card used to be so muscle memory
+            from the old placement still lands (same pattern as the
+            updates-moved row). */}
+        <div className="lg:col-span-2 flex flex-col md:flex-row md:items-center gap-sm px-lg py-md rounded-xl border border-outline-variant/20 bg-surface-container-low" data-testid="session-moved-link">
+          <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">auto_delete</span>
+          <p className="flex-1 text-on-surface-variant text-body-sm">{t('settings.advanced.movedToSession')}</p>
+          <NavLink
+            to="/settings/session"
+            className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer whitespace-nowrap"
+          >
+            {t('nav.session')}
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">arrow_forward</span>
+          </NavLink>
+        </div>
+
+        {/* B2 — Agent teams (real sub-agent execution) */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="agent-teams-card">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
+              <span className="material-symbols-outlined">account_tree</span>
+            </div>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.agentTeamsTitle')}</h3>
+          </div>
+          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.agentTeamsDesc')}</p>
+          <div className="flex items-center justify-between py-sm gap-md">
+            <div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.agentTeamsToggle')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.agentTeamsLive')}</div>
+            </div>
+            <Switch checked={agentTeamsEnabled} onCheckedChange={v => handleToggle('agent_teams_enabled', v, setAgentTeamsEnabled)} className="shrink-0" aria-label={t('settings.advanced.agentTeamsToggle')} />
+          </div>
+        </div>
+
+        {/* Memory Management */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">memory</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.memoryTitle')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.memoryTitle')}</h3>
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.memoryDesc')}</p>
           <div className="space-y-md">
             <div className="flex items-center justify-between py-sm gap-md">
               <div>
-                <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.longTermMemory')}</div>
-                <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.longTermMemoryDesc')}</div>
+                <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.longTermMemory')}</div>
+                <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.longTermMemoryDesc')}</div>
               </div>
-              <Switch checked={memoryEnabled} onCheckedChange={v => handleToggle('memory_enabled', v, setMemoryEnabled)} className="shrink-0" />
+              <Switch checked={memoryEnabled} onCheckedChange={v => handleToggle('memory_enabled', v, setMemoryEnabled)} className="shrink-0" aria-label={t('settings.advanced.longTermMemory')} />
             </div>
             <Button
-              className="w-full py-md border border-outline-variant/50 rounded-xl text-on-surface font-label-md font-bold text-[14px] hover:bg-surface-container-low transition-colors active:scale-[0.99] cursor-pointer"
+              className="w-full py-md border border-outline-variant/50 rounded-xl text-on-surface font-label-md font-bold text-body-sm hover:bg-surface-container-low transition-colors active:scale-[0.99] cursor-pointer"
               onClick={() => setShowClearConfirm(true)}
               disabled={clearing}
             >
-              {clearing ? <Spinner className="mr-sm text-[18px]" /> : null}
+              {clearing ? <Spinner className="mr-sm text-body-lg" /> : null}
               {clearing ? t('settings.advanced.clearing') : t('settings.advanced.clearSessionCache')}
             </Button>
           </div>
         </div>
 
         {/* Data Privacy */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-secondary/10 rounded-lg text-secondary flex items-center justify-center">
+            <div className="p-sm bg-secondary-container rounded-lg text-on-secondary-container flex items-center justify-center">
               <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>security</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.dataPrivacy')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.dataPrivacy')}</h3>
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.dataPrivacyDesc')}</p>
           <div className="space-y-lg mt-sm">
             <div className="flex items-center justify-between gap-md">
               <div>
-                <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.anonReporting')}</div>
-                <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.anonReportingDesc')}</div>
+                <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.anonReporting')}</div>
+                <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.anonReportingDesc')}</div>
               </div>
-              <Switch checked={telemetryEnabled} onCheckedChange={v => handleToggle('telemetry', v, setTelemetryEnabled)} className="shrink-0" />
+              <Switch checked={telemetryEnabled} onCheckedChange={v => handleToggle('telemetry', v, setTelemetryEnabled)} className="shrink-0" aria-label={t('settings.advanced.anonReporting')} />
             </div>
             <div className="flex items-center justify-between gap-md">
               <div>
-                <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.encryption')}</div>
-                <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.encryptionDesc')}</div>
+                <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.encryption')}</div>
+                <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.encryptionDesc')}</div>
               </div>
-              <Switch checked={encryptionEnabled} onCheckedChange={v => handleToggle('encryption', v, setEncryptionEnabled)} className="shrink-0" />
+              <Switch checked={encryptionEnabled} onCheckedChange={v => handleToggle('encryption', v, setEncryptionEnabled)} className="shrink-0" aria-label={t('settings.advanced.encryption')} />
             </div>
           </div>
         </div>
 
-        {/* Off-peak model override (P2-5, frozen key `offpeak.model_override`) */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+        {/* P2-4 (R9-④) — remote images in model output are held behind a
+            per-image confirm by default. Frontend-local persistence (the
+            lib/remoteImages localStorage store, like the theme/density
+            keys): the Rust config contract stays untouched, and the switch
+            drives/reads the store directly — no local mirror to drift. */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="remote-images-card">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-secondary/10 rounded-lg text-secondary flex items-center justify-center">
+            <div className="p-sm bg-secondary-container rounded-lg text-on-secondary-container flex items-center justify-center">
+              <span className="material-symbols-outlined">shield</span>
+            </div>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.remoteImages.title')}</h3>
+          </div>
+          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.remoteImages.desc')}</p>
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.remoteImages.enabled')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.remoteImages.enabledDesc')}</div>
+            </div>
+            <Switch checked={remoteImagesAllowed} onCheckedChange={setRemoteImagesAllowed} className="shrink-0" aria-label={t('settings.advanced.remoteImages.enabled')} />
+          </div>
+        </div>
+
+        {/* Off-peak model override (P2-5, frozen key `offpeak.model_override`) */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-sm bg-secondary-container rounded-lg text-on-secondary-container flex items-center justify-center">
               <span className="material-symbols-outlined">bedtime</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.offpeak.title')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.offpeak.title')}</h3>
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.offpeak.desc')}</p>
           <div className="flex flex-col md:flex-row md:items-end gap-sm">
             <label className="flex flex-col gap-xs flex-1">
-              <span className="font-label-sm text-[12px] text-on-surface-variant">
+              <span className="font-label-sm text-label-sm text-on-surface-variant">
                 {t('settings.advanced.offpeak.inputLabel')}
               </span>
               <input
@@ -276,12 +455,12 @@ export default function AdvancedSettings() {
                 aria-label={t('settings.advanced.offpeak.inputLabel')}
                 className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
               />
-              <span className="font-label-sm text-[11px] text-on-surface-variant">
+              <span className="font-label-sm text-label-xs text-on-surface-variant">
                 {offpeakModel.trim() ? t('settings.advanced.offpeak.enabledHint') : t('settings.advanced.offpeak.disabledHint')}
               </span>
             </label>
             <Button
-              className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-sm active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer disabled:opacity-50"
+              className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-body-sm font-bold hover:bg-primary/90 shadow-e1 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer disabled:opacity-50"
               onClick={handleSaveOffpeakModel}
               disabled={savingOffpeak}
               aria-label={t('settings.advanced.offpeak.saveAria')}
@@ -297,19 +476,22 @@ export default function AdvancedSettings() {
         {/* Voice / Local (P2-5e whisper-rs) — opt-in offline STT */}
         <VoiceLocalSettings />
 
+        {/* Integrated terminal defaults (P3-1) — the [terminal] config card */}
+        <TerminalSettings />
+
         {/* Command line — expose the bundled `shannon` CLI (ADR-0011 B3) */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 lg:col-span-2 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">terminal</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.cliTitle')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.cliTitle')}</h3>
             <span
               className={cn(
                 "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap",
                 cliStatus?.onPath
                   ? 'bg-tertiary-container text-on-tertiary-container'
-                  : 'bg-error/10 text-error',
+                  : 'bg-error-container text-on-error-container',
               )}
             >
               {cliStatus?.onPath
@@ -325,7 +507,7 @@ export default function AdvancedSettings() {
               )}
             </div>
             <Button
-              className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-md active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
+              className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-body-sm font-bold hover:bg-primary/90 shadow-e2 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
               onClick={handleInstallCli}
               disabled={installingCli || !cliStatus || cliStatus.onPath}
             >
@@ -334,90 +516,61 @@ export default function AdvancedSettings() {
           </div>
         </div>
 
-        {/* Version & updates — semi-automatic update check (C1①) */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
-          <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
-              <span className="material-symbols-outlined">system_update_alt</span>
-            </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.updateTitle')}</h3>
-            {updateInfo && (
-              <span
-                className={cn(
-                  "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap",
-                  updateInfo.updateAvailable
-                    ? 'bg-tertiary-container text-on-tertiary-container'
-                    : 'bg-surface-container-high text-on-surface-variant',
-                )}
-              >
-                {updateInfo.error
-                  ? t('settings.advanced.updateCheckFailed')
-                  : updateInfo.updateAvailable && updateInfo.latestVersion
-                    ? intl.formatMessage({ id: 'settings.advanced.updateAvailableBadge' }, { version: updateInfo.latestVersion })
-                    : t('settings.advanced.updateUpToDate')}
-              </span>
-            )}
-          </div>
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-lg">
-            <div className="flex-1">
-              <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.updateDesc')}</p>
-              {updateInfo && (
-                <p className="text-on-surface-variant text-label-sm">
-                  {intl.formatMessage({ id: 'settings.advanced.updateCurrent' }, { version: updateInfo.currentVersion })}
-                </p>
-              )}
-              {updateInfo?.error && (
-                <p className="text-error text-label-sm mt-xs">{updateInfo.error}</p>
-              )}
-            </div>
-            <div className="flex items-center gap-md shrink-0">
-              {updateInfo && !updateInfo.error && (
-                <Button
-                  variant="ghost"
-                  className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer"
-                  onClick={handleOpenReleasePage}
-                >
-                  <span className="material-symbols-outlined icon-sm">open_in_new</span>
-                  {t('settings.advanced.updateOpenPage')}
-                </Button>
-              )}
-              <Button
-                className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-md active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
-                onClick={handleCheckUpdate}
-                disabled={checkingUpdate}
-              >
-                {checkingUpdate ? t('settings.advanced.updateChecking') : t('settings.advanced.updateCheckButton')}
-              </Button>
-            </div>
-          </div>
+        {/* Settings R3 (T1): the「版本与更新」card moved to 关于 — leave a
+            cross-link so muscle memory from the old placement still lands. */}
+        <div className="lg:col-span-2 flex flex-col md:flex-row md:items-center gap-sm px-lg py-md rounded-xl border border-outline-variant/20 bg-surface-container-low" data-testid="updates-moved-link">
+          <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">system_update_alt</span>
+          <p className="flex-1 text-on-surface-variant text-body-sm">{t('settings.advanced.movedToAbout')}</p>
+          <NavLink
+            to="/settings/about"
+            className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer whitespace-nowrap"
+          >
+            {t('nav.about')}
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">arrow_forward</span>
+          </NavLink>
         </div>
 
         {/* Developer Options */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 lg:col-span-2 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-tertiary/10 rounded-lg text-tertiary flex items-center justify-center">
+            <div className="p-sm bg-tertiary-container rounded-lg text-on-tertiary-container flex items-center justify-center">
               <span className="material-symbols-outlined">terminal</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.devOptions')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.devOptions')}</h3>
           </div>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-lg">
             <div className="flex-1">
-              <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.devOptionsDesc')}</p>
+              <p className="text-on-surface-variant text-body-sm mb-md">
+                {t('settings.advanced.devOptionsDesc')}
+              </p>
               <div className="flex items-center gap-md">
-                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowLogs(true)}>
-                  <span className="material-symbols-outlined icon-sm">description</span>
-                  {t('settings.advanced.viewLogs')}
+                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer" onClick={() => void handleOpenLogsDir()}>
+                  <span className="material-symbols-outlined icon-sm">folder_open</span>
+                  {t('settings.advanced.openLogsDir')}
                 </Button>
                 <span className="text-outline-variant">|</span>
-                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
+                <Button variant="ghost" disabled={exportingDiagnostics} className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer" onClick={() => void handleExportDiagnostics()}>
+                  <span className="material-symbols-outlined icon-sm">package_2</span>
+                  {exportingDiagnostics ? t('settings.advanced.exportDiagnosticsWorking') : t('settings.advanced.exportDiagnostics')}
+                </Button>
+                <span className="text-outline-variant">|</span>
+                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
                   <span className="material-symbols-outlined icon-sm">api</span>
                   {t('settings.advanced.manageApiKeys')}
                 </Button>
               </div>
+              <p className="text-on-surface-variant text-label-sm mt-sm">
+                {t('settings.advanced.logsHint')}
+              </p>
             </div>
             <div className="flex items-center gap-md bg-surface-container-low p-md rounded-xl border border-outline-variant/20 shrink-0">
-              <span className="font-label-md text-[14px] text-on-surface">{t('settings.advanced.enableDebug')}</span>
-              <Switch checked={debugConsole} onCheckedChange={v => handleToggle('debug_console', v, setDebugConsole)} />
+              {appVersion && (
+                <span className="px-sm py-[2px] rounded-full bg-surface-container-high text-on-surface-variant text-label-xs font-bold whitespace-nowrap">
+                  v{appVersion}
+                </span>
+              )}
+              <span className="font-label-md text-body-sm text-on-surface">{t('settings.advanced.enableDebug')}</span>
+              <Switch checked={debugConsole} onCheckedChange={v => handleToggle('debug_console', v, setDebugConsole)} aria-label={t('settings.advanced.enableDebug')} />
             </div>
           </div>
         </div>
@@ -426,16 +579,16 @@ export default function AdvancedSettings() {
         <div className="lg:col-span-2 border-2 border-error/20 bg-error/5 p-lg rounded-xl mt-sm relative overflow-hidden">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-lg relative z-raised">
             <div className="flex items-start gap-md">
-              <div className="p-2 bg-error/10 rounded-lg text-error shrink-0 flex items-center justify-center">
+              <div className="p-sm bg-error-container rounded-lg text-on-error-container shrink-0 flex items-center justify-center">
                 <span className="material-symbols-outlined">warning</span>
               </div>
               <div>
-                <h3 className="font-headline-md text-[24px] font-bold text-error mb-1">{t('settings.advanced.resetTitle')}</h3>
+                <h3 className="font-headline-md text-headline-md font-bold text-error mb-xs">{t('settings.advanced.resetTitle')}</h3>
                 <p className="text-on-surface-variant text-body-sm">{t('settings.advanced.resetDesc')}</p>
               </div>
             </div>
             <Button
-              className="px-xl py-md bg-error text-on-error rounded-xl font-label-md text-[14px] font-bold hover:bg-error/90 shadow-md active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
+              className="px-xl py-md bg-error text-on-error rounded-xl font-label-md text-body-sm font-bold hover:bg-error/90 shadow-e2 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
               onClick={() => setShowResetConfirm(true)}
               disabled={resetting}
             >
@@ -444,17 +597,6 @@ export default function AdvancedSettings() {
           </div>
         </div>
       </div>
-
-      {/* System Logs Modal */}
-      <Modal open={showLogs} onClose={() => setShowLogs(false)} title={t('settings.advanced.systemLogs')} size="2xl">
-        <div className="px-xl pb-xl">
-          <div className="bg-surface-container-high rounded-xl p-md font-mono text-label-sm text-on-surface-variant max-h-[50vh] overflow-y-auto">
-            <p>Shannon Desktop v0.1.0</p>
-            <p>{t('settings.advanced.logsHelp')}</p>
-            <p className="mt-sm opacity-60">{t('settings.advanced.logsVerbose')}</p>
-          </div>
-        </div>
-      </Modal>
 
       {/* API Keys Modal */}
       <Modal open={showApiKeys} onClose={() => setShowApiKeys(false)} title={t('settings.advanced.manageApiKeys')} size="lg">
@@ -491,14 +633,6 @@ export default function AdvancedSettings() {
         busy={resetting}
         onConfirm={handleFactoryReset}
         onCancel={() => setShowResetConfirm(false)}
-      />
-
-      <SkillApprovalModal
-        open={approvalOpen}
-        candidate={candidates[candidateIndex] ?? null}
-        onClose={() => setApprovalOpen(false)}
-        onApproved={() => advanceCandidate()}
-        onRejected={() => advanceCandidate()}
       />
     </div>
   )

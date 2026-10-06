@@ -280,38 +280,84 @@ impl PathSandbox {
         self.bind_alias_output
     }
 
-    /// Roots whose children are rendered under the bind alias in output.
-    ///
-    /// The temp root is excluded on purpose: the command sandbox exposes
-    /// `/tmp` at the same literal path (tmpfs mount), so a host `/tmp/...`
-    /// path is already sandbox-visible spelling and must not be rewritten
-    /// to `/workspace/...`.
-    fn alias_candidate_roots(&self) -> Vec<PathBuf> {
+    /// Canonical spelling of `path`, or `path` itself when it cannot be
+    /// resolved (not yet created, virtual).
+    fn canonical_of(&self, path: &Path) -> PathBuf {
+        self.fs
+            .canonicalize_blocking(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    /// Whether `path` is the command sandbox's tmpfs root (/tmp), in any
+    /// spelling. macOS resolves std::env::temp_dir() under
+    /// `/private/var/folders/…`, so comparing the raw path against the
+    /// literal `/tmp` constant silently missed it there.
+    fn is_tmp_root(&self, path: &Path) -> bool {
+        if path.as_os_str() == SANDBOX_TMP_ROOT || path == std::env::temp_dir() {
+            return true;
+        }
+        self.canonical_of(path) == self.canonical_of(&std::env::temp_dir())
+    }
+
+    /// Spellings of the alias-eligible (non-temp) roots: canonicalized and
+    /// as-configured. macOS canonicalization renders /var/… as
+    /// /private/var/… (same for /etc, /tmp), so configured roots, resolved
+    /// paths and echoed text frequently disagree about the prefix while
+    /// naming the same files — match every spelling (roadmap F11).
+    fn alias_root_spellings(&self) -> Vec<PathBuf> {
         if !self.bind_alias_output {
             return Vec::new();
         }
-        self.effective_roots()
-            .into_iter()
-            .filter(|root| root.to_string_lossy() != SANDBOX_TMP_ROOT)
-            .map(|root| self.fs.canonicalize_blocking(&root).unwrap_or(root))
-            .collect()
+        let mut out = Vec::new();
+        for root in self.effective_roots() {
+            if self.is_tmp_root(&root) {
+                continue;
+            }
+            out.push(self.canonical_of(&root));
+            out.push(root);
+        }
+        out
     }
 
     /// Render a canonical host path the way the command sandbox sees it —
-    /// the reverse of [`PathSandbox::remap_bind_alias`] (A3).
+    /// the reverse of `PathSandbox::remap_bind_alias` (A3).
     ///
-    /// A path under the project root becomes `/workspace/<rest>`; anything
-    /// else (the temp root, paths outside every root) is returned unchanged.
-    /// When output aliasing is off ([`PathSandbox::with_bind_alias_output`])
-    /// this is the identity, so plain non-sandboxed assemblies keep echoing
-    /// host paths exactly as before.
+    /// A path under the project root becomes `/workspace/<rest>`; a path
+    /// under the temp root renders as the sandbox-visible `/tmp` spelling
+    /// (Linux host `/tmp` is already literal — identity; macOS folds
+    /// `/var/folders/…/T` and `/private/var/folders/…/T` into `/tmp`);
+    /// anything else (paths outside every root) is returned unchanged. When
+    /// output aliasing is off ([`PathSandbox::with_bind_alias_output`]) this
+    /// is the identity, so plain non-sandboxed assemblies keep echoing host
+    /// paths exactly as before.
     pub fn alias_display_path(&self, path: &Path) -> String {
-        for root in self.alias_candidate_roots() {
-            if let Ok(rest) = path.strip_prefix(&root) {
-                return match rest.as_os_str().is_empty() {
-                    true => SANDBOX_BIND_ALIAS.to_string(),
-                    false => format!("{SANDBOX_BIND_ALIAS}/{}", rest.display()),
-                };
+        let inputs = [path.to_path_buf(), self.canonical_of(path)];
+        for root in self.alias_root_spellings() {
+            for input in &inputs {
+                if let Ok(rest) = input.strip_prefix(&root) {
+                    return match rest.as_os_str().is_empty() {
+                        true => SANDBOX_BIND_ALIAS.to_string(),
+                        false => format!("{SANDBOX_BIND_ALIAS}/{}", rest.display()),
+                    };
+                }
+            }
+        }
+        let tmp = std::env::temp_dir();
+        let tmp_canonical = self.canonical_of(&tmp);
+        if self.bind_alias_output {
+            for input in &inputs {
+                for t in [
+                    tmp.as_path(),
+                    tmp_canonical.as_path(),
+                    Path::new(SANDBOX_TMP_ROOT),
+                ] {
+                    if let Ok(rest) = input.strip_prefix(t) {
+                        return match rest.as_os_str().is_empty() {
+                            true => SANDBOX_TMP_ROOT.to_string(),
+                            false => format!("{SANDBOX_TMP_ROOT}/{}", rest.display()),
+                        };
+                    }
+                }
             }
         }
         path.to_string_lossy().to_string()
@@ -326,8 +372,23 @@ impl PathSandbox {
     /// tool-generated path echoes are.
     pub fn alias_display_text(&self, text: &str) -> String {
         let mut out = text.to_string();
-        for root in self.alias_candidate_roots() {
+        for root in self.alias_root_spellings() {
             out = replace_path_prefix(&out, &root.to_string_lossy(), SANDBOX_BIND_ALIAS);
+        }
+        // Temp root spellings render as the sandbox-visible /tmp (see
+        // alias_display_path): Linux is the identity, macOS folds
+        // /var/folders/…/T and /private/var/folders/…/T into /tmp. Gated on
+        // the flag so alias-off assemblies keep echoing host paths.
+        if self.bind_alias_output {
+            let tmp = std::env::temp_dir();
+            let tmp_canonical = self.canonical_of(&tmp);
+            for t in [
+                tmp.as_path(),
+                tmp_canonical.as_path(),
+                Path::new(SANDBOX_TMP_ROOT),
+            ] {
+                out = replace_path_prefix(&out, &t.to_string_lossy(), SANDBOX_TMP_ROOT);
+            }
         }
         out
     }
@@ -600,20 +661,29 @@ impl PathSandbox {
     /// This provides a more descriptive error message. Even if this check
     /// passes, canonicalization may still detect a traversal that resolves
     /// outside allowed roots.
+    ///
+    /// Both separators count: on Windows `\..\..\` is a traversal just as
+    /// much as `/../..`, so components are counted over a normalized form
+    /// where `\` is treated as a separator (matching `Path::components`
+    /// semantics on Windows). Forward-only traversal keeps the historical
+    /// behavior and message.
     fn check_raw_traversal(&self, path_str: &str) -> Result<(), SandboxError> {
         // Count `..` components to detect potential traversal
-        let components: Vec<&str> = path_str.split('/').collect();
+        let normalized = path_str.replace('\\', "/");
         let mut depth = 0i32;
-        for comp in &components {
-            if *comp == ".." {
-                depth -= 1;
-                if depth < 0 {
-                    return Err(SandboxError::PathTraversal(format!(
-                        "Path '{path_str}' contains '..' that escapes the root directory"
-                    )));
+        for comp in Path::new(&normalized).components() {
+            match comp {
+                std::path::Component::ParentDir => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return Err(SandboxError::PathTraversal(format!(
+                            "Path '{path_str}' contains '..' that escapes the root directory"
+                        )));
+                    }
                 }
-            } else if *comp != "." && !comp.is_empty() {
-                depth += 1;
+                std::path::Component::Normal(_) => depth += 1,
+                // RootDir / CurDir / Prefix never change traversal depth.
+                _ => {}
             }
         }
         Ok(())
@@ -621,18 +691,29 @@ impl PathSandbox {
 
     /// Check if the canonicalized path matches any denied pattern.
     fn check_denied_patterns(&self, canonical_str: &str) -> Result<(), SandboxError> {
+        // macOS canonicalization renders /etc, /tmp and /var as /private/…;
+        // a denied pattern written against the visible spelling (/etc/…)
+        // must still match the same file after resolution (roadmap F11).
+        let spellings = [
+            canonical_str,
+            canonical_str
+                .strip_prefix("/private")
+                .unwrap_or(canonical_str),
+        ];
         for pattern in &self.config.denied_patterns {
+            let bare = pattern.trim_end_matches('/');
             // Match as prefix. Both "/etc/passwd" and "/etc/" itself should match "/etc/"
-            if canonical_str.starts_with(pattern) || canonical_str == pattern.trim_end_matches('/')
-            {
-                // B3: even a denied-pattern hit should tell the model where
-                // writes ARE accepted, so a rejected Write is recoverable in
-                // one turn instead of three guesses.
-                return Err(SandboxError::Denied(format!(
-                    "Path '{canonical_str}' is in a restricted area (matches '{pattern}'); \
-                     allowed roots: {}",
-                    self.allowed_roots_summary()
-                )));
+            for candidate in spellings {
+                if candidate.starts_with(pattern.as_str()) || candidate == bare {
+                    // B3: even a denied-pattern hit should tell the model where
+                    // writes ARE accepted, so a rejected Write is recoverable in
+                    // one turn instead of three guesses.
+                    return Err(SandboxError::Denied(format!(
+                        "Path '{canonical_str}' is in a restricted area (matches '{pattern}'); \
+                         allowed roots: {}",
+                        self.allowed_roots_summary()
+                    )));
+                }
             }
         }
         Ok(())
@@ -704,8 +785,9 @@ impl PathSandbox {
             // under a home directory that isn't ours
             let canonical_str = canonical.to_string_lossy().to_string();
 
-            // Only check if the path is under /home/ or a typical home root
-            let home_roots = ["/home/", "C:\\Users\\"];
+            // Only check if the path is under a typical home root: Linux
+            // `/home/`, macOS `/Users/`, root's `/root/`, Windows profiles.
+            let home_roots = ["/home/", "C:\\Users\\", "/Users/", "/root/"];
             let is_under_home_root = home_roots.iter().any(|hr| canonical_str.starts_with(hr));
 
             if is_under_home_root {
@@ -881,17 +963,25 @@ mod tests {
             path
         }
 
-        fn create_symlink(&self, link: &str, target: &Path) -> PathBuf {
+        /// Create `link` → `target`. `None` when the OS refuses — Windows
+        /// needs SeCreateSymbolicLink (admin or Developer Mode), so tests
+        /// that depend on the link existing must skip instead of panicking.
+        fn create_symlink(&self, link: &str, target: &Path) -> Option<PathBuf> {
             let link_path = self.file(link);
             if let Some(parent) = link_path.parent() {
                 fs::create_dir_all(parent).expect("Failed to create parent dirs");
             }
             #[cfg(unix)]
-            std::os::unix::fs::symlink(target, &link_path).expect("Failed to create symlink");
+            {
+                std::os::unix::fs::symlink(target, &link_path).expect("Failed to create symlink");
+                Some(link_path)
+            }
             #[cfg(windows)]
-            std::os::windows::fs::symlink_file(target, &link_path)
-                .expect("Failed to create symlink");
-            link_path
+            {
+                std::os::windows::fs::symlink_file(target, &link_path)
+                    .map(|_| link_path)
+                    .ok()
+            }
         }
     }
 
@@ -1235,16 +1325,20 @@ mod tests {
     }
 
     #[test]
-    fn alias_display_path_leaves_temp_and_outside_paths() {
+    fn alias_display_path_renders_temp_as_sandbox_visible_tmp() {
         let td = TestDir::new();
         let sandbox = alias_output_sandbox(td.path());
 
-        // The temp root keeps its literal (sandbox-visible) spelling.
+        // The temp root renders as the sandbox-visible /tmp spelling on
+        // every platform: Linux host /tmp is already literal (identity),
+        // macOS folds /var/folders/…/T (and its /private/… canonical form)
+        // into the same tmpfs mount.
         let tmp_file = std::env::temp_dir().join("alias_display_probe.txt");
-        assert_eq!(
-            sandbox.alias_display_path(&tmp_file),
-            tmp_file.to_string_lossy()
-        );
+        let expected = match tmp_file.strip_prefix(std::env::temp_dir()) {
+            Ok(rest) => format!("{SANDBOX_TMP_ROOT}/{}", rest.display()),
+            Err(_) => tmp_file.to_string_lossy().to_string(),
+        };
+        assert_eq!(sandbox.alias_display_path(&tmp_file), expected);
         // Paths outside every root are echoed unchanged.
         assert_eq!(
             sandbox.alias_display_path(Path::new("/etc/hosts")),
@@ -1279,11 +1373,29 @@ mod tests {
             "head /workspace/src/a.rs mid /workspace/src/b.rs tail"
         );
 
-        // Sibling names sharing the prefix stay untouched.
+        // Sibling names sharing the prefix must NOT be rewritten to the
+        // project alias (boundary safety). They are children of the temp
+        // dir, so their sandbox-visible spelling is /tmp/… on every
+        // platform (see alias_display_path). Match both temp spellings —
+        // macOS canonicalizes the temp dir under /private/var/….
+        let tmp = std::env::temp_dir();
+        let tmp_canonical = fs::canonicalize(&tmp).unwrap_or_else(|_| tmp.clone());
         for sibling in [format!("{root_str}-backup/x.rs"), format!("{root_str}foo")] {
+            let sibling_path = Path::new(&sibling);
+            let expected = match sibling_path
+                .strip_prefix(&tmp)
+                .or_else(|_| sibling_path.strip_prefix(&tmp_canonical))
+            {
+                Ok(rest) => format!("{SANDBOX_TMP_ROOT}/{}", rest.display()),
+                Err(_) => sibling.clone(),
+            };
+            assert!(
+                !expected.starts_with(SANDBOX_BIND_ALIAS),
+                "project alias must not swallow {sibling}"
+            );
             assert_eq!(
                 sandbox.alias_display_text(&sibling),
-                sibling,
+                expected,
                 "boundary safety"
             );
         }
@@ -1361,7 +1473,13 @@ mod tests {
     async fn test_symlink_inside_allowed_root() {
         let td = TestDir::new();
         let target = td.create_file("real.txt", "real content");
-        let link = td.create_symlink("link.txt", &target);
+        let Some(link) = td.create_symlink("link.txt", &target) else {
+            eprintln!(
+                "skipping: symlink creation requires privilege (Windows without \
+                 Developer Mode/admin)"
+            );
+            return;
+        };
 
         let sandbox = PathSandbox::with_config(SandboxConfig {
             allowed_roots: vec![td.path().to_path_buf()],
@@ -1389,7 +1507,14 @@ mod tests {
         fs::write(&outside_file, "secret data").expect("Failed to write outside file");
 
         // Create a symlink inside the sandbox pointing outside
-        let link = td.create_symlink("escape.txt", &outside_file);
+        let Some(link) = td.create_symlink("escape.txt", &outside_file) else {
+            eprintln!(
+                "skipping: symlink creation requires privilege (Windows without \
+                 Developer Mode/admin)"
+            );
+            let _ = fs::remove_dir_all(&outside_dir);
+            return;
+        };
 
         let sandbox = PathSandbox::with_config(SandboxConfig {
             allowed_roots: vec![td.path().to_path_buf()],
@@ -1403,6 +1528,9 @@ mod tests {
         let _ = fs::remove_dir_all(&outside_dir);
     }
 
+    // unix-only: the simulated attack links /etc/passwd, which does not
+    // exist (and means nothing) on Windows.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_symlink_to_system_file_blocked() {
         let td = TestDir::new();
@@ -1410,7 +1538,6 @@ mod tests {
         // Try to create a symlink to /etc/passwd (a common attack vector)
         // Note: This test doesn't create the actual symlink (would need privileges)
         // but verifies that even if such a symlink existed, it would be blocked
-        #[cfg(unix)]
         {
             let etc_passwd = PathBuf::from("/etc/passwd");
             if etc_passwd.exists() {
@@ -1448,7 +1575,14 @@ mod tests {
         fs::write(&outside_file, "secret data").expect("Failed to write outside file");
 
         // Create first symlink (outside)
-        let _link2 = td.create_symlink("link2", &outside_file);
+        let Some(_link2) = td.create_symlink("link2", &outside_file) else {
+            eprintln!(
+                "skipping: symlink creation requires privilege (Windows without \
+                 Developer Mode/admin)"
+            );
+            let _ = fs::remove_dir_all(&outside_dir);
+            return;
+        };
 
         #[cfg(unix)]
         {
@@ -1590,6 +1724,115 @@ mod tests {
         }
     }
 
+    /// The home-boundary roots must cover the macOS (`/Users/`) and root
+    /// (`/root/`) home layouts, not just `/home/` and `C:\Users\` — a path
+    /// under another user's area there used to slip the check entirely.
+    #[test]
+    fn home_boundary_recognizes_users_and_root_roots() {
+        let mut sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![],
+            denied_patterns: vec![],
+            strict_mode: false,
+        });
+
+        // macOS layout: own area allowed, other users and root denied.
+        sandbox.home_dir = Some(PathBuf::from("/Users/alice"));
+        assert!(
+            sandbox
+                .check_home_boundary(Path::new("/Users/alice/work/file.txt"))
+                .is_ok()
+        );
+        assert!(
+            sandbox
+                .check_home_boundary(Path::new("/Users/bob/work/file.txt"))
+                .is_err(),
+            "another macOS user's home must be denied"
+        );
+        assert!(
+            sandbox
+                .check_home_boundary(Path::new("/root/.bashrc"))
+                .is_err(),
+            "root's home must be denied for a /Users home"
+        );
+
+        // Root layout: /root allowed, everything else denied.
+        sandbox.home_dir = Some(PathBuf::from("/root"));
+        assert!(sandbox.check_home_boundary(Path::new("/root/x")).is_ok());
+        assert!(
+            sandbox
+                .check_home_boundary(Path::new("/Users/alice/x"))
+                .is_err()
+        );
+        assert!(
+            sandbox
+                .check_home_boundary(Path::new("/home/alice/x"))
+                .is_err()
+        );
+
+        // Paths outside any home root are untouched by this check.
+        assert!(sandbox.check_home_boundary(Path::new("/tmp/x")).is_ok());
+        assert!(sandbox.check_home_boundary(Path::new("/etc/x")).is_ok());
+    }
+
+    // --- Raw traversal normalization (both separators) ---
+
+    /// `\..\..\` must hit the descriptive traversal check exactly like
+    /// `/../..`: on Windows the backslash is a separator, and the old
+    /// '/'-only split counted the whole string as one normal component.
+    #[test]
+    fn raw_traversal_rejects_backslash_form() {
+        let sandbox = PathSandbox::new();
+        let err = sandbox
+            .check_raw_traversal("C:\\..\\..\\Windows\\System32")
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("contains '..' that escapes the root directory"),
+            "unexpected error: {err}"
+        );
+        assert!(matches!(
+            sandbox.check_raw_traversal("foo\\..\\..\\secret"),
+            Err(SandboxError::PathTraversal(_))
+        ));
+    }
+
+    #[test]
+    fn raw_traversal_allows_inside_root_with_backslashes() {
+        let sandbox = PathSandbox::new();
+        // Forward-only backslash traversal stays inside the root.
+        assert!(sandbox.check_raw_traversal("subdir\\..\\file.txt").is_ok());
+        assert!(sandbox.check_raw_traversal("a\\b\\c.txt").is_ok());
+    }
+
+    /// Forward-slash behavior and messages are unchanged by the
+    /// normalization.
+    #[test]
+    fn raw_traversal_forward_forms_unchanged() {
+        let sandbox = PathSandbox::new();
+        assert!(matches!(
+            sandbox.check_raw_traversal("../../etc/passwd"),
+            Err(SandboxError::PathTraversal(_))
+        ));
+        assert!(matches!(
+            sandbox.check_raw_traversal("a/../../c.txt"),
+            Err(SandboxError::PathTraversal(_))
+        ));
+        // Net-zero traversal stays inside the root.
+        assert!(sandbox.check_raw_traversal("a/b/../../c.txt").is_ok());
+        assert!(sandbox.check_raw_traversal("a/b/../c.txt").is_ok());
+        assert!(sandbox.check_raw_traversal("plain/path.txt").is_ok());
+        // The error keeps the original (un-normalized) spelling.
+        match sandbox.check_raw_traversal("../escape") {
+            Err(SandboxError::PathTraversal(msg)) => {
+                assert!(
+                    msg.contains("'../escape'"),
+                    "message lost the original path: {msg}"
+                );
+            }
+            other => panic!("expected PathTraversal, got {other:?}"),
+        }
+    }
+
     // --- Sync validation tests ---
 
     #[test]
@@ -1601,6 +1844,9 @@ mod tests {
 
     #[test]
     fn test_sync_validation_allows_cwd() {
+        // The assertion reads the process cwd — hold the shared cwd lock so
+        // concurrent chdir tests (git/file modules) can't relocate it mid-run.
+        let _cwd = crate::test_support::lock_cwd();
         let sandbox = PathSandbox::new();
         let cwd = std::env::current_dir().expect("Failed to get cwd");
         let result = sandbox.validate_sync(&cwd);
@@ -1825,8 +2071,12 @@ mod tests {
             "Should allow creating new file in not-yet-existing subdir: {result:?}"
         );
         let canonical = result.unwrap();
+        // Compare against the canonical root spelling: macOS canonicalizes
+        // /var/… to /private/var/…, so the raw configured root never
+        // prefixes the canonical result there (roadmap F11).
+        let canonical_root = fs::canonicalize(td.path()).expect("canonicalize root");
         assert!(
-            canonical.starts_with(td.path()),
+            canonical.starts_with(&canonical_root),
             "Canonical path must stay inside the allowed root: {canonical:?}"
         );
         assert!(canonical.ends_with("ws/docs/API.md"));

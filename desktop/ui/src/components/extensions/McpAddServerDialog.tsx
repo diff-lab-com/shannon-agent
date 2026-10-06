@@ -72,7 +72,7 @@ export default function McpAddServerDialog({
       size="2xl"
       title={t("extensions.mcp.addDialog.title")}
       closeLabel={t("extensions.installDialog.closeAria")}
-      className="max-w-3xl max-h-[90vh] overflow-y-auto"
+      className="max-w-narrow max-h-[90vh] overflow-y-auto"
     >
       <ModalBody className="flex flex-col gap-md">
 

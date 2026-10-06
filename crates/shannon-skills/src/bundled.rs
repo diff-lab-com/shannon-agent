@@ -28,6 +28,10 @@ pub fn init_bundled_skills(registry: &BundledSkills) -> SkillResult<()> {
     registry.register(create_docx_report_skill()?)?;
     registry.register(create_xlsx_table_skill()?)?;
     registry.register(create_ppt_outline_skill()?)?;
+    // Office Wave 2 (B4'): transcript → minutes skill.
+    registry.register(create_meeting_minutes_skill()?)?;
+    // Office Wave 3 (C5): brand style notes extracted from existing files.
+    registry.register(create_style_extract_skill()?)?;
 
     Ok(())
 }
@@ -74,6 +78,22 @@ fn create_ppt_outline_skill() -> SkillResult<Skill> {
     bundled_skill_from_markdown(
         include_str!("../../../skills/ppt-outline/SKILL.md"),
         "ppt-outline",
+    )
+}
+
+/// Create the meeting-minutes skill (source: skills/meeting-minutes/SKILL.md)
+fn create_meeting_minutes_skill() -> SkillResult<Skill> {
+    bundled_skill_from_markdown(
+        include_str!("../../../skills/meeting-minutes/SKILL.md"),
+        "meeting-minutes",
+    )
+}
+
+/// Create the style-extract skill (source: skills/style-extract/SKILL.md)
+fn create_style_extract_skill() -> SkillResult<Skill> {
+    bundled_skill_from_markdown(
+        include_str!("../../../skills/style-extract/SKILL.md"),
+        "style-extract",
     )
 }
 
@@ -721,8 +741,8 @@ mod tests {
         let registry = BundledSkills::new();
         init_bundled_skills(&registry).unwrap();
 
-        // 5 core bundled skills + 3 office skills (P2-3)
-        assert_eq!(registry.len(), 8);
+        // 5 core bundled skills + 5 office skills (P2-3 + Wave 2 B4' + Wave 3 C5)
+        assert_eq!(registry.len(), 10);
 
         let skills = registry.list();
         let ids: Vec<_> = skills.iter().map(|s| s.id.as_str()).collect();
@@ -735,6 +755,8 @@ mod tests {
         assert!(ids.contains(&"docx-report"));
         assert!(ids.contains(&"xlsx-table"));
         assert!(ids.contains(&"ppt-outline"));
+        assert!(ids.contains(&"meeting-minutes"));
+        assert!(ids.contains(&"style-extract"));
     }
 
     #[test]
@@ -785,6 +807,7 @@ mod tests {
             create_docx_report_skill().unwrap(),
             create_xlsx_table_skill().unwrap(),
             create_ppt_outline_skill().unwrap(),
+            create_style_extract_skill().unwrap(),
         ] {
             assert!(!skill.name.is_empty(), "{}: name", skill.id);
             assert!(!skill.description.is_empty(), "{}: description", skill.id);
@@ -806,6 +829,7 @@ mod tests {
             create_docx_report_skill().unwrap(),
             create_xlsx_table_skill().unwrap(),
             create_ppt_outline_skill().unwrap(),
+            create_style_extract_skill().unwrap(),
         ] {
             assert_eq!(skill.allowed_tools, allowed.to_vec(), "{}", skill.id);
         }

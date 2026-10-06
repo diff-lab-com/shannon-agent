@@ -62,11 +62,11 @@ export default function TaskCalendarView({
   return (
     <div className="space-y-lg">
       {/* Full-Width Calendar Grid */}
-      <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg shadow-sm">
+      <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg shadow-e1">
         <div className="grid grid-cols-7 text-center mb-sm">
-          {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-[11px] font-bold text-on-surface-variant uppercase py-sm">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
+          {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-label-xs font-bold text-on-surface-variant uppercase py-sm">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
         </div>
-        <div className="grid grid-cols-7 gap-1">
+        <div className="grid grid-cols-7 gap-xs">
           {Array.from({ length: startDay }, (_, i) => (
             <div key={`prev-${i}`} className="min-h-[80px] p-xs rounded-lg" />
           ))}
@@ -76,8 +76,14 @@ export default function TaskCalendarView({
             const dayFires = firesByDay.get(day) ?? []
             const isSelected = selectedDay === day
             return (
+              // B6-37 (§5 任务): the day cell is clickable but was mouse-only —
+              // give it button semantics + keyboard activation.
               <div
                 key={day}
+                role="button"
+                tabIndex={0}
+                aria-label={intl.formatMessage({ id: 'tasks.taskCalendarView.day.aria' }, { day })}
+                aria-pressed={isSelected}
                 title={dayFires.length > 0 ? intl.formatMessage({ id: 'tasks.taskCalendarView.scheduledRuns' }, { count: dayFires.length }) : undefined}
                 className={cn('min-h-[80px] p-xs rounded-lg border cursor-pointer transition-all',
                   isSelected ? 'border-primary bg-primary/5 ring-1 ring-primary/20' :
@@ -85,8 +91,14 @@ export default function TaskCalendarView({
                   'border-outline-variant/10 hover:bg-surface-container-low'
                 )}
                 onClick={() => onSelectDay(isSelected ? null : day)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onSelectDay(isSelected ? null : day)
+                  }
+                }}
               >
-                <div className={cn('text-[12px] font-bold mb-xs', isToday ? 'w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center' : 'text-on-surface-variant')}>
+                <div className={cn('text-label-sm font-bold mb-xs', isToday ? 'w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center' : 'text-on-surface-variant')}>
                   {day}
                 </div>
                 <div className="space-y-0.5">
@@ -94,7 +106,7 @@ export default function TaskCalendarView({
                     <div key={`fire-${ri}`} className="h-1 rounded-full bg-secondary" title={r.name} />
                   ))}
                   {dayFires.length > 3 && (
-                    <span className="text-[9px] text-on-surface-variant">+{dayFires.length - 3}</span>
+                    <span className="text-label-2xs text-on-surface-variant">+{dayFires.length - 3}</span>
                   )}
                 </div>
               </div>
@@ -110,20 +122,42 @@ export default function TaskCalendarView({
             {monthName(intl.locale, viewMonth)} {selectedDay} — {t('tasks.taskCalendarView.tasks')}
           </h4>
           <div className="space-y-md">
-            {filteredTasks.length === 0 ? (
-              <p className="text-body-sm text-on-surface-variant text-center py-lg">{t('tasks.taskCalendarView.noTasks')}</p>
-            ) : (
-              filteredTasks.slice(0, 5).map(task => {
+            {/* B3 P1-26: only tasks actually due on the selected day — the
+                list used to render the global first five regardless of the
+                selection, so every day showed the same cards. Tasks without
+                a due_date have no place on the calendar and are excluded. */}
+            {(() => {
+              const dayTasks = filteredTasks.filter(task => {
+                if (task.due_date == null) return false
+                const d = new Date(task.due_date * 1000)
+                return d.getDate() === selectedDay && d.getMonth() === viewMonth && d.getFullYear() === viewYear
+              })
+              if (dayTasks.length === 0) {
+                return (
+                  <p className="text-body-sm text-on-surface-variant text-center py-lg">{t('tasks.taskCalendarView.noTasksForDay')}</p>
+                )
+              }
+              return dayTasks.slice(0, 5).map(task => {
                 const badge = statusBadge(task.status)
                 return (
+                  // B6-37: clickable row → button semantics + keyboard.
                   <div
                     key={task.id}
-                    className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80 cursor-pointer"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={task.title}
+                    className="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-md shadow-e1 hover:shadow-e2 transition-all group cursor-pointer"
                     onClick={() => onSelectTask(task.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        onSelectTask(task.id)
+                      }
+                    }}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-md">
-                        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                        <div className="w-10 h-10 rounded-xl bg-primary-container flex items-center justify-center text-on-primary-container">
                           <span className="material-symbols-outlined icon-lg">task_alt</span>
                         </div>
                         <div>
@@ -131,15 +165,16 @@ export default function TaskCalendarView({
                           {task.assignee ? <span className="font-label-sm text-on-surface-variant">{task.assignee}</span> : null}
                         </div>
                       </div>
-                      <div title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={cn('flex items-center gap-xs px-sm py-1 rounded-full border', badge.bg)}>
+                      {/* B6-37: status changes announce politely. */}
+                      <div aria-live="polite" title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={cn('flex items-center gap-xs px-sm py-xs rounded-full border', badge.bg)}>
                         <span className={cn('w-2 h-2 rounded-full', badge.dot)} />
-                        <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">{intl.formatMessage({ id: badge.labelId }, badge.values)}</span>
+                        <span className="font-label-sm text-label-xs font-bold uppercase tracking-wider">{intl.formatMessage({ id: badge.labelId }, badge.values)}</span>
                       </div>
                     </div>
                   </div>
                 )
               })
-            )}
+            })()}
           </div>
         </div>
       )}
@@ -149,14 +184,14 @@ export default function TaskCalendarView({
         <EfficiencyCard percentage={efficiencyPct} variant="compact" />
         <AgentAllocation agents={agents} />
         <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg">
-          <h4 className="font-headline-md text-[16px] text-on-surface mb-md">{t('tasks.taskCalendarView.activeNow')}</h4>
+          <h4 className="font-headline-md text-body-md text-on-surface mb-md">{t('tasks.taskCalendarView.activeNow')}</h4>
           <div className="space-y-md">
             {allTasks.filter(task => task.status === 'running' || task.status === 'in_progress').slice(0, 3).map(task => (
               <div key={task.id} className="flex items-start gap-md">
                 <div className="w-1 bg-primary h-8 rounded-full" />
                 <div>
                   <p className="text-body-sm font-semibold">{task.title}</p>
-                  <p className="text-[12px] text-on-surface-variant">{task.assignee || t('tasks.taskCalendarView.unassigned')}</p>
+                  <p className="text-label-sm text-on-surface-variant">{task.assignee || t('tasks.taskCalendarView.unassigned')}</p>
                 </div>
               </div>
             ))}

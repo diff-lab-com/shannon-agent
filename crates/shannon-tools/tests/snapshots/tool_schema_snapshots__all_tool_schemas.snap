@@ -1,10 +1,10 @@
 ---
 source: crates/shannon-tools/tests/tool_schema_snapshots.rs
-assertion_line: 38
 expression: output
 ---
 ## Agent
 {
+  "additionalProperties": false,
   "properties": {
     "agent_id": {
       "description": "Agent ID or name for operations",
@@ -65,6 +65,14 @@ expression: output
       ],
       "type": "string"
     },
+    "priority": {
+      "description": "Optional priority level for the spawned agent (e.g. 'high')",
+      "type": "string"
+    },
+    "read_only": {
+      "description": "Restrict the sub-agent to read-only tools (Read/Grep/Glob/LSP lookups/WebFetch) — no file writes, no shell. Overrides any allowlist widening.",
+      "type": "boolean"
+    },
     "reason": {
       "description": "Reason for shutdown",
       "type": "string"
@@ -106,8 +114,37 @@ expression: output
   "type": "object"
 }
 
+## AnalyzeImages
+{
+  "properties": {
+    "paths": {
+      "description": "Absolute paths to the image files to analyze, in order. Results are sectioned per image under a '## <path>' heading.",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 20,
+      "minItems": 1,
+      "type": "array"
+    },
+    "prompt": {
+      "description": "What to analyze or describe about each image (applied to every image in the batch)",
+      "type": "string"
+    },
+    "question": {
+      "description": "Alias for prompt",
+      "type": "string"
+    }
+  },
+  "required": [
+    "paths",
+    "prompt"
+  ],
+  "type": "object"
+}
+
 ## Bash
 {
+  "additionalProperties": false,
   "properties": {
     "command": {
       "description": "The bash command to execute",
@@ -118,12 +155,24 @@ expression: output
       "type": "string"
     },
     "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
       "description": "Optional environment variables",
       "type": "object"
     },
-    "timeout": {
-      "description": "Optional timeout in milliseconds",
+    "stream_delay_ms": {
+      "description": "Delay in ms before streamed output begins (default: 500); faster commands skip streaming entirely",
       "type": "integer"
+    },
+    "timeout": {
+      "default": 120000,
+      "description": "Optional timeout in milliseconds (default 120000, hard cap 600000)",
+      "type": "integer"
+    },
+    "use_pty": {
+      "description": "Run in a pseudo-terminal for interactive command support (default: false)",
+      "type": "boolean"
     }
   },
   "required": [
@@ -363,18 +412,23 @@ expression: output
 
 ## Edit
 {
+  "additionalProperties": false,
   "properties": {
     "file_path": {
-      "description": "Absolute path to the file",
+      "description": "Path to the file — absolute, or relative to the working directory",
       "type": "string"
     },
     "new_string": {
-      "description": "Replacement text",
+      "description": "Replacement text (same length as needed — empty string deletes)",
       "type": "string"
     },
     "old_string": {
-      "description": "Text to replace",
+      "description": "Exact text to replace — must match the file content byte-for-byte (including whitespace/indentation) and be UNIQUE in the file unless replace_all is true; include surrounding lines for context when the snippet is short. Read the file first.",
       "type": "string"
+    },
+    "preview": {
+      "description": "Compute and return the diff without writing the file (default: false)",
+      "type": "boolean"
     },
     "replace_all": {
       "description": "Replace all occurrences (default: false)",
@@ -536,9 +590,21 @@ expression: output
 
 ## Glob
 {
+  "additionalProperties": false,
   "properties": {
+    "exclude_pattern": {
+      "description": "Optional glob patterns to exclude (e.g., [\"!target/**\"])",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "path": {
+      "description": "Optional directory to search in (defaults to the working directory)",
+      "type": "string"
+    },
     "pattern": {
-      "description": "File pattern to match (e.g., *.rs, src/**/*.py)",
+      "description": "File pattern to match, relative to the search directory (e.g., *.rs for top-level, src/**/*.py to recurse)",
       "type": "string"
     }
   },
@@ -550,6 +616,7 @@ expression: output
 
 ## Grep
 {
+  "additionalProperties": false,
   "properties": {
     "case_insensitive": {
       "description": "Perform case-insensitive search",
@@ -599,6 +666,28 @@ expression: output
   },
   "required": [
     "pattern"
+  ],
+  "type": "object"
+}
+
+## KillBackground
+{
+  "properties": {
+    "max_lines": {
+      "description": "Cap on tail lines returned per stream (default 50).",
+      "type": "integer"
+    },
+    "name": {
+      "description": "Background process name to kill.",
+      "type": "string"
+    },
+    "timeout_ms": {
+      "description": "Timeout to wait for graceful exit before forcing (ms). Default 5000.",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "name"
   ],
   "type": "object"
 }
@@ -693,6 +782,7 @@ expression: output
 
 ## MultiEdit
 {
+  "additionalProperties": false,
   "properties": {
     "edits": {
       "description": "List of edit operations to apply atomically",
@@ -759,6 +849,7 @@ expression: output
 
 ## PowerShell
 {
+  "additionalProperties": false,
   "properties": {
     "command": {
       "description": "The PowerShell command to execute",
@@ -769,6 +860,9 @@ expression: output
       "type": "string"
     },
     "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
       "description": "Optional environment variables",
       "type": "object"
     },
@@ -810,6 +904,7 @@ expression: output
 
 ## Read
 {
+  "additionalProperties": false,
   "properties": {
     "file_path": {
       "description": "Path to the file — absolute, or relative to the working directory",
@@ -822,10 +917,45 @@ expression: output
     "offset": {
       "description": "Optional line offset for reading specific ranges",
       "type": "integer"
+    },
+    "truncate_large_files": {
+      "description": "Summarize files over 2000 lines to a head/tail preview (default: true); set false to return the full content",
+      "type": "boolean"
     }
   },
   "required": [
     "file_path"
+  ],
+  "type": "object"
+}
+
+## RunBackground
+{
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "description": "Shell command passed to `bash -c <command>`.",
+      "type": "string"
+    },
+    "cwd": {
+      "description": "Optional working directory for the spawned child.",
+      "type": "string"
+    },
+    "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Optional extra environment variables.",
+      "type": "object"
+    },
+    "name": {
+      "description": "Idempotency key. Re-using a name kills the previous child first.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "command"
   ],
   "type": "object"
 }
@@ -929,51 +1059,6 @@ expression: output
   },
   "required": [
     "data"
-  ],
-  "type": "object"
-}
-
-## Task
-{
-  "properties": {
-    "description": {
-      "description": "Task description",
-      "type": "string"
-    },
-    "filter": {
-      "description": "Filter tasks by status",
-      "type": "string"
-    },
-    "operation": {
-      "description": "Operation type",
-      "enum": [
-        "Create",
-        "Update",
-        "Get",
-        "List"
-      ],
-      "type": "string"
-    },
-    "status": {
-      "description": "Task status",
-      "enum": [
-        "pending",
-        "in_progress",
-        "completed"
-      ],
-      "type": "string"
-    },
-    "subject": {
-      "description": "Task subject",
-      "type": "string"
-    },
-    "task_id": {
-      "description": "Task ID",
-      "type": "string"
-    }
-  },
-  "required": [
-    "operation"
   ],
   "type": "object"
 }
@@ -1120,6 +1205,7 @@ expression: output
 
 ## TodoWrite
 {
+  "additionalProperties": false,
   "properties": {
     "todos": {
       "description": "List of todo items",
@@ -1159,8 +1245,48 @@ expression: output
   "type": "object"
 }
 
+## WaitForLog
+{
+  "properties": {
+    "match_kind": {
+      "description": "Match mode: 'is' (substring) or 're' (regex). Default 'is'.",
+      "enum": [
+        "is",
+        "re"
+      ],
+      "type": "string"
+    },
+    "max_lines": {
+      "description": "Optional cap on lines scanned per poll (default = ring capacity).",
+      "type": "integer"
+    },
+    "name": {
+      "description": "Background process name (registered by RunBackground).",
+      "type": "string"
+    },
+    "pattern": {
+      "description": "Substring or regex to match against captured lines.",
+      "type": "string"
+    },
+    "poll_interval_ms": {
+      "description": "Poll interval in ms. Default 200.",
+      "type": "integer"
+    },
+    "timeout_ms": {
+      "description": "Hard timeout in ms. Default 30000.",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "name",
+    "pattern"
+  ],
+  "type": "object"
+}
+
 ## WebFetch
 {
+  "additionalProperties": false,
   "properties": {
     "max_length": {
       "default": 5000,
@@ -1188,6 +1314,7 @@ expression: output
 
 ## WebSearch
 {
+  "additionalProperties": false,
   "properties": {
     "include_images": {
       "description": "Include images in results",
@@ -1250,19 +1377,34 @@ expression: output
 
 ## Write
 {
+  "additionalProperties": false,
   "properties": {
     "content": {
-      "description": "Content to write",
+      "description": "Full new content for the file (overwrites the existing file entirely; prefer Edit for targeted changes)",
       "type": "string"
     },
     "file_path": {
-      "description": "Absolute path to the file",
+      "description": "Path to the file — absolute, or relative to the working directory",
       "type": "string"
     }
   },
   "required": [
     "file_path",
     "content"
+  ],
+  "type": "object"
+}
+
+## app_open
+{
+  "properties": {
+    "target": {
+      "description": "Path, folder, URL, or app name, e.g. 'notepad', 'C:/report.xlsx', 'https://example.com'",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target"
   ],
   "type": "object"
 }
@@ -1391,20 +1533,24 @@ expression: output
 ## browser_click
 {
   "properties": {
+    "ref": {
+      "description": "Element ref from browser_snapshot, e.g. \"e3\"",
+      "type": "string"
+    },
     "tab_id": {
       "type": "string"
     },
     "x": {
+      "description": "Viewport x (when no ref)",
       "type": "number"
     },
     "y": {
+      "description": "Viewport y (when no ref)",
       "type": "number"
     }
   },
   "required": [
-    "tab_id",
-    "x",
-    "y"
+    "tab_id"
   ],
   "type": "object"
 }
@@ -1436,6 +1582,46 @@ expression: output
   "type": "object"
 }
 
+## browser_evaluate
+{
+  "properties": {
+    "expression": {
+      "description": "JavaScript expression, e.g. \"document.querySelectorAll('h2').length\"",
+      "type": "string"
+    },
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id",
+    "expression"
+  ],
+  "type": "object"
+}
+
+## browser_fill
+{
+  "properties": {
+    "ref": {
+      "description": "Element ref from browser_snapshot, e.g. \"e7\"",
+      "type": "string"
+    },
+    "tab_id": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id",
+    "ref",
+    "text"
+  ],
+  "type": "object"
+}
+
 ## browser_navigate
 {
   "properties": {
@@ -1454,12 +1640,55 @@ expression: output
   "type": "object"
 }
 
+## browser_press_key
+{
+  "properties": {
+    "key": {
+      "description": "Key name, e.g. Enter/Escape/Tab/ArrowDown/F5 or a single character",
+      "type": "string"
+    },
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id",
+    "key"
+  ],
+  "type": "object"
+}
+
 ## browser_screenshot
 {
   "properties": {
     "full_page": {
       "default": false,
       "type": "boolean"
+    },
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id"
+  ],
+  "type": "object"
+}
+
+## browser_scroll
+{
+  "properties": {
+    "amount": {
+      "default": 600,
+      "type": "integer"
+    },
+    "direction": {
+      "default": "down",
+      "enum": [
+        "up",
+        "down"
+      ],
+      "type": "string"
     },
     "tab_id": {
       "type": "string"
@@ -1490,6 +1719,19 @@ expression: output
   "type": "object"
 }
 
+## browser_text
+{
+  "properties": {
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id"
+  ],
+  "type": "object"
+}
+
 ## browser_type
 {
   "properties": {
@@ -1502,6 +1744,25 @@ expression: output
   },
   "required": [
     "tab_id",
+    "text"
+  ],
+  "type": "object"
+}
+
+## clipboard_read
+{
+  "properties": {},
+  "type": "object"
+}
+
+## clipboard_write
+{
+  "properties": {
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
     "text"
   ],
   "type": "object"
@@ -1558,7 +1819,9 @@ expression: output
         "key_press",
         "wait",
         "mouse_move",
-        "left_click_drag"
+        "left_click_drag",
+        "ui_tree",
+        "ui_click"
       ],
       "type": "string"
     },
@@ -1575,9 +1838,21 @@ expression: output
       "description": "Seconds to wait (for 'wait' action, default 1.0)",
       "type": "number"
     },
+    "element": {
+      "description": "Element name substring to click (for 'ui_click'; run 'ui_tree' first to inspect names)",
+      "type": "string"
+    },
+    "index": {
+      "description": "0-based match index when several elements share the name (for 'ui_click')",
+      "type": "integer"
+    },
     "key": {
       "description": "Key or key combination, e.g. 'Return', 'ctrl+a', 'alt+F4'",
       "type": "string"
+    },
+    "monitor": {
+      "description": "0-based display index for multi-monitor setups (default: primary monitor). Applies to screenshot and coordinate actions.",
+      "type": "integer"
     },
     "scroll_amount": {
       "description": "Number of scroll ticks (default 3)",
@@ -1604,6 +1879,10 @@ expression: output
     },
     "text": {
       "description": "Text to type (for 'type' action)",
+      "type": "string"
+    },
+    "window": {
+      "description": "Window title substring to target (for 'ui_tree'/'ui_click'; default: foreground window)",
       "type": "string"
     }
   },
@@ -1965,6 +2244,26 @@ expression: output
   "type": "object"
 }
 
+## window_focus
+{
+  "properties": {
+    "title": {
+      "description": "Title or process-name substring, e.g. 'Notepad' or '报告.docx - Word'",
+      "type": "string"
+    }
+  },
+  "required": [
+    "title"
+  ],
+  "type": "object"
+}
+
+## window_list
+{
+  "properties": {},
+  "type": "object"
+}
+
 ## workspace_symbol
 {
   "properties": {
@@ -1979,6 +2278,50 @@ expression: output
   },
   "required": [
     "query"
+  ],
+  "type": "object"
+}
+
+## write_xlsx
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "Path of the .xlsx file to write — absolute, or relative to the working directory",
+      "type": "string"
+    },
+    "sheets": {
+      "description": "Worksheets to create, in order (at least one)",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Sheet name (unique, ≤31 chars, no []:*?/\\ characters)",
+            "type": "string"
+          },
+          "rows": {
+            "description": "Row-major cell values. Strings starting with '=' become formulas; numeric strings become numbers; everything else stays text.",
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "path",
+    "sheets"
   ],
   "type": "object"
 }

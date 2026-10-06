@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { WorkspaceLayout } from '@/components/workspace/layout'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import type {
   ChatMessage,
   StatusResponse,
@@ -9,8 +9,13 @@ import type {
   ProviderConnection,
   ProvidersFile,
   ProviderInput,
+  DeclaredModelInput,
+  ProviderProfileSummary,
+  DeleteProfileOutcome,
+  ProviderKeySummary,
   DesktopConfig,
   GatewayConfig,
+  GatewayPairingRequest,
   GatewayProcessState,
   SurfaceInfo,
   CliInstallStatus,
@@ -20,14 +25,18 @@ import type {
   MobilePairToken,
   ContainerInfo,
   SessionWindowInfo,
+  CompanionWindowInfo,
   RemoteHealth,
   RemoteTargetListItem,
   SshHostCandidate,
   SttConfig,
   TranscriptionResult,
   SendMessageResponse,
+  AttachmentPathCheck,
   HunkAction,
   SessionInfo,
+  SessionPlan,
+  ArchivedSessionRow,
   TurnTimeline,
   McpServerInfo,
   McpServerConfig,
@@ -40,9 +49,16 @@ import type {
   FileDiff,
   FileNode,
   TerminalInfo,
+  TerminalSettings,
   WorkingDirInfo,
   CatalogEntry,
+  PluginBundleSummary,
   DataSourceResult,
+  MobileTlsStatus,
+  ProjectRecord,
+  ProviderStatus,
+  FileIndexEntry,
+  SendCostEstimate,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -60,13 +76,17 @@ import type {
   InboxStats,
   TaskExecution,
   TaskExecutionDetail,
+  AgentRunRow,
   TriggeredRoutineDto,
   TriggerResponse,
   TaskWorktreeDto,
   AgentMessageEntry,
   UsageStats,
+  UsageGovernance,
+  TaskCostEstimate,
   SessionUsageRow,
   ContextBreakdown,
+  ExtensionStats,
   HookEventInfo,
   ProfilesList,
   ActiveProfileStatus,
@@ -75,6 +95,7 @@ import type {
   TaskEvaluation,
   EvaluationResult,
   SkillProposal,
+  SubAgentDto,
 } from '@/types'
 
 export async function readAttachment(path: string): Promise<AttachmentPayload> {
@@ -112,12 +133,82 @@ export async function sendMessage(
   })
 }
 
+/**
+ * P0-3 preflight — classify attachment paths the way `send_message` will,
+ * at attach time, so the composer can flag bad chips before the user hits
+ * send. Always resolves (one entry per path); a rejection here is treated
+ * as "no marking", never as an error toast.
+ */
+export async function checkAttachmentPaths(paths: string[]): Promise<AttachmentPathCheck[]> {
+  return invoke('check_attachment_paths', { paths })
+}
+
+/**
+ * G3b P1-6 — persist a clipboard image (base64, no data-URL prefix) to
+ * `~/.shannon/cache/pasted/<timestamp>-<rand>.<ext>` and return its absolute
+ * path, so a pasted image can ride the regular attachment pipeline. The
+ * backend validates the 10 MiB cap and magic-bytes-vs-extension match.
+ */
+export async function savePastedImage(dataBase64: string, ext: string): Promise<string> {
+  return invoke('save_pasted_image', { dataBase64, ext })
+}
+
 export async function getConversation(): Promise<ChatMessage[]> {
   return invoke('get_conversation')
 }
 
+/**
+ * A-6 fix — the id of the backend's ACTIVE session (the one
+ * `get_conversation` answers for), or null before any session exists.
+ * Read-only: unlike get_conversation this never materializes a session.
+ * The main window's cold start calls it AFTER get_conversation to bind
+ * `currentSessionId` to the conversation it just rendered.
+ */
+export async function getActiveSessionId(): Promise<string | null> {
+  return invoke<string | null>('get_active_session_id')
+}
+
 export async function cancelQuery(sessionId?: string): Promise<void> {
   await invoke('cancel_query', { sessionId: sessionId ?? null })
+}
+
+/**
+ * B1-4 (P1-3) — whether the backend still has a live query on THIS session.
+ * The stop button's settle watchdog reconciles against this when the
+ * `query:cancelled` terminal event never arrives (backend emits are
+ * fire-and-forget). Read-only: an unknown session reports idle and the
+ * backend never materializes a registry entry for it.
+ */
+export async function getSessionQuerying(sessionId: string): Promise<boolean> {
+  return invoke<boolean>('get_session_querying', { sessionId })
+}
+
+// --- Webview file drag-drop (Tauri v2) ---
+//
+// B0 P0-2: with the webview's `dragDropEnabled` (default on), HTML5
+// dragover/drop events never reach the page and `File.path` — the Tauri v1
+// injection the composer used to read — no longer exists, so the old drop
+// handler silently produced zero paths. The only live signal is the
+// webview's own onDragDropEvent, so the composer consumes it through this
+// normalized wrapper. Note the @tauri-apps/api DragDropEvent union gives
+// `over` a position only — paths ride on `enter` and `drop`.
+
+export type WebviewFileDropEvent =
+  | { type: 'enter'; paths: string[] }
+  | { type: 'over' }
+  | { type: 'drop'; paths: string[] }
+  | { type: 'leave' }
+
+export async function onWebviewFileDrop(
+  handler: (event: WebviewFileDropEvent) => void,
+): Promise<() => void> {
+  const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+    const p = event.payload
+    if (p.type === 'enter' || p.type === 'drop') handler({ type: p.type, paths: p.paths })
+    else if (p.type === 'over') handler({ type: 'over' })
+    else handler({ type: 'leave' })
+  })
+  return unlisten
 }
 
 // --- Config ---
@@ -215,6 +306,54 @@ export async function openReleasePage(url: string): Promise<void> {
   return invoke('open_release_page', { url })
 }
 
+// ── Settings R3 — About section: read-only data directory ────────────
+
+/** Absolute path of the Shannon data directory ($SHANNON_HOME or ~/.shannon). */
+export async function getShannonHome(): Promise<string> {
+  return invoke('get_shannon_home')
+}
+
+// ── Settings R3 T3 — hardware acceleration + prevent sleep ───────────
+
+/** Result of `get_power_capabilities` (serde camelCase). */
+export interface PowerCapabilities {
+  /** `std::env::consts::OS`: 'macos' | 'windows' | 'linux' | … */
+  platform: string
+  /** Whether the prevent-sleep backend is usable on this machine. */
+  keepAwakeSupported: boolean
+}
+
+/**
+ * Platform + keep-awake capability probe. The General settings' System
+ * cards use `platform` to hide the hardware-acceleration card on macOS and
+ * `keepAwakeSupported` to disable the prevent-sleep switches where no
+ * backend exists (Linux without systemd-inhibit).
+ */
+export async function getPowerCapabilities(): Promise<PowerCapabilities> {
+  return invoke('get_power_capabilities')
+}
+
+// ── Batch-3 follow-up — export diagnostics bundle ────────────────────
+
+/** Summary of a written diagnostics zip (logs + crash reports + doctor). */
+export interface ExportDiagnosticsResult {
+  path: string
+  log_files: number
+  log_bytes: number
+  doctor_ok: boolean
+  truncated: boolean
+}
+
+/**
+ * Bundle local logs, crash reports and a fresh `shannon doctor --json --deep`
+ * report into the zip at `dest` (an absolute path from the save dialog).
+ * Sessions/provider config/credentials are never included.
+ */
+export async function exportDiagnostics(dest: string): Promise<ExportDiagnosticsResult> {
+  return invoke('export_diagnostics', { dest })
+}
+
+
 export async function mobileGeneratePairToken(): Promise<MobilePairToken> {
   return invoke('mobile_generate_pair_token')
 }
@@ -227,6 +366,24 @@ export async function mobileListPairedDevices(): Promise<MobileDeviceEntry[]> {
 /** Remove a paired device by id; returns true if a device was removed. */
 export async function mobileRevokeDevice(deviceId: string): Promise<boolean> {
   return invoke('mobile_revoke_device', { deviceId })
+}
+
+/** Current `mobile.tls` state + cert fingerprint (v0.12 LAN hardening). */
+/** Current `mobile.tls` state + cert fingerprint (v0.12 LAN hardening). */
+export async function mobileTlsStatus(): Promise<MobileTlsStatus> {
+  return invoke('mobile_tls_status')
+}
+
+// --- T9 — gateway IM pairing approval (the desktop entry for review F42) ---
+
+/** Pending IM pairing requests on the running gateway (mints a pair token). */
+export async function gatewayPairingPending(): Promise<GatewayPairingRequest[]> {
+  return invoke('gateway_pairing_pending')
+}
+
+/** Approve one pending pairing by code; returns the approved request. */
+export async function gatewayPairingApprove(code: string): Promise<GatewayPairingRequest> {
+  return invoke('gateway_pairing_approve', { code })
 }
 
 export interface WebhookConfigDto {
@@ -262,7 +419,8 @@ export async function sendNotification(payload: NotificationPayload): Promise<vo
 }
 
 /** Desktop-notification preferences — master enable, quiet-hours (DND) window,
- *  and per-event-type toggles (completions vs failures). */
+ *  and per-event-type toggles (completions vs failures vs needs-attention)
+ *  plus the frontend task-chime opt-in. */
 export interface NotificationPrefs {
   master_enabled: boolean
   dnd_enabled: boolean
@@ -273,6 +431,13 @@ export interface NotificationPrefs {
   on_completed: boolean
   /** Surface OS notifications for error events (query/task failure). */
   on_failed: boolean
+  /** Surface OS notifications for attention requests (approval waits, budget
+   *  alerts). Backend defaults this to true for older payloads. */
+  on_needs_attention: boolean
+  /** Play the frontend-composited task chime (Web Audio) on completed /
+   *  failed / needs-attention events. Independent of the OS notification
+   *  sound. Defaults to false. */
+  sound_enabled: boolean
 }
 
 export async function getNotificationPrefs(): Promise<NotificationPrefs> {
@@ -296,9 +461,27 @@ export type TestConnectionResult =
   | { kind: 'success' }
   | { kind: 'invalid_key' }
   | { kind: 'rate_limited' }
+  // R2-P1-10: HTTP 402 — account out of credits / over plan quota.
+  | { kind: 'quota_exhausted' }
   | { kind: 'provider_error'; status: number }
   | { kind: 'network_unreachable' }
   | { kind: 'unknown'; message: string }
+
+/// Outcome of the settings "send test webhook" button (P1-7). `status` is the
+/// HTTP status the receiver answered with (null on transport failure / URL
+/// block); `detail` is a human-readable summary line for the failure toast.
+export interface WebhookTestResult {
+  success: boolean
+  status: number | null
+  detail: string
+}
+
+/// Fire one test payload at the currently configured webhook URL (P1-7).
+/// Uses the saved preset template/secret/timeout and a single synchronous
+/// POST (no retries) so the UI can show an immediate verdict.
+export async function testWebhook(title: string, body: string): Promise<WebhookTestResult> {
+  return invoke('test_webhook', { title, body })
+}
 
 export async function testProviderConnection(
   provider: string,
@@ -306,6 +489,79 @@ export async function testProviderConnection(
   baseUrl?: string,
 ): Promise<TestConnectionResult> {
   return invoke('test_provider_connection', { provider, apiKey, baseUrl })
+}
+
+/// Test raw (unsaved) credentials from inside the Add/Edit Provider modal
+/// (review §2-12): `apiKey: null` + a `providerId` tests the STORED key
+/// (edit mode — the modal never re-displays the secret). Mirrors
+/// `test_provider_connection` internals; never persists anything.
+export async function testProviderCredentials(
+  kind: string,
+  baseUrl: string | null,
+  apiKey: string | null,
+  providerId: string | null,
+): Promise<TestConnectionResult> {
+  return invoke('test_provider_credentials', { kind, baseUrl, apiKey, providerId })
+}
+
+// --- Fetch model list (review §2-9) ---
+//
+// `fetch_provider_models` returns `Err(String)` with a stable category
+// token prefix for categorizable failures (`invalid_key`, `rate_limited`,
+// `provider_error:<status>`, `network_unreachable`, `unsupported_kind:<kind>`,
+// `missing_key`, `invalid_base_url:<detail>`); anything else is the raw
+// provider message. The parser below turns that into the discriminated
+// union the modal renders inline (utils.ts categorization style).
+
+export type FetchModelsFailure =
+  | { kind: 'invalid_key' }
+  | { kind: 'rate_limited' }
+  | { kind: 'network_unreachable' }
+  | { kind: 'missing_key' }
+  | { kind: 'provider_error'; status: number }
+  | { kind: 'unsupported_kind' }
+  | { kind: 'invalid_base_url'; detail: string }
+  | { kind: 'unknown'; message: string }
+
+export function parseFetchModelsError(message: string): FetchModelsFailure {
+  const sep = message.indexOf(':')
+  const token = sep === -1 ? message : message.slice(0, sep)
+  const rest = sep === -1 ? '' : message.slice(sep + 1)
+  switch (token) {
+    case 'invalid_key':
+      return { kind: 'invalid_key' }
+    case 'rate_limited':
+      return { kind: 'rate_limited' }
+    case 'network_unreachable':
+      return { kind: 'network_unreachable' }
+    case 'missing_key':
+      return { kind: 'missing_key' }
+    case 'provider_error': {
+      const status = Number(rest)
+      return Number.isFinite(status) && status > 0
+        ? { kind: 'provider_error', status }
+        : { kind: 'provider_error', status: 0 }
+    }
+    case 'unsupported_kind':
+      return { kind: 'unsupported_kind' }
+    case 'invalid_base_url':
+      return { kind: 'invalid_base_url', detail: rest }
+    default:
+      return { kind: 'unknown', message }
+  }
+}
+
+/// Fetch the live model list from a provider endpoint. In-memory only.
+/// `providerId` (a saved connection id) lets the backend fall back to the
+/// stored credential when `apiKey` is null — the modal never round-trips
+/// the existing secret.
+export async function fetchProviderModels(
+  providerId: string | null,
+  kind: string,
+  baseUrl: string,
+  apiKey: string | null,
+): Promise<string[]> {
+  return invoke('fetch_provider_models', { providerId, kind, baseUrl, apiKey })
 }
 
 /// One row in the response from `testAllProviders`. Mirrors the Rust
@@ -342,6 +598,84 @@ export async function saveProvider(input: ProviderInput): Promise<ProvidersFile>
   return invoke('save_provider', { input })
 }
 
+/// S2-1 (模型仓固化): persist the curated model selection for one provider
+/// slot — replaces that slot's `models: Vec<ModelSpec>` in providers.toml
+/// v2 wholesale (overwrite semantics; an empty list clears the vault and
+/// the picker falls back to the unfiltered catalog). Emits
+/// `CONFIG_UPDATED { key: "provider_models" }`. `profile` names the target
+/// model profile; omit it to write the active one.
+export async function setProviderModels(
+  providerId: string,
+  models: DeclaredModelInput[],
+  profile?: string,
+): Promise<ProviderModelsOutcome> {
+  return invoke('set_provider_models', { providerId, models, profile: profile ?? null })
+}
+
+/// Echo of the committed vault from `set_provider_models`.
+export interface ProviderModelsOutcome {
+  provider_id: string
+  model_profile: string
+  models: DeclaredModelInput[]
+}
+
+// --- S3-4 (推荐降级链): one-click recommended fallback chain ---
+
+/** One hop of a recommended chain. `entry` is the literal `fallback_models`
+ *  string — bare id = stays on the provider (model swap), `provider/model` =
+ *  switches to that provider within the profile roster. Mirrors the Rust
+ *  `FallbackHop`. */
+export interface FallbackHop {
+  entry: string
+  model: string
+  provider_id: string
+  provider_label: string
+  same_provider: boolean
+  tier: 'pro' | 'standard' | 'fast' | string
+}
+
+/** A recommended chain from `recommend_fallback_chain` — candidates only;
+ *  nothing is persisted and no failover is enabled until the user applies
+ *  the chain through `setProviderFallbackModels`. */
+export interface RecommendedFallbackChain {
+  provider_id: string
+  model_profile: string
+  /** The slot's concrete current model when known (never recommended). */
+  current_model: string | null
+  hops: FallbackHop[]
+}
+
+/// Compute a recommended fallback chain for one provider slot (S3-4): same
+/// family first, tiers descending (pro → standard → fast, at most two);
+/// thin families are topped up from the same profile's other connected
+/// providers (one hop each, qualified `provider/model` entries). Read-only.
+export async function recommendFallbackChain(
+  providerId: string,
+  profile?: string,
+): Promise<RecommendedFallbackChain> {
+  return invoke('recommend_fallback_chain', { providerId, profile: profile ?? null })
+}
+
+/// Echo of the committed chain from `set_provider_fallback_models`.
+export interface ProviderFallbackOutcome {
+  provider_id: string
+  model_profile: string
+  fallback_models: string[]
+}
+
+/// Persist the user-confirmed fallback chain for one provider slot — the
+/// explicit-confirmation half of S3-4 (nothing writes `fallback_models`
+/// without this call). Sanitized (trim / drop-empty / dedupe) and capped at
+/// the engine's 3-target failover limit backend-side; an empty list clears
+/// the chain. Emits `CONFIG_UPDATED { key: "provider_fallback_models" }`.
+export async function setProviderFallbackModels(
+  providerId: string,
+  fallbackModels: string[],
+  profile?: string,
+): Promise<ProviderFallbackOutcome> {
+  return invoke('set_provider_fallback_models', { providerId, fallbackModels, profile: profile ?? null })
+}
+
 /// Delete a managed provider by id. Returns the updated (masked) file.
 export async function deleteProvider(id: string): Promise<ProvidersFile> {
   return invoke('delete_provider', { id })
@@ -353,8 +687,20 @@ export async function setActiveProvider(id: string): Promise<void> {
   await invoke('set_active_provider', { id })
 }
 
-export type { ProviderConnection, ProvidersFile, ProviderInput }
+export type {
+  ProviderConnection,
+  ProvidersFile,
+  ProviderInput,
+  ProviderStatus,
+  DeclaredModelInput,
+}
 export type { SurfaceInfo, CliInstallStatus, CliInstallResult, AppUpdateInfo }
+
+/// Reliable provider-activation signal (ADR-0005-safe replacement for the
+/// dead `config.provider` / `config.api_key` gating).
+export async function getProviderStatus(): Promise<ProviderStatus> {
+  return invoke('get_provider_status')
+}
 
 // --- Models & Status ---
 
@@ -380,6 +726,245 @@ export async function getProviderAllowlist(): Promise<string[] | null> {
 
 export async function getStatus(): Promise<StatusResponse> {
   return invoke('get_status')
+}
+
+// --- R2-1: session-level model override (composer chip) ---
+
+/** A per-session model override (R2-1). `provider` is the desktop
+ *  provider-kind slug (`anthropic` | `openai` | … | `openai-compatible`),
+ *  `model` the canonical catalog id. `null` results mean "session inherits
+ *  the global default". */
+export interface SessionModelOverride {
+  provider: string
+  model: string
+}
+
+/** Pin the CURRENT session's model: subsequent queries of this session use
+ *  `provider` + `model`; other sessions and new chats keep the global
+ *  default. The chip's "Set as default" action goes through `configure`
+ *  instead (global semantics). */
+export async function setSessionModel(
+  sessionId: string | null | undefined,
+  provider: string,
+  model: string,
+): Promise<void> {
+  await invoke('set_session_model', { sessionId: sessionId ?? null, provider, model })
+}
+
+/** Clear the session override — the session inherits the global default
+ *  again (including future default changes). Idempotent. */
+export async function clearSessionModel(sessionId: string | null | undefined): Promise<void> {
+  await invoke('clear_session_model', { sessionId: sessionId ?? null })
+}
+
+/** Read the session's model override, `null` when none is set. */
+export async function getSessionModel(
+  sessionId: string | null | undefined,
+): Promise<SessionModelOverride | null> {
+  return invoke<SessionModelOverride | null>('get_session_model', { sessionId: sessionId ?? null })
+}
+
+/** S3-2 (P-N10): how many sessions currently carry a model override — the
+ *  durable sidecar's count, backing the Settings profile-switch confirm
+ *  ("N sessions still use override models"). */
+export async function countSessionModelOverrides(): Promise<number> {
+  return invoke<number>('count_session_model_overrides')
+}
+
+// --- S3-6 (review 2026-10-05 §3-D): pre-send cost estimate ---
+
+/** Projected cost of the NEXT send, counted and priced by the backend with
+ *  the SAME estimator/pricer the engine and usage ledger run (同源) — the
+ *  frontend only renders. `costLow` = input-only floor, `costHigh` = input
+ *  at the `maxOutputTokens` ceiling. DISPLAY-ONLY by contract: never gates
+ *  a send; a failed call just hides the estimate row. */
+export async function estimateSendCost(
+  sessionId: string | null | undefined,
+  draftText: string,
+  filePaths: string[],
+): Promise<SendCostEstimate> {
+  return invoke<SendCostEstimate>('estimate_send_cost', {
+    sessionId: sessionId ?? null,
+    draftText,
+    filePaths,
+  })
+}
+
+// --- S2-4a (review 2026-10-05 P-N9): pre-send vision pre-check ---
+
+/** One-click switch candidate: the first vision-capable model of the
+ *  effective provider's merged roster (static catalog order, then the
+ *  models.dev overlay), excluding the model that would otherwise serve
+ *  the send. `provider` is ready for `setSessionModel`. */
+export interface VisionSwitchSuggestion {
+  provider: string
+  model: string
+  name: string
+}
+
+/** Result of the desktop pre-send vision check. `vision === false` is the
+ *  ONLY "ask" verdict: the effective model (session override > phase tier
+ *  > global default) is KNOWN to lack image input. `null` = unknown —
+ *  sends flow untouched and the engine-side gate stays the final backstop
+ *  (same three-state rule as the engine). */
+export interface VisionSendCheck {
+  model: string
+  provider: string
+  vision: boolean | null
+  suggestion?: VisionSwitchSuggestion | null
+}
+
+/** Resolve what the NEXT send of this session would use and whether that
+ *  model can take image attachments. Read-only; the UI calls it before
+ *  sending a message that carries image attachments. */
+export async function checkVisionSend(
+  sessionId: string | null | undefined,
+): Promise<VisionSendCheck> {
+  return invoke<VisionSendCheck>('check_vision_send', { sessionId: sessionId ?? null })
+}
+
+// --- S2-4b (review 2026-10-05 P-N9): pre-send tool-capability pre-check ---
+
+/** One-click switch candidate: the first tool-capable model of the
+ *  effective provider's merged roster (static catalog order, then the
+ *  models.dev overlay), excluding the model that would otherwise serve
+ *  the send. `provider` is ready for `setSessionModel`. Same shape as
+ *  `VisionSwitchSuggestion`. */
+export interface ToolsSwitchSuggestion {
+  provider: string
+  model: string
+  name: string
+}
+
+/** Result of the desktop pre-send tools check. `applies === false` means
+ *  the session's send carries no tools at all — the gate is moot and the
+ *  UI must not prompt (desktop sends attach the shared tool registry
+ *  unconditionally, so today this only happens with an empty registry).
+ *  `tools === false` is the ONLY "ask" verdict: the effective model
+ *  (session override > phase tier > global default) is KNOWN to lack tool
+ *  calling. `null` = unknown — sends flow untouched (能力未知不拦; the
+ *  engine has no tools gate, so a wrong guess would only degrade the run
+ *  the way it already does without this pre-check). */
+export interface ToolsSendCheck {
+  model: string
+  provider: string
+  applies: boolean
+  tools: boolean | null
+  suggestion?: ToolsSwitchSuggestion | null
+}
+
+/** Resolve what the NEXT send of this session would use and whether that
+ *  model can take a tools-carrying request. Read-only; the UI calls it
+ *  before every send (tools ride every desktop request). */
+export async function checkToolsSend(
+  sessionId: string | null | undefined,
+): Promise<ToolsSendCheck> {
+  return invoke<ToolsSendCheck>('check_tools_send', { sessionId: sessionId ?? null })
+}
+
+// --- P2-5: session-level "temporary chat" (no-memory bypass) ---
+
+/** Pin the CURRENT session's memory bypass: `disabled = true` builds this
+ *  session's subsequent queries without the memory layer (no injection of
+ *  past memories, no auto-extraction of new ones). Other sessions are
+ *  untouched; takes effect on the next send. Persisted per session
+ *  (Rust-side sidecar) so it survives a restart. */
+export async function setSessionMemoryBypass(
+  sessionId: string | null | undefined,
+  disabled: boolean,
+): Promise<void> {
+  await invoke('set_session_memory_bypass', { sessionId: sessionId ?? null, disabled })
+}
+
+/** Read the session's memory bypass flag (`false` = memory in use). */
+export async function getSessionMemoryBypass(
+  sessionId: string | null | undefined,
+): Promise<boolean> {
+  return invoke<boolean>('get_session_memory_bypass', { sessionId: sessionId ?? null })
+}
+
+// --- R2-2: Settings "Refresh model catalog" ---
+
+/** Result of `refresh_model_catalog`: how many models the dynamic
+ *  models.dev overlay now carries + its monotonic generation counter. */
+export interface ModelCatalogRefreshResult {
+  count: number
+  generation: number
+}
+
+/** Re-fetch the models.dev dynamic catalog (same path as CLI
+ *  `/model refresh`). Throws with the upstream failure reason. */
+export async function refreshModelCatalog(): Promise<ModelCatalogRefreshResult> {
+  return invoke('refresh_model_catalog')
+}
+
+// --- R3-2 (desktop slice): provider model profiles ---
+
+/** List the engine store's model profiles (`"default"` pinned first, rest
+ *  alphabetical; `active` marks the engine's `active_profile`). */
+export async function listProviderProfiles(): Promise<ProviderProfileSummary[]> {
+  return invoke('list_provider_profiles')
+}
+
+/** Create an empty named model profile (inactive — switching is explicit).
+ *  Returns the refreshed list. Throws on empty/too-long/whitespace names
+ *  (the engine's shared `validate_profile_name` contract) and duplicates. */
+export async function createProviderProfile(name: string): Promise<ProviderProfileSummary[]> {
+  return invoke('create_provider_profile', { name })
+}
+
+/** Switch the engine's active model profile and re-point the global
+ *  default. Returns the refreshed list. The UI confirms before switching
+ *  to a profile with no providers. */
+export async function setActiveProviderProfile(name: string): Promise<ProviderProfileSummary[]> {
+  return invoke('set_active_provider_profile', { name })
+}
+
+/** R5: rename a model profile. Engine errors (duplicate target, unknown
+ *  source) surface verbatim; the fresh list comes back. When the renamed
+ *  profile was active, the backend re-points the global default and
+ *  re-announces it. */
+export async function renameProviderProfile(
+  oldName: string,
+  newName: string,
+): Promise<ProviderProfileSummary[]> {
+  return invoke('rename_provider_profile', { old: oldName, new: newName })
+}
+
+/** R5: delete a model profile. `force` is the desktop's standing `true` —
+ *  the UI's ConfirmDialog is the consent (and names the fallback when the
+ *  target is active); the backend reports which profile became active. */
+export async function deleteProviderProfile(name: string, force = true): Promise<DeleteProfileOutcome> {
+  return invoke('delete_provider_profile', { name, force })
+}
+
+// --- R4-3 (desktop slice): per-provider multi-key management ---
+
+/** List a provider's stored keys in rotation order (index 0 = ACTIVE).
+ *  Hints are masked server-side; full key material never crosses the wire.
+ *  A provider with no stored key yet lists as empty. */
+export async function listProviderKeys(providerId: string): Promise<ProviderKeySummary[]> {
+  return invoke('list_provider_keys', { providerId })
+}
+
+/** Add a key to a provider's rotation list (plaintext — the same trust
+ *  level as the Add/Edit provider modal). Returns the fresh list. */
+export async function addProviderKey(providerId: string, key: string): Promise<ProviderKeySummary[]> {
+  return invoke('add_provider_key', { providerId, key })
+}
+
+/** Remove the key at `index`. Removing the ACTIVE key promotes the next
+ *  stored one; the last remaining key is refused by the backend. Returns
+ *  the fresh list. */
+export async function removeProviderKey(providerId: string, index: number): Promise<ProviderKeySummary[]> {
+  return invoke('remove_provider_key', { providerId, index })
+}
+
+/** Make the key at `index` the ACTIVE one (swap-to-slot-0 semantics); the
+ *  running client is hot-reloaded when this provider is active. Returns
+ *  the fresh list. */
+export async function activateProviderKey(providerId: string, index: number): Promise<ProviderKeySummary[]> {
+  return invoke('activate_provider_key', { providerId, index })
 }
 
 export async function getTools(): Promise<ToolInfo[]> {
@@ -507,6 +1092,12 @@ export async function listSessions(): Promise<SessionInfo[]> {
   return invoke('list_sessions')
 }
 
+/** P0 plan dock — the session working dir's most recent persisted plan
+ *  (`<workingDir>/.shannon/plans/*.md`, newest by mtime); null when none. */
+export async function getSessionPlan(workingDir: string): Promise<SessionPlan | null> {
+  return invoke('get_session_plan', { workingDir })
+}
+
 /** Turn Timeline (§4.14) — L0-derived turns/tools/token-cost view of one session. */
 export async function getTraceTimeline(sessionId: string): Promise<TurnTimeline> {
   return invoke('trace_timeline', { sessionId })
@@ -543,6 +1134,18 @@ export async function revealSessionInMain(sessionId: string): Promise<void> {
   await invoke('reveal_session_in_main', { sessionId })
 }
 
+// --- Office Wave 3 C3 companion Quick Capture window (frozen backend contract) ---
+
+/** Create (or focus) the always-on-top-capable `companion` window. */
+export async function openCompanionWindow(): Promise<CompanionWindowInfo> {
+  return invoke('open_companion_window')
+}
+
+/** Toggle the companion window's stay-on-top flag (only acts on `companion`). */
+export async function setCompanionAlwaysOnTop(enabled: boolean): Promise<void> {
+  await invoke('set_companion_always_on_top', { enabled })
+}
+
 export async function setSessionWorkingDir(id: string, path: string): Promise<void> {
   await invoke('set_session_working_dir', { id, path })
 }
@@ -553,6 +1156,33 @@ export async function createSessionWorktree(id: string, title: string): Promise<
 
 export async function deleteSession(id: string): Promise<boolean> {
   return invoke('delete_session', { id })
+}
+
+/** Session archive (卡A): write the archived curation flag — the session
+ *  leaves the active rail and every cross-session input layer. `true` when
+ *  this call flipped the flag (false = already archived). */
+export async function archiveSession(id: string): Promise<boolean> {
+  return invoke('archive_session', { id })
+}
+
+/** Session archive (卡A): clear the archived flag; the rail repopulates
+ *  from the store projection without a restart. `true` when flipped. */
+export async function unarchiveSession(id: string): Promise<boolean> {
+  return invoke('unarchive_session', { id })
+}
+
+/** Session archive (卡A): the archived lens — every archived session, most
+ *  recently active first. */
+export async function listArchivedSessions(): Promise<ArchivedSessionRow[]> {
+  return invoke('list_archived_sessions')
+}
+
+/** Session pin (Settings R3 T7): flip the curation sidecar's `pinned` flag
+ *  (the single source of truth — the auto-archive scan exempts pinned
+ *  sessions and the rail re-derives its pin sort from the list DTO). Emits
+ *  `session-pins-changed`; `true` when this call flipped the flag. */
+export async function setSessionPinned(id: string, pinned: boolean): Promise<boolean> {
+  return invoke('set_session_pinned', { id, pinned })
 }
 
 export async function renameSession(id: string, title: string): Promise<boolean> {
@@ -573,8 +1203,183 @@ export async function exportSession(id: string, format: 'markdown' | 'json'): Pr
 
 // Save a UTF-8 text payload (e.g. an exported Markdown blob) to an absolute
 // path chosen by the user via @tauri-apps/plugin-dialog's save().
-export async function saveTextFile(path: string, content: string): Promise<void> {
-  await invoke('save_text_file', { path, content })
+// B0 P0-3: `expectedMtime` opts into a stale-write conflict check — the
+// command rejects with `{ code: 'mtime_conflict' }` when the file changed
+// since it was read.
+export async function saveTextFile(path: string, content: string, expectedMtime?: string): Promise<void> {
+  await invoke('save_text_file', { path, content, expectedMtime })
+}
+
+// G5 P0-8: save text via a BACKEND-driven native save dialog. The user's
+// pick in the dialog is the explicit authorization, so destinations outside
+// the working directory (Downloads, Documents, …) work — `save_text_file`
+// is working-dir-scoped by design and would reject them. Resolves to the
+// final path written, or null when the user cancelled the dialog.
+export async function saveTextFileViaDialog(content: string, defaultName: string): Promise<string | null> {
+  return invoke<string | null>('save_text_file_via_dialog', { content, defaultName })
+}
+
+// --- 2026-09-25 open pipeline (docs/plans/2026-09-25-desktop-chat-ui-
+// open-and-artifact-design.md §4 P0-A / P0-B / P1-C / P1-D / P1-E) ---
+
+/** Open an http/https URL in the system browser (Rust validates the scheme). */
+export async function openExternal(url: string): Promise<void> {
+  await invoke('open_external', { url })
+}
+
+/** Open a local file with its OS default application (Rust scopes to $HOME/$TEMP). */
+export async function openWithDefaultApp(path: string): Promise<void> {
+  await invoke('open_with_default_app', { path })
+}
+
+/** Reveal a local file in the OS file manager. */
+export async function revealInFolder(path: string): Promise<void> {
+  await invoke('reveal_in_folder', { path })
+}
+
+/** Write a text artifact to $TEMP and open it with the default app; returns the path. */
+export async function openArtifactExternally(title: string, source: string, ext: string): Promise<string> {
+  return invoke('open_artifact_externally', { title, source, ext })
+}
+
+// --- 2026-09-29 office Wave 1 (docs/research/2026-09-29-office-scenario-
+// competitive-research.md §10 v2): host-runtime probe + file copy (save-as) ---
+
+/** Availability of host-run tools used by built-in document skills. */
+export interface HostRuntimeProbe {
+  python3: boolean
+  pythonVersion: string | null
+  pandoc: boolean
+  libreoffice: boolean
+}
+
+/** Probe the host for python3/pandoc/libreoffice (short timeouts, no side effects). */
+export async function probeHostRuntime(): Promise<HostRuntimeProbe> {
+  return invoke<HostRuntimeProbe>('probe_host_runtime')
+}
+
+/** Copy a local file to a caller-chosen destination path (save-as). */
+export async function copyFile(srcPath: string, destPath: string): Promise<void> {
+  await invoke('copy_file', { srcPath, destPath })
+}
+
+// --- 2026-09-26 round2 §5-1 A — artifact:// interactive HTML (design doc
+// docs/plans/2026-09-26-desktop-chat-ui-round2-design.md) ---
+
+/** Result of registering an interactive HTML artifact with the Rust-side
+ * registry: the id (pass to {@link unregisterInteractiveArtifact}) and the
+ * ready-to-load iframe URL (platform-shaped, computed Rust-side). */
+export interface ArtifactRegistration {
+  id: string
+  url: string
+}
+
+/**
+ * Store an interactive HTML artifact in the Rust-side registry and get back
+ * the `artifact://` (or `http://artifact.localhost/` on Windows) URL to load
+ * in a sandboxed iframe. The response carries its own strict CSP and the
+ * document runs in an opaque origin — that is what unlocks real scripts
+ * where srcdoc iframes could never have them.
+ */
+export async function registerInteractiveHtml(html: string): Promise<ArtifactRegistration> {
+  return invoke('register_interactive_artifact', { html })
+}
+
+/** Remove a previously registered artifact (unknown/expired ids are a
+ * silent no-op Rust-side). */
+export async function unregisterInteractiveArtifact(id: string): Promise<void> {
+  await invoke('unregister_interactive_artifact', { id })
+}
+
+
+export interface FrameProbe {
+  frameable: boolean
+  status: number
+  reason: string | null
+}
+
+/** Server-side X-Frame-Options / frame-ancestors probe backing the web tab. */
+export async function probeUrlFrameable(url: string): Promise<FrameProbe> {
+  return invoke('probe_url_frameable', { url })
+}
+
+/** Existence probe for chat file references (anti-hallucination backstop). */
+export async function pathExists(path: string): Promise<boolean> {
+  return invoke('path_exists', { path })
+}
+
+// --- 2026-09-30 office Wave 2 (B9' Files page): reference-style file index.
+// The Rust side owns the on-disk index; these wrappers are the whole
+// frontend contract. Registration is fire-and-forget from the UI (attach
+// flow / FileCard render) — callers swallow rejections so a failed index
+// write can never interrupt a chat.
+
+/** Every indexed file, `registered_at` descending. */
+export async function listFileIndex(): Promise<FileIndexEntry[]> {
+  return invoke('list_file_index')
+}
+
+/** Upsert one file into the index (`source`: 'attachment' | 'generated'). */
+export async function registerFileIndexEntry(path: string, source: string): Promise<void> {
+  await invoke('register_file_index_entry', { path, source })
+}
+
+/** Toggle an entry's favorite flag (persisted Rust-side). */
+export async function setFileIndexFavorite(path: string, favorite: boolean): Promise<void> {
+  await invoke('set_file_index_favorite', { path, favorite })
+}
+
+export interface TextFileContent {
+  path: string
+  content: string
+  sizeBytes: number
+}
+
+/**
+ * Machine-readable failure codes for `readTextFile` (§P2-24): the Rust
+ * command rejects with a structured `{ code, message }` payload instead of
+ * English prose the frontend had to substring-match. Branch on the code —
+ * never on the message.
+ */
+export type ReadTextFileErrorCode =
+  | 'out_of_scope'
+  | 'not_a_file'
+  | 'file_too_large'
+  | 'binary_file'
+  | 'not_utf8'
+  | 'io_error'
+
+export interface ReadTextFileError {
+  code: ReadTextFileErrorCode
+  message: string
+}
+
+const READ_TEXT_FILE_CODES: ReadonlySet<string> = new Set([
+  'out_of_scope',
+  'not_a_file',
+  'file_too_large',
+  'binary_file',
+  'not_utf8',
+  'io_error',
+])
+
+/**
+ * Normalize a `readTextFile` rejection to its code. Anything without the
+ * structured payload (mock environments, unexpected throws) degrades to
+ * `io_error` so callers keep a safe default branch.
+ */
+export function readTextFileErrorCode(e: unknown): ReadTextFileErrorCode {
+  if (e && typeof e === 'object' && 'code' in e) {
+    const code = (e as { code: unknown }).code
+    if (typeof code === 'string' && READ_TEXT_FILE_CODES.has(code)) return code as ReadTextFileErrorCode
+  }
+  return 'io_error'
+}
+
+/** Capped, scope-checked text read (disk artifacts / the dock's manual tab).
+ * Rejects with a `ReadTextFileError` payload — see `readTextFileErrorCode`. */
+export async function readTextFile(path: string, maxBytes?: number): Promise<TextFileContent> {
+  return invoke('read_text_file', { path, maxBytes: maxBytes ?? null })
 }
 
 // --- Permissions ---
@@ -598,6 +1403,17 @@ export async function respondPermission(
   })
 }
 
+// --- Ask user (Settings R3 T8) ---
+
+/**
+ * Submit the user's answer(s) to a pending `ask-user-request`. Unknown or
+ * expired ids (the auto-continue timeout raced this click, a second submit,
+ * a stale window) are an idempotent backend no-op — always `Ok`.
+ */
+export async function respondAskUser(requestId: string, answers: string[]): Promise<void> {
+  await invoke('respond_ask_user', { requestId, answers })
+}
+
 // --- Files & Diffs ---
 
 export async function getFileDiff(path: string): Promise<FileDiff> {
@@ -608,12 +1424,23 @@ export async function applyDiff(filePath: string, hunks: HunkAction[]): Promise<
   return invoke('apply_diff', { filePath, hunks })
 }
 
-export async function getFileTree(path: string): Promise<FileNode> {
+// GB P2-10b: the backend returns Vec<FileTreeNode> (root entries with
+// nested children, walk bounded at depth 12 / 5000 entries) — the old
+// single-node signature never matched the Rust command and had no callers.
+export async function getFileTree(path: string): Promise<FileNode[]> {
   return invoke('get_file_tree', { path })
 }
 
 export async function getWorkingDirInfo(): Promise<WorkingDirInfo> {
   return invoke('get_working_dir_info')
+}
+
+/** D5 方案① — code-workspace probe for the welcome card's example
+ *  filtering: the marker files (Cargo.toml / package.json / pyproject.toml /
+ *  go.mod) present in the session working directory, in fixed order. A pure
+ *  stat sweep — empty list = no code markers (office examples only). */
+export async function detectWorkspaceMarkers(): Promise<string[]> {
+  return invoke('detect_workspace_markers')
 }
 
 // --- MCP Servers ---
@@ -632,6 +1459,18 @@ export async function removeMcpServer(name: string): Promise<boolean> {
 
 export async function restartMcpServer(name: string): Promise<McpServerInfo> {
   return invoke('restart_mcp_server', { name })
+}
+
+// W2-A: inline enable/disable toggle — persists to settings.json and
+// reconciles the pool (stop on disable, start on enable).
+export async function setMcpServerEnabled(name: string, enabled: boolean): Promise<McpServerInfo> {
+  return invoke('set_mcp_server_enabled', { name, enabled })
+}
+
+// W3-B (A2): replay the OAuth loopback flow for an existing remote entry
+// (the NeedsAuth state's recovery action) and reconnect the pool.
+export async function reauthenticateMcpServer(name: string): Promise<McpServerInfo> {
+  return invoke('reauthenticate_mcp_server', { name })
 }
 
 export async function getMcpServerConfig(name: string): Promise<McpServerConfig> {
@@ -912,11 +1751,20 @@ export async function installAgentFromRepo(
   return invoke('install_agent_from_repo', { pluginName, repo, ref_ })
 }
 
+/**
+ * G1 P1-9: install a native agent as a FLAT `~/.shannon/agents/<name>.toml`
+ * `AgentDefinition` (the shape the runtime loader reads). The catalog
+ * entry's description/system_prompt map onto the definition fields; tool
+ * hints become capabilities.
+ */
 export async function installNativeAgent(
   pluginName: string,
-  body: string,
+  description: string,
+  systemPrompt: string,
+  model: string | null,
+  tools: string[],
 ): Promise<InstallResult> {
-  return invoke('install_native_agent', { pluginName, body })
+  return invoke('install_native_agent', { pluginName, description, systemPrompt, model, tools })
 }
 
 export async function listInstalledAgentPlugins(): Promise<InstalledAgent[]> {
@@ -974,6 +1822,13 @@ export interface InstalledDataSource {
   name: string
   path: string
   installed_at: string | null
+  /**
+   * F5 (A8): where this source's credentials live — `keyring` (OS keyring)
+   * or `plaintext_file` (degraded owner-only 0600 TOML), `null` when the
+   * source has no credential fields. Drives the page's credential-storage
+   * status line.
+   */
+  credential_storage?: 'keyring' | 'plaintext_file' | null
 }
 
 export async function listDataSourceCatalog(): Promise<DataSourceCatalogEntry[]> {
@@ -1099,34 +1954,70 @@ export interface PluginInfo {
   enabled: boolean
   path: string
   source_format: 'shannon-toml' | 'claude-json' | 'unknown'
+  /** Install origin for the X6 source badge, derived desktop-side:
+   *  - `migration` — thin `imported-<source>` record (`migration_imported`);
+   *  - `git` — the plugin directory carries a `.git` checkout (exactly the
+   *    condition `update` needs, so 更新 is offered only for these);
+   *  - `local` — copied in from a local directory / .dxt/.mcpb/.zip archive.
+   *  There is no `registry` origin: marketplace plugin bundles are git
+   *  clones and badge as `git`. */
+  source: 'git' | 'local' | 'migration'
+  /** Thin `imported-<source>` migration record (X5): the UI suppresses
+   *  uninstall/enable/disable on it. */
+  migration_imported: boolean
 }
 
 export async function listPlugins(): Promise<PluginInfo[]> {
   return invoke('list_plugins')
 }
 
-export async function installPlugin(sourcePath: string): Promise<string> {
+/** Result of a plugin install: the registered name plus best-effort
+ *  materialization warnings (X5). */
+export interface PluginInstallResult {
+  name: string
+  warnings: string[]
+}
+
+/** Result of a plugin lifecycle op (uninstall/enable/disable/update):
+ *  per-artifact warnings from (reverse-)materialization. Empty = clean. */
+export interface PluginLifecycleResult {
+  warnings: string[]
+}
+
+export async function installPlugin(sourcePath: string): Promise<PluginInstallResult> {
   return invoke('install_plugin', { sourcePath })
 }
 
-export async function installPluginFromGit(repoUrl: string): Promise<string> {
-  return invoke('install_plugin_from_git', { repoUrl })
+/** `allowUnverified` is the SEC-1 opt-in — pass `true` only after the user
+ *  explicitly confirmed installing a plugin whose manifest declares no
+ *  permissions. */
+export async function installPluginFromGit(
+  repoUrl: string,
+  allowUnverified?: boolean,
+): Promise<PluginInstallResult> {
+  return invoke('install_plugin_from_git', { repoUrl, allowUnverified: allowUnverified ?? false })
 }
 
-export async function uninstallPlugin(name: string): Promise<void> {
-  await invoke('uninstall_plugin', { name })
+export async function uninstallPlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('uninstall_plugin', { name })
 }
 
-export async function enablePlugin(name: string): Promise<void> {
-  await invoke('enable_plugin', { name })
+export async function enablePlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('enable_plugin', { name })
 }
 
-export async function disablePlugin(name: string): Promise<void> {
-  await invoke('disable_plugin', { name })
+export async function disablePlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('disable_plugin', { name })
 }
 
-export async function updatePlugin(name: string): Promise<void> {
-  await invoke('update_plugin', { name })
+export async function updatePlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('update_plugin', { name })
+}
+
+/** X5 trust preview: inspect a plugin source (local dir, .dxt/.mcpb/.zip
+ *  archive, or git URL) and return its bundle summary BEFORE install. */
+export async function inspectPluginSource(path: string): Promise<PluginBundleSummary> {
+  return invoke('inspect_plugin_source', { path })
 }
 
 export async function listPluginMarketplace(): Promise<CatalogEntry[]> {
@@ -1220,6 +2111,23 @@ export async function getUsageStats(days: number): Promise<UsageStats> {
   return invoke('get_usage_stats', { days })
 }
 
+// --- P2-1/P2-6 Usage governance + pre-task cost estimate ---
+//
+// Rust: shannon-desktop/src/usage_governance.rs.
+
+/** Sidebar % bar / budget-card snapshot: month spend, budget, threshold state.
+ *  Side effect on the backend: fires the once-per-month 80/100% desktop
+ *  notification when a threshold is newly reached — safe to poll. */
+export async function getUsageGovernance(): Promise<UsageGovernance> {
+  return invoke('get_usage_governance')
+}
+
+/** Historical run-cost range for a routine; `taskId = null` aggregates across
+ *  all routines (the "similar tasks" baseline for a brand-new one). */
+export async function estimateTaskCost(taskId?: string | null): Promise<TaskCostEstimate> {
+  return invoke('estimate_task_cost', { taskId: taskId ?? null })
+}
+
 // --- P0-4 Cost observability ---
 //
 // Session budget + six-category context breakdown + per-session usage
@@ -1243,6 +2151,11 @@ export async function getSessionContextBreakdown(sessionId: string): Promise<Con
 /** Per-session usage aggregation for the last `days` days (recency order). */
 export async function getUsageBySession(days: number): Promise<SessionUsageRow[]> {
   return invoke('get_usage_by_session', { days })
+}
+
+/** X7 per-extension (skill / MCP tool) invocation + token stats. */
+export async function getExtensionStats(days: number): Promise<ExtensionStats> {
+  return invoke('get_extension_stats', { days })
 }
 
 // --- Scheduled Tasks (Sprint 2) ---
@@ -1269,7 +2182,9 @@ export async function deleteScheduledTask(id: string): Promise<boolean> {
   return invoke('delete_scheduled_task', { id })
 }
 
-export async function toggleScheduledTask(id: string, enabled: boolean): Promise<ScheduledRoutine> {
+// P1-1: the backend persists the requested state and returns the persisted
+// bool (read-back fool-proofing — see toggle_scheduled_task).
+export async function toggleScheduledTask(id: string, enabled: boolean): Promise<boolean> {
   return invoke('toggle_scheduled_task', { id, enabled })
 }
 
@@ -1352,6 +2267,13 @@ export async function listGoalRuns(): Promise<GoalRunDto[]> {
   return invoke('list_goal_runs')
 }
 
+// B2 follow-up — list sub-agents currently registered in the agent-teams
+// context. Returns an empty array when the user has not enabled agent
+// teams; the Tasks-page panel renders its empty state.
+export async function listSubagents(): Promise<SubAgentDto[]> {
+  return invoke('list_subagents')
+}
+
 export async function getGoalRun(sessionId: string): Promise<GoalRunDto | null> {
   return invoke('get_goal_run', { sessionId })
 }
@@ -1426,6 +2348,14 @@ export async function discardBatchRun(
 
 export async function listTaskExecutions(taskId?: string, limit?: number): Promise<TaskExecution[]> {
   return invoke('list_task_executions', { taskId: taskId ?? null, limit: limit ?? null })
+}
+
+// P2-8 — cross-agent run table (OPC "runs" view)
+
+/** The newest `limit` runs across ALL routines/agents, each joined with its
+ *  back-linked session id and that session's latest usage-ledger model. */
+export async function listAgentRuns(limit?: number): Promise<AgentRunRow[]> {
+  return invoke('list_agent_runs', { limit: limit ?? null })
 }
 
 export async function getExecutionDetail(id: string): Promise<TaskExecutionDetail> {
@@ -1800,6 +2730,9 @@ export interface RoutineTemplate {
   trigger_type: string
   cron_expr?: string | null
   interval_secs?: number | null
+  github_event?: string | null
+  github_repo?: string | null
+  github_action?: string | null
   timezone?: string | null
 }
 
@@ -1853,6 +2786,30 @@ export type MemorySourceKind = 'manual' | 'import' | 'auto-extract'
 /** Frozen contract payload of `get_memory_source`. */
 export interface MemorySource {
   sessionId: string
+}
+
+// --- P2-5: injected-memory introspection ("which memories did this turn use") ---
+
+/** One memory entry injected into a session's current context (P2-5). */
+export interface InjectedMemory {
+  id: string
+  /** First line of the entry's content, char-capped for display. */
+  title: string
+  /** `preference | pattern | decision | error | context`. */
+  category: MemoryCategory
+  /** Session that produced the entry — the jump target; null = no jump. */
+  sourceSessionId?: string | null
+}
+
+/** The memories injected into THIS session's current context (same selection
+ *  the system prompt uses). Empty when the memory layer is off (including the
+ *  session-level "temporary chat" bypass) or nothing qualified. */
+export async function getSessionInjectedMemories(
+  sessionId: string | null | undefined,
+): Promise<InjectedMemory[]> {
+  return invoke<InjectedMemory[]>('get_session_injected_memories', {
+    sessionId: sessionId ?? '',
+  })
 }
 
 export interface MemoryGraphNode {
@@ -1916,8 +2873,14 @@ export async function updateMemory(input: {
   content?: string | null
   tags?: string[] | null
   category?: string | null
+  /** B3-24 (decision 3-A): moving an entry between projects is a real
+   *  backend move now — omit/null keeps the current project. */
+  project?: string | null
 }): Promise<MemoryEntry> {
-  return invoke('update_memory', input)
+  return invoke('update_memory', {
+    ...input,
+    project: input.project ?? null,
+  })
 }
 
 export async function deleteMemory(id: string): Promise<boolean> {
@@ -1940,6 +2903,126 @@ export async function getMemorySource(sessionId: string | null, memoryId: string
 /** P2-4 graph payload for the Memory page's graph view. */
 export async function getMemoryGraph(project?: string | null): Promise<MemoryGraph> {
   return invoke('get_memory_graph', { project: project ?? null })
+}
+
+// --- Dream Pass (梦境提炼 — review-gated memory distillation) ---
+//
+// Frozen contract with desktop/src/commands_dream.rs. The Rust DTOs do NOT
+// use serde rename_all, so every field below is snake_case on the wire.
+// Nothing here writes to ~/.shannon/memories/ directly — the only write
+// path is applyDreamProposal (user-approved actions).
+
+/** One merge/remove/add action inside a DreamProposal. */
+export interface DreamAction {
+  id: string
+  kind: 'merge' | 'remove' | 'add'
+  /** Memory ids this action targets (the merge/remove group). */
+  entry_ids: string[]
+  /** Populated for `add` actions only — the proposed new memory. */
+  add_entry: {
+    category: string
+    content: string
+    confidence: number
+    source_session_ids: string[]
+    verified: boolean
+  } | null
+  rationale: string
+}
+
+/// A review-gated distillation proposal for one project (shadow copy under
+/// ~/.shannon/dreams/ — applying is the only way it touches real memories).
+export interface DreamProposal {
+  id: string
+  project: string
+  created_at: string
+  actions: DreamAction[]
+}
+
+/// Outcome of one dream pass. `skipped_reason` is null when the pass ran;
+/// `"disabled" | "throttled" | "in-progress"` otherwise (nothing was read).
+export interface DreamPassResult {
+  skipped_reason: 'disabled' | 'throttled' | 'in-progress' | null
+  scanned_sessions: number
+  projects: string[]
+  merge_proposed: number
+  remove_proposed: number
+  add_proposed: number
+  candidates_detected: number
+  candidates_refined: number
+  proposal_ids: string[]
+  report_path: string | null
+  duration_ms: number
+}
+
+/// Result of applying the selected actions of one proposal. The proposal
+/// file is deleted either way — a partial apply discards the rest
+/// (“应用所选，其余丢弃”).
+export interface DreamApplyOutcome {
+  applied: string[]
+  skipped: string[]
+}
+
+/// Run one dream pass (Memory panel button / `/dream`). `daysBack` defaults
+/// to the backend's 3-day manual window when null.
+export async function runDreamPass(daysBack?: number | null): Promise<DreamPassResult> {
+  return invoke('run_dream_pass', { daysBack: daysBack ?? null })
+}
+
+/// Every pending proposal across projects, newest first.
+export async function listDreamProposals(): Promise<DreamProposal[]> {
+  return invoke('list_dream_proposals')
+}
+
+/// One pass report's markdown; `ts = null` reads the newest.
+export async function readDreamReport(ts?: string | null): Promise<string> {
+  return invoke('read_dream_report', { ts: ts ?? null })
+}
+
+/// Apply the selected actions of a proposal to the memory store, then
+/// delete the proposal (remaining actions are discarded with it).
+export async function applyDreamProposal(proposalId: string, actionIds: string[]): Promise<DreamApplyOutcome> {
+  return invoke('apply_dream_proposal', { proposalId, actionIds })
+}
+
+/// Discard a proposal without touching the memory store.
+export async function discardDreamProposal(proposalId: string): Promise<void> {
+  return invoke('discard_dream_proposal', { proposalId })
+}
+
+/// Full counters of one completed pass, as persisted in the shared
+/// detection-state file (`DreamState.last_stats`). `Partial` on the wire —
+/// the file is shared and a writer may have recorded only the timestamp.
+export interface DreamPassStats {
+  scanned_sessions: number
+  entries_reviewed: number
+  merge_proposed: number
+  remove_proposed: number
+  add_proposed: number
+  candidates_detected: number
+  candidates_refined: number
+  redactions_applied: number
+  duration_ms: number
+  projects: string[]
+  token_estimate: number
+}
+
+/// Persisted dream state (read_dream_state): the last pass's timestamp and
+/// stats, for cold-start display. Both fields null when no pass ever ran.
+export interface DreamState {
+  last_dream_at: string | null
+  last_stats: Partial<DreamPassStats> | null
+}
+
+/// Read the persisted dream state — the cold-start 「上次提炼」 line's data.
+export async function readDreamState(): Promise<DreamState> {
+  return invoke('read_dream_state')
+}
+
+/// `/detect-skills` backend — heuristic pattern detection only (zero LLM),
+/// bypasses dream throttles by design. Returns the number of newly appended
+/// candidates (dedup by the backend's sig-hash id).
+export async function detectSkillsSlash(): Promise<number> {
+  return invoke('detect_slash')
 }
 
 // --- Skill Loop (E2) ---
@@ -2078,8 +3161,18 @@ export async function transcribeAudioLocalBase64(
 
 // --- Remote targets (SSH hosts / Docker containers) ---
 
-/** List saved remote targets from ~/.shannon/remotes.toml. */
-export async function remoteListTargets(): Promise<RemoteTargetListItem[]> {
+/**
+ * Response of `remote_list_targets`: the saved targets plus the persisted
+ * default (P1-16 — the UI reads it back instead of treating reloads as a
+ * no-op).
+ */
+export interface RemoteTargetsList {
+  targets: RemoteTargetListItem[]
+  defaultTarget: string | null
+}
+
+/** List saved remote targets (and the default) from ~/.shannon/remotes.toml. */
+export async function remoteListTargets(): Promise<RemoteTargetsList> {
   return invoke('remote_list_targets')
 }
 
@@ -2202,19 +3295,136 @@ export async function terminalList(): Promise<TerminalInfo[]> {
   return invoke('terminal_list')
 }
 
-// Draggable panel workspace (P1-5 C-2 — frozen contract). Layout geometry
-// types live with the model in components/workspace/layout.ts; the backend
-// stores per-project layouts in ~/.shannon/desktop/workspace-layouts.json.
-
 /**
- * The saved layout for `projectKey`, or `null` when none is stored **or the
- * stored version is unsupported** (both reset the UI to the default preset).
+ * P3-1: persisted terminal preferences (`[terminal]` in
+ * `~/.shannon/config.toml`). The backend clamps numerics (fontSize 8–32,
+ * scrollback 0–100000, drawerHeight 120–1200) and blanks the shell —
+ * callers must render the values returned here, not what they sent.
  */
-export async function workspaceGetLayout(projectKey: string): Promise<WorkspaceLayout | null> {
-  return invoke('workspace_get_layout', { projectKey })
+export async function terminalGetSettings(): Promise<TerminalSettings> {
+  return invoke('terminal_get_settings')
 }
 
-/** Persist the layout for `projectKey` (validated backend-side). */
-export async function workspaceSetLayout(projectKey: string, layout: WorkspaceLayout): Promise<void> {
-  await invoke('workspace_set_layout', { projectKey, layout })
+/** Persist preferences; returns the sanitized (effective) values. */
+export async function terminalSetSettings(settings: TerminalSettings): Promise<TerminalSettings> {
+  return invoke('terminal_set_settings', { settings })
+}
+
+/**
+ * Replay bytes for one session, base64 (US6). Empty string when the id is
+ * unknown or the session already ended — the frontend calls it
+ * speculatively on reconnect, so a missing ring must not be an error.
+ * `endSeq` (additive, review fix) is the highest output-chunk seq fully
+ * contained in `data`: the replay consumer drops queued `terminal:output`
+ * events with `seq <= endSeq` and flushes the rest, so the snapshot and
+ * the live stream stitch without loss or duplication. Absent on the demo
+ * backend → flush-everything fallback.
+ *
+ * `truncated` (additive) is true when the backend's 1 MiB replay ring
+ * evicted older bytes: `data` is only the newest tail, and the replay
+ * consumer prepends an in-stream dim notice so the gap is visible.
+ * Absent on legacy/demo payloads → treated as false (nothing known lost).
+ */
+export async function terminalHistory(terminalId: string): Promise<{ data: string; endSeq?: number; truncated?: boolean }> {
+  return invoke('terminal_history', { terminalId })
+}
+
+// --- P-E3 project registry (projects.db, adopt-not-migrate) ---
+
+/** Every registered project, path-ascending. Archived rows are included
+ *  only with `includeArchived`. The registry is back-filled from session
+ *  working dirs (and, on first seed, memory project labels) before the
+ *  read, so a fresh install already knows its projects. */
+export async function listProjects(includeArchived?: boolean): Promise<ProjectRecord[]> {
+  return invoke('list_projects', { includeArchived: includeArchived ?? false })
+}
+
+/** Register a project path. Idempotent: an already-registered path (any
+ *  name, archived or not) is returned unchanged — registration never
+ *  overwrites an existing row. */
+export async function registerProject(path: string): Promise<ProjectRecord> {
+  return invoke('register_project', { path })
+}
+
+/** Set a project's custom display name (`null` clears it, falling back to
+ *  the path's tail segment in the UI). */
+export async function renameProject(path: string, name: string | null): Promise<ProjectRecord> {
+  return invoke('rename_project', { path, name })
+}
+
+/** Set a project's custom icon and color (`null` clears a field). */
+export async function setProjectAppearance(
+  path: string,
+  icon: string | null,
+  color: string | null,
+): Promise<ProjectRecord> {
+  return invoke('set_project_appearance', { path, icon, color })
+}
+
+/** Archive a project (stamps archivedAtMs; hidden from the default list). */
+export async function archiveProject(path: string): Promise<ProjectRecord> {
+  return invoke('archive_project', { path })
+}
+
+/** Unarchive a project (clears archivedAtMs). */
+export async function unarchiveProject(path: string): Promise<ProjectRecord> {
+  return invoke('unarchive_project', { path })
+}
+
+// --- S3-3 (utility tier slots): compaction + session-summary auxiliary
+// slots (providers.toml v2 `auxiliary`). Strictly a background-task channel:
+// the interactive precedence chain (session override > phase tier > global
+// default) never reads these, and the write path never moves `active_target`.
+
+/** One slot row of `get_utility_slots`. `provider`/`model` null = the slot
+ *  follows the global default; `resolves` false = configured but the named
+ *  provider slot no longer exists in the active profile (falls back with a
+ *  backend warn). */
+export interface UtilitySlotStatus {
+  role: 'compression' | 'title_generation' | string
+  provider: string | null
+  model: string | null
+  resolves: boolean
+}
+
+/** One roster row offered as a slot target: a provider slot of the active
+ *  profile plus its candidate models (curated vault first, then tier
+ *  resolutions, then the slot's active-target model). */
+export interface UtilityRosterEntry {
+  provider_id: string
+  display_name: string
+  models: string[]
+}
+
+/** Read shape of `get_utility_slots`: both slot rows + the candidate roster
+ *  in one snapshot. */
+export interface UtilitySlotsView {
+  slots: UtilitySlotStatus[]
+  roster: UtilityRosterEntry[]
+  profile: string
+}
+
+/** Read the two utility slots + the candidate roster (Settings → Models). */
+export async function getUtilitySlots(): Promise<UtilitySlotsView> {
+  return invoke('get_utility_slots')
+}
+
+/** Echo of a committed slot write from `set_utility_slot`. */
+export interface UtilitySlotOutcome {
+  role: string
+  /** Null = the slot was cleared (follows the global default again). */
+  provider: string | null
+  model: string | null
+}
+
+/** Write (or clear) one utility slot. `provider` + `model` both null clear
+ *  the slot; both set assign it. The provider must exist in the active
+ *  profile's roster (write-time validation). Emits
+ *  `CONFIG_UPDATED { key: "utility_slots" }`. */
+export async function setUtilitySlot(
+  role: string,
+  provider: string | null,
+  model: string | null,
+): Promise<UtilitySlotOutcome> {
+  return invoke('set_utility_slot', { role, provider, model })
 }

@@ -139,8 +139,10 @@ pub fn known_config_keys() -> Vec<ConfigKey> {
 
 /// Format config list output
 pub fn format_config_list() -> String {
+    use rust_i18n::t;
+
     let keys = known_config_keys();
-    let mut output = String::from("Configuration Settings:\n\n");
+    let mut output = t!("commands.config.settings_title").to_string();
 
     for key in &keys {
         output.push_str(&format!(
@@ -149,11 +151,7 @@ pub fn format_config_list() -> String {
         ));
     }
 
-    output.push_str("\nUsage:\n");
-    output.push_str("  /config list          - Show all settings\n");
-    output.push_str("  /config get <key>     - Get a specific value\n");
-    output.push_str("  /config set <key> <value> - Set a value\n");
-    output.push_str("  /config reset <key>   - Reset to default\n");
+    output.push_str(t!("commands.config.usage").as_ref());
 
     output
 }

@@ -62,6 +62,15 @@ pub struct CreateTaskPayload {
     /// Initial dependency list. Defaults to empty when omitted.
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
+    /// Project directory the routine belongs to (P-E1). Persisted as the
+    /// task's `working_dir` sidecar; `None` = no project. Normalized like
+    /// the project registry key (trimmed, trailing separators stripped).
+    #[serde(default)]
+    pub working_dir: Option<String>,
+    /// Route run completions through the configured webhook sink (B6').
+    /// Defaults to false when omitted.
+    #[serde(default)]
+    pub notify_webhook: Option<bool>,
 }
 
 /// Payload for `update_scheduled_task`. All fields optional except `id`.
@@ -92,6 +101,15 @@ pub struct UpdateTaskPayload {
     /// the full new list (add or remove); an empty vec clears all deps.
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
+    /// Project directory change (P-E1). Supplied non-empty value replaces
+    /// the routine's working_dir; supplied empty string clears it; omitted
+    /// leaves it unchanged. Normalized like the project registry key.
+    #[serde(default)]
+    pub working_dir: Option<String>,
+    /// Completion-webhook routing change (B6'). Supplied value replaces the
+    /// flag; omitted leaves it unchanged.
+    #[serde(default)]
+    pub notify_webhook: Option<bool>,
 }
 
 /// Result of `preview_cron`.
@@ -150,7 +168,9 @@ pub struct TriageStats {
 }
 
 /// Lightweight execution record for the history list.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Derives `PartialEq` so the T7 JSONL↔SQLite projection-consistency test
+/// can assert field-for-field equality of the two read paths.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskExecution {
     pub run_id: String,
     pub task_id: String,
@@ -201,6 +221,23 @@ pub struct TriggerResponse {
     pub run_id: String,
     pub task_id: String,
     pub task_name: String,
+}
+
+/// One scheduled routine as `list_scheduled_tasks` returns it.
+///
+/// A desktop-side wire type, not a core change: [`ScheduledRoutine`] keeps
+/// its exact serialized shape (pub struct — adding a field would be
+/// semver-major), and this DTO flattens it so the JSON the UI sees is the
+/// old fields **plus** `working_dir` (the task's `working_dir` sidecar,
+/// `null` when unset). Backward-compatible for any consumer of the old
+/// plain-routine shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutineDto {
+    #[serde(flatten)]
+    pub routine: ScheduledRoutine,
+    /// Project directory the routine belongs to (P-E1); `None` when unset.
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 // ─── AppState storage helpers ───────────────────────────────────────────────
@@ -517,7 +554,7 @@ fn ts_to_dt(ts: i64) -> DateTime<Utc> {
 }
 
 /// Convert a [`ScheduledRun`] to a frontend-friendly [`TaskExecution`].
-fn run_to_execution(run: &ScheduledRun) -> TaskExecution {
+pub(crate) fn run_to_execution(run: &ScheduledRun) -> TaskExecution {
     TaskExecution {
         run_id: run.run_id.clone(),
         task_id: run.task_id.clone(),
@@ -534,14 +571,33 @@ fn run_to_execution(run: &ScheduledRun) -> TaskExecution {
 // ─── 15 Tauri commands ──────────────────────────────────────────────────────
 
 /// List all scheduled tasks, sorted by `created_at`.
+///
+/// Each row is a [`RoutineDto`]: the routine's fields verbatim plus its
+/// `working_dir` sidecar (`null` when unset). A sidecar read failure is
+/// best-effort — the row still lists, without a working dir.
 #[tauri::command]
 pub async fn list_scheduled_tasks(
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<ScheduledRoutine>, String> {
-    state
-        .scheduled_task_store()
-        .list()
-        .map_err(|e| e.to_string())
+) -> Result<Vec<RoutineDto>, String> {
+    let store = state.scheduled_task_store();
+    let routines = store.list().map_err(|e| e.to_string())?;
+    Ok(routines
+        .into_iter()
+        .map(|routine| {
+            let working_dir = store.working_dir_of(&routine.id).unwrap_or_else(|e| {
+                tracing::debug!(
+                    task_id = %routine.id,
+                    error = %e,
+                    "list_scheduled_tasks: working_dir sidecar unreadable"
+                );
+                None
+            });
+            RoutineDto {
+                routine,
+                working_dir,
+            }
+        })
+        .collect())
 }
 
 /// Create a new scheduled task and persist it.
@@ -588,11 +644,22 @@ pub async fn create_scheduled_task(
     if let Some(deps) = payload.depends_on.clone() {
         routine.depends_on = deps;
     }
+    if let Some(notify_webhook) = payload.notify_webhook {
+        routine.notify_webhook = notify_webhook;
+    }
 
     state
         .scheduled_task_store()
         .save(&routine)
         .map_err(|e| e.to_string())?;
+
+    // P-E1: persist the routine's project as the `working_dir` sidecar.
+    // Best-effort: the task itself is saved, so a sidecar failure must not
+    // turn a successful create into an error the UI reports as lost.
+    if let Some(dir) = payload.working_dir.as_deref() {
+        persist_working_dir(state.scheduled_task_store(), &routine.id, Some(dir));
+    }
+
     Ok(routine)
 }
 
@@ -636,7 +703,9 @@ pub async fn update_scheduled_task(
         };
     }
     if let Some(enabled) = payload.enabled {
-        routine.enabled = enabled;
+        // R7-②: stamp `enabled_at` on a disabled→enabled update, same as a
+        // toggle.
+        routine.set_enabled(enabled);
     }
     if let Some(ts) = payload.expires_at {
         routine.expires_at = Some(ts_to_dt(ts));
@@ -651,9 +720,44 @@ pub async fn update_scheduled_task(
     if let Some(deps) = payload.depends_on.clone() {
         routine.depends_on = deps;
     }
+    if let Some(notify_webhook) = payload.notify_webhook {
+        routine.notify_webhook = notify_webhook;
+    }
 
     store.save(&routine).map_err(|e| e.to_string())?;
+
+    // P-E1: working_dir change. Supplied non-empty replaces, supplied empty
+    // clears, omitted leaves unchanged — then best-effort sidecar write
+    // (same contract as create).
+    if let Some(dir) = payload.working_dir.as_deref() {
+        persist_working_dir(store, &payload.id, Some(dir));
+    }
+
     Ok(routine)
+}
+
+/// Normalize + persist a routine's working-dir sidecar (P-E1 helper).
+///
+/// The path is normalized to the project registry key (trimmed, trailing
+/// separators stripped) so a routine and its project land on one row; an
+/// empty remainder clears the sidecar. Failures are warn-logged, never
+/// fatal: the routine itself is already persisted.
+fn persist_working_dir(store: &ScheduledTaskStore, task_id: &str, dir: Option<&str>) {
+    let normalized = dir
+        .map(crate::commands_projects::normalize_path)
+        .unwrap_or("");
+    let value = if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    };
+    if let Err(e) = store.set_working_dir(task_id, value) {
+        tracing::warn!(
+            task_id = %task_id,
+            error = %e,
+            "scheduled task: working_dir sidecar write failed"
+        );
+    }
 }
 
 /// Delete a task by ID (also removes its `SKILL.md` / `task.json` directory).
@@ -668,18 +772,27 @@ pub async fn delete_scheduled_task(
         .map_err(|e| e.to_string())
 }
 
-/// Toggle a task on/off. Returns the new enabled state.
+/// Toggle a task on/off. Returns the persisted enabled state.
+///
+/// P1-1 lifecycle UI: `enabled` makes the target state explicit — the
+/// desktop switch sends the state the user asked for and the returned bool
+/// is read back as the persisted truth (a flip-only contract would race a
+/// stale list and silently invert the user's click). `None` keeps the
+/// legacy flip semantics.
 #[tauri::command]
 pub async fn toggle_scheduled_task(
     state: tauri::State<'_, AppState>,
     id: String,
+    enabled: Option<bool>,
 ) -> Result<bool, String> {
     let store = state.scheduled_task_store();
     let mut routine = store
         .load(&id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("task not found: {id}"))?;
-    routine.enabled = !routine.enabled;
+    // R7-②: the disabled→enabled transition stamps `enabled_at`, the zero
+    // point of the auto-pause failure streak — re-enabling clears it.
+    routine.set_enabled(enabled.unwrap_or(!routine.enabled));
     let enabled = routine.enabled;
     store.save(&routine).map_err(|e| e.to_string())?;
     Ok(enabled)
@@ -687,24 +800,53 @@ pub async fn toggle_scheduled_task(
 
 /// Fire a task immediately, bypassing the schedule. Returns the new run_id.
 ///
-/// Sprint 2 returns a `Running` run; the actual prompt execution wiring
-/// (via `QueryEngine`) lands in Sprint 3.
+/// P0-4: executes the routine's prompt through the shared unattended
+/// executor (`crate::inbox_commands::spawn_routine_run`) — the same path
+/// the scheduler loop, `rerun_inbox_item`, and the loopback trigger use —
+/// so the run lands in History (SQLite `routine_runs`, D6) and terminates
+/// (succeeded/failed) with an inbox item, exactly like a scheduled fire.
+/// No `Running` JSONL placeholder is written anymore: the executor mints
+/// the run id itself (SQLite-first) and finalizes that row.
+///
+/// Immediate triggers are NOT gated by the routine's off-peak execution
+/// window — only `spawn_routine_run`'s in-window model override applies,
+/// identical to the loopback trigger / rerun.
 #[tauri::command]
 pub async fn trigger_task_now(
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<TriggerResponse, String> {
-    let store = state.scheduled_task_store();
-    let runs = state.scheduled_runs_store();
-
-    let routine = store
+    let routine = state
+        .scheduled_task_store()
         .load(&id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("task not found: {id}"))?;
 
-    let run_id = runs
-        .start_run(&routine.id, &routine.name)
-        .map_err(|e| e.to_string())?;
+    let deps = RoutineRunDeps::from_state(&state);
+    trigger_routine_with_deps(&deps, app_handle, routine).await
+}
+
+/// Testable core of [`trigger_task_now`] (Tauri-state-free): fire an
+/// already-loaded routine through [`spawn_routine_run`] and shape the
+/// [`TriggerResponse`]. Spawn failures propagate as `Err` so the frontend
+/// shows the failure instead of toasting success. Runs are tagged
+/// `run_now` (R7-①) — user-initiated, never counted by the auto-pause
+/// streak.
+pub(crate) async fn trigger_routine_with_deps<R: tauri::Runtime>(
+    deps: &RoutineRunDeps,
+    app: tauri::AppHandle<R>,
+    routine: ScheduledRoutine,
+) -> Result<TriggerResponse, String> {
+    let run_id = spawn_routine_run(
+        deps,
+        app,
+        routine.clone(),
+        shannon_core::inbox_store::SOURCE_TRIGGER,
+        None,
+        crate::inbox_commands::RunTrigger::RunNow,
+    )
+    .await?;
 
     Ok(TriggerResponse {
         run_id,
@@ -850,7 +992,19 @@ impl RoutinePersistence for ScheduledTaskStore {
 /// record still counts as "pending" for `routine_last_run_succeeded`, so
 /// dependents unblock only when the REAL run (the id we repoint
 /// `last_run_id` to) finishes `Succeeded`.
-fn retire_drained_run(runs: &ScheduledRunsStore, run_id: &str, reason: &str) {
+///
+/// T7: the retire state is also mirrored into the authoritative
+/// `routine_runs` history (`mirror_drained_run`) so the History view — now
+/// reading SQLite — keeps showing why this firing produced no executable
+/// run. Best-effort: the JSONL record remains the fallback.
+fn retire_drained_run(
+    runs: &ScheduledRunsStore,
+    inbox: &shannon_core::inbox_store::InboxStore,
+    task_id: &str,
+    task_name: &str,
+    run_id: &str,
+    reason: &str,
+) {
     if let Err(e) = runs.update(run_id, |r| {
         r.finish(
             shannon_core::scheduled_runs::RunStatus::Cancelled,
@@ -861,6 +1015,65 @@ fn retire_drained_run(runs: &ScheduledRunsStore, run_id: &str, reason: &str) {
             run_id = %run_id,
             error = %e,
             "scheduler: failed to retire drained run record (history may show a stale running row)"
+        );
+    }
+    mirror_drained_run(
+        inbox,
+        runs,
+        task_id,
+        task_name,
+        run_id,
+        "cancelled",
+        Some(reason),
+    );
+}
+
+/// Mirror a drained JSONL placeholder — a retired `Cancelled` placeholder
+/// or a `Queued` off-peak tombstone — into the authoritative `routine_runs`
+/// history (T7). Core writes these records to the JSONL store only, so
+/// without the mirror they would vanish from the History view (and from the
+/// off-peak editor's `lastRun.status === 'queued'` check) after the
+/// read-source switch. Idempotent (`import_run` skips existing ids) and
+/// best-effort: the JSONL record remains the read-fallback source of truth.
+fn mirror_drained_run(
+    inbox: &shannon_core::inbox_store::InboxStore,
+    runs: &ScheduledRunsStore,
+    task_id: &str,
+    task_name: &str,
+    run_id: &str,
+    status: &str,
+    error: Option<&str>,
+) {
+    // Faithful timestamps when the drained record is still readable; the
+    // tombstone then sorts exactly where the JSONL one always did.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let started_ms = runs
+        .find_by_id(run_id)
+        .ok()
+        .flatten()
+        .map(|r| r.started_at.timestamp_millis())
+        .unwrap_or(now_ms);
+    let record = shannon_core::inbox_store::RunRecord {
+        id: run_id.to_string(),
+        task_id: task_id.to_string(),
+        task_name: Some(task_name.to_string()),
+        status: status.to_string(),
+        error: error.map(str::to_string),
+        started_at_ms: Some(started_ms),
+        finished_at_ms: (status == "cancelled").then_some(now_ms),
+        duration_ms: None,
+        inbox_item_id: None,
+        // Drained scheduler tombstones never executed — no spend.
+        cost_usd: None,
+        token_usage: None,
+        // Tombstones are not terminal failures; the tag stays unset.
+        trigger: None,
+    };
+    if let Err(e) = inbox.import_run(&record) {
+        tracing::warn!(
+            run_id = %run_id,
+            error = %e,
+            "scheduler: failed to mirror drained run into the inbox history"
         );
     }
 }
@@ -929,6 +1142,7 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
         let Some(updated) = mgr.get(&d.task_id) else {
             continue;
         };
+        let task_name = updated.name.clone();
         // 1. Persist BEFORE acting. On failure the drained record (queued
         // tombstone or running placeholder) never becomes the routine's
         // durable state — retire it so no ghost rows accumulate and the
@@ -941,6 +1155,9 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
             );
             retire_drained_run(
                 runs,
+                &deps.inbox,
+                &d.task_id,
+                &task_name,
                 &d.run_id,
                 "scheduler: routine state not persisted this tick; record retired",
             );
@@ -951,6 +1168,20 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
                 task_id = %d.task_id,
                 run_id = %d.run_id,
                 "routine due outside its execution window — queued until the window opens"
+            );
+            // T7: core writes the queued tombstone to the JSONL store only;
+            // mirror it into the authoritative `routine_runs` history so the
+            // History view and the off-peak editor (`lastRun.status ===
+            // 'queued'`) keep seeing it after the read-source switch. The
+            // inbox item table stays untouched (P2-5 contract).
+            mirror_drained_run(
+                &deps.inbox,
+                runs,
+                &d.task_id,
+                &task_name,
+                &d.run_id,
+                "queued",
+                None,
             );
             continue;
         }
@@ -963,6 +1194,9 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
             );
             retire_drained_run(
                 runs,
+                &deps.inbox,
+                &d.task_id,
+                &task_name,
                 &d.run_id,
                 "scheduler: skipped, previous run still in flight",
             );
@@ -971,13 +1205,15 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
         let Some(routine) = mgr.get(&d.task_id).cloned() else {
             continue;
         };
-        // 3. Spawn, then reconcile run ids.
+        // 3. Spawn, then reconcile run ids. Tagged `scheduled` (R7-①) —
+        // these are the only fires that advance the auto-pause streak.
         match spawn_routine_run(
             deps,
             app.clone(),
             routine,
             shannon_core::inbox_store::SOURCE_ROUTINE,
             None,
+            crate::inbox_commands::RunTrigger::Scheduled,
         )
         .await
         {
@@ -985,7 +1221,14 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
                 // The executor finalized... nothing yet — it owns `new_run_id`
                 // and will finish it (succeeded/failed) in its own finalize
                 // path. Close the drained placeholder and follow the real run.
-                retire_drained_run(runs, &d.run_id, &format!("superseded by run {new_run_id}"));
+                retire_drained_run(
+                    runs,
+                    &deps.inbox,
+                    &d.task_id,
+                    &task_name,
+                    &d.run_id,
+                    &format!("superseded by run {new_run_id}"),
+                );
                 if let Some(r) = mgr.get_mut(&d.task_id) {
                     r.last_run_id = Some(new_run_id.clone());
                 }
@@ -1018,6 +1261,9 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
                 // again after its interval elapses.
                 retire_drained_run(
                     runs,
+                    &deps.inbox,
+                    &d.task_id,
+                    &task_name,
                     &d.run_id,
                     &format!("scheduler: failed to start run: {e}"),
                 );
@@ -1090,6 +1336,12 @@ pub async fn get_triage_stats(state: tauri::State<'_, AppState>) -> Result<Triag
 
 /// List execution records for a task, newest first.
 /// When `task_id` is None, returns recent runs across all tasks.
+///
+/// T7: the authoritative read source is the SQLite `routine_runs` table in
+/// the inbox store; the legacy JSONL store is only the fallback for an
+/// inbox read failure (and stays written as a best-effort mirror). The
+/// command signature and the `TaskExecution` shape are unchanged — the
+/// frontend History view needs no switch-over change.
 #[tauri::command]
 pub async fn list_task_executions(
     state: tauri::State<'_, AppState>,
@@ -1097,37 +1349,59 @@ pub async fn list_task_executions(
     limit: Option<usize>,
 ) -> Result<Vec<TaskExecution>, String> {
     let cap = limit.unwrap_or(50);
-    let runs = match task_id.as_deref() {
-        Some(id) if !id.is_empty() => state
-            .scheduled_runs_store()
-            .list_by_task(id, cap)
-            .map_err(|e| e.to_string())?,
-        _ => state
-            .scheduled_runs_store()
-            .list_recent(cap)
-            .map_err(|e| e.to_string())?,
-    };
-    Ok(runs.iter().map(run_to_execution).collect())
+    let task_id = task_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let cap_u32 = u32::try_from(cap).unwrap_or(u32::MAX);
+    let inbox = state.inbox_store();
+    crate::inbox_commands::read_run_history(
+        move || match task_id {
+            Some(id) => inbox.list_runs_by_task(id, cap_u32),
+            None => inbox.list_runs(cap_u32),
+        },
+        state.scheduled_runs_store(),
+        task_id,
+        cap,
+    )
 }
 
+/// Bounded scan cap for the `routine_runs` by-id lookup in
+/// [`get_execution_detail`]. The inbox store gained no by-id run getter
+/// this cycle (pub-API freeze), so the detail view resolves its single row
+/// through a newest-first `list_runs` scan — the same full-scan shape as
+/// the JSONL `find_by_id` it front-runs. The cap mirrors
+/// `BACKFILL_SCAN_LIMIT`'s defensive role (an oversized table cannot make
+/// the detail view unbounded); a run older than the cap simply falls back
+/// to the JSONL path.
+const DETAIL_SCAN_LIMIT: u32 = 10_000;
+
 /// Full execution detail view (lightweight run + task metadata).
+///
+/// T7-symmetric read source: the SQLite `routine_runs` table first (the
+/// JSONL mirror is best-effort, so a run whose JSONL write failed while its
+/// SQLite write succeeded must still resolve here — the old JSONL-only
+/// lookup listed it in History but reported not found), falling back to the
+/// legacy JSONL store on a miss or inbox read failure. See
+/// `inbox_commands::read_run_detail`.
 #[tauri::command]
 pub async fn get_execution_detail(
     state: tauri::State<'_, AppState>,
     run_id: String,
 ) -> Result<TaskExecutionDetail, String> {
-    let run = state
-        .scheduled_runs_store()
-        .find_by_id(&run_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("run not found: {run_id}"))?;
-
-    let execution = run_to_execution(&run);
+    let inbox = state.inbox_store();
+    let scanned = run_id.clone();
+    let execution = crate::inbox_commands::read_run_detail(
+        move || {
+            inbox
+                .list_runs(DETAIL_SCAN_LIMIT)
+                .map(|rows| rows.into_iter().find(|r| r.id == scanned))
+        },
+        state.scheduled_runs_store(),
+        &run_id,
+    )?;
 
     // Best-effort task enrichment — runs may outlive their tasks.
     let (prompt, cron_expr, next_fire_at) = state
         .scheduled_task_store()
-        .load(&run.task_id)
+        .load(&execution.task_id)
         .ok()
         .flatten()
         .map(|r| {
@@ -1145,6 +1419,169 @@ pub async fn get_execution_detail(
         cron_expr,
         next_fire_at,
     })
+}
+
+// ─── P2-8: cross-agent run table (the OPC "runs" view) ──────────────────────
+
+/// Default row cap for [`list_agent_runs`] — the runs view's initial window.
+const AGENT_RUNS_DEFAULT_LIMIT: usize = 100;
+
+/// One cross-agent run row for the OPC "runs" view (P2-8).
+///
+/// The [`TaskExecution`] projection plus the two joins the view needs:
+/// the run's back-linked session (jump target) and that session's latest
+/// model (the "model" column).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRunRow {
+    pub run_id: String,
+    pub task_id: String,
+    pub task_name: String,
+    pub started_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<u64>,
+    /// Run → inbox item → session id. `None` when the run predates the
+    /// session back-link (or the item was created without one) — the row
+    /// renders without the "open session" affordance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Latest model observed in the usage ledger for `session_id`. `None`
+    /// when the session is unknown or its ledger lines predate attribution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// Pure join behind [`list_agent_runs`] (unit-tested empty + multi-state):
+/// threads each run through `session_of_run` (run id → session id) and then
+/// `model_of_session` (session id → model). Input order is preserved —
+/// callers hand in newest-first runs.
+pub(crate) fn join_agent_runs(
+    runs: &[TaskExecution],
+    session_of_run: &HashMap<String, String>,
+    model_of_session: &HashMap<String, String>,
+) -> Vec<AgentRunRow> {
+    runs.iter()
+        .map(|r| {
+            let session_id = session_of_run.get(&r.run_id).cloned();
+            let model = session_id
+                .as_deref()
+                .and_then(|s| model_of_session.get(s).cloned());
+            AgentRunRow {
+                run_id: r.run_id.clone(),
+                task_id: r.task_id.clone(),
+                task_name: r.task_name.clone(),
+                started_at: r.started_at,
+                finished_at: r.finished_at,
+                status: r.status.clone(),
+                error_message: r.error_message.clone(),
+                cost_usd: r.cost_usd,
+                token_usage: r.token_usage,
+                session_id,
+                model,
+            }
+        })
+        .collect()
+}
+
+/// Latest model per session from usage-ledger records — the "model" column's
+/// data source. Ties (identical timestamps) resolve to the last record read;
+/// records without a session attribution are invisible here by design (the
+/// by-session budget aggregation has the same rule).
+pub(crate) fn latest_model_by_session(
+    records: &[crate::commands_usage::UsageRecord],
+) -> HashMap<String, String> {
+    let mut latest: HashMap<String, &crate::commands_usage::UsageRecord> = HashMap::new();
+    for r in records {
+        let Some(sid) = r
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        match latest.get(sid) {
+            Some(cur) if cur.timestamp_ms > r.timestamp_ms => {}
+            _ => {
+                latest.insert(sid.to_string(), r);
+            }
+        }
+    }
+    latest
+        .into_iter()
+        .map(|(k, v)| (k, v.model.clone()))
+        .collect()
+}
+
+/// Cross-agent run list for the OPC "runs" view (P2-8): the newest `limit`
+/// runs across ALL routines/agents, each joined with its session id (via the
+/// run's back-linked inbox item) and that session's latest model (from the
+/// usage ledger). Read source mirrors [`list_task_executions`]: the SQLite
+/// `routine_runs` table first, the legacy JSONL store as the fallback —
+/// JSONL rows carry no inbox back-link, so their session/model columns stay
+/// empty (documented degradation, never an error).
+#[tauri::command]
+pub async fn list_agent_runs(
+    state: tauri::State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<AgentRunRow>, String> {
+    let cap = limit.unwrap_or(AGENT_RUNS_DEFAULT_LIMIT);
+    let cap_u32 = u32::try_from(cap).unwrap_or(u32::MAX);
+    let inbox = state.inbox_store();
+
+    let (runs, session_of_run) = match inbox.list_runs(cap_u32) {
+        Ok(records) => {
+            let mut session_of_run: HashMap<String, String> = HashMap::new();
+            for record in &records {
+                let Some(item_id) = record.inbox_item_id else {
+                    continue;
+                };
+                let session = inbox
+                    .get_item(item_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|item| item.session_id)
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                if let Some(session) = session {
+                    session_of_run.insert(record.id.clone(), session);
+                }
+            }
+            (
+                records
+                    .iter()
+                    .map(crate::inbox_commands::run_record_to_execution)
+                    .collect::<Vec<_>>(),
+                session_of_run,
+            )
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "agent runs: inbox store read failed — falling back to the legacy JSONL runs store (no session/model join)"
+            );
+            let rows = state
+                .scheduled_runs_store()
+                .list_recent(cap)
+                .map_err(|e| e.to_string())?;
+            (
+                rows.iter()
+                    .map(crate::scheduled_commands::run_to_execution)
+                    .collect::<Vec<_>>(),
+                HashMap::new(),
+            )
+        }
+    };
+
+    let model_of_session = latest_model_by_session(&state.usage_store.load());
+    Ok(join_agent_runs(&runs, &session_of_run, &model_of_session))
 }
 
 /// List triggered routines, applying local overrides for enabled/disabled.
@@ -1361,9 +1798,18 @@ const OPC_WINDOW_DAYS: usize = 7;
 
 #[tauri::command]
 #[tracing::instrument(skip_all)]
-pub async fn get_opc_metrics() -> Result<OpcMetrics, String> {
-    let tasks = crate::commands_tasks::list_tasks().await?;
-    let daily = collect_daily_buckets()?;
+pub async fn get_opc_metrics(state: tauri::State<'_, AppState>) -> Result<OpcMetrics, String> {
+    // R2-P1-3: read the SAME anchored `.claude/tasks` root the board's
+    // list_tasks/update_task resolve (`working_dir`/home) — never the
+    // desktop process CWD.
+    let tasks_dir = crate::commands_tasks::anchored_tasks_dir_base(
+        crate::commands_tasks::configured_working_dir(&state)
+            .await
+            .as_deref(),
+    )?;
+    let root = tasks_dir.join(".claude").join("tasks");
+    let tasks = crate::commands_tasks::list_tasks_in(&root)?;
+    let daily = collect_daily_buckets_in(&root)?;
     Ok(compute_opc_metrics(&tasks, daily))
 }
 
@@ -1457,8 +1903,10 @@ fn is_in_progress_status(s: &str) -> bool {
     )
 }
 
-fn collect_daily_buckets() -> Result<Vec<OpcDayBucket>, String> {
-    let tasks_dir = std::path::Path::new(".claude/tasks");
+/// Daily-bucket walk over an explicit tasks root — the filesystem half of
+/// [`get_opc_metrics`]. Public so the `bench_opc` example can time the same
+/// walk + aggregation composition without Tauri state.
+pub fn collect_daily_buckets_in(tasks_dir: &std::path::Path) -> Result<Vec<OpcDayBucket>, String> {
     if !tasks_dir.is_dir() {
         return Ok(empty_daily_buckets());
     }
@@ -1708,6 +2156,116 @@ pub async fn prune_task_worktrees(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::Manager as _;
+
+    // ── P2-8: cross-agent run table joins ────────────────────────────────
+
+    fn execution(run_id: &str, task_id: &str, name: &str) -> TaskExecution {
+        TaskExecution {
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            task_name: name.into(),
+            started_at: 1_700_000_000,
+            finished_at: None,
+            status: "succeeded".into(),
+            error_message: None,
+            cost_usd: Some(0.25),
+            token_usage: Some(1_500),
+        }
+    }
+
+    #[test]
+    fn join_agent_runs_empty_state_yields_no_rows() {
+        let out = join_agent_runs(&[], &HashMap::new(), &HashMap::new());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn join_agent_runs_threads_session_and_model_and_preserves_order() {
+        let runs = vec![
+            execution("run-1", "task-a", "Scanner"),
+            execution("run-2", "task-b", "Digest"),
+            execution("run-3", "task-c", "Legacy"),
+        ];
+        let mut session_of_run = HashMap::new();
+        session_of_run.insert("run-1".to_string(), "sess-1".to_string());
+        session_of_run.insert("run-2".to_string(), "sess-2".to_string());
+        let mut model_of_session = HashMap::new();
+        model_of_session.insert("sess-1".to_string(), "claude-sonnet-4-6".to_string());
+        model_of_session.insert("sess-2".to_string(), "glm-4.7".to_string());
+
+        let rows = join_agent_runs(&runs, &session_of_run, &model_of_session);
+        assert_eq!(rows.len(), 3);
+        // Input order preserved (callers hand in newest-first).
+        assert_eq!(rows[0].run_id, "run-1");
+        assert_eq!(rows[1].run_id, "run-2");
+        assert_eq!(rows[2].run_id, "run-3");
+        // Joined rows carry session + model.
+        assert_eq!(rows[0].session_id.as_deref(), Some("sess-1"));
+        assert_eq!(rows[0].model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(rows[1].session_id.as_deref(), Some("sess-2"));
+        assert_eq!(rows[1].model.as_deref(), Some("glm-4.7"));
+        // A run with no back-link (legacy JSONL) renders without either.
+        assert_eq!(rows[2].session_id, None);
+        assert_eq!(rows[2].model, None);
+        // Base fields pass through.
+        assert_eq!(rows[0].task_name, "Scanner");
+        assert_eq!(rows[0].cost_usd, Some(0.25));
+        assert_eq!(rows[0].token_usage, Some(1_500));
+    }
+
+    #[test]
+    fn join_agent_runs_session_without_ledger_rows_has_no_model() {
+        // A session id that the usage ledger never saw → model stays None.
+        let runs = vec![execution("run-1", "task-a", "Scanner")];
+        let mut session_of_run = HashMap::new();
+        session_of_run.insert("run-1".to_string(), "sess-unknown".to_string());
+        let rows = join_agent_runs(&runs, &session_of_run, &HashMap::new());
+        assert_eq!(rows[0].session_id.as_deref(), Some("sess-unknown"));
+        assert_eq!(rows[0].model, None);
+    }
+
+    fn record(ts: u64, model: &str, session: Option<&str>) -> crate::commands_usage::UsageRecord {
+        crate::commands_usage::UsageRecord {
+            timestamp_ms: ts,
+            model: model.into(),
+            provider: "anthropic".into(),
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            cost_usd: 0.01,
+            session_id: session.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn latest_model_by_session_picks_newest_per_session() {
+        let records = vec![
+            record(1_000, "old-model", Some("s1")),
+            record(2_000, "new-model", Some("s1")),
+            record(1_500, "other-model", Some("s2")),
+            record(500, "unattributed", None),
+        ];
+        let models = latest_model_by_session(&records);
+        assert_eq!(models.get("s1").map(String::as_str), Some("new-model"));
+        assert_eq!(models.get("s2").map(String::as_str), Some("other-model"));
+        assert!(!models.contains_key("unattributed"));
+    }
+
+    #[test]
+    fn latest_model_by_session_tie_breaks_to_last_read_and_trims_ids() {
+        let records = vec![
+            record(1_000, "first", Some(" s1 ")),
+            record(1_000, "second", Some("s1")),
+        ];
+        let models = latest_model_by_session(&records);
+        assert_eq!(
+            models.get("s1").map(String::as_str),
+            Some("second"),
+            "identical timestamps resolve to the last record read"
+        );
+    }
 
     // ── DTO round-trips ──────────────────────────────────────────────────
 
@@ -1724,6 +2282,8 @@ mod tests {
             max_fires: None,
             policy: None,
             depends_on: None,
+            working_dir: None,
+            notify_webhook: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         let back: CreateTaskPayload = serde_json::from_str(&json).unwrap();
@@ -1744,6 +2304,8 @@ mod tests {
             max_fires: Some(260),
             policy: None,
             depends_on: None,
+            working_dir: None,
+            notify_webhook: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"cron_expr\""));
@@ -1773,6 +2335,8 @@ mod tests {
             max_fires: None,
             policy: None,
             depends_on: Some(vec!["dep1".into(), "dep2".into()]),
+            working_dir: None,
+            notify_webhook: None,
         };
         let json = serde_json::to_string(&create).unwrap();
         let back: CreateTaskPayload = serde_json::from_str(&json).unwrap();
@@ -1794,6 +2358,8 @@ mod tests {
             max_fires: None,
             policy: None,
             depends_on: Some(Vec::new()),
+            working_dir: None,
+            notify_webhook: None,
         };
         let ujson = serde_json::to_string(&update).unwrap();
         assert!(ujson.contains("\"depends_on\":[]"));
@@ -1814,6 +2380,467 @@ mod tests {
         let json = serde_json::to_string(&policy).unwrap();
         assert!(json.contains("budget_usd"));
         assert!(!json.contains("monthly"));
+    }
+
+    // ── P-E1: routine working_dir sidecar ────────────────────────────────
+
+    /// AppState with a hermetic scheduled-task store (`AppState::new` only
+    /// reads ambient config; the store is swapped onto a tempdir base —
+    /// same fixture contract as the project-registry tests).
+    fn task_state(dir: &std::path::Path) -> AppState {
+        let mut state = AppState::new();
+        state.scheduled_task_store =
+            std::sync::Arc::new(ScheduledTaskStore::with_base(dir.join("tasks")));
+        state
+    }
+
+    #[test]
+    fn routine_dto_flatten_keeps_old_fields_and_adds_working_dir() {
+        let routine = ScheduledRoutine::new("Flat Shape".into(), "p".into(), 60);
+        let plain = serde_json::to_value(&routine).unwrap();
+
+        let dto = RoutineDto {
+            routine: routine.clone(),
+            working_dir: Some("/work/proj".into()),
+        };
+        let json = serde_json::to_value(&dto).unwrap();
+
+        // The routine's fields appear at the TOP level (flatten)…
+        assert_eq!(json["id"], plain["id"]);
+        assert_eq!(json["name"], plain["name"]);
+        assert_eq!(json["created_at"], plain["created_at"]);
+        // …and working_dir rides alongside.
+        assert_eq!(json["working_dir"], "/work/proj");
+
+        // Round-trip preserves the routine verbatim; null working_dir also
+        // deserializes (older writers / unset sidecar).
+        let back: RoutineDto = serde_json::from_value(json).unwrap();
+        assert_eq!(back.routine.id, routine.id);
+        assert_eq!(back.routine.prompt, routine.prompt);
+        assert_eq!(back.working_dir.as_deref(), Some("/work/proj"));
+        let none_json = serde_json::to_value(RoutineDto {
+            routine,
+            working_dir: None,
+        })
+        .unwrap();
+        let back_none: RoutineDto = serde_json::from_value(none_json).unwrap();
+        assert_eq!(back_none.working_dir, None);
+    }
+
+    #[tokio::test]
+    async fn create_update_roundtrip_working_dir_sidecar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(task_state(tmp.path()));
+
+        let created = create_scheduled_task(
+            app.state::<AppState>(),
+            CreateTaskPayload {
+                name: "Scoped scan".into(),
+                prompt: "p".into(),
+                trigger_type: None,
+                interval_secs: Some(60),
+                cron_expr: None,
+                timezone: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: Some("/work/proj/".into()),
+                notify_webhook: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let store = app.state::<AppState>().scheduled_task_store().clone();
+        assert_eq!(
+            store.working_dir_of(&created.id).unwrap().as_deref(),
+            Some("/work/proj"),
+            "sidecar persisted, normalized like the registry key"
+        );
+
+        // Update replaces the value.
+        let updated = update_scheduled_task(
+            app.state::<AppState>(),
+            UpdateTaskPayload {
+                id: created.id.clone(),
+                name: None,
+                prompt: None,
+                trigger_type: None,
+                interval_secs: None,
+                cron_expr: None,
+                timezone: None,
+                enabled: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: Some("/work/other".into()),
+                notify_webhook: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.id, created.id);
+        assert_eq!(
+            store.working_dir_of(&created.id).unwrap().as_deref(),
+            Some("/work/other")
+        );
+
+        // Update with an empty string clears it.
+        update_scheduled_task(
+            app.state::<AppState>(),
+            UpdateTaskPayload {
+                id: created.id.clone(),
+                name: None,
+                prompt: None,
+                trigger_type: None,
+                interval_secs: None,
+                cron_expr: None,
+                timezone: None,
+                enabled: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: Some("  ".into()),
+                notify_webhook: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            store.working_dir_of(&created.id).unwrap(),
+            None,
+            "empty string clears the sidecar"
+        );
+
+        // Omitted working_dir leaves the value untouched. A rename in the
+        // same update is non-orphaning: save() migrates the whole slug
+        // directory (sidecar included) to the new name.
+        store
+            .set_working_dir(&created.id, Some("/work/final"))
+            .unwrap();
+        update_scheduled_task(
+            app.state::<AppState>(),
+            UpdateTaskPayload {
+                id: created.id.clone(),
+                name: Some("Renamed Scope".into()),
+                prompt: None,
+                trigger_type: None,
+                interval_secs: None,
+                cron_expr: None,
+                timezone: None,
+                enabled: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: None,
+                notify_webhook: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            store.working_dir_of(&created.id).unwrap().as_deref(),
+            Some("/work/final"),
+            "omitted working_dir must not clobber the sidecar (survives the rename migration)"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_scheduled_tasks_returns_flattened_dto_with_working_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(task_state(tmp.path()));
+
+        let with_dir = create_scheduled_task(
+            app.state::<AppState>(),
+            CreateTaskPayload {
+                name: "Housed".into(),
+                prompt: "p".into(),
+                trigger_type: None,
+                interval_secs: Some(60),
+                cron_expr: None,
+                timezone: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: Some("/work/housed".into()),
+                notify_webhook: None,
+            },
+        )
+        .await
+        .unwrap();
+        let unhoused = create_scheduled_task(
+            app.state::<AppState>(),
+            CreateTaskPayload {
+                name: "Unhoused".into(),
+                prompt: "p".into(),
+                trigger_type: None,
+                interval_secs: Some(60),
+                cron_expr: None,
+                timezone: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: None,
+                notify_webhook: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let rows = list_scheduled_tasks(app.state::<AppState>()).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        let housed = rows
+            .iter()
+            .find(|r| r.routine.id == with_dir.id)
+            .expect("housed row listed");
+        assert_eq!(housed.working_dir.as_deref(), Some("/work/housed"));
+        // Old wire fields still present on the row (flatten).
+        assert_eq!(housed.routine.name, "Housed");
+        assert_eq!(housed.routine.prompt, "p");
+
+        let unhoused_row = rows
+            .iter()
+            .find(|r| r.routine.id == unhoused.id)
+            .expect("unhoused row listed");
+        assert_eq!(unhoused_row.working_dir, None);
+    }
+
+    #[tokio::test]
+    async fn rename_scheduled_task_is_non_orphaning_for_working_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(task_state(tmp.path()));
+        let store = app.state::<AppState>().scheduled_task_store().clone();
+        let tasks_base = tmp.path().join("tasks");
+
+        let created = create_scheduled_task(
+            app.state::<AppState>(),
+            CreateTaskPayload {
+                name: "Old Scope".into(),
+                prompt: "p".into(),
+                trigger_type: None,
+                interval_secs: Some(60),
+                cron_expr: None,
+                timezone: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: Some("/work/renamed-proj".into()),
+                notify_webhook: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        update_scheduled_task(
+            app.state::<AppState>(),
+            UpdateTaskPayload {
+                id: created.id.clone(),
+                name: Some("New Scope".into()),
+                prompt: None,
+                trigger_type: None,
+                interval_secs: None,
+                cron_expr: None,
+                timezone: None,
+                enabled: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: None,
+                notify_webhook: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // The sidecar survived the rename…
+        assert_eq!(
+            store.working_dir_of(&created.id).unwrap().as_deref(),
+            Some("/work/renamed-proj"),
+        );
+        // …no `<old-slug>-<id>` orphan remains — exactly one dir for the id.
+        let dir_names: Vec<String> = std::fs::read_dir(&tasks_base)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(dir_names.len(), 1, "one dir per id: {dir_names:?}");
+        assert!(
+            !dir_names.iter().any(|n| n.starts_with("old-scope-")),
+            "orphaned old-slug dir must be gone: {dir_names:?}"
+        );
+        // And the collector reports the moved (not stale) project exactly once.
+        assert_eq!(store.working_dirs(), ["/work/renamed-proj"]);
+
+        // The list shows ONE row (no duplicate from a stale task.json) with
+        // the new name and the intact project.
+        let rows = list_scheduled_tasks(app.state::<AppState>()).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].routine.id, created.id);
+        assert_eq!(rows[0].routine.name, "New Scope");
+        assert_eq!(rows[0].working_dir.as_deref(), Some("/work/renamed-proj"));
+    }
+
+    // ── P-E1: working_dir stamp on the run's session ─────────────────────
+
+    /// First `session/start` payload of the run's session log, if any.
+    fn read_session_start(
+        container: &std::path::Path,
+    ) -> Option<shannon_types::session_event::SessionStartPayload> {
+        let entries = std::fs::read_dir(container).ok()?;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(uuid) = uuid::Uuid::parse_str(&name) else {
+                continue;
+            };
+            let store = shannon_core::session_log::SessionStore::new(container.to_path_buf());
+            let Ok(Some(events)) = store.read_events(&uuid) else {
+                continue;
+            };
+            for event in events {
+                if let shannon_types::session_event::SessionEventBody::SessionStart(payload) =
+                    event.body
+                {
+                    return Some(payload);
+                }
+            }
+        }
+        None
+    }
+
+    /// Wait (bounded) for the spawned engine future to create the run's
+    /// session log, then return its `session/start` payload.
+    async fn wait_for_session_start(
+        container: &std::path::Path,
+    ) -> shannon_types::session_event::SessionStartPayload {
+        // 2000 x 20ms = 40s ceiling: on success this returns in tens of
+        // milliseconds, but the first engine spawn in the process may also
+        // pay one-time startup probes (sandbox backend detection), which on
+        // a machine with a wedged docker CLI costs its bounded-probe window.
+        for _ in 0..2000 {
+            if let Some(payload) = read_session_start(container) {
+                return payload;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("run session log with session/start never appeared");
+    }
+
+    /// Restore `SHANNON_HOME` even when an assert fires mid-test.
+    struct RestoreHome(Option<String>);
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            // SAFETY: test process; serialized through CWD_LOCK like the
+            // other env/cwd mutations in this module.
+            unsafe {
+                match &self.0 {
+                    Some(v) => std::env::set_var("SHANNON_HOME", v),
+                    None => std::env::remove_var("SHANNON_HOME"),
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn routine_run_stamps_session_working_dir_and_threads_engine_cwd() {
+        // Both routine_run tests spawn engine futures that read process-global
+        // state (cwd, SHANNON_HOME) and detach finish tasks; serialize them so
+        // shared-process `cargo test` runs are order-independent (nextest
+        // already isolates per process).
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        // The spawned engine resolves providers/credentials under
+        // SHANNON_HOME; pin it to the fixture so a developer's real
+        // ~/.shannon (e.g. a Keychain-backed provider profile) can't turn
+        // the spawn into a blocking credential lookup on macOS. CWD_LOCK
+        // (taken above) serializes the process-global env mutation.
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        // SAFETY: see RestoreHome — CWD_LOCK-serialized test process.
+        unsafe { std::env::set_var("SHANNON_HOME", tmp.path()) };
+        let _home_guard = RestoreHome(prev_home);
+        let (deps, tasks, runs, _inbox) = scheduler_fixture(tmp.path());
+
+        let routine = ScheduledRoutine::new("scoped run".into(), "stamp-scope-proj".into(), 60);
+        tasks.save(&routine).unwrap();
+        tasks
+            .set_working_dir(&routine.id, Some("/work/scoped-project/"))
+            .unwrap();
+
+        let executed = run_due_check_at(&deps, &tasks, &runs, app.handle(), utc_at(12, 0))
+            .await
+            .unwrap();
+        assert_eq!(executed, 1);
+
+        // The run session's durable metadata carries the routine's working
+        // dir (normalized) — this is the field the session store projects to
+        // `project_path` / `SessionMeta.working_dir`.
+        let container = tmp.path().join("sessions");
+        let start = wait_for_session_start(&container).await;
+        assert_eq!(
+            start.cwd.as_deref(),
+            Some("/work/scoped-project"),
+            "session/start stamped with the routine's normalized working dir"
+        );
+    }
+
+    // Intentional: CWD_LOCK is held across the awaited run below — the
+    // engine tee reads the process cwd mid-run, so the lock must span the
+    // awaits (test-only and uncontended).
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn routine_run_without_working_dir_keeps_the_default_session_start() {
+        // The assert below pins the tee's default (process cwd) — the
+        // cwd-mutating bucket tests serialize through CWD_LOCK, and this
+        // test must hold it too so no concurrent test moves the cwd under
+        // the run.
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        // Same SHANNON_HOME isolation as the stamps test above.
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        // SAFETY: see RestoreHome — CWD_LOCK-serialized test process.
+        unsafe { std::env::set_var("SHANNON_HOME", tmp.path()) };
+        let _home_guard = RestoreHome(prev_home);
+        let (deps, tasks, runs, _inbox) = scheduler_fixture(tmp.path());
+
+        // The engine tee writes session/start with the process cwd —
+        // snapshot the expectation BEFORE the run (A12 polish: the old
+        // assert_ne against a never-written sentinel was vacuously true).
+        let expected_cwd = std::env::current_dir().unwrap().display().to_string();
+
+        let routine = ScheduledRoutine::new("unhoused run".into(), "unhoused-proj".into(), 60);
+        tasks.save(&routine).unwrap();
+
+        let executed = run_due_check_at(&deps, &tasks, &runs, app.handle(), utc_at(12, 0))
+            .await
+            .unwrap();
+        assert_eq!(executed, 1);
+
+        // No sidecar → no pre-stamp; the engine tee writes its own
+        // session/start (process cwd), exactly the pre-P-E1 behavior.
+        let container = tmp.path().join("sessions");
+        let start = wait_for_session_start(&container).await;
+        assert_eq!(
+            start.cwd.as_deref(),
+            Some(expected_cwd.as_str()),
+            "without a routine working_dir the tee's own session/start (process cwd) stands"
+        );
     }
 
     // ── Cron preview ─────────────────────────────────────────────────────
@@ -2180,10 +3207,8 @@ mod tests {
 
     #[test]
     fn test_collect_daily_buckets_walks_team_dirs() {
-        let _guard = CWD_LOCK.lock().unwrap();
+        // R2-P1-3: path-parameterised core — no process-CWD dependency.
         let tmp = tempfile::tempdir().unwrap();
-        let orig = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
 
         // Two task JSONs under .claude/tasks/<team>/ — both today by mtime.
         let team_dir = tmp.path().join(".claude/tasks/Default");
@@ -2199,8 +3224,7 @@ mod tests {
         )
         .unwrap();
 
-        let buckets = collect_daily_buckets().unwrap();
-        std::env::set_current_dir(orig).unwrap();
+        let buckets = collect_daily_buckets_in(&tmp.path().join(".claude/tasks")).unwrap();
 
         // 7-day window, oldest-first ordering.
         assert_eq!(buckets.len(), OPC_WINDOW_DAYS);
@@ -2212,13 +3236,10 @@ mod tests {
 
     #[test]
     fn test_collect_daily_buckets_no_tasks_dir_returns_empty_buckets() {
-        let _guard = CWD_LOCK.lock().unwrap();
+        // R2-P1-3: path-parameterised core — no process-CWD dependency.
         let tmp = tempfile::tempdir().unwrap();
-        let orig = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
 
-        let buckets = collect_daily_buckets().unwrap();
-        std::env::set_current_dir(orig).unwrap();
+        let buckets = collect_daily_buckets_in(&tmp.path().join(".claude/tasks")).unwrap();
 
         // No .claude/tasks dir — returns 7 empty buckets.
         assert_eq!(buckets.len(), OPC_WINDOW_DAYS);
@@ -2230,7 +3251,9 @@ mod tests {
 
     #[test]
     fn test_append_routine_to_project_toml_creates_file() {
-        let _guard = CWD_LOCK.lock().unwrap();
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -2261,7 +3284,9 @@ mod tests {
 
     #[test]
     fn test_append_routine_to_project_toml_appends_to_existing() {
-        let _guard = CWD_LOCK.lock().unwrap();
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -2398,6 +3423,10 @@ mod tests {
         let deps = RoutineRunDeps {
             inbox: inbox.clone(),
             runs_store: std::sync::Arc::new(runs.clone()),
+            webhook: std::sync::Arc::new(crate::inbox_commands::DesktopWebhookPort),
+            notify: std::sync::Arc::new(crate::inbox_commands::DesktopRunNotifier(
+                std::sync::Arc::new(shannon_core::notifier::Notifier::new()),
+            )),
             usage_store: std::sync::Arc::new(crate::commands_usage::UsageStore::with_path(
                 tmp.join("usage.jsonl"),
             )),
@@ -2409,6 +3438,10 @@ mod tests {
             memory_store: std::sync::Arc::new(std::sync::RwLock::new(
                 shannon_core::MemoryStore::new(tmp.join("memories")),
             )),
+            scheduled_tasks: std::sync::Arc::new(ScheduledTaskStore::with_base(
+                tmp.join("tasks").to_path_buf(),
+            )),
+            sessions_dir: tmp.join("sessions"),
         };
         let tasks = ScheduledTaskStore::with_base(tmp.join("tasks").to_path_buf());
         (deps, tasks, runs, inbox)
@@ -2447,10 +3480,16 @@ mod tests {
         assert!(stored.last_fired.is_none());
         assert_eq!(stored.fire_count, 0);
 
-        // No inbox item, no SQLite routine_runs row (queueing never writes
-        // the inbox, brief contract).
+        // No inbox item (P2-5 contract — queueing never writes inbox_items).
+        // T7: the tombstone IS mirrored into the authoritative routine_runs
+        // history so the History view / off-peak editor keep seeing "queued"
+        // after the read-source switch.
         assert!(inbox.list(None, None, 10).unwrap().is_empty());
-        assert!(inbox.list_runs(10).unwrap().is_empty());
+        let mirrored = inbox.list_runs(10).unwrap();
+        assert_eq!(mirrored.len(), 1, "queued tombstone mirrored (T7)");
+        assert_eq!(mirrored[0].id, history[0].run_id);
+        assert_eq!(mirrored[0].status, "queued");
+        assert_eq!(mirrored[0].task_id, id);
     }
 
     #[tokio::test]
@@ -2484,11 +3523,37 @@ mod tests {
         assert_eq!(executed, 1);
 
         // A real run row was created synchronously by spawn_routine_run.
+        // T7: routine_runs mirrors the drained JSONL placeholders too, so
+        // the authoritative history is exactly the JSONL history: mirrored
+        // queued tombstone + mirrored retired placeholder + the executor's
+        // running row.
         let runs_rows = inbox.list_runs(10).unwrap();
-        assert_eq!(runs_rows.len(), 1);
-        assert_eq!(runs_rows[0].task_id, id);
-        assert_eq!(runs_rows[0].status, "running");
-        let new_run_id = runs_rows[0].id.clone();
+        assert_eq!(
+            runs_rows.len(),
+            3,
+            "queued + retired placeholder + real run"
+        );
+        let running_row = runs_rows
+            .iter()
+            .find(|r| r.status == "running")
+            .expect("executor's run row");
+        assert_eq!(running_row.task_id, id);
+        assert!(running_row.finished_at_ms.is_none());
+        let new_run_id = running_row.id.clone();
+        assert!(
+            runs_rows
+                .iter()
+                .any(|r| r.id == queued_run_id && r.status == "queued"),
+            "12:00 queued tombstone mirrored (T7)"
+        );
+        assert!(
+            runs_rows.iter().any(|r| r.status == "cancelled"
+                && r.error
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains(&format!("superseded by run {new_run_id}"))),
+            "retired placeholder mirrored with its reason (T7)"
+        );
 
         // Routine state advanced with the injected clock…
         let stored = tasks.load(&id).unwrap().unwrap();
@@ -2610,7 +3675,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(executed, 0, "save failure must skip the spawn");
-        assert!(inbox.list_runs(10).unwrap().is_empty(), "no run row");
+        // T7: the only routine_runs row is the retired placeholder mirrored
+        // by retire_drained_run (cancelled, with the skip reason).
+        let mirrored = inbox.list_runs(10).unwrap();
+        assert_eq!(mirrored.len(), 1, "only the retired placeholder mirror");
+        assert_eq!(mirrored[0].status, "cancelled");
         assert!(
             inbox.list(None, None, 10).unwrap().is_empty(),
             "no inbox item"
@@ -2633,7 +3702,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(executed, 1, "recovered tick spawns");
-        assert_eq!(inbox.list_runs(10).unwrap().len(), 1);
+        // T7: 1 retire mirror from the failed tick + 1 retire mirror +
+        // 1 running executor row from the recovered tick — no second
+        // spawn was stacked.
+        let mirrored = inbox.list_runs(10).unwrap();
+        assert_eq!(mirrored.len(), 3);
+        assert_eq!(
+            mirrored.iter().filter(|r| r.status == "running").count(),
+            1,
+            "only the recovered tick's run is running"
+        );
         let stored = tasks.load(&id).unwrap().unwrap();
         assert_eq!(stored.fire_count, 1);
     }
@@ -2657,8 +3735,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(executed, 0, "in-flight guard must skip the spawn");
-        // Only the pre-existing row — no second run was stacked.
-        assert_eq!(inbox.list_runs(10).unwrap().len(), 1);
+        // T7: the pre-existing run row plus the retire mirror (cancelled
+        // placeholder) — no second *running* run was stacked.
+        let mirrored = inbox.list_runs(10).unwrap();
+        assert_eq!(mirrored.len(), 2);
+        assert_eq!(
+            mirrored.iter().filter(|r| r.status == "running").count(),
+            1,
+            "only the pre-existing run is running"
+        );
+        assert!(
+            mirrored.iter().any(|r| r.status == "cancelled"
+                && r.error.as_deref().unwrap_or_default().contains("in flight")),
+            "retire reason mirrored into the history"
+        );
         // The drained placeholder was retired with the skip reason.
         let history = runs.list_by_task(&id, 10).unwrap();
         assert_eq!(history.len(), 1);
@@ -2710,6 +3800,89 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(executed, 0);
+    }
+
+    // ── P0-4: trigger_task_now executes for real ─────────────────────────
+
+    /// Wait (bounded) for the spawned engine future to finalize the run,
+    /// then return its terminal `routine_runs` row.
+    async fn wait_for_terminal_run(
+        inbox: &InboxStore,
+        run_id: &str,
+    ) -> shannon_core::inbox_store::RunRecord {
+        // 2000 x 20ms = 40s ceiling (same budget as wait_for_session_start).
+        for _ in 0..2000 {
+            if let Some(row) = inbox
+                .list_runs(50)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.id == run_id && (r.status == "succeeded" || r.status == "failed"))
+            {
+                return row;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("run {run_id} never reached a terminal status (succeeded/failed)");
+    }
+
+    #[tokio::test]
+    async fn trigger_now_run_reaches_a_terminal_status_and_yields_an_inbox_item() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, tasks, _runs, inbox) = scheduler_fixture(tmp.path());
+
+        // Deterministic engine failure without DNS/network: the spawned run
+        // connects to a closed loopback port (instant ECONNREFUSED) with
+        // retries off. A live backend would instead finish "succeeded" —
+        // either terminal status satisfies the contract under test.
+        *deps.client_config.write().await = LlmClientConfig {
+            base_url: "http://127.0.0.1:9".into(),
+            retry_config: shannon_engine::api::retry::RetryConfig {
+                max_retries: 0,
+                ..shannon_engine::api::retry::RetryConfig::default()
+            },
+            ..LlmClientConfig::default()
+        };
+
+        let routine = ScheduledRoutine::new("manual fire".into(), "say hi".into(), 3600);
+        let id = routine.id.clone();
+        tasks.save(&routine).unwrap();
+
+        let resp = trigger_routine_with_deps(&deps, app.handle().clone(), routine)
+            .await
+            .expect("trigger must kick off the run");
+        assert_eq!(resp.task_id, id);
+        assert_eq!(resp.task_name, "manual fire");
+        assert!(!resp.run_id.is_empty());
+
+        // The executor mints the run row synchronously (SQLite-first, D6);
+        // no separate `Running` JSONL placeholder is written anymore.
+        let running = inbox
+            .list_runs(50)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == resp.run_id)
+            .expect("run row exists right after trigger");
+        assert_eq!(running.status, "running");
+        assert_eq!(running.task_id, id);
+
+        // The spawned engine finalizes the run — here: failed (offline
+        // fixture), and the row is never stuck in `running`.
+        let finished = wait_for_terminal_run(&inbox, &resp.run_id).await;
+        assert_eq!(finished.status, "failed");
+        assert!(finished.error.is_some(), "failure reason recorded");
+
+        // And the run produced its inbox item, exactly like the loopback
+        // trigger path (source=trigger, linked to the routine).
+        let items = inbox
+            .list(None, Some(shannon_core::inbox_store::SOURCE_TRIGGER), 50)
+            .unwrap();
+        assert!(
+            items
+                .iter()
+                .any(|i| i.source_id.as_deref() == Some(id.as_str())),
+            "trigger run must append an inbox item (source=trigger)"
+        );
     }
 
     #[test]

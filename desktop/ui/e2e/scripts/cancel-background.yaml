@@ -1,0 +1,29 @@
+# ChatScript: cancel-background — cancel-matrix 场景 9（后台会话取消）。
+#
+# 会话 A 长流式中切到 B（后台运行），再对 A 显式路由 cancel_query(sessionId=A)
+# ——通过 window.__TAURI_INTERNALS__.invoke 直发（P1-1 的显式路由路径，
+# 单窗口下模拟「另一窗口/后台取消」）——snapshot 断言：turn 收敛（phase
+# armed）、B 的画面/队列不受影响。
+name: cancel-background
+description: cancel-matrix #9 — 后台会话 A 取消：cancel_query(session_id) 显式路由 + snapshot 断言，B 不越窗响应
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-bg-a
+      title: Background A
+      messages: []
+    - id: script-sess-bg-b
+      title: Foreground B
+      messages: []
+turns:
+  - user: A 的长任务
+    script:
+      - event: query:text
+        chunks:
+          - "后台一，"
+          - "后台二，"
+          - "后台三，"
+          - "后台四。"
+        chunkDelayMs: 700
+      - event: query:completed

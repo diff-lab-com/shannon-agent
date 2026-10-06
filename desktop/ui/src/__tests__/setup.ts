@@ -1,5 +1,21 @@
 import '@testing-library/jest-dom/vitest'
+import { JSDOM } from 'jsdom'
 import { createElement, type ReactElement } from 'react'
+
+// Node >= 25 exposes an experimental global `localStorage` that stays
+// `undefined` unless --localstorage-file is passed. That own property on
+// globalThis wins over vitest's jsdom global population (which skips keys
+// that already exist on global), so every bare `localStorage` in tests
+// resolves to undefined (Node <= 22 has no such global, which is why CI
+// stays green). Shadow it with a real Storage. `window` is aliased to
+// globalThis under vitest's jsdom environment, so the jsdom-window storage
+// is unreachable from here — build a throwaway JSDOM window instead.
+if (typeof globalThis.localStorage === 'undefined') {
+  const storage = new JSDOM('', { url: 'http://localhost/' }).window.localStorage
+  delete (globalThis as { localStorage?: unknown }).localStorage
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage })
+}
+
 
 // Auto-wrap rendered components with I18nProvider so tests don't need to
 // manually wrap every `render()` call. This is global; individual tests
@@ -117,6 +133,32 @@ Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: tru
 // Mock getAnimations for base-ui ScrollArea
 Element.prototype.getAnimations = vi.fn().mockReturnValue([])
 
+// jsdom 24 + nwsapi 2.2.27: matching ':modal'/' :fullscreen' recurses between
+// nwsapi's isModal/isFullscreen and the jsdom matcher until a RangeError is
+// finally swallowed by nwsapi's try/catch — ~20s of CPU PER CALL. floating-ui's
+// isTopLayer() (getOffsetParent → every popup positioning pass, so every Base
+// UI Menu/Select/Dialog in jsdom) hits exactly this. Nothing in the suite
+// exercises the HTML top layer (no requestFullscreen / dialog.showModal), so
+// the honest answer in this environment is always false; guard without
+// changing behavior for any other selector.
+for (const method of ['matches', 'webkitMatchesSelector'] as const) {
+  const impl = Element.prototype[method]
+  Object.defineProperty(Element.prototype, method, {
+    configurable: true,
+    writable: true,
+    value(this: Element, selector: string, ...rest: unknown[]) {
+      // STRICT equality is deliberate, not sloppiness: widening this to a
+      // substring/prefix match can't cover compound selectors anyway
+      // (`:modal.foo`, `.x:modal` re-enter nwsapi's own parse path and the
+      // mutual recursion revives for those calls). The exact-match intercept
+      // is the honest boundary — anything compound must be fixed in nwsapi,
+      // not papered over here.
+      if (selector === ':modal' || selector === ':fullscreen') return false
+      return (impl as (...args: unknown[]) => boolean).apply(this, [selector, ...rest])
+    },
+  })
+}
+
 class IntersectionObserverMock {
   readonly root = null
   readonly rootMargin = ''
@@ -135,11 +177,44 @@ class PointerEventMock extends MouseEvent {}
 ;(globalThis as any).PointerEvent = PointerEventMock
 ;(window as any).PointerEvent = PointerEventMock
 
-// Mock tauri-api module
-vi.mock('@/lib/tauri-api', () => ({
+// Mock tauri-api module. The real module is spread in first so pure
+// helpers that don't cross the bridge (e.g. `parseFetchModelsError`)
+// behave identically to production; every `invoke`-backing export below
+// is overridden with an explicit mock.
+vi.mock('@/lib/tauri-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tauri-api')>()),
   sendMessage: vi.fn().mockResolvedValue({ message_id: '1', status: 'sent' }),
+  // S2-4a — vision pre-check default: the effective model HAS vision, so
+  // no send is ever held; the vision-confirm flow tests override per
+  // scenario (vision=false / rejection).
+  checkVisionSend: vi.fn().mockResolvedValue({
+    model: 'claude-sonnet-4-6',
+    provider: 'anthropic',
+    vision: true,
+  }),
+  // S2-4b — tools pre-check default: applies AND tool-capable, so no send
+  // is ever held; the tools-confirm flow tests override per scenario
+  // (tools=false / applies=false / rejection).
+  checkToolsSend: vi.fn().mockResolvedValue({
+    model: 'claude-sonnet-4-6',
+    provider: 'anthropic',
+    applies: true,
+    tools: true,
+  }),
+  // P0-3 preflight — default: every path checks clean; chip-flagging tests
+  // override per scenario.
+  checkAttachmentPaths: vi.fn().mockResolvedValue([]),
   getConversation: vi.fn().mockResolvedValue([]),
+  // A-6 fix default: no active session in the bare render — cold start stays
+  // unbound exactly as before; the binding test overrides this per scenario.
+  getActiveSessionId: vi.fn().mockResolvedValue(null),
   cancelQuery: vi.fn().mockResolvedValue(undefined),
+  // B1-4 (P1-3) — the stop watchdog's reconciliation read. Default: backend
+  // idle; the watchdog tests override per scenario.
+  getSessionQuerying: vi.fn().mockResolvedValue(false),
+  // B0 P0-2 — webview file drag-drop. Default: registration resolves with a
+  // no-op unlisten and no events ever fire; drag-flow tests override it.
+  onWebviewFileDrop: vi.fn().mockResolvedValue(() => {}),
   getConfig: vi.fn().mockResolvedValue({
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
@@ -148,6 +223,27 @@ vi.mock('@/lib/tauri-api', () => ({
     approval_mode: 'normal',
   }),
   configure: vi.fn().mockResolvedValue(undefined),
+  // Settings R3 T8 — answering an ask-user question card. Default: resolves;
+  // card tests assert against this spy.
+  respondAskUser: vi.fn().mockResolvedValue(undefined),
+  // R3-2: model-profile roster (Settings → Models "Profiles") — one active
+  // "default" row by default; flows override per test.
+  listProviderProfiles: vi.fn().mockResolvedValue([
+    { name: 'default', provider_count: 2, active: true, model: 'claude-sonnet-4-6' },
+  ]),
+  createProviderProfile: vi.fn(),
+  setActiveProviderProfile: vi.fn(),
+  // R5: profile rename/delete (Settings → Models "Profiles").
+  renameProviderProfile: vi.fn(),
+  deleteProviderProfile: vi.fn(),
+  // R4-3 (desktop slice): per-provider multi-key management panel.
+  listProviderKeys: vi.fn().mockResolvedValue([]),
+  addProviderKey: vi.fn(),
+  removeProviderKey: vi.fn(),
+  activateProviderKey: vi.fn(),
+  // P0-③/P1-⑤: plan dock + tool-duration lookup (both opportunistic reads).
+  getSessionPlan: vi.fn().mockResolvedValue(null),
+  getTraceTimeline: vi.fn().mockResolvedValue({ session_id: 's', turns: [], cumulative: [] }),
   // ADR-0011 B3/B7 — surface identity + bundled CLI install.
   getSurfaceInfo: vi.fn().mockResolvedValue({ surface: 'desktop', version: '0.11.0' }),
   getCliInstallStatus: vi.fn().mockResolvedValue({
@@ -170,21 +266,35 @@ vi.mock('@/lib/tauri-api', () => ({
     error: null,
   }),
   openReleasePage: vi.fn().mockResolvedValue(undefined),
+  // Settings R3 (T1) — About section: read-only data directory.
+  getShannonHome: vi.fn().mockResolvedValue('/home/tester/.shannon'),
+  // Settings R3 (T3) — General System cards: pretend to be a supported
+  // Linux host (hw-accel card visible, keep-awake switches enabled).
+  // Per-test `vi.mocked(...)` overrides cover the macos-hide and
+  // unsupported-disable branches.
+  getPowerCapabilities: vi.fn().mockResolvedValue({
+    platform: 'linux',
+    keepAwakeSupported: true,
+  }),
   // Remote targets (SSH hosts / Docker containers). Default: one saved
   // ssh target so the Remotes settings page renders its list.
-  remoteListTargets: vi.fn().mockResolvedValue([
-    {
-      name: 'build-box',
-      kind: 'ssh',
-      host: 'build-box',
-      port: null,
-      user: null,
-      container: null,
-      shell: null,
-      sshTarget: null,
-      workspaceDir: '/home/ed/proj',
-    },
-  ]),
+  remoteListTargets: vi.fn().mockResolvedValue({
+    targets: [
+      {
+        name: 'build-box',
+        kind: 'ssh',
+        host: 'build-box',
+        port: null,
+        user: null,
+        container: null,
+        shell: null,
+        sshTarget: null,
+        workspaceDir: '/home/ed/proj',
+      },
+    ],
+    // P1-16: the persisted default rides along with the list.
+    defaultTarget: 'build-box',
+  }),
   remoteDiscoverSshHosts: vi.fn().mockResolvedValue([
     { alias: 'build-box', user: 'ed', hostname: '192.168.1.20', port: 22 },
   ]),
@@ -232,9 +342,51 @@ vi.mock('@/lib/tauri-api', () => ({
   }),
   mobileListPairedDevices: vi.fn().mockResolvedValue([]),
   mobileRevokeDevice: vi.fn().mockResolvedValue(true),
+  mobileTlsStatus: vi.fn().mockResolvedValue({ enabled: false, fingerprint: null }),
+  // T9 — gateway IM pairing approval. Default: nothing pending; approve echoes.
+  gatewayPairingPending: vi.fn().mockResolvedValue([]),
+  gatewayPairingApprove: vi.fn().mockImplementation(async (code: string) => ({
+    code,
+    platform: 'slack',
+    senderId: 'UAPPROVED',
+    requestedAt: Date.now(),
+    expiresAt: Date.now() + 300_000,
+  })),
   testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
+  // P1-7 — settings "send test webhook" one-shot probe.
+  testWebhook: vi.fn().mockResolvedValue({ success: true, status: 200, detail: 'HTTP 200' }),
+  // 2026-09-29 provider review — in-modal probe + live model listing.
+  // Defaults mirror the getConfig default below (a configured provider) so
+  // existing gate-dependent tests keep today's behavior; per-test
+  // `vi.mocked(...)` overrides cover the unconfigured / failing paths.
+  testProviderCredentials: vi.fn().mockResolvedValue({ kind: 'success' }),
+  fetchProviderModels: vi.fn().mockResolvedValue([]),
+  // Default: configured + keyed, so the ApiKeyBanner / welcome CTA stay
+  // hidden in tests that don't care about them (matches the old dead-gate
+  // behavior those tests were written against).
+  getProviderStatus: vi.fn().mockResolvedValue({
+    active_provider_id: 'anthropic-main',
+    display_name: 'Anthropic',
+    kind: 'anthropic',
+    has_api_key: true,
+    model: 'claude-sonnet-4-6',
+    env_provider: null,
+  }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   saveProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
+  // S2-1 (模型仓固化): default no-op; the curation tests override per
+  // scenario.
+  setProviderModels: vi.fn().mockResolvedValue({
+    provider_id: '', model_profile: 'default', models: [],
+  }),
+  // S3-4 (推荐降级链): default empty recommendation + committed-echo no-op;
+  // the fallback-panel tests override per scenario.
+  recommendFallbackChain: vi.fn().mockResolvedValue({
+    provider_id: '', model_profile: 'default', current_model: null, hops: [],
+  }),
+  setProviderFallbackModels: vi.fn().mockResolvedValue({
+    provider_id: '', model_profile: 'default', fallback_models: [],
+  }),
   deleteProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   setActiveProvider: vi.fn().mockResolvedValue(undefined),
   // ADR-0005 P4.12 — fan-out probe. Default: empty roster.
@@ -242,6 +394,17 @@ vi.mock('@/lib/tauri-api', () => ({
   listModels: vi.fn().mockResolvedValue([
     { id: 'claude-sonnet-4-6', name: 'Claude Sonnet', provider: 'anthropic', context_window: 200000 },
   ]),
+  // R2-1 — session model override (composer chip). Default: no override on
+  // any session; per-test `vi.mocked(...)` overrides cover the active paths.
+  setSessionModel: vi.fn().mockResolvedValue(undefined),
+  clearSessionModel: vi.fn().mockResolvedValue(undefined),
+  getSessionModel: vi.fn().mockResolvedValue(null),
+  // S3-2 (P-N10) — override count for the Settings profile-switch confirm.
+  // Default: no session carries an override, so every switch stays direct;
+  // the confirm tests override per scenario.
+  countSessionModelOverrides: vi.fn().mockResolvedValue(0),
+  // R2-2 — Settings "Refresh model catalog". Default: no-op success.
+  refreshModelCatalog: vi.fn().mockResolvedValue({ count: 0, generation: 1 }),
   // ADR-0005 P4.9 — provider allowlist. Default: no override (returns
   // env-var state or null).
   getProviderAllowlist: vi.fn().mockResolvedValue(null),
@@ -251,9 +414,27 @@ vi.mock('@/lib/tauri-api', () => ({
     status: 'ready',
   }),
   getTools: vi.fn().mockResolvedValue([]),
+  // D5 方案① — welcome-card workspace probe. Default: markers PRESENT so
+  // every existing suite renders the full four-card welcome (the permissive
+  // default, like checkVisionSend); the filtering tests override with [].
+  detectWorkspaceMarkers: vi.fn().mockResolvedValue(['Cargo.toml']),
   newSession: vi.fn().mockResolvedValue('session-1'),
   listSessions: vi.fn().mockResolvedValue([]),
   searchSessions: vi.fn().mockResolvedValue([]),
+  // 卡A archive: the rail's 已归档 lens + archive/restore actions.
+  listArchivedSessions: vi.fn().mockResolvedValue([]),
+  archiveSession: vi.fn().mockResolvedValue(true),
+  unarchiveSession: vi.fn().mockResolvedValue(true),
+  // Settings R3 T7: the rail's pin flips (curation sidecar backend-side).
+  setSessionPinned: vi.fn().mockResolvedValue(true),
+  // P-E3/P-U3 project registry — default empty so pages degrade to path-tail
+  // labels without per-test mocking (the rail tree and the deep-link chips).
+  listProjects: vi.fn().mockResolvedValue([]),
+  registerProject: vi.fn().mockResolvedValue(null),
+  renameProject: vi.fn().mockResolvedValue(null),
+  setProjectAppearance: vi.fn().mockResolvedValue(null),
+  archiveProject: vi.fn().mockResolvedValue(null),
+  unarchiveProject: vi.fn().mockResolvedValue(null),
   loadSession: vi.fn().mockResolvedValue([]),
   switchSession: vi.fn().mockResolvedValue([]),
   setSessionWorkingDir: vi.fn().mockResolvedValue(undefined),
@@ -332,10 +513,17 @@ vi.mock('@/lib/tauri-api', () => ({
   listAgents: vi.fn().mockResolvedValue([]),
   listTasks: vi.fn().mockResolvedValue([]),
   getUsageStats: vi.fn().mockResolvedValue({ days: 30, totals: { label: 'total', input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0, requests: 0 }, by_model: [], by_provider: [], by_day: [] }),
+  // P2-1 — usage governance: default null keeps the sidebar % meter and the
+  // /usage budget card unmounted in tests that don't care; per-test
+  // overrides cover the budgeted / threshold paths.
+  getUsageGovernance: vi.fn().mockResolvedValue(null),
+  // P2-6 — pre-task cost estimate: default "no history" so the hint renders
+  // its first-run copy without per-test mocking.
+  estimateTaskCost: vi.fn().mockResolvedValue({ hasHistory: false, runsCounted: 0, minUsd: null, maxUsd: null, avgUsd: null, lastUsd: null }),
   requestPermission: vi.fn().mockResolvedValue(true),
   featuredVendorToEntry: vi.fn().mockResolvedValue({ id: 'test', kind: 'mcp', name: 'Test', description: '', trust: 'community', homepage_url: null, source: null, metadata: {}, tags: [] }),
   sendNotification: vi.fn().mockResolvedValue(undefined),
-  getNotificationPrefs: vi.fn().mockResolvedValue({ master_enabled: true, dnd_enabled: false, dnd_start: null, dnd_end: null, on_completed: true, on_failed: true }),
+  getNotificationPrefs: vi.fn().mockResolvedValue({ master_enabled: true, dnd_enabled: false, dnd_start: null, dnd_end: null, on_completed: true, on_failed: true, on_needs_attention: true, sound_enabled: false }),
   setNotificationPrefs: vi.fn().mockResolvedValue(undefined),
   getWebhookConfig: vi.fn().mockResolvedValue(null),
   saveWebhookConfig: vi.fn().mockResolvedValue(undefined),
@@ -346,6 +534,24 @@ vi.mock('@/lib/tauri-api', () => ({
   saveCustomProfile: vi.fn().mockResolvedValue({ name: 'p', description: '', auto_approve: [], confirm: [], deny: [] }),
   deleteCustomProfile: vi.fn().mockResolvedValue([]),
   listHookEvents: vi.fn().mockResolvedValue([]),
+  // X6 plugins page — installed management + add-from-three-sources.
+  // Defaults keep the installed section quiet; plugin tests override via
+  // vi.mocked(...).
+  listPlugins: vi.fn().mockResolvedValue([]),
+  installPlugin: vi.fn().mockResolvedValue({ name: 'plugin-x', warnings: [] }),
+  installPluginFromGit: vi.fn().mockResolvedValue({ name: 'plugin-git', warnings: [] }),
+  uninstallPlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  enablePlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  disablePlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  updatePlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  inspectPluginSource: vi.fn().mockResolvedValue({
+    name: 'preview-plugin',
+    source_format: 'claude-json',
+    skills: [],
+    agents: [],
+    commands: [],
+    mcp_servers: [],
+  }),
   listPluginMarketplace: vi.fn().mockResolvedValue([]),
   listCatalogUpstreams: vi.fn().mockResolvedValue([]),
   installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
@@ -380,6 +586,21 @@ vi.mock('@/lib/tauri-api', () => ({
   getMemoryGraph: vi.fn().mockResolvedValue({
     project: null, nodes: [], edges: [], entryCount: 0, maxEntries: 200, truncated: false,
   }),
+  // Dream pass (梦境提炼) — defaults so the Memory page's distillation
+  // section renders its empty state without per-test mocking.
+  runDreamPass: vi.fn().mockResolvedValue({
+    skipped_reason: null, scanned_sessions: 0, projects: [],
+    merge_proposed: 0, remove_proposed: 0, add_proposed: 0,
+    candidates_detected: 0, candidates_refined: 0,
+    proposal_ids: [], report_path: null, duration_ms: 0,
+  }),
+  listDreamProposals: vi.fn().mockResolvedValue([]),
+  readDreamReport: vi.fn().mockResolvedValue(''),
+  applyDreamProposal: vi.fn().mockResolvedValue({ applied: [], skipped: [] }),
+  discardDreamProposal: vi.fn().mockResolvedValue(undefined),
+  // 卡C — cold-start read-back; null fields keep the 「上次提炼」 line off.
+  readDreamState: vi.fn().mockResolvedValue({ last_dream_at: null, last_stats: null }),
+  detectSkillsSlash: vi.fn().mockResolvedValue(0),
   // P0-3 inbox — defaults so components consuming useInboxStats (e.g. the
   // sidebar badge) render sanely without per-test mocking.
   listInboxItems: vi.fn().mockResolvedValue([]),
@@ -396,6 +617,13 @@ vi.mock('@/lib/tauri-api', () => ({
   // OffpeakWindowEditor renders without a queued status and without
   // per-test mocking.
   listTaskExecutions: vi.fn().mockResolvedValue([]),
+  // Tasks page (useScheduledTasks) — default empty so the page and the
+  // sidebar automations section render without per-test mocking.
+  listScheduledTasks: vi.fn().mockResolvedValue([]),
+  // I2 create-schedule path — resolves to a minimal routine so
+  // handleCreateSchedule's `created` toast branch works out of the box;
+  // tests assert on the CALL args (e.g. the working_dir default).
+  createScheduledTask: vi.fn().mockResolvedValue({ id: 'r-mock', name: 'Mock routine', trigger_type: 'interval' }),
   updateScheduledTask: vi.fn().mockResolvedValue(null),
   stopGoalRun: vi.fn().mockResolvedValue(undefined),
   pauseGoalRun: vi.fn().mockResolvedValue(undefined),
@@ -435,6 +663,25 @@ vi.mock('@/lib/tauri-api', () => ({
   // the populated-action / failure paths.
   lspCodeActions: vi.fn().mockResolvedValue({ actions: [] }),
   applyCodeAction: vi.fn().mockResolvedValue(0),
+  // 2026-09-25 open pipeline — default: paths don't exist (FileRefChip
+  // degrades to inline code), reads/opens inert. Per-test overrides cover
+  // the exists → interactive-chip path.
+  pathExists: vi.fn().mockResolvedValue(false),
+  readTextFile: vi.fn().mockResolvedValue({ path: '', content: '', sizeBytes: 0 }),
+  openExternal: vi.fn().mockResolvedValue(undefined),
+  openWithDefaultApp: vi.fn().mockResolvedValue(undefined),
+  revealInFolder: vi.fn().mockResolvedValue(undefined),
+  openArtifactExternally: vi.fn().mockResolvedValue('/tmp/shannon-artifacts/x.html'),
+  // Office Wave 1 — host runtime probe (Welcome documents card) + save-as.
+  probeHostRuntime: vi.fn().mockResolvedValue({ python3: true, pythonVersion: 'Python 3.12.3', pandoc: false, libreoffice: false }),
+  copyFile: vi.fn().mockResolvedValue(undefined),
+  probeUrlFrameable: vi.fn().mockResolvedValue({ frameable: true, status: 200, reason: null }),
+  // 2026-09-26 round2 §5-1 A — artifact:// interactive HTML registry.
+  // Default: one stable registration; per-test overrides cover rejection /
+  // fallback paths. The mock is exhaustive — a missing export crashes every
+  // test that renders MessageBubble/RightDock.
+  registerInteractiveHtml: vi.fn().mockResolvedValue({ id: 'mock-artifact', url: 'artifact://mock-artifact' }),
+  unregisterInteractiveArtifact: vi.fn().mockResolvedValue(undefined),
   // P1-5 C-2 — workspace layout persistence. Default: nothing stored, so
   // the Chat page boots on the default focus preset in every test.
   workspaceGetLayout: vi.fn().mockResolvedValue(null),
@@ -452,4 +699,13 @@ vi.mock('@/lib/tauri-api', () => ({
   terminalWrite: vi.fn().mockResolvedValue(undefined),
   terminalResize: vi.fn().mockResolvedValue(undefined),
   terminalKill: vi.fn().mockResolvedValue(undefined),
+  // P3-1 — terminal settings card (AdvancedSettings mounts it on every
+  // render). set-settings echoes its input like the backend's effective
+  // response; history stays an empty replay payload.
+  terminalGetSettings: vi.fn().mockResolvedValue({
+    shell: null, fontSize: 12, scrollback: 5000, drawerHeight: 320, screenReaderMode: false,
+    loginShell: false, fontFamily: null,
+  }),
+  terminalSetSettings: vi.fn().mockImplementation((settings: unknown) => Promise.resolve(settings)),
+  terminalHistory: vi.fn().mockResolvedValue({ data: '' }),
 }))

@@ -19,6 +19,7 @@
 use serde::Serialize;
 use std::process::Stdio;
 use std::sync::Mutex;
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
 type ProbeFn = fn() -> ServiceState;

@@ -1,0 +1,49 @@
+# ChatScript: multi-window — wave-2 journey #21（方案 §9.4 J21 / G5，nightly-only）。
+#
+# 双页模型：同一个剧本武装两个 page。pageA 主窗（/chat）冷启动绑定第一个
+# seed 会话 s1；pageB 以 /chat?windowSession=<s2> 起会话窗（windowSession
+# 参数要求 UUID —— lib/windowSession.ts 的 parseWindowSession 硬校验）。
+# 两页 mock 独立（各自的 __shannonMock / 桥），所以跨页断言只有
+# 「每页自身的过滤投影」这一种语义：
+#   - 剧本 turn 本身不带会话身份 —— auto payload 的 session_id 来自
+#     send_message 的目标会话（pageA→s1/s2、pageB→s2），同一份 YAML 两页
+#     各自消费各自的 turn（turn 文本按「轮」命名，不按会话命名，避免
+#     两页消费同一 turn 时的标签混淆）。
+#   - pageB 的 s1 事件注入用 control.emitNow 显式带 session_id=s1
+#     （绕开播放器状态，纯桥发射）—— 正是 windowSession 过滤器的探针。
+# 审批窗断言钉现状：PERMISSION_REQUEST 只按「窗」过滤（AppContext
+# isEventForCurrentWindow：主窗 windowSessionId=null 全放行），不按「显示中的
+# 会话」过滤 —— 主窗显示 s1 时 s2 的审批弹窗也会弹出（spec 把这个现状钉死）。
+name: multi-window
+description: 多窗 journey — 主窗共览两会话、会话窗只收本会话事件、审批弹窗按窗过滤（主窗全放行现状钉死）
+seed:
+  config:
+    hasKey: true
+  sessions:
+    # UUID ids —— pageB 的 ?windowSession= 必须通过 parseWindowSession 的
+    # UUID 硬校验（非 UUID 参数会被静默丢弃回主窗形态）。
+    - id: 11111111-1111-4111-8111-111111111111
+      title: Main Session One
+      messages: []
+    - id: 22222222-2222-4222-8222-222222222222
+      title: Window Session Two
+      messages: []
+turns:
+  - user: 第一轮问题
+    script:
+      - event: query:text
+        chunks:
+          - "第一轮流一段 "
+          - "第一轮流二段 "
+          - "第一轮流三段"
+        chunkDelayMs: 200
+      - event: query:completed
+  - user: 第二轮问题
+    script:
+      - event: query:text
+        chunks:
+          - "第二轮流一段 "
+          - "第二轮流二段 "
+          - "第二轮流三段"
+        chunkDelayMs: 200
+      - event: query:completed

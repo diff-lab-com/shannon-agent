@@ -53,6 +53,10 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
   const [models, setModels] = useState<api.WhisperModelInfo[]>([])
   const [config, setConfig] = useState<api.VoiceLocalConfig | null>(null)
   const [saving, setSaving] = useState(false)
+  // P1-16: the language field used to save (and toast!) on every keystroke.
+  // The draft state holds the in-progress text; the write happens on blur /
+  // Enter with the committed value.
+  const [languageDraft, setLanguageDraft] = useState('')
   const [activeDownload, setActiveDownload] = useState<string | null>(null)
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null)
   const unlistenRef = useRef<UnlistenFn | null>(null)
@@ -65,6 +69,7 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
       ])
       setConfig(cfg)
       setModels(m)
+      setLanguageDraft(cfg?.language ?? '')
     } catch (e) {
       // Silent — the card is best-effort. A toast here would
       // pile up on every Settings open.
@@ -136,6 +141,14 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
     setSaving(false)
   }
 
+  /** Commit the language draft once editing ends (blur / Enter). */
+  const commitLanguage = () => {
+    if (!config) return
+    const next = languageDraft.trim() || null
+    if ((config.language ?? null) === next) return
+    void handleSave({ language: next })
+  }
+
   const handleDownload = async (model: string) => {
     setActiveDownload(model)
     setDownloadProgress({ model, progress: 0, done: false, error: null })
@@ -159,12 +172,12 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
 
   if (featureDisabled) {
     return (
-      <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+      <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
         <div className="flex items-center gap-md mb-md">
-          <div className="p-2 bg-tertiary/10 rounded-lg text-tertiary flex items-center justify-center">
+          <div className="p-sm bg-tertiary-container rounded-lg text-on-tertiary-container flex items-center justify-center">
             <span className="material-symbols-outlined">offline_bolt</span>
           </div>
-          <h3 className="font-headline-md text-[24px] font-bold text-on-surface">
+          <h3 className="font-headline-md text-headline-md font-bold text-on-surface">
             {t('settings.voiceLocal.title')}
           </h3>
         </div>
@@ -176,12 +189,12 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
   }
 
   return (
-    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
       <div className="flex items-center gap-md mb-md">
-        <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+        <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
           <span className="material-symbols-outlined">offline_bolt</span>
         </div>
-        <h3 className="font-headline-md text-[24px] font-bold text-on-surface">
+        <h3 className="font-headline-md text-headline-md font-bold text-on-surface">
           {t('settings.voiceLocal.title')}
         </h3>
         <span
@@ -202,10 +215,10 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
       <div className="space-y-md">
         <div className="flex items-center justify-between gap-md">
           <div>
-            <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+            <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
               {t('settings.voiceLocal.enable')}
             </div>
-            <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+            <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
               {t('settings.voiceLocal.enableDesc')}
             </div>
           </div>
@@ -213,11 +226,14 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
             checked={config?.enabled ?? false}
             disabled={!config}
             onCheckedChange={(v) => void handleSave({ enabled: v })}
+            // B6-37: switches must carry an accessible name — reuse the
+            // adjacent label's key.
+            aria-label={t('settings.voiceLocal.enable')}
           />
         </div>
 
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1">
+          <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs">
             {t('settings.voiceLocal.model')}
           </label>
           <div className="space-y-sm">
@@ -230,10 +246,10 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
                   className="flex items-center gap-md p-sm rounded-lg border border-outline-variant/30 bg-surface-container-low"
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="font-label-md text-[14px] text-on-surface font-semibold">
+                    <div className="font-label-md text-body-sm text-on-surface font-semibold">
                       {m.model}
                     </div>
-                    <div className="font-label-sm text-[12px] text-on-surface-variant">
+                    <div className="font-label-sm text-label-sm text-on-surface-variant">
                       {m.downloaded
                         ? t('settings.voiceLocal.modelReady', {
                             size: m.size_bytes
@@ -245,7 +261,7 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
                           })}
                     </div>
                     {isActive && progress && (
-                      <div className="mt-xs h-1.5 w-full bg-surface-container-highest rounded overflow-hidden">
+                      <div className="mt-xs h-1.5 w-full bg-surface-container-highest rounded-sm overflow-hidden">
                         <div
                           className="h-full bg-primary transition-all"
                           style={{ width: `${Math.round(progress.progress * 100)}%` }}
@@ -282,7 +298,7 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
         </div>
 
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1">
+          <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs">
             {t('settings.voiceLocal.preferredModel')}
           </label>
           <Select
@@ -303,23 +319,29 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
         </div>
 
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1">
+          <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs" htmlFor="voice-local-language">
             {t('settings.voiceLocal.language')}
           </label>
           <Input
+            id="voice-local-language"
             type="text"
-            value={config?.language ?? ''}
-            onChange={(e) => void handleSave({ language: e.target.value || null })}
+            value={languageDraft}
+            onChange={(e) => setLanguageDraft(e.target.value)}
+            onBlur={commitLanguage}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitLanguage()
+            }}
+            disabled={!config}
             placeholder="auto (en, zh, …)"
           />
         </div>
 
         <div className="flex items-center justify-between gap-md">
           <div>
-            <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+            <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
               {t('settings.voiceLocal.autoDownload')}
             </div>
-            <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+            <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
               {t('settings.voiceLocal.autoDownloadDesc')}
             </div>
           </div>
@@ -327,6 +349,7 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
             checked={config?.auto_download ?? true}
             disabled={!config}
             onCheckedChange={(v) => void handleSave({ auto_download: v })}
+            aria-label={t('settings.voiceLocal.autoDownload')}
           />
         </div>
 

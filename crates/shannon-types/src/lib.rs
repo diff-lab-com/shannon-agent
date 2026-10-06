@@ -13,6 +13,7 @@ pub mod events;
 pub mod model_ref;
 pub mod provider_config;
 pub mod session_event;
+pub mod shell;
 
 // Re-export the canonical `provider/model` identifier at the crate root for
 // ergonomics (`shannon_types::ModelRef`); see ADR-0005 Phase 0.

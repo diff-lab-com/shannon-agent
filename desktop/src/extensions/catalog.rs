@@ -46,7 +46,7 @@ pub fn featured_vendors() -> Vec<FeaturedVendor> {
             slug: "linear".into(),
             display_name: "Linear".into(),
             description: "Issues, projects, and sprints from Linear.".into(),
-            icon: "linear".into(),
+            icon: "segment".into(),
             category: FeaturedCategory::Productivity,
             trust: TrustLevel::Verified,
             install_kind: FeaturedInstallKind::OAuthRemote {
@@ -160,6 +160,69 @@ pub fn featured_vendors() -> Vec<FeaturedVendor> {
                 display_name: "Install Exa".into(),
             },
             homepage_url: "https://exa.ai/".into(),
+        },
+        FeaturedVendor {
+            slug: "filesystem".into(),
+            display_name: "Filesystem".into(),
+            description: "Read, write, and search files in allowed directories.".into(),
+            icon: "folder".into(),
+            category: FeaturedCategory::DeveloperTools,
+            trust: TrustLevel::Official,
+            install_kind: FeaturedInstallKind::Stdio {
+                command: "npx".into(),
+                args: vec![
+                    "-y".into(),
+                    "@modelcontextprotocol/server-filesystem".into(),
+                ],
+                env_vars: vec![],
+                display_name: "Install Filesystem".into(),
+            },
+            homepage_url: "https://github.com/modelcontextprotocol/servers".into(),
+        },
+        FeaturedVendor {
+            slug: "puppeteer".into(),
+            display_name: "Browser (Puppeteer)".into(),
+            description: "Drive a headless browser: navigate, click, screenshot.".into(),
+            icon: "web".into(),
+            category: FeaturedCategory::DeveloperTools,
+            trust: TrustLevel::Official,
+            install_kind: FeaturedInstallKind::Stdio {
+                command: "npx".into(),
+                args: vec!["-y".into(), "@modelcontextprotocol/server-puppeteer".into()],
+                env_vars: vec![],
+                display_name: "Install Browser".into(),
+            },
+            homepage_url: "https://github.com/modelcontextprotocol/servers".into(),
+        },
+        FeaturedVendor {
+            slug: "postgres".into(),
+            display_name: "PostgreSQL".into(),
+            description: "Read-only SQL queries against a Postgres database.".into(),
+            icon: "database".into(),
+            category: FeaturedCategory::DataSources,
+            trust: TrustLevel::Official,
+            install_kind: FeaturedInstallKind::Stdio {
+                command: "npx".into(),
+                args: vec!["-y".into(), "@modelcontextprotocol/server-postgres".into()],
+                env_vars: vec![("DATABASE_URL".into(), "".into())],
+                display_name: "Install PostgreSQL".into(),
+            },
+            homepage_url: "https://github.com/modelcontextprotocol/servers".into(),
+        },
+        FeaturedVendor {
+            slug: "memory".into(),
+            display_name: "Knowledge Memory".into(),
+            description: "Persistent knowledge-graph memory across sessions.".into(),
+            icon: "psychology".into(),
+            category: FeaturedCategory::Productivity,
+            trust: TrustLevel::Official,
+            install_kind: FeaturedInstallKind::Stdio {
+                command: "npx".into(),
+                args: vec!["-y".into(), "@modelcontextprotocol/server-memory".into()],
+                env_vars: vec![],
+                display_name: "Install Memory".into(),
+            },
+            homepage_url: "https://github.com/modelcontextprotocol/servers".into(),
         },
     ]
 }
@@ -597,9 +660,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn featured_vendors_includes_eight_canonical_vendors() {
+    fn featured_vendors_includes_twelve_canonical_vendors() {
         let vendors = featured_vendors();
-        assert_eq!(vendors.len(), 8, "5 OAuth vendors + 3 search data sources");
+        assert_eq!(
+            vendors.len(),
+            12,
+            "5 OAuth vendors + 3 search + filesystem/puppeteer/postgres/memory (MCP official)"
+        );
         let slugs: Vec<&str> = vendors.iter().map(|v| v.slug.as_str()).collect();
         assert!(slugs.contains(&"notion"));
         assert!(slugs.contains(&"linear"));
@@ -609,6 +676,10 @@ mod tests {
         assert!(slugs.contains(&"tavily"));
         assert!(slugs.contains(&"brave-search"));
         assert!(slugs.contains(&"exa"));
+        assert!(slugs.contains(&"filesystem"));
+        assert!(slugs.contains(&"puppeteer"));
+        assert!(slugs.contains(&"postgres"));
+        assert!(slugs.contains(&"memory"));
     }
 
     #[test]

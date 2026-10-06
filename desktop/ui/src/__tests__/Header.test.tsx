@@ -63,7 +63,9 @@ describe('Header component', () => {
       { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai', context_window: 128000 },
     ]
     mockCtx.permissionRequest = null
-    mockCtx.respondPermission = vi.fn()
+    // Header fires respondPermission without awaiting (B0 P0-1 made the
+    // real action re-throw on failure), so the mock must return a promise.
+    mockCtx.respondPermission = vi.fn().mockResolvedValue(undefined)
     mockCtx.refreshConfig = vi.fn()
     mockCtx.refreshStatus = vi.fn()
     mockCtx.config = { active_permission_profile: 'balanced', approval_mode: 'suggest', sandbox: { mode: 'off' } }
@@ -101,7 +103,8 @@ describe('Header component', () => {
     ]
     mockSessionCtx.currentSessionId = 's1'
     render(wrap(<Header />, { route: '/tasks' }))
-    expect(screen.getByText('Scheduled')).toBeInTheDocument()
+    // IA T1: /tasks is titled「自动化」(Automations), never「任务」.
+    expect(screen.getByText('Automations')).toBeInTheDocument()
   })
 
   // U2 — ContextPanel toggle moved here from the retired ChatHeader.
@@ -125,12 +128,51 @@ describe('Header component', () => {
   })
 
   it('renders model selector with current model name', () => {
-    render(wrap(<Header />, { route: '/chat' }))
+    render(wrap(<Header />, { route: '/tasks' }))
     expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument()
   })
 
+  // S3-1 (P-N11) — the Header menu reads at the SAME density as the
+  // composer chip: priority line, context·price meta, source badge and the
+  // why-active label all come from the shared row renderer.
+  it('model menu shows the priority line, price meta and source badge (chip parity)', async () => {
+    mockCtx.status = {
+      model: 'claude-sonnet-4-6', provider: 'anthropic', querying: false,
+      active_profile: 'default',
+    } as any
+    mockCtx.models = [
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet', provider: 'anthropic', context_window: 200000, price_in: 3, price_out: 15, vision: true },
+      { id: 'gpt-5-mini', name: 'GPT-5 Mini', provider: 'openai', context_window: 128000, price_in: 0.25, price_out: 2, source: 'overlay' },
+    ]
+    render(wrap(<Header />, { route: '/tasks' }))
+    fireEvent.click(screen.getByText('claude-sonnet-4-6'))
+    // The precedence line, stated in the picker (chat.input/header parity).
+    await waitFor(() => {
+      expect(screen.getByTestId('header-model-priority-line')).toBeInTheDocument()
+    })
+    // Price meta the old Header row never showed.
+    expect(screen.getByText('200k · $3.00/$15.00')).toBeInTheDocument()
+    // Shared provenance badge — same component as the Settings catalog.
+    expect(screen.getByTestId('source-badge-overlay')).toBeInTheDocument()
+    // The default row's why label: "default" is the unset sentinel → plain
+    // "Global default", never a fake profile attribution.
+    expect(screen.getByTestId('why-badge-global')).toBeInTheDocument()
+  })
+
+  it('attributes the default row to an explicitly active profile (why label)', async () => {
+    mockCtx.status = {
+      model: 'claude-sonnet-4-6', provider: 'anthropic', querying: false,
+      active_profile: 'lab',
+    } as any
+    render(wrap(<Header />, { route: '/tasks' }))
+    fireEvent.click(screen.getByText('claude-sonnet-4-6'))
+    await waitFor(() => {
+      expect(screen.getByTestId('why-badge-profile')).toHaveTextContent('lab')
+    })
+  })
+
   it('opens model dropdown with model names on click', async () => {
-    render(wrap(<Header />, { route: '/chat' }))
+    render(wrap(<Header />, { route: '/tasks' }))
     fireEvent.click(screen.getByText('claude-sonnet-4-6'))
     await waitFor(() => {
       expect(screen.getByText('Claude Sonnet')).toBeInTheDocument()
@@ -138,25 +180,91 @@ describe('Header component', () => {
     })
   })
 
-  // U2 — Header absorbed ChatInput's dual-write: it configures the model
-  // NAME plus the model's provider (not just the catalog id).
+  // Decision 1 (B1-8) — the config's `model` key stores the catalog ID:
+  // Header writes the id plus the model's provider (never the name).
   it('switches model when option is clicked', async () => {
     const api = await import('@/lib/tauri-api')
-    render(wrap(<Header />, { route: '/chat' }))
+    render(wrap(<Header />, { route: '/tasks' }))
     fireEvent.click(screen.getByText('claude-sonnet-4-6'))
     await waitFor(() => {
       expect(screen.getByText('GPT-4o')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByText('GPT-4o'))
     await waitFor(() => {
-      expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'GPT-4o' })
+      expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'gpt-4o' })
       expect(api.configure).toHaveBeenCalledWith({ key: 'provider', value: 'openai' })
     })
   })
 
+  // w4 refactor/header-menus-baseui — this menu used to be the family's last
+  // INLINE dropdown: it sat inside the glass header's contain:paint stacking
+  // context (#250 only portalled the two /chat switchers), so on /settings
+  // it was one sidebar-resize away from clipping. Same portal contract as
+  // the switchers now: body-level mount + z-modal token on the positioner.
+  it('opens the model menu as a body-level portal carrying the z-modal positioner token', async () => {
+    const { container } = render(wrap(<Header />, { route: '/tasks' }))
+    const trigger = screen.getByRole('button', { name: 'Select model' })
+    trigger.focus()
+    fireEvent.click(trigger)
+    const menu = await screen.findByRole('listbox', { name: 'Select model' })
+    let root: HTMLElement = menu
+    while (root.parentElement && root.parentElement !== document.body) {
+      root = root.parentElement
+    }
+    expect(root.parentElement).toBe(document.body)
+    expect(container.contains(menu)).toBe(false)
+    expect(menu.parentElement).toHaveClass('z-modal')
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('Escape closes the model menu and returns focus to the trigger', async () => {
+    render(wrap(<Header />, { route: '/tasks' }))
+    const trigger = screen.getByRole('button', { name: 'Select model' })
+    trigger.focus()
+    fireEvent.click(trigger)
+    await screen.findByRole('listbox', { name: 'Select model' })
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => {
+      expect(screen.queryByRole('listbox', { name: 'Select model' })).toBeNull()
+    }, { timeout: 5000 })
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  // S1-5 (P-N16①) — the old `models.length > 0` gate removed the whole
+  // Portal, so clicking the trigger on an empty catalog was a silent no-op.
+  // Now the menu always renders; with no models it carries one explanatory
+  // entry that deep-links to the model settings page.
+  it('empty catalog: the menu renders an explanatory entry deep-linking to /settings/models', async () => {
+    mockCtx.models = []
+    render(
+      wrap(
+        <>
+          <Header />
+          <LocationProbe />
+        </>,
+        { route: '/tasks' },
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Select model' }))
+    const entry = await screen.findByTestId('header-model-empty')
+    expect(entry).toHaveTextContent('No models available — add one in Settings')
+    fireEvent.click(entry)
+    await waitFor(() => {
+      expect(screen.getByTestId('header-location')).toHaveTextContent('/settings/models')
+    })
+  })
+
+  // 2026-09 dedup: on /chat the composer chip is the single model surface
+  // (issue: 三处模型名重复). Header must hide its selector on that page
+  // so there's exactly one entry point per view.
+  it('hides the model selector on /chat — the composer chip owns it there', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.queryByRole('button', { name: /select model/i })).not.toBeInTheDocument()
+  })
+
   it('renders OPC title on /opc route', () => {
     render(wrap(<Header />, { route: '/opc' }))
-    expect(screen.getByText('One Person Company')).toBeInTheDocument()
+    expect(screen.getByText('Mission Control')).toBeInTheDocument()
   })
 
   it('renders sync status badge on /opc/task route', () => {
@@ -180,10 +288,17 @@ describe('Header component', () => {
 
   // U3 — four distinguishable risk tiers: critical=error, high=secondary,
   // medium=tertiary (was wrongly secondary), low=tertiary. Localized text,
-  // announced via aria-label.
+  // announced via aria-label. G7 2026-09-30: tier chips render the MD3
+  // container pairs (bg-X-container + text-on-X-container), not accent
+  // text on an accent/10 tint.
   describe.each(['critical', 'high', 'medium', 'low'] as const)('risk tier %s', (risk) => {
     const label = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' }[risk]
-    const tier = { critical: 'text-error', high: 'text-secondary', medium: 'text-tertiary', low: 'text-tertiary' }[risk]
+    const tier = {
+      critical: 'text-on-error-container',
+      high: 'text-on-secondary-container',
+      medium: 'text-on-tertiary-container',
+      low: 'text-on-tertiary-container',
+    }[risk]
 
     it(`renders a localized "${label}" badge in the ${tier} tier`, () => {
       mockCtx.permissionRequest = { request_id: 'p1', tool: 'bash', risk, input: null }
@@ -223,9 +338,9 @@ describe('Header component', () => {
     expect(screen.getByText('Chat')).toBeInTheDocument()
   })
 
-  it('renders Scheduled title on /tasks route', () => {
+  it('renders Automations title on /tasks route (IA T1)', () => {
     render(wrap(<Header />, { route: '/tasks' }))
-    expect(screen.getByText('Scheduled')).toBeInTheDocument()
+    expect(screen.getByText('Automations')).toBeInTheDocument()
   })
 
   it('renders Settings title on /settings route', () => {
@@ -244,8 +359,8 @@ describe('Header component', () => {
     expect(screen.getByLabelText('Help')).toBeInTheDocument()
   })
 
-  // U6: the bell tooltip says where it leads — the approval dialog when
-  // pending, Triage otherwise.
+  // U6/IA T3: the bell always leads to /triage — the pending skill count
+  // is announced in the tooltip, but the click is never hijacked into a modal.
   it('bell title names the Triage inbox when nothing is pending', () => {
     render(wrap(<Header />, { route: '/chat' }))
     expect(screen.getByLabelText('Notifications')).toHaveAttribute(
@@ -253,7 +368,7 @@ describe('Header component', () => {
     )
   })
 
-  it('bell title names the approval dialog when skills are pending', async () => {
+  it('bell title names the Triage inbox when skills are pending', async () => {
     const api = await import('@/lib/tauri-api')
     vi.mocked(api.listSkillCandidates).mockResolvedValue([
       { id: 'c1', proposed_name: 'X', proposed_trigger: 'Y', occurrence_count: 1, procedure: [], last_seen_at: '', originating_sessions: [] },
@@ -261,7 +376,7 @@ describe('Header component', () => {
     render(wrap(<Header />, { route: '/chat' }))
     const bell = await screen.findByLabelText('Notifications')
     await waitFor(() => {
-      expect(bell).toHaveAttribute('title', expect.stringContaining('opens the approval dialog'))
+      expect(bell).toHaveAttribute('title', expect.stringContaining('Triage inbox'))
     })
   })
 
@@ -305,14 +420,25 @@ describe('Header — skill candidate badge', () => {
     })
   })
 
-  it('opens SkillApprovalModal on bell click when pending', async () => {
+  // IA T3: the badge stays, but the click lands on /triage — no approval
+  // dialog is mounted anywhere in the Header anymore.
+  it('keeps the badge but routes the click to /triage (no modal hijack)', async () => {
     vi.mocked(api.listSkillCandidates).mockResolvedValue([
       { id: 'c1', proposed_name: 'Wrap commits', proposed_trigger: 'when committing', occurrence_count: 2, procedure: ['s1'], last_seen_at: '', originating_sessions: [] },
     ])
-    render(wrap(<Header />, { route: '/chat' }))
+    render(
+      wrap(
+        <>
+          <Header />
+          <LocationProbe />
+        </>,
+        { route: '/chat' }
+      )
+    )
     await waitFor(() => { expect(screen.getByLabelText('Notifications').querySelector('.bg-error')).toBeTruthy() })
     fireEvent.click(screen.getByLabelText('Notifications'))
-    await waitFor(() => { expect(screen.getByText('Save as skill?')).toBeInTheDocument() })
+    await waitFor(() => { expect(screen.getByTestId('header-location')).toHaveTextContent('/triage') })
+    expect(screen.queryByText('Save as skill?')).not.toBeInTheDocument()
   })
 
 })

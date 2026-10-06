@@ -16,8 +16,8 @@
 //!    lands in a follow-up).
 //! 8. **Discord** — queries Discord channel history via the REST API (config-only).
 //! 9. **Telegram** — queries Telegram bot chats via the Bot API (config-only).
-//! 10. **RSS Feed** — fetches and parses any RSS/Atom feed.
-//! 11. **Web Calendar (iCal)** — fetches and parses any .ics feed.
+//! 10. **RSS Feed** — connects an RSS/Atom feed (config-only; query in a follow-up).
+//! 11. **Web Calendar (iCal)** — connects an .ics feed (config-only).
 
 use serde::{Deserialize, Serialize};
 
@@ -366,7 +366,9 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
             slug: "rss".into(),
             kind: DataSourceKind::Rss,
             name: "RSS / Atom Feed".into(),
-            description: "Fetch and search any RSS or Atom feed.".into(),
+            description: "Connect an RSS or Atom feed to attach results into your workflow \
+                          (config-only; query coming soon)."
+                .into(),
             homepage_url: Some("https://www.rssboard.org/rss-specification".into()),
             fields: vec![
                 DataSourceField {
@@ -383,7 +385,7 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                     kind: "number".into(),
                     required: false,
                     placeholder: Some("50".into()),
-                    help: Some("Optional: cap items returned per query.".into()),
+                    help: Some("Optional: cap items returned once query support lands.".into()),
                 },
             ],
         },
@@ -391,7 +393,9 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
             slug: "ical".into(),
             kind: DataSourceKind::Ical,
             name: "Web Calendar (iCal)".into(),
-            description: "Fetch and search events from any .ics feed.".into(),
+            description: "Connect an iCal (.ics) feed to attach events into your workflow \
+                          (config-only; query coming soon)."
+                .into(),
             homepage_url: Some("https://datatracker.ietf.org/doc/html/rfc5545".into()),
             fields: vec![DataSourceField {
                 key: "feed_url".into(),
@@ -433,6 +437,24 @@ fn adapter_to_entry(adapter: &DataSourceAdapter) -> CatalogEntry {
         metadata,
         tags: vec!["native".into(), adapter.kind.as_str().into()],
     }
+}
+
+/// The union of every adapter's credential fields — the keys declared
+/// `kind: "password"` in the catalog (IMAP `password`, Notion
+/// `integration_token`, Linear `api_key`, GitHub/Slack/Telegram `token`,
+/// Jira `api_token`, Discord/`bot_token`s).
+///
+/// F5 migration scope: exactly these fields move into the OS keyring
+/// (`shannon/datasource/<slug>`, JSON map). Host/port/user/enabled-style
+/// fields stay in the TOML — they are not credentials and their plaintext
+/// presence is what makes the file readable when the keyring is gone.
+pub fn secret_field_keys() -> std::collections::BTreeSet<String> {
+    data_source_adapters()
+        .iter()
+        .flat_map(|a| a.fields.iter())
+        .filter(|f| f.kind == "password")
+        .map(|f| f.key.clone())
+        .collect()
 }
 
 #[cfg(test)]

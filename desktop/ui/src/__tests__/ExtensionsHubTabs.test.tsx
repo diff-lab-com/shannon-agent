@@ -1,8 +1,16 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import Extensions from '@/pages/Extensions'
+
+// IA X1: the hub subscribes to pending skill candidates for the 待处理 tab
+// badge (same source of truth as the header bell and the degraded toast).
+const hookSpy = vi.hoisted(() => vi.fn())
+
+vi.mock('@/hooks/usePendingSkillCandidates', () => ({
+  usePendingSkillCandidates: () => hookSpy(),
+}))
 
 function renderWithRoute(path: string) {
   return render(
@@ -12,20 +20,47 @@ function renderWithRoute(path: string) {
           <Route path="/*" element={<Extensions />} />
         </Routes>
       </MemoryRouter>
-    </I18nProvider>
+    </I18nProvider>,
   )
 }
 
-describe('Extensions hub sub-tabs (P1)', () => {
-  it('renders all 7 sub-tabs', () => {
+beforeEach(() => {
+  hookSpy.mockReset()
+  hookSpy.mockReturnValue({ candidates: [], loading: false, refetch: vi.fn() })
+})
+
+describe('Extensions hub tabs (2026-09 marketplace simplification)', () => {
+  it('renders the three primary tabs (Featured / Installed / Pending) only', () => {
     renderWithRoute('/extensions/featured')
     expect(screen.getByText('Featured')).toBeInTheDocument()
-    expect(screen.getByText('MCP Servers')).toBeInTheDocument()
-    expect(screen.getByText('Skills')).toBeInTheDocument()
-    expect(screen.getByText('Agents')).toBeInTheDocument()
-    expect(screen.getByText('Data Sources')).toBeInTheDocument()
-    expect(screen.getByText('Plugins')).toBeInTheDocument()
     expect(screen.getByText('Installed')).toBeInTheDocument()
+    // IA X1: 待处理 is the third primary destination — the single
+    // skill-review surface (评审裁决 #2).
+    expect(screen.getByText('Pending')).toBeInTheDocument()
+    // The old seven-tab taxonomy row is gone: type-specific pages hide
+    // behind the 管理 menu instead of competing as top-level tabs.
+    expect(screen.queryByText('MCP Servers')).not.toBeInTheDocument()
+    expect(screen.queryByText('Skills')).not.toBeInTheDocument()
+    expect(screen.queryByText('Data Sources')).not.toBeInTheDocument()
+    expect(screen.queryByText('Plugins')).not.toBeInTheDocument()
+  })
+
+  // X4 管理瘦身: the dropdown is labelled 「高级管理」 (advanced management) —
+  // the five type-specific managers stay available but stop competing with
+  // the three primary tabs.
+  it('lists the five type-specific managers inside the Advanced-management menu', () => {
+    renderWithRoute('/extensions/featured')
+    fireEvent.click(screen.getByRole('button', { name: /Advanced management/ }))
+    expect(screen.getByRole('menuitem', { name: 'MCP Servers' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Agents' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Data Sources' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Plugins' })).toBeInTheDocument()
+  })
+
+  it('renders the marketplace subtitle', () => {
+    renderWithRoute('/extensions/featured')
+    expect(screen.getByText(/Install MCP servers, skills, agents and data sources/)).toBeInTheDocument()
   })
 
   it('still renders default search placeholder on featured route', () => {
@@ -50,5 +85,26 @@ describe('Extensions hub sub-tabs (P1)', () => {
   it('does not show dead CTA on datasources route', () => {
     renderWithRoute('/extensions/datasources')
     expect(screen.queryByText(/Add Source/)).not.toBeInTheDocument()
+  })
+
+  // IA X1: the 待处理 tab carries a badge with the pending-review count;
+  // the accessible name spells it out ("Pending, N items waiting…").
+  it('hides the Pending badge while nothing is waiting', () => {
+    renderWithRoute('/extensions/featured')
+    const tab = screen.getByRole('link', { name: 'Pending' })
+    expect(tab).toBeInTheDocument()
+    expect(tab.querySelector('span[title]')).toBeNull()
+  })
+
+  it('shows the pending count badge on the Pending tab', () => {
+    hookSpy.mockReturnValue({
+      candidates: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+      loading: false,
+      refetch: vi.fn(),
+    })
+    renderWithRoute('/extensions/featured')
+    const tab = screen.getByRole('link', { name: 'Pending, 3 items waiting for review' })
+    expect(tab).toHaveTextContent('Pending')
+    expect(tab).toHaveTextContent('3')
   })
 })

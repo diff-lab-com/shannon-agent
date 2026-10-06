@@ -185,9 +185,13 @@ pub fn entry_to_model_info(entry: &ModelsDevEntry) -> Option<ModelInfo> {
     if entry.reasoning.unwrap_or(false) {
         caps = caps.or(ModelCapabilities::reasoning());
     }
-    // Tool-calling is the best available proxy for "coding-capable".
+    // Tool-calling is the best available proxy for "coding-capable"; S2-4b
+    // additionally feeds the catalog's TOOL_USE bit from the same explicit
+    // models.dev field (schema/wire only — no gating behavior consumes the
+    // bit yet, a follow-up PR wires tool-path prechecks off it).
     if entry.tool_call.unwrap_or(false) {
         caps = caps.or(ModelCapabilities::coding());
+        caps = caps.or(ModelCapabilities::tool_use());
     }
     let lower = model_id.to_lowercase();
     if ["flash", "mini", "nano", "haiku", "turbo", "lite", "air"]
@@ -216,6 +220,7 @@ pub fn entry_to_model_info(entry: &ModelsDevEntry) -> Option<ModelInfo> {
         cost_per_m_input: 0.0,
         cost_per_m_output: 0.0,
         capabilities: caps,
+        source: super::ModelEntrySource::Overlay,
     };
 
     // The picker filters models by tier (Fast/Standard/Pro); `Unknown`-tier
@@ -295,7 +300,13 @@ fn load_cached_payload() -> Option<String> {
 /// (e.g. `repl.runtime.block_on(...)`); the module never constructs its own
 /// tokio runtime, so it cannot trigger the "runtime within runtime" panic.
 pub async fn fetch_models_dev(timeout: Duration) -> Result<String, DynamicCatalogError> {
-    let client = reqwest::Client::builder()
+    // Settings R3 T4 (B1): honor SHANNON_CA_BUNDLE the same way the LLM
+    // client does — reqwest here is rustls + webpki-roots only, so behind a
+    // corporate MITM CA the catalog refresh would fail its TLS handshake
+    // without the explicitly added root.
+    let builder =
+        shannon_engine::api::client::apply_custom_root_certificates(reqwest::Client::builder());
+    let client = builder
         .timeout(timeout)
         .build()
         .map_err(|e| DynamicCatalogError::Network(e.to_string()))?;
@@ -398,8 +409,11 @@ mod tests {
         let claude = entries
             .iter()
             .find(|e| e.id == "anthropic/claude-sonnet-4-6")
-            .unwrap();
-        assert_eq!(claude.limit.as_ref().unwrap().context, Some(1_000_000));
+            .expect("claude entry present");
+        assert_eq!(
+            claude.limit.as_ref().expect("limit present").context,
+            Some(1_000_000)
+        );
     }
 
     #[test]
@@ -475,7 +489,7 @@ mod tests {
 
     #[test]
     fn cache_roundtrip_and_freshness() {
-        let tmp = NamedTempFile::new().unwrap();
+        let tmp = NamedTempFile::new().expect("tempfile");
         let now = now_secs();
         save_cache_at(tmp.path(), r#"{"x":1}"#, now).expect("save");
         let loaded = load_cached_payload_at(tmp.path(), now).expect("fresh load");
@@ -507,7 +521,7 @@ mod tests {
             reasoning: Some(true),
             ..Default::default()
         })
-        .unwrap();
+        .expect("dup maps");
         let fresh = entry_to_model_info(&ModelsDevEntry {
             id: "anthropic/claude-future-9".into(),
             name: Some("Future".into()),
@@ -515,7 +529,7 @@ mod tests {
             reasoning: Some(true),
             ..Default::default()
         })
-        .unwrap();
+        .expect("fresh maps");
         let merged =
             crate::model_registry::merge_static_and_dynamic(LlmProvider::Anthropic, &[dup, fresh]);
         let sonnet_count = merged

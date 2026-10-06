@@ -62,10 +62,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use shannon_engine::api::LlmProvider;
-use shannon_types::provider_config::{CredentialRef, ProviderProfile, ProviderTiers, TierName};
+use shannon_types::provider_config::{
+    CredentialRef, ProviderModelConfig, ProviderProfile, ProviderTiers, TierName,
+    validate_profile_name,
+};
 
 use crate::model_registry::models_for_provider;
-use crate::provider_config_store::ProviderConfigStore;
+use crate::provider_config_store::{ImportConflict, ProviderConfigStore};
 use crate::provider_resolver::{llm_provider_from_slug, llm_provider_id, llm_provider_to_kind};
 
 /// Outcome of [`ProviderConfigService::connect`] — what the caller needs to
@@ -99,6 +102,97 @@ pub struct DisconnectOutcome {
     pub next_active: Option<String>,
     /// Where `providers.toml` was written (`None` when nothing was removed).
     pub saved_path: Option<PathBuf>,
+}
+
+/// R3-2: one named model profile in the `/profiles` + desktop listing.
+/// Serde so the desktop IPC surface can return it verbatim; `active` is
+/// derived from the config's `active_profile` pointer (a name is never
+/// stored twice).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProfileSummary {
+    /// The `profiles` map key (also the `/profiles use <name>` argument).
+    pub name: String,
+    /// Whether this profile is the config's active one.
+    pub active: bool,
+    /// How many provider slots the profile carries.
+    pub provider_count: usize,
+    /// `active_target.provider_id` ("" when the profile has no target yet).
+    pub active_provider_id: String,
+    /// `active_target.model_id` ("" when the profile has no target yet).
+    pub active_model_id: String,
+}
+
+/// R3-2: the full profile listing — the desktop's `list_profiles` payload.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProfileList {
+    /// The key in-process resolution uses (never empty: `"default"` when the
+    /// config's `active_profile` is unset).
+    pub active_profile: String,
+    /// Every profile, sorted by name.
+    pub profiles: Vec<ProfileSummary>,
+}
+
+/// R3-2: outcome of a successful profile switch
+/// (`set_active_profile`) — everything a caller needs to re-resolve the
+/// running engine without re-reading the file.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProfileSwitch {
+    /// The profile that is now active.
+    pub profile: String,
+    /// The profile's active provider slot id.
+    pub provider_id: String,
+    /// The profile's active model id.
+    pub model_id: String,
+    /// Where `providers.toml` was written.
+    pub saved_path: PathBuf,
+}
+
+/// R3-2: outcome of `create_profile` (new empty profile, switched active).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CreatedProfile {
+    /// The freshly created (and now active) profile name.
+    pub name: String,
+    /// Where `providers.toml` was written.
+    pub saved_path: PathBuf,
+}
+
+/// R3-2: outcome of `rename_profile`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RenamedProfile {
+    /// The name before the rename.
+    pub old: String,
+    /// The name after the rename.
+    pub new: String,
+    /// True when the renamed profile was the active one (the active pointer
+    /// followed the rename; the live target itself is unchanged).
+    pub was_active: bool,
+    /// Where `providers.toml` was written.
+    pub saved_path: PathBuf,
+}
+
+/// R3-2: outcome of `delete_profile`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DeletedProfile {
+    /// The profile that was removed.
+    pub removed: String,
+    /// When the deleted profile was active and `force` applied: the profile
+    /// that became active ("default" when it exists, else the first
+    /// remaining by name). `None` when the active pointer was untouched or
+    /// nothing remained to fall back to.
+    pub fallback: Option<String>,
+    /// Where `providers.toml` was written.
+    pub saved_path: PathBuf,
+}
+
+/// R4-2 (config export/import): outcome of
+/// [`ProviderConfigService::import_snapshot`] — what the merge did plus
+/// where it persisted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportOutcome {
+    /// Counts and the resulting active-profile pointer.
+    pub summary: crate::provider_config_store::ImportSummary,
+    /// Where `providers.toml` was written.
+    pub saved_path: PathBuf,
 }
 
 /// The single semantic write path for `~/.shannon/providers.toml`.
@@ -146,13 +240,15 @@ impl ProviderConfigService {
         &self.store
     }
 
-    /// Slugs currently connected — read from the in-memory config the service
-    /// holds (no extra disk read).
+    /// Slugs connected on the **active** profile — read from the in-memory
+    /// config the service holds (no extra disk read). The profile-free
+    /// global view remains
+    /// [`crate::provider_config_store::connected_slugs`] (flattens every
+    /// profile; used by the dashboards).
     pub fn connected_slugs(&self) -> HashSet<String> {
         self.store
             .config()
-            .profiles
-            .get("default")
+            .active_model_profile()
             .map(|mp| mp.providers.iter().map(|p| p.id.clone()).collect())
             .unwrap_or_default()
     }
@@ -219,8 +315,7 @@ impl ProviderConfigService {
         } else {
             self.store
                 .config()
-                .profiles
-                .get("default")
+                .active_model_profile()
                 .map(|mp| mp.active_target.clone())
         };
 
@@ -278,7 +373,7 @@ impl ProviderConfigService {
     /// locked path (lock → reload → here → `save_locked`), so the
     /// disconnect semantics live in one place.
     fn disconnect_by_slug_unpersisted(&mut self, slug: &str) -> DisconnectOutcome {
-        let default = self.store.config().profiles.get("default");
+        let default = self.store.config().active_model_profile();
         let was_connected = default
             .map(|mp| mp.providers.iter().any(|p| p.id == slug))
             .unwrap_or(false);
@@ -348,10 +443,156 @@ impl ProviderConfigService {
         locked.set_max_tokens(provider, max_tokens)
     }
 
+    /// Insert or replace one per-model metadata declaration (R2-4) on the
+    /// provider slot with the raw stored id `provider_id` and persist.
+    /// Errors when no such slot exists or the spec is invalid.
+    pub fn set_model_meta(
+        &mut self,
+        provider_id: &str,
+        spec: shannon_types::provider_config::ModelSpec,
+    ) -> io::Result<PathBuf> {
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.set_model_meta(provider_id, spec)
+    }
+
+    /// Remove the per-model declaration `model_id` from provider slot
+    /// `provider_id` and persist (when something was removed). Idempotent.
+    pub fn remove_model_meta(&mut self, provider_id: &str, model_id: &str) -> io::Result<PathBuf> {
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.remove_model_meta(provider_id, model_id)
+    }
+
     /// Hand back the underlying store for callers that need raw access
     /// (desktop low-level paths).
     pub fn into_inner(self) -> ProviderConfigStore {
         self.store
+    }
+
+    // ── R3-2: named model-profile management (multi-profile phase 2) ────
+
+    /// List every named model profile with the active one marked
+    /// (`/profiles`, the desktop's `list_profiles`). Read-only over the
+    /// in-memory snapshot this service was constructed from — construct
+    /// fresh (`load`) for the latest on-disk state. Names are sorted; the
+    /// `active_profile` key is never empty (`"default"` when unset).
+    pub fn list_profiles(&self) -> ProfileList {
+        let active_key = self.store.config().active_profile_key().to_string();
+        let mut profiles: Vec<ProfileSummary> = self
+            .store
+            .config()
+            .profiles
+            .iter()
+            .map(|(name, mp)| ProfileSummary {
+                name: name.clone(),
+                active: *name == active_key,
+                provider_count: mp.providers.len(),
+                active_provider_id: mp.active_target.provider_id.clone(),
+                active_model_id: mp.active_target.model_id.clone(),
+            })
+            .collect();
+        profiles.sort_by(|a, b| a.name.cmp(&b.name));
+        ProfileList {
+            active_profile: active_key,
+            profiles,
+        }
+    }
+
+    /// Switch the active profile to `name` and persist
+    /// (`/profiles use <name>`, the desktop's `set_active_profile`).
+    ///
+    /// Refuses (does not persist) when:
+    /// - the profile does not exist (`NotFound`, message lists the
+    ///   available ones),
+    /// - it has no provider slots (`InvalidData`: empty profile), or
+    /// - it has no usable `active_target` — the slot it names is absent or
+    ///   the pointer is blank (`InvalidData`).
+    ///
+    /// Returns a [`ProfileSwitch`] so callers can re-resolve the running
+    /// engine (`provider_id` / `model_id`) without re-reading the file.
+    /// Engine state itself is a session concern — the caller applies it
+    /// (REPL: `apply_model_selection`).
+    pub fn set_active_profile(&mut self, name: &str) -> io::Result<ProfileSwitch> {
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.set_active_profile(name)
+    }
+
+    /// Create an empty named profile and switch to it, persisting both
+    /// (`/profiles new <name>`). Refuses duplicates (`AlreadyExists`) and
+    /// invalid names (`InvalidData`, via
+    /// [`shannon_types::provider_config::validate_profile_name`]). Unlike
+    /// [`Self::set_active_profile`], the switch to an **empty** profile is
+    /// intentional — this is the "start fresh" flow; the empty profile
+    /// resolves to synthesis until the user connects a provider into it.
+    pub fn create_profile(&mut self, name: &str) -> io::Result<CreatedProfile> {
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.create_profile(name)
+    }
+
+    /// Rename a model profile and persist (`/profiles rename <old> <new>`).
+    /// The profile's contents move wholesale; when the renamed profile was
+    /// active, the active pointer follows it. Errors: unknown `old`
+    /// (`NotFound` + available list), duplicate/invalid `new`
+    /// (`AlreadyExists` / `InvalidData`).
+    pub fn rename_profile(&mut self, old: &str, new: &str) -> io::Result<RenamedProfile> {
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.rename_profile(old, new)
+    }
+
+    /// Delete a named model profile and persist
+    /// (`/profiles delete <name> [--force]`).
+    ///
+    /// Guards (refusal leaves the file untouched):
+    /// - the last remaining profile can never be deleted;
+    /// - the **active** profile requires `force = true`;
+    /// - unknown names are a `NotFound` listing what exists.
+    ///
+    /// With `force`, the active pointer falls back to `"default"` (when it
+    /// exists and is not the deleted one), else to the first remaining
+    /// profile (sorted) — [`DeletedProfile::fallback`] names it so the
+    /// caller can re-resolve the engine.
+    pub fn delete_profile(&mut self, name: &str, force: bool) -> io::Result<DeletedProfile> {
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.delete_profile(name, force)
+    }
+
+    /// R4-2 (config export/import): provider slots an import of `snapshot`
+    /// would overwrite — sorted `(profile, provider id)` pairs. Read-only
+    /// over the in-memory snapshot; call before [`Self::import_snapshot`] to
+    /// implement the default refuse-on-conflict contract and list the
+    /// conflicts for the user.
+    pub fn import_conflicts(&self, snapshot: &ProviderModelConfig) -> Vec<ImportConflict> {
+        self.store.import_conflicts(snapshot)
+    }
+
+    /// R4-2 (config export/import): overlay a portable snapshot (the
+    /// `ProviderModelConfig` payload of `shannon providers export`) onto the
+    /// live `providers.toml` and persist — the one semantic write for imports,
+    /// same lock → reload → mutate → save sequence as every other write so a
+    /// concurrent desktop/CLI writer cannot be clobbered. Conflict detection
+    /// runs **after** the reload, so the refusal (without `force`) reflects
+    /// the freshest committed state.
+    ///
+    /// `set_active` switches the active-profile pointer after the merge (the
+    /// profile must exist with at least one provider slot); `None` adopts the
+    /// snapshot's pointer only on a fresh machine (no connected providers
+    /// before the import). See
+    /// [`crate::provider_config_store::ProviderConfigStore::apply_import_snapshot`]
+    /// for the full merge policy. Credentials are never touched.
+    pub fn import_snapshot(
+        &mut self,
+        snapshot: &ProviderModelConfig,
+        force: bool,
+        set_active: Option<&str>,
+    ) -> io::Result<ImportOutcome> {
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.import_snapshot(snapshot, force, set_active)
     }
 
     /// Acquire an exclusive `flock` on the underlying `providers.toml`
@@ -535,12 +776,172 @@ impl<'a> LockedService<'a> {
         self.svc.store.save_locked()
     }
 
+    /// Insert or replace one per-model metadata declaration (R2-4) and
+    /// persist. The flock is already held by this guard.
+    pub fn set_model_meta(
+        &mut self,
+        provider_id: &str,
+        spec: shannon_types::provider_config::ModelSpec,
+    ) -> io::Result<PathBuf> {
+        self.svc.store.set_model_meta(provider_id, spec)?;
+        self.svc.store.save_locked()
+    }
+
+    /// Remove one per-model metadata declaration (R2-4) and persist — only
+    /// when an entry was actually removed (idempotent no-op otherwise).
+    pub fn remove_model_meta(&mut self, provider_id: &str, model_id: &str) -> io::Result<PathBuf> {
+        if self.svc.store.remove_model_meta(provider_id, model_id)? {
+            self.svc.store.save_locked()
+        } else {
+            // Nothing changed; hand back the pinned path without touching
+            // the file (matches disconnect_by_slug's "no write on no-op").
+            self.svc
+                .store
+                .last_path()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "no providers.toml path pinned")
+                })
+        }
+    }
+
+    // ── R3-2: named model-profile management (locked variants) ──────────
+
+    /// Switch the active profile (validate → persist). See
+    /// [`ProviderConfigService::set_active_profile`] for the contract.
+    pub fn set_active_profile(&mut self, name: &str) -> io::Result<ProfileSwitch> {
+        let list = self.svc.list_profiles();
+        let summary = list
+            .profiles
+            .iter()
+            .find(|p| p.name == name)
+            .ok_or_else(|| unknown_profile_error(name, &list))?;
+        if summary.provider_count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "refusing to switch to profile '{name}': it has no providers yet; \
+                     add one with /connect first"
+                ),
+            ));
+        }
+        let target_has_slot = self
+            .svc
+            .store
+            .config()
+            .profiles
+            .get(name)
+            .is_some_and(|mp| {
+                mp.providers
+                    .iter()
+                    .any(|p| p.id == summary.active_provider_id)
+            });
+        if summary.active_provider_id.is_empty()
+            || summary.active_model_id.is_empty()
+            || !target_has_slot
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "refusing to switch to profile '{name}': it has no active model — \
+                     set one with /connect or /model first"
+                ),
+            ));
+        }
+        self.svc.store.set_active_profile_key(name);
+        let saved_path = self.svc.store.save_locked()?;
+        Ok(ProfileSwitch {
+            profile: name.to_string(),
+            provider_id: summary.active_provider_id.clone(),
+            model_id: summary.active_model_id.clone(),
+            saved_path,
+        })
+    }
+
+    /// Create an empty named profile + switch (validate name → persist).
+    /// See [`ProviderConfigService::create_profile`].
+    pub fn create_profile(&mut self, name: &str) -> io::Result<CreatedProfile> {
+        let name = validate_profile_name(name)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        self.svc.store.insert_model_profile(&name)?;
+        self.svc.store.set_active_profile_key(&name);
+        let saved_path = self.svc.store.save_locked()?;
+        Ok(CreatedProfile { name, saved_path })
+    }
+
+    /// Rename a model profile (validate → persist). See
+    /// [`ProviderConfigService::rename_profile`].
+    pub fn rename_profile(&mut self, old: &str, new: &str) -> io::Result<RenamedProfile> {
+        let new = validate_profile_name(new)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let was_active = self.svc.store.config().active_profile_key() == old;
+        self.svc.store.rename_model_profile(old, &new)?;
+        let saved_path = self.svc.store.save_locked()?;
+        Ok(RenamedProfile {
+            old: old.to_string(),
+            new,
+            was_active,
+            saved_path,
+        })
+    }
+
+    /// Delete a model profile (guards → persist). See
+    /// [`ProviderConfigService::delete_profile`].
+    pub fn delete_profile(&mut self, name: &str, force: bool) -> io::Result<DeletedProfile> {
+        let fallback = self.svc.store.remove_model_profile(name, force)?;
+        let saved_path = self.svc.store.save_locked()?;
+        Ok(DeletedProfile {
+            removed: name.to_string(),
+            fallback,
+            saved_path,
+        })
+    }
+
+    /// R4-2: overlay a portable snapshot onto the store and persist, inside
+    /// the flock this guard holds. See
+    /// [`ProviderConfigService::import_snapshot`] for the contract.
+    pub fn import_snapshot(
+        &mut self,
+        snapshot: &ProviderModelConfig,
+        force: bool,
+        set_active: Option<&str>,
+    ) -> io::Result<ImportOutcome> {
+        let summary = self
+            .svc
+            .store
+            .apply_import_snapshot(snapshot, force, set_active)?;
+        let saved_path = self.svc.store.save_locked()?;
+        Ok(ImportOutcome {
+            summary,
+            saved_path,
+        })
+    }
+
     /// Persist whatever is in the in-memory config to disk. **The
     /// caller MUST hold the flock** (typically via
     /// [`ProviderConfigService::lock`]); this does not re-acquire it.
     pub fn save_locked(&mut self) -> io::Result<PathBuf> {
         self.svc.store.save_locked()
     }
+}
+
+/// The `NotFound` error for an unknown profile name, listing what exists
+/// (R3-2: every front-end shows the same "available profiles" hint).
+fn unknown_profile_error(name: &str, list: &ProfileList) -> io::Error {
+    let available = list
+        .profiles
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        if available.is_empty() {
+            format!("profile '{name}' not found (no profiles configured)")
+        } else {
+            format!("profile '{name}' not found; available profiles: {available}")
+        },
+    )
 }
 
 /// Build the [`ProviderProfile`] for a provider — the shared shape both
@@ -569,6 +970,7 @@ fn build_profile_for_provider(
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers: ProviderTiers::default(),
+        models: Vec::new(),
     }
 }
 
@@ -591,8 +993,10 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
-        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+            .expect("connect must succeed");
+        let _ = svc
+            .connect(LlmProvider::OpenAI, None, None, true)
+            .expect("connect must succeed");
         let connected = svc.connected_slugs();
         assert!(
             connected.contains("anthropic"),
@@ -607,10 +1011,14 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
-        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+            .expect("connect must succeed");
+        let _ = svc
+            .connect(LlmProvider::OpenAI, None, None, true)
+            .expect("connect must succeed");
 
-        let outcome = svc.disconnect(&LlmProvider::OpenAI).unwrap();
+        let outcome = svc
+            .disconnect(&LlmProvider::OpenAI)
+            .expect("connect must succeed");
         assert!(outcome.was_connected);
         let connected = svc.connected_slugs();
         assert!(connected.contains("anthropic"));
@@ -623,10 +1031,14 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
-        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+            .expect("connect must succeed");
+        let _ = svc
+            .connect(LlmProvider::OpenAI, None, None, true)
+            .expect("connect must succeed");
 
-        let outcome = svc.disconnect(&LlmProvider::OpenAI).unwrap();
+        let outcome = svc
+            .disconnect(&LlmProvider::OpenAI)
+            .expect("connect must succeed");
         // OpenAI was made active by the second connect; a remaining slug is offered.
         assert_eq!(outcome.next_active.as_deref(), Some("anthropic"));
     }
@@ -637,26 +1049,28 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
         let anthropic_active = svc
             .store
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("connect must succeed")
             .active_target
             .provider_id
             .clone();
         assert_eq!(anthropic_active, "anthropic");
 
         // Add OpenAI without making it active.
-        let _ = svc.connect(LlmProvider::OpenAI, None, None, false).unwrap();
+        let _ = svc
+            .connect(LlmProvider::OpenAI, None, None, false)
+            .expect("connect must succeed");
         let still_active = svc
             .store
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("connect must succeed")
             .active_target
             .provider_id
             .clone();
@@ -671,7 +1085,9 @@ mod tests {
     #[test]
     fn disconnect_unknown_provider_is_idempotent_noop() {
         let (mut svc, _dir) = service();
-        let outcome = svc.disconnect(&LlmProvider::OpenAI).unwrap();
+        let outcome = svc
+            .disconnect(&LlmProvider::OpenAI)
+            .expect("disconnect must succeed");
         assert!(!outcome.was_connected);
         assert!(!outcome.was_active);
         assert!(outcome.next_active.is_none());
@@ -687,7 +1103,7 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
         let custom = ProviderProfile {
             id: "my-gateway".into(),
             kind: shannon_types::provider_config::ProviderKind::OpenAiCompatible,
@@ -702,11 +1118,15 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
-        svc.upsert(custom, "gpt-4o", true).unwrap();
+        svc.upsert(custom, "gpt-4o", true)
+            .expect("upsert must succeed");
         // `my-gateway` became active (make_active=true); disconnecting it by
         // raw slug must report was_active and offer anthropic as next.
-        let outcome = svc.disconnect_by_slug("my-gateway").unwrap();
+        let outcome = svc
+            .disconnect_by_slug("my-gateway")
+            .expect("disconnect must succeed");
         assert!(outcome.was_connected, "custom slug must match");
         assert!(outcome.was_active, "custom slug was the active target");
         assert_eq!(outcome.next_active.as_deref(), Some("anthropic"));
@@ -724,13 +1144,17 @@ mod tests {
         for svc in [&mut svc_a, &mut svc_b] {
             let _ = svc
                 .connect(LlmProvider::Anthropic, None, None, true)
-                .unwrap();
-            let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+                .expect("connect must succeed");
+            let _ = svc
+                .connect(LlmProvider::OpenAI, None, None, true)
+                .expect("connect must succeed");
         }
-        let by_provider = svc_a.disconnect(&LlmProvider::OpenAI).unwrap();
+        let by_provider = svc_a
+            .disconnect(&LlmProvider::OpenAI)
+            .expect("connect must succeed");
         let by_slug = svc_b
             .disconnect_by_slug(&llm_provider_id(&LlmProvider::OpenAI))
-            .unwrap();
+            .expect("connect must succeed");
         assert_eq!(by_provider.was_connected, by_slug.was_connected);
         assert_eq!(by_provider.was_active, by_slug.was_active);
         assert_eq!(by_provider.next_active, by_slug.next_active);
@@ -739,7 +1163,9 @@ mod tests {
     #[test]
     fn disconnect_by_slug_unknown_is_idempotent_noop() {
         let (mut svc, _dir) = service();
-        let outcome = svc.disconnect_by_slug("does-not-exist").unwrap();
+        let outcome = svc
+            .disconnect_by_slug("does-not-exist")
+            .expect("disconnect must succeed");
         assert!(!outcome.was_connected);
         assert!(!outcome.was_active);
         assert!(outcome.next_active.is_none());
@@ -753,10 +1179,14 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
-        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+            .expect("connect must succeed");
+        let _ = svc
+            .connect(LlmProvider::OpenAI, None, None, true)
+            .expect("connect must succeed");
         // Anthropic is NOT active (OpenAI took active). Removing anthropic:
-        let outcome = svc.disconnect(&LlmProvider::Anthropic).unwrap();
+        let outcome = svc
+            .disconnect(&LlmProvider::Anthropic)
+            .expect("connect must succeed");
         assert!(outcome.was_connected);
         assert!(!outcome.was_active, "anthropic was not the active target");
         assert!(outcome.next_active.is_none(), "active target untouched");
@@ -770,7 +1200,7 @@ mod tests {
         let path = dir.path().join("providers.toml");
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
         drop(svc);
 
         let reloaded = ProviderConfigService::load_at(&path);
@@ -787,14 +1217,14 @@ mod tests {
                 None,
                 true,
             )
-            .unwrap();
+            .expect("connect must succeed");
         assert_eq!(connected.model_id, "claude-sonnet-4-6");
         let active = &svc
             .store
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("default profile exists")
             .active_target;
         assert_eq!(active.provider_id, "anthropic");
         assert_eq!(active.model_id, "claude-sonnet-4-6");
@@ -810,7 +1240,7 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
 
         let custom = ProviderProfile {
             id: "my-gateway".into(),
@@ -826,8 +1256,10 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
-        svc.upsert(custom, "gpt-4o", true).unwrap();
+        svc.upsert(custom, "gpt-4o", true)
+            .expect("upsert must succeed");
 
         let connected = svc.connected_slugs();
         assert!(connected.contains("anthropic"), "anthropic must survive");
@@ -839,7 +1271,7 @@ mod tests {
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("upsert must succeed")
             .active_target;
         assert_eq!(active.provider_id, "my-gateway");
         assert_eq!(active.model_id, "gpt-4o");
@@ -858,7 +1290,7 @@ mod tests {
                 None,
                 true,
             )
-            .unwrap();
+            .expect("connect must succeed");
 
         let custom = ProviderProfile {
             id: "openai".into(),
@@ -874,8 +1306,10 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
-        svc.upsert(custom, "gpt-4o", false).unwrap();
+        svc.upsert(custom, "gpt-4o", false)
+            .expect("upsert must succeed");
 
         assert!(svc.connected_slugs().contains("openai"));
         let active = &svc
@@ -883,7 +1317,7 @@ mod tests {
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("upsert must succeed")
             .active_target;
         assert_eq!(
             active.provider_id, "anthropic",
@@ -914,7 +1348,7 @@ mod tests {
         let (mut svc, _dir) = service();
         let connected = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
         assert_eq!(connected.provider, LlmProvider::Anthropic);
         assert_eq!(connected.service, "anthropic");
         // No model requested → the provider's first catalog model.
@@ -935,7 +1369,7 @@ mod tests {
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("default profile exists")
             .active_target;
         assert_eq!(active.provider_id, "anthropic");
         assert_eq!(active.model_id, connected.model_id);
@@ -946,7 +1380,7 @@ mod tests {
         let (mut svc, _dir) = service();
         let connected = svc
             .connect(LlmProvider::OpenAI, Some("gpt-4o"), None, true)
-            .unwrap();
+            .expect("connect must succeed");
         assert_eq!(connected.provider, LlmProvider::OpenAI);
         assert_eq!(connected.service, "openai");
         assert_eq!(connected.model_id, "gpt-4o");
@@ -961,7 +1395,7 @@ mod tests {
             Some("https://proxy.example.com"),
             true,
         )
-        .unwrap();
+        .expect("connect must succeed");
         assert_eq!(
             profile_for(&svc, "anthropic").base_url,
             "https://proxy.example.com"
@@ -975,7 +1409,7 @@ mod tests {
         let (mut svc, _dir) = service();
         let connected = svc
             .connect(LlmProvider::Ollama, Some("llama3"), None, true)
-            .unwrap();
+            .expect("connect must succeed");
         assert_eq!(connected.service, "ollama");
         assert_eq!(connected.model_id, "llama3");
         let p = profile_for(&svc, "ollama");
@@ -1011,7 +1445,8 @@ mod tests {
                 .path()
                 .join(format!("{}.toml", llm_provider_id(&provider)));
             let mut svc = ProviderConfigService::load_at(&path);
-            svc.connect(provider.clone(), None, None, true).unwrap();
+            svc.connect(provider.clone(), None, None, true)
+                .expect("connect must succeed");
             drop(svc);
             let matches = scanner
                 .scan_file(&path)
@@ -1158,7 +1593,9 @@ service = "glm-plan"
             result.is_err(),
             "connect must refuse to rewrite an unparseable providers.toml"
         );
-        let err = result.unwrap_err().to_string();
+        let err = result
+            .expect_err("connect must have been refused")
+            .to_string();
         assert!(
             err.contains("refusing to overwrite") && err.contains("env_key"),
             "error must name the guard and the offending field; got: {err}"
@@ -1205,18 +1642,21 @@ service = "glm-plan"
             let mut locked = svc.lock().expect("lock");
             locked
                 .connect(LlmProvider::Anthropic, None, None, true)
-                .unwrap();
+                .expect("connect must succeed");
             locked
                 .connect(LlmProvider::OpenAI, None, None, true)
-                .unwrap();
+                .expect("connect must succeed");
         }
         {
             let mut locked = svc.lock().expect("lock again");
-            let outcome = locked.disconnect(&LlmProvider::OpenAI).unwrap();
+            let outcome = locked
+                .disconnect(&LlmProvider::OpenAI)
+                .expect("connect must succeed");
             assert!(outcome.was_connected);
         }
         // Now drop locked; reopen to verify shape.
-        let on_disk = std::fs::read_to_string(_dir.path().join("providers.toml")).unwrap();
+        let on_disk = std::fs::read_to_string(_dir.path().join("providers.toml"))
+            .expect("connect must succeed");
         assert!(
             on_disk.contains("anthropic"),
             "anthropic survives: {on_disk}"
@@ -1263,7 +1703,7 @@ service = "glm-plan"
         let (mut svc, dir) = service();
         // Seed one provider so subsequent calls have something to do.
         svc.connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
 
         let svc = Arc::new(Mutex::new(svc));
         let dir_path = dir.path().join("providers.toml");
@@ -1289,5 +1729,590 @@ service = "glm-plan"
         // At least one OpenAI + the seeded Anthropic must be present.
         assert!(on_disk.contains("anthropic"));
         assert!(on_disk.contains("openai"));
+    }
+
+    // ===== Per-model metadata declarations (R2-4) =====
+
+    fn meta_spec(
+        id: &str,
+        context_window: u32,
+        cost_in: f64,
+        cost_out: f64,
+    ) -> shannon_types::provider_config::ModelSpec {
+        shannon_types::provider_config::ModelSpec {
+            id: id.to_string(),
+            display_name: None,
+            context_window: Some(context_window),
+            max_output: Some(8_192),
+            cost_per_m_input: Some(cost_in),
+            cost_per_m_output: Some(cost_out),
+            capabilities: vec![shannon_types::provider_config::ModelCapability::Vision],
+        }
+    }
+
+    #[test]
+    fn set_model_meta_persists_through_service_write_path() {
+        let (mut svc, dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .expect("connect must succeed");
+        // Raw stored id (== llm_provider_id for the canonical connect path).
+        let saved = svc
+            .set_model_meta("anthropic", meta_spec("claude-custom", 200_000, 3.0, 15.0))
+            .expect("set_model_meta must persist");
+        assert!(saved.exists());
+
+        // Reload from disk: the declaration survives, with values intact.
+        let reloaded = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        let models = &reloaded.store().config().profiles["default"].providers[0].models;
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "claude-custom");
+        assert_eq!(models[0].context_window, Some(200_000));
+        assert_eq!(models[0].cost_per_m_input, Some(3.0));
+    }
+
+    #[test]
+    fn set_model_meta_replaces_entry_with_same_id() {
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .expect("connect must succeed");
+        svc.set_model_meta("anthropic", meta_spec("m", 100_000, 1.0, 2.0))
+            .expect("first set");
+        svc.set_model_meta("anthropic", meta_spec("m", 128_000, 0.5, 1.5))
+            .expect("second set replaces");
+        let models = &svc.store().config().profiles["default"].providers[0].models;
+        assert_eq!(models.len(), 1, "ids stay unique through the service");
+        assert_eq!(models[0].context_window, Some(128_000));
+    }
+
+    #[test]
+    fn set_model_meta_unknown_provider_is_an_error() {
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .expect("connect must succeed");
+        let err = svc
+            .set_model_meta("ghost-provider", meta_spec("m", 1, 0.0, 0.0))
+            .expect_err("unknown provider must error");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn remove_model_meta_is_idempotent_and_persists_only_on_removal() {
+        let (mut svc, dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .expect("connect must succeed");
+        svc.set_model_meta("anthropic", meta_spec("m", 1_000, 0.0, 0.0))
+            .expect("set");
+        let saved = svc
+            .remove_model_meta("anthropic", "m")
+            .expect("remove must persist");
+        assert!(saved.exists());
+        // Second remove: no-op, no error.
+        svc.remove_model_meta("anthropic", "m")
+            .expect("idempotent remove");
+        let reloaded = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        let models = &reloaded.store().config().profiles["default"].providers[0].models;
+        assert!(models.is_empty());
+    }
+
+    // ===== R3-2: named model-profile management =====
+
+    use shannon_types::provider_config::{
+        ActiveTarget, CredentialScope, ModelProfile, ProviderKind, ProviderModelConfig, Scope,
+    };
+
+    /// Seed a two-profile config on disk (`default` → anthropic, plus any
+    /// extras the caller passes) and hand back a service over it. Going
+    /// through the file keeps the tests on the same public surface the
+    /// front-ends use.
+    fn service_with_profiles(extra: Vec<(&str, ModelProfile)>) -> (ProviderConfigService, TempDir) {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("providers.toml");
+        let anthropic = ProviderProfile {
+            id: "anthropic".to_string(),
+            kind: ProviderKind::Anthropic,
+            display_name: "anthropic".to_string(),
+            base_url: LlmProvider::Anthropic.default_base_url().to_string(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: "anthropic".to_string(),
+            },
+            extra_headers: std::collections::HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+            models: Vec::new(),
+        };
+        let mut profiles = std::collections::HashMap::from([(
+            "default".to_string(),
+            ModelProfile {
+                name: "default".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: "anthropic".to_string(),
+                    model_id: "claude-sonnet-4-6".to_string(),
+                    scope: Scope::Global,
+                },
+                providers: vec![anthropic],
+                auxiliary: std::collections::HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        )]);
+        for (name, mp) in extra {
+            profiles.insert(name.to_string(), mp);
+        }
+        crate::provider_config_store::save(
+            &ProviderModelConfig {
+                version: ProviderModelConfig::VERSION,
+                active_profile: String::new(),
+                profiles,
+                gateway: Default::default(),
+            },
+            Some(&path),
+        )
+        .expect("seed file");
+        (ProviderConfigService::load_at(&path), dir)
+    }
+
+    /// `default` + a `work` profile (openai / gpt-4o).
+    fn service_with_work_profile() -> (ProviderConfigService, TempDir) {
+        let work = ModelProfile {
+            name: "work".to_string(),
+            active_target: ActiveTarget {
+                provider_id: "openai".to_string(),
+                model_id: "gpt-4o".to_string(),
+                scope: Scope::Global,
+            },
+            providers: vec![ProviderProfile {
+                id: "openai".to_string(),
+                kind: ProviderKind::OpenAi,
+                display_name: "openai".to_string(),
+                base_url: LlmProvider::OpenAI.default_base_url().to_string(),
+                models_url: None,
+                credential: CredentialRef::Store {
+                    service: "openai".to_string(),
+                },
+                extra_headers: std::collections::HashMap::new(),
+                default_max_tokens: None,
+                fallback_models: Vec::new(),
+                quirks: Default::default(),
+                tiers: ProviderTiers::default(),
+                models: Vec::new(),
+            }],
+            auxiliary: std::collections::HashMap::new(),
+            credential_scope: CredentialScope::Shared,
+        };
+        service_with_profiles(vec![("work", work)])
+    }
+
+    #[test]
+    fn list_profiles_marks_active_and_sorts_names() {
+        let (svc, _dir) = service_with_work_profile();
+        let list = svc.list_profiles();
+        assert_eq!(list.active_profile, "default");
+        let names: Vec<&str> = list.profiles.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["default", "work"], "sorted");
+        let default = &list.profiles[0];
+        assert!(default.active && default.provider_count == 1);
+        assert_eq!(default.active_provider_id, "anthropic");
+        assert_eq!(default.active_model_id, "claude-sonnet-4-6");
+        let work = &list.profiles[1];
+        assert!(!work.active && work.active_provider_id == "openai");
+    }
+
+    #[test]
+    fn set_active_profile_switches_and_persists() {
+        let (mut svc, dir) = service_with_work_profile();
+        let sw = svc.set_active_profile("work").expect("switch");
+        assert_eq!(sw.profile, "work");
+        assert_eq!(sw.provider_id, "openai");
+        assert_eq!(sw.model_id, "gpt-4o");
+
+        // Durable: a fresh load resolves the work profile's target.
+        let reloaded = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        assert_eq!(reloaded.list_profiles().active_profile, "work");
+        let rt = crate::provider_resolver::resolve_active_target(reloaded.store().config())
+            .expect("work resolves");
+        assert_eq!(rt.provider, LlmProvider::OpenAI);
+        assert_eq!(rt.model_id, "gpt-4o");
+        // And connected_slugs follows the active profile.
+        assert!(reloaded.connected_slugs().contains("openai"));
+    }
+
+    #[test]
+    fn set_active_profile_refuses_unknown_and_empty() {
+        let (mut svc, _dir) = service_with_work_profile();
+        // Unknown → NotFound listing what exists.
+        let err = svc
+            .set_active_profile("ghost")
+            .expect_err("unknown profile must error");
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(err.to_string().contains("default") && err.to_string().contains("work"));
+
+        // Empty profile → refused with the reason. (create_profile already
+        // switched to the fresh "hollow"; the refused set must not change
+        // anything further.)
+        svc.create_profile("hollow").expect("create empty");
+        let before = svc.list_profiles();
+        let err = svc
+            .set_active_profile("hollow")
+            .expect_err("expected failure");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("no providers"), "{err}");
+        assert_eq!(svc.list_profiles(), before);
+    }
+
+    #[test]
+    fn set_active_profile_refuses_targeting_gap() {
+        // A profile with a provider slot but a dangling active_target —
+        // switching would leave the engine with nothing to resolve.
+        let broken = ModelProfile {
+            name: "broken".to_string(),
+            active_target: ActiveTarget {
+                provider_id: "ghost-slot".to_string(),
+                model_id: "m".to_string(),
+                scope: Scope::Global,
+            },
+            providers: vec![build_profile_for_provider(&LlmProvider::Ollama, None)],
+            auxiliary: std::collections::HashMap::new(),
+            credential_scope: CredentialScope::Shared,
+        };
+        let (mut svc, _dir) = service_with_profiles(vec![("broken", broken)]);
+        let err = svc
+            .set_active_profile("broken")
+            .expect_err("expected failure");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("no active model"), "{err}");
+        assert_eq!(svc.list_profiles().active_profile, "default");
+    }
+
+    #[test]
+    fn set_active_profile_refuses_blank_model_id() {
+        // A provider slot with a blank `active_target.model_id` (hand-edited
+        // file) — switching would leave the engine with an empty model.
+        let blank_model = ModelProfile {
+            name: "blank".to_string(),
+            active_target: ActiveTarget {
+                provider_id: "ollama".to_string(),
+                model_id: String::new(),
+                scope: Scope::Global,
+            },
+            providers: vec![build_profile_for_provider(&LlmProvider::Ollama, None)],
+            auxiliary: std::collections::HashMap::new(),
+            credential_scope: CredentialScope::Shared,
+        };
+        let (mut svc, _dir) = service_with_profiles(vec![("blank", blank_model)]);
+        let err = svc
+            .set_active_profile("blank")
+            .expect_err("blank model must refuse");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("no active model"), "{err}");
+        assert_eq!(svc.list_profiles().active_profile, "default");
+    }
+
+    #[test]
+    fn create_profile_refuses_duplicates_and_bad_names_and_persists_switch() {
+        let (mut svc, dir) = service_with_work_profile();
+        svc.create_profile("personal").expect("create");
+        let err = svc
+            .create_profile("personal")
+            .expect_err("expected failure");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        let err = svc
+            .create_profile("two words")
+            .expect_err("expected failure");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+        let reloaded = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        let list = reloaded.list_profiles();
+        assert_eq!(list.active_profile, "personal");
+        let personal = list
+            .profiles
+            .iter()
+            .find(|p| p.name == "personal")
+            .expect("personal profile listed");
+        assert_eq!(personal.provider_count, 0);
+        // The scaffold is named after its key.
+        assert_eq!(
+            reloaded.store().config().profiles["personal"].name,
+            "personal"
+        );
+    }
+
+    #[test]
+    fn rename_profile_moves_contents_and_follows_active_pointer() {
+        let (mut svc, dir) = service_with_work_profile();
+        // Rename a non-active profile: contents move, pointer untouched.
+        let renamed = svc.rename_profile("work", "gig").expect("rename");
+        assert_eq!(
+            (renamed.old.as_str(), renamed.new.as_str()),
+            ("work", "gig")
+        );
+        assert!(!renamed.was_active);
+        assert_eq!(svc.list_profiles().active_profile, "default");
+
+        // Rename the active profile: the pointer follows.
+        svc.rename_profile("default", "main")
+            .expect("rename active");
+        let list = svc.list_profiles();
+        assert_eq!(list.active_profile, "main");
+        assert!(list.profiles.iter().any(|p| p.name == "gig"));
+
+        // Durable, and resolution still finds the (renamed) active profile.
+        let reloaded = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        assert_eq!(reloaded.list_profiles().active_profile, "main");
+        let rt = crate::provider_resolver::resolve_active_target(reloaded.store().config())
+            .expect("renamed active profile resolves");
+        assert_eq!(rt.provider, LlmProvider::Anthropic);
+
+        // Guards: unknown old, duplicate new.
+        assert_eq!(
+            svc.rename_profile("ghost", "x")
+                .expect_err("expected failure")
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            svc.rename_profile("gig", "main")
+                .expect_err("expected failure")
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+    }
+
+    #[test]
+    fn delete_profile_guards_and_force_fallback_chain() {
+        let (mut svc, dir) = service_with_work_profile();
+        // Active without --force refuses.
+        let err = svc
+            .delete_profile("default", false)
+            .expect_err("expected failure");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("refusing to delete the active"));
+
+        // Non-active deletes cleanly; pointer untouched.
+        let deleted = svc.delete_profile("work", false).expect("delete work");
+        assert_eq!(deleted.removed, "work");
+        assert!(deleted.fallback.is_none());
+
+        // Last remaining profile refuses even with --force.
+        let err = svc
+            .delete_profile("default", true)
+            .expect_err("expected failure");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("only profile"), "{err}");
+        assert_eq!(svc.list_profiles().active_profile, "default");
+
+        // Force-delete with a "default" present falls back to it.
+        // (create_profile already switches to the fresh profile.)
+        svc.create_profile("temp").expect("create");
+        let deleted = svc.delete_profile("temp", true).expect("force delete");
+        assert_eq!(deleted.fallback.as_deref(), Some("default"));
+
+        // Durable.
+        let reloaded = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        assert_eq!(reloaded.list_profiles().active_profile, "default");
+    }
+
+    #[test]
+    fn delete_profile_force_without_default_falls_to_first_sorted() {
+        let (mut svc, _dir) = service_with_work_profile();
+        // Rename default away so the fallback chain hits first-sorted.
+        svc.rename_profile("default", "aaa").expect("rename");
+        svc.set_active_profile("aaa").expect("switch");
+        let deleted = svc.delete_profile("aaa", true).expect("force delete");
+        // Remaining: work → becomes active.
+        assert_eq!(deleted.fallback.as_deref(), Some("work"));
+        assert_eq!(svc.list_profiles().active_profile, "work");
+    }
+
+    #[test]
+    fn writes_land_in_the_active_profile() {
+        // The phase-2 coherence contract: with a non-default profile active,
+        // /connect-style writes (connect/set_active/set_tier) land in THAT
+        // profile, and resolution reads them from there.
+        let (mut svc, dir) = service_with_work_profile();
+        svc.set_active_profile("work").expect("switch");
+        let connected = svc
+            .connect(LlmProvider::Ollama, Some("llama3"), None, true)
+            .expect("connect into work");
+
+        let reloaded = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        // Ollama landed in `work`, not `default`.
+        let work = reloaded
+            .store()
+            .config()
+            .profiles
+            .get("work")
+            .expect("work exists");
+        assert!(work.providers.iter().any(|p| p.id == "ollama"));
+        assert_eq!(work.active_target.provider_id, "ollama");
+        assert_eq!(work.active_target.model_id, connected.model_id);
+        // `default` was untouched.
+        let default = reloaded
+            .store()
+            .config()
+            .profiles
+            .get("default")
+            .expect("default profile listed");
+        assert!(!default.providers.iter().any(|p| p.id == "ollama"));
+        assert_eq!(default.active_target.provider_id, "anthropic");
+        // And resolution over the fresh load serves the work profile.
+        let rt = crate::provider_resolver::resolve_active_target(reloaded.store().config())
+            .expect("work resolves");
+        assert_eq!(rt.provider, LlmProvider::Ollama);
+    }
+
+    #[test]
+    fn active_profile_round_trips_through_toml_and_is_skipped_for_default() {
+        // Byte-compat: a config whose active profile is "default" (or unset)
+        // omits the key entirely; an explicit pointer survives the cycle.
+        let (mut svc, dir) = service();
+        let path = dir.path().join("providers.toml");
+        svc.connect(LlmProvider::Anthropic, None, None, true)
+            .expect("connect");
+        svc.store.save().expect("save default-active");
+        let on_disk = std::fs::read_to_string(&path).expect("file written");
+        assert!(
+            !on_disk.contains("active_profile"),
+            "default-active file must omit the key:\n{on_disk}"
+        );
+
+        svc.create_profile("work").expect("create");
+        svc.store.save().expect("save work-active");
+        let on_disk = std::fs::read_to_string(&path).expect("file written");
+        assert!(
+            on_disk.contains("active_profile = \"work\""),
+            "explicit pointer persists:\n{on_disk}"
+        );
+        let reloaded = ProviderConfigService::load_at(&path);
+        assert_eq!(reloaded.list_profiles().active_profile, "work");
+    }
+
+    // ── R4-2: config export/import ───────────────────────────────────────
+
+    fn import_profile(id: &str, base_url: &str, model: &str) -> ProviderProfile {
+        ProviderProfile {
+            id: id.to_string(),
+            kind: shannon_types::provider_config::ProviderKind::OpenAiCompatible,
+            display_name: id.to_string(),
+            base_url: base_url.to_string(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: id.to_string(),
+            },
+            extra_headers: std::collections::HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers {
+                standard: Some(model.to_string()),
+                ..Default::default()
+            },
+            models: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn import_snapshot_persists_and_conflicts_recheck_under_lock() {
+        let (mut svc, dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .expect("seed");
+
+        // Snapshot carrying an anthropic slot that conflicts with the live
+        // one (same id) plus a brand-new glm slot.
+        let snapshot = ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
+            profiles: std::iter::once((
+                "default".to_string(),
+                shannon_types::provider_config::ModelProfile {
+                    name: "default".to_string(),
+                    active_target: shannon_types::provider_config::ActiveTarget {
+                        provider_id: "anthropic".to_string(),
+                        model_id: "claude-from-snapshot".to_string(),
+                        scope: shannon_types::provider_config::Scope::Global,
+                    },
+                    providers: vec![
+                        import_profile(
+                            "anthropic",
+                            "https://api.anthropic.com",
+                            "claude-from-snapshot",
+                        ),
+                        import_profile("glm", "https://open.bigmodel.cn/v1", "glm-4.6"),
+                    ],
+                    auxiliary: std::collections::HashMap::new(),
+                    credential_scope: shannon_types::provider_config::CredentialScope::Shared,
+                },
+            ))
+            .collect(),
+            gateway: Default::default(),
+        };
+
+        // Without force: refused, listing the conflict.
+        assert!(!svc.import_conflicts(&snapshot).is_empty());
+        let err = svc
+            .import_snapshot(&snapshot, false, None)
+            .expect_err("conflict refuses");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+
+        // With force: the anthropic slot is replaced, glm added, persisted.
+        let outcome = svc
+            .import_snapshot(&snapshot, true, None)
+            .expect("forced import");
+        assert_eq!(outcome.summary.providers_replaced, 1);
+        assert_eq!(outcome.summary.providers_added, 1);
+        // The snapshot's active target followed the force-replaced slot.
+        assert_eq!(
+            outcome.summary.active_profile, "default",
+            "pointer unchanged (was already default)"
+        );
+        assert!(!outcome.summary.active_pointer_applied);
+
+        // The write landed on disk (a fresh reader sees it).
+        let reloaded = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        assert!(reloaded.connected_slugs().contains("glm"));
+        assert!(reloaded.connected_slugs().contains("anthropic"));
+    }
+
+    #[test]
+    fn import_snapshot_fresh_machine_adopts_snapshot_pointer() {
+        let (mut svc, _dir) = service();
+        let snapshot = ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: "work".to_string(),
+            profiles: std::iter::once((
+                "work".to_string(),
+                shannon_types::provider_config::ModelProfile {
+                    name: "work".to_string(),
+                    active_target: shannon_types::provider_config::ActiveTarget {
+                        provider_id: "glm".to_string(),
+                        model_id: "glm-4.6".to_string(),
+                        scope: shannon_types::provider_config::Scope::Global,
+                    },
+                    providers: vec![import_profile(
+                        "glm",
+                        "https://open.bigmodel.cn/v1",
+                        "glm-4.6",
+                    )],
+                    auxiliary: std::collections::HashMap::new(),
+                    credential_scope: shannon_types::provider_config::CredentialScope::Shared,
+                },
+            ))
+            .collect(),
+            gateway: Default::default(),
+        };
+        let outcome = svc
+            .import_snapshot(&snapshot, false, None)
+            .expect("fresh import");
+        assert!(outcome.summary.active_pointer_applied);
+        assert_eq!(outcome.summary.active_profile, "work");
+
+        let reloaded = ProviderConfigService::load_at(&_dir.path().join("providers.toml"));
+        assert_eq!(reloaded.list_profiles().active_profile, "work");
     }
 }

@@ -203,8 +203,89 @@ describe("mapEngineEvent", () => {
     expect(mapEngineEvent(ev)).toEqual({ ...ev, type: "approval.request" });
   });
 
+  it("§L1: passes the engine's rich ts/agent/risk through the approval.request mapping", () => {
+    const ev = {
+      type: "approval_request" as const,
+      request_id: "r2",
+      tool_name: "Edit",
+      tool_input: { path: "/x" },
+      description: "edit /x",
+      is_destructive: false,
+      diff_preview: null,
+      ts: 1759500000000,
+      agent: { id: "agent-0001", name: "Planner" },
+      risk: { destructive: false, scope: "repo" as const, reversible: true },
+    };
+    expect(mapEngineEvent(ev)).toEqual({
+      type: "approval.request",
+      request_id: "r2",
+      tool_name: "Edit",
+      tool_input: { path: "/x" },
+      description: "edit /x",
+      is_destructive: false,
+      diff_preview: null,
+      ts: 1759500000000,
+      agent: { id: "agent-0001", name: "Planner" },
+      risk: { destructive: false, scope: "repo", reversible: true },
+    });
+  });
+
+  it("§L1: omits rich keys when the engine doesn't supply usable values (legacy engines)", () => {
+    // Absent fields → keys absent (the legacy six-key shape, byte-identical).
+    const bare = mapEngineEvent({
+      type: "approval_request",
+      request_id: "r3",
+      tool_name: "Bash",
+      tool_input: {},
+      description: "run",
+      is_destructive: false,
+      diff_preview: null,
+    });
+    expect(bare).toEqual({
+      type: "approval.request",
+      request_id: "r3",
+      tool_name: "Bash",
+      tool_input: {},
+      description: "run",
+      is_destructive: false,
+      diff_preview: null,
+    });
+    // Null ts / null agent (serde #[serde(default)]) / malformed risk → omitted.
+    const nulled = mapEngineEvent({
+      type: "approval_request",
+      request_id: "r4",
+      tool_name: "Bash",
+      tool_input: {},
+      description: "run",
+      is_destructive: false,
+      diff_preview: null,
+      ts: null,
+      agent: null,
+      risk: null,
+    } as never);
+    expect(nulled).not.toHaveProperty("ts");
+    expect(nulled).not.toHaveProperty("agent");
+    expect(nulled).not.toHaveProperty("risk");
+    // A risk that misses the required scope/reversible pair is not invented.
+    const badRisk = mapEngineEvent({
+      type: "approval_request",
+      request_id: "r5",
+      tool_name: "Bash",
+      tool_input: {},
+      description: "run",
+      is_destructive: false,
+      diff_preview: null,
+      risk: { scope: "galaxy" },
+    } as never);
+    expect(badRisk).not.toHaveProperty("risk");
+  });
+
   it("drops session_info (metadata-only) → null", () => {
     expect(mapEngineEvent({ type: "session_info", message_count: 3, model: "gpt-x" })).toBeNull();
+  });
+
+  it("drops thinking (WP-15 P0-2) — reasoning never leaks into task.progress", () => {
+    expect(mapEngineEvent({ type: "thinking", content: "chain of thought" })).toBeNull();
   });
 });
 
@@ -241,6 +322,14 @@ describe("createEngineHandlers (P1.1b)", () => {
     ]);
     expect((events[0] as { turn_id: string }).turn_id).toMatch(/^[0-9a-f-]{36}$/);
     expect((events[1] as { content: string }).content).toBe("Hel");
+    // WP-15 P2-8: every task.progress carries the routing key so clients can
+    // correlate without the one-in-flight-turn-per-socket convention.
+    const turnId = (events[0] as { turn_id: string }).turn_id;
+    for (const ev of events) {
+      if (ev.type === "task.progress") {
+        expect((ev as { turn_id?: string }).turn_id).toBe(turnId);
+      }
+    }
     expect(holder.current?.lastPrompt).toBe("hi");
     expect(holder.current?.lastModel).toBe("gpt-x");
     socket.close();
@@ -318,6 +407,114 @@ describe("createEngineHandlers (P1.1b)", () => {
     socket.close();
   });
 
+  it("approval/decide scope=session POSTs always_allow_session and binds the signature", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => mockResponse(200, ""));
+    const handlers = createEngineHandlers({
+      engineWsUrl: "ws://127.0.0.1:9",
+      engineHttpBaseUrl: "http://engine:33420",
+      version: "test",
+      logger,
+      engineClientFactory: fakeFactory({ current: null }, { script: [] }),
+      fetchImpl: fetchMock,
+    });
+    const { port } = await start(handlers);
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r2",
+      choice: "allow",
+      scope: "session",
+      signature: "sig",
+    });
+    expect(res.result).toEqual({ ok: true });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe("http://engine:33420/api/approval/respond");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      request_id: "r2",
+      choice: "always_allow_session",
+    });
+    socket.close();
+  });
+
+  it("approval/decide rejects a session scope on deny and an unknown scope", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => mockResponse(200, ""));
+    const handlers = createEngineHandlers({
+      engineWsUrl: "ws://127.0.0.1:9",
+      engineHttpBaseUrl: "http://engine:33420",
+      version: "test",
+      logger,
+      engineClientFactory: fakeFactory({ current: null }, { script: [] }),
+      fetchImpl: fetchMock,
+    });
+    const { port } = await start(handlers);
+    const socket = await connect(port);
+    const denyScoped = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r3",
+      choice: "deny",
+      scope: "session",
+      signature: "sig",
+    });
+    expect(denyScoped.error?.code).toBe(ShannonError.BAD_PARAMS);
+    const badScope = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r4",
+      choice: "allow",
+      scope: "forever",
+      signature: "sig",
+    });
+    expect(badScope.error?.code).toBe(ShannonError.BAD_PARAMS);
+    expect(fetchMock).not.toHaveBeenCalled();
+    socket.close();
+  });
+
+  it("approval.state reads the session mode and approval.set tightens to readonly", async () => {
+    const jsonResponse = (status: number, body: unknown): Response =>
+      ({
+        status,
+        ok: status >= 200 && status < 300,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response;
+    const fetchMock = vi.fn<typeof fetch>(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/approval/mode") && (init as RequestInit | undefined)?.method === "POST") {
+        return jsonResponse(200, { mode: "readonly" });
+      }
+      return jsonResponse(200, { mode: "auto-edit" });
+    });
+    const handlers = createEngineHandlers({
+      engineWsUrl: "ws://127.0.0.1:9",
+      engineHttpBaseUrl: "http://engine:33420",
+      version: "test",
+      logger,
+      engineClientFactory: fakeFactory({ current: null }, { script: [] }),
+      fetchImpl: fetchMock,
+    });
+    const { port } = await start(handlers);
+    const socket = await connect(port);
+    const stateRes = await rpc(socket, "shannon/approval.state", {});
+    expect(stateRes.error).toBeUndefined();
+    expect(stateRes.result).toEqual({ mode: "auto-edit" });
+
+    const setRes = await rpc(socket, "shannon/approval.set", { mode: "readonly" });
+    expect(setRes.result).toEqual({ mode: "readonly" });
+    const post = fetchMock.mock.calls.find(
+      ([u, i]) => String(u).includes("/api/approval/mode") && (i as RequestInit).method === "POST",
+    );
+    expect(post).toBeTruthy();
+    // Open-mode harness has no bound session (session_id: null) — the live
+    // gateway always carries the paired device's engine session id.
+    expect(JSON.parse((post![1] as RequestInit).body as string)).toMatchObject({
+      mode: "readonly",
+    });
+
+    // Escalation attempts never leave the gateway.
+    const escalate = await rpc(socket, "shannon/approval.set", { mode: "full-auto" });
+    expect(escalate.error?.code).toBe(ShannonError.BAD_PARAMS);
+    expect(
+      fetchMock.mock.calls.filter(([u, i]) => String(u).includes("/api/approval/mode") && (i as RequestInit).method === "POST"),
+    ).toHaveLength(1);
+    socket.close();
+  });
+
   it("health reports engine up on 2xx and down on connection failure", async () => {
     const up = vi.fn<typeof fetch>(async () => mockResponse(200, ""));
     const handlers = createEngineHandlers({
@@ -380,5 +577,231 @@ describe("createEngineHandlers (P1.1b)", () => {
     const detail = await rpc(socket, "shannon/agent.detail", { session_id: "s1" });
     expect(detail.error?.code).toBe(ShannonError.NOT_IMPLEMENTED);
     socket.close();
+  });
+});
+
+// ── §J session face (engine one-shot call seam) ──────────────────────────────
+
+/** A session-capable fake engine: answers `sessions.list` / `session.history` via `call`. */
+class SessionFakeEngine implements EngineClient {
+  sent: unknown[] = [];
+  constructor(
+    private readonly respond: (message: any) => unknown,
+    private readonly opts: { connectFails?: boolean } = {},
+  ) {}
+  async connect(): Promise<void> {
+    if (this.opts.connectFails) throw new Error("engine socket refused");
+  }
+  cancel(): void {}
+  async close(): Promise<void> {}
+  async *runQuery(): AsyncGenerator<EngineEvent> {}
+  async call<T>(
+    message: unknown,
+    match: (frame: unknown) => T | null,
+  ): Promise<T> {
+    this.sent.push(message);
+    const frame = this.respond(message);
+    const matched = match(frame);
+    if (matched === null) {
+      throw new Error(`fake engine produced an unmatched frame: ${JSON.stringify(frame)}`);
+    }
+    return matched;
+  }
+}
+
+function sessionHandlers(engine: EngineClient): MethodHandlers {
+  return createEngineHandlers({
+    engineWsUrl: "ws://127.0.0.1:9",
+    engineHttpBaseUrl: "http://engine:33420",
+    version: "test",
+    logger,
+    engineClientFactory: () => engine,
+  });
+}
+
+describe("shannon/session.list + session.history (§J)", () => {
+  it("maps the engine snapshot to the §J1 wire shape (id required; optional keys omitted)", async () => {
+    const engine = new SessionFakeEngine(() => ({
+      type: "sessions.snapshot",
+      sessions: [
+        {
+          session_id: "sess-1",
+          title: "Refactor transport client",
+          updated_at: "2026-06-28T14:21:00Z",
+          // C8 additive: lifetime token totals ride through camelCase.
+          total_input_tokens: 1520,
+          total_output_tokens: 843,
+          preview: "…",
+          turn_count: 4,
+        },
+        { session_id: "sess-2", title: null, updated_at: null }, // no totals → keys omitted
+        { session_id: "", title: "unusable" }, // no id → dropped
+      ],
+    }));
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/session.list", {});
+    expect(res.result).toEqual({
+      sessions: [
+        {
+          id: "sess-1",
+          title: "Refactor transport client",
+          updatedAt: "2026-06-28T14:21:00Z",
+          totalInputTokens: 1520,
+          totalOutputTokens: 843,
+        },
+        { id: "sess-2" },
+      ],
+    });
+    // v1 request frame is the bare type tag (unknown params never forwarded).
+    expect(engine.sent).toEqual([{ type: "sessions.list" }]);
+    socket.close();
+  });
+
+  it("session.list token totals: non-numeric / negative engine values are omitted, camelCase fallback accepted", async () => {
+    const engine = new SessionFakeEngine(() => ({
+      type: "sessions_snapshot",
+      sessions: [
+        {
+          session_id: "sess-a",
+          total_input_tokens: "many", // junk → omitted
+          total_output_tokens: -4, // nonsense → omitted
+        },
+        {
+          session_id: "sess-b",
+          totalInputTokens: 10, // camelCase fallback (engine WS convention tolerance)
+          totalOutputTokens: 0, // zero IS a usable value
+        },
+      ],
+    }));
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/session.list", {});
+    expect(res.result).toEqual({
+      sessions: [
+        { id: "sess-a" },
+        { id: "sess-b", totalInputTokens: 10, totalOutputTokens: 0 },
+      ],
+    });
+    socket.close();
+  });
+
+  it("session.history happy path: §J2 wire shape, pagination passthrough, epoch ts normalized", async () => {
+    const engine = new SessionFakeEngine((message: any) => {
+      expect(message.type).toBe("session.history");
+      expect(message.session_id).toBe("sess-1");
+      expect(message.before).toBe("2026-06-28T14:20:00Z");
+      expect(message.limit).toBe(10);
+      return {
+        type: "session.transcript",
+        session_id: "sess-1",
+        has_more: true,
+        messages: [
+          { role: "user", content: "refactor the reconnect backoff", ts: 1_759_500_000_000 },
+          { role: "assistant", content: "on it", ts: "2026-06-28T14:20:05Z" },
+          { content: "no role but string content stays" },
+        ],
+      };
+    });
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/session.history", {
+      sessionId: "sess-1",
+      before: "2026-06-28T14:20:00Z",
+      limit: 10,
+    });
+    expect(res.result).toEqual({
+      sessionId: "sess-1",
+      hasMore: true,
+      messages: [
+        { role: "user", content: "refactor the reconnect backoff", ts: "2025-10-03T14:00:00.000Z" },
+        { role: "assistant", content: "on it", ts: "2026-06-28T14:20:05Z" },
+        { role: "assistant", content: "no role but string content stays" },
+      ],
+    });
+    socket.close();
+  });
+
+  it("session.history without pagination omits the optional engine params", async () => {
+    const engine = new SessionFakeEngine((message: any) => {
+      expect(message.before).toBeUndefined();
+      expect(message.limit).toBeUndefined();
+      return { type: "session.transcript", session_id: "sess-1", messages: [], has_more: false };
+    });
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/session.history", { sessionId: "sess-1" });
+    expect(res.result).toEqual({ sessionId: "sess-1", messages: [], hasMore: false });
+    socket.close();
+  });
+
+  it("session.history limit<1 passes through for the engine-side §J4 clamp (handover §5)", async () => {
+    // §J4: "<1 按 1 处理" is ENGINE semantics — the gateway must forward the
+    // value verbatim (the old >= 1 guard turned limit<1 into the default-50
+    // page, so the clamp never reached the wire). Non-number/non-finite still
+    // means "absent".
+    const engine = new SessionFakeEngine((message: any) => {
+      expect(message.limit).toBe(0);
+      return { type: "session.transcript", session_id: "sess-1", messages: [], has_more: false };
+    });
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    await rpc(socket, "shannon/session.history", { sessionId: "sess-1", limit: 0 });
+    await rpc(socket, "shannon/session.history", { sessionId: "sess-1", limit: -3 });
+    socket.close();
+
+    const nonFinite = new SessionFakeEngine((message: any) => {
+      expect(message.limit).toBeUndefined();
+      return { type: "session.transcript", session_id: "sess-1", messages: [], has_more: false };
+    });
+    const { port: port2 } = await start(sessionHandlers(nonFinite));
+    const socket2 = await connect(port2);
+    await rpc(socket2, "shannon/session.history", { sessionId: "sess-1", limit: "5" });
+    socket2.close();
+  });
+
+  it("session.history missing/blank sessionId → INVALID_PARAMS (no engine call)", async () => {
+    const engine = new SessionFakeEngine(() => {
+      throw new Error("engine must not be called");
+    });
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const missing = await rpc(socket, "shannon/session.history", {});
+    expect(missing.error?.code).toBe(ShannonError.BAD_PARAMS);
+    const blank = await rpc(socket, "shannon/session.history", { sessionId: "" });
+    expect(blank.error?.code).toBe(ShannonError.BAD_PARAMS);
+    socket.close();
+  });
+
+  it("an engine error frame on history degrades to the honest empty transcript (§J2)", async () => {
+    const engine = new SessionFakeEngine(() => ({ type: "error", message: "no such session" }));
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/session.history", { sessionId: "ghost" });
+    expect(res.error).toBeUndefined();
+    expect(res.result).toEqual({ sessionId: "ghost", messages: [], hasMore: false });
+    socket.close();
+  });
+
+  it("engine connect failure / call-less client → ENGINE_ERROR (distinguishable from empty)", async () => {
+    const down = new SessionFakeEngine(() => ({}), { connectFails: true });
+    const { port } = await start(sessionHandlers(down));
+    const socket = await connect(port);
+    const downList = await rpc(socket, "shannon/session.list", {});
+    expect(downList.error?.code).toBe(ShannonError.ENGINE_ERROR);
+    expect(downList.error?.message).toMatch(/engine session call failed/);
+    const downHistory = await rpc(socket, "shannon/session.history", { sessionId: "s" });
+    expect(downHistory.error?.code).toBe(ShannonError.ENGINE_ERROR);
+    socket.close();
+
+    // A legacy fake without `call` reports the surface as unavailable —
+    // still ENGINE_ERROR, never a silent empty list.
+    const legacy = new FakeEngine({ script: [] });
+    const { port: port2 } = await start(sessionHandlers(legacy));
+    const socket2 = await connect(port2);
+    const noCall = await rpc(socket2, "shannon/session.list", {});
+    expect(noCall.error?.code).toBe(ShannonError.ENGINE_ERROR);
+    expect(noCall.error?.message).toMatch(/one-shot calls/);
+    socket2.close();
   });
 });

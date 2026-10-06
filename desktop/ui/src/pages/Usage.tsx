@@ -2,9 +2,15 @@
 //
 // Reads `~/.shannon/usage.jsonl` (appended on every engine Usage event in
 // `commands.rs::send_message`) via the `get_usage_stats` command and
-// aggregates by model / provider / day. Local-only; no billing backend.
+// aggregates by model / provider / day. Billing commands removed (R2 F4);
+// the local usage ledger is the source of record.
+//
+// 2026-09 review: charts are the default surface — they answer "where did
+// my tokens go this week?" at a glance. The audit (table) view sits next
+// to it, reserved for precise reconciliation ("the exact cost row 12
+// minutes ago").
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { useT } from '@/i18n'
 import LoadingState from '@/components/ui/loading-state'
@@ -12,16 +18,39 @@ import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
+import StatCard from '@/components/ui/stat-card'
 import { cn } from '@/lib/utils'
 import type { UsageStats, UsageBucket, SessionUsageRow } from '@/types'
+import CurrentSessionCostPanel from '@/components/usage/CurrentSessionCostPanel'
+import UsageBudgetCard from '@/components/usage/UsageBudgetCard'
+import { useUsageGovernance } from '@/hooks/useUsageGovernance'
+import { BarChart, DonutChart, type BarSeriesDef } from '@/components/usage/BarChart'
+import { DataTable } from '@/components/ui/data-table'
+import type { ColumnDef } from '@tanstack/react-table'
 
 const RANGES = [7, 30, 90] as const
+type DisplayMode = 'overview' | 'audit'
 
 function fmtTokens(locale: string, n: number): string {
+  // Audit §P2-6 (round 6): explicit compactThreshold prevents zh-CN edge
+  // cases where values just below the 万 boundary get rendered with a
+  // confusing decimal point (e.g. 4250 → "43.5" under some Intl builds).
+  // Force the abbreviated form only for ≥10k and fall back to plain
+  // thousands grouping otherwise.
+  if (Math.abs(n) >= 10_000) {
+    return new Intl.NumberFormat(locale, {
+      notation: 'compact',
+      compactDisplay: 'short',
+      maximumFractionDigits: 1,
+    }).format(n)
+  }
   return new Intl.NumberFormat(locale, {
-    notation: 'compact',
     maximumFractionDigits: 1,
   }).format(n)
+}
+
+function fmtTokensFull(locale: string, n: number): string {
+  return new Intl.NumberFormat(locale).format(n)
 }
 
 function fmtCost(locale: string, n: number): string {
@@ -31,33 +60,43 @@ function fmtCost(locale: string, n: number): string {
   }).format(n)}`
 }
 
-function StatCard({
+/** Card wrapper for a chart — title + subtitle on top, the SVG below. */
+function ChartCard({
+  title,
+  subtitle,
   icon,
-  label,
-  value,
-  hint,
+  children,
+  empty,
 }: {
+  title: string
+  subtitle?: string
   icon: string
-  label: string
-  value: string
-  hint?: string
+  children: React.ReactNode
+  empty?: boolean
 }) {
   return (
-    <div className="bg-surface-container-low rounded-2xl p-lg border border-outline-variant/30">
-      <div className="flex items-center gap-xs text-on-surface-variant mb-sm">
-        <span className="material-symbols-outlined icon-sm">{icon}</span>
-        <span className="font-label-sm text-label-sm uppercase tracking-wider">{label}</span>
+    <div className="bg-surface-container-low rounded-2xl border border-outline-variant/30 overflow-hidden">
+      <div className="flex items-center gap-xs px-lg py-md border-b border-outline-variant/20">
+        <span className="material-symbols-outlined icon-sm text-primary">{icon}</span>
+        <h2 className="font-label-md font-bold text-on-surface">{title}</h2>
       </div>
-      <div className="font-mono font-headline-md text-[26px] font-bold text-on-surface leading-tight tabular-nums">
-        {value}
+      <div className="p-lg">
+        {empty ? (
+          <p className="text-label-sm text-on-surface-variant text-center py-lg">{subtitle}</p>
+        ) : (
+          <>
+            {subtitle && (
+              <p className="font-label-sm text-label-sm text-on-surface-variant mb-md">{subtitle}</p>
+            )}
+            {children}
+          </>
+        )}
       </div>
-      {hint && (
-        <div className="font-label-sm text-label-sm text-outline-variant mt-xs">{hint}</div>
-      )}
     </div>
   )
 }
 
+/** Audit-mode table — exact numbers, no aggregation. */
 function BucketTable({
   title,
   icon,
@@ -75,7 +114,6 @@ function BucketTable({
   emptyTitle: string
   emptyLabel: string
 }) {
-  const t = useT()
   return (
     <div className="bg-surface-container-low rounded-2xl border border-outline-variant/30 overflow-hidden">
       <div className="flex items-center gap-xs px-lg py-md border-b border-outline-variant/20">
@@ -85,46 +123,56 @@ function BucketTable({
       {buckets.length === 0 ? (
         <EmptyState icon="monitoring" title={emptyTitle} description={emptyLabel} />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="text-outline-variant">
-              <tr className="border-b border-outline-variant/20">
-                <th className="px-lg py-xs font-label-sm font-medium">{labelTitle}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.tokens')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cache')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cost')}</th>
-                <th className="px-lg py-xs font-label-sm font-medium text-right">Reqs</th>
-              </tr>
-            </thead>
-            <tbody>
-              {buckets.map((b) => (
-                <tr
-                  key={b.label}
-                  className="border-b border-outline-variant/10 last:border-0 hover:bg-surface-container/40"
-                >
-                  <td className="px-lg py-sm font-label-md text-on-surface truncate max-w-[220px]">
-                    {b.label}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtTokens(locale, b.input_tokens + b.output_tokens)}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtTokens(locale, b.cache_creation_tokens + b.cache_read_tokens)}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtCost(locale, b.cost_usd)}
-                  </td>
-                  <td className="px-lg py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {b.requests}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="overflow-x-auto p-sm">
+          <BucketDataTable labelTitle={labelTitle} buckets={buckets} locale={locale} emptyLabel={emptyLabel} />
         </div>
       )}
     </div>
   )
+}
+
+function BucketDataTable({ labelTitle, buckets, locale, emptyLabel }: {
+  labelTitle: string
+  buckets: UsageBucket[]
+  locale: string
+  emptyLabel: string
+}) {
+  const tB = useT()
+  const columns: ColumnDef<UsageBucket, unknown>[] = [
+    {
+      accessorKey: 'label',
+      header: labelTitle,
+      enableSorting: false,
+      cell: ({ getValue }) => (
+        <span className="font-label-md text-on-surface truncate max-w-[220px] block">{getValue() as string}</span>
+      ),
+    },
+    {
+      id: 'tokens',
+      header: tB('usage.col.tokens'),
+      accessorFn: b => b.input_tokens + b.output_tokens,
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtTokensFull(locale, getValue() as number)}</span>
+      ),
+    },
+    {
+      id: 'cache',
+      header: tB('usage.col.cache'),
+      accessorFn: b => b.cache_creation_tokens + b.cache_read_tokens,
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtTokensFull(locale, getValue() as number)}</span>
+      ),
+    },
+    {
+      accessorKey: 'cost_usd',
+      header: tB('usage.col.cost'),
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtCost(locale, getValue() as number)}</span>
+      ),
+    },
+    { accessorKey: 'requests', header: tB('usage.col.reqs') },
+  ]
+  return <DataTable columns={columns} data={buckets} emptyMessage={emptyLabel} />
 }
 
 function SessionTable({ rows, locale, emptyTitle, emptyLabel }: {
@@ -136,6 +184,53 @@ function SessionTable({ rows, locale, emptyTitle, emptyLabel }: {
   const t = useT()
   const fmtDay = (ms: number) =>
     new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(new Date(ms))
+
+  const columns: ColumnDef<SessionUsageRow, unknown>[] = [
+    {
+      accessorKey: 'title',
+      header: t('usage.col.session'),
+      enableSorting: false,
+      cell: ({ row }) => (
+        <span className="font-label-md text-on-surface truncate max-w-[220px] block">
+          {row.original.title ?? `${row.original.sessionId.slice(0, 8)}…`}
+        </span>
+      ),
+      meta: { align: 'left', pad: 'lg' },
+    },
+    {
+      id: 'tokens',
+      header: t('usage.col.tokens'),
+      accessorFn: r => r.inputTokens + r.outputTokens,
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtTokensFull(locale, getValue() as number)}</span>
+      ),
+    },
+    {
+      id: 'cache',
+      header: t('usage.col.cache'),
+      accessorFn: r => r.cacheCreationTokens + r.cacheReadTokens,
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtTokensFull(locale, getValue() as number)}</span>
+      ),
+    },
+    {
+      accessorKey: 'costUsd',
+      header: t('usage.col.cost'),
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtCost(locale, getValue() as number)}</span>
+      ),
+    },
+    { accessorKey: 'requests', header: t('usage.col.reqs') },
+    {
+      id: 'lastUsed',
+      header: t('usage.col.lastUsed'),
+      accessorFn: r => r.lastUsedAtMs,
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtDay(getValue() as number)}</span>
+      ),
+    },
+  ]
+
   return (
     <div className="bg-surface-container-low rounded-2xl border border-outline-variant/30 overflow-hidden">
       <div className="flex items-center gap-xs px-lg py-md border-b border-outline-variant/20">
@@ -145,61 +240,48 @@ function SessionTable({ rows, locale, emptyTitle, emptyLabel }: {
       {rows.length === 0 ? (
         <EmptyState icon="bar_chart" title={emptyTitle} description={emptyLabel} />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="text-outline-variant">
-              <tr className="border-b border-outline-variant/20">
-                <th className="px-lg py-xs font-label-sm font-medium">{t('usage.col.session')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.tokens')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cache')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cost')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.reqs')}</th>
-                <th className="px-lg py-xs font-label-sm font-medium text-right">{t('usage.col.lastUsed')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(r => (
-                <tr
-                  key={r.sessionId}
-                  className="border-b border-outline-variant/10 last:border-0 hover:bg-surface-container/40"
-                >
-                  <td className="px-lg py-sm font-label-md text-on-surface truncate max-w-[220px]">
-                    {r.title ?? `${r.sessionId.slice(0, 8)}…`}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtTokens(locale, r.inputTokens + r.outputTokens)}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtTokens(locale, r.cacheCreationTokens + r.cacheReadTokens)}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtCost(locale, r.costUsd)}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {r.requests}
-                  </td>
-                  <td className="px-lg py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtDay(r.lastUsedAtMs)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="overflow-x-auto p-sm">
+          <DataTable columns={columns} data={rows} emptyMessage={emptyLabel} />
         </div>
       )}
     </div>
   )
 }
 
+// B6-36: the backend (commands_usage.rs) attributes unattributable spend —
+// scheduled-routine runs — to model/provider buckets labelled with the
+// SCHEDULED_LABEL constant ("Scheduled tasks"). Front-end mapping (per
+// decision in the review): translate that literal wherever a bucket label
+// renders, without touching the wire format or the backend ACL.
+const SCHEDULED_LABEL = 'Scheduled tasks'
+
+function useBucketLabel() {
+  const intl = useIntl()
+  return useCallback(
+    (label: string) =>
+      label === SCHEDULED_LABEL
+        ? intl.formatMessage({ id: 'usage.scheduledTasks' })
+        : label,
+    [intl],
+  )
+}
+
 export default function Usage() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+  // B6-36: "Scheduled tasks" bucket label → translated (frontend mapping).
+  const bucketLabel = useBucketLabel()
   const [days, setDays] = useState<number>(30)
   const [stats, setStats] = useState<UsageStats | null>(null)
   const [loading, setLoading] = useState(true)
-  // P0-4: per-session view (tab toggle) + its rows.
-  const [view, setView] = useState<'overview' | 'sessions'>('overview')
+  // 2026-09: two-mode page — overview (charts, the default) and audit
+  // (precise tables). The mode toggle sits next to the time-range picker
+  // so the action stays close to the primary surface.
+  const [mode, setMode] = useState<DisplayMode>('overview')
   const [sessionRows, setSessionRows] = useState<SessionUsageRow[] | null>(null)
+  // P2-1 — usage governance: budget % + threshold state (the sidebar's data
+  // source; here it drives the banner and the budget card).
+  const { governance, refresh: refreshGovernance } = useUsageGovernance()
 
   useEffect(() => {
     let cancelled = false
@@ -219,63 +301,139 @@ export default function Usage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days])
 
+  // 2026-09: in Audit mode we additionally pull per-session rows so the
+  // per-conversation breakdown is available for precise reconciliation.
+  // Loaded on demand to keep the default Overview mode responsive.
   useEffect(() => {
-    if (view !== 'sessions') return
+    if (mode !== 'audit') return
     let cancelled = false
     setLoading(true)
     api
       .getUsageBySession(days)
-      .then(rows => {
-        if (!cancelled) setSessionRows(rows)
-      })
+      .then(rows => { if (!cancelled) setSessionRows(rows) })
       .catch(e => toastError(t('usage.load.failed'), e))
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, days])
+  }, [mode, days])
 
-  const hasData = view === 'sessions'
-    ? !!sessionRows && sessionRows.length > 0
-    : !!stats && stats.totals.requests > 0
+  // Build the per-day bar series (input + output stacked) once.
+  const dailyBars = useMemo(() => {
+    if (!stats) return []
+    return stats.by_day.map(b => ({
+      label: b.label.slice(5), // strip year
+      series: [
+        { key: 'input', value: b.input_tokens },
+        { key: 'output', value: b.output_tokens },
+      ],
+    }))
+  }, [stats])
+
+  // Model-level donut: who got the tokens?
+  const modelSegments = useMemo(() => {
+    if (!stats) return []
+    return stats.by_model
+      .map(m => ({
+        key: m.label,
+        label: bucketLabel(m.label),
+        value: m.input_tokens + m.output_tokens,
+      }))
+      .filter(s => s.value > 0)
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 5)
+  }, [stats, bucketLabel])
+
+  // B6-36: series labels ("Input"/"Output") come from the locale, not literals.
+  const tokenSeries: BarSeriesDef[] = useMemo(() => [
+    { key: 'input', label: intl.formatMessage({ id: 'usage.chart.series.input' }), colorClass: 'text-primary' },
+    { key: 'output', label: intl.formatMessage({ id: 'usage.chart.series.output' }), colorClass: 'text-secondary' },
+  ], [intl])
+
+  const totalTokens = stats
+    ? stats.totals.input_tokens + stats.totals.output_tokens
+    : 0
+
+  const hasData = (stats != null && stats.totals.requests > 0)
 
   return (
-    <div className="p-lg max-w-6xl mx-auto">
-      <div className="mb-xl">
-        <h1 className="font-headline-lg text-[28px] font-bold text-on-surface flex items-center gap-sm">
-          <span className="material-symbols-outlined">monitoring</span>
-          {t('usage.title')}
-        </h1>
-        <p className="text-on-surface-variant font-body-md mt-xs">{t('usage.subtitle')}</p>
-      </div>
+    <div className="p-lg max-w-medium mx-auto">
+      <p className="text-on-surface-variant font-body-md mb-lg">{t('usage.subtitle')}</p>
+
+      {/* P2-1 — threshold banner. Derived from the live percent (not the
+          once-per-month notification markers), so it stays up while the
+          state persists and disappears the month the budget resets. */}
+      {governance?.thresholdReached && governance.budgetUsd != null && (
+        <div
+          role="alert"
+          data-testid="usage-budget-banner"
+          className={cn(
+            'flex items-start gap-sm rounded-xl border p-md mb-lg',
+            governance.thresholdReached === '100'
+              ? 'bg-error-container border-error/30 text-on-error-container'
+              : 'bg-warning-container border-warning/30 text-on-warning-container',
+          )}
+        >
+          <span className="material-symbols-outlined icon-md shrink-0" aria-hidden="true">
+            {governance.thresholdReached === '100' ? 'error' : 'warning'}
+          </span>
+          <p className="font-label-md text-body-sm font-semibold">
+            {governance.thresholdReached === '100'
+              ? intl.formatMessage(
+                  { id: 'usage.governance.banner100' },
+                  {
+                    spent: fmtCost(intl.locale, governance.monthCostUsd),
+                    budget: fmtCost(intl.locale, governance.budgetUsd),
+                  },
+                )
+              : intl.formatMessage(
+                  { id: 'usage.governance.banner80' },
+                  {
+                    percent: Math.round(governance.percent ?? 0),
+                    spent: fmtCost(intl.locale, governance.monthCostUsd),
+                    budget: fmtCost(intl.locale, governance.budgetUsd),
+                  },
+                )}
+          </p>
+        </div>
+      )}
 
       <div className="flex items-center gap-xs mb-lg flex-wrap">
-        {/* P0-4: overview vs per-session segmented toggle */}
-        <div
-          role="tablist"
-          aria-label={t('usage.title')}
-          className="flex items-center gap-xs mr-md p-xs bg-surface-container-low/60 rounded-full border border-outline-variant/20"
-        >
-          {(['overview', 'sessions'] as const).map(v => (
-            <button
-              key={v}
-              type="button"
-              role="tab"
-              aria-selected={view === v}
-              onClick={() => setView(v)}
-              className={cn(
-                'px-md py-xs rounded-full font-label-md text-label-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
-                view === v
-                  ? 'bg-secondary-container text-on-secondary-container font-bold'
-                  : 'text-on-surface-variant hover:text-primary',
-              )}
-            >
-              {v === 'overview' ? t('usage.view.overview') : t('usage.view.bySession')}
-            </button>
-          ))}
+        {/* 2026-09: two-mode toggle — Overview (charts) is the default;
+            Audit (tables) sits next to it for precise reconciliation.
+            B6-37: these are toggle buttons (aria-pressed), not a tablist —
+            the two buttons were always independently focusable/clickable and
+            never implemented the tab keyboard pattern (no roving focus, no
+            aria-controls/tabpanels), so the tab roles misannounced them. */}
+        <div className="flex items-center gap-xs mr-md p-xs bg-surface-container-low/60 rounded-full border border-outline-variant/20">
+          <button
+            type="button"
+            aria-pressed={mode === 'overview'}
+            onClick={() => setMode('overview')}
+            className={cn(
+              'px-md py-xs rounded-full font-label-md text-label-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
+              mode === 'overview'
+                ? 'bg-primary text-on-primary font-bold'
+                : 'text-on-surface-variant hover:text-primary',
+            )}
+          >
+            <span className="material-symbols-outlined icon-sm align-middle mr-xs" aria-hidden="true">monitoring</span>
+            {t('usage.view.overview')}
+          </button>
+          <button
+            type="button"
+            aria-pressed={mode === 'audit'}
+            title={t('usage.view.audit.aria')}
+            onClick={() => setMode('audit')}
+            className={cn(
+              'px-md py-xs rounded-full font-label-md text-label-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
+              mode === 'audit'
+                ? 'bg-primary text-on-primary font-bold'
+                : 'text-on-surface-variant hover:text-primary',
+            )}
+          >
+            <span className="material-symbols-outlined icon-sm align-middle mr-xs" aria-hidden="true">table</span>
+            {t('usage.view.audit')}
+          </button>
         </div>
         {RANGES.map((r) => (
           <Button
@@ -296,6 +454,16 @@ export default function Usage() {
         ))}
       </div>
 
+      {/* P2-1 — monthly-budget card: the % bar visualization + the budget
+            input (configure('monthly_budget_usd')). Sits above the stats so
+            the spend context is the first thing the page answers. */}
+      {governance && (
+        <div className="mb-lg">
+          <UsageBudgetCard governance={governance} onSaved={refreshGovernance} />
+        </div>
+      )}
+
+      <CurrentSessionCostPanel />
       {loading ? (
         <LoadingState size="lg" />
       ) : !hasData ? (
@@ -306,13 +474,45 @@ export default function Usage() {
             description={t('usage.empty')}
           />
         </div>
-      ) : view === 'sessions' ? (
-        <SessionTable
-          rows={sessionRows ?? []}
-          locale={intl.locale}
-          emptyTitle={t('usage.empty.title')}
-          emptyLabel={t('usage.empty')}
-        />
+      ) : mode === 'audit' ? (
+        <div className="space-y-lg">
+          {/* Audit view — precise numbers per bucket. Reserved for users
+              who need to reconcile a specific row with their provider's
+              billing dashboard. */}
+          <BucketTable
+            title={t('usage.section.byModel')}
+            icon="smart_toy"
+            labelTitle={t('usage.col.model')}
+            buckets={stats!.by_model.map(b => ({ ...b, label: bucketLabel(b.label) }))}
+            locale={intl.locale}
+            emptyTitle={t('usage.empty.title')}
+            emptyLabel={t('usage.empty')}
+          />
+          <BucketTable
+            title={t('usage.section.byProvider')}
+            icon="cloud"
+            labelTitle={t('usage.col.provider')}
+            buckets={stats!.by_provider.map(b => ({ ...b, label: bucketLabel(b.label) }))}
+            locale={intl.locale}
+            emptyTitle={t('usage.empty.title')}
+            emptyLabel={t('usage.empty')}
+          />
+          <BucketTable
+            title={t('usage.section.byDay')}
+            icon="calendar_month"
+            labelTitle={t('usage.col.date')}
+            buckets={stats!.by_day}
+            locale={intl.locale}
+            emptyTitle={t('usage.empty.title')}
+            emptyLabel={t('usage.empty')}
+          />
+          <SessionTable
+            rows={sessionRows ?? []}
+            locale={intl.locale}
+            emptyTitle={t('usage.empty.title')}
+            emptyLabel={t('usage.empty')}
+          />
+        </div>
       ) : (
         <div className="space-y-lg">
           {/* Totals */}
@@ -340,34 +540,60 @@ export default function Usage() {
             />
           </div>
 
-          {/* Breakdowns */}
-          <BucketTable
-            title={t('usage.section.byModel')}
-            icon="smart_toy"
-            labelTitle={t('usage.col.model')}
-            buckets={stats!.by_model}
-            locale={intl.locale}
-            emptyTitle={t('usage.empty.title')}
-          emptyLabel={t('usage.empty')}
-          />
-          <BucketTable
-            title={t('usage.section.byProvider')}
-            icon="cloud"
-            labelTitle={t('usage.col.provider')}
-            buckets={stats!.by_provider}
-            locale={intl.locale}
-            emptyTitle={t('usage.empty.title')}
-          emptyLabel={t('usage.empty')}
-          />
-          <BucketTable
-            title={t('usage.section.byDay')}
+          {/* Charts — primary read. Hover a bar for the exact segment split. */}
+          <ChartCard
+            title={t('usage.chart.byDay.title')}
+            subtitle={t('usage.chart.byDay.subtitle')}
             icon="calendar_month"
-            labelTitle={t('usage.col.date')}
-            buckets={stats!.by_day}
-            locale={intl.locale}
-            emptyTitle={t('usage.empty.title')}
-          emptyLabel={t('usage.empty')}
-          />
+            empty={dailyBars.length === 0}
+          >
+            <BarChart
+              data={dailyBars}
+              series={tokenSeries}
+              formatValue={(n) => fmtTokens(intl.locale, n)}
+            />
+          </ChartCard>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-md">
+            <div className="bg-surface-container-low rounded-2xl border border-outline-variant/30 p-lg md:col-span-1">
+              <div className="flex items-center gap-xs text-on-surface-variant mb-md">
+                <span className="material-symbols-outlined icon-sm">pie_chart</span>
+                <span className="font-label-sm text-label-sm uppercase tracking-wider">{t('usage.chart.byModel.title')}</span>
+              </div>
+              <div className="flex items-center gap-md">
+                <DonutChart
+                  segments={modelSegments}
+                  total={totalTokens}
+                  centerLabel={fmtTokens(intl.locale, totalTokens)}
+                  size={140}
+                />
+                <ul className="flex-1 min-w-0 space-y-1">
+                  {modelSegments.map((m, i) => (
+                    <li key={m.key} className="flex items-center gap-xs text-label-xs">
+                      <span className={cn('inline-block w-2.5 h-2.5 rounded-sm',
+                        ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-warning', 'bg-error'][i % 5])} />
+                      <span className="flex-1 min-w-0 truncate text-on-surface">{m.label}</span>
+                      <span className="font-mono tabular-nums text-on-surface-variant">
+                        {fmtTokens(intl.locale, m.value)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            <div className="md:col-span-2">
+              <BucketTable
+                title={t('usage.chart.byProvider.title')}
+                icon="cloud"
+                labelTitle={t('usage.col.provider')}
+                buckets={stats!.by_provider.map(b => ({ ...b, label: bucketLabel(b.label) }))}
+                locale={intl.locale}
+                emptyTitle={t('usage.empty.title')}
+                emptyLabel={t('usage.empty')}
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>

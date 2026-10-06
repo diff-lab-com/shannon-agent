@@ -32,6 +32,10 @@ export interface CodeBlockProps {
   /** Gutter behavior: 'toggle' (header button, >5 lines), true (always on),
    *  false (never). */
   lineNumbers?: 'toggle' | boolean
+  /** Extra header actions (chat Markdown adds the "run in terminal"
+   *  button here). Rendered after the copy button; the caller owns the
+   *  i18n and the behavior — this primitive only provides the slot. */
+  actions?: ReactNode
   className?: string
   /** Extra classes for the <pre> (e.g. wrap behavior). */
   contentClassName?: string
@@ -49,12 +53,14 @@ export function CodeBlock({
   children,
   chrome = true,
   lineNumbers = 'toggle',
+  actions,
   className,
   contentClassName,
 }: CodeBlockProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
   const [showLines, setShowLines] = useState(false)
   const preRef = useRef<HTMLPreElement>(null)
 
@@ -98,8 +104,14 @@ export function CodeBlock({
   const handleCopy = () => {
     navigator.clipboard.writeText(code).then(() => {
       setCopied(true)
+      setCopyFailed(false)
       setTimeout(() => setCopied(false), 1500)
-    }).catch(() => {})
+    }).catch(() => {
+      // Review §5: clipboard failures used to vanish silently — show a
+      // brief failure state on the button instead.
+      setCopyFailed(true)
+      setTimeout(() => setCopyFailed(false), 1500)
+    })
   }
 
   return (
@@ -119,7 +131,7 @@ export function CodeBlock({
                 aria-label={t(showLines ? 'code.lineNumbers.hide' : 'code.lineNumbers.show')}
                 className="h-auto px-xs py-[2px] text-on-surface-variant hover:text-primary"
               >
-                <span className="material-symbols-outlined text-[14px] align-middle">format_list_numbered</span>
+                <span className="material-symbols-outlined icon-sm align-middle">format_list_numbered</span>
               </Button>
             )}
             <Button
@@ -127,11 +139,19 @@ export function CodeBlock({
               size="sm"
               onClick={handleCopy}
               aria-label={t('code.copy.aria')}
-              className="h-auto px-xs py-[2px] gap-xs text-on-surface-variant hover:text-primary"
+              className={cn(
+                'h-auto px-xs py-[2px] gap-xs text-on-surface-variant hover:text-primary',
+                copyFailed && 'text-error hover:text-error',
+              )}
             >
-              <span className="material-symbols-outlined text-[14px]">{copied ? 'check' : 'content_copy'}</span>
-              <span>{copied ? t('code.copy.copied') : t('code.copy.copy')}</span>
+              <span className="material-symbols-outlined icon-sm">
+                {copied ? 'check' : copyFailed ? 'error' : 'content_copy'}
+              </span>
+              <span>
+                {copied ? t('code.copy.copied') : copyFailed ? t('code.copy.failed') : t('code.copy.copy')}
+              </span>
             </Button>
+            {actions}
           </div>
         </div>
       )}

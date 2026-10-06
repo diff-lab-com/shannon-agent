@@ -30,6 +30,14 @@ vi.mock('@/lib/tauri-api', () => ({
   getCliInstallStatus: vi.fn().mockRejectedValue(new Error('skip')),
   listSkillCandidates: vi.fn().mockRejectedValue(new Error('skip')),
   checkAppUpdate: vi.fn().mockRejectedValue(new Error('skip')),
+  // office B6'-ui: ScheduleForm probes the webhook config on mount.
+  getWebhookConfig: vi.fn().mockResolvedValue(null),
+  // P2-6/F6: filling the required fields flips ScheduleForm's valid gate,
+  // which mounts CostEstimateHint — its 350ms debounce then calls
+  // estimateTaskCost. Missing here = TypeError thrown inside that timer
+  // whenever a test outlives the debounce (intermittent unhandled-error
+  // flake), so every function the render path touches must exist.
+  estimateTaskCost: vi.fn().mockResolvedValue({ hasHistory: false, runsCounted: 0, minUsd: null, maxUsd: null, avgUsd: null, lastUsd: null }),
 }))
 
 function windowedRoutine(): ScheduledRoutine {
@@ -95,7 +103,8 @@ describe('P2-5 ScheduleForm off-peak window payload', () => {
     fireEvent.change(screen.getByLabelText('End hour (inclusive)'), { target: { value: '5' } })
     fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'UTC' } })
 
-    fireEvent.click(screen.getByText('Create Routine'))
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
 
     const payload: CreateTaskPayload = onSubmit.mock.calls[0][0]
@@ -112,7 +121,8 @@ describe('P2-5 ScheduleForm off-peak window payload', () => {
 
     fillRequiredFields()
     fireEvent.click(screen.getByText('Policy options'))
-    fireEvent.click(screen.getByText('Create Routine'))
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
 
     const payload: CreateTaskPayload = onSubmit.mock.calls[0][0]
@@ -127,7 +137,8 @@ describe('P2-5 ScheduleForm off-peak window payload', () => {
     fireEvent.click(screen.getByText('Policy options'))
     fireEvent.click(screen.getByLabelText('Toggle off-peak execution window'))
     fireEvent.change(screen.getByLabelText('Start hour (inclusive)'), { target: { value: '99' } })
-    fireEvent.click(screen.getByText('Create Routine'))
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
 
     const payload: CreateTaskPayload = onSubmit.mock.calls[0][0]

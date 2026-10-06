@@ -83,9 +83,9 @@ export function KanbanBoard({
   return (
     <div className="flex-1 w-full flex flex-col min-w-0">
       {(boardTitle || toolbar) && (
-        <div className="flex justify-between items-center mb-4">
+        <div className="flex justify-between items-center mb-md">
           {boardTitle ? (
-            <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest">
+            <h3 className="font-label-md text-body-sm font-bold text-on-surface-variant uppercase tracking-widest">
               {boardTitle}
             </h3>
           ) : <span />}
@@ -97,7 +97,7 @@ export function KanbanBoard({
       <div
         className={mode === 'observe'
           ? 'flex-1 overflow-x-auto overflow-y-hidden'
-          : 'flex gap-4 overflow-x-auto pb-4 custom-scrollbar items-start min-h-[600px]'}
+          : 'flex gap-md overflow-x-auto pb-md custom-scrollbar items-start min-h-[600px]'}
         aria-label={intl.formatMessage({ id: 'shared.kanban.board.aria' })}
       >
         <div className={mode === 'observe'
@@ -167,8 +167,8 @@ function KanbanColumn({ title, icon, dotClass, bgClass, count, observe, emptyLab
     >
       <header className={observe
         ? 'flex items-center justify-between px-md py-sm border-b border-outline-variant/20'
-        : 'flex justify-between items-center px-2 py-3 mb-1'}>
-        <div className="flex items-center gap-2">
+        : 'flex justify-between items-center px-sm py-3 mb-xs'}>
+        <div className="flex items-center gap-sm">
           <span className={cn("w-2 h-2 rounded-full", dotClass)} />
           {observe ? (
             <span className="font-label-md text-label-md text-on-surface font-bold uppercase tracking-wider flex items-center gap-xs">
@@ -176,12 +176,12 @@ function KanbanColumn({ title, icon, dotClass, bgClass, count, observe, emptyLab
               {title}
             </span>
           ) : (
-            <span className="font-label-md text-[14px] font-bold">{title}</span>
+            <span className="font-label-md text-body-sm font-bold">{title}</span>
           )}
         </div>
         <span className={observe
           ? 'text-label-sm text-on-surface-variant font-mono'
-          : 'font-label-sm text-[11px] text-on-surface-variant'}>
+          : 'font-label-sm text-label-xs text-on-surface-variant'}>
           {count}
         </span>
       </header>
@@ -190,7 +190,7 @@ function KanbanColumn({ title, icon, dotClass, bgClass, count, observe, emptyLab
           <div className={observe
             ? 'text-center text-label-sm text-on-surface-variant py-xl opacity-60'
             : 'flex items-center justify-center p-xl mt-xl'}>
-            <p className={observe ? '' : 'font-label-sm text-[12px] text-on-surface-variant italic opacity-60'}>
+            <p className={observe ? '' : 'font-label-sm text-label-sm text-on-surface-variant italic opacity-60'}>
               {emptyLabel ?? intl.formatMessage({ id: 'shared.kanban.nothingHere' })}
             </p>
           </div>
@@ -211,14 +211,14 @@ export function DefaultCard({ task, onClick, observe }: { task: TaskItem; onClic
       draggable={!observe}
       onDragStart={!observe ? e => e.dataTransfer.setData('text/plain', task.id) : undefined}
       className={cn(
-        'w-full text-left p-md rounded-xl bg-surface-container-lowest/90 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 mb-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ring-1',
+        'w-full text-left p-md rounded-xl bg-surface-container-lowest/90 shadow-e1 hover:shadow-e2 hover:-translate-y-0.5 transition-all duration-(--duration-normal) mb-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ring-1',
         ring
       )}
     >
       <div className="flex items-start justify-between gap-xs">
         <h4 className="font-body-md font-semibold text-on-surface line-clamp-2 flex-1">{task.title}</h4>
         {task.priority ? (
-          <span className="shrink-0 text-[10px] uppercase tracking-wider font-bold text-on-surface-variant px-xs py-0.5 rounded bg-surface-container-high">
+          <span className="shrink-0 text-label-2xs uppercase tracking-wider font-bold text-on-surface-variant px-xs py-0.5 rounded-sm bg-surface-container-high">
             {task.priority}
           </span>
         ) : null}
@@ -229,19 +229,19 @@ export function DefaultCard({ task, onClick, observe }: { task: TaskItem; onClic
       <div className="mt-sm flex items-center gap-md text-label-sm text-on-surface-variant">
         {task.assignee ? (
           <span className="inline-flex items-center gap-xs">
-            <span className="material-symbols-outlined text-[14px]">smart_toy</span>
+            <span className="material-symbols-outlined icon-sm">smart_toy</span>
             {task.assignee}
           </span>
         ) : null}
         {task.team ? (
           <span className="inline-flex items-center gap-xs">
-            <span className="material-symbols-outlined text-[14px]">groups</span>
+            <span className="material-symbols-outlined icon-sm">groups</span>
             {task.team}
           </span>
         ) : null}
         {task.due_date ? (
           <span className="inline-flex items-center gap-xs">
-            <span className="material-symbols-outlined text-[14px]">event</span>
+            <span className="material-symbols-outlined icon-sm">event</span>
             {new Date(task.due_date * 1000).toLocaleDateString()}
           </span>
         ) : null}

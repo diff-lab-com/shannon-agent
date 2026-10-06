@@ -213,6 +213,7 @@ fn seed_messages_session(
                 );
                 w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
                     TurnEndPayload {
+                        llm_steps: None,
                         reason: TurnEndPayload::REASON_COMPLETED.into(),
                         usage: None,
                         error: None,
@@ -455,6 +456,7 @@ async fn seed_anthropic_profile(state: &AppState, model_id: &str) {
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers: ProviderTiers::default(),
+        models: Vec::new(),
     };
     let model_profile = ModelProfile {
         name: "default".to_string(),
@@ -562,7 +564,7 @@ async fn new_session(state: &AppState) -> Result<String, String> {
 
     // Seed an empty L0 session log
     let uuid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    seed_empty_session(&state, uuid, Some(&title))?;
+    seed_empty_session(state, uuid, Some(&title))?;
 
     // (§4.6) Snapshot-before-switch is obsolete: events.jsonl already holds
     // every turn durably.
@@ -2160,46 +2162,20 @@ fn window_state_roundtrip() {
     assert_eq!(deserialized["height"], 900);
 }
 
-/// Tray menu items are correctly structured.
+/// Tray menu items are correctly structured. B1-15: no "Check for Updates"
+/// entry — the updater plugin was removed (review decision 6).
 #[test]
 fn tray_menu_items() {
     let items = [
         serde_json::json!({"id": "show", "label": "Show Shannon"}),
         serde_json::json!({"id": "new-session", "label": "New Session"}),
-        serde_json::json!({"id": "check-updates", "label": "Check for Updates"}),
         serde_json::json!({"id": "quit", "label": "Quit"}),
     ];
 
-    assert_eq!(items.len(), 4);
+    assert_eq!(items.len(), 3);
     assert!(items.iter().any(|i| i["id"] == "show"));
     assert!(items.iter().any(|i| i["id"] == "quit"));
-}
-
-/// Update payload structure matches frontend expectations.
-#[test]
-fn update_payload_structure() {
-    let payload = serde_json::json!({
-        "version": "0.5.0",
-        "date": "2026-06-07",
-        "body": "Bug fixes and performance improvements",
-    });
-
-    assert!(payload["version"].is_string());
-    assert!(payload["date"].is_string());
-    assert!(payload["body"].is_string());
-}
-
-/// Update payload with null date is valid.
-#[test]
-fn update_payload_null_date() {
-    let payload = serde_json::json!({
-        "version": "0.5.0",
-        "date": null,
-        "body": "Bug fixes",
-    });
-
-    assert!(payload["date"].is_null());
-    assert_eq!(payload["version"], "0.5.0");
+    assert!(items.iter().all(|i| i["id"] != "check-updates"));
 }
 
 /// Desktop config serialization includes all required fields.
@@ -2217,4 +2193,130 @@ fn desktop_config_fields() {
     assert_eq!(config["provider"], "anthropic");
     assert!(config["base_url"].is_null());
     assert_eq!(config["working_dir"], "/home/user/project");
+}
+
+// ── Background task status guard (mirrors commands.rs §P2-19) ─────────
+
+#[derive(Debug, Clone)]
+struct BackgroundTaskMeta {
+    id: String,
+    status: String, // "running", "completed", "failed", "cancelled"
+    completed_at: Option<i64>,
+    output: String,
+}
+
+fn is_terminal_task_status(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "cancelled")
+}
+
+/// Mirrors `commands::finalize_background_task`: transition a background
+/// task into a terminal state only from `running` — a cancelled task must
+/// never be overwritten back to `completed`.
+fn finalize_background_task(
+    tasks: &mut [BackgroundTaskMeta],
+    id: &str,
+    status: &str,
+    output: String,
+) -> bool {
+    assert!(
+        is_terminal_task_status(status),
+        "finalize requires a terminal status, got '{status}'"
+    );
+    if let Some(task) = tasks.iter_mut().find(|t| t.id == id) {
+        if is_terminal_task_status(&task.status) {
+            return false;
+        }
+        task.status = status.to_string();
+        task.completed_at = Some(chrono_timestamp());
+        task.output = output;
+        true
+    } else {
+        false
+    }
+}
+
+fn bg_task(id: &str) -> BackgroundTaskMeta {
+    BackgroundTaskMeta {
+        id: id.to_string(),
+        status: "running".into(),
+        completed_at: None,
+        output: String::new(),
+    }
+}
+
+#[test]
+fn background_task_finalize_transitions_running_to_terminal() {
+    let mut tasks = vec![bg_task("t1")];
+    assert!(finalize_background_task(
+        &mut tasks,
+        "t1",
+        "completed",
+        "done".into()
+    ));
+    assert_eq!(tasks[0].status, "completed");
+    assert_eq!(tasks[0].output, "done");
+    assert!(tasks[0].completed_at.is_some());
+}
+
+#[test]
+fn background_task_finalize_never_overwrites_cancelled() {
+    // §P2-19 core regression: the old runner unconditionally wrote
+    // "completed" over the user's cancel.
+    let mut tasks = vec![bg_task("t1")];
+    tasks[0].status = "cancelled".into();
+    tasks[0].output = "Task cancelled by user".into();
+
+    assert!(!finalize_background_task(
+        &mut tasks,
+        "t1",
+        "completed",
+        "done".into()
+    ));
+    assert_eq!(
+        tasks[0].status, "cancelled",
+        "cancelled must stay cancelled"
+    );
+    assert_eq!(tasks[0].output, "Task cancelled by user");
+}
+
+#[test]
+fn background_task_finalize_never_overwrites_failed_or_completed() {
+    let mut tasks = vec![bg_task("t1"), bg_task("t2")];
+    tasks[0].status = "failed".into();
+    tasks[1].status = "completed".into();
+
+    assert!(!finalize_background_task(
+        &mut tasks,
+        "t1",
+        "cancelled",
+        "x".into()
+    ));
+    assert_eq!(tasks[0].status, "failed");
+    assert!(!finalize_background_task(
+        &mut tasks,
+        "t2",
+        "cancelled",
+        "x".into()
+    ));
+    assert_eq!(tasks[1].status, "completed");
+}
+
+#[test]
+fn background_task_finalize_unknown_id_is_noop() {
+    let mut tasks = vec![bg_task("t1")];
+    assert!(!finalize_background_task(
+        &mut tasks,
+        "missing",
+        "completed",
+        "x".into()
+    ));
+    assert_eq!(tasks[0].status, "running");
+}
+
+#[test]
+fn background_task_terminal_status_classification() {
+    assert!(!is_terminal_task_status("running"));
+    assert!(is_terminal_task_status("completed"));
+    assert!(is_terminal_task_status("failed"));
+    assert!(is_terminal_task_status("cancelled"));
 }

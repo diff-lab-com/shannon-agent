@@ -43,6 +43,9 @@ regex = "1"
 # File traversal (respects .gitignore)
 ignore = "0.4"
 
+# Lazy statics (global BackgroundProcess registry; §B.5)
+once_cell = { workspace = true }
+
 # UUID generation
 uuid = { version = "1.0", features = ["v4", "serde"] }
 
@@ -61,6 +64,12 @@ sha2 = "0.10"
 # Shell command parsing for security
 shell-words = "1.1"
 
+# review §P2-9: replaces the O(m*n) LCS table in compute_diff_hunks with a
+# linear-space Myers diff (already present transitively in the lockfile
+# via a tracing dep). O(n) memory + O(nd) time, so a 20k-line edit no
+# longer needs ~3 GB of working memory.
+similar = "2"
+
 # PTY support for interactive commands
 portable-pty = "0.8"
 
@@ -71,15 +80,25 @@ toml = "0.8"
 # session the builtin browser_* tools drive
 shannon-browser = { path = "../shannon-browser" }
 
+# Office Wave 2 (B1): engine-native xlsx generation for the `write_xlsx` tool.
+# Pure-Rust (no zlib feature → rust deflate backend), MIT/Apache-2.0.
+rust_xlsxwriter = { workspace = true }
+
+
 # Landlock backend for the Linux kernel-enforced execution world (§4.12)
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4"
-
 # B3 / T10-Phase2: native Wayland screenshot stack (optional, behind the
 # computer-use-wayland-capture feature). wayland-client + the wlr screencopy
 # extension cover wlroots-family compositors; ashpd (xdg-desktop-portal)
 # covers GNOME/KDE. Versions track the ones already in the lockfile via
 # enigo's wayland/libei backends so no new versions enter the tree.
+# NOTE: keep this block inside the Linux target table — the Windows
+# desktop-control table below must not capture it. That swallow is exactly
+# how the wayland-capture CI leg rotted: on Windows the deps resolve fine
+# (and the Linux-only module is never compiled), while on Linux they
+# silently vanish and screen_capture.rs dies with E0433
+# `wayland_client`/`memmap2` unresolved.
 wayland-client = { version = "0.31", optional = true }
 wayland-protocols-wlr = { version = "0.2", optional = true, features = ["client"] }
 memmap2 = { version = "0.8", optional = true }
@@ -89,6 +108,29 @@ memmap2 = { version = "0.8", optional = true }
 # reactor runs on its own driver thread, so the portal future is awaitable
 # from tokio regardless.
 ashpd = { version = "0.8", optional = true }
+
+# Windows desktop-control surface (DPI awareness, window enumeration/focus,
+# clipboard, UIA tree, foreground-window context metadata). Compiled on every
+# Windows build (Cargo target tables cannot combine cfg(feature) predicates);
+# the code paths inside `windows_platform` additionally require the
+# `computer-use` feature, so default-feature builds only pay compile time.
+# Version 0.62 already sits in the tree via enigo, so no new `windows`
+# major enters the lockfile.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_JobObjects",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [features]
 default = []
@@ -127,7 +169,7 @@ local-browser = ["shannon-browser/local-browser"]
 
 
 [dependencies.xcap]
-version = "0.0.13"
+version = "0.9"
 optional = true
 
 [dependencies.enigo]
@@ -144,12 +186,18 @@ tokio-test = "0.4"
 tempfile = "3"
 mockito = "1.6"
 serde_json = "1"
+base64 = { workspace = true }
 criterion = "0.5"
 globset = "0.4"
 regex = "1"
 ignore = "0.4"
 proptest = { workspace = true }
 insta = { workspace = true }
+# write_xlsx tests: calamine reads generated workbooks back with real types,
+# zip unwraps the package to assert formula parts. Both already live in the
+# workspace (desktop uses them for the A2' parsing pipeline).
+calamine = { workspace = true }
+zip = { workspace = true }
 
 [[bench]]
 name = "tool_benchmarks"

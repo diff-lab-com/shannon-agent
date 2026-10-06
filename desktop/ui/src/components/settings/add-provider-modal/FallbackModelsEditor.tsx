@@ -27,7 +27,7 @@ export function FallbackModelsEditor({ models, onChange }: FallbackModelsEditorP
         {models.map((m, i) => (
           <div key={i} className="flex items-center gap-xs" data-testid="fallback-models-row">
             <Input
-              className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-xs font-mono"
+              className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded-sm font-body-xs font-mono"
               value={m}
               placeholder={t('settings.models.addProvider.fallbackModelsPlaceholder')}
               onChange={(e) => {
@@ -43,7 +43,7 @@ export function FallbackModelsEditor({ models, onChange }: FallbackModelsEditorP
               onClick={() => onChange(models.filter((_, j) => j !== i))}
               aria-label={t('settings.models.addProvider.fallbackModelsRemove')}
             >
-              <span className="material-symbols-outlined text-[16px]">close</span>
+              <span className="material-symbols-outlined icon-sm">close</span>
             </Button>
           </div>
         ))}
@@ -55,7 +55,7 @@ export function FallbackModelsEditor({ models, onChange }: FallbackModelsEditorP
         onClick={() => onChange([...models, ''])}
         data-testid="fallback-models-add"
       >
-        <span className="material-symbols-outlined text-[16px] mr-xs">add</span>
+        <span className="material-symbols-outlined icon-sm mr-xs">add</span>
         {t('settings.models.addProvider.fallbackModelsAdd')}
       </Button>
     </div>

@@ -32,6 +32,7 @@ import { CATEGORIES, type CategoryFilter } from './constants'
 import { MemoryCard } from './MemoryCard'
 import { MemoryEditor, type MemorySaveInput } from './MemoryEditor'
 import { MemoryGraphView } from './MemoryGraphView'
+import DreamPanel from './DreamPanel'
 import StatCard from '@/components/ui/stat-card'
 import { cn } from '@/lib/utils'
 
@@ -39,8 +40,14 @@ type MemoryView = 'list' | 'graph'
 
 export default function MemoryPanel({
   onOpenMemorySource,
+  projectPreset,
 }: {
   onOpenMemorySource?: (memoryId: string, sourceSessionId: string) => void
+  /** P-U3: /memory?project= preset — resolved by the page against
+   *  listMemoryProjects (labels, not paths). Applied to the EXISTING
+   *  project filter when it lands; manual changes afterwards win because
+   *  the effect only re-runs when the preset value itself changes. */
+  projectPreset?: string | null
 }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -56,11 +63,29 @@ export default function MemoryPanel({
 
   const [projectFilter, setProjectFilter] = useState<string>('all')
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all')
+  // 2026-09 review: typing used to fire an IPC round-trip on every
+  // keystroke. We split the live query (instant UI feedback) from the
+  // backend-bound query (debounced 250 ms).
   const [query, setQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
 
   const [editing, setEditing] = useState<MemoryEntry | null>(null)
   const [creating, setCreating] = useState(false)
+  // B0 item 7 (P2 follow-up): the delete confirm needs a busy state — a
+  // double click used to fire two deletes and toast a bogus "not found".
+  const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedQuery(query), 250)
+    return () => window.clearTimeout(id)
+  }, [query])
+
+  // P-U3: apply the deep-link preset to the existing project filter once the
+  // page has resolved it (see the prop doc above).
+  useEffect(() => {
+    if (projectPreset) setProjectFilter(projectPreset)
+  }, [projectPreset])
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
@@ -70,7 +95,7 @@ export default function MemoryPanel({
         listMemories({
           project: projectFilter === 'all' ? null : projectFilter,
           category: categoryFilter === 'all' ? null : categoryFilter,
-          query: query.trim() || null,
+          query: debouncedQuery.trim() || null,
         }),
         listMemoryProjects(),
         getMemoryStats(),
@@ -83,7 +108,7 @@ export default function MemoryPanel({
     } finally {
       setLoading(false)
     }
-  }, [projectFilter, categoryFilter, query])
+  }, [projectFilter, categoryFilter, debouncedQuery])
 
   useEffect(() => {
     void fetchAll()
@@ -114,7 +139,8 @@ export default function MemoryPanel({
 
   const confirmDelete = async () => {
     const id = pendingDeleteId
-    if (!id) return
+    if (!id || deleting) return
+    setDeleting(true)
     try {
       const ok = await deleteMemory(id)
       if (!ok) {
@@ -126,6 +152,7 @@ export default function MemoryPanel({
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t('memory.toast.failedDelete'))
     } finally {
+      setDeleting(false)
       setPendingDeleteId(null)
     }
   }
@@ -133,11 +160,15 @@ export default function MemoryPanel({
   const handleSave = async (input: MemorySaveInput) => {
     try {
       if (input.id) {
+        // B3-24 (decision 3-A): project is part of the update contract — a
+        // project edit moves the entry instead of being silently dropped
+        // (the old behavior showed "updated" then reverted on refetch).
         await updateMemory({
           id: input.id,
           content: input.content,
           tags: input.tags,
           category: input.category,
+          project: input.project,
         })
         toast.success(t('memory.toast.updated'))
       } else {
@@ -164,14 +195,14 @@ export default function MemoryPanel({
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
       <div className="max-w-[1100px] mx-auto px-lg py-xl">
-        <header className="mb-xl">
-          <h1 className="text-headline-md font-headline-md text-on-surface mb-xs">
-            {t('memory.title')}
-          </h1>
-          <p className="text-body-md text-on-surface-variant">
-            {t('memory.subtitle')}
-          </p>
-        </header>
+        <p className="text-body-md text-on-surface-variant mb-xl">
+          {t('memory.subtitle')}
+        </p>
+
+        {/* Dream distillation (梦境提炼) — run / review-gated proposals /
+            report. Sits above the memory browser: it is the only surface
+            that proposes *changes* to the memories below. */}
+        <DreamPanel />
 
         {stats && (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-md mb-xl">
@@ -200,8 +231,8 @@ export default function MemoryPanel({
         )}
 
         {errorMsg && (
-          <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/20 text-error font-label-md mb-lg">
-            <span className="material-symbols-outlined text-[18px]">error</span>
+          <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error-container border border-error/20 text-on-error-container font-label-md mb-lg">
+            <span className="material-symbols-outlined icon-md">error</span>
             {errorMsg}
             <Button
               variant="ghost"
@@ -209,7 +240,7 @@ export default function MemoryPanel({
               className="ml-auto text-error/60 hover:text-error"
               onClick={() => setErrorMsg(null)}
             >
-              <span className="material-symbols-outlined text-[18px]">close</span>
+              <span className="material-symbols-outlined icon-md">close</span>
             </Button>
           </div>
         )}
@@ -231,11 +262,11 @@ export default function MemoryPanel({
                 className={cn(
                   'px-md py-sm rounded-lg text-label-md font-bold transition-colors cursor-pointer',
                   view === v
-                    ? 'bg-surface-container-lowest text-on-surface shadow-sm'
+                    ? 'bg-surface-container-lowest text-on-surface shadow-e1'
                     : 'text-on-surface-variant hover:text-on-surface',
                 )}
               >
-                <span className="material-symbols-outlined text-[16px] align-middle mr-xs">
+                <span className="material-symbols-outlined icon-sm align-middle mr-xs">
                   {v === 'list' ? 'list' : 'hub'}
                 </span>
                 {t(`memory.view.${v}`)}
@@ -271,7 +302,7 @@ export default function MemoryPanel({
           </select>
 
           <div className="flex-1 min-w-[200px] relative">
-            <span className="material-symbols-outlined absolute left-md top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">
+            <span className="material-symbols-outlined absolute left-md top-1/2 -translate-y-1/2 text-on-surface-variant icon-md">
               search
             </span>
             <input
@@ -285,16 +316,22 @@ export default function MemoryPanel({
 
           <Button
             onClick={() => setCreating(true)}
-            className="gap-xs px-md py-sm text-[14px] font-bold"
+            className="gap-xs px-md py-sm text-body-sm font-bold"
           >
-            <span className="material-symbols-outlined text-[18px]">add</span>
+            <span className="material-symbols-outlined icon-md">add</span>
             {t('memory.action.create')}
           </Button>
         </div>
 
-        <div className="text-label-sm text-on-surface-variant mb-md">
-          {intl.formatMessage({ id: 'memory.listCount' }, { count: filteredCount })}
-        </div>
+        {/* Audit §P2-2 (round 6): suppress the count line during a reload so
+            "暂无记忆" + "正在加载记忆…" never appear at the same time. The
+            loading block (below) is the single source of truth while
+            loading is true. */}
+        {!loading && (
+          <div className="text-label-sm text-on-surface-variant mb-md">
+            {intl.formatMessage({ id: 'memory.listCount' }, { count: filteredCount })}
+          </div>
+        )}
 
         {view === 'graph' ? (
           <MemoryGraphView
@@ -309,16 +346,19 @@ export default function MemoryPanel({
             {t('memory.loading')}
           </div>
         ) : isEmpty ? (
-          <div className="text-center py-3xl">
-            <span className="material-symbols-outlined icon-2xl text-on-surface-variant/40 mb-md block">
-              psychology
-            </span>
-            <p className="text-on-surface-variant mb-lg">{t('memory.empty')}</p>
+          <div className="flex flex-col items-center justify-center text-center py-3xl px-lg">
+            <div className="w-20 h-20 rounded-2xl bg-primary-container/30 flex items-center justify-center mb-lg">
+              <span className="material-symbols-outlined icon-2xl text-primary" aria-hidden="true">
+                psychology
+              </span>
+            </div>
+            <h2 className="font-headline-sm text-on-surface mb-xs">{t('memory.empty.title')}</h2>
+            <p className="text-on-surface-variant mb-lg max-w-md">{t('memory.empty.desc')}</p>
             <Button
               onClick={() => setCreating(true)}
-              className="gap-xs px-md py-sm text-[14px] font-bold"
+              className="gap-xs px-md py-sm text-body-sm font-bold bg-primary text-on-primary"
             >
-              <span className="material-symbols-outlined text-[18px]">add</span>
+              <span className="material-symbols-outlined icon-md">add</span>
               {t('memory.action.createFirst')}
             </Button>
           </div>
@@ -355,6 +395,7 @@ export default function MemoryPanel({
         confirmLabel={t('memory.confirmDelete.confirm')}
         cancelLabel={t('memory.confirmDelete.cancel')}
         destructive
+        busy={deleting}
         onConfirm={() => void confirmDelete()}
         onCancel={() => setPendingDeleteId(null)}
       />

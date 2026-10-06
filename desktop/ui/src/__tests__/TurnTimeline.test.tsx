@@ -1,23 +1,29 @@
 // TurnTimeline page tests (§4.14). Mocks @/lib/tauri-api getTraceTimeline —
-// no Tauri runtime involved. Covers: header/chips, turn cards with tool
-// waterfall rows (incl. interrupted-call error marking), the cumulative
-// curve card, the i18n-driven empty state, and the load-failure state.
+// no Tauri runtime involved. Covers: subtitle row/summary chips, turn cards
+// with tool waterfall rows (incl. interrupted-call error marking), the
+// cumulative curve card, the i18n-driven empty state, and the load-failure
+// state. (The page title itself lives in the Header's TITLE_MAP.)
+// office Wave 3 C6 adds the Export-as-HTML flow; G5 P0-8 moved the save
+// dialog + write into the backend (`saveTextFileViaDialog`).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import type * as TauriApi from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
 import TurnTimeline from '@/pages/TurnTimeline'
+import { timelineToHtml } from '@/lib/timelineExport'
 import type { TurnTimeline } from '@/types'
 
 const getTraceTimeline = vi.hoisted(() => vi.fn())
+const saveTextFileViaDialog = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', async () => {
   const actual = await vi.importActual<typeof TauriApi>('@/lib/tauri-api')
   return {
     ...actual,
     getTraceTimeline: (...args: unknown[]) => getTraceTimeline(...args),
+    saveTextFileViaDialog: (...args: unknown[]) => saveTextFileViaDialog(...args),
   }
 })
 
@@ -82,6 +88,9 @@ function renderAt(path = '/timeline/sess-001') {
 
 beforeEach(() => {
   getTraceTimeline.mockReset()
+  saveTextFileViaDialog.mockReset()
+  // Default: the backend dialog "wrote" the file and reports the path.
+  saveTextFileViaDialog.mockResolvedValue('/tmp/export/timeline-sess-001.html')
 })
 
 describe('TurnTimeline', () => {
@@ -92,7 +101,9 @@ describe('TurnTimeline', () => {
     await waitFor(() => {
       expect(screen.getByText('Turn 1')).toBeInTheDocument()
     })
-    expect(screen.getByRole('heading', { name: 'Turn Timeline' })).toBeInTheDocument()
+    // The page-local h1 was converged into the Header's TITLE_MAP
+    // (header.title.timeline) — the panel row carries the model subtitle.
+    expect(screen.getByText('claude-sonnet-4-20250514')).toBeInTheDocument()
     expect(screen.getByText('Turn 2')).toBeInTheDocument()
 
     // Tool names across the waterfall rows.
@@ -100,10 +111,10 @@ describe('TurnTimeline', () => {
     expect(screen.getByText('Bash')).toBeInTheDocument()
     expect(screen.getByText('Grep')).toBeInTheDocument()
 
-    // Summary chip labels resolve through ICU plurals.
-    expect(screen.getByLabelText('Session summary')).toHaveTextContent(
-      /2 turns/,
-    )
+    // Summary chip labels resolve through ICU plurals. The chips live in a
+    // role="list" container (office wave 3 moved the section title into the
+    // persistent Header, removing the old "Session summary" label).
+    expect(screen.getByRole('list')).toHaveTextContent(/2 turns/)
     expect(getTraceTimeline).toHaveBeenCalledWith('sess-001')
   })
 
@@ -155,5 +166,131 @@ describe('TurnTimeline', () => {
     await waitFor(() => {
       expect(getTraceTimeline).toHaveBeenCalledWith('whatever-id')
     })
+  })
+})
+
+// ─── B4 §7-28: reason badge tones, raw unknown reasons, app-locale times ───
+
+function fixtureWithReason(reason: string): TurnTimeline {
+  return {
+    ...FIXTURE,
+    cumulative: [],
+    turns: [{ ...FIXTURE.turns[0], reason }],
+  }
+}
+
+describe('TurnTimeline — reason badges and locale (B4 §7-28)', () => {
+  it('renders a genuine failure reason in the error tone', async () => {
+    getTraceTimeline.mockResolvedValue(fixtureWithReason('failed'))
+    renderAt()
+    const badge = await screen.findByText('Failed')
+    // G7 2026-09-30: error tone = MD3 container pair (was bg-error/10 tint).
+    expect(badge.className).toContain('bg-error-container')
+  })
+
+  it('renders neutral stopping reasons (interrupted) without error styling', async () => {
+    getTraceTimeline.mockResolvedValue(fixtureWithReason('interrupted'))
+    renderAt()
+    const badge = await screen.findByText('Interrupted')
+    // Neutral chip — not red: interrupted is not a failure.
+    expect(badge.className).toContain('bg-surface-container-high')
+    expect(badge.className).not.toContain('bg-error')
+  })
+
+  it('renders an unknown reason as its raw text, not a literal i18n key', async () => {
+    getTraceTimeline.mockResolvedValue(fixtureWithReason('engine-restart'))
+    renderAt()
+    expect(await screen.findByText('engine-restart')).toBeInTheDocument()
+    expect(screen.queryByText('timeline.reason.engine-restart')).not.toBeInTheDocument()
+  })
+
+  it('formats timestamps in the app locale (zh-CN), not the system default', async () => {
+    window.localStorage.setItem('shannon.locale', 'zh-CN')
+    try {
+      getTraceTimeline.mockResolvedValue(fixtureWithReason('completed'))
+      const { container } = renderAt()
+      // zh-CN localizes the turn label — anchor on the testid instead.
+      await screen.findByTestId('timeline-turn-1')
+      const turn = FIXTURE.turns[0]
+      const opts: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit', second: '2-digit' }
+      const zhStart = new Intl.DateTimeFormat('zh-CN', opts).format(new Date(turn.start_ts_ns / 1e6))
+      const enStart = new Intl.DateTimeFormat('en', opts).format(new Date(turn.start_ts_ns / 1e6))
+      // The rendered time matches the zh-CN formatting…
+      expect(container.textContent).toContain(zhStart)
+      // …which must differ from what a system-default (en) render would show.
+      expect(zhStart).not.toBe(enStart)
+    } finally {
+      window.localStorage.removeItem('shannon.locale')
+    }
+  })
+})
+
+// ─── office Wave 3 C6: Export as HTML (G5 P0-8 backend dialog flow) ───
+
+describe('TurnTimeline — Export as HTML (office Wave 3 C6)', () => {
+  it('exports self-contained HTML through the backend save-dialog command', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    saveTextFileViaDialog.mockResolvedValueOnce('/home/user/Downloads/timeline-sess-001.html')
+    renderAt()
+
+    await screen.findByText('Turn 1')
+    fireEvent.click(screen.getByTestId('timeline-export-html'))
+    await waitFor(() => {
+      expect(saveTextFileViaDialog).toHaveBeenCalledTimes(1)
+    })
+    const [html, defaultName] = saveTextFileViaDialog.mock.calls[0] as [string, string]
+    expect(defaultName).toBe('timeline-sess-001.html')
+    // Self-contained document carrying the timeline's step content.
+    expect(html).toContain('<!DOCTYPE html>')
+    expect(html).toContain('Turn 1')
+    expect(html).toContain('Turn 2')
+    expect(html).toContain('Read')
+    expect(html).toContain('Grep')
+    expect(html).toContain('sess-001')
+    // Inline styles only — no scripts or external resources.
+    expect(html).not.toContain('<script')
+    expect(html).not.toContain('src=')
+  })
+
+  it('cancelling the save dialog never writes a file', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    saveTextFileViaDialog.mockResolvedValueOnce(null)
+    renderAt()
+    await screen.findByText('Turn 1')
+    fireEvent.click(screen.getByTestId('timeline-export-html'))
+    await waitFor(() => {
+      expect(saveTextFileViaDialog).toHaveBeenCalledTimes(1)
+    })
+    // Cancel (null) backs out silently — no toast, no retry.
+    expect(saveTextFileViaDialog).toHaveBeenCalledTimes(1)
+  })
+
+  it('a backend write failure surfaces as the export-failed toast path', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    saveTextFileViaDialog.mockRejectedValueOnce(new Error('disk full'))
+    renderAt()
+    await screen.findByText('Turn 1')
+    fireEvent.click(screen.getByTestId('timeline-export-html'))
+    // Must not throw out of the handler; the catch turns it into a toast.
+    await waitFor(() => {
+      expect(saveTextFileViaDialog).toHaveBeenCalledTimes(1)
+    })
+    expect(screen.getByTestId('timeline-export-html')).toBeEnabled()
+  })
+
+  it('timelineToHtml escapes HTML-sensitive tool names', () => {
+    const html = timelineToHtml({
+      ...FIXTURE,
+      turns: [
+        {
+          ...FIXTURE.turns[0],
+          tools: [
+            { tool_use_id: 'tu-x', tool_name: '<script>', start_ts_ns: ns(1), end_ts_ns: ns(2), duration_ms: 10, is_error: false },
+          ],
+        },
+      ],
+    })
+    expect(html).toContain('&lt;script&gt;')
+    expect(html).not.toContain('<script>')
   })
 })

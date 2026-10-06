@@ -79,10 +79,14 @@ impl Default for ExtractionConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            // NOT `~/.shannon/memories`: this extractor writes one
+            // `<Category>_<uuid>.json` per fact, a schema the MemoryStore
+            // never reads — pointing it at the canonical store directory
+            // permanently littered it with orphan files the loader skips.
             memory_dir: dirs::home_dir()
                 .unwrap_or_default()
                 .join(".shannon")
-                .join("memories"),
+                .join("memory-extracts"),
             min_messages_between_extractions: 10,
             max_turns: 50,
             auto_only: true,

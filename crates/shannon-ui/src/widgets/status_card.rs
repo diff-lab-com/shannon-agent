@@ -201,7 +201,9 @@ fn render_full(
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
         Span::styled("/provider", Style::default().fg(Color::Cyan)),
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
-        Span::styled("/profile", Style::default().fg(Color::Cyan)),
+        // R1-6: permission profiles live at /permissions now; /profile is the
+        // transitional alias (one-release rename window, decision ②).
+        Span::styled("/permissions", Style::default().fg(Color::Cyan)),
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
         Span::styled("/remote", Style::default().fg(Color::Cyan)),
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),

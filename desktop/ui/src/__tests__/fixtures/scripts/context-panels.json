@@ -1,0 +1,38 @@
+{
+  "name": "context-panels",
+  "description": "上下文面板 journey — /context /cost SlashResultCard → query:usage 驱动 usage 弹框刷新（usageTick）",
+  "seed": {
+    "config": {
+      "hasKey": true,
+      "spentUsd": 0.0731
+    },
+    "sessions": [
+      {
+        "id": "script-sess-panels",
+        "title": "Panels",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "查看一下当前用量",
+      "script": [
+        {
+          "event": "query:usage",
+          "payload": {
+            "input_tokens": 1200,
+            "output_tokens": 300,
+            "cost_usd": 0.012
+          }
+        },
+        {
+          "waitFor": "ui"
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

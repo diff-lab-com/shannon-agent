@@ -72,6 +72,20 @@ pub struct NotificationPrefsDto {
     pub dnd_end: Option<String>,
     pub on_completed: bool,
     pub on_failed: bool,
+    /// Surface a desktop notification when the user's attention is required
+    /// (tool-approval waits, budget alerts). `#[serde(default)]` keeps old
+    /// frontend payloads / config files loadable; defaults to enabled.
+    #[serde(default = "default_on_needs_attention")]
+    pub on_needs_attention: bool,
+    /// Play the frontend-composited chime (Web Audio) on task completed /
+    /// failed / needs-attention events. Independent of the OS notification
+    /// sound (R4). Defaults to disabled.
+    #[serde(default)]
+    pub sound_enabled: bool,
+}
+
+fn default_on_needs_attention() -> bool {
+    true
 }
 
 /// Read the current desktop-notification preferences.
@@ -85,6 +99,8 @@ pub async fn get_notification_prefs() -> Result<NotificationPrefsDto, String> {
         dnd_end: c.notifications_dnd_end,
         on_completed: c.notifications_on_completed,
         on_failed: c.notifications_on_failed,
+        on_needs_attention: c.notifications_on_needs_attention,
+        sound_enabled: c.notifications_sound_enabled,
     })
 }
 
@@ -111,6 +127,8 @@ pub async fn set_notification_prefs(
         dc.notifications_dnd_end = prefs.dnd_end;
         dc.notifications_on_completed = prefs.on_completed;
         dc.notifications_on_failed = prefs.on_failed;
+        dc.notifications_on_needs_attention = prefs.on_needs_attention;
+        dc.notifications_sound_enabled = prefs.sound_enabled;
         dc.clone()
     };
     crate::config::save_config(&snapshot)?;
@@ -146,6 +164,138 @@ pub async fn clear_webhook_config() -> Result<(), String> {
     clear_webhook_config_on_disk()
 }
 
+// === Webhook test send (P1-7) ==============================================
+
+/// Result of `test_webhook` — the delivery verdict the settings "send test"
+/// button surfaces, plus the HTTP status when the receiver answered.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookTestResult {
+    pub success: bool,
+    pub status: Option<u16>,
+    /// Human-readable summary: `HTTP 200` on delivery, the transport error
+    /// line on failure, or why the URL was blocked.
+    pub detail: String,
+}
+
+/// SSRF guard for `test_webhook`, mirroring the settings UI's
+/// `validateWebhookUrl` (desktop/ui/src/lib/packageValidation.ts): http(s)
+/// only, never a loopback / private / link-local / `.local` host. The save
+/// path already enforces this in the webview; the command re-applies the
+/// same rules so a hand-edited config can't turn the test button into an
+/// internal-network POST. `Some(reason)` = blocked.
+fn webhook_url_blocked(raw: &str) -> Option<String> {
+    let url = match url::Url::parse(raw.trim()) {
+        Ok(u) => u,
+        Err(_) => return Some("not a valid URL".to_string()),
+    };
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Some(format!(
+            "scheme `{}` is not allowed (http/https only)",
+            url.scheme()
+        ));
+    }
+    let host = url
+        .host_str()?
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    let h = host.to_ascii_lowercase();
+    let private = h == "localhost"
+        || h.ends_with(".local")
+        || h.starts_with("127.")
+        || h.starts_with("10.")
+        || h.starts_with("192.168.")
+        || h.starts_with("169.254.")
+        || (h.starts_with("172.")
+            && h.split('.')
+                .nth(1)
+                .and_then(|o| o.parse::<u8>().ok())
+                .is_some_and(|o| (16..=31).contains(&o)))
+        || h.starts_with("0.")
+        || h == "::1"
+        || h.starts_with("fc00:")
+        || h.starts_with("fe80:")
+        || h.starts_with("fd");
+    if private {
+        return Some(format!(
+            "host `{host}` resolves to a private/loopback range"
+        ));
+    }
+    None
+}
+
+/// Send a one-shot test payload to the currently configured webhook URL.
+///
+/// Reuses the production pipeline end-to-end: the saved
+/// `[notifications.webhook]` config (preset template, secret, timeout),
+/// `WebhookHandler::render_body` for the payload, and the same HMAC
+/// signature header — but a single synchronous POST (`deliver_once`, no
+/// retries) so the UI can show an immediate verdict. `title`/`body` come
+/// from the caller so the test message renders in the user's locale.
+#[tauri::command]
+pub async fn test_webhook(title: String, body: String) -> Result<WebhookTestResult, String> {
+    let config = load_desktop_webhook_config()
+        .ok_or_else(|| "no webhook configured — save a webhook URL first".to_string())?;
+    // SSRF guard (same rules the save-path webview enforces) — applied before
+    // any await so a hand-edited config can't turn the test button into an
+    // internal-network POST.
+    if let Some(reason) = webhook_url_blocked(&config.url) {
+        return Ok(WebhookTestResult {
+            success: false,
+            status: None,
+            detail: reason,
+        });
+    }
+    Ok(deliver_test_webhook(&config, title, body).await)
+}
+
+/// Build the handler, render the test payload through the configured
+/// template, and map the single-shot delivery outcome to a
+/// [`WebhookTestResult`]. Split from the command (and free of the URL guard)
+/// so tests can drive it against a local mock server. Callers must have
+/// applied [`webhook_url_blocked`] first.
+async fn deliver_test_webhook(
+    config: &shannon_core::notifier::WebhookConfig,
+    title: String,
+    body: String,
+) -> WebhookTestResult {
+    let handler = match shannon_core::notifier::WebhookHandler::new(config.clone()) {
+        Ok(h) => h,
+        Err(e) => {
+            return WebhookTestResult {
+                success: false,
+                status: None,
+                detail: format!("webhook client build failed: {e}"),
+            };
+        }
+    };
+    let notification = shannon_core::notifier::Notification {
+        title,
+        body,
+        level: shannon_core::notifier::NotificationLevel::Info,
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now(),
+        source: Some("webhook_test".to_string()),
+        action_id: None,
+        kind: shannon_core::notifier::NotificationKind::Completed,
+    };
+    let payload = handler.render_body(&notification);
+    match handler.deliver_once(payload).await {
+        Ok(status) => {
+            let success = (200..300).contains(&status);
+            WebhookTestResult {
+                success,
+                status: Some(status),
+                detail: format!("HTTP {status}"),
+            }
+        }
+        Err(detail) => WebhookTestResult {
+            success: false,
+            status: None,
+            detail,
+        },
+    }
+}
+
 // === Helpers ==============================================================
 
 /// Query-event notification kinds used by `fire_query_notification`.
@@ -170,13 +320,14 @@ pub(crate) fn fire_query_notification(
     use chrono::Utc;
     use shannon_core::notifier::{Notification, NotificationLevel};
 
-    let (title, body, level, source, window_ms) = match kind {
+    let (title, body, level, source, window_ms, core_kind) = match kind {
         NotificationKind::Completed => (
             "Shannon".to_string(),
             "Query complete".to_string(),
             NotificationLevel::Info,
             "query_complete".to_string(),
             0_u64,
+            shannon_core::notifier::NotificationKind::Completed,
         ),
         NotificationKind::Failed(err) => {
             let body = if err.chars().count() > 200 {
@@ -191,6 +342,7 @@ pub(crate) fn fire_query_notification(
                 NotificationLevel::Error,
                 "query_error".to_string(),
                 5_000_u64,
+                shannon_core::notifier::NotificationKind::Failed,
             )
         }
     };
@@ -203,6 +355,7 @@ pub(crate) fn fire_query_notification(
         timestamp: Utc::now(),
         source: Some(source),
         action_id: None,
+        kind: core_kind,
     };
 
     notifier.notify_dedup(&notification, window_ms)
@@ -229,12 +382,47 @@ pub(crate) fn fire_query_notification_logged(
 /// Best-effort load of `[notifications.webhook]` from `~/.shannon/config.toml`
 /// and `.shannon.toml` (project-local). Returns `None` on any error — never
 /// panics the app on config issues.
+///
+/// Two readers, deliberately: `ConfigBuilder` handles JSON config files in
+/// full (serde path), but its TOML fallback parser only understands flat
+/// `key = value` lines — a `[notifications.webhook]` table written by
+/// [`save_webhook_config_to_disk`] is invisible to it (P1-7: the settings UI
+/// round-trip and the startup webhook attach both silently saw `None`). So
+/// when the builder comes up empty, re-read the same file the save path
+/// wrote (same `.shannon.toml`-else-global preference) with a real TOML
+/// parse.
 pub(crate) fn load_desktop_webhook_config() -> Option<shannon_core::notifier::WebhookConfig> {
     let cfg = shannon_core::unified_config::ConfigBuilder::new()
         .load_global_toml()
         .load_local_toml()
         .build();
-    cfg.notifications.and_then(|n| n.webhook)
+    if let Some(webhook) = cfg.notifications.and_then(|n| n.webhook) {
+        return Some(webhook);
+    }
+    load_webhook_config_from_toml_file()
+}
+
+/// Read-only parse of `[notifications.webhook]` from the config file the
+/// save path uses (project-local `.shannon.toml` when it exists, else the
+/// global `~/.shannon/config.toml`). Never creates anything; `None` on any
+/// error or when no webhook table is present.
+fn load_webhook_config_from_toml_file() -> Option<shannon_core::notifier::WebhookConfig> {
+    let path = webhook_config_read_path()?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    let root: toml::Value = toml::from_str(&content).ok()?;
+    let table = root.get("notifications")?.get("webhook")?;
+    let json = serde_json::to_value(table).ok()?;
+    serde_json::from_value(json).ok()
+}
+
+/// The config file the webhook section is read from (no side effects — the
+/// save path's `resolve_webhook_config_path` additionally creates dirs).
+fn webhook_config_read_path() -> Option<std::path::PathBuf> {
+    let local = std::path::Path::new(".shannon.toml");
+    if local.exists() {
+        return Some(local.to_path_buf());
+    }
+    Some(dirs::home_dir()?.join(".shannon").join("config.toml"))
 }
 
 // === Desktop-notification preferences (master enable + DND) ==============
@@ -249,6 +437,7 @@ pub(crate) struct NotificationPrefs {
     dnd_end_min: Option<u32>,
     on_completed: bool,
     on_failed: bool,
+    on_needs_attention: bool,
 }
 
 impl NotificationPrefs {
@@ -263,6 +452,7 @@ impl NotificationPrefs {
             dnd_end_min: c.notifications_dnd_end.as_deref().and_then(parse_hhmm),
             on_completed: c.notifications_on_completed,
             on_failed: c.notifications_on_failed,
+            on_needs_attention: c.notifications_on_needs_attention,
         }
     }
 
@@ -279,13 +469,15 @@ impl NotificationPrefs {
     }
 
     /// Whether the event-type toggles permit a notification of the given
-    /// severity. Error notifications honor `on_failed`; everything else
-    /// (info/success/warning — e.g. query completions) honors `on_completed.
-    pub(crate) fn allows_level(&self, is_error: bool) -> bool {
-        if is_error {
-            self.on_failed
-        } else {
-            self.on_completed
+    /// semantic kind (three-way since settings-r3 T5): completions honor
+    /// `on_completed`, failures honor `on_failed`, and attention requests
+    /// (tool approvals, budget alerts) honor `on_needs_attention`.
+    pub(crate) fn allows_level(&self, kind: shannon_core::notifier::NotificationKind) -> bool {
+        use shannon_core::notifier::NotificationKind as K;
+        match kind {
+            K::Completed => self.on_completed,
+            K::Failed => self.on_failed,
+            K::NeedsAttention => self.on_needs_attention,
         }
     }
 }
@@ -421,8 +613,10 @@ fn save_webhook_config_to_disk(dto: &WebhookConfigDto) -> Result<(), String> {
     notif_table.insert("webhook".into(), toml::Value::Table(wh));
 
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
-    std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
-    crate::file_permissions::restrict_to_owner(&path);
+    // The `[notifications.webhook]` table carries the plaintext `secret` —
+    // owner-only atomic write (R6).
+    crate::secret_files::write_atomic_owner_only(&path, serialized.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(path = %path.display(), "webhook config saved");
     Ok(())
 }
@@ -445,8 +639,11 @@ fn clear_webhook_config_on_disk() -> Result<(), String> {
         }
     }
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
-    std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
-    crate::file_permissions::restrict_to_owner(&path);
+    // Same file can still hold a webhook `secret` in sibling tables (and the
+    // path may be the project-local `.shannon.toml`) — keep the owner-only
+    // atomic write (R6).
+    crate::secret_files::write_atomic_owner_only(&path, serialized.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(path = %path.display(), "webhook config cleared");
     Ok(())
 }
@@ -590,38 +787,292 @@ mod tests {
     }
 
     #[test]
-    fn allows_level_routes_by_severity() {
-        let both = NotificationPrefs {
+    fn allows_level_routes_by_kind() {
+        use shannon_core::notifier::NotificationKind as K;
+        let all = NotificationPrefs {
             master_enabled: true,
             dnd_enabled: false,
             dnd_start_min: None,
             dnd_end_min: None,
             on_completed: true,
             on_failed: true,
+            on_needs_attention: true,
         };
-        assert!(both.allows_level(false)); // completion
-        assert!(both.allows_level(true)); // error
+        assert!(all.allows_level(K::Completed));
+        assert!(all.allows_level(K::Failed));
+        assert!(all.allows_level(K::NeedsAttention));
 
+        // Each toggle mutes exactly its own kind.
         let only_errors = NotificationPrefs {
-            master_enabled: true,
-            dnd_enabled: false,
-            dnd_start_min: None,
-            dnd_end_min: None,
             on_completed: false,
-            on_failed: true,
+            on_needs_attention: false,
+            ..all
         };
-        assert!(!only_errors.allows_level(false)); // completions muted
-        assert!(only_errors.allows_level(true)); // errors still fire
+        assert!(!only_errors.allows_level(K::Completed));
+        assert!(only_errors.allows_level(K::Failed));
+        assert!(!only_errors.allows_level(K::NeedsAttention));
 
         let only_completed = NotificationPrefs {
-            master_enabled: true,
-            dnd_enabled: false,
-            dnd_start_min: None,
-            dnd_end_min: None,
             on_completed: true,
             on_failed: false,
+            on_needs_attention: false,
+            ..all
         };
-        assert!(only_completed.allows_level(false));
-        assert!(!only_completed.allows_level(true)); // errors muted
+        assert!(only_completed.allows_level(K::Completed));
+        assert!(!only_completed.allows_level(K::Failed));
+        assert!(!only_completed.allows_level(K::NeedsAttention));
+
+        // Attention-only config: approvals/budget alerts fire while the
+        // completed/failed chatter stays muted.
+        let attention_only = NotificationPrefs {
+            on_completed: false,
+            on_failed: false,
+            on_needs_attention: true,
+            ..all
+        };
+        assert!(!attention_only.allows_level(K::Completed));
+        assert!(!attention_only.allows_level(K::Failed));
+        assert!(attention_only.allows_level(K::NeedsAttention));
+    }
+
+    #[test]
+    fn notification_prefs_dto_roundtrips_new_fields() {
+        let dto = NotificationPrefsDto {
+            master_enabled: true,
+            dnd_enabled: true,
+            dnd_start: Some("22:00".into()),
+            dnd_end: Some("07:00".into()),
+            on_completed: false,
+            on_failed: true,
+            on_needs_attention: false,
+            sound_enabled: true,
+        };
+        let json = serde_json::to_value(&dto).expect("serialize");
+        let back: NotificationPrefsDto = serde_json::from_value(json).expect("deserialize");
+        assert!(!back.on_needs_attention);
+        assert!(back.sound_enabled);
+        assert_eq!(back.dnd_start.as_deref(), Some("22:00"));
+    }
+
+    #[test]
+    fn notification_prefs_dto_defaults_new_fields_for_old_payloads() {
+        // An old frontend (or hand-rolled payload) without the two new keys
+        // must still deserialize: needs-attention on, sound off.
+        let json = serde_json::json!({
+            "master_enabled": true,
+            "dnd_enabled": false,
+            "on_completed": true,
+            "on_failed": true,
+        });
+        let dto: NotificationPrefsDto = serde_json::from_value(json).expect("parse");
+        assert!(dto.on_needs_attention, "needs-attention defaults on");
+        assert!(!dto.sound_enabled, "sound defaults off");
+    }
+
+    // === test_webhook (P1-7) =================================================
+
+    /// Serialize every `$HOME`-swapping test in this module (same per-module
+    /// env lock as policy_limits/model_registry): cargo test runs this
+    /// binary's tests on parallel threads, and an unsynchronized HOME swap
+    /// races other tests' save/restore windows.
+    fn home_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Redirect `$HOME` at `tmp` for the duration of `f` (same save/restore
+    /// pattern as the commands_feedback tests) so `load_desktop_webhook_config`
+    /// reads a temp `~/.shannon/config.toml` instead of the developer's.
+    fn with_temp_home<F: FnOnce(&std::path::Path)>(f: F) {
+        let _guard = home_test_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let prev = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+        f(tmp.path());
+        match prev {
+            Some(prev) => unsafe { std::env::set_var("HOME", prev) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+
+    fn write_global_webhook_config(home: &std::path::Path, body: &str) {
+        let dir = home.join(".shannon");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), body).unwrap();
+    }
+
+    #[test]
+    fn webhook_url_blocked_rejects_private_and_loopback_hosts() {
+        for url in [
+            "http://localhost:8080/hook",
+            "http://127.0.0.1:9090/hook",
+            "http://10.1.2.3/hook",
+            "http://192.168.1.10/hook",
+            "http://172.16.0.9/hook",
+            "http://172.31.255.1/hook",
+            "http://169.254.169.254/latest/meta-data",
+            "http://0.1.2.3/hook",
+            "http://[::1]:33420/hook",
+            "http://[fc00::1]/hook",
+            "http://[fe80::1]/hook",
+            "http://[fd12::1]/hook",
+            "https://intranet.corp.local/hook",
+        ] {
+            assert!(webhook_url_blocked(url).is_some(), "{url} must be blocked");
+        }
+        // 172.* outside 16–31 is public.
+        assert!(webhook_url_blocked("http://172.32.1.9/hook").is_none());
+    }
+
+    #[test]
+    fn webhook_url_blocked_rejects_non_http_schemes_and_garbage() {
+        assert!(webhook_url_blocked("ftp://example.com").is_some());
+        assert!(webhook_url_blocked("file:///etc/passwd").is_some());
+        assert!(webhook_url_blocked("not a url").is_some());
+    }
+
+    #[test]
+    fn webhook_url_blocked_allows_public_https() {
+        assert!(webhook_url_blocked("https://hooks.slack.com/services/T/B/X").is_none());
+        assert!(webhook_url_blocked("https://discord.com/api/webhooks/1/2").is_none());
+    }
+
+    #[test]
+    fn test_webhook_without_config_errors() {
+        with_temp_home(|_home| {
+            // No ~/.shannon/config.toml at all. The command fails before its
+            // first await, so the HOME swap never spans an yield point.
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let result = test_webhook("t".into(), "b".into()).await;
+                assert!(result.is_err(), "no config must Err, got {result:?}");
+            });
+        });
+    }
+
+    fn webhook_config_for(
+        url: String,
+        template: shannon_core::notifier::WebhookTemplate,
+    ) -> shannon_core::notifier::WebhookConfig {
+        shannon_core::notifier::WebhookConfig {
+            url,
+            secret: None,
+            template,
+            timeout_ms: 5000,
+            include_body: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn deliver_test_webhook_renders_config_template_and_reports_success() {
+        use mockito::Server;
+
+        let mut server = Server::new_async().await;
+        // The rendered Slack preset (include_body = true) carries
+        // `*{title}*\n{body}` — match the exact compact JSON the pipeline
+        // produces so a template regression can't slip through.
+        let mock = server
+            .mock("POST", "/hook")
+            .with_status(200)
+            .match_body(mockito::Matcher::JsonString(
+                serde_json::json!({ "text": "*Shannon webhook test*\nhello" }).to_string(),
+            ))
+            .create_async()
+            .await;
+        let config = webhook_config_for(
+            format!("{}/hook", server.url()),
+            shannon_core::notifier::WebhookTemplate::Slack,
+        );
+
+        let result =
+            deliver_test_webhook(&config, "Shannon webhook test".into(), "hello".into()).await;
+        assert!(result.success, "{result:?}");
+        assert_eq!(result.status, Some(200));
+        assert!(result.detail.contains("200"));
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn deliver_test_webhook_reports_non_2xx_as_failure_with_status() {
+        use mockito::Server;
+
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/hook")
+            .with_status(404)
+            .create_async()
+            .await;
+        let config = webhook_config_for(
+            format!("{}/hook", server.url()),
+            shannon_core::notifier::WebhookTemplate::Raw,
+        );
+
+        let result = deliver_test_webhook(&config, "t".into(), "b".into()).await;
+        assert!(!result.success);
+        assert_eq!(result.status, Some(404));
+        assert!(result.detail.contains("404"));
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn deliver_test_webhook_maps_transport_failure_to_failed_result() {
+        // Port 1 on loopback is a reliable connection-refused.
+        let config = webhook_config_for(
+            "http://127.0.0.1:1/hook".into(),
+            shannon_core::notifier::WebhookTemplate::Raw,
+        );
+        let result = deliver_test_webhook(&config, "t".into(), "b".into()).await;
+        assert!(!result.success);
+        assert!(result.status.is_none());
+        assert!(result.detail.contains("webhook request failed"));
+    }
+
+    #[test]
+    fn test_webhook_blocks_private_host_from_config_without_posting() {
+        // A hand-edited config targeting loopback must not turn the test
+        // button into an internal POST. The guard fires before the command's
+        // first await, so the HOME swap never spans a yield point.
+        with_temp_home(|home| {
+            write_global_webhook_config(
+                home,
+                "[notifications.webhook]\nurl = \"http://127.0.0.1:9/hook\"\ntemplate = \"raw\"\n",
+            );
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let result = test_webhook("t".into(), "b".into())
+                    .await
+                    .expect("command result");
+                assert!(!result.success);
+                assert!(result.status.is_none());
+                assert!(result.detail.contains("private/loopback"));
+            });
+        });
+    }
+
+    #[test]
+    fn load_desktop_webhook_config_reads_the_toml_table_the_save_path_writes() {
+        // P1-7 regression: the ConfigBuilder TOML fallback ignores tables, so
+        // the section the settings UI saves was invisible to every reader.
+        with_temp_home(|home| {
+            assert!(
+                load_desktop_webhook_config().is_none(),
+                "no config file yet"
+            );
+            write_global_webhook_config(
+                home,
+                "[notifications.webhook]\nurl = \"https://discord.com/api/webhooks/1/2\"\ntemplate = \"discord\"\nsecret = \"s3cret\"\ntimeout_ms = 9000\ninclude_body = true\n",
+            );
+            let cfg = load_desktop_webhook_config().expect("webhook table must load");
+            assert_eq!(cfg.url, "https://discord.com/api/webhooks/1/2");
+            assert_eq!(
+                cfg.template,
+                shannon_core::notifier::WebhookTemplate::Discord
+            );
+            assert_eq!(cfg.secret.as_deref(), Some("s3cret"));
+            assert_eq!(cfg.timeout_ms, 9000);
+            assert!(cfg.include_body);
+        });
     }
 }

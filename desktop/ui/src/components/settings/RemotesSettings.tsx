@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 
@@ -15,6 +15,10 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Icon } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { Modal, ModalBody, ModalFooter } from '@/components/ui/modal'
+// G7 i18n: `useT()` (stable per locale) instead of the inline intl shorthand —
+// `reload()` now toasts with `t` inside the mount effect, and a fresh arrow
+// per render would trip react-hooks/exhaustive-deps on that effect.
+import { useT } from '@/i18n'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import type { RemoteHealth, RemoteTarget as RemoteTargetItem } from './remotes-settings/types'
@@ -31,7 +35,7 @@ type HealthByTarget = Record<string, RemoteHealth>
 
 function RemotesSettings(): React.JSX.Element {
   const intl = useIntl()
-  const t = (id: string): string => intl.formatMessage({ id })
+  const t = useT()
   const tVal = (id: string, values: Record<string, string | number>): string =>
     intl.formatMessage({ id }, values)
 
@@ -43,22 +47,27 @@ function RemotesSettings(): React.JSX.Element {
   const [health, setHealth] = useState<HealthByTarget>({})
   const [testing, setTesting] = useState<string | null>(null)
 
-  async function reload(): Promise<void> {
+  // Memoized so the mount effect can list `reload` honestly in its deps now
+  // that the function toasts through `t` (G7 i18n). useT's callback is stable
+  // per locale, so this only re-fires on a language switch.
+  const reload = useCallback(async (): Promise<void> => {
     try {
+      // P1-16: the list response now carries the persisted default target,
+      // so a reload reflects reality instead of the previous explicit no-op
+      // (`setDefaultTarget((prev) => prev ?? null)`).
       const list = await api.remoteListTargets()
-      setTargets(list)
-      // The default is stored in remotes.toml; surface it if present.
-      setDefaultTarget((prev) => prev ?? null)
+      setTargets(list.targets)
+      setDefaultTarget(list.defaultTarget)
       setLoaded(true)
     } catch (e) {
-      toastError('remotes: load failed', e)
+      toastError(t('settings.remotes.loadFailed'), e)
       setLoaded(true)
     }
-  }
+  }, [t])
 
   useEffect(() => {
     void reload()
-  }, [])
+  }, [reload])
 
   async function runTest(target: RemoteTargetItem): Promise<void> {
     setTesting(target.name)
@@ -69,7 +78,7 @@ function RemotesSettings(): React.JSX.Element {
         toast.error(tVal('settings.remotes.testFailedToast', { name: target.name }))
       }
     } catch (e) {
-      toastError('remotes: test failed', e)
+      toastError(t('settings.remotes.testFailed'), e)
     } finally {
       setTesting(null)
     }
@@ -81,7 +90,7 @@ function RemotesSettings(): React.JSX.Element {
       setDefaultTarget(target.name)
       toast.success(tVal('settings.remotes.defaultSet', { name: target.name }))
     } catch (e) {
-      toastError('remotes: set default failed', e)
+      toastError(t('settings.remotes.setDefaultFailed'), e)
     }
   }
 
@@ -91,7 +100,7 @@ function RemotesSettings(): React.JSX.Element {
       setDefaultTarget(null)
       toast.success(t('settings.remotes.defaultCleared'))
     } catch (e) {
-      toastError('remotes: clear default failed', e)
+      toastError(t('settings.remotes.clearDefaultFailed'), e)
     }
   }
 
@@ -103,7 +112,7 @@ function RemotesSettings(): React.JSX.Element {
       setRemoveTarget(null)
       await reload()
     } catch (e) {
-      toastError('remotes: remove failed', e)
+      toastError(t('settings.remotes.removeFailed'), e)
     }
   }
 
@@ -113,6 +122,24 @@ function RemotesSettings(): React.JSX.Element {
         <h2 className="text-headline-sm font-medium">{t('settings.remotes.title')}</h2>
         <p className="text-body-sm text-on-surface-variant">{t('settings.remotes.description')}</p>
       </div>
+
+      {/* R2-P2-15: surface the known remote-execution boundaries up front —
+          PTY interactive commands and remote git worktrees are local-only. */}
+      <Card className="border-outline-variant/20 bg-surface-container-lowest/60">
+        <CardHeader className="pb-xs">
+          <CardTitle className="flex items-center gap-sm font-label-lg">
+            <Icon name="info" className="text-on-surface-variant" />
+            {t('settings.remotes.limits.title')}
+          </CardTitle>
+          <CardDescription>{t('settings.remotes.limits.subtitle')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ul className="text-body-sm text-on-surface-variant list-disc pl-lg space-y-xs">
+            <li>{t('settings.remotes.limits.pty')}</li>
+            <li>{t('settings.remotes.limits.worktree')}</li>
+          </ul>
+        </CardContent>
+      </Card>
 
       {loaded && targets.length === 0 && (
         <Card>
@@ -146,7 +173,7 @@ function RemotesSettings(): React.JSX.Element {
               return (
                 <div
                   key={target.name}
-                  className="flex items-center gap-sm rounded border p-sm"
+                  className="flex items-center gap-sm rounded-sm border p-sm"
                   data-testid={`remotes-target-${target.name}`}
                 >
                   <Icon name={target.kind === 'ssh' ? 'terminal' : 'deployed_code'} />
@@ -273,6 +300,18 @@ function AddRemoteDialog({ open, onClose, onAdded }: AddRemoteDialogProps): Reac
   const [detail, setDetail] = useState('')
   const [workspaceDir, setWorkspaceDir] = useState('')
   const [busy, setBusy] = useState(false)
+  // P2: typed edits must not vanish on a stray Esc / backdrop click —
+  // once anything is filled in, closing goes through a discard confirm.
+  const dirty = name.trim() !== '' || detail.trim() !== '' || workspaceDir.trim() !== ''
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+
+  function requestClose(): void {
+    if (dirty) {
+      setConfirmDiscard(true)
+      return
+    }
+    onClose()
+  }
 
   function reset(): void {
     setName('')
@@ -298,7 +337,7 @@ function AddRemoteDialog({ open, onClose, onAdded }: AddRemoteDialogProps): Reac
       reset()
       onAdded()
     } catch (e) {
-      toastError('remotes: add failed', e)
+      toastError(t('settings.remotes.addFailed'), e)
     } finally {
       setBusy(false)
     }
@@ -310,7 +349,9 @@ function AddRemoteDialog({ open, onClose, onAdded }: AddRemoteDialogProps): Reac
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={requestClose}
+      closeOnEscape={!dirty}
+      closeOnBackdrop={!dirty}
       title={t('settings.remotes.dialogTitle')}
       description={t('settings.remotes.dialogDescription')}
     >
@@ -318,7 +359,7 @@ function AddRemoteDialog({ open, onClose, onAdded }: AddRemoteDialogProps): Reac
         <label className="block space-y-xs">
           <span className="text-label-md">{t('settings.remotes.fieldKind')}</span>
           <select
-            className="h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30"
+            className="h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-xs text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30"
             value={kind}
             onChange={(e) => setKind(e.target.value as 'ssh' | 'docker')}
             data-testid="remotes-dialog-kind"
@@ -358,13 +399,24 @@ function AddRemoteDialog({ open, onClose, onAdded }: AddRemoteDialogProps): Reac
         </label>
       </ModalBody>
       <ModalFooter>
-        <Button variant="ghost" onClick={onClose}>
+        <Button variant="ghost" onClick={requestClose}>
           {t('settings.remotes.cancel')}
         </Button>
         <Button disabled={!valid || busy} onClick={() => void submit()} data-testid="remotes-dialog-submit">
           {busy ? t('settings.remotes.saving') : t('settings.remotes.save')}
         </Button>
       </ModalFooter>
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        onCancel={() => setConfirmDiscard(false)}
+        onConfirm={onClose}
+        title={t('ui.modal.discard.title')}
+        message={t('ui.modal.discard.message')}
+        confirmLabel={t('ui.modal.discard.confirm')}
+        cancelLabel={t('ui.modal.discard.cancel')}
+        destructive
+      />
     </Modal>
   )
 }

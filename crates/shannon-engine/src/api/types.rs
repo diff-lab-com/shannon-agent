@@ -105,6 +105,16 @@ pub enum LlmProvider {
     DashScope,
 }
 
+/// Default `api-version` query value for Azure OpenAI requests (S2-6).
+///
+/// Azure's deployment-based chat-completions route requires an **explicit**
+/// versioned query (`?api-version=…`) — without it the request 404s. This
+/// fallback keeps default-built configs valid; a resource pinned to another
+/// revision overrides it via the `AZURE_OPENAI_API_VERSION` env var or the
+/// client config's `api_version` field (see `LlmClient::endpoint_url` for
+/// where the value lands on the wire).
+pub const AZURE_DEFAULT_API_VERSION: &str = "2024-10-21";
+
 impl LlmProvider {
     /// Detect provider from a base URL.
     ///
@@ -316,7 +326,13 @@ impl LlmProvider {
     }
 
     /// Resolve the API key for this provider from environment variables.
-    /// Chain: SHANNON_API_KEY → {PROVIDER_CANONICAL}_API_KEY → empty
+    ///
+    /// Chain: `SHANNON_API_KEY` → `{PROVIDER_CANONICAL}_API_KEY` → empty.
+    ///
+    /// Anthropic additionally honours the Claude Code migration aliases
+    /// **after** the canonical var, in this precedence order:
+    /// `ANTHROPIC_API_KEY` → `CLAUDE_API_KEY` → `ANTHROPIC_AUTH_TOKEN`
+    /// (review 2026-09-29 P1-14 — migrants' env must not silently fail).
     pub fn resolve_api_key_from_env(&self) -> String {
         if let Ok(key) = std::env::var("SHANNON_API_KEY") {
             return key;
@@ -324,6 +340,14 @@ impl LlmProvider {
         if let Some(env_var) = self.canonical_api_key_env() {
             if let Ok(key) = std::env::var(env_var) {
                 return key;
+            }
+            // Claude Code migration aliases (Anthropic only, in order).
+            if matches!(self, LlmProvider::Anthropic) {
+                for alias in ["CLAUDE_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
+                    if let Ok(key) = std::env::var(alias) {
+                        return key;
+                    }
+                }
             }
         }
         String::new()
@@ -369,9 +393,21 @@ impl std::fmt::Display for LlmProvider {
 // ============================================================================
 
 /// Configuration for the LLM API client
-#[derive(Debug, Clone)]
+///
+/// `Debug` is implemented manually (F19): the derived impl used to render
+/// the plaintext `api_key` into every log line, tracing record, or panic
+/// message that happened to print a `LlmClientConfig`.
+#[derive(Clone)]
 pub struct LlmClientConfig {
     pub api_key: String,
+    /// R4-3: the remaining API keys of the SAME provider, in rotation order
+    /// (the active key is `api_key`, slot 0; these are slots 1..n). When a
+    /// request dies with an authentication failure or a persistent 429, the
+    /// client rotates through these before any provider failover — see
+    /// `LlmClient::send_with_failover` and
+    /// `RetryConfig::is_key_rotation_eligible`. Empty = single-key credential
+    /// (the default; rotation disabled, historical behavior).
+    pub alternate_api_keys: Vec<String>,
     pub base_url: String,
     pub model: String,
     pub max_tokens: u32,
@@ -404,6 +440,11 @@ pub struct LlmClientConfig {
     /// OpenAI's `reasoning_effort` parameter. Takes precedence over `budget_tokens`
     /// for OpenAI-compatible providers when set.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Explicit thinking toggle for providers that take a `thinking` object
+    /// (zhipu/GLM: `{"type": "enabled"|"disabled"}`). When unset, the
+    /// provider default applies (GLM-5.x servers default to thinking on).
+    /// Sourced from `SHANNON_THINKING` via [`thinking_type_from_env`].
+    pub thinking_type: Option<String>,
 }
 
 impl Default for LlmClientConfig {
@@ -448,6 +489,7 @@ impl Default for LlmClientConfig {
 
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url,
             model,
             max_tokens: 4096,
@@ -466,7 +508,55 @@ impl Default for LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: thinking_type_from_env(),
         }
+    }
+}
+
+/// R3-1: one explicit failover target resolved from a provider profile's
+/// `fallback_models` list (providers.toml v2).
+///
+/// Failover is **opt-in and user-authored**: Shannon never picks targets on
+/// its own (the engine's declared non-goal — no model router). A target is
+/// only ever created because the user listed the model (optionally
+/// `provider/model`-qualified) in the active profile's `fallback_models`.
+/// The client walks the chain in order when the primary target dies with a
+/// transient error (rate limit / 5xx / 529 after its retry budget is
+/// exhausted); see `RetryConfig::fallbacks`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailoverTarget {
+    /// Model id exactly as sent to the API on the fallback hop.
+    pub model: String,
+    /// Provider serving the model (drives wire format + endpoint path).
+    pub provider: LlmProvider,
+    /// Base URL for the fallback hop (same-provider targets reuse the
+    /// primary profile's; qualified targets take the named provider's).
+    pub base_url: String,
+    /// Credential resolved from the owning profile. Empty means "inherit
+    /// the primary client's key" (same-provider chain where the key is
+    /// shared); the failover walk skips overwriting in that case.
+    pub api_key: String,
+}
+
+/// Read the explicit thinking toggle from `SHANNON_THINKING`.
+/// `enabled|on|true` → `Some("enabled")`; `disabled|off|false|0` →
+/// `Some("disabled")`; unset or unrecognized → `None` (provider default
+/// applies — GLM-5.x servers default to thinking on).
+pub fn thinking_type_from_env() -> Option<String> {
+    std::env::var("SHANNON_THINKING")
+        .ok()
+        .as_deref()
+        .and_then(normalize_thinking_type)
+}
+
+/// Normalize a raw thinking-toggle value: `enabled|on|true` →
+/// `Some("enabled")`; `disabled|off|false|0` → `Some("disabled")`;
+/// anything else → `None` (provider default applies).
+pub fn normalize_thinking_type(raw: &str) -> Option<String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "enabled" | "on" | "true" => Some("enabled".into()),
+        "disabled" | "off" | "false" | "0" => Some("disabled".into()),
+        _ => None,
     }
 }
 
@@ -478,6 +568,41 @@ impl Default for LlmClientConfig {
 // PR-A documented. Rust permits a trait impl in either the type's crate or
 // the trait's crate; since `LlmClientConfig` is re-exported back into
 // `shannon-core` via the backward-compat shim, the impl lives there now.
+
+/// Mask an API key for `Debug` output (F19): keep only the last 4 chars so
+/// the key stays recognizable across config logs without being recoverable.
+/// Keys of 4 chars or fewer are masked entirely — a short "tail" would be
+/// the whole key.
+fn masked_api_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 4 {
+        return "…".to_string();
+    }
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("…{tail}")
+}
+
+impl std::fmt::Debug for LlmClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmClientConfig")
+            .field("api_key", &masked_api_key(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("max_tokens", &self.max_tokens)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("api_version", &self.api_version)
+            .field("provider", &self.provider)
+            .field("extra_headers", &self.extra_headers)
+            .field("retry_config", &self.retry_config)
+            .field("fallback_provider", &self.fallback_provider)
+            .field("fallback_base_url", &self.fallback_base_url)
+            .field("max_stream_reconnects", &self.max_stream_reconnects)
+            .field("enable_anthropic_toolsets", &self.enable_anthropic_toolsets)
+            .field("budget_tokens", &self.budget_tokens)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .finish()
+    }
+}
 
 impl LlmClientConfig {
     /// Validate that the configuration has the minimum required fields.
@@ -538,6 +663,7 @@ impl LlmClientConfig {
     pub fn ollama_default() -> Self {
         Self {
             api_key: String::new(),
+            alternate_api_keys: Vec::new(),
             base_url: "http://localhost:11434".to_string(),
             model: "llama3".to_string(),
             max_tokens: 4096,
@@ -552,6 +678,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -563,6 +690,7 @@ impl LlmClientConfig {
         let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url,
             model,
             max_tokens: 4096,
@@ -577,6 +705,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -589,6 +718,7 @@ impl LlmClientConfig {
             std::env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.0-flash".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url: "https://generativelanguage.googleapis.com".to_string(),
             model,
             max_tokens: 8192,
@@ -603,6 +733,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -612,13 +743,19 @@ impl LlmClientConfig {
         let base_url = std::env::var("AZURE_OPENAI_BASE_URL")
             .unwrap_or_else(|_| "https://your-resource.openai.azure.com".to_string());
         let model = std::env::var("AZURE_OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+        // S2-6: the deployments route needs an explicit api-version on every
+        // request; seed it here so the config carries a wire-valid default
+        // (`endpoint_url` would fall back to the same constant anyway).
+        let api_version = std::env::var("AZURE_OPENAI_API_VERSION")
+            .unwrap_or_else(|_| AZURE_DEFAULT_API_VERSION.to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url,
             model,
             max_tokens: 4096,
             timeout_seconds: 120,
-            api_version: String::new(),
+            api_version,
             provider: LlmProvider::Azure,
             extra_headers: HashMap::new(),
             retry_config: RetryConfig::default(),
@@ -628,6 +765,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -640,6 +778,7 @@ impl LlmClientConfig {
             .unwrap_or_else(|_| "us-east-1".to_string());
         Self {
             api_key: String::new(), // Bedrock uses SigV4, not API keys
+            alternate_api_keys: Vec::new(),
             base_url: format!("https://bedrock-runtime.{region}.amazonaws.com"),
             model,
             max_tokens: 4096,
@@ -654,6 +793,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -664,6 +804,7 @@ impl LlmClientConfig {
             std::env::var("MISTRAL_MODEL").unwrap_or_else(|_| "mistral-large-latest".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url: "https://api.mistral.ai".to_string(),
             model,
             max_tokens: 4096,
@@ -678,6 +819,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -687,6 +829,7 @@ impl LlmClientConfig {
         let model = std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-chat".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url: "https://api.deepseek.com".to_string(),
             model,
             max_tokens: 4096,
@@ -701,6 +844,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -711,6 +855,7 @@ impl LlmClientConfig {
             std::env::var("GROQ_MODEL").unwrap_or_else(|_| "llama-3.3-70b-versatile".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url: "https://api.groq.com".to_string(),
             model,
             max_tokens: 4096,
@@ -725,6 +870,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -735,6 +881,7 @@ impl LlmClientConfig {
             .unwrap_or_else(|_| "meta-llama/Llama-3.3-70B-Instruct-Turbo".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url: "https://api.together.xyz".to_string(),
             model,
             max_tokens: 4096,
@@ -749,6 +896,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 }
@@ -947,6 +1095,10 @@ pub struct MessageRequest {
     /// Translated to the appropriate provider-specific parameter at request time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Explicit thinking toggle (zhipu/GLM `thinking.type`). Serialized only
+    /// on the OpenAI-compatible wire; ignored elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_type: Option<String>,
 }
 
 // ============================================================================
@@ -1081,6 +1233,15 @@ pub enum StreamEvent {
 
     #[serde(rename = "ping")]
     Ping,
+
+    /// Provider-reported mid-stream error (Anthropic `{"type":"error",...}`
+    /// and the equivalent shapes from other wire formats), or an
+    /// unknown/unparseable SSE payload that would otherwise be dropped.
+    /// Terminal: the provider ends the stream after emitting it. Carried as
+    /// an event (not a stream `Err`) so consumers can match it typed and the
+    /// transport layer does not attempt to reconnect over it.
+    #[serde(rename = "error")]
+    Error { message: String },
 }
 
 /// Delta for content block streaming
@@ -1165,11 +1326,60 @@ mod tests {
     }
 
     #[test]
+    fn test_debug_output_masks_api_key() {
+        // F19 regression: the derived Debug used to render the plaintext
+        // api_key into every log/tracing line that printed the config.
+        let mut config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            api_key: "sk-ant-api11-supersecret-value-9f8e7d6c".to_string(),
+            ..LlmClientConfig::default()
+        };
+        let rendered = format!("{config:?}");
+
+        assert!(
+            !rendered.contains("sk-ant-api11-supersecret-value-9f8e7d6c"),
+            "Debug output must never contain the full key: {rendered}"
+        );
+        assert!(
+            !rendered.contains("supersecret"),
+            "no interior fragment of the key may leak: {rendered}"
+        );
+        assert!(
+            rendered.contains("…7d6c"),
+            "exactly the last 4 chars stay visible: {rendered}"
+        );
+
+        // Short keys are masked entirely — a short "tail" would BE the key.
+        config.api_key = "abc".to_string();
+        let rendered = format!("{config:?}");
+        assert!(
+            !rendered.contains("abc"),
+            "short key must be masked: {rendered}"
+        );
+    }
+
+    #[test]
     fn test_image_source_base64_constructor() {
         let src = ImageSource::base64("image/png", "abc123");
         assert_eq!(src.source_type, "base64");
         assert_eq!(src.media_type, "image/png");
         assert_eq!(src.data, "abc123");
+    }
+
+    #[test]
+    fn test_stream_event_error_variant_contract() {
+        // The exact tagged-JSON contract of the Error variant: consumers
+        // (the query engine) match on this shape, so it must not drift.
+        let event = StreamEvent::Error {
+            message: "Overloaded".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(json, r#"{"type":"error","message":"Overloaded"}"#);
+        let back: StreamEvent = serde_json::from_str(&json).unwrap();
+        match back {
+            StreamEvent::Error { message } => assert_eq!(message, "Overloaded"),
+            other => panic!("Expected Error variant, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1506,6 +1716,7 @@ mod tests {
     #[test]
     fn test_message_request_with_thinking_budget() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -1529,6 +1740,7 @@ mod tests {
     #[test]
     fn test_message_request_with_reasoning_effort() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "gpt-4o".to_string(),
             max_tokens: 4096,
             system: None,
@@ -1552,6 +1764,7 @@ mod tests {
     #[test]
     fn test_message_request_without_thinking_fields() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 4096,
             system: None,
@@ -1918,8 +2131,19 @@ mod tests {
 
     // -- resolve_api_key_from_env() --
 
+    /// Serializes the env-mutating resolution tests: set_var/remove_var are
+    /// process-global and parallel siblings race otherwise (nextest isolates
+    /// per-process; plain `cargo test` does not).
+    fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn test_resolve_api_key_prefers_shannon_key() {
+        let _env = env_test_lock();
         // SAFETY: Test-only env var manipulation. These vars are test-scoped
         // and cleaned up before and after the test.
         unsafe {
@@ -1943,6 +2167,7 @@ mod tests {
 
     #[test]
     fn test_resolve_api_key_falls_back_to_provider_key() {
+        let _env = env_test_lock();
         unsafe {
             std::env::remove_var("SHANNON_API_KEY");
             std::env::remove_var("OPENAI_API_KEY");
@@ -1958,8 +2183,94 @@ mod tests {
         }
     }
 
+    // -- resolve_api_key_from_env(): Claude Code migration aliases (P1-14) --
+
+    /// Clear every var in the Anthropic resolution chain so the resolution
+    /// result is deterministic regardless of the host environment.
+    fn clear_anthropic_env_chain() {
+        for var in [
+            "SHANNON_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+        ] {
+            unsafe { std::env::remove_var(var) };
+        }
+    }
+
+    #[test]
+    fn test_resolve_api_key_honours_claude_api_key_alias() {
+        let _env = env_test_lock();
+        unsafe {
+            clear_anthropic_env_chain();
+            std::env::set_var("CLAUDE_API_KEY", "claude-code-key");
+        }
+
+        let resolved = LlmProvider::Anthropic.resolve_api_key_from_env();
+        assert_eq!(resolved, "claude-code-key");
+
+        clear_anthropic_env_chain();
+    }
+
+    #[test]
+    fn test_resolve_api_key_honours_anthropic_auth_token_alias() {
+        let _env = env_test_lock();
+        unsafe {
+            clear_anthropic_env_chain();
+            std::env::set_var("ANTHROPIC_AUTH_TOKEN", "auth-token-key");
+        }
+
+        let resolved = LlmProvider::Anthropic.resolve_api_key_from_env();
+        assert_eq!(resolved, "auth-token-key");
+
+        clear_anthropic_env_chain();
+    }
+
+    #[test]
+    fn test_resolve_api_key_anthropic_alias_precedence_order() {
+        let _env = env_test_lock();
+        // Canonical var wins over both aliases.
+        unsafe {
+            clear_anthropic_env_chain();
+            std::env::set_var("ANTHROPIC_API_KEY", "canonical");
+            std::env::set_var("CLAUDE_API_KEY", "claude-alias");
+            std::env::set_var("ANTHROPIC_AUTH_TOKEN", "token-alias");
+        }
+        assert_eq!(
+            LlmProvider::Anthropic.resolve_api_key_from_env(),
+            "canonical"
+        );
+
+        // CLAUDE_API_KEY outranks ANTHROPIC_AUTH_TOKEN.
+        unsafe {
+            std::env::remove_var("ANTHROPIC_API_KEY");
+        }
+        assert_eq!(
+            LlmProvider::Anthropic.resolve_api_key_from_env(),
+            "claude-alias"
+        );
+
+        clear_anthropic_env_chain();
+    }
+
+    #[test]
+    fn test_resolve_api_key_aliases_are_anthropic_only() {
+        let _env = env_test_lock();
+        // Another provider must NOT pick up the Anthropic migration aliases.
+        unsafe {
+            clear_anthropic_env_chain();
+            std::env::set_var("CLAUDE_API_KEY", "claude-code-key");
+        }
+
+        let resolved = LlmProvider::OpenAI.resolve_api_key_from_env();
+        assert!(resolved.is_empty(), "aliases must not leak to OpenAI");
+
+        clear_anthropic_env_chain();
+    }
+
     #[test]
     fn test_resolve_api_key_returns_empty_when_none_set() {
+        let _env = env_test_lock();
         unsafe {
             std::env::remove_var("SHANNON_API_KEY");
             std::env::remove_var("DEEPSEEK_API_KEY");
@@ -1974,6 +2285,7 @@ mod tests {
     #[test]
     fn test_validate_valid_config() {
         let cfg = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             api_key: "sk-test".to_string(),
             base_url: "https://api.openai.com".to_string(),
             model: "gpt-4o".to_string(),
@@ -1989,6 +2301,7 @@ mod tests {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         };
         assert!(cfg.validate().is_ok());
         assert!(cfg.is_configured());
@@ -2004,6 +2317,7 @@ mod tests {
     #[test]
     fn test_validate_fails_with_empty_base_url() {
         let cfg = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             api_key: "sk-test".to_string(),
             base_url: "  ".to_string(),
             model: "gpt-4o".to_string(),
@@ -2019,6 +2333,7 @@ mod tests {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -2031,6 +2346,7 @@ mod tests {
     #[test]
     fn test_validate_fails_with_missing_api_key_for_auth_provider() {
         let cfg = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             api_key: String::new(),
             base_url: "https://api.anthropic.com".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
@@ -2046,6 +2362,7 @@ mod tests {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -2062,6 +2379,7 @@ mod tests {
     #[test]
     fn test_validate_fails_with_empty_model() {
         let cfg = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             api_key: "sk-test".to_string(),
             base_url: "https://api.openai.com".to_string(),
             model: "  ".to_string(),
@@ -2077,6 +2395,7 @@ mod tests {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("model"), "error should mention model: {err}");

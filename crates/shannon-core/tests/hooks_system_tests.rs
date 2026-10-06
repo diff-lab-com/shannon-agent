@@ -217,6 +217,7 @@ mod hook_event_tests {
             tool_name: "Read".to_string(),
             input: json!({"path": "/tmp/file.txt"}),
             output: json!({"content": "hello"}),
+            is_error: false,
         };
         assert_eq!(event.event_type(), HookEventType::PostToolUse);
     }
@@ -270,6 +271,7 @@ mod hook_event_tests {
             tool_name: "Write".into(),
             input: json!(null),
             output: json!(null),
+            is_error: false,
         };
         assert_eq!(event.event_type(), HookEventType::PostToolUse);
     }
@@ -323,6 +325,7 @@ mod hook_event_tests {
             tool_name: "Read".to_string(),
             input: json!({}),
             output: json!({}),
+            is_error: false,
         };
         assert_eq!(event.match_subject(), "Read");
     }
@@ -382,6 +385,7 @@ mod hook_event_tests {
             tool_name: "Read".to_string(),
             input: json!({"path": "/etc/hosts"}),
             output: json!({"lines": 10}),
+            is_error: false,
         };
         let bytes = event.to_json_bytes();
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -455,6 +459,7 @@ mod hook_event_tests {
                 tool_name: "T".into(),
                 input: json!(1),
                 output: json!(2),
+                is_error: false,
             },
             HookEvent::SessionStart {
                 session_id: "s".into(),
@@ -1451,13 +1456,19 @@ mod hook_manager_tests {
                 .unwrap()
                 .ends_with("hooks.json")
         );
-        // Project config should be .shannon/hooks.json (now absolute via base_dir)
-        assert!(
-            manager
-                .project_config_path()
-                .to_str()
-                .unwrap()
-                .ends_with(".shannon/hooks.json")
+        // Project config should be .shannon/hooks.json (now absolute via
+        // base_dir). Compare components, not a `/` string suffix — Windows
+        // renders `\`.
+        let project = manager.project_config_path();
+        assert_eq!(
+            project.file_name().map(|f| f.to_string_lossy()),
+            Some("hooks.json".into())
+        );
+        assert_eq!(
+            project
+                .parent()
+                .map(|p| p.file_name().map(|f| f.to_string_lossy())),
+            Some(Some(".shannon".into()))
         );
     }
 

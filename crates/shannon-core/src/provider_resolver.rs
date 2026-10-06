@@ -32,11 +32,70 @@ pub struct ResolvedTarget<'a> {
     pub model_id: &'a str,
 }
 
-/// Resolve the active target of the `"default"` profile (B3 phase-1:
-/// single-active-profile).
+/// Why an active-target resolution failed (R3-2).
 ///
-/// Returns `None` when there is no `"default"` profile, or its `active_target`
-/// points at a provider id absent from `providers`.
+/// The graceful `Option`-returning [`resolve_active_target`] collapses these
+/// into `None` (launch must never fail — the synthesis fallback applies).
+/// Interactive surfaces (`/profiles use`, the desktop's `set_active_profile`)
+/// use [`resolve_active_target_checked`] to tell the user *what* is wrong.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActiveTargetError {
+    /// No profile exists under the config's `active_profile` key (a dangling
+    /// pointer — the named profile was never created or was deleted).
+    ProfileNotFound {
+        /// The key resolution looked for (never empty; `"default"` when unset).
+        requested: String,
+        /// Every profile that does exist, sorted — rendered into the error.
+        available: Vec<String>,
+    },
+    /// The active profile exists but has no usable target: it either has no
+    /// provider slots at all (empty profile) or its `active_target` names a
+    /// provider id absent from `providers`.
+    NoActiveTarget {
+        /// The profile that was looked into.
+        profile: String,
+    },
+}
+
+impl std::fmt::Display for ActiveTargetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProfileNotFound {
+                requested,
+                available,
+            } => {
+                if available.is_empty() {
+                    write!(
+                        f,
+                        "profile '{requested}' not found (no profiles configured)"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "profile '{requested}' not found; available profiles: {}",
+                        available.join(", ")
+                    )
+                }
+            }
+            Self::NoActiveTarget { profile } => write!(
+                f,
+                "profile '{profile}' has no active model — connect a provider \
+                 first (/connect) or pick one (/model)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ActiveTargetError {}
+
+/// Resolve the active target of the config's `active_profile` (R3-2: the
+/// named pointer replaces the hardcoded `"default"`; an empty pointer keeps
+/// meaning `"default"` for pre-R3-2 files).
+///
+/// Error-bearing twin of [`resolve_active_target`]: the graceful wrapper
+/// collapses both failure modes to `None` (launch paths + synthesis
+/// fallback), while interactive surfaces render the message — it names the
+/// requested profile and lists the available ones.
 ///
 /// The provider identity is recovered in this order (preserving the
 /// pre-N1 explicit-name behaviour, where a user `--provider groq` flows
@@ -46,19 +105,46 @@ pub struct ResolvedTarget<'a> {
 ///    unconditionally (preserves the user's explicit intent).
 /// 2. **fall back to [`resolve_provider`]** — base_url-driven detection
 ///    for unknown ids, then the coarse `ProviderKind` fallback.
-pub fn resolve_active_target(pm: &ProviderModelConfig) -> Option<ResolvedTarget<'_>> {
-    let profile = pm.profiles.get("default")?;
+pub fn resolve_active_target_checked(
+    pm: &ProviderModelConfig,
+) -> Result<ResolvedTarget<'_>, ActiveTargetError> {
+    let key = pm.active_profile_key();
+    let profile = pm.profiles.get(key).ok_or_else(|| {
+        let mut available = pm.profile_names();
+        // The requested key is by definition not among them.
+        available.retain(|n| n != key);
+        ActiveTargetError::ProfileNotFound {
+            requested: key.to_string(),
+            available,
+        }
+    })?;
     let active = profile
         .providers
         .iter()
-        .find(|p| p.id == profile.active_target.provider_id)?;
+        .find(|p| p.id == profile.active_target.provider_id)
+        .ok_or_else(|| ActiveTargetError::NoActiveTarget {
+            profile: key.to_string(),
+        })?;
     let provider = llm_provider_from_id(&active.id)
         .unwrap_or_else(|| resolve_provider(&active.kind, &active.base_url));
-    Some(ResolvedTarget {
+    Ok(ResolvedTarget {
         provider,
         profile: active,
         model_id: &profile.active_target.model_id,
     })
+}
+
+/// Resolve the active target of the config's `active_profile` (R3-2:
+/// honors [`ProviderModelConfig::active_profile`]; an empty/unset pointer
+/// keeps the B3 phase-1 `"default"` behaviour).
+///
+/// Returns `None` when there is no profile under that key, or its
+/// `active_target` points at a provider id absent from `providers` — the
+/// same graceful contract as before R3-2 (launch falls back to synthesis).
+/// Interactive surfaces that need to say *why* use
+/// [`resolve_active_target_checked`].
+pub fn resolve_active_target(pm: &ProviderModelConfig) -> Option<ResolvedTarget<'_>> {
+    resolve_active_target_checked(pm).ok()
 }
 
 /// Reverse of [`llm_provider_id`]: map a profile id slug (e.g. `"groq"`,
@@ -168,6 +254,49 @@ pub fn resolve_credential(cred: &CredentialRef) -> String {
         CredentialRef::InlineLegacy { masked } => masked.clone(),
         CredentialRef::Keyring { .. } | CredentialRef::Ephemeral => String::new(),
     }
+}
+
+/// R4-3: resolve ALL credential values a [`CredentialRef`] stands for, in
+/// **rotation order** — the active key first, then the remaining keys in the
+/// order they are stored (multi-key store entries; see
+/// `crate::credential_manager::Credential`).
+///
+/// This is the deterministic, observable ordering the engine's key rotation
+/// walks: position 0 is the key that would be used without rotation, and the
+/// engine tries positions 1..n in exactly this order. Blank and duplicate
+/// values are dropped (a blank or repeated key is never a useful rotation
+/// target; duplicates keep their first occurrence). Single-key credentials
+/// (and every non-Store backend) yield at most one entry.
+pub fn resolve_credential_keys(cred: &CredentialRef) -> Vec<String> {
+    let keys: Vec<String> = match cred {
+        CredentialRef::Store { service } => {
+            crate::credential_manager::read_credential_keys_default(service).unwrap_or_default()
+        }
+        CredentialRef::Env { var } => vec![std::env::var(var).unwrap_or_default()],
+        CredentialRef::InlineLegacy { masked } => vec![masked.clone()],
+        CredentialRef::Keyring { .. } | CredentialRef::Ephemeral => Vec::new(),
+    };
+    dedup_rotation_keys(keys)
+}
+
+/// Drop blank entries and duplicate values from a resolved rotation list,
+/// keeping the **first** occurrence of each value in store order.
+///
+/// P-N24: this used to be `Vec::dedup`, which only removes *consecutive*
+/// duplicates — a hand-edited (or pre-dedup-writer) store file shaped
+/// `[a, b, a]` kept the trailing `a`, and the engine burned a full retry
+/// budget re-walking a key it had already tried. The active key (position 0)
+/// is never displaced: dedup keeps first occurrences.
+fn dedup_rotation_keys(keys: Vec<String>) -> Vec<String> {
+    let mut seen: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(keys.len());
+    let mut out = Vec::with_capacity(keys.len());
+    for k in keys.into_iter().filter(|k| !k.is_empty()) {
+        if seen.insert(k.clone()) {
+            out.push(k);
+        }
+    }
+    out
 }
 
 /// A resolved [`ModelRef`]: the concrete engine provider plus the (possibly
@@ -368,10 +497,12 @@ pub fn synthesize_default_profile(
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers: ProviderTiers::default(),
+        models: Vec::new(),
     };
 
     Some(ProviderModelConfig {
         version: ProviderModelConfig::VERSION,
+        active_profile: String::new(),
         profiles: build_default_profiles_map(profile, &model_id),
         gateway: Default::default(),
     })
@@ -396,9 +527,11 @@ fn ollama_default_profile(model_id: &str) -> ProviderModelConfig {
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers: ProviderTiers::default(),
+        models: Vec::new(),
     };
     ProviderModelConfig {
         version: ProviderModelConfig::VERSION,
+        active_profile: String::new(),
         profiles: build_default_profiles_map(profile, model_id),
         gateway: Default::default(),
     }
@@ -492,6 +625,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         }
     }
 
@@ -513,6 +647,7 @@ mod tests {
         );
         ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
             profiles,
             gateway: Default::default(),
         }
@@ -628,10 +763,196 @@ mod tests {
     fn none_when_no_default_profile() {
         let pm = ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
             profiles: HashMap::new(),
             gateway: Default::default(),
         };
         assert!(resolve_active_target(&pm).is_none());
+    }
+
+    // ── R3-2: multi-profile resolution ──────────────────────────────────
+
+    /// Two named profiles (`default` → anthropic, `work` → openai) with
+    /// `active_profile` controlling which one wins.
+    fn two_profile_config(active: &str) -> ProviderModelConfig {
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ModelProfile {
+                name: "default".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: "anthropic".to_string(),
+                    model_id: "claude-sonnet-4-20250514".to_string(),
+                    scope: Scope::Global,
+                },
+                providers: vec![profile(
+                    "anthropic",
+                    ProviderKind::Anthropic,
+                    "https://api.anthropic.com",
+                    "K",
+                )],
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        profiles.insert(
+            "work".to_string(),
+            ModelProfile {
+                name: "work".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: "openai".to_string(),
+                    model_id: "gpt-4o".to_string(),
+                    scope: Scope::Global,
+                },
+                providers: vec![profile(
+                    "openai",
+                    ProviderKind::OpenAi,
+                    "https://api.openai.com/v1",
+                    "K2",
+                )],
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: active.to_string(),
+            profiles,
+            gateway: Default::default(),
+        }
+    }
+
+    #[test]
+    fn empty_active_profile_still_resolves_default() {
+        // B3 phase-1 compat: an unset pointer means "default".
+        let pm = two_profile_config("");
+        let r = resolve_active_target(&pm).unwrap();
+        assert_eq!(r.provider, LlmProvider::Anthropic);
+        assert_eq!(r.model_id, "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn active_profile_switches_resolution_target() {
+        let pm = two_profile_config("work");
+        let r = resolve_active_target(&pm).unwrap();
+        assert_eq!(r.provider, LlmProvider::OpenAI);
+        assert_eq!(r.model_id, "gpt-4o");
+        assert_eq!(r.profile.base_url, "https://api.openai.com/v1");
+        // And back.
+        let pm = two_profile_config("default");
+        let r = resolve_active_target(&pm).unwrap();
+        assert_eq!(r.provider, LlmProvider::Anthropic);
+    }
+
+    #[test]
+    fn dangling_active_profile_is_an_error_listing_available() {
+        let pm = two_profile_config("ghost");
+        assert!(
+            resolve_active_target(&pm).is_none(),
+            "graceful path stays None"
+        );
+        let err = resolve_active_target_checked(&pm).unwrap_err();
+        match &err {
+            ActiveTargetError::ProfileNotFound {
+                requested,
+                available,
+            } => {
+                assert_eq!(requested, "ghost");
+                assert_eq!(*available, vec!["default".to_string(), "work".to_string()]);
+            }
+            other => panic!("expected ProfileNotFound, got {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ghost") && msg.contains("default") && msg.contains("work"),
+            "error must list available profiles: {msg}"
+        );
+    }
+
+    #[test]
+    fn empty_profile_resolves_to_none_but_names_the_profile() {
+        // "Profile found but empty → same behavior as an empty default
+        // today": the Option contract degrades to None; the checked variant
+        // explains that the profile exists but has nothing to activate.
+        let mut pm = two_profile_config("");
+        pm.profiles.insert(
+            "empty".to_string(),
+            ModelProfile {
+                name: "empty".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: String::new(),
+                    model_id: String::new(),
+                    scope: Scope::Global,
+                },
+                providers: Vec::new(),
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        pm.active_profile = "empty".to_string();
+        assert!(resolve_active_target(&pm).is_none());
+        let err = resolve_active_target_checked(&pm).unwrap_err();
+        assert_eq!(
+            err,
+            ActiveTargetError::NoActiveTarget {
+                profile: "empty".to_string()
+            }
+        );
+        assert!(err.to_string().contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn profile_with_targeting_gap_is_no_active_target_error() {
+        // A profile whose active_target names a provider id absent from its
+        // providers list — the "empty default today" contract too.
+        let mut pm = two_profile_config("work");
+        pm.profiles
+            .get_mut("work")
+            .unwrap()
+            .active_target
+            .provider_id = "ghost".to_string();
+        assert!(resolve_active_target(&pm).is_none());
+        assert_eq!(
+            resolve_active_target_checked(&pm).unwrap_err(),
+            ActiveTargetError::NoActiveTarget {
+                profile: "work".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn checked_resolution_reports_custom_slug_identity() {
+        // A custom openai-compatible slot (id not in the slug table) resolves
+        // via base_url detection, same as the phase-1 path.
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "proxy".to_string(),
+            ModelProfile {
+                name: "proxy".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: "my-gateway".to_string(),
+                    model_id: "some-model".to_string(),
+                    scope: Scope::Global,
+                },
+                providers: vec![profile(
+                    "my-gateway",
+                    ProviderKind::OpenAiCompatible,
+                    "https://my-proxy.example.com/v1",
+                    "K",
+                )],
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        let pm = ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: "proxy".to_string(),
+            profiles,
+            gateway: Default::default(),
+        };
+        let r = resolve_active_target_checked(&pm).unwrap();
+        assert_eq!(r.provider, LlmProvider::OpenAI);
+        assert_eq!(r.model_id, "some-model");
     }
 
     #[test]
@@ -786,6 +1107,82 @@ mod tests {
                 service: "shannon-definitely-not-a-real-service-9f3a".to_string()
             }),
             ""
+        );
+    }
+
+    // ── R4-3: multi-key resolution ───────────────────────────────────────
+
+    #[test]
+    fn resolve_credential_keys_env_is_single_slot() {
+        // SAFETY: unique key read only by this test thread; no concurrent
+        // set/remove of the same key elsewhere.
+        unsafe { std::env::set_var("R43_TEST_KEY", "one-key") };
+        assert_eq!(
+            resolve_credential_keys(&CredentialRef::Env {
+                var: "R43_TEST_KEY".to_string()
+            }),
+            vec!["one-key".to_string()],
+            "env credentials never rotate (single slot)"
+        );
+        // SAFETY: see above.
+        unsafe { std::env::remove_var("R43_TEST_KEY") };
+        assert!(
+            resolve_credential_keys(&CredentialRef::Env {
+                var: "R43_DEFINITELY_UNSET_9f3a".to_string()
+            })
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn resolve_credential_keys_inline_legacy_is_single_slot() {
+        assert_eq!(
+            resolve_credential_keys(&CredentialRef::InlineLegacy {
+                masked: "legacy".to_string()
+            }),
+            vec!["legacy".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_credential_keys_keyring_ephemeral_and_missing_store_are_empty() {
+        assert!(
+            resolve_credential_keys(&CredentialRef::Keyring {
+                service: "s".to_string(),
+                account: "a".to_string()
+            })
+            .is_empty()
+        );
+        assert!(resolve_credential_keys(&CredentialRef::Ephemeral).is_empty());
+        assert!(
+            resolve_credential_keys(&CredentialRef::Store {
+                service: "shannon-definitely-not-a-real-service-9f3a".to_string()
+            })
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn rotation_key_dedup_removes_non_adjacent_duplicates_first_occurrence_wins() {
+        // P-N24: `Vec::dedup` only collapsed *consecutive* duplicates, so a
+        // `[a, b, a]` list kept the trailing `a` and rotation re-walked a key
+        // it had already burned a retry budget on. Full dedup, store order,
+        // first occurrence wins (the active key at position 0 never moves).
+        assert_eq!(
+            dedup_rotation_keys(vec!["a".to_string(), "b".to_string(), "a".to_string()]),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        // Blanks are still dropped, and an all-duplicate list collapses to
+        // its first entry.
+        assert_eq!(
+            dedup_rotation_keys(vec![
+                "a".to_string(),
+                String::new(),
+                "a".to_string(),
+                "b".to_string(),
+                "b".to_string(),
+            ]),
+            vec!["a".to_string(), "b".to_string()]
         );
     }
 

@@ -15,6 +15,7 @@ const saveWebhookConfig = vi.mocked(api.saveWebhookConfig)
 const clearWebhookConfig = vi.mocked(api.clearWebhookConfig)
 const getNotificationPrefs = vi.mocked(api.getNotificationPrefs)
 const setNotificationPrefs = vi.mocked(api.setNotificationPrefs)
+const testWebhook = vi.mocked(api.testWebhook)
 
 vi.mock('sonner', () => ({
   toast: {
@@ -54,11 +55,15 @@ async function waitForDndLoaded() {
 beforeEach(() => {
   // Use mockReset so the setup.ts defaults are wiped, then re-establish
   // baseline values — `mockReset` alone leaves `vi.fn()` returning undefined.
+  // clearAllMocks first also wipes sonner toast history, so the
+  // not.toHaveBeenCalled assertions below stay per-test.
+  vi.clearAllMocks()
   getWebhookConfig.mockReset()
   saveWebhookConfig.mockReset()
   clearWebhookConfig.mockReset()
   getNotificationPrefs.mockReset()
   setNotificationPrefs.mockReset()
+  testWebhook.mockReset()
   getWebhookConfig.mockResolvedValue(null)
   saveWebhookConfig.mockResolvedValue(undefined)
   clearWebhookConfig.mockResolvedValue(undefined)
@@ -69,14 +74,19 @@ beforeEach(() => {
     dnd_end: null,
     on_completed: true,
     on_failed: true,
+    on_needs_attention: true,
+    sound_enabled: false,
   })
   setNotificationPrefs.mockResolvedValue(undefined)
+  testWebhook.mockResolvedValue({ success: true, status: 200, detail: 'HTTP 200' })
 })
 
 describe('NotificationsSettings — layout', () => {
-  it('renders the page title, DND section, and webhook section', async () => {
+  it('renders the page subtitle, DND section, and webhook section', async () => {
     render(<NotificationsSettings />)
-    expect(screen.getByRole('heading', { name: 'Notifications', level: 2 })).toBeInTheDocument()
+    // h2 retired — the global Header carries the page title; here we pin
+    // the subtitle as the page's distinctive marker.
+    expect(screen.getByText(/Configure webhook delivery for desktop notifications/)).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /Desktop & quiet hours/i, level: 3 })).toBeInTheDocument()
     await waitForWebhookLoaded()
     expect(screen.getByRole('heading', { name: /Webhook Notifications/i, level: 3 })).toBeInTheDocument()
@@ -118,12 +128,12 @@ describe('NotificationsSettings — webhook loading', () => {
     })
     render(<NotificationsSettings />)
     await waitForWebhookLoaded()
-    // No timeout input is rendered; verify the URL seeds and the Save button
-    // enables, which together imply the underlying timeoutMs state defaulted
-    // back to 5000 (or the user would need to re-enable to save).
+    // P1-7: the timeout now has a control — verify the underlying timeoutMs
+    // state defaulted back to 5000 (0 from the wire is treated as unset).
     const section = getWebhookSection()
     const urlInput = within(section).getByLabelText(/Webhook URL/) as HTMLInputElement
     expect(urlInput.value).toBe('https://example.com/webhook')
+    expect((within(section).getByLabelText(/Timeout \(ms\)/) as HTMLInputElement).value).toBe('5000')
     expect(within(section).getByText('Valid URL')).toBeInTheDocument()
   })
 
@@ -167,7 +177,7 @@ describe('NotificationsSettings — webhook loading', () => {
 })
 
 describe('NotificationsSettings — webhook save validation', () => {
-  it('disables the save button until a valid URL is entered', async () => {
+  it('disables the save button until a valid URL and (for Custom) a body are entered', async () => {
     render(<NotificationsSettings />)
     await waitForWebhookLoaded()
     const section = getWebhookSection()
@@ -178,6 +188,12 @@ describe('NotificationsSettings — webhook save validation', () => {
     expect(save).toBeDisabled()
     expect(within(section).getByText('Invalid URL')).toBeInTheDocument()
     fireEvent.change(urlInput, { target: { value: 'https://hooks.slack.com/services/T/B/X' } })
+    // Default preset is Custom — an empty body keeps the save blocked.
+    await waitFor(() => expect(within(section).getByText('Valid URL')).toBeInTheDocument())
+    expect(save).toBeDisabled()
+    fireEvent.change(within(section).getByLabelText(/Custom template body/), {
+      target: { value: '{"text": "{title}: {body}"}' },
+    })
     await waitFor(() => expect(save).not.toBeDisabled())
     expect(within(section).getByText('Valid URL')).toBeInTheDocument()
   })
@@ -207,14 +223,61 @@ describe('NotificationsSettings — webhook save validation', () => {
     const section = getWebhookSection()
     const urlInput = within(section).getByLabelText(/Webhook URL/) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: 'https://hooks.slack.com/services/T/B/X' } })
+    // Default preset is Custom — a body is required before the save fires.
+    fireEvent.change(within(section).getByLabelText(/Custom template body/), {
+      target: { value: '{"text": "{title}: {body}"}' },
+    })
     fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
     await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
     const dto = saveWebhookConfig.mock.calls[0]![0]
     expect(dto.url).toBe('https://hooks.slack.com/services/T/B/X')
-    expect(dto.template.startsWith('custom')).toBe(true)
+    expect(dto.template).toBe('custom:{"text": "{title}: {body}"}')
     expect(dto.timeout_ms).toBe(5000)
     expect(dto.include_body).toBe(false)
     expect(dto.secret).toBeNull()
+  })
+
+  it('seeds and saves the HMAC secret (P1-15: it had no input at all)', async () => {
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://example.com/hook',
+      template: 'slack',
+      secret: 'stored-secret',
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    const secretInput = within(section).getByLabelText(/HMAC signing secret/) as HTMLInputElement
+    expect(secretInput.type).toBe('password')
+    expect(secretInput.value).toBe('stored-secret')
+    fireEvent.change(secretInput, { target: { value: 'rotated-secret' } })
+    fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
+    expect(saveWebhookConfig.mock.calls[0]![0].secret).toBe('rotated-secret')
+  })
+
+  it('blocks the save when the Custom body is cleared (no template wipe)', async () => {
+    const { toast } = await import('sonner')
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://example.com/hook',
+      template: 'custom:{"text":"hi"}',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    // The stored custom body is decoded back into the textarea.
+    const body = within(section).getByLabelText(/Custom template body/) as HTMLTextAreaElement
+    expect(body.value).toBe('{"text":"hi"}')
+    // Clearing it disables the save; a programmatic save attempt only toasts.
+    fireEvent.change(body, { target: { value: '' } })
+    expect(within(section).getByRole('button', { name: /^Save$/ })).toBeDisabled()
+    // saveWebhookConfig must not have been called — the stored template stays.
+    expect(saveWebhookConfig).not.toHaveBeenCalled()
+    expect(toast.error).not.toHaveBeenCalled()
   })
 
   it('shows the saving label while save is in flight', async () => {
@@ -225,6 +288,10 @@ describe('NotificationsSettings — webhook save validation', () => {
     const section = getWebhookSection()
     const urlInput = within(section).getByLabelText(/Webhook URL/) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: 'https://hooks.slack.com/services/T/B/X' } })
+    // Default preset is Custom — the save needs a body to fire.
+    fireEvent.change(within(section).getByLabelText(/Custom template body/), {
+      target: { value: '{"text": "x"}' },
+    })
     fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
     await waitFor(() =>
       expect(within(section).getByRole('button', { name: /Saving/ })).toBeInTheDocument(),
@@ -243,6 +310,9 @@ describe('NotificationsSettings — webhook save validation', () => {
     const section = getWebhookSection()
     const urlInput = within(section).getByLabelText(/Webhook URL/) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: 'https://hooks.slack.com/services/T/B/X' } })
+    fireEvent.change(within(section).getByLabelText(/Custom template body/), {
+      target: { value: '{"text": "x"}' },
+    })
     fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
   })
@@ -305,6 +375,181 @@ describe('NotificationsSettings — webhook clear', () => {
   })
 })
 
+describe('NotificationsSettings — webhook timeout / include-body controls (P1-7)', () => {
+  it('seeds and saves the timeout and include-body values they always carried', async () => {
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 7500,
+      include_body: true,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    const timeoutInput = within(section).getByLabelText(/Timeout \(ms\)/) as HTMLInputElement
+    expect(timeoutInput.value).toBe('7500')
+    expect(within(section).getByLabelText(/Include body in payload/)).toBeChecked()
+    // Edit both and save — the values must survive the round-trip.
+    fireEvent.change(timeoutInput, { target: { value: '9000' } })
+    fireEvent.click(within(section).getByLabelText(/Include body in payload/))
+    fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
+    const dto = saveWebhookConfig.mock.calls[0]![0]
+    expect(dto.timeout_ms).toBe(9000)
+    expect(dto.include_body).toBe(false)
+  })
+
+  it('ignores non-positive / non-numeric timeout input instead of saving 0', async () => {
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    const timeoutInput = within(section).getByLabelText(/Timeout \(ms\)/) as HTMLInputElement
+    fireEvent.change(timeoutInput, { target: { value: 'garbage' } })
+    fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
+    expect(saveWebhookConfig.mock.calls[0]![0].timeout_ms).toBe(5000)
+  })
+
+  it('round-trips a stored discord template through the preset and save', async () => {
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://discord.com/api/webhooks/12/abc',
+      template: 'discord',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    // No custom body is required for a preset template — save is enabled.
+    const save = within(section).getByRole('button', { name: /^Save$/ })
+    await waitFor(() => expect(save).not.toBeDisabled())
+    fireEvent.click(save)
+    await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
+    expect(saveWebhookConfig.mock.calls[0]![0].template).toBe('discord')
+  })
+})
+
+describe('NotificationsSettings — send test webhook (P1-7)', () => {
+  it('disables the test button while the URL is empty', async () => {
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    expect(within(getWebhookSection()).getByRole('button', { name: /Send test webhook/ })).toBeDisabled()
+  })
+
+  it('toasts success with the HTTP status on a 2xx verdict', async () => {
+    const { toast } = await import('sonner')
+    testWebhook.mockResolvedValue({ success: true, status: 204, detail: 'HTTP 204' })
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    fireEvent.click(within(getWebhookSection()).getByRole('button', { name: /Send test webhook/ }))
+    await waitFor(() => expect(testWebhook).toHaveBeenCalledTimes(1))
+    // The payload title/body come from the locale so the test message reads
+    // in the user's language on the receiving channel.
+    expect(testWebhook.mock.calls[0]![0]).toContain('Shannon')
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('toasts the failure reason on a non-2xx verdict', async () => {
+    const { toast } = await import('sonner')
+    testWebhook.mockResolvedValue({ success: false, status: 500, detail: 'HTTP 500' })
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    fireEvent.click(within(getWebhookSection()).getByRole('button', { name: /Send test webhook/ }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('toasts an error when the command rejects (nothing configured)', async () => {
+    const { toast } = await import('sonner')
+    testWebhook.mockRejectedValue(new Error('no webhook configured — save a webhook URL first'))
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    fireEvent.click(within(getWebhookSection()).getByRole('button', { name: /Send test webhook/ }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+  })
+
+  // W1-E review (Important): the dirty gate relies on webhookSnapshotFromDto
+  // hand-expanding the persisted DTO (template → preset + custom body,
+  // timeout_ms || 5000, secret ?? ''). This walks the full loop so a
+  // regression in that expansion — or in the re-baseline after save — shows
+  // up as a stuck or prematurely lit test button.
+  it('gates the test button on the dirty form, then relights it after save', async () => {
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    const testBtn = () => within(section).getByRole('button', { name: /Send test webhook/ })
+    // Persisted config loaded and the form matches it → the test button is lit.
+    expect(testBtn()).toBeEnabled()
+
+    // Edit the form (rotate the secret) → dirty → test disabled + hint shown.
+    fireEvent.change(within(section).getByLabelText(/HMAC signing secret/), {
+      target: { value: 'rotated-secret' },
+    })
+    expect(testBtn()).toBeDisabled()
+    expect(within(section).getByText(/Testing uses the saved configuration/)).toBeTruthy()
+
+    // Save → the snapshot is re-baselined against the new form state → the
+    // test button lights up again, and the hint disappears.
+    fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
+    expect(saveWebhookConfig.mock.calls[0]![0].secret).toBe('rotated-secret')
+    await waitFor(() => expect(testBtn()).toBeEnabled())
+    expect(within(section).queryByText(/Testing uses the saved configuration/)).toBeNull()
+  })
+})
+
+describe('NotificationsSettings — desktop-notification test button (P1-7, moved from General)', () => {
+  it('fires a native OS notification and toasts success', async () => {
+    const { toast } = await import('sonner')
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    fireEvent.click(within(section).getByRole('button', { name: /Send test notification/ }))
+    // useNotification → invoke('send_notification') — the global core mock
+    // resolves, so the success toast is the observable outcome.
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+})
+
 describe('NotificationsSettings — DND prefs', () => {
   it('seeds the form from getNotificationPrefs on mount', async () => {
     getNotificationPrefs.mockResolvedValue({
@@ -314,6 +559,8 @@ describe('NotificationsSettings — DND prefs', () => {
       dnd_end: '06:30',
       on_completed: false,
       on_failed: true,
+      on_needs_attention: true,
+      sound_enabled: false,
     })
     render(<NotificationsSettings />)
     await waitForDndLoaded()
@@ -364,6 +611,8 @@ describe('NotificationsSettings — DND prefs', () => {
       dnd_end: null,
       on_completed: true,
       on_failed: true,
+      on_needs_attention: true,
+      sound_enabled: false,
     })
     render(<NotificationsSettings />)
     await waitForDndLoaded()
@@ -382,6 +631,8 @@ describe('NotificationsSettings — DND prefs', () => {
       dnd_end: '07:00',
       on_completed: true,
       on_failed: true,
+      on_needs_attention: true,
+      sound_enabled: false,
     })
     render(<NotificationsSettings />)
     await waitForDndLoaded()
@@ -401,6 +652,8 @@ describe('NotificationsSettings — DND prefs', () => {
       dnd_end: null,
       on_completed: true,
       on_failed: true,
+      on_needs_attention: true,
+      sound_enabled: false,
     })
     render(<NotificationsSettings />)
     await waitForDndLoaded()
@@ -424,5 +677,76 @@ describe('NotificationsSettings — DND prefs', () => {
     getNotificationPrefs.mockRejectedValue(new Error('prefs read failed'))
     render(<NotificationsSettings />)
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
+  })
+})
+describe('NotificationsSettings — needs-attention + sound switches (settings R3 T5)', () => {
+  it('seeds both new switches from getNotificationPrefs', async () => {
+    getNotificationPrefs.mockResolvedValue({
+      master_enabled: true,
+      dnd_enabled: false,
+      dnd_start: null,
+      dnd_end: null,
+      on_completed: true,
+      on_failed: true,
+      on_needs_attention: false,
+      sound_enabled: true,
+    })
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    expect(within(section).getByLabelText(/Needs attention/)).not.toBeChecked()
+    expect(within(section).getByLabelText(/Task sounds/)).toBeChecked()
+  })
+
+  it('renders the backend defaults when older fields are absent (attention on, sound off)', async () => {
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    // setup.ts default: on_needs_attention: true, sound_enabled: false.
+    expect(within(section).getByLabelText(/Needs attention/)).toBeChecked()
+    expect(within(section).getByLabelText(/Task sounds/)).not.toBeChecked()
+  })
+
+  it('disables both new switches when the master is off', async () => {
+    getNotificationPrefs.mockResolvedValue({
+      master_enabled: false,
+      dnd_enabled: false,
+      dnd_start: null,
+      dnd_end: null,
+      on_completed: true,
+      on_failed: true,
+      on_needs_attention: true,
+      sound_enabled: true,
+    })
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    expect(within(section).getByLabelText(/Needs attention/)).toHaveAttribute('aria-disabled', 'true')
+    expect(within(section).getByLabelText(/Task sounds/)).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('saves toggled values for both new switches', async () => {
+    const { toast } = await import('sonner')
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    // Defaults: attention on, sound off — flip both.
+    fireEvent.click(within(section).getByLabelText(/Needs attention/))
+    fireEvent.click(within(section).getByLabelText(/Task sounds/))
+    fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(setNotificationPrefs).toHaveBeenCalledTimes(1))
+    const payload = setNotificationPrefs.mock.calls[0]![0]
+    expect(payload.on_needs_attention).toBe(false)
+    expect(payload.sound_enabled).toBe(true)
+    expect(toast.success).toHaveBeenCalled()
+  })
+
+  it('keeps the test-notification button working alongside the new switches', async () => {
+    const { toast } = await import('sonner')
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    fireEvent.click(within(section).getByRole('button', { name: /Send test notification/ }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
   })
 })

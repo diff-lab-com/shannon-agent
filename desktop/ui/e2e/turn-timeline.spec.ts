@@ -8,16 +8,40 @@ test.describe('Turn Timeline (§4.14)', () => {
   test('opens from the session rail menu', async ({ page }) => {
     await page.goto('/chat')
 
-    // The ⋯ button is hover-only; force-click past the hover gate.
-    await page
-      .getByRole('button', { name: 'Actions for Q3 roadmap brainstorm' })
-      .click({ force: true })
-    await page.getByRole('menuitem', { name: 'Turn Timeline' }).click()
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByTestId('desktop-session-row-sess-008')
+    ).toBeVisible({ timeout: 15000 })    // CI only: slow CI hydrates the sidebar's CSS variables asynchronously,
+    // so the session button stays under the aside for the first click. Wait
+    // for the sidebar to report a non-zero width and for the layout to
+    // settle before interacting.
+    await page.waitForFunction(() => {
+      const aside = document.querySelector('aside[data-sidebar]')
+      if (!aside) return false
+      // aside must be sized AND the main column must be offset
+      return aside.getBoundingClientRect().width > 0 &&
+             getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w').trim().endsWith('px')
+    }, { timeout: 15000 })
+
+
+    // The ⋯ button is hover-only: hover the row first, wait for the button
+    // to actually mount, then click it normally. (force:true raced the
+    // session-list render and intermittently timed out the menu wait.)
+    await page.getByText('Q3 roadmap brainstorm').hover()
+    const actions = page.getByRole('button', { name: 'Actions for Q3 roadmap brainstorm' })
+    await expect(actions).toBeVisible()
+    await actions.click()
+    const item = page.getByRole('menuitem', { name: 'Turn Timeline' })
+    await expect(item).toBeVisible()
+    await item.click()
 
     await expect(page).toHaveURL(/\/timeline\/sess-001$/)
     const panel = page.getByTestId('turn-timeline')
     await expect(panel).toBeVisible()
-    await expect(panel.getByRole('heading', { name: 'Turn Timeline' })).toBeVisible()
+    // Route title now lives in the app Header (TITLE_MAP), outside the panel.
+    await expect(page.getByRole('heading', { name: 'Timeline', exact: true })).toBeVisible()
   })
 
   test('deep link renders turns, tools, and the cumulative curve', async ({ page }) => {
@@ -26,7 +50,7 @@ test.describe('Turn Timeline (§4.14)', () => {
     await page.goto('/timeline/sess-002')
 
     const panel = page.getByTestId('turn-timeline')
-    await expect(panel.getByRole('heading', { name: 'Turn Timeline' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Timeline', exact: true })).toBeVisible()
     await expect(panel.getByText('Turn 1')).toBeVisible()
     await expect(panel.getByText('Turn 2')).toBeVisible()
     await expect(

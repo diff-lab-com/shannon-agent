@@ -1,0 +1,44 @@
+{
+  "name": "cancel-approval-wait",
+  "description": "cancel-matrix",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-cancel-approval",
+        "title": "Cancel approval wait",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "删掉临时目录",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "这条命令需要审批。"
+          ]
+        },
+        {
+          "event": "permission-request",
+          "payload": {
+            "request_id": "pr-cancel-1",
+            "tool": "Bash",
+            "risk": "critical",
+            "input": {
+              "command": "rm -rf /tmp/build-cache"
+            },
+            "reason": {
+              "source": "rule",
+              "ruleName": "shell-command"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

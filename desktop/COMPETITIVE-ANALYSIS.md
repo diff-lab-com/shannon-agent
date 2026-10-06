@@ -49,7 +49,7 @@ Shannon Desktop 当前是「**对话 + 会话管理**」型的 Tauri 应用:底�
 ### 桌面端相对 CLI 的覆盖度(约 60%)
 - ✅ Chat / Sessions / MCP / Permissions / Provider 切换 / 后台任务
 - ⚠️ Skills(只列出,不触发) / Tasks(列表,无 team 协调) / 项目记忆(后端有,无 UI)
-- ❌ Subagent / Team / Worktree / LSP / Hook / Plugin / Computer Use — **全部没暴露 UI**
+- ⚠️ Subagent（2026-09-18 部分闭环：`agent_spawn` 一级折叠块 + crates 侧 lifecycle observer 就绪，desktop TeamContext 注入待决策）/ Team / Worktree / LSP / Hook / Plugin / Computer Use — **其余没暴露 UI**
 
 ---
 
@@ -140,7 +140,7 @@ Shannon Desktop 当前是「**对话 + 会话管理**」型的 Tauri 应用:底�
 
 | 功能 | CLI 状态 | 桌面端 | 优先级 |
 |---|---|---|---|
-| Subagent 系统 | ✅(teammate 协调、`/batch`、agent view) | ❌ | **P0** |
+| Subagent 系统 | ✅(teammate 协调、`/batch`、agent view) | ⚠️ 部分闭环(2026-09-18: 一级折叠块 + 生命周期桥 crates 侧就绪) | P0→P2 |
 | Agent Team(Create/SendMessage/Task) | ✅(`/team` 命令) | ❌ | **P0** |
 | Worktree 隔离 | ✅(`/batch` 自动创建) | ❌ | P1 |
 | Hook 系统(32 事件) | ✅(超过 Claude Code) | ❌ 无配置 UI | P1 |

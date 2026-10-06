@@ -27,12 +27,12 @@ pub fn spawn(base_dir: &std::path::Path, app: tauri::AppHandle) {
     let mut watcher = match notify::recommended_watcher(tx) {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("agent-message watcher: {e}");
+            tracing::warn!("agent-message watcher: init failed: {e}");
             return;
         }
     };
     if let Err(e) = watcher.watch(base_dir, RecursiveMode::Recursive) {
-        eprintln!("agent-message watcher: {} ({e})", base_dir.display());
+        tracing::warn!("agent-message watcher: {} ({e})", base_dir.display());
         return;
     }
     std::thread::spawn(move || {
@@ -43,7 +43,7 @@ pub fn spawn(base_dir: &std::path::Path, app: tauri::AppHandle) {
             match rx.recv() {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
-                    eprintln!("agent-message watcher: {e}");
+                    tracing::warn!("agent-message watcher: {e}");
                     continue;
                 }
                 Err(_) => break, // channel closed — watcher dropped

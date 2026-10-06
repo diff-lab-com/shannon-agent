@@ -2,9 +2,11 @@ name: CI
 on:
   push:
     branches: [main, dev]
-    # Release tags must pass the full CI gate too — release.yml itself only
-    # typechecks/tests the gateway, so without this a tag on an un-CI'd
-    # commit ships straight to production.
+    # Release tags must pass the full CI gate too — and since 2026-09-27 that
+    # gate is MECHANICALLY enforced: release.yml's publish job polls for this
+    # tag-triggered run and refuses to flip the release draft until it is
+    # green (before then the check existed on the tag but nothing made the
+    # release wait for it).
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
   pull_request:
@@ -23,6 +25,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Least privilege by default: every job here only reads the repository.
+# Workflows that need more (release, publish, the metrics bot) declare
+# their own elevated scopes next to the steps that use them.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -33,9 +41,256 @@ env:
 # release tag's commit). Never use a moving tag like `@v4` for these —
 # always pin to an exact commit.
 jobs:
-  test:
-    name: Test
+  # PR path triage: the heavy Rust/UI/gateway jobs below are skipped when the
+  # PR cannot possibly have touched them (docs-only / website-only PRs used to
+  # burn ~4-6 runner-hours each). This is done with JOB-level `if:` conditions
+  # and NOT workflow-level `paths:` on purpose: a skipped job reports check
+  # conclusion "skipped", which branch protection treats as satisfied, while
+  # workflow-level path filters leave required checks "Pending" forever and
+  # wedge merging. Pushes and tags always run the full suite (this job is
+  # PR-only), so what lands on dev/main is never under-tested.
+  # Fail-open semantics: if this triage job itself errors, every downstream
+  # `needs.changes.result != 'success'` clause goes true and the full suite
+  # runs — a broken triage must never silently widen the skip window.
+  #
+  # PR-vs-push coverage matrix (documented 2026-09-30, R1-3 of the
+  # provider-followups roadmap — decision ① "CI covers dev direct pushes"):
+  #   • push / tag (main, dev, v*.*.*): EVERY job below runs the full suite.
+  #     Each job's `if:` short-circuits on its first clause
+  #     (`github.event_name != 'pull_request'`), so this triage job and the
+  #     path filters it computes can only ever NARROW pull_request runs —
+  #     never a push. A desktop/ui-only or gateway-only direct push to dev
+  #     therefore still runs desktop-unit (lint + vitest), Desktop E2E and
+  #     Desktop Visual Audit alongside every Rust job.
+  #
+  #     GOTCHA (fixed 2026-09-30, silent since this matrix landed): on a
+  #     push/dispatch this job is SKIPPED (`if:` is PR-only), and GitHub
+  #     implicitly ANDs every dependent job's `if:` with a `success()` gate
+  #     over its `needs` — a skipped `needs` job fails that gate and the
+  #     explicit `if:` is never evaluated. Every downstream `if:` therefore
+  #     needs a leading `always()` to opt out of the implicit gate, or the
+  #     whole matrix silently degenerates to "push runs do nothing" (every
+  #     push/dispatch run concluded all-jobs-skipped between 2026-09-27 and
+  #     this fix). Community discussion #26945 documents the semantics.
+  #   • pull_request: this job classifies changed paths and each downstream
+  #     job runs only when its output matched:
+  #       rust        → test, test-features, clippy (with the doc build),
+  #                     fast-checks (with the eval dry-run), cross-platform
+  #                     (incl. the advisory musl check), semver-check
+  #       desktop-ui  → desktop-e2e, desktop-visual-audit, desktop-unit
+  #       gateway     → gateway
+  #       website     → website
+  #       ci          → everything below (workflow edits re-run the full gate)
+  #     (the desktop-* and gateway jobs additionally run on rust: desktop/**
+  #     outside desktop/ui and Cargo-level changes rebuild the Tauri shell.
+  #     website runs on website/ci only.)
+  #     Non-matching jobs conclude "skipped", which branch protection accepts
+  #     (see above) — the docs-only/website-only PR fast path.
+  #
+  #     Branch-protection asymmetry (intentional, documented 2026-10-01 when
+  #     the required-context lists were audited): Desktop E2E and Desktop
+  #     Unit Tests are REQUIRED on `main` only. On `dev` they still run on
+  #     every qualifying PR, but a red desktop job does not block a merge —
+  #     the Rust jobs are required on both branches.
+  changes:
+    name: PR path triage
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      desktop-ui: ${{ steps.filter.outputs.desktop_ui }}
+      gateway: ${{ steps.filter.outputs.gateway }}
+      website: ${{ steps.filter.outputs.website }}
+      ci: ${{ steps.filter.outputs.ci }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - name: Classify changed paths
+        id: filter
+        # dorny/paths-filter v3.0.x — pinned per the policy above.
+        uses: dorny/paths-filter@15192bc058cc28a13dbf6cde61f19e18988b7af6
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'desktop/**'
+              - '!desktop/ui/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'deny.toml'
+              - '.cargo/**'
+              - '.config/**'
+              - 'justfile'
+              - 'scripts/**'
+              - 'tests/**'
+              - 'locales/**'
+            desktop_ui:
+              - 'desktop/ui/**'
+            gateway:
+              - 'gateway/**'
+            website:
+              - 'website/**'
+            ci:
+              - '.github/workflows/**'
+  fast-checks:
+    # The five "seconds, not minutes" checks (facade-facts, fmt,
+    # guard-headless, audit, rustsec-audit) used to be five separate jobs.
+    # Merged 2026-10-01 (P4 of the CI speed plan): each paid ~1 min of
+    # checkout/toolchain setup on its own runner (~7 runner-min total and,
+    # the real cost, 5 of the ~20 concurrency slots a full run occupies —
+    # on the free plan ONE CI run already saturates the 20-job limit, so
+    # two concurrent PRs queue). Serial inside one job they total ~3-4 min;
+    # none of them was ever on the critical path (all ran parallel to Test).
+    #
+    # Required-for-merge on `dev` and `main`: the branch protection was
+    # switched from the old job names (Format / Headless purity (ADR-0011) /
+    # Dependency Audit) to `Fast checks` in the same change. RustSec
+    # Advisory Audit rides along REQUIRED here — its old job header claimed
+    # required-for-merge on dev and main, but neither branch's protection
+    # actually listed it (drift found and fixed 2026-10-01; the comment's
+    # intent won over the status quo).
+    #
+    # Round-2 CI plan (R4, 2026-10-01): the Eval Dry-Run Gate merged in as
+    # the last steps (parallel job → gate-neutral), saving its runner setup
+    # + slot. The old job's "standalone for retry isolation" rationale is
+    # partially traded away: a cold-cache stall in the eval compile now
+    # costs this whole job's re-run (~5 min, still the cheapest slot in the
+    # gate) instead of a 4-min solo job. rust-cache was added for the eval
+    # compile — the fast checks themselves are metadata-only and unaffected.
+    name: Fast checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+          components: rustfmt
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Only the eval steps below compile; the metadata checks are
+          # cache-agnostic. Shared workspace-compile cache (ci-v4, rotated
+          # per run) — see the rationale on the Test job.
+          shared-key: ci-v4
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Generated facade facts are fresh
+        run: node scripts/gen-facts.mjs --check
+      - name: No stale/banned phrases in facade surfaces
+        run: bash scripts/check-facade.sh
+      - name: Rust toolchain pin matches rust-toolchain.toml
+        # Single source of truth for the toolchain channel is
+        # rust-toolchain.toml; every workflow repeats the same channel in its
+        # dtolnay/rust-toolchain step (the action at our pinned SHA has no
+        # rust-toolchain-file fallback — the `toolchain` input is required).
+        # That is ~15 hand-maintained copies; this tripwire fails the moment
+        # any of them drifts (e.g. a toolchain bump that missed one file).
+        # Note: the guard only recognises numeric pins (`toolchain: "1.88"`);
+        # never introduce a channel name like `toolchain: stable` — it would
+        # be silently unmonitored here.
+        run: |
+          expected="$(awk -F'"' '/^channel/{print $2; exit}' rust-toolchain.toml)"
+          actual="$(grep -hE '^[[:space:]]*toolchain:[[:space:]]*"?[0-9]+\.' .github/workflows/*.yml \
+            | grep -oE '[0-9]+\.[0-9]+' | sort -u | paste -sd, -)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::toolchain pin drift: workflows pin [$actual], rust-toolchain.toml says [$expected]"
+            exit 1
+          fi
+          echo "toolchain pins consistent: $actual"
+      - name: Release-version lockstep across the six sources
+        # Same script `just dev` runs (see scripts/check-version-lockstep.sh):
+        # root Cargo.toml, desktop/Cargo.toml, desktop/tauri.conf.json,
+        # gateway/package.json, desktop/ui/package.json and
+        # crates/shannon-plugin-api must all carry the workspace version —
+        # five of the six drifted to 0.11.0 during the 0.12.0 cycle (found
+        # 2026-09-28), which release.yml's prep guard only catches at tag
+        # time, after `just release-prep` can no longer self-heal.
+        run: bash scripts/check-version-lockstep.sh
+      - name: Headless purity (ADR-0011)
+        # The headless `shannon` CLI must never link GUI libraries.
+        # Metadata-only check (no compile) — fails the moment shannon-cli
+        # grows a tauri/webkit dependency edge.
+        run: scripts/check-headless-purity.sh
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-deny
+      - name: Check dependencies (cargo-deny)
+        # Required-for-merge gate (inside Fast checks). Tracks `deny.toml`:
+        # license allowlist + curated advisory ignores for transitive crates
+        # whose upstream fix is blocked on Tauri / plist / syntax ecosystem.
+        run: cargo deny check --hide-inclusion-graph
+      - name: Install cargo-audit
+        # Same pinned taiki-e/install-action cargo-deny uses: prebuilt
+        # release binary, download-cached, version-consistent. Replaces an
+        # unpinned `cargo install cargo-audit --locked` that recompiled the
+        # crate from the latest crates.io release on every run.
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-audit
+      - name: Audit dependencies (RustSec)
+        # The ignore list lives in `.cargo/audit.toml` (cargo-audit 0.22+
+        # discovers project config there, NOT at the repo root — moving it
+        # back silently re-enables every suppressed advisory). It mirrors
+        # `deny.toml`'s `[advisories].ignore`; keep the two in sync.
+        # `--deny warnings` escalates unsound/unmaintained informational
+        # advisories to errors; the ignored IDs are each vetted as
+        # non-exploitable + ecosystem-blocked (see audit.toml rationale).
+        run: cargo audit --deny warnings
+      - name: Install just
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: just
+      - name: Install nextest
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-nextest
+      - name: Eval dry-run suite (no API key)
+        # Formerly the standalone Eval Dry-Run Gate job (R4 merge,
+        # 2026-10-01). W1 §7① PR quick gate (design:
+        # docs/plans/2026-08-28-eval-system-design.md): the zero-API-key
+        # dry-run rehearsal of the L1 suite (`just eval`) plus the
+        # eval-harness unit tests. This gates the EVAL ASSETS themselves —
+        # task TOMLs parse/validate, the runner + assertion vocabulary +
+        # rule table don't regress, dry_run stubs stay in sync. Real-model
+        # capability is deliberately NEVER a PR gate (cost, variance,
+        # flakiness).
+        #
+        # `just eval` = cargo run -p shannon-core --example eval_runner
+        # (dry-run stub executor over the full tests/eval/tasks suite;
+        # exits non-zero when any rehearsal fails).
+        run: just eval
+      - name: Eval CLI entry
+        # The user-facing `shannon eval` subcommand (crates/shannon-cli) must
+        # stay in sync with the suite: list parses every task, and a single
+        # dry-run task rehearses the full CLI run path.
+        run: |
+          cargo run -q -p shannon-cli -- eval run --list
+          cargo run -q -p shannon-cli -- eval run --task read_01
+      - name: Eval harness tests
+        run: cargo nextest run -p shannon-core -E 'test(eval)' --profile ci
+  test-shards:
+    # The suite split across two runners (P5 of the CI speed plan,
+    # 2026-10-01): nextest's hash partition cut the ~8.5 min execution
+    # phase to ~4.5 min per shard. Compile dominates the job (~11 min
+    # warm-cache), so the critical path drops from ~20-31 min to ~15-18.
+    # Both shards must be green: the aggregate `test` job below carries
+    # the required "Test" branch-protection context, so protection never
+    # had to change. Hash partitioning is deterministic by test name.
+    name: Test (shard ${{ matrix.shard }}/2)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
+    # review §P3-E2: hang-on-build job would burn 6 hours of runner quota
+    # without a hard cap. 60 min is generous for our 11.7k-test suite.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -43,39 +298,173 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
-          # Bump to invalidate caches that predate the feature-isolated
-          # target dir (a stale cache carried feature-ON shannon-tools test
-          # binaries into the feature-OFF workspace run).
-          prefix-key: ci-v2
+          # One cache entry shared across the workspace-compile family (this
+          # job, test-features, clippy (with the doc build), fast-checks
+          # (with the eval dry-run) — see each job's rust-cache step. rust-cache's
+          # default key is per-JOB, which
+          # fragmented GitHub's 10 GB repo cache budget into ~8 near-duplicate
+          # entries; heavy eviction under that budget was the likely root
+          # cause of the "GHA cold-cache stall" flakes noted on the eval gate.
+          # Bump to ci-v3 to invalidate every pre-split cache (ci-v2's
+          # feature-isolation rationale, see git history).
+          #
+          # 2026-10-03 (ci-v4, REVISED after CI data): shared-key-only ci-v3
+          # froze on one partial 2026-10-02 snapshot (actions/cache skips the
+          # post-save on an exact-key hit), so every job recompiled ~700
+          # crates per run. A per-run `key: github.run_id` was tried first and
+          # MEASURED 4x SLOWER — restore never hits a unique-per-run key, so
+          # every run compiled from cold (Test shards 915-982s vs 231-235s
+          # with the partial hit). Final semantics: shared-key-only ci-v4,
+          # with the frozen partial entries purged once (2026-10-03) so the
+          # first run rebuilds and saves a COMPLETE snapshot that later runs
+          # hit exactly. If it ever goes partial again, purge the ci-v4
+          # entries the same way (actions/caches API, key prefix ci-v4).
+          shared-key: ci-v4
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev patchelf
+            librsvg2-dev libssl-dev libxdo-dev libgbm-dev libdrm-dev libpipewire-0.3-dev patchelf
       - name: Install nextest
         uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:
           tool: cargo-nextest
-      - name: Build
-        run: cargo build --workspace
       - name: Compile tests
+        # `cargo test --no-run` builds everything the old two-step
+        # Build + Compile-tests sequence built (libs, bins, test binaries);
+        # the separate `cargo build --workspace` first only added a second
+        # target-dir scan to the critical path.
         run: cargo test --workspace --no-run
+      - name: Snapshot /tmp leak counters
+        # Baseline for the post-test leak check below: test fixtures once
+        # accumulated ~3k uncleaned /tmp entries, slowing every product-side
+        # temp-dir scan. Any growth across the suite means a producer is
+        # missing its tempfile::TempDir RAII cleanup.
+        run: ./scripts/check-tmp-leaks.sh --snapshot /tmp/tmp-leak-snapshot.txt
       - name: Test
         # `--profile ci` activates the `.config/nextest.toml` [profile.ci]
         # settings: per-test retries (2, exponential backoff) so known
         # load-sensitive tests (e.g. the byte-exact session-log tee mock
         # round-trip) don't fail the whole gate on a runner hiccup.
+        #
+        # `--partition hash:N/2` (P5, 2026-10-01) splits the suite
+        # deterministically by test-name hash; the aggregate `test` job
+        # below gates the merge on both shards.
+        #
+        # On failure the repro lines + output tail are re-emitted as
+        # ::error:: annotations — the only failure detail readable through
+        # the public API without an authenticated log download.
+        #
+        # R6 chat wire-contract smoke (crates/shannon-server/tests/
+        # chat_contract_smoke.rs — fake SSE LLM + the real server, offline,
+        # seconds) deliberately rides THIS workspace run instead of a
+        # dedicated step: no extra compile slot, no double run. GUARD: any
+        # future filter/exclude added to the nextest invocation below must
+        # keep that test target included (or re-home it explicitly).
         run: |
-          # Guard against stale cached binaries with unexpected feature sets.
-          cargo clean -p shannon-tools
-          cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
-      # Feature-gated builds/tests (downscale_dims, click_spec, key combos,
-      # libei backend). Runs AFTER the main gate, in an ISOLATED target dir:
-      # sharing `target/` with feature-OFF steps leaked the enabled feature
-      # into the workspace nextest build (the `computer` stub tests took the
-      # real-execution path on the displayless runner).
+          set -o pipefail
+          # (The old `cargo clean -p shannon-tools` stale-feature guard was
+          # removed 2026-10-03: it recompiled shannon-tools plus the four
+          # crates downstream of it — ~3 min per shard, on the merge
+          # critical path — and its motive is gone since test-features
+          # builds its feature shapes in the isolated target-feature dir
+          # (see that job). If a stale-binary mystery ever appears, suspect
+          # this removal first.)
+          if cargo nextest run --workspace --config-file .config/nextest.toml --profile ci --partition hash:${{ matrix.shard }}/2 2>&1 | tee /tmp/nextest-test.log; then
+            exit 0
+          fi
+          status=$?
+          repros=$(grep -E "TRY 3 FAIL" /tmp/nextest-test.log | cut -c1-160 | sed 's/%/%25/g;s/\r/%0D/g' | tr '\n' '\001' | sed 's/\x01/%0A/g' | cut -c1-3600)
+          echo "::error::nextest repros (TRY 3 FAIL): ${repros:-none captured}"
+          tail=$(tail -25 /tmp/nextest-test.log | cut -c1-160 | sed 's/%/%25/g;s/\r/%0D/g' | tr '\n' '\001' | sed 's/\x01/%0A/g' | cut -c1-3600)
+          echo "::error::nextest output tail: ${tail:-none captured}"
+          exit $status
+      - name: Reject pending snapshots
+        # Formerly the separate Insta job, which re-ran the entire workspace
+        # suite a second time just to reach this check. The suite above
+        # already exercises every insta snapshot test; a `.snap.new` left in
+        # the tree means a snapshot diff was recorded but not accepted (see
+        # docs/plans/insta-workflow.md).
+        run: |
+          if find . -path ./target -prune -o -name '*.snap.new' -print | grep -q .; then
+            echo "Pending insta snapshots detected — review with 'cargo insta review':"
+            find . -path ./target -prune -o -name '*.snap.new' -print
+            exit 1
+          fi
+      - name: Check /tmp test leaks
+        if: always()
+        # Runs even when the suite above fails, so a leaked fixture producer
+        # surfaces alongside the test failure instead of hiding behind it.
+        run: ./scripts/check-tmp-leaks.sh --check /tmp/tmp-leak-snapshot.txt
+
+  test:
+    # Aggregate required check (P5, 2026-10-01). Branch protection requires
+    # the context "Test"; with the suite sharded across two runners, this
+    # no-op job carries that context and fails unless BOTH shards concluded
+    # success — the shards themselves are plain (non-required) checks, so
+    # the protection rule never had to change. On gate-skipped PRs the
+    # shards conclude "skipped" and this job's `if` skips it too, same
+    # semantics the single Test job always had.
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [changes, test-shards]
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate shard results
+        run: |
+          result="${{ needs.test-shards.result }}"
+          if [ "$result" = "success" ]; then
+            echo "both test shards green"
+          else
+            echo "::error::test shards concluded: $result (expected success)"
+            exit 1
+          fi
+
+  # Feature-gated builds/tests (downscale_dims, click_spec, key combos,
+  # libei backend, live browser tools) plus doctests. Split out of the Test
+  # job (2026-09-27 review, P2): they ran SERIALLY after the full suite and
+  # were the tail of the longest critical path in the gate. As a parallel
+  # job they no longer add to Test's wall clock; `needs:` coupling is
+  # deliberately avoided so a flake here can be retried in isolation.
+  test-features:
+    name: Feature Matrix & Doctests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Same shared cache as the Test job (see the comment there).
+          shared-key: ci-v4
+      - name: Install Tauri system deps
+        # The doctests below compile every workspace lib (shannon-desktop
+        # needs the webkit/gtk headers); the feature legs need the xcap
+        # capture-stack headers (gbm/drm/pipewire) and libxdo (enigo).
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev libgbm-dev libdrm-dev libpipewire-0.3-dev patchelf
+      - name: Doctests
+        # nextest does not execute doctests, so a doctest-only regression
+        # (e.g. an example that relies on opt-in configuration) stays green
+        # in the Test job and only fails here. Runs FIRST in this job: it
+        # compiles the workspace into the shared target cache, warming it
+        # for the feature legs below.
+        run: cargo test --workspace --doc
+      # Feature-isolated target dir: sharing `target/` with feature-OFF
+      # steps leaked the enabled feature into the workspace nextest build
+      # (the `computer` stub tests took the real-execution path on the
+      # displayless runner).
       - name: Build with computer-use feature
         run: |
           CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features computer-use
@@ -108,74 +497,13 @@ jobs:
           # most. `--no-sandbox` is set by the session layer.
           CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools \
             --features local-browser --test browser_e2e -- --nocapture
-      - name: Doctests
-        # nextest does not execute doctests, so a doctest-only regression
-        # (e.g. an example that relies on opt-in configuration) stays green
-        # in `Test` and only fails here. Lib targets are already compiled by
-        # the steps above; this only builds the doctest binaries.
-        run: cargo test --workspace --doc
-
-  eval-dry-run:
-    # W1 §7① PR quick gate (design: docs/plans/2026-08-28-eval-system-design.md):
-    # the zero-API-key dry-run rehearsal of the L1 suite (`just eval`) plus
-    # the eval-harness unit tests. This gates the EVAL ASSETS themselves —
-    # task TOMLs parse/validate, the runner + assertion vocabulary + rule
-    # table don't regress, dry_run stubs stay in sync. Real-model capability
-    # is deliberately NEVER a PR gate (cost, variance, flakiness).
-    # Standalone on purpose: no `needs:` coupling and a bounded timeout, so
-    # a GHA cold-cache stall (known runner flake) can be retried in
-    # isolation without re-running the rest of CI.
-    name: Eval Dry-Run Gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
-      - name: Install just
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
-        with:
-          tool: just
-      - name: Install nextest
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
-        with:
-          tool: cargo-nextest
-      - name: Eval dry-run suite (no API key)
-        # `just eval` = cargo run -p shannon-core --example eval_runner
-        # (dry-run stub executor over the full tests/eval/tasks suite;
-        # exits non-zero when any rehearsal fails).
-        run: just eval
-      - name: Eval CLI entry
-        # The user-facing `shannon eval` subcommand (crates/shannon-cli) must
-        # stay in sync with the suite: list parses every task, and a single
-        # dry-run task rehearses the full CLI run path.
-        run: |
-          cargo run -q -p shannon-cli -- eval run --list
-          cargo run -q -p shannon-cli -- eval run --task read_01
-      - name: Eval harness tests
-        run: cargo nextest run -p shannon-core -E 'test(eval)' --profile ci
-
-  vscode:
-    name: VS Code Extension
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
-        with:
-          node-version: "24"
-      - name: Install dependencies
-        run: cd editors/vscode && npm install
-      - name: Compile
-        run: cd editors/vscode && npm run compile
-      - name: Test
-        run: cd editors/vscode && npm test
 
   desktop-e2e:
     name: Desktop E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
@@ -203,6 +531,8 @@ jobs:
   desktop-visual-audit:
     name: Desktop Visual Audit (walkthrough)
     runs-on: ubuntu-latest
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -228,17 +558,31 @@ jobs:
         # material + tokyo-night and fails on any critical/serious axe
         # violation. Serves the production build via `vite preview`
         # (playwright.walkthrough.config.ts) — no dev server needed.
+        # --workers=1: one worker = one deterministic screenshot set and a
+        # single axe-report-worker0.md (the spec writes one report file per
+        # worker process; parallel workers would shard both across files).
         working-directory: desktop/ui
         env:
           WALKTHROUGH: "1"
           VITE_MOCK_MODE: "1"
           CI: "1"
-        run: pnpm exec playwright test -c playwright.walkthrough.config.ts
+        run: pnpm exec playwright test -c playwright.walkthrough.config.ts --workers=1
 
-  desktop-unit:
-    name: Desktop Unit Tests
+  desktop-unit-shards:
+    # UI suite split across two runners (R5 of the round-2 CI plan,
+    # 2026-10-01): vitest's file sharding cut the ~9.5 min suite to ~5 min
+    # per shard. Lint + the static design guards run in shard 1 only —
+    # the aggregate `desktop-unit` job below gates the merge on BOTH
+    # shards, so nothing escapes.
+    name: Desktop Unit Tests (shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
@@ -257,38 +601,86 @@ jobs:
         # the 2026-08-26 audit, R10, R11 and B1; all consistent-type-imports
         # have been migrated to top-level `import type`); raise only with
         # ed sign-off.
+        if: matrix.shard == 1
         working-directory: desktop/ui
         run: pnpm lint
       - name: Overlay whitelist check
         # R2's tripwire against hand-rolled `fixed inset-0` overlays —
         # see desktop/ui/scripts/check-overlays.sh for the whitelist.
+        if: matrix.shard == 1
         working-directory: desktop/ui
         run: bash scripts/check-overlays.sh
+      - name: Design-token guard
+        # UI audit §6.1 acceptance: retired dual-track terms must never
+        # reappear in src, and raw palette classes / hard-coded hex are
+        # blocked in favour of theme tokens. Already invoked by pnpm lint
+        # too — duplicated here so CI logs identify the failure clearly.
+        if: matrix.shard == 1
+        working-directory: desktop/ui
+        run: node scripts/check-design-tokens.mjs
       - name: Theme source drift check
         # src/theme/generated/{themes.css,registry.ts} must match
         # scripts/theme-source.json — blocks hand-edits to generated files.
+        if: matrix.shard == 1
         working-directory: desktop/ui
         run: node scripts/generate-themes.mjs --check
       - name: Theme contrast audit
         # WCAG 2.x AA check over every [data-theme] token block in the
         # generated themes.css (scripts/contrast-audit.mjs) — fails on any
         # pair below 4.5:1 (text) / 3:1 (UI).
+        if: matrix.shard == 1
         working-directory: desktop/ui
         run: node scripts/contrast-audit.mjs
       - name: Run unit tests
         # `pnpm test` is vitest in watch mode; `vitest run` is the one-shot
-        # form. CI=1 keeps workers deterministic. --coverage enforces the
-        # vitest.config.ts thresholds (80/75/60/80; actual 83.28/80.64/
-        # 69.44/83.28 after D1 excluded the demo mock layer) — before D1
-        # these thresholds were checked only by a local `pnpm test:coverage`.
+        # form. CI=1 keeps workers deterministic. `--shard` (R5) splits the
+        # suite deterministically by test-file hash; the aggregate job below
+        # gates the merge on both shards. Coverage moved to the Nightly
+        # Coverage workflow (2026-10-01, P3 of the CI speed plan): V8
+        # instrumentation tripled this job (~13.5 of ~14 min) and UI PRs
+        # paid it on every run. The vitest.config.ts thresholds
+        # (80/75/60/80; actual 83.28/80.64/69.44/83.28) are now enforced by
+        # the desktop-coverage job in coverage.yml — see it for the tradeoff.
         working-directory: desktop/ui
         env:
           CI: "1"
-        run: pnpm exec vitest run --coverage
+        run: pnpm exec vitest run --shard=${{ matrix.shard }}/2
+
+  desktop-unit:
+    # Aggregate required check (R5, 2026-10-01). "Desktop Unit Tests" is a
+    # required context on `main`; this no-op job carries that context and
+    # fails unless BOTH shards concluded success — the shards themselves
+    # are plain checks, so branch protection never had to change. Skips
+    # exactly like the old single job did when the path gate doesn't match.
+    name: Desktop Unit Tests
+    runs-on: ubuntu-latest
+    needs: [changes, desktop-unit-shards]
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate shard results
+        run: |
+          result="${{ needs.desktop-unit-shards.result }}"
+          if [ "$result" = "success" ]; then
+            echo "both desktop unit shards green"
+          else
+            echo "::error::desktop unit shards concluded: $result (expected success)"
+            exit 1
+          fi
 
   clippy:
+    # Round-2 CI plan (R4, 2026-10-01): the Doc Build check merged into this
+    # job — both are compile-family checks that each paid a full runner
+    # setup (~1 min) and a concurrency slot. The job id AND the "Clippy"
+    # required context name are UNCHANGED (no branch-protection switch);
+    # Doc Build was never a required context, it rides along as a named
+    # step. Serial total ~10-11 min — under the Test-shard critical path,
+    # so gate wall time is unchanged.
     name: Clippy
     runs-on: ubuntu-latest
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -296,16 +688,24 @@ jobs:
           toolchain: "1.88"
           components: clippy
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Shared workspace-compile cache (ci-v4, rotated per run) — see the
+          # rationale on the Test job.
+          shared-key: ci-v4
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev patchelf
+            librsvg2-dev libssl-dev libxdo-dev libgbm-dev libdrm-dev libpipewire-0.3-dev patchelf
       - name: Clippy
+        # --all-targets lints lib + bin + test + bench + example targets, so
+        # the test code is held to the same bar as production (including
+        # shannon-core's crate-level `unwrap_used` warn — tests now use
+        # expect()/expect_err() with reasons, hence no unwrap_used allow here).
         run: >
-          cargo clippy --workspace --
+          cargo clippy --workspace --all-targets --
           -D warnings
           -A unknown-lints
           -A clippy::collapsible_if
@@ -313,104 +713,16 @@ jobs:
           -A clippy::derivable_impls
           -A clippy::manual_is_multiple_of
           -A clippy::manual_checked_div
-          -A clippy::unwrap_used
           -A clippy::unnecessary_sort_by
-
-  fmt:
-    name: Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-          components: rustfmt
-      - name: Format check
-        run: cargo fmt --all -- --check
-
-  # ADR-0011 red line 1: the headless `shannon` CLI must never link GUI
-  # libraries. Metadata-only check (no compile) — fails the moment
-  # shannon-cli grows a tauri/webkit dependency edge.
-  guard-headless:
-    name: Headless purity (ADR-0011)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - name: Headless purity check
-        run: scripts/check-headless-purity.sh
-
-  audit:
-    name: Dependency Audit
-    # Required-for-merge gate on `dev` and `main`. Tracks `deny.toml`:
-    # license allowlist + curated advisory ignores for transitive crates
-    # whose upstream fix is blocked on Tauri / plist / syntax ecosystem.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
-        with:
-          tool: cargo-deny
-      - name: Check dependencies
-        run: cargo deny check --hide-inclusion-graph
-
-  rustsec-audit:
-    # Required-for-merge gate on `dev` and `main`. RustSec advisory DB
-    # covers vulnerabilities not in the Open Rust Database that
-    # cargo-deny reads (rustsec.org advisory-db is the broader feed).
-    # `cargo-audit` is pinned in the step rather than installed via
-    # the global toolchain so the binary itself is reproducible.
-    # The --locked flag ensures we install the exact version that
-    # gated the merge — no surprise upgrades mid-run.
-    name: RustSec Advisory Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Audit dependencies
-        # The ignore list lives in `.cargo/audit.toml` (cargo-audit 0.22+
-        # discovers project config there, NOT at the repo root — moving it
-        # back silently re-enables every suppressed advisory). It mirrors
-        # `deny.toml`'s `[advisories].ignore`; keep the two in sync.
-        # `--deny warnings` escalates unsound/unmaintained informational
-        # advisories to errors; the ignored IDs are each vetted as
-        # non-exploitable + ecosystem-blocked (see audit.toml rationale).
-        run: cargo audit --deny warnings
-
-  doc:
-    # Required-for-merge gate. The workspace's intra-doc-link debt (~96
-    # errors across 11 crates) was fixed in the P2-4 CI cleanup; the job
-    # then ran one more cycle with `continue-on-error: true` while the
-    # eval-era doc comments landed, was repaired again (2026-09-04, commit
-    # 95d90224), and the team confirmed the flip. Keep new doc comments
-    # link-clean: broken intra-doc links fail the build here before they
-    # ship to docs.rs.
-    name: Doc Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
-      - name: Install Tauri system deps
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev patchelf
       - name: Build docs
+        # Formerly the standalone `doc` job (required-for-merge gate). The
+        # workspace's intra-doc-link debt (~96 errors across 11 crates) was
+        # fixed in the P2-4 CI cleanup; the check then ran one more cycle
+        # with `continue-on-error: true` while the eval-era doc comments
+        # landed, was repaired again (2026-09-04, commit 95d90224), and the
+        # team confirmed the flip. Keep new doc comments link-clean: broken
+        # intra-doc links fail the build here before they ship to docs.rs.
+        #
         # `--no-deps` skips documenting the entire ecosystem; we only
         # care about our own intra-doc links. `RUSTDOCFLAGS="-D warnings"`
         # upgrades doc warnings to compile-time errors.
@@ -418,52 +730,60 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps
 
-  metrics:
-    name: Generate Metrics
+  # review §P1-E1: ci.yml previously claimed in a header comment that it
+  # typechecked/tested the gateway but had no such job. Without this, a
+  # red `tsc --noEmit` on dev (we observed TS2352 in protocolSchema.test.ts
+  # when we started) could ship to main. Now runs pnpm typecheck + vitest
+  # on every PR touching gateway/.
+  gateway:
+    name: Gateway (TS typecheck + vitest)
     runs-on: ubuntu-latest
-    needs: [test, clippy, audit, rustsec-audit]
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.gateway == 'true' || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
         with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
-      - name: Install Tauri + libdbus system deps
-        if: runner.os == 'Linux'
-        # `cargo test --workspace --no-run` (next step) compiles every
-        # workspace member, including shannon-desktop (Tauri → needs
-        # webkit2gtk/gtk headers) and shannon-mcp-saas (keyring →
-        # libdbus-sys → needs libdbus-1-dev). This step mirrors the
-        # system-deps install in the test/clippy/doc jobs; without it the
-        # metrics job cannot compile and the required check stays red.
-        # The job was previously skipped (its `needs:` were failing), so
-        # this gap only surfaced once RustSec Audit went green.
+          node-version: 24
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+      - name: Install gateway deps
+        working-directory: gateway
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        working-directory: gateway
+        run: pnpm typecheck
+      - name: Test
+        working-directory: gateway
+        run: pnpm test
+
+  # PR gate for the marketing site. Previously website/ was only built AFTER
+  # merging to main (deploy-website.yml), so a broken Astro build shipped
+  # straight to GitHub Pages with zero pre-merge signal. Same frozen install
+  # + build as the deploy workflow; pnpm/SHA pins kept identical to it.
+  website:
+    name: Website Build
+    runs-on: ubuntu-latest
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.website == 'true' || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+      - name: Build (frozen install)
+        working-directory: website
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev patchelf libdbus-1-dev
-      - name: Install nextest
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
-        with:
-          tool: cargo-nextest
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
-        with:
-          tool: cargo-deny
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-      - name: Compile tests (required for nextest list)
-        run: cargo test --workspace --no-run
-      - name: Generate docs/metrics.md
-        run: bash scripts/gen-metrics.sh
-      - name: Upload metrics report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: metrics-report
-          path: docs/metrics.md
-          if-no-files-found: error
+          pnpm install --frozen-lockfile
+          pnpm build
 
   cross-platform:
     # Required-for-merge gate on `dev` and `main` for the three primary
@@ -472,8 +792,19 @@ jobs:
     # before a release build fails on a maintainer's laptop. We
     # only run `cargo check` (not build) per matrix leg — full builds
     # already run in release.yml — so the cost stays bounded.
+    #
+    # Scope note (2026-10-01 CI speed plan, P2): the exotic Linux feature
+    # shapes (computer-use-wayland / -x11rb / -wayland-capture and the
+    # per-crate --all-features universe) moved to the Nightly Platform
+    # Tests workflow — they were ~13 of this leg's ~15.5 min on every Rust
+    # PR while only rotting occasionally. computer-use / -libei /
+    # local-browser stay PR-covered via the test-features job above;
+    # the moved shapes are re-checked daily by the nightly.
     name: Cross-platform Check
     runs-on: ${{ matrix.os }}
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -484,14 +815,28 @@ jobs:
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Shared-key joins the ci-v4 cache family (per-run rotation — see
+          # the rationale on the Test job); rust-cache automatically appends
+          # matrix values to the key, so each OS leg keeps its own entry
+          # (no cross-OS pollution).
+          shared-key: ci-v4
       # shannon-desktop is excluded below, but shannon-mcp-saas still
       # pulls in `keyring` → `dbus-secret-service` → `dbus` →
       # `libdbus-sys`, whose build.rs runs `pkg-config --libs dbus-1`.
       # On Linux that needs the dev headers; macOS/Windows use the
       # native keychain backends and skip dbus entirely.
-      - name: Install libdbus headers (Linux only)
+      - name: Install system headers (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev
+        # libdbus-1-dev is the load-bearing entry: keyring →
+        # dbus-secret-service (shannon-mcp-saas) probes pkg-config for
+        # dbus-1 at build time; macOS/Windows use native keychain backends
+        # and skip dbus entirely. The gbm/drm/wayland/pipewire/egl set was
+        # installed for the computer-use feature shapes that moved to the
+        # nightly (2026-10-01); it is kept because it costs ~15 s and is
+        # cheap insurance against a red dev run from an unprobed
+        # Linux-only system header in some default-feature dep.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev libgbm-dev libdrm-dev libwayland-dev libpipewire-0.3-dev libegl-dev
       - name: Check workspace (all platforms)
         # shannon-desktop requires Tauri/webview system libs that are
         # difficult to install on `windows-latest` and `macos-latest`
@@ -499,6 +844,26 @@ jobs:
         # test of the public Rust API surface. shannon-desktop is
         # built fully in release.yml under each platform's matrix leg.
         run: cargo check --workspace --exclude shannon-desktop
+      - name: Install nextest
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-nextest
+      - name: Prevent-sleep platform smoke (native)
+        # F5 (Settings R3 followups): until now the macOS `caffeinate` and
+        # Windows `PowerRequest` backends only ever proved they
+        # cross-compile — the `cargo check` above says nothing about
+        # whether spawn / PowerCreateRequest actually succeed on the real
+        # platform. Run the prevent_sleep module's tests natively on every
+        # leg: macOS asserts the caffeinate child appears (kill(0) + pgrep
+        # on the full command line) and is killed and reaped on release;
+        # Windows asserts the PowerRequest acquire/release round trip at
+        # "the API accepts our request" level; Linux re-runs the existing
+        # systemd-inhibit injected-binary tests. The tests self-skip when
+        # the platform environment is unavailable (no caffeinate on PATH,
+        # PowerCreateRequest fails), so a runner limitation can never turn
+        # this required gate red. `--profile ci` = the repo's nextest
+        # profile (retries, slow-test timeout) — see .config/nextest.toml.
+        run: cargo nextest run -p shannon-core prevent_sleep --profile ci
       - name: Check landlock feature (Linux only)
         # The optional landlock feature is off by default, so nothing else
         # compiles it — it rotted for months with 12 errors before #71.
@@ -506,45 +871,55 @@ jobs:
         # other matrix legs.
         if: runner.os == 'Linux'
         run: cargo check -p shannon-core --features landlock
-
-  check-linux-musl:
-    # Linux-only musl smoke test. Renamed from `check-cross-platform` so
-    # the new `cross-platform` matrix is the obvious OS-coverage gate
-    # and this job reads as what it actually does: confirm the workspace
-    # still compiles against the statically-linked musl libc target.
-    # `continue-on-error: true` because musl-portable webkit/gtk deps
-    # are blocked upstream — see shannon-desktop exclude below.
-    name: Linux musl Check
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - name: Install targets
-        run: rustup target add x86_64-unknown-linux-musl
-      - name: Install musl cross-compiler
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
-      - name: Install Tauri system deps (musl)
-        if: runner.os == 'Linux'
+      - name: Check computer-use feature (macOS only)
+        # xcap 0.0.13's macOS backend didn't compile on the pinned rustc
+        # 1.88 (E0282) and no leg noticed: the computer-use build gate lives
+        # in the Linux-only feature job, and this matrix's macOS leg checks
+        # default features only. Keep the macOS capture path compiling.
+        if: runner.os == 'macOS'
+        run: cargo check -p shannon-tools --features computer-use
+      - name: Check computer-use + local-browser features (Windows only)
+        # Windows release artifacts ship with these features enabled
+        # (release.yml), yet before 2026-09 no CI leg ever compiled them on
+        # Windows — the enigo Win32 / xcap GDI / chromiumoxide CDP surface
+        # was verified nowhere. Both shapes must keep compiling.
+        if: runner.os == 'Windows'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev patchelf
-      # shannon-desktop depends on Tauri/webkit2gtk-4.1 which is not musl-portable.
-      # shannon-mcp-saas depends on keyring → libdbus-sys, whose C build
-      # cannot cross-compile to musl without a musl-linked libdbus (not
-      # packaged on ubuntu). Cross-compile the remaining workspace as a
-      # smoke test.
-      - name: Check Linux x86_64 musl
+          cargo check -p shannon-tools --features computer-use,local-browser
+          cargo check -p shannon-cli --features computer-use,local-browser
+      - name: Install musl cross-compiler (Linux only, advisory)
+        # Formerly the standalone `check-linux-musl` job (R4 merge,
+        # 2026-10-01: one fewer concurrency slot; the job paid a full
+        # runner setup for a ~2 min check). The rust-cache step above
+        # already ran; musl artifacts land in
+        # target/x86_64-unknown-linux-musl/ — a separate dir, no pollution
+        # of the host check above.
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-musl && sudo apt-get install -y --no-install-recommends musl-tools
+      - name: Check Linux x86_64 musl (advisory)
+        # Confirm the workspace still compiles against the statically-linked
+        # musl libc target. Step-level continue-on-error keeps the REQUIRED
+        # Cross-platform Check green when musl breaks (musl-portable
+        # webkit/gtk deps are blocked upstream) — same advisory semantics
+        # the standalone job had via job-level continue-on-error.
+        # shannon-desktop: Tauri/webkit2gtk-4.1 is not musl-portable.
+        # shannon-mcp-saas: keyring → libdbus-sys needs a musl-linked
+        # libdbus (not packaged on ubuntu).
+        if: runner.os == 'Linux'
+        continue-on-error: true
         run: cargo check --workspace --exclude shannon-desktop --exclude shannon-mcp-saas --target x86_64-unknown-linux-musl
 
   semver-check:
     name: Semver Check
     runs-on: ubuntu-latest
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
+    # 30 min (raised from 20, 2026-10-03): the old cap left only ~40%
+    # headroom over the job's 10-12 min median, and once killed a stalled
+    # job before cargo-semver-checks had run a single step (run
+    # 37057376956 attempt 1 — checkout completed, ~20 min of log silence,
+    # canceled).
+    timeout-minutes: 30
     # Semver is a required gate (flipped from advisory in the v0.8.0 cycle).
     # Previously advisory because breaking changes are routine before 1.0 — they
     # remain allowed as long as the minor version bumps (0.8.x -> 0.9.0);
@@ -557,73 +932,161 @@ jobs:
     #    deps this job does not install, and its public API is not consumed
     #    externally (application crate, not a library).
     env:
-      # Bump this when cutting a new baseline release. It feeds both
-      # `baseline-rev` and the cache `prefix-key`, so a baseline bump always
-      # invalidates the cached baseline rustdoc and never serves a stale one.
-      SEMVER_BASELINE: v0.10.0
+      # Interim fix (2026-09-09): v0.10.0 predates shannon-browser /
+      # shannon-remote, and cargo-semver-checks cannot build a baseline
+      # rustdoc for workspace crates absent from the baseline revision
+      # ("no `package` table" → retrieval failure) — the gate has been
+      # red on dev for this reason. `semver-baseline-2026-09` is a tag on
+      # a dev commit containing every workspace crate; move it forward
+      # (or bump to the next release tag) when new crates land. It feeds
+      # both `baseline-rev` and the cache `prefix-key`, so a baseline bump
+      # always invalidates the cached baseline rustdoc and never serves a
+      # stale one.
+      # Second move (2026-09-09, PR #85): shannon-plugin-api (the
+      # secret-guard contract crate) is a new workspace member absent from
+      # semver-baseline-2026-09 — same "no package table" retrieval
+      # failure class. New TAG NAME (not a re-point) so the prefix-key
+      # cache invalidates.
+      # Third move (2026-09-16, c10cf94d): WP-15 added a `Thinking` variant to
+      # WsServerMessage (shannon-api-protocol) and reshaped query-engine
+      # internals — intentional minor-cycle breaks. New TAG NAME so the
+      # baseline-rustdoc cache invalidates.
+      # Fourth move (2026-09-18, f1e1e2f5): WP-15 T5 added an optional `name`
+      # field to ModelInfo (shannon-api-protocol) — intentional minor-cycle
+      # break (new pub field on an exhaustively-constructible struct). New TAG
+      # NAME so the baseline-rustdoc cache invalidates.
+      # Fifth move (2026-09-18, 758e33be, PR #89): ZCode delta added optional
+      # `running`/`updated_at` to SessionInfo and `meta`/`tokens_used` to
+      # ToolResultPayload (shannon-types) — same intentional minor-cycle
+      # break class. New TAG NAME so the baseline-rustdoc cache invalidates.
+      # Sixth move (2026-09-19, PR #94 B2-1): Teammate 真回复 — added a new
+      # trailing `executor: Option<Arc<dyn AgentExecutor>>` parameter to
+      # `shannon_agents::AgentCoordinator::add_teammate` (3 → 4 args). This
+      # is a method-parameter-count bump on a publicly-visible method on the
+      # public coordinator type — semver-major by definition, but additive
+      # in practice: every external caller can pass `None` and recover the
+      # exact pre-PR behaviour. New TAG NAME so the baseline-rustdoc cache
+      # invalidates.
+      # Seventh move (2026-09-22, harness-arch review waves merged to dev):
+      # cc2bacc4 (P0-7) added `max_turns: Option<u32>` to
+      # `shannon_agents::agent_defs::AgentDefinition` (P0-7 sub-agent
+      # max_turns override) — new pub field on an exhaustively-constructible
+      # struct, intentional minor-cycle break. New TAG NAME so the
+      # baseline-rustdoc cache invalidates.
+      # Eighth move (2026-09-22, PR #97 comprehensive review): review §P1-6
+      # restores ConversationUpdate payload into the engine on WS (additive
+      # public event consumption), §P2-14 adds `apply_conflicts: bool` to
+      # `shannon_tools::file::edit::EditInput` (new pub field on an
+      # exhaustively-constructible struct), §P2-15 adds
+      # `FileSystemProvider::rename_blocking` (new trait method,
+      # additive). All three are intentional minor-cycle breaks pre-1.0.
+      # New TAG NAME so the baseline-rustdoc cache invalidates.
+      # Ninth move (2026-09-22, review wave-2): §P2-2/3 added pub
+      # `query_budget`/`session_locks` to AppState, §P2-4 replaced the
+      # global install_decision_sink with task-local scope_decision_sink,
+      # §P2-1 gave SessionState a private last_access (LRU/TTL), §P3-2
+      # replaced DeliveryCache::get/insert with reserve/complete, and
+      # §P2-13 gave register_subagent_tools a sandbox param. Same
+      # intentional minor-cycle class; new TAG NAME so the baseline-rustdoc
+      # cache invalidates.
+      # Tenth move (2026-09-23, review wave-3): §P3-22 removed the dead
+      # CommandExecutor::execute/execute_string stubs and ExecutorOptions
+      # accessors from shannon-commands (unreachable placeholder API). Same
+      # intentional minor-cycle class; new TAG NAME so the baseline-rustdoc
+      # cache invalidates.
+      # Eleventh move (2026-09-24, structural task 0): removed the never-called
+      # ToolExecutionService/StreamingToolExecutor dead infrastructure
+      # (pub types in shannon-core/shannon-engine). Intentional minor-cycle
+      # break; new TAG NAME so the baseline-rustdoc cache invalidates.
+      # Twelfth move (2026-09-23, PR #107): added a `MissingSourceId`
+      # variant to `shannon_core::inbox_store::InboxStoreError` plus new
+      # pub store/seam APIs for the T5 unified needs-attention sources
+      # (`session_approval`/`session_failed`/`skill_candidate`) and the T7
+      # run-history backfill — intentional minor-cycle breaks. Tag names
+      # -10/-11 were already claimed by parallel branches; -09-12 was
+      # re-pointed at the PR #107 dev-integration merge.
+      # Thirteenth move (2026-09-24, structural task 2 / PR #110):
+      # backpressure made EventTx::send/ProgressSender::send async
+      # (tool-interface trait method return value added) and removed Clone
+      # from PermissionRequest (core auto/derive trait impl changes).
+      # Fourteenth move (2026-09-24, PR #110 integration): -09-12 and
+      # -09-13 each contained only one side of the parallel PR #107 /
+      # PR #110 merges, so the combined baseline is re-established at the
+      # integration merge itself. Intentional minor-cycle breaks.
+      # Fifteenth move (2026-09-25, PR #116 memory/docs/retrieval
+      # hardening): new pub fields on exhaustively-constructible structs
+      # (MemoryEntry::valid_until bi-temporal invalidation,
+      # QueryEngineConfig::working_directory session pinning,
+      # CompactSummary/ConsolidationResult::conflicts_resolved) plus
+      # project-parameter additions to MemoryStore consolidation methods
+      # and the retired shannon-commands builtin /memory dead structs.
+      # Intentional minor-cycle breaks per the memory review; new TAG NAME
+      # so the baseline-rustdoc cache invalidates.
+      # Sixteenth move (2026-09-27, PR #142 honest-accounting followup):
+      # QueryEvent::Completed gained a serde-defaulted `outcome` field
+      # (QueryOutcome) — new pub field on an exhaustively-constructible enum
+      # variant, intentional minor-cycle break. Workspace version bumps
+      # 0.11.0 -> 0.12.0 in the same PR (the break's required major slot).
+      # NOTE: unlike the moves above, the existing tag was RE-POINTED at the
+      # new baseline commit (731a0fb0) while keeping its name — a new tag
+      # name alone does NOT invalidate the baseline-rustdoc cache, because
+      # the cache key is the prefix-key string, not the tag's target.
+      #
+      # BASELINE-MOVE PROCEDURE (do both, every time):
+      #   1. move/re-point SEMVER_BASELINE at the new baseline commit, AND
+      #   2. bump SEMVER_BASELINE_DATE (below) — it is part of the cache
+      #      prefix-key, so this is what actually invalidates the cached
+      #      baseline rustdoc and prevents a stale comparison.
+      SEMVER_BASELINE: semver-baseline-2026-09-17
+      SEMVER_BASELINE_DATE: "2026-09-28"
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
-      - name: Install libdbus headers
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # 2026-10-03 (semver cache): cargo-semver-checks builds its rustdoc
+          # passes into ./semver-checks/target, which nothing cached before —
+          # the action's own prefix-key only caches the BASELINE rustdoc, so
+          # the ~7.5 min current-side dependency compile was re-paid on every
+          # PR. Deliberately its own ci-semver family, NOT the ci-v4
+          # workspace family: this job builds with the action's latest
+          # stable toolchain (rustc >=1.91, see the note below), not the
+          # repo's 1.88 pin.
+          shared-key: ci-semver
+          cache-directories: semver-checks/target
+      - name: Install libdbus + Tauri system deps
         # shannon-mcp-saas → keyring → libdbus-sys needs pkg-config +
         # libdbus-1-dev at build time (also needed for the baseline rustdoc).
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev
+        # Tauri deps (libwebkit2gtk/gtk3/...) are needed because the CURRENT
+        # workspace's rustdoc pass builds shannon-desktop's dependency tree
+        # (glib-sys build script) even when the crate itself is excluded from
+        # comparison — the v0.10.0 baseline had no desktop crate, but the
+        # current one does (Insta job installs the same set for the same
+        # reason).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libgbm-dev libdrm-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev libgbm-dev libdrm-dev libpipewire-0.3-dev patchelf
       - name: Check semver (baseline rustdoc cached)
         uses: obi1kenobi/cargo-semver-checks-action@eac29787462b0f1957d618a21f458305db73b36c
         with:
           baseline-rev: ${{ env.SEMVER_BASELINE }}
-          prefix-key: baseline-${{ env.SEMVER_BASELINE }}
+          # Includes SEMVER_BASELINE_DATE: a tag re-point keeps the name, so
+          # the date bump is the cache invalidation (see the env comment above).
+          prefix-key: baseline-${{ env.SEMVER_BASELINE }}-${{ env.SEMVER_BASELINE_DATE }}
           # No rust-toolchain pin: the action defaults to latest stable, which
           # cargo-semver-checks (>=0.48) requires (rustc >=1.91 for its rustdoc
           # format). The repo-wide 1.88 pin is intentionally not used here.
           feature-group: default-features
-          exclude: shannon-desktop
+          # shannon-browser / shannon-remote are new crates absent from the
+          # v0.10.0 baseline — cargo-semver-checks cannot load a baseline
+          # manifest for them ("no `package` table"); they join the exclude
+          # list until the next baseline tag.
+          # NOTE (2026-09-18): this input is COMMA-separated (space-separated
+          # silently matched nothing, so shannon-desktop was being semver-
+          # checked despite the documented exclusion — it is a Tauri binary
+          # crate whose public API is not consumed externally).
+          exclude: shannon-desktop,shannon-browser,shannon-remote
           verbose: true
-
-  insta:
-    # P2-3 (improvement plan §P2-3): snapshot discipline. Runs the workspace
-    # nextest suite (which exercises every insta snapshot test) and then
-    # fails if any `.snap.new` files are left over. The `.snap.new` files
-    # are what `insta::assert_snapshot!` writes when an assertion fails —
-    # leaving them in the tree means a contributor shipped a snapshot
-    # change without explicitly accepting it. See docs/plans/insta-workflow.md.
-    # Required-for-merge on `dev` and `main`: a snapshot drift blocks the
-    # same way the underlying test would.
-    name: Insta Snapshots
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
-      - name: Install Tauri system deps
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev patchelf
-      - name: Install nextest
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
-        with:
-          tool: cargo-nextest
-      - name: Run workspace tests (exercises snapshot tests)
-        # Arch-invariants tests are guarded by `cargo test` integration
-        # discovery; running nextest covers the same set in addition to
-        # the bin/lib unit tests, so a single invocation is enough.
-        # `--profile ci` mirrors the Test job (retries for load-sensitive
-        # tests; a retried-then-passing snapshot test leaves no .snap.new).
-        run: cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
-      - name: Reject pending snapshots
-        # If any `.snap.new` file exists, the snapshot test recorded a
-        # diff the contributor did not accept. Fail the build so the PR
-        # cannot merge until the snapshot is reviewed and accepted
-        # locally (see docs/plans/insta-workflow.md).
-        run: |
-          if find . -path ./target -prune -o -name '*.snap.new' -print | grep -q .; then
-            echo "Pending insta snapshots detected — review with 'cargo insta review':"
-            find . -path ./target -prune -o -name '*.snap.new' -print
-            exit 1
-          fi

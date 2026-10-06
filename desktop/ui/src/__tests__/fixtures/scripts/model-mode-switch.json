@@ -1,0 +1,105 @@
+{
+  "name": "model-mode-switch",
+  "description": "模型/模式切换 — session override 后缀 → Set as default → Reset 回继承；effort/执行模式/相位档位；strict 审批弹窗（G4）；sends 快照的 model 字段钉死下一 turn 生效",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-model",
+        "title": "Model switch",
+        "messages": [],
+        "modelOverride": {
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001"
+        }
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "第一轮：确认会话当前用的模型",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "本轮请求仍由会话 override 的 ",
+            "claude-haiku-4-5-20251001 服务。"
+          ],
+          "chunkDelayMs": 200
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    },
+    {
+      "user": "第二轮：切换模型后这条才用新模型，并触发一次工具审批",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "本轮请求已切到 ",
+            "gpt-5 服务，需要先写一个文件。"
+          ],
+          "chunkDelayMs": 200
+        },
+        {
+          "event": "permission-request",
+          "payload": {
+            "request_id": "pr-model-1",
+            "tool": "Bash",
+            "risk": "critical",
+            "input": {
+              "command": "rm -rf build"
+            },
+            "reason": {
+              "source": "rule",
+              "ruleName": "destructive-command"
+            }
+          }
+        },
+        {
+          "event": "query:tool-start",
+          "payload": {
+            "tool_use_id": "tool-model-1",
+            "tool_name": "Bash",
+            "tool_input": {
+              "command": "rm -rf build"
+            }
+          }
+        },
+        {
+          "event": "query:tool-result",
+          "payload": {
+            "tool_use_id": "tool-model-1",
+            "result": "Permission denied: user rejected the Bash command",
+            "is_error": true
+          }
+        },
+        {
+          "waitFor": "ui"
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    },
+    {
+      "user": "第三轮：Reset 之后这条回到继承的默认模型",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "本轮请求回到全局默认模型（override 已清空）。"
+          ],
+          "chunkDelayMs": 200
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

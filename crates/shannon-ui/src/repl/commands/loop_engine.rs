@@ -460,6 +460,10 @@ pub(crate) fn detect_platform_sandbox() -> &'static str {
 }
 
 /// Simple check if a command exists in PATH.
+#[allow(dead_code)] // KEEP: public-within-crate helper consumed by the Linux and
+// macOS sandbox detection arms; non-unix `detect_platform_sandbox`
+// never reaches it but the API stays reachable for future
+// shannon-ui consumers.
 pub(crate) fn which_exists(cmd: &str) -> bool {
     std::process::Command::new("which")
         .arg(cmd)
@@ -482,7 +486,7 @@ fn default_keybindings() -> Vec<(&'static str, &'static str)> {
         ("Home/End", "Move to start/end of line"),
         ("Ctrl+U", "Clear input line"),
         ("Ctrl+W", "Delete word backward"),
-        ("Ctrl+A", "Move to start of line"),
+        ("Ctrl+A", "Toggle agents panel"),
         ("Ctrl+E", "Move to end of line"),
         ("Ctrl+K", "Delete to end of line"),
         ("Esc", "Cancel / dismiss dialog"),
@@ -603,8 +607,8 @@ pub(crate) fn handle_project(repl: &mut Repl, args: &str) -> Result<()> {
             let mode = perms
                 .read()
                 .map(|p| p.approval_mode())
-                .unwrap_or(shannon_engine::permissions::ApprovalMode::Suggest);
-            msg.push_str(&format!("\n  Permission mode: {mode:?}"));
+                .unwrap_or(shannon_engine::permissions::ApprovalMode::Ask);
+            msg.push_str(&format!("\n  Permission mode: {mode}"));
         }
 
         if repl.state.plan.active {
@@ -734,20 +738,27 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
                 );
             }
             "permissions" => {
-                let mode = match value {
-                    "auto-edit" => shannon_engine::permissions::ApprovalMode::AutoEdit,
-                    "full-auto" => shannon_engine::permissions::ApprovalMode::FullAuto,
-                    "readonly" => shannon_engine::permissions::ApprovalMode::Readonly,
-                    _ => shannon_engine::permissions::ApprovalMode::Suggest,
+                // P2-2: accept the full token set via from_str_ci; unknown
+                // values report instead of silently degrading to ask.
+                let Some(mode) = shannon_engine::permissions::ApprovalMode::from_str_ci(value)
+                else {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!(
+                            "Unknown permission mode '{value}'. Valid: {}",
+                            shannon_engine::permissions::ApprovalMode::all_names().join(", ")
+                        ),
+                    );
+                    return Ok(());
                 };
                 if let Some(ref engine) = repl.query_engine {
                     if let Ok(mut perms) = engine.permissions().write() {
                         perms.set_approval_mode(mode);
                     }
-                    repl.state.approval_mode_label = mode.short_label().to_string();
+                    repl.state.approval_mode = mode;
                 }
                 repl.chat
-                    .add_message(ChatRole::System, format!("Permission mode set to: {value}"));
+                    .add_message(ChatRole::System, format!("Permission mode set to: {mode}"));
             }
             "notifications" => {
                 repl.notifications_enabled = value == "on" || value == "true" || value == "enabled";
@@ -938,6 +949,7 @@ pub(crate) fn notify_query_complete(
         timestamp: chrono::Utc::now(),
         source: Some("query_complete".to_string()),
         action_id: None,
+        kind: shannon_core::notifier::NotificationKind::Completed,
     };
     // window_ms=0 — each query completion is unique and worth surfacing.
     let _ = notifier.notify_dedup(&notification, 0);
@@ -1145,6 +1157,7 @@ Agent definitions are loaded from:
                         max_concurrent_tasks: 3,
                         plan_mode_required: false,
                         temperature: None,
+                        max_turns: None,
                     };
 
                     Some((toml_def, system_prompt))
@@ -1891,7 +1904,6 @@ fn resolve_job_id(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repl::state::{LoopState, RalphState};
 
     // ---------------------------------------------------------------
     // interval_to_cron
@@ -2364,19 +2376,8 @@ mod p20_recursion {
     use super::*;
     use crate::repl::state::{LoopState, RalphState};
 
-    struct HomeGuard(#[allow(dead_code)] std::path::PathBuf); // KEEP: field owns the tempdir so HOME stays valid for the whole test
-    impl HomeGuard {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().unwrap();
-            unsafe { std::env::set_var("HOME", dir.path()) };
-            Self(dir.path().to_path_buf())
-        }
-    }
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            unsafe { std::env::set_var("HOME", "/") };
-        }
-    }
+    // HOME swap via the shared, lock-serialized guard (see test_env docs).
+    use crate::test_env::HomeGuard;
 
     fn last_message(repl: &Repl) -> String {
         repl.chat

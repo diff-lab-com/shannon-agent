@@ -1,0 +1,18 @@
+# ChatScript: slash-goal-no-session — wave-2 journey #15 的 /goal 无会话分支。
+#
+# seed 空 sessions（sessions: []）→ 应用以未绑定态启动（get_active_session_id
+# → null）→ /goal 表单以 sessionId=null 提交 → mock start_goal_run 铸造专用
+# goal 会话 id（0196goal-…）→ goal-start-success 卡。断言在 spec
+# （chat-script.slash.spec.ts）。
+name: slash-goal-no-session
+description: /goal 无会话 — 空种子下表单提交铸造专用 goal 会话
+seed:
+  config:
+    hasKey: true
+  sessions: []
+turns:
+  - user: "/goal"
+    script:
+      - event: query:text
+        chunks:
+          - "(unused)"

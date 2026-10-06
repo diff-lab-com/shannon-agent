@@ -1,0 +1,70 @@
+{
+  "name": "budget-exceeded",
+  "description": "预算超支 journey — 超支 seed 红横幅（continueTarget=last-message）→ 自动取消 → Continue once 带 budgetBypass",
+  "seed": {
+    "config": {
+      "hasKey": true,
+      "budgetUsd": 5,
+      "spentUsd": 6.4
+    },
+    "sessions": [
+      {
+        "id": "script-sess-budget",
+        "title": "Over budget",
+        "messages": [
+          {
+            "role": "user",
+            "content": "帮我总结这份报告",
+            "attachments": [
+              "/Users/demo/Downloads/report-draft.md"
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "报告要点已整理完毕。"
+          }
+        ]
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "再补充一下数据来源部分",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "先看一下当前花销……",
+            "已经超过预算上限了。",
+            "预算守卫即将中断本轮。"
+          ],
+          "chunkDelayMs": 800
+        },
+        {
+          "event": "budget:exceeded",
+          "payload": {
+            "spentUsd": 6.4
+          }
+        },
+        {
+          "event": "query:cancelled"
+        }
+      ]
+    },
+    {
+      "user": "再补充一下数据来源部分",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "数据来源已补充：引用列表见附录。"
+          ],
+          "chunkDelayMs": 200
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

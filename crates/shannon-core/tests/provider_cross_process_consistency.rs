@@ -50,6 +50,7 @@ fn profile_for(i: usize) -> ProviderProfile {
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers: ProviderTiers::default(),
+        models: Vec::new(),
     }
 }
 

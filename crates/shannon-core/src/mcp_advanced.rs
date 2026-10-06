@@ -773,6 +773,13 @@ pub struct McpServerRegistry {
     servers: HashMap<String, McpServerConfig>,
     /// Content signatures for deduplication (command+args for stdio, url for remote)
     signatures: std::collections::HashSet<String>,
+    /// Config provenance (T11): the file each server was loaded from, when
+    /// it came from a file load (see `load_from_default_paths_with_base`).
+    /// Only the highest-priority file that successfully registered/updated a
+    /// server is recorded; manually registered servers carry no provenance.
+    /// Feeds the approval request's source-path binding
+    /// (`McpServerApprovalRequest::with_source_path`).
+    sources: HashMap<String, std::path::PathBuf>,
 }
 
 impl McpServerRegistry {
@@ -781,7 +788,17 @@ impl McpServerRegistry {
         Self {
             servers: HashMap::new(),
             signatures: std::collections::HashSet::new(),
+            sources: HashMap::new(),
         }
+    }
+
+    /// The config file server `name` was loaded from, if known.
+    ///
+    /// `None` for manually registered servers and for names that were never
+    /// file-loaded. Enablement/identity questions should still be answered
+    /// from `get`/`enabled_servers`; this is provenance metadata.
+    pub fn source_of(&self, name: &str) -> Option<&std::path::Path> {
+        self.sources.get(name).map(std::path::PathBuf::as_path)
     }
 
     /// Register a new MCP server configuration.
@@ -816,6 +833,7 @@ impl McpServerRegistry {
             .remove(name)
             .ok_or_else(|| McpAdvancedError::ServerNotFound(name.to_string()))?;
         self.signatures.remove(&config.content_signature());
+        self.sources.remove(name);
         Ok(config)
     }
 
@@ -890,6 +908,16 @@ impl McpServerRegistry {
 
     /// Load server configurations from a JSON value (e.g., parsed from a config file).
     pub fn load_from_json(&mut self, json: serde_json::Value) -> Result<(), McpAdvancedError> {
+        self.load_from_json_with_source(json, None)
+    }
+
+    /// [`Self::load_from_json`], recording `source` as the config provenance
+    /// (T11) of every server the array successfully registers or updates.
+    fn load_from_json_with_source(
+        &mut self,
+        json: serde_json::Value,
+        source: Option<&std::path::Path>,
+    ) -> Result<(), McpAdvancedError> {
         if let Some(servers) = json.as_array() {
             for server_value in servers {
                 let config: McpServerConfig = serde_json::from_value(server_value.clone())
@@ -898,10 +926,14 @@ impl McpServerRegistry {
                             "Failed to parse server config: {e}"
                         ))
                     })?;
-                if self.servers.contains_key(&config.name) {
-                    self.update(&config.name.clone(), config)?;
+                let name = config.name.clone();
+                if self.servers.contains_key(&name) {
+                    self.update(&name, config)?;
                 } else {
                     self.register(config)?;
+                }
+                if let Some(src) = source {
+                    self.sources.insert(name, src.to_path_buf());
                 }
             }
         }
@@ -914,6 +946,18 @@ impl McpServerRegistry {
     /// transport (default: stdio). If `command` is present, transport is stdio.
     /// If `url` is present with `type: "http"` or `type: "sse"`, that transport is used.
     pub fn load_from_mcp_json_value(&mut self, json: &serde_json::Value) -> usize {
+        self.load_from_mcp_json_value_with_source(json, None)
+    }
+
+    /// [`Self::load_from_mcp_json_value`], recording `source` as the config
+    /// provenance (T11) of every server this file registers or updates.
+    /// Servers the file only *mentions* but fails to parse keep whatever
+    /// provenance their still-registered earlier definition had.
+    fn load_from_mcp_json_value_with_source(
+        &mut self,
+        json: &serde_json::Value,
+        source: Option<&std::path::Path>,
+    ) -> usize {
         let servers_map = match json.get("mcpServers").and_then(|v| v.as_object()) {
             Some(map) => map,
             None => return 0,
@@ -925,12 +969,16 @@ impl McpServerRegistry {
                 Ok(mut config) => {
                     expand_env_vars_in_config(&mut config);
                     let config_name = config.name.clone();
-                    if self.servers.contains_key(&config_name) {
-                        if self.update(&config_name, config).is_ok() {
-                            count += 1;
-                        }
-                    } else if self.register(config).is_ok() {
+                    let registered = if self.servers.contains_key(&config_name) {
+                        self.update(&config_name, config).is_ok()
+                    } else {
+                        self.register(config).is_ok()
+                    };
+                    if registered {
                         count += 1;
+                        if let Some(src) = source {
+                            self.sources.insert(config_name, src.to_path_buf());
+                        }
                     }
                 }
                 Err(e) => {
@@ -1062,10 +1110,10 @@ impl McpServerRegistry {
             if let Some(json) = try_load_file(&legacy_global) {
                 let before = self.count();
                 if json.is_array() {
-                    let _ = self.load_from_json(json);
+                    let _ = self.load_from_json_with_source(json, Some(legacy_global.as_path()));
                 } else {
                     // Also try mcpServers key for backward compat
-                    self.load_from_mcp_json_value(&json);
+                    self.load_from_mcp_json_value_with_source(&json, Some(&legacy_global));
                 }
                 let loaded = self.count().saturating_sub(before);
                 if loaded > 0 {
@@ -1099,10 +1147,11 @@ impl McpServerRegistry {
             if let Some(json) = try_load_file(path) {
                 let before = self.count();
                 // Try mcpServers key first (Claude Code format)
-                let loaded_mcp = self.load_from_mcp_json_value(&json);
+                let loaded_mcp =
+                    self.load_from_mcp_json_value_with_source(&json, Some(path.as_path()));
                 // If no mcpServers, try flat array (Shannon legacy)
                 if loaded_mcp == 0 && json.is_array() {
-                    let _ = self.load_from_json(json);
+                    let _ = self.load_from_json_with_source(json, Some(path.as_path()));
                 }
                 let loaded = self.count().saturating_sub(before);
                 if loaded > 0 {
@@ -1807,6 +1856,70 @@ mod tests {
         let loaded = registry.load_from_default_paths_with_base(dir.path().to_path_buf());
         assert_eq!(loaded, 1);
         assert!(registry.contains("local-server"));
+    }
+
+    /// T11: every file-loaded server records the config file it came from
+    /// (highest-priority file wins), so approval requests can bind to the
+    /// source, not just the command.
+    #[test]
+    fn test_load_records_source_provenance() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().to_path_buf();
+
+        // Lower priority: .claude/settings.json defines "srv" (node).
+        std::fs::create_dir_all(base.join(".claude")).unwrap();
+        std::fs::write(
+            base.join(".claude").join("settings.json"),
+            r#"{"mcpServers": {"srv": {"command": "node", "args": ["a.js"]}}}"#,
+        )
+        .unwrap();
+        // Higher priority: .mcp.json overrides "srv" (deno)…
+        std::fs::write(
+            base.join(".mcp.json"),
+            r#"{"mcpServers": {"srv": {"command": "deno", "args": ["b.js"]}}}"#,
+        )
+        .unwrap();
+        // …and a Shannon project-local flat-array file adds "legacy-srv".
+        std::fs::create_dir_all(base.join(".shannon")).unwrap();
+        std::fs::write(
+            base.join(".shannon").join("mcp_servers.json"),
+            r#"[{"name": "legacy-srv", "command": "python", "args": ["-m", "srv"]}]"#,
+        )
+        .unwrap();
+
+        let mut registry = McpServerRegistry::new();
+        registry.load_from_default_paths_with_base(base.clone());
+
+        // The winning definition and its provenance both come from the
+        // highest-priority file that registered it.
+        assert_eq!(
+            registry.get("srv").unwrap().command.as_deref(),
+            Some("deno")
+        );
+        assert_eq!(
+            registry.source_of("srv"),
+            Some(base.join(".mcp.json").as_path())
+        );
+        // The legacy flat-array format records provenance too.
+        assert_eq!(
+            registry.source_of("legacy-srv"),
+            Some(base.join(".shannon").join("mcp_servers.json").as_path())
+        );
+
+        // Unregistering a server drops its provenance with it.
+        registry.unregister("srv").unwrap();
+        assert_eq!(registry.source_of("srv"), None);
+    }
+
+    /// T11: manually registered servers carry no provenance.
+    #[test]
+    fn test_source_of_manual_and_unknown_servers() {
+        let mut registry = McpServerRegistry::new();
+        registry
+            .register(McpServerConfig::new_stdio("manual", "node"))
+            .unwrap();
+        assert_eq!(registry.source_of("manual"), None);
+        assert_eq!(registry.source_of("missing"), None);
     }
 
     #[test]

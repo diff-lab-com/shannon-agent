@@ -163,6 +163,38 @@ describe('AppContext', () => {
     spy.mockRestore()
   })
 
+  // A-11 fix: two identical texts in flight at once (double-Enter before
+  // isQuerying flips, drain vs manual send) — the first send's FAILURE must
+  // roll back only its own optimistic bubble. The old role+content matcher
+  // deleted the LAST same-text message, i.e. the second send's bubble,
+  // while the failed one stayed on screen.
+  it('rolls back only the failed send when two identical sends race (A-11)', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    const sendSpy = vi.spyOn(api, 'sendMessage')
+      .mockRejectedValueOnce(new Error('another query is already running for this session'))
+      .mockResolvedValueOnce({ query_id: 'q2' })
+    let first!: Promise<boolean>
+    let second!: Promise<boolean>
+    await act(async () => {
+      // Fired without awaiting either: both optimistic bubbles exist before
+      // either send settles.
+      first = result.current.sendMessage('Hello')
+      second = result.current.sendMessage('Hello', ['/tmp/a.txt'])
+    })
+    await act(async () => { await Promise.all([first, second]) })
+
+    const hellos = result.current.messages.filter(m => m.role === 'user' && m.content === 'Hello')
+    expect(hellos).toHaveLength(1)
+    // The survivor is the SECOND send's bubble (the one that succeeded) —
+    // its attachment paths ride along; content matching would have kept the
+    // attachmentless failed one instead.
+    expect(hellos[0]!.file_attachments).toEqual([
+      { name: 'a.txt', path: '/tmp/a.txt', size: 0 },
+    ])
+    sendSpy.mockRestore()
+  })
+
   it('cancelQuery calls api', async () => {
     const spy = vi.spyOn(api, 'cancelQuery').mockResolvedValue(undefined)
     const { result } = renderHook(() => useApp(), { wrapper })
@@ -188,4 +220,139 @@ describe('AppContext', () => {
     expect(result.current.messages).toEqual([])
     spy.mockRestore()
   })
+
+  // ── R4 group 3 — session binding ────────────────────────────────────────
+
+  // A-5 fix: the error banner is a visible-session readout, but nothing
+  // cleared it when the user moved to another session — the previous
+  // session's failure banner (auth included) followed them there.
+  it('clears the chat error when the user switches to another session (A-5)', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    // A rejected send leaves its error on screen…
+    const sendSpy = vi.spyOn(api, 'sendMessage').mockRejectedValue(new Error('401 Unauthorized'))
+    await act(async () => {
+      await result.current.sendMessage('Hello')
+    })
+    expect(result.current.error).toBe('Error: 401 Unauthorized')
+    sendSpy.mockRestore()
+
+    // …and switching sessions must not carry it over.
+    const switchSpy = vi.spyOn(api, 'switchSession').mockResolvedValue([])
+    await act(async () => {
+      await result.current.switchSession('11111111-2222-4333-8444-555555555555')
+    })
+    expect(result.current.error).toBeNull()
+    // Kept in lockstep with `error` by the single writer.
+    expect(result.current.errorKind).toBeNull()
+    switchSpy.mockRestore()
+  })
+
+  // A-5 semantics pin: a SAME-session reload (Chat remount re-running the
+  // switch against the current id) belongs to the session still on screen —
+  // its error banner must survive the reload.
+  it('keeps the error banner on a same-session reload (A-5)', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    const switchSpy = vi.spyOn(api, 'switchSession').mockResolvedValue([])
+    await act(async () => {
+      await result.current.switchSession('11111111-2222-4333-8444-555555555555')
+    })
+    const sendSpy = vi.spyOn(api, 'sendMessage').mockRejectedValue(new Error('boom'))
+    await act(async () => {
+      await result.current.sendMessage('Hello')
+    })
+    expect(result.current.error).toBe('Error: boom')
+
+    await act(async () => {
+      await result.current.switchSession('11111111-2222-4333-8444-555555555555')
+    })
+    expect(result.current.error).toBe('Error: boom')
+    switchSpy.mockRestore()
+    sendSpy.mockRestore()
+  })
+
+  // A-6 fix: the cold-start conversation comes from the backend's ACTIVE
+  // session, but `currentSessionId` stayed null — RunStatusLine had no
+  // session to time against and every currentSessionId-gated action stayed
+  // half-bound until the first manual switch.
+  it('binds currentSessionId to the active session on cold start (A-6)', async () => {
+    const convSpy = vi.spyOn(api, 'getConversation').mockResolvedValue([
+      { role: 'user', content: 'recorded history', timestamp: 1 },
+    ])
+    const activeSpy = vi.spyOn(api, 'getActiveSessionId').mockResolvedValue('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
+    const { result } = renderHook(() => useApp(), { wrapper })
+
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    expect(result.current.messages).toEqual([
+      { role: 'user', content: 'recorded history', timestamp: 1 },
+    ])
+    expect(result.current.currentSessionId).toBe('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
+
+    // The bound id is the composer's explicit routing target from the very
+    // first send (P1-1's explicit-session path, no null fallback).
+    const sendSpy = vi.spyOn(api, 'sendMessage').mockResolvedValue({ query_id: 'q1' })
+    await act(async () => {
+      await result.current.sendMessage('Hello')
+    })
+    expect(sendSpy).toHaveBeenCalledWith('Hello', undefined, undefined, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
+    sendSpy.mockRestore()
+    convSpy.mockRestore()
+    activeSpy.mockRestore()
+  })
+
+  // A-6 guard: when the backend reports no active session (the mock's demo
+  // world), the cold start stays unbound — no fabricated id.
+  it('leaves currentSessionId null when the backend has no active session (A-6)', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.currentSessionId).toBeNull()
+  })
+
+  // P2-8: a failed worktree bind must not strand the `new_session` the call
+  // already made — the backend session is deleted best-effort (a failed
+  // delete never masks the original worktree error), and the frontend
+  // pointer rolls back as before.
+  describe('createSessionInWorktree orphan rollback (P2-8)', () => {
+    const ORPHAN_ID = 'c0c0c0c0-0000-4000-8000-00000000c0c0'
+
+    async function renderAndCreate() {
+      const { result } = renderHook(() => useApp(), { wrapper })
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      await act(async () => { await result.current.createSessionInWorktree() })
+      return result
+    }
+
+    beforeEach(() => {
+      vi.mocked(api.newSession).mockResolvedValue(ORPHAN_ID)
+      vi.mocked(api.createSessionWorktree).mockRejectedValue(new Error('git worktree add failed'))
+    })
+
+    it('deletes the backend session when worktree creation fails', async () => {
+      const deleteSpy = vi.spyOn(api, 'deleteSession').mockResolvedValue(true)
+      const result = await renderAndCreate()
+      expect(deleteSpy).toHaveBeenCalledWith(ORPHAN_ID)
+      // The original worktree error is what surfaces — not the rollback.
+      expect(result.current.error).toContain('git worktree add failed')
+      // ...and the composer pointer rolled back (unchanged behavior).
+      expect(result.current.currentSessionId).toBeNull()
+      deleteSpy.mockRestore()
+    })
+
+    it('a failing rollback delete is logged, never masks the worktree error', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const deleteSpy = vi.spyOn(api, 'deleteSession').mockRejectedValue(new Error('delete failed too'))
+      const result = await renderAndCreate()
+      expect(deleteSpy).toHaveBeenCalledWith(ORPHAN_ID)
+      expect(result.current.error).toContain('git worktree add failed')
+      expect(result.current.error).not.toContain('delete failed too')
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('orphan session'), expect.any(Error))
+      warnSpy.mockRestore()
+      deleteSpy.mockRestore()
+    })
+  })
+
 })

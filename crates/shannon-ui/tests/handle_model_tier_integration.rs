@@ -101,7 +101,7 @@ fn full_flow_haiku_alias_resolves_to_anthropic_fast() {
         "haiku alias should resolve to claude-haiku-4-5 for anthropic"
     );
     let resolved = resolved.unwrap();
-    assert!(resolved.contains("haiku"), "got: {}", resolved);
+    assert!(resolved.contains("haiku"), "got: {resolved}");
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn full_flow_flash_alias_resolves_to_gemini_fast() {
         "flash alias should resolve to a Gemini fast model"
     );
     let id = resolved.unwrap();
-    assert!(id.contains("flash"), "got: {}", id);
+    assert!(id.contains("flash"), "got: {id}");
 }
 
 #[test]

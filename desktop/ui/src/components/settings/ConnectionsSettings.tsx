@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 
 import { useTauriEvent } from '@/hooks/useTauriEvent'
+// G7 i18n: `useT()` (not the inline `t = (id) => intl.formatMessage(...)`
+// shorthand) so the two mount effects below can list `t` in their deps
+// without re-firing every render — the useT callback is stable per locale.
+import { useT } from '@/i18n'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import type { GatewayConfig, GatewayProcessState } from '@/types'
@@ -9,12 +13,14 @@ import type { GatewayConfig, GatewayProcessState } from '@/types'
 import { EngineConnectionCard } from './connections-settings/EngineConnectionCard'
 import { GatewayProcessCard } from './connections-settings/GatewayProcessCard'
 import { MobileDispatchCard } from './connections-settings/MobileDispatchCard'
+import { PairingRequestsCard } from './connections-settings/PairingRequestsCard'
 import { PlatformsCard } from './connections-settings/PlatformsCard'
 import { ALL_SLOTS, type Platform } from './connections-settings/types'
 
 export default function ConnectionsSettings() {
-  const intl = useIntl()
-  const t = (id: string): string => intl.formatMessage({ id })
+  const t = useT()
+  // X3 互链 — gateway page points to Data Sources for external-data queries.
+  const navigate = useNavigate()
 
   const [config, setConfig] = useState<GatewayConfig | null>(null)
   const [hasSecret, setHasSecret] = useState<Record<string, boolean>>({})
@@ -30,8 +36,8 @@ export default function ConnectionsSettings() {
     api
       .gatewaySupervisorStatus()
       .then(setProcState)
-      .catch((e) => toastError('gateway supervisor: status failed', e))
-  }, [])
+      .catch((e) => toastError(t('settings.connections.process.statusFailed'), e))
+  }, [t])
 
   // When the supervisor reports the child exited (crash, clean exit, or our own
   // stop), re-poll the status so the badge reflects the new state.
@@ -43,8 +49,8 @@ export default function ConnectionsSettings() {
     api
       .gatewayReadConfig()
       .then((cfg) => setConfig(cfg))
-      .catch((e) => toastError('gateway config: load failed', e))
-  }, [])
+      .catch((e) => toastError(t('settings.connections.configLoadFailed'), e))
+  }, [t])
 
   // Seed the engine inputs once the config is in.
   useEffect(() => {
@@ -83,12 +89,40 @@ export default function ConnectionsSettings() {
 
   return (
     <div className="space-y-lg">
-      <header className="space-y-1">
-        <h1 className="font-display-md text-on-surface">{t('settings.connections.title')}</h1>
-        <p className="text-on-surface-variant font-body-sm max-w-prose">
-          {t('settings.connections.subtitle')}
-        </p>
-      </header>
+      <p className="text-on-surface-variant font-body-sm max-w-prose">
+        {t('settings.connections.subtitle')}
+      </p>
+
+      {/* X3 互链: gateway = model/platform access channel, data sources =
+          external data connections. One line each way so users stop bouncing
+          between the two pages looking for "where do I connect X". */}
+      <p className="text-on-surface-variant/80 font-body-sm max-w-prose flex flex-wrap items-center gap-xs">
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+          swap_horiz
+        </span>
+        {t('settings.connections.crossLink.text')}{' '}
+        <button
+          type="button"
+          onClick={() => navigate('/extensions/datasources')}
+          data-testid="gateway-to-datasources-link"
+          className="text-primary hover:underline cursor-pointer inline-flex items-center gap-0.5"
+        >
+          {t('settings.connections.crossLink.link')}
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+            arrow_forward
+          </span>
+        </button>
+      </p>
+
+      {/* J4-5: the gateway delivers inbound IM traffic into the sidebar
+          session list — say so, or users configure a platform and then hunt
+          for a separate inbox page that does not exist. */}
+      <p className="text-on-surface-variant/80 font-body-sm max-w-prose flex flex-wrap items-center gap-xs">
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+          forum
+        </span>
+        {t('settings.connections.imSessionsNote')}
+      </p>
 
       <EngineConnectionCard
         config={config}
@@ -99,7 +133,7 @@ export default function ConnectionsSettings() {
 
       <GatewayProcessCard procState={procState} onProcStateChange={setProcState} />
 
-      <MobileDispatchCard config={config} procState={procState} />
+      <MobileDispatchCard config={config} procState={procState} onConfigChange={setConfig} />
 
       <PlatformsCard
         config={config}
@@ -120,6 +154,9 @@ export default function ConnectionsSettings() {
         onHasSecretChange={setHasSecret}
         onProcStateChange={setProcState}
       />
+
+      {/* T9 — desktop approval entry for IM pairing requests (review F42). */}
+      <PairingRequestsCard config={config} procState={procState} />
     </div>
   )
 }

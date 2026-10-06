@@ -188,8 +188,10 @@ describe('Plugins (marketplace browser)', () => {
     fireEvent.click(screen.getByText('Install'))
 
     // The dialog shows the repo; click its Install button (the last one in the DOM).
-    await waitFor(() => expect(screen.getByText('test/skill')).toBeInTheDocument())
-    fireEvent.click(screen.getAllByText('Install').at(-1)!)
+    // X2: the trust card repeats the repo, so the dialog has two matches.
+    await waitFor(() => expect(screen.getAllByText('test/skill').length).toBeGreaterThan(0))
+    // X2: the dialog's confirm button now carries authorization wording.
+    fireEvent.click(screen.getAllByText('Install & authorize').at(-1)!)
 
     await waitFor(() => {
       expect(api.installSkillFromRepo).toHaveBeenCalledWith('Test Skill', 'test/skill', 'main')
@@ -218,8 +220,10 @@ describe('Plugins (marketplace browser)', () => {
 
     // Open the dialog, then click through to install.
     fireEvent.click(screen.getByText('Install'))
-    await waitFor(() => expect(screen.getByText('test/skill')).toBeInTheDocument())
-    fireEvent.click(screen.getAllByText('Install').at(-1)!)
+    // X2: the trust card repeats the repo, so the dialog has two matches.
+    await waitFor(() => expect(screen.getAllByText('test/skill').length).toBeGreaterThan(0))
+    // X2: the dialog's confirm button now carries authorization wording.
+    fireEvent.click(screen.getAllByText('Install & authorize').at(-1)!)
 
     await waitFor(() => {
       expect(eventSpy).toHaveBeenCalledTimes(1)

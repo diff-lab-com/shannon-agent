@@ -86,7 +86,19 @@ impl TeamContext {
                 "Agent teams disabled. Set {TEAMS_ENV_VAR}=1 to enable."
             )));
         }
+        Self::new_unchecked(client_config).await
+    }
 
+    /// Create a TeamContext without the `SHANNON_AGENT_TEAMS` env gate.
+    ///
+    /// For embedders that gate agent teams through their own persisted
+    /// settings instead of a process env var — the desktop shell toggles
+    /// teams from its Settings UI, and a GUI process must not mutate its
+    /// own environment after threads have spawned. TUI/CLI entry points
+    /// keep using [`Self::new`], which enforces the gate.
+    pub async fn new_unchecked(
+        client_config: LlmClientConfig,
+    ) -> Result<Self, crate::error::AgentError> {
         let coordinator_config = CoordinatorConfig::default();
         let mut coordinator = Arc::new(AgentCoordinator::new(coordinator_config).await?);
 
@@ -165,7 +177,17 @@ impl TeamContext {
     }
 
     /// Set the shared executor for Teammate LLM calls.
+    ///
+    /// Stores the executor on this `TeamContext` AND forwards it to the
+    /// `SubAgentRegistry` so every subsequent `SubAgentRegistry::spawn`
+    /// plumbs it through `coordinator.add_teammate(..., Some(executor))`
+    /// and the spawned teammate gets a real LLM-backed
+    /// `handle_chat_message` (no more placeholder replies for chat-typed
+    /// messages). The registry was built without an executor because it
+    /// exists before this setter is called; this is the seam that closes
+    /// that gap.
     pub fn with_executor(mut self, executor: Arc<dyn AgentExecutor>) -> Self {
+        self.registry.set_executor(executor.clone());
         self.executor = Some(executor);
         self
     }

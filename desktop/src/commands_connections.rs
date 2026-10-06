@@ -85,6 +85,18 @@ pub struct GatewayMobileConfig {
     pub tokens_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub devices_file: Option<String>,
+    /// v0.12 LAN hardening (mirrors `mobile.tls` in
+    /// `shannon-gateway/src/config/types.ts`): serve the mobile face over
+    /// wss with the persisted self-signed cert; phones pin the QR-carried
+    /// fingerprint. None/absent = plaintext ws (legacy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<GatewayMobileTlsConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayMobileTlsConfig {
+    pub enabled: bool,
 }
 
 /// Split `"<service>/<account>"` into its parts. With no `/`, the whole key
@@ -168,8 +180,28 @@ pub async fn gateway_delete_secret(key: String) -> Result<(), String> {
     }
 }
 
+/// WP-15 P1-5: legacy desktop builds wrote `mobile.host = "127.0.0.1"` into
+/// the gateway config, which phones can never reach — LAN direct-connect (and
+/// iOS preflight) needs the wildcard bind of §A8b. Migrate exactly that
+/// machine-written value to `0.0.0.0` and report whether anything changed.
+/// Deliberately narrow: a human-set `localhost` / `::1` looks deliberate and
+/// is left alone (shrinking the bind would be a security-posture change we
+/// must not make silently in the other direction).
+fn normalize_legacy_mobile_host(config: &mut GatewayConfig) -> bool {
+    if let Some(mobile) = config.mobile.as_mut() {
+        if mobile.host.as_deref() == Some("127.0.0.1") {
+            mobile.host = Some("0.0.0.0".into());
+            return true;
+        }
+    }
+    false
+}
+
 /// Read the gateway config. Returns a loopback default if no file exists yet
-/// (first-run); errors only on a present-but-unparseable file.
+/// (first-run); errors only on a present-but-unparseable file. A surviving
+/// legacy `mobile.host = "127.0.0.1"` (WP-15 P1-5) is migrated to `0.0.0.0`
+/// and persisted, because the gateway process reads this same file to pick
+/// its mobile bind — an in-memory-only fix would never reach it.
 #[tauri::command]
 pub async fn gateway_read_config() -> Result<GatewayConfig, String> {
     let path = gateway_config_path()?;
@@ -178,15 +210,18 @@ pub async fn gateway_read_config() -> Result<GatewayConfig, String> {
     }
     let raw = fs::read_to_string(&path)
         .map_err(|e| format!("gateway config: cannot read {path:?}: {e}"))?;
-    let cfg: GatewayConfig = serde_json::from_str(&raw)
+    let mut cfg: GatewayConfig = serde_json::from_str(&raw)
         .map_err(|e| format!("gateway config: invalid JSON in {path:?}: {e}"))?;
+    if normalize_legacy_mobile_host(&mut cfg) {
+        write_gateway_config_atomic(&cfg)?;
+    }
     Ok(cfg)
 }
 
 /// Validate + persist the gateway config. Writes atomically (temp file +
 /// rename) so a crash mid-write can't leave a half-written config. Returns
 /// the canonicalized config that was written.
-fn write_gateway_config_atomic(config: &GatewayConfig) -> Result<(), String> {
+pub(crate) fn write_gateway_config_atomic(config: &GatewayConfig) -> Result<(), String> {
     let path = gateway_config_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -396,6 +431,21 @@ pub async fn bootstrap_gateway_supervisor(
     tracing::info!("gateway supervisor auto-started: {status:?}");
 }
 
+/// Kill + reap the supervised gateway during app teardown (tray Quit, main
+/// window destroyed). `GatewaySupervisor::Drop` intentionally does nothing,
+/// so an exit path that skips `stop().await` used to leave a managed
+/// `shannon-gateway` running as an orphan — still holding the port and any
+/// IM-channel connections. Safe to call from sync contexts on the main
+/// thread; bounded by `stop()`'s internal 3s wait.
+pub fn shutdown_gateway_on_exit(state: &tauri::State<'_, AppState>) {
+    tauri::async_runtime::block_on(async move {
+        let mut guard = state.gateway_supervisor.lock().await;
+        if let Some(supervisor) = guard.as_mut() {
+            supervisor.stop().await;
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,5 +518,40 @@ mod tests {
         assert!(c.engine.ws_url.starts_with("ws://127.0.0.1"));
         assert!(c.engine.http_base_url.starts_with("http://127.0.0.1"));
         assert!(c.adapters.is_empty());
+    }
+
+    #[test]
+    fn legacy_loopback_mobile_host_migrates_to_wildcard() {
+        // WP-15 P1-5: the machine-written "127.0.0.1" from legacy desktop
+        // builds is migrated to the §A8b wildcard.
+        let mut cfg = default_gateway_config();
+        cfg.mobile.as_mut().unwrap().host = Some("127.0.0.1".into());
+        assert!(normalize_legacy_mobile_host(&mut cfg));
+        assert_eq!(
+            cfg.mobile.as_mut().unwrap().host.as_deref(),
+            Some("0.0.0.0")
+        );
+
+        // Already-wildcard: untouched, no migration reported.
+        let mut cfg = default_gateway_config();
+        assert!(!normalize_legacy_mobile_host(&mut cfg));
+        assert_eq!(
+            cfg.mobile.as_mut().unwrap().host.as_deref(),
+            Some("0.0.0.0")
+        );
+
+        // A human-looking choice (`localhost`) is left alone.
+        let mut cfg = default_gateway_config();
+        cfg.mobile.as_mut().unwrap().host = Some("localhost".into());
+        assert!(!normalize_legacy_mobile_host(&mut cfg));
+        assert_eq!(
+            cfg.mobile.as_mut().unwrap().host.as_deref(),
+            Some("localhost")
+        );
+
+        // No mobile block at all: no-op.
+        let mut cfg = default_gateway_config();
+        cfg.mobile = None;
+        assert!(!normalize_legacy_mobile_host(&mut cfg));
     }
 }

@@ -26,7 +26,7 @@ export function HeaderRowsEditor({ rows, onChange }: HeaderRowsEditorProps) {
         {rows.map((row, i) => (
           <div key={i} className="flex items-center gap-xs" data-testid="extra-headers-row">
             <Input
-              className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-xs font-mono"
+              className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded-sm font-body-xs font-mono"
               value={row.key}
               placeholder={t('settings.models.providers.extraHeadersKey')}
               onChange={(e) => {
@@ -36,7 +36,7 @@ export function HeaderRowsEditor({ rows, onChange }: HeaderRowsEditorProps) {
               }}
             />
             <Input
-              className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-xs font-mono"
+              className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded-sm font-body-xs font-mono"
               value={row.value}
               placeholder={t('settings.models.providers.extraHeadersValue')}
               onChange={(e) => {
@@ -52,7 +52,7 @@ export function HeaderRowsEditor({ rows, onChange }: HeaderRowsEditorProps) {
               onClick={() => onChange(rows.filter((_, j) => j !== i))}
               aria-label={t('settings.models.providers.extraHeadersRemove')}
             >
-              <span className="material-symbols-outlined text-[16px]">close</span>
+              <span className="material-symbols-outlined icon-sm">close</span>
             </Button>
           </div>
         ))}
@@ -64,7 +64,7 @@ export function HeaderRowsEditor({ rows, onChange }: HeaderRowsEditorProps) {
         onClick={() => onChange([...rows, { key: '', value: '' }])}
         data-testid="extra-headers-add"
       >
-        <span className="material-symbols-outlined text-[16px] mr-xs">add</span>
+        <span className="material-symbols-outlined icon-sm mr-xs">add</span>
         {t('settings.models.providers.extraHeadersAdd')}
       </Button>
     </div>

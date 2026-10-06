@@ -40,14 +40,15 @@ fn computer_tool_schema_has_all_actions() {
 
 #[tokio::test]
 async fn computer_tool_screenshot_without_feature() {
-    let tool = ComputerUseTool::new();
-    let result = tool
-        .execute(serde_json::json!({"action": "screenshot"}))
-        .await
-        .unwrap();
-
+    // Only meaningful without the feature: with `computer-use` on, executing
+    // would drive a real screen capture, which is not this test's business.
     #[cfg(not(feature = "computer-use"))]
     {
+        let tool = ComputerUseTool::new();
+        let result = tool
+            .execute(serde_json::json!({"action": "screenshot"}))
+            .await
+            .unwrap();
         assert!(result.is_error);
         assert!(result.content.contains("computer-use"));
     }

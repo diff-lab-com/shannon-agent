@@ -24,13 +24,13 @@ type Priority = (typeof PRIORITIES)[number]
 function priorityBadge(p: string): { bg: string; label: string } {
   switch (p) {
     case 'critical':
-      return { bg: 'bg-error/15 text-error border-error/30', label: 'CRIT' }
+      return { bg: 'bg-error-container text-on-error-container border-error/30', label: 'CRIT' }
     case 'high':
-      return { bg: 'bg-primary/15 text-primary border-primary/30', label: 'HIGH' }
+      return { bg: 'bg-primary-container text-on-primary-container border-primary/30', label: 'HIGH' }
     case 'low':
       return { bg: 'bg-surface-container-high text-on-surface-variant border-outline-variant', label: 'LOW' }
     default:
-      return { bg: 'bg-tertiary/15 text-tertiary border-tertiary/30', label: 'NORM' }
+      return { bg: 'bg-tertiary-container text-on-tertiary-container border-tertiary/30', label: 'NORM' }
   }
 }
 
@@ -121,19 +121,19 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
   const empty = useMemo(() => rows.length === 0, [rows])
 
   return (
-    <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
+    <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1">
       <div className="flex items-center justify-between mb-md">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-sm">
           <span className="material-symbols-outlined icon-md text-on-surface">forum</span>
-          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.agentMessagesPanel.title')}</h3>
+          <h3 className="font-headline-md text-body-lg font-bold text-on-surface">{t('tasks.agentMessagesPanel.title')}</h3>
           {team && (
-            <span className="text-label-sm text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full border border-outline-variant/20">
+            <span className="text-label-sm text-on-surface-variant bg-surface-container px-sm py-0.5 rounded-full border border-outline-variant/20">
               {team}
             </span>
           )}
         </div>
         <div className="flex items-center gap-sm">
-          <label className="flex items-center gap-1 text-label-sm text-on-surface-variant cursor-pointer select-none">
+          <label className="flex items-center gap-xs text-label-sm text-on-surface-variant cursor-pointer select-none">
             <input
               type="checkbox"
               checked={autoRefresh}
@@ -149,7 +149,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
             disabled={loading}
             aria-label={t('tasks.agentMessagesPanel.reloadAria')}
           >
-            <span className="material-symbols-outlined text-[18px]">refresh</span>
+            <span className="material-symbols-outlined icon-md">refresh</span>
           </Button>
         </div>
       </div>
@@ -225,7 +225,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
       {loading ? (
         <ListSkeleton count={4} />
       ) : error ? (
-        <div className="rounded-xl border border-error/30 bg-error/10 px-md py-md text-error font-body-md">
+        <div className="rounded-xl border border-error/30 bg-error-container px-md py-md text-on-error-container font-body-md">
           {error}
         </div>
       ) : empty ? (

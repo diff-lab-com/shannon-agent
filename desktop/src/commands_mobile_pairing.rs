@@ -38,7 +38,10 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
-use crate::commands_connections::{GatewayConfig, GatewayMobileConfig};
+use crate::commands_connections::{
+    GatewayConfig, GatewayMobileConfig, GatewayMobileTlsConfig, gateway_read_config,
+    write_gateway_config_atomic,
+};
 
 /// Default port the gateway binds its mobile `shannon/*` WS server on. Mirrors
 /// `shannon-gateway` `bootstrap()` and the desktop's default gateway config.
@@ -80,9 +83,19 @@ fn now_ms() -> u64 {
 /// The default `mobile` block the desktop writes into the gateway config so the
 /// inbound `shannon/*` server starts on the next gateway launch. Paths are the
 /// canonical `~/.shannon/mobile-*` files these commands also use, so both sides
-/// agree by construction. Binds `0.0.0.0`: LAN direct-connect pairing is
-/// reachable only from a non-loopback bind (the gateway skips its mDNS
-/// advertisement on loopback binds), and access is gated by one-time tokens.
+/// agree by construction.
+///
+/// review §P1-4: the previous default bound `0.0.0.0` in cleartext, so the
+/// QR-carried pair token and all subsequent command traffic were sniffable
+/// by anyone on the same WiFi. We now default to TLS-on (the gateway ships
+/// a self-signed cert at `~/.shannon/mobile-tls/` and the QR encodes its
+/// SHA-256 fingerprint for the phone to pin). The bind stays
+/// non-loopback because LAN pairing requires the phone to reach the
+/// desktop; iOS ATS rejects raw-IP endpoints so the desktop advertises
+/// a `.local` hostname over mDNS. Pair tokens are still single-use, so a
+/// sniff-then-relay attacker gains nothing even if they break the cert
+/// pin. Returning users on old mobile builds can flip `tls.enabled = false`
+/// in the gateway config file to restore plaintext for that pairing.
 pub fn default_mobile_config() -> GatewayMobileConfig {
     GatewayMobileConfig {
         enabled: true,
@@ -94,34 +107,112 @@ pub fn default_mobile_config() -> GatewayMobileConfig {
         devices_file: devices_path()
             .ok()
             .and_then(|p| p.to_str().map(str::to_string)),
+        // review §P1-4: TLS-on by default. The gateway emits a self-signed
+        // cert in `~/.shannon/mobile-tls/` on first start; the desktop
+        // reads the cert fingerprint into the QR payload so phones pin it.
+        tls: Some(GatewayMobileTlsConfig { enabled: true }),
     }
 }
 
 // ── on-disk shapes (mirror shannon-gateway/src/mobile/pairing.ts) ────────────
+//
+// Wire-form contract (verified against the TS sources, which are the producer
+// for devices.json and the consumer for tokens.jsonl):
+//   devices.json  → snake_case keys (`device_id`, `public_key`, `added_at`,
+//                  `last_seen_at`) — the gateway writes and reads these; its
+//                  load() drops entries without `device_id`/`public_key`.
+//   tokens.jsonl  → camelCase keys (`issuedAt`, `expiresAt`) — the gateway's
+//                  `PairTokenRecord` shape; a snake_case line is silently
+//                  skipped by its consumer, so the desktop MUST write camelCase.
+//
+// `DeviceEntry` (camelCase) is the Tauri command result for the UI;
+// `DeviceEntryFile` (snake_case + legacy aliases) is what touches the disk.
 
+/// On-disk device entry. Reads both the canonical snake_case form and the
+/// camelCase form older desktop builds wrote (those entries used to be
+/// dropped by the gateway's strict load — un-trusting every paired device).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct DeviceEntryFile {
+    #[serde(alias = "deviceId")]
+    pub device_id: String,
+    #[serde(alias = "publicKey")]
+    pub public_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(alias = "addedAt")]
+    pub added_at: u64,
+    #[serde(alias = "lastSeenAt")]
+    pub last_seen_at: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+struct DevicesFile {
+    #[serde(default)]
+    entries: Vec<DeviceEntryFile>,
+}
+
+/// UI-facing entry (the desktop's JS convention, unchanged for the frontend).
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceEntry {
     pub device_id: String,
     pub public_key: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub added_at: u64,
     pub last_seen_at: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct DevicesFile {
-    #[serde(default)]
-    entries: Vec<DeviceEntry>,
+impl From<DeviceEntryFile> for DeviceEntry {
+    fn from(f: DeviceEntryFile) -> Self {
+        DeviceEntry {
+            device_id: f.device_id,
+            public_key: f.public_key,
+            label: f.label,
+            added_at: f.added_at,
+            last_seen_at: f.last_seen_at,
+        }
+    }
+}
+
+impl From<&DeviceEntry> for DeviceEntryFile {
+    fn from(e: &DeviceEntry) -> Self {
+        DeviceEntryFile {
+            device_id: e.device_id.clone(),
+            public_key: e.public_key.clone(),
+            label: e.label.clone(),
+            added_at: e.added_at,
+            last_seen_at: e.last_seen_at,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
-struct PairTokenRecord {
-    token: String,
-    issued_at: u64,
-    expires_at: u64,
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PairTokenRecord {
+    pub(crate) token: String,
+    pub(crate) issued_at: u64,
+    pub(crate) expires_at: u64,
+}
+
+/// `~/.shannon/mobile-tls/tls-info.json` — written by the gateway when
+/// `mobile.tls` is on (mobileTls.ts). Its fingerprint rides the QR so phones
+/// pin the self-signed cert instead of chain-validating it.
+#[derive(Debug, Clone, Deserialize)]
+struct MobileTlsInfo {
+    fingerprint: String,
+}
+
+/// Read the gateway's TLS info file; `None` when TLS is off (or the file is
+/// unreadable → plaintext ws QR, matching the gateway's actual listener).
+fn read_tls_info() -> Option<MobileTlsInfo> {
+    let path = home_dir()
+        .ok()?
+        .join(".shannon")
+        .join("mobile-tls")
+        .join("tls-info.json");
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 // ── command result shapes ───────────────────────────────────────────────────
@@ -137,11 +228,13 @@ pub struct PairTokenResponse {
     pub qr_data_url: String,
 }
 
-/// Mint a one-time pair token + QR. Appends to the tokens file the gateway
-/// consumes; the QR embeds the LAN endpoint + token for the phone (P1.4 parses
-/// this payload).
-#[tauri::command]
-pub async fn mobile_generate_pair_token() -> Result<PairTokenResponse, String> {
+/// Mint a fresh one-time pair token and append it to the tokens JSONL — the
+/// core of the Design-D control channel, shared by the QR flow
+/// ([`mobile_generate_pair_token`]) and the gateway pairing-approval RPC
+/// (`gateway_pairing_pending` / `gateway_pairing_approve`, T9). The gateway
+/// consumes (or, for the read-only pairing list, verifies) the record on the
+/// other side of the file.
+pub(crate) fn mint_pair_token() -> Result<PairTokenRecord, String> {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     let token = URL_SAFE_NO_PAD.encode(bytes);
@@ -159,18 +252,51 @@ pub async fn mobile_generate_pair_token() -> Result<PairTokenResponse, String> {
         serde_json::to_string(&record).map_err(|e| format!("pair token: serialize failed: {e}"))?;
     let path = tokens_path()?;
     if let Some(parent) = path.parent() {
+        // review §P1-4: directory also needs 0700 so the file mode 0600
+        // we set below actually restricts access (a world-readable
+        // directory still allows name enumeration).
         fs::create_dir_all(parent)
             .map_err(|e| format!("pair token: cannot create {parent:?}: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+        }
     }
+    // review §P1-4: pair tokens grant mobile access — they must not be
+    // world-readable. Use OpenOptions::mode(0o600) on unix to atomically
+    // create with restricted permissions in one step (no brief world-
+    // readable window between fs::write and chmod).
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| format!("pair token: cannot open {path:?}: {e}"))?
+    };
+    #[cfg(not(unix))]
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .map_err(|e| format!("pair token: cannot open {path:?}: {e}"))?;
     writeln!(file, "{line}").map_err(|e| format!("pair token: write failed: {e}"))?;
+    Ok(record)
+}
+
+/// Mint a one-time pair token + QR. Appends to the tokens file the gateway
+/// consumes; the QR embeds the LAN endpoint + token for the phone (P1.4 parses
+/// this payload).
+#[tauri::command]
+pub async fn mobile_generate_pair_token() -> Result<PairTokenResponse, String> {
+    let record = mint_pair_token()?;
+    let token = record.token;
+    let expires_at = record.expires_at;
 
     let (ip, port) = lan_endpoint()?;
-    let lan_endpoint = format!("ws://{ip}:{port}");
 
     // QR host: the desktop's mDNS name (`<hostname>.local`) — iOS ATS refuses
     // raw-IP ws:// endpoints outright, while `.local` names are permitted
@@ -179,16 +305,25 @@ pub async fn mobile_generate_pair_token() -> Result<PairTokenResponse, String> {
     // `rawIpOnIos` instead of a mysterious OS-level refusal).
     let qr_host = mdns_hostname().unwrap_or_else(|| ip.to_string());
 
+    // v0.12: when the gateway serves TLS (tls-info.json present), the QR
+    // advertises wss + the cert fingerprint the phone pins (out-of-band
+    // trust — same channel that carried the pair token).
+    let tls_info = read_tls_info();
+    let scheme = if tls_info.is_some() { "wss" } else { "ws" };
+    let lan_endpoint = format!("{scheme}://{ip}:{port}");
+
     // QR payload — the contract the mobile app (P1.4) parses. v1 = LAN direct.
-    let payload = serde_json::json!({
-        "v": QR_VERSION,
-        "scheme": "ws",
-        "host": qr_host,
-        "port": port,
-        "token": token,
-        "exp": expires_at,
-    })
-    .to_string();
+    let mut payload = serde_json::Map::new();
+    payload.insert("v".into(), serde_json::json!(QR_VERSION));
+    payload.insert("scheme".into(), serde_json::json!(scheme));
+    payload.insert("host".into(), serde_json::json!(qr_host));
+    payload.insert("port".into(), serde_json::json!(port));
+    payload.insert("token".into(), serde_json::json!(token));
+    payload.insert("exp".into(), serde_json::json!(expires_at));
+    if let Some(tls) = tls_info {
+        payload.insert("certFingerprint".into(), serde_json::json!(tls.fingerprint));
+    }
+    let payload = serde_json::Value::Object(payload).to_string();
     let qr_data_url = render_qr_svg_data_url(&payload)?;
 
     Ok(PairTokenResponse {
@@ -202,7 +337,11 @@ pub async fn mobile_generate_pair_token() -> Result<PairTokenResponse, String> {
 /// List currently paired devices (read-only; the gateway writes the file).
 #[tauri::command]
 pub async fn mobile_list_paired_devices() -> Result<Vec<DeviceEntry>, String> {
-    Ok(read_devices()?.entries)
+    Ok(read_devices()?
+        .entries
+        .into_iter()
+        .map(Into::into)
+        .collect())
 }
 
 /// Remove a paired device by id. Atomically rewrites the registry file so the
@@ -219,6 +358,48 @@ pub async fn mobile_revoke_device(device_id: String) -> Result<bool, String> {
         write_devices_atomic(&path, &file)?;
     }
     Ok(removed)
+}
+
+// ── v0.12 LAN TLS (wss + cert-fingerprint pinning) ──────────────────────────
+
+/// UI-facing TLS status: the config flag plus the live material info (the
+/// fingerprint appears only after the gateway first boots with TLS on).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileTlsStatus {
+    pub enabled: bool,
+    pub fingerprint: Option<String>,
+}
+
+/// Current `mobile.tls` toggle state + cert fingerprint (read-only).
+#[tauri::command]
+pub async fn mobile_tls_status() -> Result<MobileTlsStatus, String> {
+    let config: GatewayConfig = gateway_read_config().await?;
+    let enabled = config
+        .mobile
+        .as_ref()
+        .and_then(|m| m.tls.as_ref())
+        .map(|t| t.enabled)
+        .unwrap_or(false);
+    Ok(MobileTlsStatus {
+        enabled,
+        fingerprint: read_tls_info().map(|i| i.fingerprint),
+    })
+}
+
+/// Flip `mobile.tls.enabled` in the gateway config (read-modify-write, same
+/// atomic path as the connections panel). Takes effect on the next gateway
+/// (re)start — the supervised process restart is the UI's job after writing.
+#[tauri::command]
+pub async fn mobile_set_tls(enabled: bool) -> Result<MobileTlsStatus, String> {
+    let mut config: GatewayConfig = gateway_read_config().await?;
+    let mobile = config.mobile.get_or_insert(default_mobile_config());
+    let tls = mobile
+        .tls
+        .get_or_insert(GatewayMobileTlsConfig { enabled: false });
+    tls.enabled = enabled;
+    write_gateway_config_atomic(&config)?;
+    mobile_tls_status().await
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -386,24 +567,73 @@ mod tests {
 
     #[test]
     fn device_entry_round_trips_gateway_schema() {
-        // Exact wire shape the gateway's DeviceRegistry writes.
+        // Exact wire shape the gateway's DeviceRegistry writes/reads
+        // (pairing.ts DeviceEntry — snake_case on disk).
         let raw = r#"{
-            "deviceId": "abc123",
-            "publicKey": "pk",
+            "device_id": "abc123",
+            "public_key": "pk",
             "label": "pixel",
-            "addedAt": 1000,
-            "lastSeenAt": 2000
+            "added_at": 1000,
+            "last_seen_at": 2000
         }"#;
-        let e: DeviceEntry = serde_json::from_str(raw).unwrap();
+        let e: DeviceEntryFile = serde_json::from_str(raw).unwrap();
         assert_eq!(e.device_id, "abc123");
         assert_eq!(e.public_key, "pk");
         assert_eq!(e.label.as_deref(), Some("pixel"));
         assert_eq!(e.added_at, 1000);
         assert_eq!(e.last_seen_at, 2000);
-        // Round-trips back to camelCase.
+        // Round-trips back to snake_case — the shape the gateway's load()
+        // requires (it drops entries without `device_id`/`public_key`).
         let j = serde_json::to_string(&e).unwrap();
+        assert!(j.contains("\"device_id\""));
+        assert!(j.contains("\"public_key\""));
+        assert!(!j.contains("\"deviceId\""));
+    }
+
+    #[test]
+    fn device_entry_still_parses_legacy_camelcase_files() {
+        // Pre-fix desktop builds wrote camelCase; serde aliases keep those
+        // files readable (they get rewritten snake_case on the next revoke).
+        let legacy: DeviceEntryFile = serde_json::from_str(
+            r#"{"deviceId":"abc","publicKey":"pk","addedAt":1,"lastSeenAt":2}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.device_id, "abc");
+        assert_eq!(legacy.public_key, "pk");
+        assert_eq!(legacy.added_at, 1);
+        assert_eq!(legacy.last_seen_at, 2);
+    }
+
+    #[test]
+    fn ui_device_entry_stays_camelcase() {
+        // The Tauri command result is the UI contract (MobileDispatchCard.tsx
+        // reads d.deviceId / d.lastSeenAt) — distinct from the disk shape.
+        let j = serde_json::to_string(&DeviceEntry {
+            device_id: "abc".into(),
+            public_key: "pk".into(),
+            label: None,
+            added_at: 1,
+            last_seen_at: 2,
+        })
+        .unwrap();
         assert!(j.contains("\"deviceId\""));
-        assert!(j.contains("\"publicKey\""));
+        assert!(j.contains("\"lastSeenAt\""));
+    }
+
+    #[test]
+    fn pair_token_record_serializes_gateway_consumable_camelcase() {
+        // The gateway's PairTokenStore.consumeFromFile skips any line whose
+        // `expiresAt` (camelCase) is missing — a snake_case record made every
+        // desktop-minted QR token invisible to `shannon/pair`.
+        let record = PairTokenRecord {
+            token: "tok".into(),
+            issued_at: 1,
+            expires_at: 2,
+        };
+        let j = serde_json::to_string(&record).unwrap();
+        assert!(j.contains("\"issuedAt\""));
+        assert!(j.contains("\"expiresAt\""));
+        assert!(!j.contains("\"expires_at\""));
     }
 
     #[test]
@@ -420,7 +650,7 @@ mod tests {
         // Point HOME at a temp dir with no devices file. set_env(HOME) is unsafe
         // under parallel tests, so call the parser path directly instead.
         let parsed: DevicesFile = serde_json::from_str(
-            r#"{"entries":[{"deviceId":"x","publicKey":"k","addedAt":1,"lastSeenAt":2}]}"#,
+            r#"{"entries":[{"device_id":"x","public_key":"k","added_at":1,"last_seen_at":2}]}"#,
         )
         .unwrap();
         assert_eq!(parsed.entries.len(), 1);

@@ -164,6 +164,10 @@ pub enum HookEvent {
         input: Value,
         /// Output from the tool
         output: Value,
+        /// Whether the tool execution ended in an error. `false` for the
+        /// historical shape (serde default) so older payloads still parse.
+        #[serde(default)]
+        is_error: bool,
     },
     /// When a session begins
     SessionStart {
@@ -565,9 +569,36 @@ mod tests {
             tool_name: "read".to_string(),
             input: serde_json::json!({"path": "/tmp"}),
             output: serde_json::json!("contents"),
+            is_error: false,
         };
         assert_eq!(event.event_type(), HookEventType::PostToolUse);
         assert_eq!(event.match_subject(), "read");
+    }
+
+    #[test]
+    fn test_post_tool_use_is_error_defaults_when_absent_in_json() {
+        // Payloads emitted before the is_error field existed must still
+        // deserialize — missing key means a successful tool call.
+        let legacy = r#"{"PostToolUse":{"tool_name":"bash","input":{},"output":"ok"}}"#;
+        let parsed: HookEvent = serde_json::from_str(legacy).unwrap();
+        match parsed {
+            HookEvent::PostToolUse { is_error, .. } => assert!(!is_error),
+            other => panic!("wrong variant: {:?}", other.event_type()),
+        }
+        // Present key round-trips.
+        let event = HookEvent::PostToolUse {
+            tool_name: "bash".into(),
+            input: serde_json::json!({}),
+            output: serde_json::json!("boom"),
+            is_error: true,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"is_error\":true"), "{json}");
+        let back: HookEvent = serde_json::from_str(&json).unwrap();
+        match back {
+            HookEvent::PostToolUse { is_error, .. } => assert!(is_error),
+            other => panic!("wrong variant: {:?}", other.event_type()),
+        }
     }
 
     #[test]
@@ -719,6 +750,7 @@ mod tests {
             tool_name: "x".into(),
             input: serde_json::json!(null),
             output: serde_json::json!(null),
+            is_error: false,
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(
@@ -755,6 +787,7 @@ mod tests {
                 tool_name: "read".into(),
                 input: json!({"path": "/tmp"}),
                 output: json!("contents"),
+                is_error: false,
             },
             HookEvent::SessionStart {
                 session_id: "s1".into(),

@@ -16,6 +16,7 @@ pub mod docker;
 pub mod dynamic;
 pub mod ssh;
 pub mod target;
+pub mod telegram;
 
 #[cfg(test)]
 mod smoke {

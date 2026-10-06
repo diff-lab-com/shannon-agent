@@ -13,8 +13,7 @@ export default function CTABanner({ lang }: CTABannerProps) {
       margin: '0 auto',
       padding: '0 24px 100px',
     }}>
-      <div style={{
-        background: 'var(--code-bg)',
+      <div className="glass-card glass-cta" style={{
         borderRadius: 'var(--radius-lg)',
         padding: '56px 40px',
         textAlign: 'center',

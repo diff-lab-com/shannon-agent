@@ -147,12 +147,13 @@ pub fn delete_snapshot(name: &str) -> Result<()> {
 /// Format a list of snapshots for display.
 #[allow(dead_code)] // invoked dynamically by LLM via /session command tools
 pub fn format_snapshot_list(snapshots: &[(String, String)]) -> String {
+    use rust_i18n::t;
+
     if snapshots.is_empty() {
-        return "No saved session snapshots.\nUse `/session save <name>` to create one."
-            .to_string();
+        return t!("commands.session.none_saved").to_string();
     }
 
-    let mut out = String::from("Saved session snapshots:\n\n");
+    let mut out = t!("commands.session.snapshots_title").to_string();
     for (name, description) in snapshots {
         if description.is_empty() {
             out.push_str(&format!("  {name}\n"));
@@ -160,12 +161,12 @@ pub fn format_snapshot_list(snapshots: &[(String, String)]) -> String {
             out.push_str(&format!("  {name} — {description}\n"));
         }
     }
-    out.push_str("\nUse `/session load <name>` to restore a snapshot.");
+    out.push_str(t!("commands.session.load_hint").as_ref());
     out
 }
 
 /// Format detailed information about a single snapshot.
-#[allow(dead_code)] // invoked dynamically by LLM via /session command tools
+#[allow(dead_code)] // KEEP: invoked dynamically by LLM via /session command tools
 pub fn format_snapshot_detail(snapshot: &SessionSnapshot) -> String {
     let mut out = format!("Session: {}\n", snapshot.name);
     out.push_str(&format!("  Created: {}\n", snapshot.created_at));
@@ -329,22 +330,17 @@ mod tests {
         assert_eq!(deserialized.temperature, Some(0.7));
     }
 
-    /// Helper: create a unique temp directory for test isolation
-    fn test_temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon-session-test-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
+    /// Helper: RAII temp directory for test isolation; removed when the
+    /// returned guard drops.
+    fn test_temp_dir() -> tempfile::TempDir {
+        tempfile::tempdir().expect("create temp dir")
     }
 
     #[test]
     fn test_save_and_load_snapshot() {
-        let dir = test_temp_dir("save-load");
+        let dir = test_temp_dir();
         let snapshot = sample_snapshot("test-save-load");
-        let path = dir.join("test-save-load.toml");
+        let path = dir.path().join("test-save-load.toml");
         let toml_str = toml::to_string_pretty(&snapshot).expect("serialize");
         std::fs::write(&path, &toml_str).expect("write");
 
@@ -359,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_list_snapshots() {
-        let dir = test_temp_dir("list");
+        let dir = test_temp_dir();
         for name in &["alpha", "beta", "charlie"] {
             let snapshot = SessionSnapshot {
                 name: name.to_string(),
@@ -376,14 +372,14 @@ mod tests {
                 enabled_tools: vec![],
                 system_prompt_additions: None,
             };
-            let path = dir.join(format!("{name}.toml"));
+            let path = dir.path().join(format!("{name}.toml"));
             let toml_str = toml::to_string_pretty(&snapshot).expect("serialize");
             std::fs::write(&path, &toml_str).expect("write");
         }
 
         // Read and sort (replicating list_snapshots logic against temp dir)
         let mut entries: Vec<(String, String)> = Vec::new();
-        for entry in std::fs::read_dir(&dir).expect("readdir") {
+        for entry in std::fs::read_dir(dir.path()).expect("readdir") {
             let entry = entry.expect("entry");
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("toml") {
@@ -414,8 +410,8 @@ mod tests {
 
     #[test]
     fn test_delete_snapshot() {
-        let dir = test_temp_dir("delete");
-        let path = dir.join("to-delete.toml");
+        let dir = test_temp_dir();
+        let path = dir.path().join("to-delete.toml");
         std::fs::write(&path, "name = 'to-delete'").expect("write");
         assert!(path.exists());
 

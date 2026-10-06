@@ -98,6 +98,25 @@ impl NotificationLevel {
 
 use serde::{Deserialize, Serialize};
 
+/// Semantic event category of a notification. Consumed by interactive
+/// frontends (desktop app) to route the notification to its per-event-type
+/// preference toggle (`on_completed` / `on_failed` / `on_needs_attention`);
+/// pure log/shell-out handlers ignore it. Defaults to [`NotificationKind::Completed`]
+/// so older construction sites (and old serialized payloads) keep their
+/// historical "completion-like" routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationKind {
+    /// A query/task finished successfully.
+    #[default]
+    Completed,
+    /// A query/task failed.
+    Failed,
+    /// Something needs the user's attention (tool approval wait, budget
+    /// threshold alert, auto-pause, …).
+    NeedsAttention,
+}
+
 /// A single notification payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Notification {
@@ -121,6 +140,10 @@ pub struct Notification {
     /// CLI shell-out ignores this field.
     #[serde(default)]
     pub action_id: Option<String>,
+    /// Semantic event category for per-event-type preference routing.
+    /// `#[serde(default)]` keeps older serialized payloads loadable.
+    #[serde(default)]
+    pub kind: NotificationKind,
 }
 
 // ============================================================================
@@ -283,12 +306,30 @@ impl Default for NotificationsConfig {
 
 /// Tracks last-fired timestamps per source key for cooldown/dedup.
 ///
-/// Thread-safe via `DashMap`. Keys are typically `Notification::source`
-/// (e.g. `"tool:Edit"`, `"error:ApiTimeout"`) or fall back to `Notification::id`
-/// when source is `None` (in which case dedup never applies — each fire is unique).
+/// Thread-safe via `DashMap`. Keys are `Notification::source`
+/// (e.g. `"tool:Edit"`, `"error:ApiTimeout"`); notifications without a
+/// source never coalesce and are not recorded at all (T15a: the former
+/// fallback to the per-notification id keyed every fire by a fresh UUID,
+/// growing the map with entries that could never dedup anything).
+///
+/// The map self-bounds: once it grows past `COOLDOWN_MAP_BOUND` entries,
+/// an insert opportunistically evicts entries older than the applicable
+/// cooldown horizon (T15a — previously the map only ever grew).
 pub struct Cooldown {
     last_fired: DashMap<String, Instant>,
 }
+
+/// Tracked-key count at which inserts start opportunistically evicting
+/// expired entries. Chosen well above any real source-key population
+/// (tools × error types × agents), so eviction only triggers for
+/// pathological or runaway key growth.
+const COOLDOWN_MAP_BOUND: usize = 1024;
+
+/// Floor for the eviction horizon: entries older than this can no longer
+/// suppress any realistic cooldown window (the largest configured default
+/// is 10 s), so they are safe to drop even when the triggering insert used
+/// a shorter window.
+const COOLDOWN_MIN_EVICT_AGE: Duration = Duration::from_secs(60);
 
 impl Default for Cooldown {
     fn default() -> Self {
@@ -310,12 +351,27 @@ impl Cooldown {
     /// `window_ms == 0` always returns `true` (no cooldown) but still records the
     /// timestamp so subsequent calls with a non-zero window see the latest fire.
     pub fn check_and_record(&self, key: &str, window_ms: u64) -> bool {
-        let now = Instant::now();
+        self.check_and_record_at(key, window_ms, Instant::now())
+    }
+
+    /// [`Self::check_and_record`] at an explicit instant (test seam for the
+    /// eviction aging, which cannot be observed with real `Instant`s).
+    fn check_and_record_at(&self, key: &str, window_ms: u64, now: Instant) -> bool {
         if let Some(entry) = self.last_fired.get(key) {
             let elapsed = now.duration_since(*entry.value());
             if window_ms > 0 && elapsed < Duration::from_millis(window_ms) {
                 return false;
             }
+        }
+        // Opportunistic eviction (T15a): past the bound, drop entries older
+        // than the applicable horizon — they can no longer suppress a fire,
+        // so removing them changes nothing except reclaiming memory. The
+        // horizon is max(this insert's window, 60 s floor): an entry must
+        // outlive every window it could still be suppressing.
+        if self.last_fired.len() >= COOLDOWN_MAP_BOUND {
+            let min_age = Duration::from_millis(window_ms).max(COOLDOWN_MIN_EVICT_AGE);
+            self.last_fired
+                .retain(|_, fired| now.duration_since(*fired) < min_age);
         }
         self.last_fired.insert(key.to_string(), now);
         true
@@ -580,8 +636,12 @@ impl Notifier {
     /// Send a notification with per-source cooldown/dedup.
     ///
     /// Returns `Ok(true)` if dispatched, `Ok(false)` if suppressed by cooldown.
-    /// Uses `notification.source` as the dedup key (falls back to `notification.id`,
-    /// which is always unique — so `None` sources bypass dedup).
+    /// Uses `notification.source` as the dedup key. A `None` source means
+    /// "never coalesce" (the `Notification` doc contract): nothing is
+    /// checked or recorded. (T15a: the key previously fell back to the
+    /// per-notification id — a fresh UUID every fire — so each unsourced
+    /// notification inserted a map entry that could never dedup anything
+    /// and was never evicted.)
     ///
     /// If no `Cooldown` is attached, this is equivalent to [`Self::notify`] and
     /// always returns `Ok(true)`.
@@ -591,9 +651,10 @@ impl Notifier {
         window_ms: u64,
     ) -> Result<bool, NotifierError> {
         if let Some(cd) = &self.cooldown {
-            let key = notification.source.as_deref().unwrap_or(&notification.id);
-            if !cd.check_and_record(key, window_ms) {
-                return Ok(false);
+            if let Some(source) = notification.source.as_deref() {
+                if !cd.check_and_record(source, window_ms) {
+                    return Ok(false);
+                }
             }
         }
         self.notify(notification)?;
@@ -616,6 +677,7 @@ impl Notifier {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::default(),
         }
     }
 
@@ -677,6 +739,7 @@ impl DesktopNotifier {
         cfg!(target_os = "linux") || cfg!(target_os = "macos") || cfg!(target_os = "windows")
     }
 
+    #[allow(dead_code)] // KEEP: cross-platform stub
     fn send_linux(&self, notification: &Notification) -> Result<(), NotifierError> {
         let icon = match notification.level {
             NotificationLevel::Info => "dialog-information",
@@ -708,11 +771,21 @@ impl DesktopNotifier {
         Ok(())
     }
 
+    /// Escape `text` for a double-quoted AppleScript string literal.
+    ///
+    /// Backslashes must be escaped FIRST: escaping quotes alone left raw `\`
+    /// characters untouched, so a body ending in `\` turned the closing
+    /// `\"` into an escaped quote and broke the `osascript` compile.
+    #[allow(dead_code)] // KEEP: cross-platform stub (only called from macOS path)
+    fn escape_applescript(text: &str) -> String {
+        text.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+
     #[allow(dead_code)] // KEEP: cross-platform stub
     fn send_macos(&self, notification: &Notification) -> Result<(), NotifierError> {
-        // Escape double quotes in body for AppleScript
-        let escaped_body = notification.body.replace('"', "\\\"");
-        let escaped_title = notification.title.replace('"', "\\\"");
+        // Escape backslashes then double quotes for AppleScript.
+        let escaped_body = Self::escape_applescript(&notification.body);
+        let escaped_title = Self::escape_applescript(&notification.title);
         let script =
             format!("display notification \"{escaped_body}\" with title \"{escaped_title}\"");
         std::process::Command::new("osascript")
@@ -1088,6 +1161,31 @@ impl WebhookHandler {
         });
         Ok(())
     }
+
+    /// Single-shot SYNCHRONOUS delivery for the settings "send test" flow.
+    ///
+    /// One POST through the same client/signature headers as `Self::deliver`,
+    /// but no retry loop and no spawn: the caller awaits the outcome so a
+    /// human-visible verdict (HTTP status or transport error) can be surfaced.
+    /// `Ok(status)` carries whatever status the receiver answered with — any
+    /// non-2xx is the caller's cue to report failure; `Err` is a transport
+    /// failure (DNS, connect, timeout, TLS).
+    pub async fn deliver_once(&self, body: String) -> Result<u16, String> {
+        let sig = self.sign(&body).map_err(|e| e.to_string())?;
+        let mut req = self
+            .client
+            .post(&self.config.url)
+            .header("Content-Type", "application/json")
+            .body(body);
+        if !sig.is_empty() {
+            req = req.header("X-Shannon-Signature", format!("sha256={sig}"));
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("webhook request failed: {e}"))?;
+        Ok(resp.status().as_u16())
+    }
 }
 
 /// Bounded-retry POST shared by every webhook payload shape.
@@ -1153,6 +1251,35 @@ mod tests {
         assert_eq!(NotificationLevel::Error.to_string(), "ERROR");
     }
 
+    // -- NotificationKind (settings-r3 T5) ------------------------------------
+
+    #[test]
+    fn notification_kind_defaults_to_completed_and_roundtrips() {
+        assert_eq!(NotificationKind::default(), NotificationKind::Completed);
+
+        // Old serialized payloads (pre-kind) must still load — kind falls
+        // back to Completed.
+        let legacy: Notification = serde_json::from_str(
+            r#"{"title":"t","body":"b","level":"info","id":"1","timestamp":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.kind, NotificationKind::Completed);
+
+        for (wire, expected) in [
+            ("\"completed\"", NotificationKind::Completed),
+            ("\"failed\"", NotificationKind::Failed),
+            ("\"needs_attention\"", NotificationKind::NeedsAttention),
+        ] {
+            let n: Notification = serde_json::from_str(&format!(
+                r#"{{"title":"t","body":"b","level":"info","id":"1","timestamp":"2026-01-01T00:00:00Z","kind":{wire}}}"#
+            ))
+            .unwrap_or_else(|e| panic!("kind {wire} must deserialize: {e}"));
+            assert_eq!(n.kind, expected);
+            let json = serde_json::to_string(&n).unwrap();
+            assert!(json.contains(&format!("\"kind\":{wire}")), "{json}");
+        }
+    }
+
     // -- LogNotifier ---------------------------------------------------------
 
     #[test]
@@ -1178,6 +1305,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         assert!(n.send(&notification).is_ok());
     }
@@ -1204,6 +1332,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         notifier.send(&notification).unwrap();
 
@@ -1227,6 +1356,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
 
         notifier.send(&make_notification("a")).unwrap();
@@ -1251,6 +1381,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         notifier.send(&notification).unwrap();
         assert!(path.exists());
@@ -1282,6 +1413,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         cb.send(&notification).unwrap();
 
@@ -1304,6 +1436,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         let result = cb.send(&notification);
         assert!(result.is_err());
@@ -1490,6 +1623,7 @@ mod tests {
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         let json = serde_json::to_string(&n).unwrap();
         let back: Notification = serde_json::from_str(&json).unwrap();
@@ -1541,6 +1675,68 @@ mod tests {
         assert!(cd.check_and_record("k", 60_000));
     }
 
+    // -- Cooldown eviction (T15a) --------------------------------------------
+
+    #[test]
+    fn test_cooldown_eviction_keeps_size_bounded() {
+        let cd = Cooldown::new();
+        let t0 = Instant::now();
+        // Fill the map exactly to the bound; no eviction can trigger yet
+        // (it runs on insert once the bound is already reached).
+        for i in 0..COOLDOWN_MAP_BOUND {
+            assert!(
+                cd.check_and_record_at(&format!("src:{i}"), 5_000, t0),
+                "first fill must always fire"
+            );
+        }
+        assert_eq!(cd.tracked_count(), COOLDOWN_MAP_BOUND);
+
+        // One more insert two minutes later: every entry is now older than
+        // the eviction horizon, so the map collapses to the new key.
+        let t1 = t0 + Duration::from_secs(120);
+        assert!(cd.check_and_record_at("trigger", 5_000, t1));
+        assert_eq!(
+            cd.tracked_count(),
+            1,
+            "expired entries must be evicted on insert past the bound"
+        );
+
+        // Entries younger than the horizon survive an eviction pass.
+        let t2 = t1 + Duration::from_secs(10);
+        for i in 0..COOLDOWN_MAP_BOUND {
+            assert!(cd.check_and_record_at(&format!("young:{i}"), 5_000, t2));
+        }
+        let t3 = t2 + Duration::from_secs(120);
+        assert!(cd.check_and_record_at("final", 5_000, t3));
+        assert_eq!(
+            cd.tracked_count(),
+            1,
+            "only entries inside the horizon may survive, and none do here"
+        );
+    }
+
+    #[test]
+    fn test_cooldown_eviction_preserves_active_suppression() {
+        let cd = Cooldown::new();
+        let t0 = Instant::now();
+        for i in 0..COOLDOWN_MAP_BOUND {
+            cd.check_and_record_at(&format!("old:{i}"), 5_000, t0);
+        }
+        let t1 = t0 + Duration::from_secs(120);
+        // A young active key recorded just before the eviction pass.
+        assert!(cd.check_and_record_at("active", 60_000, t1));
+        assert!(
+            cd.check_and_record_at("spill", 5_000, t1),
+            "spill insert fires"
+        );
+        // Suppression for the young key still works after the pass removed
+        // the expired population.
+        assert!(
+            !cd.check_and_record("active", 60_000),
+            "surviving entry must keep suppressing"
+        );
+    }
+
     // -- Notifier::notify_dedup ---------------------------------------------
 
     fn capture_notifier() -> (Notifier, Arc<Mutex<Vec<String>>>) {
@@ -1563,6 +1759,7 @@ mod tests {
             timestamp: Utc::now(),
             source: source.map(str::to_string),
             action_id: None,
+            kind: NotificationKind::Completed,
         }
     }
 
@@ -1592,6 +1789,28 @@ mod tests {
         assert!(n.notify_dedup(&n1, 60_000).unwrap());
         assert!(n.notify_dedup(&n2, 60_000).unwrap());
         assert_eq!(received.lock().unwrap().len(), 2);
+    }
+
+    /// T15a: a `None` source means "never coalesce" — the fallback keyed
+    /// every fire by its fresh per-notification UUID, inserting a map entry
+    /// that could never dedup anything. Unsourced notifications must fire
+    /// every time AND leave the cooldown map empty.
+    #[test]
+    fn test_notify_dedup_none_source_records_no_key() {
+        let (n, received) = capture_notifier();
+        for i in 0..8 {
+            let notif = make_notification(&format!("n{i}"), None);
+            assert!(
+                n.notify_dedup(&notif, 60_000).expect("dedup dispatch"),
+                "unsourced notifications must never be suppressed"
+            );
+        }
+        assert_eq!(received.lock().expect("received").len(), 8);
+        assert_eq!(
+            n.cooldown.as_ref().map(Cooldown::tracked_count),
+            Some(0),
+            "None-source notifications must not grow the cooldown map"
+        );
     }
 
     #[test]
@@ -1733,6 +1952,7 @@ enabled = true
             timestamp: Utc::now(),
             source: Some("tool:Edit".into()),
             action_id: Some("approve:perm_42".into()),
+            kind: NotificationKind::Completed,
         };
         let json = serde_json::to_string(&n).unwrap();
         assert!(json.contains("\"source\":\"tool:Edit\""));
@@ -1750,6 +1970,7 @@ enabled = true
             timestamp: Utc::now(),
             source: Some("query_complete".into()),
             action_id: None,
+            kind: NotificationKind::Completed,
         }
     }
 
@@ -1849,6 +2070,118 @@ enabled = true
         assert_eq!(WebhookConfig::default_timeout_ms(), 5000);
     }
 
+    // -- WebhookHandler::deliver_once (settings "send test" flow) ------------
+
+    #[test]
+    fn webhook_deliver_once_returns_success_status_and_posts_template_body() {
+        use mockito::Server;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/hook")
+                .with_status(200)
+                .match_header("content-type", "application/json")
+                .match_body(mockito::Matcher::PartialJson(
+                    serde_json::json!({ "text": "Build complete" }),
+                ))
+                .create_async()
+                .await;
+
+            let config = WebhookConfig {
+                url: format!("{}/hook", server.url()),
+                ..webhook_config(WebhookTemplate::Slack, false)
+            };
+            let h = WebhookHandler::new(config).unwrap();
+            let body = h.render_body(&sample_notification());
+            let status = h.deliver_once(body).await.unwrap();
+            assert_eq!(status, 200);
+            mock.assert();
+        });
+    }
+
+    #[test]
+    fn webhook_deliver_once_surfaces_non_2xx_status_without_retrying() {
+        use mockito::Server;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/hook")
+                .with_status(500)
+                .create_async()
+                .await;
+
+            let config = WebhookConfig {
+                url: format!("{}/hook", server.url()),
+                ..webhook_config(WebhookTemplate::Slack, false)
+            };
+            let h = WebhookHandler::new(config).unwrap();
+            let body = h.render_body(&sample_notification());
+            // Single shot: the 500 comes back as Ok(500) — the caller decides
+            // it's a failure — and exactly ONE request hits the server.
+            let status = h.deliver_once(body).await.unwrap();
+            assert_eq!(status, 500);
+            mock.assert();
+        });
+    }
+
+    #[test]
+    fn webhook_deliver_once_signs_with_hmac_header_when_secret_set() {
+        use hmac::{Hmac, Mac};
+        use mockito::Server;
+        use sha2::Sha256;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut server = Server::new_async().await;
+
+            let config = WebhookConfig {
+                url: format!("{}/hook", server.url()),
+                secret: Some("test-secret".into()),
+                ..webhook_config(WebhookTemplate::Raw, false)
+            };
+            let h = WebhookHandler::new(config).unwrap();
+            let body = h.render_body(&sample_notification());
+
+            // The header must carry the HMAC-SHA256 of exactly the sent body;
+            // an absent/wrong signature leaves the mock unmatched.
+            let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(b"test-secret").unwrap();
+            mac.update(body.as_bytes());
+            let expected = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+            let mock = server
+                .mock("POST", "/hook")
+                .with_status(204)
+                .match_header("x-shannon-signature", expected.as_str())
+                .create_async()
+                .await;
+
+            let status = h.deliver_once(body).await.unwrap();
+            assert_eq!(status, 204);
+            mock.assert();
+        });
+    }
+
+    #[test]
+    fn webhook_deliver_once_maps_transport_failure_to_err() {
+        // Port 1 on localhost is a reliable "connection refused" — no server.
+        let config = WebhookConfig {
+            url: "http://127.0.0.1:1/hook".into(),
+            ..webhook_config(WebhookTemplate::Slack, false)
+        };
+        let h = WebhookHandler::new(config).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let result = h.deliver_once("{}".to_string()).await;
+            assert!(
+                result.is_err(),
+                "connection refused must be Err, got {result:?}"
+            );
+        });
+    }
+
     // -- NotifPreset ---------------------------------------------------------
 
     #[test]
@@ -1905,6 +2238,7 @@ enabled = true
             timestamp: Utc::now(),
             source: Some("tool:Edit".into()),
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         let err_n = Notification {
             title: "err".into(),
@@ -1914,6 +2248,7 @@ enabled = true
             timestamp: Utc::now(),
             source: Some("query:complete".into()),
             action_id: None,
+            kind: NotificationKind::Completed,
         };
 
         notifier.notify(&info_n).unwrap();
@@ -1968,6 +2303,7 @@ enabled = true
             timestamp: Utc::now(),
             source: None,
             action_id: None,
+            kind: NotificationKind::Completed,
         };
         let body = h.render_body(&n);
         assert_eq!(body, "evil {body}"); // {body} stays literal, SENSITIVE not injected
@@ -2126,5 +2462,26 @@ template = "slack"
         assert!(cfg.webhook.is_some());
         let wh = cfg.webhook.unwrap();
         assert_eq!(wh.url, "https://hooks.slack.com/services/abc");
+    }
+
+    // -- DesktopNotifier AppleScript escaping --------------------------------
+
+    /// A trailing backslash in a title/body used to escape the closing `\"`
+    /// of the generated AppleScript and break the `osascript` compile:
+    /// backslashes must be doubled BEFORE quotes are escaped, for both
+    /// title and body.
+    #[test]
+    fn test_applescript_escaping_escapes_backslashes_before_quotes() {
+        let escape = DesktopNotifier::escape_applescript;
+
+        // Trailing backslash: the exact crash input from the finding.
+        assert_eq!(escape("done \\"), "done \\\\");
+        // Quotes alone.
+        assert_eq!(escape("say \"hi\""), "say \\\"hi\\\"");
+        // Backslash+quote must compose (escaped backslash, then escaped quote)
+        // — the old order produced a doubly-escaped quote instead.
+        assert_eq!(escape("a\\\"b"), "a\\\\\\\"b");
+        // Plain text passes through.
+        assert_eq!(escape("plain"), "plain");
     }
 }

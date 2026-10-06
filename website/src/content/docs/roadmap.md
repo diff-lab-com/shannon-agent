@@ -8,7 +8,7 @@ section: reference
 
 ## Current Status
 
-Shannon Code is in active development with 8,600+ tests and 300K+ lines of Rust code.
+Shannon is in active development with 11,752+ automated tests and 418K+ lines of Rust code.
 
 ## Completed
 
@@ -31,8 +31,13 @@ Shannon Code is in active development with 8,600+ tests and 300K+ lines of Rust 
 
 ## In Progress
 
-- Desktop app (Tauri) — currently scaffolded
 - Plugin marketplace
+
+## Desktop App
+
+The Tauri desktop app ships alongside the CLI: a chat workspace over the
+same engine, with sessions per project and an integrated terminal
+(persisted settings, replayable scrollback, per-project tabs).
 
 ## Planned
 

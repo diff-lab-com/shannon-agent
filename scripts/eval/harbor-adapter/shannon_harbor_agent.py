@@ -20,14 +20,17 @@ The binary evaluated is the LOCAL dev build pointed at by SHANNON_HARBOR_BIN
 `shannon --version` output is captured into the trial's agent info.
 """
 
+import asyncio
 import os
 import shlex
+import tempfile
 from pathlib import Path
 from typing import override
 
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     CliFlag,
+    NonZeroAgentExitCodeError,
     with_prompt_template,
 )
 from harbor.agents.model_connection import (
@@ -70,9 +73,39 @@ class Shannon(BaseInstalledAgent):
     def _local_bin(self) -> Path:
         return Path(os.environ.get("SHANNON_HARBOR_BIN", DEFAULT_SHANNON_BIN))
 
+    @property
+    def _local_musl_bin(self) -> Path:
+        return Path(
+            os.environ.get(
+                "SHANNON_HARBOR_MUSL_BIN",
+                str(self._local_bin.parent.parent
+                    / "x86_64-unknown-linux-musl" / "release" / "shannon"),
+            )
+        )
+
     @override
     async def install(self, environment: BaseEnvironment) -> None:
+        # Container libc probe decides which binary to ship: the default dev
+        # build is dynamically linked against the host glibc (needs >= 2.32),
+        # which dies on alpine/musl-based TB images (qemu-alpine-ssh,
+        # qemu-startup — RCA 2026-09-06, 2 tasks lost at install time). When a
+        # musl build is available locally, prefer it for musl containers.
+        try:
+            probe = await self.exec_as_root(
+                environment,
+                command=(
+                    "if [ -e /lib/ld-musl-x86_64.so.1 ]; then echo musl; "
+                    "else ldd --version 2>/dev/null | head -1; fi"
+                ),
+            )
+            libc_info = str(getattr(probe, "stdout", "") or "")
+        except Exception:
+            libc_info = ""
         local_bin = self._local_bin
+        if "musl" in libc_info:
+            musl_bin = self._local_musl_bin
+            if musl_bin.is_file():
+                local_bin = musl_bin
         if not local_bin.is_file():
             raise RuntimeError(
                 f"Shannon dev binary not found at {local_bin} — set "
@@ -128,22 +161,62 @@ class Shannon(BaseInstalledAgent):
         for key, value in os.environ.items():
             if key.startswith("SHANNON_") and key not in env:
                 env[key] = value
+        # Eval default: turn on the content-idle stream watchdog. CAUTION on
+        # the threshold: GLM-5.3-flash thinking mode has NORMAL mid-reasoning
+        # silences up to ~5 min (312 s measured; RCA 2026-09-07 — a 180 s
+        # watchdog killed healthy thinking streams, and each engine retry
+        # re-thought from scratch, producing another 180 s silence: the
+        # rc=3 death spiral that took the re-test to 18/86). 420 s covers
+        # observed silences with margin while still bounding true stalls.
+        env.setdefault("SHANNON_STREAM_IDLE_SECS", "420")
 
-        escaped_instruction = shlex.quote(instruction)
         cli_flags = self.build_cli_flags()
         extra_flags = (cli_flags + " ") if cli_flags else ""
 
-        await self.exec_as_agent(
-            environment,
-            command=(
+        # Write the prompt to a temp file, upload it into the container, and
+        # pass it via attached `--prompt=$(cat file)`. This handles prompts
+        # that begin with '-' or contain quoting-hostile characters (clap
+        # refuses separated values starting with '-'; see RCA 2026-09-07).
+        prompt_filename = "shannon_prompt.txt"
+        prompt_target = f"/tmp/{prompt_filename}"
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write(instruction)
+            tmp_path = Path(tmp.name)
+        try:
+            await environment.upload_file(tmp_path, prompt_target)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        command = (
                 "shannon "
                 f"--provider {shlex.quote(provider)} "
                 f"--model {shlex.quote(model)} "
-                "--disallowed-tools WebFetch --disallowed-tools WebSearch "
                 "--output-format json-stream "
                 f"{extra_flags}"
-                f"-p {escaped_instruction} "
+                # Attached long-form --prompt=<value>: clap refuses SEPARATED
+                # option values that start with '-' (RCA 2026-09-07: '-p - <file'
+                # assigned the literal "-" as the prompt → 0/85 sweep; '-p
+                # "$(cat f)"' with a leading-dash file was ALSO rejected). The
+                # attached `=` form carries the file's bytes verbatim — verified
+                # byte-exact with leading '-', newlines, backticks and $().
+                f"--prompt=\"$(cat {shlex.quote(prompt_target)})\" "
                 "> /logs/agent/shannon.ndjson 2> /logs/agent/shannon.stderr"
-            ),
-            env=env,
         )
+        # rc=4 (rate-limit) retries at the harness layer: coding-plan windows
+        # are bursty and the engine's in-call retry cannot cover an immediate
+        # first-call rejection (RCA 2026-09-06/07). One retry after 60s.
+        for attempt in range(2):
+            try:
+                await self.exec_as_agent(environment, command=command, env=env)
+                return
+            except NonZeroAgentExitCodeError as exc:
+                if attempt == 0 and "exit 4" in str(exc):
+                    self.logger.warning(
+                        "shannon exited rc=4 (rate limit); retrying once in 60s"
+                    )
+                    await asyncio.sleep(60)
+                    continue
+                raise
+

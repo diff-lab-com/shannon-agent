@@ -16,15 +16,12 @@ export default function ThemeSettings() {
   ]
 
   return (
-    <div className="max-w-3xl">
-      <header className="mb-xl">
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-xs">{t('settings.theme.title')}</h2>
-        <p className="font-body-md text-on-surface-variant">{t('settings.theme.subtitle')}</p>
-      </header>
+    <div className="max-w-narrow">
+      <p className="font-body-md text-on-surface-variant mb-md">{t('settings.theme.subtitle')}</p>
 
       <div className="space-y-lg pb-10">
         {/* Theme Selection */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
           <h3 className="font-headline-md text-headline-md mb-md">{t('settings.theme.themeLabel')}</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
             {themes.map(opt => (
@@ -35,35 +32,35 @@ export default function ThemeSettings() {
                 className={cn(
                   'h-auto cursor-pointer p-md rounded-xl border-2 transition-all text-left whitespace-normal',
                   theme === opt.id
-                    ? 'border-primary bg-primary-fixed/20 shadow-sm'
+                    ? 'border-primary bg-primary-fixed/20 shadow-e1'
                     : 'border-outline-variant/30 hover:border-primary/50',
                 )}
               >
                 <div className="aspect-video rounded-md mb-sm border border-outline-variant/20 overflow-hidden bg-background p-xs space-y-xs">
                   <div className="flex items-center gap-xs mb-xs">
                     <div className="w-3 h-3 rounded-sm bg-primary-container" />
-                    <div className="h-1 flex-1 bg-outline-variant/20 rounded" />
+                    <div className="h-1 flex-1 bg-outline-variant/20 rounded-sm" />
                   </div>
                   <div className="flex justify-end">
                     <div className="bg-primary rounded-sm px-xs py-[1px] max-w-[60%]">
-                      <div className="h-1 bg-on-primary/50 rounded w-8" />
+                      <div className="h-1 bg-on-primary/50 rounded-sm w-8" />
                     </div>
                   </div>
                   <div className="flex gap-xs">
                     <div className="w-3 h-3 rounded-full bg-primary-container shrink-0" />
                     <div className="bg-surface-container-lowest border border-outline-variant/10 rounded-sm px-xs py-[1px] max-w-[70%]">
-                      <div className="h-1 bg-on-surface-variant/30 rounded w-10" />
+                      <div className="h-1 bg-on-surface-variant/30 rounded-sm w-10" />
                     </div>
                   </div>
                   <div className="flex justify-end">
                     <div className="bg-primary rounded-sm px-xs py-[1px] max-w-[45%]">
-                      <div className="h-1 bg-on-primary/50 rounded w-5" />
+                      <div className="h-1 bg-on-primary/50 rounded-sm w-5" />
                     </div>
                   </div>
                 </div>
                 <p className={cn('text-center font-label-md', theme === opt.id ? 'text-on-surface font-bold' : 'text-on-surface')}>
-                  {opt.id === 'system' && <span className="material-symbols-outlined text-[14px] align-middle mr-xs">monitor</span>}
-                  {opt.label}
+                  {opt.id === 'system' && <span className="material-symbols-outlined icon-sm align-middle mr-xs">monitor</span>}
+                  {t(opt.labelKey)}
                 </p>
               </Button>
             ))}
@@ -71,7 +68,7 @@ export default function ThemeSettings() {
         </section>
 
         {/* Font Size Selection */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
           <h3 className="font-headline-md text-headline-md mb-md">{t('settings.theme.fontSize.title')}</h3>
           <p className="font-body-sm text-on-surface-variant mb-lg">{t('settings.theme.fontSize.subtitle')}</p>
 
@@ -84,7 +81,7 @@ export default function ThemeSettings() {
                 className={cn(
                   'flex-1 py-md px-sm rounded-lg border-2 transition-all font-label-md',
                   Math.abs(fontScale - size.value) < 0.01
-                    ? 'border-primary bg-primary-fixed/30 shadow-sm'
+                    ? 'border-primary bg-primary-fixed/30 shadow-e1'
                     : 'border-outline-variant/30 hover:border-primary/50',
                 )}
               >
@@ -100,11 +97,11 @@ export default function ThemeSettings() {
         </section>
 
         {/* Active Theme Info */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-headline-md text-headline-md">{t('settings.theme.activeTheme')}</h3>
-              <p className="font-body-sm text-on-surface-variant mt-xs">{intl.formatMessage({ id: 'settings.theme.usingTheme' }, { theme: (themes.find(opt => opt.id === theme)?.label ?? theme) })}</p>
+              <p className="font-body-sm text-on-surface-variant mt-xs">{intl.formatMessage({ id: 'settings.theme.usingTheme' }, { theme: t(themes.find(opt => opt.id === theme)?.labelKey ?? 'settings.theme.name.system') })}</p>
             </div>
             <div className="flex gap-sm">
               <div className="w-8 h-8 rounded-full bg-primary ring-2 ring-primary/30" title={t('settings.theme.colorPrimary')} />

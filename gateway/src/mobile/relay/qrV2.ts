@@ -21,8 +21,20 @@ export interface QrV2Options {
   relayUrl: string;
   /** Session ID for the relay (the host registers with this). */
   relaySessionId: string;
-  /** Retained for forward compatibility; unused in key derivation. */
+  /**
+   * Host X25519 E2E public key (base64url). On the relay rail this is the
+   * per-session ephemeral pubkey the phone's `e2e_hello` answers (relayHost
+   * mixes it into `deriveSessionKeyV2`); the desktop's direct-mode QR carries
+   * the host's STATIC seal identity (`mobile/directE2E.ts`) in the same field
+   * — mobile's `QrPairingPayload.fromJson` accepts it in either mode.
+   */
   hostE2EPubKey?: string | null;
+  /**
+   * v0.12: SHA-256 fingerprint (lowercase hex) of the gateway's self-signed
+   * TLS cert — the phone pins it when dialing the wss LAN endpoint. Present
+   * only when `mobile.tls.enabled` is on.
+   */
+  certFingerprint?: string | null;
 }
 
 /**
@@ -41,6 +53,7 @@ export function generateQrV2Payload(opts: QrV2Options): Record<string, unknown> 
     relayEndpoint: opts.relayUrl,
     relaySessionId: opts.relaySessionId,
     ...(opts.hostE2EPubKey ? { hostE2EPubKey: opts.hostE2EPubKey } : {}),
+    ...(opts.certFingerprint ? { certFingerprint: opts.certFingerprint } : {}),
   };
 }
 

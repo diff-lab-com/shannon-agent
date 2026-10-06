@@ -1,0 +1,27 @@
+# ChatScript: send-rejected — A-1 anchor（R4 组2「发送失败完整性」）。
+#
+# 第一轮 sendRejects: true — send_message 的 invoke 本身被拒（剧本层对应
+# 真实后端的 pre-turn 守卫：预算 / 并发查询 / goal），不产生任何事件、该轮
+# 被消费。断言在 chat-script.errors.spec.ts：普通错误横幅出现，且 composer
+# 的文本与草稿不丢（A-1 修复前输入被无条件清空 → 后端拒绝即丢字）。
+# 第二次发送消费下一轮，正常播放回复 → 会话继续。
+name: send-rejected
+description: 发送被拒 — invoke reject → composer 文本/草稿保留（A-1）→ 重发成功
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-reject
+      title: Send rejected
+      messages: []
+turns:
+  # 拒收轮：sendRejects 让 invoke 抛错，script 不播放（保持形状统一留空）。
+  - user: "这条会被 pre-turn 守卫拒绝"
+    sendRejects: true
+    script: []
+  # 重发轮：同样的文本第二次发送，正常流式回复并收尾（自动 query:completed）。
+  - user: "这条会被 pre-turn 守卫拒绝"
+    script:
+      - event: query:text
+        chunks:
+          - "重发成功的流式回复"

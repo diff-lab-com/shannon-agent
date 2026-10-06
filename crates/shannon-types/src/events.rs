@@ -87,6 +87,16 @@ pub struct ToolResultPayload {
     pub is_error: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// P1-⑤: engine tool metadata (§4.12 — currently the sandbox
+    /// classification). `serde(default)` keeps older engines parseable;
+    /// `None` is skipped so the wire shape is unchanged when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
+    /// P1-⑤ telemetry: approximate per-tool token attribution — usage
+    /// frames the desktop forwarder observed while this call was the
+    /// session's pending one. `None` when nothing was collapsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_used: Option<u64>,
 }
 
 /// Tool progress update (e.g., bash command output).
@@ -158,6 +168,17 @@ pub struct QueryFailedPayload {
     pub error: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// S1-1 (review 2026-10-05 §3 P-N1): structured failure classification,
+    /// produced by the engine where the typed error is in scope
+    /// (`shannon_engine::api::ApiError::error_kind`). One of the canonical
+    /// wire strings: `"auth"` (401) | `"quota"` (402) | `"rate_limit"` (429)
+    /// | `"authz"` (403) | `"other"` (network/timeout/5xx/…). `None` when
+    /// the emit site only had a rendered string — consumers fall back to
+    /// Display-text matching, which is transitional. Additive like
+    /// `session_id`: older payloads keep parsing, older consumers ignore
+    /// the field; the wire shape is unchanged when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
 }
 
 /// P1-3: explanation of why a permission prompt was raised. Field names are a
@@ -197,6 +218,11 @@ pub struct PermissionRequest {
     /// when no reason is available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<PermissionReason>,
+    /// P3-1: free-text risk explanation from the engine's policy table
+    /// ("Medium risk based on tool policy and approval mode", the
+    /// budget-exhausted notice, …). Additive like `reason`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_reason: Option<String>,
 }
 
 /// Session information for session list.
@@ -212,6 +238,22 @@ pub struct SessionInfo {
     pub parent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_point: Option<usize>,
+    /// P0 sidebar telemetry: true while this session has a live query
+    /// (joined from the session registry at list time). `serde(default)` +
+    /// `skip_serializing_if` keep older desktop builds / wire consumers
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running: Option<bool>,
+    /// P0 sidebar telemetry: epoch **milliseconds** of the session's last
+    /// activity (events.jsonl mtime at list time). `None` when the L0 log
+    /// is missing (e.g. brand-new in-memory session).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
+    /// Settings R3 T7: user-pinned flag, joined from the session's curation
+    /// sidecar at list time. `serde(default)` keeps older wire consumers
+    /// (and older desktops sending to newer UIs) unchanged — unpinned.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Session loaded event with messages.
@@ -365,6 +407,16 @@ pub mod event_names {
     pub const SESSIONS_UPDATED: &str = "sessions-updated";
     pub const SESSION_LOADED: &str = "session-loaded";
     pub const CONFIG_UPDATED: &str = "config-updated";
+    /// Settings R3 T7: emitted when a session's pinned flag changes (the
+    /// `set_session_pinned` command). Payload: `SessionPinChanged`. The
+    /// frontend refreshes the session list so the rail's pin sort/glyph
+    /// re-derives from the curation sidecar (the single source of truth).
+    pub const SESSION_PINS_CHANGED: &str = "session-pins-changed";
+    /// Settings R3 T7: emitted by the auto-archive scan for each session it
+    /// archived on the user's behalf. Payload: `SessionAutoArchived`. The
+    /// frontend toasts it so the user understands why the conversation left
+    /// the active rail (mirror of the resume auto-unarchive toast).
+    pub const SESSION_AUTO_ARCHIVED: &str = "session-auto-archived";
     pub const DIFF_REVIEW_AVAILABLE: &str = "diff-review-available";
     pub const BACKGROUND_TASK_UPDATE: &str = "background-task-update";
     pub const BACKGROUND_TASKS_UPDATED: &str = "background-tasks-updated";
@@ -391,11 +443,11 @@ pub mod event_names {
     /// Frontend: Tasks-page batch cards refresh on this instead of polling.
     pub const BATCH_UPDATED: &str = "batch:updated";
     /// P0-4: the session's cumulative spend crossed 80% of its budget cap.
-    /// Payload: [`BudgetStatusPayload`]. Frontend: yellow advisory bar.
+    /// Payload: [`BudgetStatusPayload`](super::BudgetStatusPayload). Frontend: yellow advisory bar.
     pub const BUDGET_WARNING: &str = "budget:warning";
     /// P0-4: the session's budget cap was reached — a send was rejected
     /// pre-turn or a running turn was cancelled mid-stream. Payload:
-    /// [`BudgetStatusPayload`]. Frontend: red choice bar (continue once with
+    /// [`BudgetStatusPayload`](super::BudgetStatusPayload). Frontend: red choice bar (continue once with
     /// bypass / raise the budget / stop).
     pub const BUDGET_EXCEEDED: &str = "budget:exceeded";
     pub const UPDATE_AVAILABLE: &str = "update-available";
@@ -415,6 +467,28 @@ pub mod event_names {
     /// Emitted by `desktop/src/terminal_commands.rs`; coalesced to at most
     /// one event per 16 ms per terminal.
     pub const TERMINAL_OUTPUT: &str = "terminal:output";
+    /// P3-6: the terminal's process exited naturally and the session was
+    /// reaped. Payload: `{ terminalId }` (see
+    /// `desktop/src/terminal_commands.rs` `TerminalExitPayload`). The
+    /// authoritative exit signal — the in-stream "[shannon: process exited
+    /// …" notice in `terminal:output` is display text only and must not be
+    /// parsed. Emitted right after the final output flush; explicit
+    /// `terminal_kill` does not emit it (the killing client already knows).
+    pub const TERMINAL_EXIT: &str = "terminal:exit";
+    /// Settings R3 T8 — the desktop `ask_user_question` tool surfaced one
+    /// question to the frontend (the GUI replacement for the terminal stdin
+    /// handler, which EOFs/hangs under a GUI). Payload: `AskUserRequest`
+    /// (`desktop/src/events.rs` — desktop-only wire type, same pattern as
+    /// `query:notice`). Frontend: the AskUserCard dialog; the answer travels
+    /// back through the `respond_ask_user` command keyed by `request_id`.
+    pub const ASK_USER_REQUEST: &str = "ask-user-request";
+    /// Settings R3 T8 — a pending ask_user question settled without an
+    /// answer: the 提问自动继续 timeout fired, the pending entry was dropped
+    /// and the tool auto-continued with a best-judgment answer. Payload:
+    /// `AskUserResolved` (`desktop/src/events.rs`); emitted on the timeout
+    /// path only — an answered question cleans up silently through
+    /// `respond_ask_user`'s remove semantics.
+    pub const ASK_USER_RESOLVED: &str = "ask-user-resolved";
 }
 
 #[cfg(test)]
@@ -429,6 +503,14 @@ mod tests {
         assert!(event_names::TASK_RETRY.contains(':'));
         assert!(event_names::BUDGET_WARNING.contains(':'));
         assert!(event_names::BUDGET_EXCEEDED.contains(':'));
+        assert!(event_names::TERMINAL_EXIT.contains(':'));
+    }
+
+    #[test]
+    fn terminal_exit_event_name_is_frozen() {
+        // Task 3's frontend listens on this exact string
+        // (desktop/ui EVENT_NAMES.TERMINAL_EXIT) — it must never drift.
+        assert_eq!(event_names::TERMINAL_EXIT, "terminal:exit");
     }
 
     #[test]
@@ -503,6 +585,7 @@ mod tests {
                 rule_name: None,
                 confidence: Some(0.74),
             }),
+            risk_reason: Some("Medium risk based on tool policy".into()),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"reason\""), "{json}");
@@ -557,11 +640,27 @@ mod tests {
             working_dir: None,
             parent_id: None,
             branch_point: None,
+            running: None,
+            updated_at: None,
+            pinned: false,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(!json.contains("working_dir"));
         assert!(!json.contains("parent_id"));
         assert!(!json.contains("branch_point"));
+        // P0 sidebar telemetry fields are additive and skipped when None —
+        // the wire shape stays byte-identical for older consumers.
+        assert!(!json.contains("running"));
+        assert!(!json.contains("updated_at"));
+        // Older payloads without the optional fields still parse; the T7 pin
+        // flag serde-defaults to unpinned.
+        let legacy: SessionInfo =
+            serde_json::from_str(r#"{"id":"s1","title":"T","created_at":1,"message_count":0}"#)
+                .unwrap();
+        assert_eq!(legacy.id, "s1");
+        assert_eq!(legacy.running, None);
+        assert_eq!(legacy.updated_at, None);
+        assert!(!legacy.pinned);
     }
 
     #[test]

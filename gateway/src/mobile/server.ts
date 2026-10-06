@@ -1,11 +1,14 @@
 import type { IncomingMessage } from "node:http";
 import { createServer, type RequestListener, type Server } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { WebSocket, WebSocketServer } from "ws";
 
 import type { Logger } from "../adapters/types.js";
 import type { ShannonEvent } from "./protocol.js";
 import { dispatchNdjson } from "./dispatch.js";
 import { MOBILE_PAGE_HTML } from "./web/page.js";
+import { DirectLink, type DirectE2EOptions } from "./directE2E.js";
+import type { PushReplayBuffer } from "./pushReplay.js";
 
 /**
  * The inbound mobile server — a WebSocket endpoint speaking NDJSON `shannon/*`
@@ -49,6 +52,13 @@ export interface MethodContext {
    * re-binds) this connection to a device, so pushes can reach it.
    */
   onSessionBound?: (deviceId: string) => void;
+  /**
+   * §O4: the process-wide replay ring (same instance the hub and the pairing
+   * handlers hold). The direct-query stream loop in `dispatch.ts` records
+   * its seq-stamped frames here so a drop mid-query replays on resume.
+   * Absent in tests/wirings that don't opt into replay.
+   */
+  readonly replay?: PushReplayBuffer;
 }
 
 /** Discriminated handler outcome — unambiguous vs. duck-typing the result. */
@@ -76,6 +86,12 @@ export interface MobileServerOptions {
   /** WS path (default "/"). */
   path?: string;
   /**
+   * v0.12 LAN hardening: serve the face over TLS (wss) with the persisted
+   * self-signed material from `ensureTlsMaterial` — the phone pins the cert
+   * fingerprint carried in the QR. Absent → plaintext ws (legacy behavior).
+   */
+  tls?: { key: string; cert: string };
+  /**
    * Optional connection gate. P1.1 leaves this unset (open for testing); P1.2
    * injects Ed25519 device verification. Returning `false` closes the socket
    * with code 4001 and dispatches no methods.
@@ -88,10 +104,38 @@ export interface MobileServerOptions {
    */
   onContext?: (ctx: MethodContext) => void | (() => void);
   /**
+   * §O4: the process-wide replay ring, surfaced on every connection's
+   * MethodContext so the dispatch stream loop can record its frames. The
+   * hub and the pairing handlers receive the SAME instance via their own
+   * options — construct once, inject three ways.
+   */
+  replayBuffer?: PushReplayBuffer;
+  /**
    * P2-1: serve the built-in PWA page on GET / (default true). Set false in
    * tests that want the old bare-WS behavior.
    */
   servePage?: boolean;
+  /**
+   * T9: optional POST handler for the desktop-facing RPC skins (the pairing
+   * access endpoints). Called with the request path (query stripped) and the
+   * RAW body (already size-capped). Returning null = "not mine" → the request
+   * falls through to the plain 404. Non-null results are sent verbatim
+   * (status + JSON body). The listener applies the same cross-site Origin
+   * defense to these POSTs as it does to WS upgrades.
+   */
+  httpApi?: (
+    path: string,
+    rawBody: string,
+  ) => Promise<{ status: number; body: string } | null>;
+  /**
+   * v0.13 negotiated direct-link E2E seal (cross-repo-adaptation-spec §I).
+   * When set, each connection's first binary frame may be the phone's
+   * `e2e_direct_hello`; an accepted hello seals both directions (C6 frames,
+   * per-connection counters) behind the host's static X25519 key. Absent —
+   * or a hello that cannot be honored — keeps the exact legacy plaintext
+   * behavior, so old phones are unaffected.
+   */
+  directE2E?: DirectE2EOptions;
 }
 
 export interface MobileServerHandle {
@@ -121,13 +165,58 @@ export class MobileServer {
         res.end(MOBILE_PAGE_HTML);
         return;
       }
+      if (
+        req.method === "POST" &&
+        this.opts.httpApi &&
+        isOriginAllowed(req)
+      ) {
+        const path = (req.url ?? "/").split("?")[0] ?? "/";
+        const httpApi = this.opts.httpApi;
+        readBody(req, MAX_HTTP_BODY_BYTES)
+          .then((rawBody) => httpApi(path, rawBody))
+          .then((outcome) => {
+            if (outcome) {
+              res.writeHead(outcome.status, { "content-type": "application/json" });
+              res.end(outcome.body);
+              return;
+            }
+            res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+            res.end("not found");
+          })
+          .catch(() => {
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "handler error" } }));
+          });
+        return;
+      }
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       res.end("not found");
     };
-    const httpServer = createServer(requestListener);
+    // TLS (v0.12): https server when material is provided — the phone dials
+    // wss and pins the cert fingerprint from the QR.
+    const httpServer: Server = this.opts.tls
+      ? createHttpsServer(
+          { key: this.opts.tls.key, cert: this.opts.tls.cert },
+          requestListener,
+        )
+      : createServer(requestListener);
     this.httpServer = httpServer;
-    const wss = new WebSocketServer({ server: httpServer, path: this.opts.path ?? "/" });
+    // noServer + manual `upgrade` handling: the server binds 0.0.0.0 in
+    // production, so upgrades are cross-checked (path + Origin) BEFORE the
+    // handshake completes — a drive-by web page in the phone's/LAN user's
+    // browser must not be able to open the socket and speak shannon/*.
+    const wss = new WebSocketServer({ noServer: true });
     this.wss = wss;
+    const wsPath = this.opts.path ?? "/";
+    httpServer.on("upgrade", (req, socket, head) => {
+      const pathname = (req.url ?? "/").split("?")[0];
+      if (pathname !== wsPath || !isOriginAllowed(req)) {
+        socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+    });
     await new Promise<void>((resolve, reject) => {
       httpServer.once("listening", resolve);
       httpServer.once("error", reject);
@@ -142,7 +231,8 @@ export class MobileServer {
     });
 
     this.opts.logger.info(
-      `mobile server listening on ${this.opts.host}:${boundPort}${this.opts.path ?? "/"}`,
+      `mobile server listening on ${this.opts.tls ? "wss" : "ws"}://` +
+        `${this.opts.host}:${boundPort}${this.opts.path ?? "/"}`,
     );
     return {
       get port() {
@@ -180,14 +270,35 @@ export class MobileServer {
         return;
       }
     }
-    const ctx: MethodContext = { socket, sessionId: null, logger: this.opts.logger };
+    // v0.13 direct seal: when configured, the link owns the inbound frame
+    // routing (first-frame negotiation) and every outbound send routes
+    // through it via the proxy socket (queued until the first frame decides,
+    // sealed once negotiated). The phone-facing surface is otherwise identical.
+    const link = this.opts.directE2E
+      ? new DirectLink(this.opts.directE2E, socket, this.opts.logger)
+      : null;
+    const ctx: MethodContext = {
+      socket: (link?.socket ?? socket) as WebSocket,
+      sessionId: null,
+      logger: this.opts.logger,
+      replay: this.opts.replayBuffer,
+    };
     const detach = this.opts.onContext?.(ctx);
     if (typeof detach === "function") this.detachers.push(detach);
+    // §I6.2: a pairing-flavor link publishes kid→K0 once shannon/pair binds
+    // this connection (after onContext so the hub's binder stays ahead).
+    link?.armPublishOnBind(ctx);
 
-    socket.on("message", (data) => {
-      const text = frameToString(data);
-      void this.onMessage(text, ctx);
-    });
+    if (link) {
+      link.listen((text) => {
+        void this.onMessage(text, ctx);
+      });
+    } else {
+      socket.on("message", (data) => {
+        const text = frameToString(data);
+        void this.onMessage(text, ctx);
+      });
+    }
     socket.on("error", (err) =>
       this.opts.logger.warn(`mobile socket error: ${(err as Error).message}`),
     );
@@ -210,6 +321,47 @@ export class MobileServer {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/** Cap for POST bodies (the pairing-access JSON is a token + a 6-digit code). */
+const MAX_HTTP_BODY_BYTES = 64 * 1024;
+
+/** Collect a request body, rejecting early once `max` bytes are exceeded. */
+function readBody(req: IncomingMessage, max: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > max) {
+        req.destroy(); // stop reading; the response write below still works
+        reject(new Error("body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+/**
+ * Cross-site WebSocket handshake defense. Browsers always send `Origin`;
+ * native clients (Dart `WebSocket.connect`, Node `ws`) send none. Policy:
+ *  - no Origin header → allow (native client);
+ *  - Origin authority === request Host → allow (the built-in PWA dialing home);
+ *  - anything else (another site's page, another LAN host's browser) → 403.
+ */
+function isOriginAllowed(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (origin === undefined) return true;
+  const host = req.headers.host;
+  if (typeof origin !== "string" || origin.length === 0 || typeof host !== "string") return false;
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
 
 function frameToString(data: unknown): string {
   if (typeof data === "string") return data;

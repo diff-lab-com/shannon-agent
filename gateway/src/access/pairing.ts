@@ -6,9 +6,11 @@ import { type NormalizedInbound, type Platform } from "../adapters/types.js";
  * Short-lived, single-use pairing codes that bootstrap the allowlist.
  *
  * When an unallowlisted user DMs the bot, the guard issues a 6-digit code via
- * `issue()`; the desktop app lists pending pairings and the user approves one,
- * which calls `consume()` → on success the host writes the sender to the
- * Allowlist (persisted) and they're in.
+ * `issue()`; an ALREADY-ALLOWED sender then approves it by replying
+ * `approve <code>` in any chat (review F42 — wired in bootstrap), which calls
+ * `consume()` → on success the host writes the sender to the Allowlist
+ * (persisted) and they're in. Codes may also be approved by editing the
+ * allowlist file directly when no second user exists yet.
  *
  * Codes are in-memory only (ephemeral by design), expire after `ttlMs`
  * (default 5 min), and are single-use. Expired entries are pruned on each
@@ -46,6 +48,15 @@ export class PairingStore {
     return record;
   }
 
+  /**
+   * Look at a pending code WITHOUT consuming it (review F42: the guard peeks
+   * to reject a self-approval before the single-use code is burned).
+   */
+  peek(code: string): PairingRecord | null {
+    this.pruneExpired();
+    return this.pending.get(code) ?? null;
+  }
+
   /** Validate and consume a code. Returns the record on success, null otherwise. */
   consume(code: string): PairingRecord | null {
     this.pruneExpired();
@@ -53,6 +64,17 @@ export class PairingStore {
     if (!record) return null;
     this.pending.delete(code); // single-use
     return record;
+  }
+
+  /**
+   * Snapshot of the live pending requests, oldest first (T9: the desktop's
+   * `shannon/pairing.pending` reads this — it must see exactly the codes the
+   * IM challenge issued, WITHOUT consuming them). Expired entries are pruned
+   * before listing so a caller can never observe a dead code.
+   */
+  listPending(): PairingRecord[] {
+    this.pruneExpired();
+    return [...this.pending.values()].sort((a, b) => a.createdAt - b.createdAt);
   }
 
   get pendingCount(): number {

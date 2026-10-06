@@ -53,7 +53,44 @@ pub use discovery::{
     PooledDiscoveryResult, UserPromptCallback, discover_pooled_remote_tools, discover_pooled_tools,
     make_elicitation_provider, make_sampling_provider,
 };
+pub use remote_handle::{RemoteFailureKind, classify_remote_failure};
 pub use types::{ChunkResult, ServerState, ServerStatus};
+
+/// Stored OAuth credentials for reconnecting a remote MCP server without
+/// re-running the authorization-code flow (A2 token lifecycle).
+///
+/// The desktop persists these in the server's settings entry after the
+/// initial OAuth install and after every successful refresh; this struct is
+/// the hand-off shape into [`McpProcessPool::start_remote_oauth_server`].
+#[derive(Debug, Clone)]
+pub struct StoredOAuthCredentials {
+    /// OAuth client id the original flow used (refresh requests carry it).
+    pub client_id: String,
+    /// Optional confidential-client secret.
+    pub client_secret: Option<String>,
+    /// Token endpoint URL the refresh grant is POSTed to.
+    pub token_url: String,
+    /// Access token persisted from the last successful exchange/refresh.
+    pub access_token: String,
+    /// Refresh token, when the vendor issued one.
+    pub refresh_token: Option<String>,
+    /// When the access token expires (unix epoch instant).
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Scopes to re-request on refresh (usually the install-time scopes).
+    pub scopes: Vec<String>,
+}
+
+/// Callback invoked when a remote OAuth server **rotated** its tokens (F6
+/// token-rotation persistence): a 401-triggered refresh inside the handle
+/// replaced the in-memory credential, and the new
+/// [`OAuthTokenSnapshot`](crate::auth::OAuthTokenSnapshot) should be
+/// persisted by the embedding application so the rotation survives restart.
+///
+/// Receives `(server_name, new_snapshot)`. The crate itself has no access
+/// to settings files or OS keyrings — persisting is entirely caller-side
+/// (the desktop installs a hook that writes the keyring). No subscriber
+/// means rotation stays memory-only, exactly the pre-F6 behavior.
+pub type TokenUpdateCallback = Arc<dyn Fn(&str, &crate::auth::OAuthTokenSnapshot) + Send + Sync>;
 
 /// Type alias for the async sampling callback.
 ///
@@ -130,6 +167,9 @@ pub struct McpProcessPool {
     /// Receives `(tool_name, progress, total)`.
     pub(crate) progress_callback:
         Arc<Mutex<Option<Arc<dyn Fn(&str, f64, Option<f64>) + Send + Sync>>>>,
+    /// Callback invoked when a remote OAuth server rotated its tokens (F6).
+    /// Shared `Arc` so the setter propagates to already-built handles.
+    pub(crate) on_token_refresh: Arc<Mutex<Option<TokenUpdateCallback>>>,
     /// Glob patterns for tool allowlisting (from `allowedTools` config).
     /// Empty = all tools allowed. `!` prefix = deny.
     allowed_patterns: Arc<RwLock<Vec<String>>>,
@@ -180,6 +220,7 @@ impl McpProcessPool {
             tool_cache: Arc::new(RwLock::new(HashMap::new())),
             cache_ttl: Duration::from_secs(60),
             progress_callback: Arc::new(Mutex::new(None)),
+            on_token_refresh: Arc::new(Mutex::new(None)),
             allowed_patterns: Arc::new(RwLock::new(Vec::new())),
             max_concurrent_per_server: 8,
             max_output_chars: 1_000_000,
@@ -369,7 +410,18 @@ impl McpProcessPool {
             )),
         });
 
-        handle.start().await?;
+        let start_result = handle.start().await;
+        if let Err(e) = start_result {
+            // W2-A: a failed start used to drop the handle, making the
+            // failure invisible to `list_servers`/`server_status` (the UI
+            // could only show a bare Offline). Keep the handle in the pool
+            // carrying the failure reason — W1-7's `last_error` contract —
+            // so consumers can diagnose (and stop/restart) it, while the
+            // error still propagates to the caller.
+            *handle.state.write().await = ServerState::Unhealthy(e.clone());
+            self.handles.insert(name.to_string(), handle);
+            return Err(e);
+        }
         self.handles.insert(name.to_string(), handle);
         self.fire_event(McpEvent::new(
             McpEventType::ServerConnected,
@@ -447,7 +499,117 @@ impl McpProcessPool {
             None => {}
         }
 
-        let handle = Arc::new(RemoteMcpServerHandle {
+        let handle = self.new_remote_handle(
+            name,
+            url,
+            resolved_headers,
+            header_commands,
+            auth_provider,
+            None,
+        );
+
+        if let Err(e) = handle.start().await {
+            // W2-A: same observability contract as `start_server` — a
+            // failed remote handshake stays in the pool as Unhealthy(err)
+            // so the desktop UI can render the concrete `last_error`
+            // instead of a bare Offline badge. The error still propagates.
+            *handle.state.write().await = ServerState::Unhealthy(e.clone());
+            self.remote_handles.insert(name.to_string(), handle);
+            return Err(e);
+        }
+        self.remote_handles.insert(name.to_string(), handle);
+        self.fire_event(McpEvent::new(
+            McpEventType::ServerConnected,
+            name.to_string(),
+            None,
+            serde_json::json!({"transport": "http"}),
+        ))
+        .await;
+        Ok(())
+    }
+
+    /// Start a remote MCP server whose OAuth tokens were persisted by an
+    /// earlier authorization-code flow (A2 token lifecycle).
+    ///
+    /// The provider is seeded with the stored access/refresh tokens, so the
+    /// handshake carries the saved credential and a 401 triggers the
+    /// refresh-once-retry path inside the handle. The caller snapshots the
+    /// (possibly rotated) tokens afterwards via [`Self::remote_oauth_tokens`]
+    /// and persists any change.
+    ///
+    /// Failure semantics match [`Self::start_remote_server`]: the failed
+    /// handle stays in the pool as `Unhealthy(reason)` and the error
+    /// propagates (classify it with `classify_remote_failure`).
+    pub async fn start_remote_oauth_server(
+        &self,
+        name: &str,
+        url: &str,
+        creds: StoredOAuthCredentials,
+    ) -> Result<(), String> {
+        let provider = OAuth2Provider::new_stored(
+            creds.client_id,
+            creds.token_url,
+            creds.access_token,
+            creds.refresh_token,
+            creds.expires_at,
+        )
+        .with_scopes(creds.scopes);
+        let provider = match creds.client_secret {
+            Some(secret) => provider.with_client_secret(secret),
+            None => provider,
+        };
+        info!(server = %name, "Configured stored OAuth credentials for remote MCP server");
+
+        let handle = self.new_remote_handle(
+            name,
+            url,
+            HashMap::new(),
+            HashMap::new(),
+            Some(Arc::new(provider)),
+            None,
+        );
+
+        if let Err(e) = handle.start().await {
+            *handle.state.write().await = ServerState::Unhealthy(e.clone());
+            self.remote_handles.insert(name.to_string(), handle);
+            return Err(e);
+        }
+        self.remote_handles.insert(name.to_string(), handle);
+        self.fire_event(McpEvent::new(
+            McpEventType::ServerConnected,
+            name.to_string(),
+            None,
+            serde_json::json!({"transport": "http"}),
+        ))
+        .await;
+        Ok(())
+    }
+
+    /// Snapshot the OAuth tokens held by the named remote server's provider.
+    ///
+    /// `None` when the server has no remote handle or no OAuth provider
+    /// (pure-remote / API-key rows). Callers diff this against what they
+    /// persisted and write back a change so refreshed tokens survive restart.
+    pub async fn remote_oauth_tokens(&self, name: &str) -> Option<crate::auth::OAuthTokenSnapshot> {
+        let provider = {
+            let handle = self.remote_handles.get(name)?;
+            handle.auth_provider.clone()
+        };
+        let provider = provider?;
+        Some(provider.token_snapshot().await)
+    }
+
+    /// Shared constructor for remote handles (HTTP/SSE and WebSocket).
+    fn new_remote_handle(
+        &self,
+        name: &str,
+        url: &str,
+        resolved_headers: HashMap<String, String>,
+        header_commands: HashMap<String, String>,
+        auth_provider: Option<Arc<OAuth2Provider>>,
+        ws_transport: Option<Arc<Mutex<crate::WebSocketTransport>>>,
+    ) -> Arc<RemoteMcpServerHandle> {
+        Arc::new(RemoteMcpServerHandle {
             name: name.to_string(),
             url: url.to_string(),
             client: reqwest::Client::builder()
@@ -477,21 +639,11 @@ impl McpProcessPool {
                 self.max_concurrent_per_server as usize,
             )),
             session_id: Arc::new(RwLock::new(None)),
-            ws_transport: None,
+            ws_transport,
             sampling_provider: self.sampling_provider.clone(),
             notification_tx: self.notification_tx.clone(),
-        });
-
-        handle.start().await?;
-        self.remote_handles.insert(name.to_string(), handle);
-        self.fire_event(McpEvent::new(
-            McpEventType::ServerConnected,
-            name.to_string(),
-            None,
-            serde_json::json!({"transport": "http"}),
-        ))
-        .await;
-        Ok(())
+            on_token_refresh: self.on_token_refresh.clone(),
+        })
     }
 
     /// Start a WebSocket-based MCP server and add it to the pool.
@@ -550,40 +702,14 @@ impl McpProcessPool {
             None => None,
         };
 
-        let handle = Arc::new(RemoteMcpServerHandle {
-            name: name.to_string(),
-            url: url.to_string(),
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_else(|e| {
-                    tracing::error!("Failed to create HTTP client: {e}");
-                    reqwest::Client::new()
-                }),
-            headers: resolved_headers,
+        let handle = self.new_remote_handle(
+            name,
+            url,
+            resolved_headers,
+            HashMap::new(),
             auth_provider,
-            header_commands: HashMap::new(),
-            state: Arc::new(RwLock::new(ServerState::Starting)),
-            capabilities: Arc::new(RwLock::new(None)),
-            protocol_version: Arc::new(RwLock::new(String::new())),
-            next_id: AtomicU64::new(1),
-            request_count: AtomicU64::new(0),
-            error_count: AtomicU64::new(0),
-            total_result_bytes: AtomicU64::new(0),
-            budget_bytes: Arc::new(RwLock::new(None)),
-            restart_count: Arc::new(AtomicU64::new(0)),
-            max_restarts: self.max_restarts,
-            started_at: Arc::new(RwLock::new(None)),
-            request_timeout: self.request_timeout,
-            tool_timeout: self.tool_timeout,
-            concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(
-                self.max_concurrent_per_server as usize,
-            )),
-            session_id: Arc::new(RwLock::new(None)),
-            ws_transport: Some(Arc::new(Mutex::new(ws))),
-            sampling_provider: self.sampling_provider.clone(),
-            notification_tx: self.notification_tx.clone(),
-        });
+            Some(Arc::new(Mutex::new(ws))),
+        );
 
         handle.start().await?;
         self.remote_handles.insert(name.to_string(), handle);
@@ -1667,6 +1793,19 @@ impl McpProcessPool {
         callback: Arc<dyn Fn(&str, f64, Option<f64>) + Send + Sync>,
     ) {
         *self.progress_callback.lock().await = Some(callback);
+    }
+
+    /// Set a callback invoked when a remote OAuth server rotates its tokens
+    /// (F6 token-rotation persistence).
+    ///
+    /// The callback receives `(server_name, new_snapshot)` right after a
+    /// 401-triggered refresh succeeded inside the handle — during the
+    /// connect handshake and during tool calls alike. The embedding
+    /// application persists the snapshot (desktop: keyring via the F5
+    /// keyring-first write path) so a rotated refresh token survives
+    /// restart; without a callback, rotation stays memory-only.
+    pub async fn set_on_token_refresh(&self, callback: TokenUpdateCallback) {
+        *self.on_token_refresh.lock().await = Some(callback);
     }
 
     /// Request completions from a server that supports the completions capability.

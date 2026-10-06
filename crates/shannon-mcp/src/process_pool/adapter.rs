@@ -263,17 +263,22 @@ impl Tool for PooledMcpToolAdapter {
         self.annotations.as_ref().is_some_and(|a| a.read_only_hint)
     }
 
+    // P1-2 review fix: the two MCP adapter paths (this pooled adapter and
+    // shannon-core's McpToolAdapter) MUST agree on flag semantics — the
+    // same server behaves differently depending on which path discovered
+    // it otherwise. Both now use the conservative policy:
+    //   is_concurrency_safe = read_only AND idempotent
+    //   is_destructive      = destructive AND NOT read_only
     fn is_concurrency_safe(&self) -> bool {
-        // Idempotent or read-only tools are safe to run concurrently.
         self.annotations
             .as_ref()
-            .is_some_and(|a| a.read_only_hint || a.idempotent_hint)
+            .is_some_and(|a| a.read_only_hint && a.idempotent_hint)
     }
 
     fn is_destructive(&self) -> bool {
         self.annotations
             .as_ref()
-            .is_some_and(|a| a.destructive_hint)
+            .is_some_and(|a| a.destructive_hint && !a.read_only_hint)
     }
 }
 
@@ -361,26 +366,54 @@ mod tests {
         assert!(!safe.is_destructive());
     }
 
+    // P1-2: aligned with shannon-core's McpToolAdapter — concurrency-safe
+    // requires BOTH read_only AND idempotent (single-hint tools no longer
+    // qualify).
     #[test]
-    fn test_is_concurrency_safe_read_only() {
+    fn test_is_concurrency_safe_read_only_alone_is_not_safe() {
         let read_only = make_adapter(Some(crate::ToolAnnotations {
             read_only_hint: true,
             destructive_hint: false,
             idempotent_hint: false,
             open_world_hint: false,
         }));
-        assert!(read_only.is_concurrency_safe());
+        assert!(!read_only.is_concurrency_safe());
     }
 
     #[test]
-    fn test_is_concurrency_safe_idempotent() {
+    fn test_is_concurrency_safe_idempotent_alone_is_not_safe() {
         let idempotent = make_adapter(Some(crate::ToolAnnotations {
             read_only_hint: false,
             destructive_hint: false,
             idempotent_hint: true,
             open_world_hint: false,
         }));
-        assert!(idempotent.is_concurrency_safe());
+        assert!(!idempotent.is_concurrency_safe());
+    }
+
+    #[test]
+    fn test_is_concurrency_safe_requires_both_hints() {
+        let both = make_adapter(Some(crate::ToolAnnotations {
+            read_only_hint: true,
+            destructive_hint: false,
+            idempotent_hint: true,
+            open_world_hint: false,
+        }));
+        assert!(both.is_concurrency_safe());
+    }
+
+    #[test]
+    fn test_is_destructive_excludes_read_only() {
+        let contradictory = make_adapter(Some(crate::ToolAnnotations {
+            read_only_hint: true,
+            destructive_hint: true,
+            idempotent_hint: false,
+            open_world_hint: false,
+        }));
+        assert!(
+            !contradictory.is_destructive(),
+            "read_only takes precedence over a contradictory destructive hint"
+        );
     }
 
     #[test]

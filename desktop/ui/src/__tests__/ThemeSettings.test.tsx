@@ -27,9 +27,11 @@ describe('ThemeSettings', () => {
     }
   })
 
-  it('renders theme settings heading', () => {
+  it('renders theme subtitle', () => {
     render(wrap(<ThemeSettings />))
-    expect(screen.getByText('Theme Settings')).toBeInTheDocument()
+    // The page-level h1 was retired — the global Header shows the page
+    // name; here we pin the subtitle as the page's distinctive marker.
+    expect(screen.getByText(/Customize the visual environment/)).toBeInTheDocument()
   })
 
   it('renders theme selection section', () => {

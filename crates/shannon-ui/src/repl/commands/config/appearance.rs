@@ -80,23 +80,34 @@ pub(crate) fn handle_theme(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 /// /accessibility — toggle or check accessibility mode.
+///
+/// Review P2-6: motion is part of accessibility, so `on`/`off` here also
+/// drives reduced motion for the session (spinner static mode re-synced via
+/// `Repl::set_reduced_motion`). The env-level opt-in is
+/// `SHANNON_REDUCED_MOTION=1|true|yes`; `NO_COLOR` no longer affects motion.
+/// The toggle is session-scoped — `preferences.rs` has no persistence slot
+/// for it yet.
 pub(crate) fn handle_accessibility(repl: &mut Repl, args: &str) -> Result<()> {
     let arg = args.trim();
     match arg {
         "on" | "enable" | "true" | "1" => {
             repl.state.accessibility_mode = true;
             crate::a11y::set_enabled(true);
+            repl.set_reduced_motion(true);
             repl.chat.add_message(
                 ChatRole::System,
-                "Accessibility mode enabled. Decorative characters replaced with plain text."
+                "Accessibility mode enabled. Decorative characters replaced with plain text. Reduced motion on."
                     .to_string(),
             );
         }
         "off" | "disable" | "false" | "0" => {
             repl.state.accessibility_mode = false;
             crate::a11y::set_enabled(false);
-            repl.chat
-                .add_message(ChatRole::System, "Accessibility mode disabled.".to_string());
+            repl.set_reduced_motion(false);
+            repl.chat.add_message(
+                ChatRole::System,
+                "Accessibility mode disabled. Reduced motion off.".to_string(),
+            );
         }
         "" | "status" => {
             let state = if repl.state.accessibility_mode {
@@ -104,8 +115,13 @@ pub(crate) fn handle_accessibility(repl: &mut Repl, args: &str) -> Result<()> {
             } else {
                 "disabled"
             };
+            let motion = if repl.state.reduced_motion {
+                "on"
+            } else {
+                "off"
+            };
             repl.chat.add_message(ChatRole::System,
-                format!("Accessibility mode: {state}\n\nUsage: /accessibility on|off\nAlso auto-enabled via NO_GRAPHICS or ACCESSIBILITY env vars."));
+                format!("Accessibility mode: {state}\nReduced motion: {motion}\n\nUsage: /accessibility on|off\nAlso auto-enabled via NO_GRAPHICS or ACCESSIBILITY env vars; SHANNON_REDUCED_MOTION=1|true|yes enables reduced motion (NO_COLOR does not affect it)."));
         }
         _ => {
             repl.chat.add_message(

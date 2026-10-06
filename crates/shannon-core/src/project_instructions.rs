@@ -8,6 +8,7 @@ use tracing::debug;
 const INSTRUCTION_FILES: &[&str] = &[
     "CLAUDE.md",
     "AGENTS.md",
+    "SHANNON.md",
     "GEMINI.md",
     ".cursorrules",
     ".windsurfrules",
@@ -20,13 +21,63 @@ const DEFAULT_MAX_IMPORT_DEPTH: usize = 5;
 /// Default maximum total imported content size in bytes.
 const DEFAULT_MAX_IMPORT_SIZE: usize = 100 * 1024;
 
+/// Maximum size in bytes for a single instruction file (1 MiB).
+///
+/// The main CLAUDE.md/AGENTS.md body has no other size guard (the @import
+/// budget above only bounds *imported* content), so a runaway instruction
+/// file would otherwise be pulled wholesale into the system prompt. Files
+/// larger than this cap are truncated at the limit with a stderr warning.
+const MAX_INSTRUCTION_FILE_SIZE: u64 = 1024 * 1024;
+
+/// Read an instruction file with a hard per-file size cap.
+///
+/// Streams at most [`MAX_INSTRUCTION_FILE_SIZE`] `+ 1` bytes from the file so
+/// the read itself never buffers more than the cap allows. Returns `None` if
+/// the file cannot be opened/read (matching the previous `read_to_string`
+/// behaviour) and truncates with a stderr warning when the file exceeds the
+/// cap.
+fn read_instruction_file_capped(path: &Path) -> Option<String> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::new();
+    file.take(MAX_INSTRUCTION_FILE_SIZE + 1)
+        .read_to_end(&mut buf)
+        .ok()?;
+
+    if buf.len() as u64 > MAX_INSTRUCTION_FILE_SIZE {
+        buf.truncate(MAX_INSTRUCTION_FILE_SIZE as usize);
+        eprintln!(
+            "warning: instruction file '{}' exceeds the 1 MiB size limit, truncating",
+            path.display()
+        );
+    }
+
+    String::from_utf8(buf).ok()
+}
+
+/// Candidate directories for user-level instruction files, in priority order
+/// within the same `User` scope level: Shannon's own directory wins over the
+/// Claude compatibility directory; within each directory the
+/// [`INSTRUCTION_FILES`] order applies.
+///
+/// Returns `(display label, directory)` pairs so callers can render stable
+/// `~/.shannon/...` style paths regardless of where the real home lives.
+fn user_instruction_dirs(home: &Path) -> Vec<(&'static str, PathBuf)> {
+    vec![
+        ("~/.shannon", home.join(".shannon")),
+        ("~/.claude", home.join(".claude")),
+    ]
+}
+
 /// Instruction scope levels for hierarchical priority.
 ///
 /// Priority order (highest to lowest):
 /// 1. Managed - Remote/organization managed instructions
 /// 2. Project - Project root instructions
-/// 3. User - User-level instructions (~/.claude/)
-/// 4. Local - Local project (.claude/, gitignored)
+/// 3. Ancestor - Parent-directory instructions (still project context)
+/// 4. User - User-level instructions (~/.claude/)
+/// 5. Local - Local project (.claude/, gitignored)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InstructionScope {
     /// Managed/remote instructions (highest priority)
@@ -35,6 +86,10 @@ pub enum InstructionScope {
     Project = 75,
     /// Project root scope alias
     ProjectRoot = 74,
+    /// Instructions found in a parent directory above the starting
+    /// directory. Still project context (NOT user-level), but broader than
+    /// the project root itself.
+    Ancestor = 73,
     /// User instructions (~/.claude/CLAUDE.md)
     User = 50,
     /// Global scope alias (user-level)
@@ -51,6 +106,7 @@ impl InstructionScope {
         match self {
             Self::Managed => "managed",
             Self::Project | Self::ProjectRoot => "project",
+            Self::Ancestor => "ancestor",
             Self::User | Self::Global => "user",
             Self::Local => "local",
             Self::Directory => "directory",
@@ -62,6 +118,7 @@ impl InstructionScope {
         match self {
             Self::Managed => "Managed/remote instructions (highest priority)",
             Self::Project | Self::ProjectRoot => "Project root instructions (repository root)",
+            Self::Ancestor => "Ancestor directory instructions (parent of the project root)",
             Self::User | Self::Global => "User instructions (~/.claude/)",
             Self::Local => "Local project (.claude/, .shannon/, gitignored)",
             Self::Directory => "Directory-specific instructions (cwd-relative)",
@@ -122,10 +179,13 @@ fn load_from_directory_with_scope(
         let scope = if path == dir {
             base_scope
         } else {
-            // Parent directories get lower scope
+            // Parent directories keep their actual disposition: they are
+            // ancestor project context, NOT user-level instructions
+            // (R1-1). ~/.claude/CLAUDE.md is loaded separately as `User`
+            // and never passes through this walk. Ancestor ranks below the
+            // project root but above user-level.
             match base_scope {
-                InstructionScope::Project => InstructionScope::User,
-                InstructionScope::Local => InstructionScope::Project,
+                InstructionScope::Project | InstructionScope::Local => InstructionScope::Ancestor,
                 _ => base_scope,
             }
         };
@@ -133,7 +193,7 @@ fn load_from_directory_with_scope(
         for filename in INSTRUCTION_FILES {
             let candidate = path.join(filename);
             if candidate.is_file() {
-                if let Ok(content) = std::fs::read_to_string(&candidate) {
+                if let Some(content) = read_instruction_file_capped(&candidate) {
                     if !content.trim().is_empty() {
                         found.push((candidate, content, scope));
                     }
@@ -177,11 +237,7 @@ fn load_from_directory_with_scope(
         all_imported_files.extend(imported);
 
         // Add scope header
-        content.push_str(&format!(
-            "## {} Scope: {} ---\n\n",
-            scope.name(),
-            display_name
-        ));
+        content.push_str(&format!("## {} scope: {}\n\n", scope.name(), display_name));
         content.push_str(&resolved);
         content.push_str("\n\n");
 
@@ -330,7 +386,17 @@ fn process_import_line_inner(
                         }
                     }
                     Err(_) => {
-                        // Path doesn't exist yet, will be caught by read below
+                        // Path doesn't resolve (missing, or unresolvable):
+                        // refuse the import instead of falling back to a raw
+                        // read, which would bypass the containment check
+                        // above (TOCTOU / escape window). Keep the `@`
+                        // reference verbatim, matching the other skip paths.
+                        eprintln!(
+                            "warning: @import path '{path_str}' not found, keeping reference as-is"
+                        );
+                        result.push('@');
+                        i += 1;
+                        continue;
                     }
                 }
 
@@ -342,9 +408,11 @@ fn process_import_line_inner(
                     continue;
                 }
 
-                // Try to read and inline the file
-                match std::fs::read_to_string(&full_path) {
-                    Ok(file_content) => {
+                // Try to read and inline the file (same 1 MiB per-file cap as
+                // the main instruction body; the 100 KiB total import budget
+                // below still applies on top of it).
+                match read_instruction_file_capped(&full_path) {
+                    Some(file_content) => {
                         let new_bytes = file_content.len();
                         if *total_imported_bytes + new_bytes > max_total_size {
                             eprintln!(
@@ -400,8 +468,10 @@ fn process_import_line_inner(
                         i += 1 + path_str.len();
                         continue;
                     }
-                    Err(e) => {
-                        eprintln!("warning: @import file '{path_str}' not found: {e}");
+                    None => {
+                        eprintln!(
+                            "warning: @import file '{path_str}' not found or unreadable, keeping reference as-is"
+                        );
                         result.push('@');
                         i += 1;
                         continue;
@@ -555,7 +625,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
     // Gracefully skipped when no managed instructions are configured.
     if let Ok(Some(managed_content)) = load_managed_instructions(dir) {
         all_content.push_str(&format!(
-            "## {} Scope: managed ---\n\n{}\n\n",
+            "## {} scope: managed\n\n{}\n\n",
             InstructionScope::Managed.name(),
             managed_content
         ));
@@ -571,34 +641,35 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
         instruction_files.extend(proj.instruction_files);
     }
 
-    // 3. Load user-level global instructions from ~/.claude/CLAUDE.md
+    // 3. Load user-level global instructions (~/.shannon/, then ~/.claude/),
+    //    each directory searched in INSTRUCTION_FILES order.
     if let Some(home) = dirs::home_dir() {
-        let claude_dir = home.join(".claude");
-        for filename in INSTRUCTION_FILES {
-            let home_file = claude_dir.join(filename);
-            if home_file.is_file() {
-                if let Ok(content) = std::fs::read_to_string(&home_file) {
-                    if !content.trim().is_empty() {
-                        let (resolved, imported) = resolve_content_imports(
-                            &content,
-                            &claude_dir,
-                            &claude_dir,
-                            DEFAULT_MAX_IMPORT_DEPTH,
-                            DEFAULT_MAX_IMPORT_SIZE,
-                        );
-                        all_imported.extend(imported);
-                        all_content.push_str(&format!(
-                            "## {} Scope: ~/.claude/{} ---\n\n{}\n\n",
-                            InstructionScope::User.name(),
-                            filename,
-                            resolved
-                        ));
-                        all_files.push(format!("~/.claude/{filename}"));
-                        instruction_files.push(InstructionFile {
-                            path: home_file,
-                            content,
-                            scope: InstructionScope::User,
-                        });
+        for (user_label, user_dir) in user_instruction_dirs(&home) {
+            for filename in INSTRUCTION_FILES {
+                let home_file = user_dir.join(filename);
+                if home_file.is_file() {
+                    if let Some(content) = read_instruction_file_capped(&home_file) {
+                        if !content.trim().is_empty() {
+                            let (resolved, imported) = resolve_content_imports(
+                                &content,
+                                &user_dir,
+                                &user_dir,
+                                DEFAULT_MAX_IMPORT_DEPTH,
+                                DEFAULT_MAX_IMPORT_SIZE,
+                            );
+                            all_imported.extend(imported);
+                            all_content.push_str(&format!(
+                                "## {} scope: {user_label}/{filename}\n\n{}\n\n",
+                                InstructionScope::User.name(),
+                                resolved
+                            ));
+                            all_files.push(format!("{user_label}/{filename}"));
+                            instruction_files.push(InstructionFile {
+                                path: home_file,
+                                content,
+                                scope: InstructionScope::User,
+                            });
+                        }
                     }
                 }
             }
@@ -618,7 +689,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
         for filename in INSTRUCTION_FILES {
             let local_file = local_dir.join(filename);
             if local_file.is_file() {
-                if let Ok(content) = std::fs::read_to_string(&local_file) {
+                if let Some(content) = read_instruction_file_capped(&local_file) {
                     if !content.trim().is_empty() {
                         let canonical = local_file
                             .canonicalize()
@@ -638,7 +709,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
                         all_imported.extend(imported);
                         let rel_path = format!("{dir_name}/{filename}");
                         all_content.push_str(&format!(
-                            "## {} Scope: {} ---\n\n{}\n\n",
+                            "## {} scope: {}\n\n{}\n\n",
                             InstructionScope::Local.name(),
                             rel_path,
                             resolved
@@ -660,7 +731,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
         let local_filename = base_filename.replace(".md", ".local.md");
         let local_file = dir.join(&local_filename);
         if local_file.is_file() {
-            if let Ok(content) = std::fs::read_to_string(&local_file) {
+            if let Some(content) = read_instruction_file_capped(&local_file) {
                 if !content.trim().is_empty() {
                     let canonical = local_file
                         .canonicalize()
@@ -679,7 +750,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
                     );
                     all_imported.extend(imported);
                     all_content.push_str(&format!(
-                        "## {} Scope: {} ---\n\n{}\n\n",
+                        "## {} scope: {}\n\n{}\n\n",
                         InstructionScope::Local.name(),
                         local_filename,
                         resolved
@@ -695,11 +766,10 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
         }
     }
 
-    // 5. Load git context
-    if let Some(git) = git_context(dir) {
-        all_content.push_str(&git);
-        all_files.push("git context".to_string());
-    }
+    // NOTE: git context is intentionally NOT part of this payload. It is
+    // per-turn mutable state; embedding it here churned the prompt cache on
+    // every edit. The engine renders it in the non-cached trailing
+    // environment block instead (see query_engine/engine.rs).
 
     if all_content.is_empty() {
         None
@@ -723,13 +793,11 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
 
 /// Emit a `HookEvent::InstructionsLoaded` event when the engine is wired up.
 ///
-/// This is the no-op default implementation: the hook manager sits in
-/// `tool_execution.rs` (a sibling module). To avoid a circular dependency
-/// between `project_instructions` and `tool_execution`, the actual emit is
-/// performed via the `INSTRUCTION_HOOK_EMITTER` global set at startup by
-/// `ToolExecutionContext::install_instructions_emitter`. The default (when
-/// not installed) is a no-op so the loader keeps working in tests / CLI
-/// headless mode without any hook setup.
+/// This is the no-op default implementation: the actual emit is performed
+/// via the `INSTRUCTION_HOOK_EMITTER` global set at startup by
+/// [`install_instructions_emitter`]. The default (when not installed) is a
+/// no-op so the loader keeps working in tests / CLI headless mode without
+/// any hook setup.
 fn emit_instructions_loaded(files_count: usize, total_bytes: usize, files: &[String]) {
     if let Some(emitter) = INSTRUCTION_HOOK_EMITTER.get() {
         let event = shannon_engine::hooks::HookEvent::InstructionsLoaded {
@@ -749,7 +817,7 @@ fn emit_instructions_loaded(files_count: usize, total_bytes: usize, files: &[Str
 type InstructionsHookEmitter = Box<dyn Fn(shannon_engine::hooks::HookEvent) + Send + Sync>;
 
 /// Global slot for the instructions hook emitter. Populated by
-/// [`install_instructions_emitter`] from `tool_execution.rs` after the
+/// [`install_instructions_emitter`] during engine wiring, after the
 /// `HookManager` is constructed; read by [`emit_instructions_loaded`] every
 /// time the instruction loader finishes a merge.
 static INSTRUCTION_HOOK_EMITTER: std::sync::OnceLock<InstructionsHookEmitter> =
@@ -793,13 +861,14 @@ fn load_managed_instructions(_dir: &Path) -> Result<Option<String>, Box<dyn std:
 pub fn get_active_scopes(dir: &Path) -> Vec<InstructionScope> {
     let mut scopes = Vec::new();
 
-    // Check global scope
+    // Check global scope (~/.shannon/, then ~/.claude/)
     if let Some(home) = dirs::home_dir() {
-        let claude_dir = home.join(".claude");
-        for filename in INSTRUCTION_FILES {
-            if claude_dir.join(filename).is_file() {
-                scopes.push(InstructionScope::Global);
-                break;
+        for (_, user_dir) in user_instruction_dirs(&home) {
+            for filename in INSTRUCTION_FILES {
+                if user_dir.join(filename).is_file() {
+                    scopes.push(InstructionScope::Global);
+                    break;
+                }
             }
         }
     }
@@ -863,7 +932,7 @@ pub fn get_instruction_info(dir: &Path) -> String {
                     .strip_prefix(&home)
                     .ok()
                     .and_then(|p| {
-                        if p.starts_with(".claude") {
+                        if p.starts_with(".claude") || p.starts_with(".shannon") {
                             Some(format!("~/{}", p.to_string_lossy()))
                         } else {
                             None
@@ -919,14 +988,23 @@ pub struct InstructionWatcher {
 
 impl InstructionWatcher {
     /// Create a new watcher for the given working directory.
+    ///
+    /// The constructor performs the initial scan *and* preheats the content
+    /// cache: `mtimes` is seeded with the freshly observed modification times
+    /// and `cached_content` holds the merged instruction payload, so the very
+    /// first `cached_instructions()` call hits without waiting for a file
+    /// change (and the first `check_and_reload()` compares against a real
+    /// baseline instead of reporting a spurious full reload).
     pub fn new(watch_dir: PathBuf) -> Self {
         let mut watcher = Self {
             watch_dir,
             mtimes: std::collections::HashMap::new(),
             cached_content: None,
         };
-        // Initial scan
-        let _ = watcher.scan_mtimes();
+        watcher.mtimes = watcher.scan_mtimes();
+        watcher.cached_content = Some(
+            load_full_context(&watcher.watch_dir).map_or_else(String::new, |instr| instr.content),
+        );
         watcher
     }
 
@@ -934,14 +1012,16 @@ impl InstructionWatcher {
     fn scan_mtimes(&mut self) -> std::collections::HashMap<PathBuf, std::time::SystemTime> {
         let mut current_mtimes = std::collections::HashMap::new();
 
-        // Check home-level instructions (global scope)
+        // Check home-level instructions (global scope: ~/.shannon/ then ~/.claude/)
         if let Some(home) = dirs::home_dir() {
-            for filename in INSTRUCTION_FILES {
-                let path = home.join(".claude").join(filename);
-                if path.is_file() {
-                    if let Ok(meta) = std::fs::metadata(&path) {
-                        if let Ok(mtime) = meta.modified() {
-                            current_mtimes.insert(path, mtime);
+            for (_, user_dir) in user_instruction_dirs(&home) {
+                for filename in INSTRUCTION_FILES {
+                    let path = user_dir.join(filename);
+                    if path.is_file() {
+                        if let Ok(meta) = std::fs::metadata(&path) {
+                            if let Ok(mtime) = meta.modified() {
+                                current_mtimes.insert(path, mtime);
+                            }
                         }
                     }
                 }
@@ -1033,7 +1113,11 @@ impl InstructionWatcher {
         Some((changed_paths, new_content))
     }
 
-    /// Get the cached instruction content (reload first if needed).
+    /// Get the cached instruction content.
+    ///
+    /// Preheated at construction time and refreshed by [`Self::check_and_reload`]
+    /// whenever a file changes, so callers can hit the cache without a full
+    /// rescan on the common (unchanged) path. Empty when no instructions exist.
     pub fn cached_instructions(&self) -> Option<&str> {
         self.cached_content.as_deref()
     }
@@ -1052,67 +1136,58 @@ mod tests {
 
     #[test]
     fn test_load_empty_dir() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        assert!(load_from_directory(&tmp).is_none());
-        let _ = fs::remove_dir_all(&tmp);
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(load_from_directory(tmp.path()).is_none());
     }
 
     #[test]
     fn test_load_claude_md() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Test\n\nUse Rust best practices.").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("CLAUDE.md"),
+            "# Test\n\nUse Rust best practices.",
+        )
+        .unwrap();
 
-        let result = load_from_directory(&tmp);
+        let result = load_from_directory(tmp.path());
         assert!(result.is_some());
         let instructions = result.unwrap();
         assert!(instructions.content.contains("Use Rust best practices"));
         assert!(instructions.loaded_files.contains(&"CLAUDE.md".to_string()));
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_load_multiple_files() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Claude rules").unwrap();
-        fs::write(tmp.join("AGENTS.md"), "# Agent rules").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Claude rules").unwrap();
+        fs::write(tmp.path().join("AGENTS.md"), "# Agent rules").unwrap();
 
-        let result = load_from_directory(&tmp);
+        let result = load_from_directory(tmp.path());
         assert!(result.is_some());
         let instructions = result.unwrap();
         assert!(instructions.content.contains("Claude rules"));
         assert!(instructions.content.contains("Agent rules"));
         assert_eq!(instructions.loaded_files.len(), 2);
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_load_empty_file_skipped() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "   \n  \n").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "   \n  \n").unwrap();
 
-        assert!(load_from_directory(&tmp).is_none());
-
-        let _ = fs::remove_dir_all(&tmp);
+        assert!(load_from_directory(tmp.path()).is_none());
     }
 
     #[test]
     fn test_load_parent_directory() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        let child = tmp.join("subdir");
+        let tmp = tempfile::tempdir().unwrap();
+        let child = tmp.path().join("subdir");
         fs::create_dir_all(&child).unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Parent project rules").unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Parent project rules").unwrap();
 
         let result = load_from_directory(&child);
         assert!(result.is_some());
         assert!(result.unwrap().content.contains("Parent project rules"));
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1140,16 +1215,17 @@ mod tests {
 
     #[test]
     fn test_git_context_not_repo() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        let ctx = git_context(&tmp);
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = git_context(tmp.path());
         assert!(ctx.is_none(), "Should return None for non-git directory");
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_load_full_context_with_git() {
-        // Running in shannon-code repo: both instructions and git context should load
+        // Running in the Shannon repo: instructions should load. Git context
+        // is no longer embedded in the merged payload (it is per-turn mutable
+        // state and lived inside the cached prefix; the engine now renders it
+        // in the non-cached environment block).
         let cwd = std::env::current_dir().unwrap();
         let result = load_full_context(&cwd);
         assert!(
@@ -1157,34 +1233,49 @@ mod tests {
             "Should load full context in shannon-code repo"
         );
         let instr = result.unwrap();
-        // Should have either CLAUDE.md or git context (or both)
         assert!(
-            instr.loaded_files.contains(&"CLAUDE.md".to_string())
-                || instr.loaded_files.contains(&"git context".to_string()),
-            "Should load at least one source"
+            instr.loaded_files.iter().any(|f| f.contains("CLAUDE.md")),
+            "Should load CLAUDE.md in the repo, got {:?}",
+            instr.loaded_files
+        );
+        assert!(
+            !instr.loaded_files.contains(&"git context".to_string()),
+            "git context must not be part of the instruction payload"
+        );
+        assert!(
+            !instr.content.contains("## Git Context"),
+            "git context must not leak into instruction content"
         );
     }
 
     #[test]
+    fn test_git_context_still_available_for_env_block() {
+        // The engine's environment block consumes git_context directly.
+        let cwd = std::env::current_dir().unwrap();
+        // In a git repo this returns Some; only assert it does not panic and,
+        // when present, mentions git information.
+        if let Some(git) = git_context(&cwd) {
+            assert!(!git.is_empty());
+        }
+    }
+
+    #[test]
     fn test_load_full_context_nothing() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        let result = load_full_context(&tmp);
+        let tmp = tempfile::tempdir().unwrap();
+        let result = load_full_context(tmp.path());
         // May or may not be None depending on whether ~/.claude/CLAUDE.md exists
         // The important thing is it doesn't panic and returns a valid result
         if let Some(instr) = result {
             // If something was loaded, it should only be user-level or git context
             assert!(!instr.content.is_empty());
         }
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_load_full_context_instructions_only() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Test instructions").unwrap();
-        let result = load_full_context(&tmp);
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Test instructions").unwrap();
+        let result = load_full_context(tmp.path());
         assert!(
             result.is_some(),
             "Should load instructions even without git"
@@ -1192,7 +1283,6 @@ mod tests {
         let instr = result.unwrap();
         assert!(instr.content.contains("Test instructions"));
         assert!(instr.loaded_files.contains(&"CLAUDE.md".to_string()));
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     // -----------------------------------------------------------------------
@@ -1201,12 +1291,15 @@ mod tests {
 
     #[test]
     fn test_import_simple() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        fs::write(tmp.join("rules.md"), "Always use Rust best practices.").unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@rules.md\n").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("rules.md"),
+            "Always use Rust best practices.",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Project\n\n@rules.md\n").unwrap();
 
-        let result = load_from_directory(&tmp).unwrap();
+        let result = load_from_directory(tmp.path()).unwrap();
         assert!(
             result.content.contains("Always use Rust best practices"),
             "Imported content should appear: {:?}",
@@ -1221,18 +1314,16 @@ mod tests {
             "rules.md should be in imported_files: {:?}",
             result.imported_files
         );
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_import_nested() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        fs::write(tmp.join("deep.md"), "Nested content here.").unwrap();
-        fs::write(tmp.join("rules.md"), "Rules file.\n\n@deep.md\n").unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@rules.md\n").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("deep.md"), "Nested content here.").unwrap();
+        fs::write(tmp.path().join("rules.md"), "Rules file.\n\n@deep.md\n").unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Project\n\n@rules.md\n").unwrap();
 
-        let result = load_from_directory(&tmp).unwrap();
+        let result = load_from_directory(tmp.path()).unwrap();
         assert!(
             result.content.contains("Nested content here"),
             "Nested import should resolve: {:?}",
@@ -1246,19 +1337,17 @@ mod tests {
             result.imported_files.iter().any(|f| f.contains("deep.md")),
             "deep.md in imported_files"
         );
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_import_circular_detection() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
         // A imports B, B imports A -- should stop at circular detection
-        fs::write(tmp.join("a.md"), "Content A.\n@b.md\n").unwrap();
-        fs::write(tmp.join("b.md"), "Content B.\n@a.md\n").unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@a.md\n").unwrap();
+        fs::write(tmp.path().join("a.md"), "Content A.\n@b.md\n").unwrap();
+        fs::write(tmp.path().join("b.md"), "Content B.\n@a.md\n").unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Project\n\n@a.md\n").unwrap();
 
-        let result = load_from_directory(&tmp).unwrap();
+        let result = load_from_directory(tmp.path()).unwrap();
         // Should contain both files' content but not loop infinitely
         assert!(
             result.content.contains("Content A"),
@@ -1280,20 +1369,18 @@ mod tests {
             a_count, 1,
             "a.md should appear exactly once in imported_files"
         );
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_import_missing_file() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
         fs::write(
-            tmp.join("CLAUDE.md"),
+            tmp.path().join("CLAUDE.md"),
             "# Project\n\n@nonexistent.md\nMore text.\n",
         )
         .unwrap();
 
-        let result = load_from_directory(&tmp).unwrap();
+        let result = load_from_directory(tmp.path()).unwrap();
         // Should not fail, just leave the @reference as-is
         assert!(
             result.content.contains("More text"),
@@ -1305,17 +1392,19 @@ mod tests {
             "No files should be imported: {:?}",
             result.imported_files
         );
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_import_in_code_block_not_resolved() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        fs::write(tmp.join("rules.md"), "Secret rules.").unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n```\n@rules.md\n```\n").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("rules.md"), "Secret rules.").unwrap();
+        fs::write(
+            tmp.path().join("CLAUDE.md"),
+            "# Project\n\n```\n@rules.md\n```\n",
+        )
+        .unwrap();
 
-        let result = load_from_directory(&tmp).unwrap();
+        let result = load_from_directory(tmp.path()).unwrap();
         // The @rules.md inside code block should NOT be resolved
         assert!(
             !result.content.contains("Secret rules"),
@@ -1331,37 +1420,39 @@ mod tests {
             result.imported_files.is_empty(),
             "No imports from code blocks"
         );
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_import_size_limit() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
         // Create a large file
         let big_content = "X".repeat(200);
-        fs::write(tmp.join("big.md"), &big_content).unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@big.md\n").unwrap();
+        fs::write(tmp.path().join("big.md"), &big_content).unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Project\n\n@big.md\n").unwrap();
 
         // Resolve with a very small size limit (50 bytes)
-        let (resolved, imported) =
-            resolve_content_imports("@big.md\n", &tmp, &tmp, DEFAULT_MAX_IMPORT_DEPTH, 50);
+        let (resolved, imported) = resolve_content_imports(
+            "@big.md\n",
+            tmp.path(),
+            tmp.path(),
+            DEFAULT_MAX_IMPORT_DEPTH,
+            50,
+        );
         // The file is too large to import under the 50-byte limit
         assert!(
             !resolved.contains("XXX"),
             "Large import should be skipped: {resolved:?}"
         );
         assert!(imported.is_empty(), "No files imported due to size limit");
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_import_path_traversal_rejected() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        let subdir = tmp.join("project");
+        let tmp = tempfile::tempdir().unwrap();
+        let subdir = tmp.path().join("project");
         fs::create_dir_all(&subdir).unwrap();
         // Write a file outside the project dir
-        fs::write(tmp.join("secret.txt"), "secret data").unwrap();
+        fs::write(tmp.path().join("secret.txt"), "secret data").unwrap();
         fs::write(subdir.join("CLAUDE.md"), "# Project\n\n@../secret.txt\n").unwrap();
 
         let result = load_from_directory(&subdir).unwrap();
@@ -1375,22 +1466,20 @@ mod tests {
             result.imported_files.is_empty(),
             "No imports from path traversal"
         );
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_import_multiple_in_one_file() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        fs::write(tmp.join("rules.md"), "Rule one.").unwrap();
-        fs::write(tmp.join("flags.md"), "Flag settings.").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("rules.md"), "Rule one.").unwrap();
+        fs::write(tmp.path().join("flags.md"), "Flag settings.").unwrap();
         fs::write(
-            tmp.join("CLAUDE.md"),
+            tmp.path().join("CLAUDE.md"),
             "# Project\n\n@rules.md\n\nSome text.\n\n@flags.md\n",
         )
         .unwrap();
 
-        let result = load_from_directory(&tmp).unwrap();
+        let result = load_from_directory(tmp.path()).unwrap();
         assert!(
             result.content.contains("Rule one"),
             "First import: {:?}",
@@ -1412,17 +1501,20 @@ mod tests {
             "Should have 2 imported files: {:?}",
             result.imported_files
         );
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_import_subdirectory_path() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(tmp.join("docs")).unwrap();
-        fs::write(tmp.join("docs/guide.md"), "Guide content.").unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@docs/guide.md\n").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        fs::write(tmp.path().join("docs/guide.md"), "Guide content.").unwrap();
+        fs::write(
+            tmp.path().join("CLAUDE.md"),
+            "# Project\n\n@docs/guide.md\n",
+        )
+        .unwrap();
 
-        let result = load_from_directory(&tmp).unwrap();
+        let result = load_from_directory(tmp.path()).unwrap();
         assert!(
             result.content.contains("Guide content"),
             "Subdirectory import should resolve: {:?}",
@@ -1432,7 +1524,6 @@ mod tests {
             result.imported_files.iter().any(|f| f.contains("guide.md")),
             "guide.md in imported_files"
         );
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1469,50 +1560,55 @@ mod tests {
 
     #[test]
     fn test_import_max_depth() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
         // Create a chain: CLAUDE.md -> a.md -> b.md -> c.md -> d.md -> e.md -> f.md
-        fs::write(tmp.join("f.md"), "Deepest content.").unwrap();
-        fs::write(tmp.join("e.md"), "Level E.\n@f.md\n").unwrap();
-        fs::write(tmp.join("d.md"), "Level D.\n@e.md\n").unwrap();
-        fs::write(tmp.join("c.md"), "Level C.\n@d.md\n").unwrap();
-        fs::write(tmp.join("b.md"), "Level B.\n@c.md\n").unwrap();
-        fs::write(tmp.join("a.md"), "Level A.\n@b.md\n").unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@a.md\n").unwrap();
+        fs::write(tmp.path().join("f.md"), "Deepest content.").unwrap();
+        fs::write(tmp.path().join("e.md"), "Level E.\n@f.md\n").unwrap();
+        fs::write(tmp.path().join("d.md"), "Level D.\n@e.md\n").unwrap();
+        fs::write(tmp.path().join("c.md"), "Level C.\n@d.md\n").unwrap();
+        fs::write(tmp.path().join("b.md"), "Level B.\n@c.md\n").unwrap();
+        fs::write(tmp.path().join("a.md"), "Level A.\n@b.md\n").unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Project\n\n@a.md\n").unwrap();
 
         // With max depth 5, should get several levels deep but not infinite loop
-        let result = load_from_directory(&tmp).unwrap();
+        let result = load_from_directory(tmp.path()).unwrap();
         assert!(result.content.contains("Level A"), "Should contain A");
         // The key is that we don't infinite loop and don't panic
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_instruction_cascade_order() {
         // Verify the instruction cascade priority: Managed > Project > User > Local
         // We test the scopes of loaded instruction_files to confirm the order.
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
 
         // Write project-level CLAUDE.md
-        fs::write(tmp.join("CLAUDE.md"), "# Project instructions").unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Project instructions").unwrap();
 
         // Write local .claude/CLAUDE.md
-        fs::create_dir_all(tmp.join(".claude")).unwrap();
-        fs::write(tmp.join(".claude/CLAUDE.md"), "# Local claude instructions").unwrap();
+        fs::create_dir_all(tmp.path().join(".claude")).unwrap();
+        fs::write(
+            tmp.path().join(".claude/CLAUDE.md"),
+            "# Local claude instructions",
+        )
+        .unwrap();
 
         // Write local .shannon/CLAUDE.md
-        fs::create_dir_all(tmp.join(".shannon")).unwrap();
+        fs::create_dir_all(tmp.path().join(".shannon")).unwrap();
         fs::write(
-            tmp.join(".shannon/CLAUDE.md"),
+            tmp.path().join(".shannon/CLAUDE.md"),
             "# Local shannon instructions",
         )
         .unwrap();
 
         // Write CLAUDE.local.md at project root
-        fs::write(tmp.join("CLAUDE.local.md"), "# Local file instructions").unwrap();
+        fs::write(
+            tmp.path().join("CLAUDE.local.md"),
+            "# Local file instructions",
+        )
+        .unwrap();
 
-        let result = load_full_context(&tmp);
+        let result = load_full_context(tmp.path());
         assert!(result.is_some(), "Should load full context");
         let instr = result.unwrap();
 
@@ -1563,30 +1659,89 @@ mod tests {
                 window[1].scope
             );
         }
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_scope_priority_values() {
         // Verify the scope priority values match the expected ordering
         assert!(InstructionScope::Managed > InstructionScope::Project);
+        assert!(InstructionScope::Project > InstructionScope::Ancestor);
+        assert!(InstructionScope::Ancestor > InstructionScope::User);
         assert!(InstructionScope::Project > InstructionScope::User);
         assert!(InstructionScope::User > InstructionScope::Local);
         assert!(InstructionScope::Local > InstructionScope::Directory);
     }
 
     #[test]
+    fn test_scope_headings_are_clean_markdown() {
+        // R1-1: scope headers used to render as `## project Scope: x ---`
+        // with a stray trailing `---` artifact and inconsistent casing.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Heading format probe").unwrap();
+
+        let result = load_from_directory(tmp.path()).unwrap();
+        assert!(
+            result.content.contains("## directory scope: CLAUDE.md\n"),
+            "heading should be clean markdown: {:?}",
+            result.content
+        );
+        assert!(
+            !result.content.contains(" ---"),
+            "scope headings must not carry the legacy trailing --- artifact: {:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_parent_directory_instructions_are_ancestor_not_user() {
+        // R1-1: parent-directory instruction files used to be relabeled
+        // `User` while walking above the project root, which mislabeled
+        // ancestor repo context as user-level (~/.claude) instructions.
+        let tmp = tempfile::tempdir().unwrap();
+        let child = tmp.path().join("subdir");
+        fs::create_dir_all(&child).unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Ancestor project rules").unwrap();
+
+        let result = load_full_context(&child).expect("instructions from parent dir");
+        let parent_file = result
+            .instruction_files
+            .iter()
+            .find(|f| f.path == tmp.path().join("CLAUDE.md"))
+            .expect("parent CLAUDE.md should be loaded");
+        assert_eq!(
+            parent_file.scope,
+            InstructionScope::Ancestor,
+            "a parent-directory instruction file is ancestor project context, not user scope"
+        );
+        // The heading shows the path relative to the loaded directory; for a
+        // parent file that is the path outside `dir` (rendered absolute).
+        let heading = result
+            .content
+            .lines()
+            .find(|l| l.starts_with("## ancestor scope: "))
+            .expect("ancestor heading should be present");
+        assert!(
+            heading.ends_with("/CLAUDE.md"),
+            "heading should name the parent CLAUDE.md: {heading}"
+        );
+        assert!(
+            !result.content.contains("## user scope:"),
+            "ancestor file must not be mislabeled user scope: {:?}",
+            result.content
+        );
+    }
+
+    #[test]
     fn test_shannon_dir_loaded_as_local() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(tmp.join(".shannon")).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".shannon")).unwrap();
         fs::write(
-            tmp.join(".shannon/CLAUDE.md"),
+            tmp.path().join(".shannon/CLAUDE.md"),
             "# Shannon local instructions",
         )
         .unwrap();
 
-        let result = load_full_context(&tmp);
+        let result = load_full_context(tmp.path());
         assert!(result.is_some(), "Should load instructions from .shannon/");
         let instr = result.unwrap();
 
@@ -1611,21 +1766,18 @@ mod tests {
                 .map(|f| (&f.path, f.scope))
                 .collect::<Vec<_>>()
         );
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_claude_local_md_loaded_as_local() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
         fs::write(
-            tmp.join("CLAUDE.local.md"),
+            tmp.path().join("CLAUDE.local.md"),
             "# Personal gitignored instructions",
         )
         .unwrap();
 
-        let result = load_full_context(&tmp);
+        let result = load_full_context(tmp.path());
         assert!(
             result.is_some(),
             "Should load instructions from CLAUDE.local.md"
@@ -1651,18 +1803,15 @@ mod tests {
                 .map(|f| (&f.path, f.scope))
                 .collect::<Vec<_>>()
         );
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_managed_instructions_graceful_skip() {
         // When no RemoteManagedSettings are configured, managed instructions should be skipped gracefully
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Only project instructions").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Only project instructions").unwrap();
 
-        let result = load_full_context(&tmp);
+        let result = load_full_context(tmp.path());
         assert!(result.is_some());
         let instr = result.unwrap();
 
@@ -1679,8 +1828,6 @@ mod tests {
             "Should still load project instructions: {:?}",
             instr.content
         );
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     // -----------------------------------------------------------------------
@@ -1691,13 +1838,11 @@ mod tests {
     /// and never panic — the global `OnceLock` is empty by default.
     #[test]
     fn test_instructions_emitter_noop_when_unset() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# No-op emitter").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# No-op emitter").unwrap();
 
-        let result = load_full_context(&tmp);
+        let result = load_full_context(tmp.path());
         assert!(result.is_some());
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// With an emitter installed, every `load_full_context` call must produce
@@ -1720,11 +1865,10 @@ mod tests {
             captured_clone.lock().unwrap().push(event);
         }));
 
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "# Emit me").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Emit me").unwrap();
 
-        let result = load_full_context(&tmp);
+        let result = load_full_context(tmp.path());
         assert!(result.is_some());
 
         let events = captured.lock().unwrap();
@@ -1744,7 +1888,103 @@ mod tests {
             }
             other => panic!("expected InstructionsLoaded, got {other:?}"),
         }
+    }
 
-        let _ = fs::remove_dir_all(&tmp);
+    // -----------------------------------------------------------------------
+    // Size cap / canonicalize / watcher preheat / user dirs tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_load_oversized_file_truncated() {
+        // A single instruction file larger than MAX_INSTRUCTION_FILE_SIZE must
+        // be truncated at the cap (never pulled wholesale into the prompt).
+        let tmp = tempfile::tempdir().unwrap();
+        let oversized = format!(
+            "{}\nTAIL_MARKER_BEYOND_CAP\n",
+            "X".repeat(MAX_INSTRUCTION_FILE_SIZE as usize)
+        );
+        fs::write(tmp.path().join("CLAUDE.md"), &oversized).unwrap();
+
+        let result = load_from_directory(tmp.path()).expect("oversized file should still load");
+        let x_count = result.content.matches('X').count();
+        assert_eq!(
+            x_count, MAX_INSTRUCTION_FILE_SIZE as usize,
+            "payload must be truncated to exactly the per-file cap, got {x_count} bytes"
+        );
+        assert!(
+            !result.content.contains("TAIL_MARKER_BEYOND_CAP"),
+            "content beyond the cap must be cut off"
+        );
+    }
+
+    #[test]
+    fn test_import_canonicalize_failure_keeps_reference() {
+        // When canonicalize fails (missing target) the import must be refused
+        // outright — no fallback raw read that would bypass the containment
+        // check — and the literal `@path` kept in the output.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("CLAUDE.md"),
+            "# Project\n\n@missing.md\nMore text.\n",
+        )
+        .unwrap();
+
+        let result = load_from_directory(tmp.path()).unwrap();
+        assert!(
+            result.content.contains("@missing.md"),
+            "unresolvable import must keep the @reference verbatim: {:?}",
+            result.content
+        );
+        assert!(
+            result.imported_files.is_empty(),
+            "nothing may be imported when canonicalize fails: {:?}",
+            result.imported_files
+        );
+    }
+
+    #[test]
+    fn test_watcher_preheats_cache() {
+        // InstructionWatcher::new must preheat the content cache: the first
+        // cached_instructions() hit requires no file-change event, and the
+        // first check_and_reload() must not report a spurious reload.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "# Watcher preheat probe").unwrap();
+
+        let mut watcher = InstructionWatcher::new(tmp.path().to_path_buf());
+        let cached = watcher.cached_instructions();
+        assert!(
+            cached.is_some(),
+            "cache must be preheated at construction time"
+        );
+        assert!(
+            cached.unwrap().contains("Watcher preheat probe"),
+            "preheated cache should hold the loaded instructions: {cached:?}"
+        );
+
+        // No file changed since construction: no reload may be reported.
+        assert!(
+            watcher.check_and_reload().is_none(),
+            "first check must compare against the seeded mtime baseline, not report a change"
+        );
+    }
+
+    #[test]
+    fn test_user_instruction_dirs_order() {
+        // ~/.shannon ranks before ~/.claude inside the same User scope level.
+        let home = Path::new("/home/tester");
+        let dirs = user_instruction_dirs(home);
+        assert_eq!(dirs.len(), 2, "two user-level candidate directories");
+        assert_eq!(dirs[0].0, "~/.shannon");
+        assert_eq!(dirs[0].1, home.join(".shannon"));
+        assert_eq!(dirs[1].0, "~/.claude");
+        assert_eq!(dirs[1].1, home.join(".claude"));
+
+        // Within each directory the INSTRUCTION_FILES order is preserved.
+        for (_, dir) in &dirs {
+            for (i, filename) in INSTRUCTION_FILES.iter().enumerate() {
+                let expected = dir.join(INSTRUCTION_FILES[i]);
+                assert_eq!(dir.join(filename), expected);
+            }
+        }
     }
 }

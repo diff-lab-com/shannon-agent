@@ -38,6 +38,7 @@ pub mod sandbox;
 pub mod agent;
 pub mod applescript;
 pub mod ask_user;
+pub mod background;
 pub mod brief;
 pub mod browser_tools;
 pub mod chrome_session;
@@ -81,7 +82,46 @@ pub mod team_delete;
 pub mod todo;
 pub mod tool_search;
 pub mod web;
+pub mod windows_platform;
 pub mod worktree;
+pub mod write_xlsx;
+
+/// Test-only helper for tests that must retarget the process-wide working
+/// directory (`std::env::set_current_dir` is global state — parallel test
+/// threads otherwise race each other into the wrong repo, roadmap E7/F13).
+/// Every cwd-mutating test takes [`test_support::CwdGuard`]; cwd-reading
+/// tests take [`test_support::lock_cwd`] to run outside churn windows.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, MutexGuard};
+
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+    pub fn lock_cwd() -> MutexGuard<'static, ()> {
+        CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub struct CwdGuard {
+        prev: PathBuf,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl CwdGuard {
+        pub fn acquire(path: &Path) -> Self {
+            let lock = lock_cwd();
+            let prev = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+            std::env::set_current_dir(path).unwrap();
+            Self { prev, _lock: lock }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.prev);
+        }
+    }
+}
 
 // Re-exports for convenience
 pub use agent::{AgentOperation, AgentTool, AgentToolContext};
@@ -91,11 +131,30 @@ pub use ask_user::{
     Question, QuestionAnswer, QuestionHandler, QuestionOption, SharedQuestionHandler,
     TerminalQuestionHandler,
 };
+pub use background::{
+    BackgroundEntry, DEFAULT_POLL_MS, DEFAULT_WAIT_TIMEOUT_MS, EntryStatus, KillBackgroundInput,
+    KillBackgroundOutput, KillBackgroundTool, REGISTRY, RING_CAPACITY, RunBackgroundInput,
+    RunBackgroundOutput, RunBackgroundTool, WaitForLogInput, WaitForLogOutput, WaitForLogTool,
+};
 pub use brief::{BriefFormat, BriefInput, BriefMessage, BriefTool};
 pub use computer_use::{
     ComputerAction, ComputerUseConfig, ComputerUseInput, ComputerUseTool, REFERENCE_HEIGHT,
     REFERENCE_WIDTH, ScrollDirection,
 };
+
+/// Whether this build has the desktop-control tool family compiled in
+/// (`computer-use` feature). Introspection lives here — inside the crate
+/// that owns the feature — so doctor/status UIs report the truth even when
+/// they don't forward the feature themselves.
+pub fn computer_use_enabled() -> bool {
+    cfg!(feature = "computer-use")
+}
+
+/// Whether the built-in CDP browser tools are live in this build
+/// (`local-browser` feature).
+pub fn local_browser_enabled() -> bool {
+    cfg!(feature = "local-browser")
+}
 pub use config::{ConfigAction, ConfigInput, ConfigManager, ConfigTool, SharedConfigManager};
 pub use cron::{
     CronCreateInput, CronCreateOutput, CronDeleteInput, CronDeleteOutput, CronListInput,
@@ -122,7 +181,9 @@ pub use git::{
 };
 pub use github::{GhIssueListTool, GhIssueViewTool, GhPrCreateTool, GhPrListTool, GhPrViewTool};
 pub use grep::GrepTool;
-pub use image_analysis::{AnalyzeImageInput, AnalyzeImageTool};
+pub use image_analysis::{
+    AnalyzeImageInput, AnalyzeImageTool, AnalyzeImagesInput, AnalyzeImagesTool, MAX_BATCH_IMAGES,
+};
 pub use lsp::{
     CodeActionItem, CodeActionsInput, CodeActionsOutput, CodeActionsTool, DocumentSymbolInput,
     DocumentSymbolItem, DocumentSymbolOutput, DocumentSymbolTool, FindReferencesInput,
@@ -181,6 +242,7 @@ pub use web::{WebFetchTool, WebOperation, WebSearchTool};
 pub use worktree::{
     EnterWorktreeInput, EnterWorktreeOutput, ExitWorktreeInput, ExitWorktreeOutput, WorktreeTool,
 };
+pub use write_xlsx::{WriteXlsxInput, WriteXlsxTool, XlsxSheet};
 
 // Re-export from shannon_core
 pub use shannon_core::tools::{
@@ -298,6 +360,10 @@ fn register_all_tools(
             .with_history_opt(history.clone())
             .with_fs(fs.clone()),
     ))?;
+    // Office Wave 2 (B1): engine-native xlsx generation, scoped like Write.
+    registry.register(Box::new(
+        WriteXlsxTool::with_sandbox(sandbox.clone()).with_fs(fs.clone()),
+    ))?;
     registry.register(Box::new(
         EditTool::with_sandbox(sandbox.clone())
             .with_history_opt(history.clone())
@@ -331,6 +397,24 @@ fn register_all_tools(
         PowerShellTool::new().with_process(process.clone()),
     ))?;
     registry.register(Box::new(ReplTool::new().with_process(process.clone())))?;
+
+    // ── Background processes (§B.5) ────────────────────────────────────
+    // Spawn / poll / kill long-running children. Only meaningful against a
+    // process-capable, non-remote world: the global registry assumes the
+    // OS-level signal model, which a remote (SSH / Docker) world violates.
+    // Future revision: thread an explicit RemoteRegistry through the provider.
+    let is_remote = process.capabilities().is_remote;
+    if !is_remote {
+        registry.register(Box::new(
+            RunBackgroundTool::new().with_process(process.clone()),
+        ))?;
+        registry.register(Box::new(
+            WaitForLogTool::new().with_process(process.clone()),
+        ))?;
+        registry.register(Box::new(
+            KillBackgroundTool::new().with_process(process.clone()),
+        ))?;
+    }
 
     // ── Git operations ─────────────────────────────────────────────────
     registry.register(Box::new(GitBranchTool::new().with_process(process.clone())))?;
@@ -367,6 +451,7 @@ fn register_all_tools(
 
     // ── Multimodal ──────────────────────────────────────────────────────
     registry.register(Box::new(AnalyzeImageTool::new().with_fs(fs.clone())))?;
+    registry.register(Box::new(AnalyzeImagesTool::new().with_fs(fs.clone())))?;
 
     // ── Agent & team ───────────────────────────────────────────────────
     let agent_tool = AgentTool::new();
@@ -377,11 +462,39 @@ fn register_all_tools(
 
     // ── Task management ────────────────────────────────────────────────
     registry.register(Box::new(TodoWriteTool::new()))?;
-    registry.register(Box::new(TaskCreateTool::new()))?;
-    registry.register(Box::new(TaskListTool::new()))?;
-    registry.register(Box::new(TaskUpdateTool::new()))?;
-    registry.register(Box::new(TaskGetTool::new()))?;
-    registry.register(Box::new(TaskTool::new()))?;
+    // C+D Phase 2: by default, the legacy TaskCreate/List/Update/Get
+    // surface is hidden from the LLM's tool schema (kept callable for
+    // host-side users + desktop through the `hidden` constructor that
+    // flips `hidden_from_llm`). Their operations are fully covered by
+    // TodoWrite. SHANNON_LEGACY_TASK_TOOLS=1 re-advertises them to the
+    // model for one release cycle as a deprecation runway.
+    let legacy_visible = std::env::var("SHANNON_LEGACY_TASK_TOOLS")
+        .ok()
+        .map(|s| s == "1")
+        .unwrap_or(false);
+    if legacy_visible {
+        registry.register(Box::new(TaskCreateTool::new()))?;
+        registry.register(Box::new(TaskListTool::new()))?;
+        registry.register(Box::new(TaskUpdateTool::new()))?;
+        registry.register(Box::new(TaskGetTool::new()))?;
+    } else {
+        registry.register(Box::new(TaskCreateTool::new().hidden()))?;
+        registry.register(Box::new(TaskListTool::new().hidden()))?;
+        registry.register(Box::new(TaskUpdateTool::new().hidden()))?;
+        registry.register(Box::new(TaskGetTool::new().hidden()))?;
+    }
+    // C+D Phase 3: the op-enum `Task` tool (crates/shannon-tools/src/task.rs)
+    // collided with Claude Code's "Task" = subagent-spawn convention. Its
+    // operations are fully covered by TodoWrite + TaskCreate/List/Update/Get
+    // above. Removed from the default registry; re-introducible via
+    // `SHANNON_LEGACY_TASK_TOOLS=1` (R1 Phase 2) if any host needs it.
+    // NOTE (P3 review): the legacy tool keeps its own private `Task` type
+    // and store — items created through it do NOT appear in the shared
+    // TaskStore that TodoWrite/Task* (and the post-compact todo
+    // reinjection) read. Prefer the unified surfaces.
+    if legacy_visible {
+        registry.register(Box::new(TaskTool::new()))?;
+    }
     registry.register(Box::new(TaskOutputTool::new()))?;
     registry.register(Box::new(TaskStopTool::new()))?;
 
@@ -439,6 +552,16 @@ fn register_all_tools(
     // ── Computer Use (desktop automation) ────────────────────────────────
     registry.register(Box::new(ComputerUseTool::new()))?;
 
+    // ── Windows desktop surfaces (DPI/UIA/windows/clipboard) ─────────────
+    // Register unconditionally; execution is gated on
+    // Windows + `computer-use` and returns honest errors elsewhere
+    // (same pattern as the applescript tool).
+    registry.register(Box::new(windows_platform::WindowListTool))?;
+    registry.register(Box::new(windows_platform::WindowFocusTool))?;
+    registry.register(Box::new(windows_platform::ClipboardReadTool))?;
+    registry.register(Box::new(windows_platform::ClipboardWriteTool))?;
+    registry.register(Box::new(windows_platform::AppOpenTool))?;
+
     // ── AppleScript / Shortcuts (macOS app automation, T13 Tier 1) ───────
     registry.register(Box::new(applescript::AppleScriptTool::new()))?;
 
@@ -447,6 +570,11 @@ fn register_all_tools(
     registry.register(Box::new(browser_tools::BrowserClickTool))?;
     registry.register(Box::new(browser_tools::BrowserTypeTool))?;
     registry.register(Box::new(browser_tools::BrowserSnapshotTool))?;
+    registry.register(Box::new(browser_tools::BrowserTextTool))?;
+    registry.register(Box::new(browser_tools::BrowserFillTool))?;
+    registry.register(Box::new(browser_tools::BrowserPressKeyTool))?;
+    registry.register(Box::new(browser_tools::BrowserScrollTool))?;
+    registry.register(Box::new(browser_tools::BrowserEvaluateTool))?;
     registry.register(Box::new(browser_tools::BrowserScreenshotTool))?;
     registry.register(Box::new(browser_tools::BrowserTabsTool))?;
     registry.register(Box::new(browser_tools::BrowserCloseTool))?;
@@ -593,6 +721,11 @@ pub fn register_default_tools_with_project_dir_ex(
 ///
 /// Call this after `register_default_tools` when a team context is available.
 /// These tools let the LLM manage the shared team TaskBoard for multi-agent coordination.
+///
+/// `register_team_tools` takes `&mut ToolRegistry` for API parity with the
+/// other registration helpers, but the registry uses interior mutability
+/// internally — the helper below ([`register_team_tools_arc`]) is for call
+/// sites that hold the registry behind an `Arc` (the desktop chat state).
 pub fn register_team_tools(
     registry: &mut ToolRegistry,
     coordinator: Arc<shannon_agents::AgentCoordinator>,
@@ -607,6 +740,73 @@ pub fn register_team_tools(
     Ok(())
 }
 
+/// Arc-friendly version of [`register_team_tools`] — accepts a shared
+/// reference (the desktop `AppState::tools` is `Arc<ToolRegistry>` and
+/// never has an exclusive handle). Returns the per-tool errors as a flat
+/// `Box<dyn Error>` so the call site can log without unwrapping.
+pub fn register_team_tools_arc(
+    registry: &Arc<ToolRegistry>,
+    coordinator: Arc<shannon_agents::AgentCoordinator>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    registry.register(Box::new(shannon_agents::TeamTaskCreateTool::new(
+        coordinator.clone(),
+    )))?;
+    registry.register(Box::new(shannon_agents::TeamTaskUpdateTool::new(
+        coordinator.clone(),
+    )))?;
+    registry.register(Box::new(shannon_agents::TeamTaskListTool::new(coordinator)))?;
+    Ok(())
+}
+
+/// Point the registry's `AgentTool` at `handle` instead of its own
+/// freshly-created (empty) context slot.
+///
+/// Surfaces that build a per-run tool registry (the desktop goal runner)
+/// but must share the chat session's team state call this right after
+/// `register_default_tools_with_providers`: subsequent `Agent` tool
+/// operations (`Spawn`/`SendMessage`/`CreateTeam`/`Shutdown`) resolve the
+/// team context through `handle`, so they land on the same coordinator and
+/// registry as the interactive chat.
+///
+/// The `Tool` trait has no downcast, so this unregisters the existing
+/// `Agent` entry and registers a fresh `AgentTool` wired to `handle`. The
+/// only state on a fresh instance is the lazily-loaded agent-definitions
+/// cache, which re-loads on first use — behaviourally identical.
+///
+/// Returns `false` when no `Agent` tool is registered (a wiring bug worth
+/// surfacing at the call site) or re-registration fails.
+pub fn swap_agent_tool_context(
+    registry: &mut ToolRegistry,
+    handle: std::sync::Arc<std::sync::Mutex<Option<crate::agent::AgentToolContext>>>,
+) -> bool {
+    let mut replacement = crate::agent::AgentTool::new();
+    replacement.set_context_handle(handle);
+    if registry.unregister("Agent").is_err() {
+        return false;
+    }
+    registry.register(Box::new(replacement)).is_ok()
+}
+
+/// Register `team_task_*` tools bound to the coordinator inside `handle`,
+/// but only when a team context is actually present. No-op `Ok(())` when
+/// agent teams are disabled (handle empty) — call sites stay linear.
+pub fn register_team_tools_when_enabled(
+    registry: &mut ToolRegistry,
+    handle: &std::sync::Arc<std::sync::Mutex<Option<crate::agent::AgentToolContext>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let coordinator = handle
+        .lock()
+        .map_err(|e| -> Box<dyn std::error::Error> {
+            format!("agent tool context lock poisoned: {e}").into()
+        })?
+        .as_ref()
+        .map(|ctx| ctx.coordinator.clone());
+    if let Some(coord) = coordinator {
+        register_team_tools(registry, coord)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -618,6 +818,80 @@ mod tests {
         let mut registry = ToolRegistry::new();
         let result = register_default_tools(&mut registry);
         assert!(result.is_ok(), "register_default_tools should succeed");
+    }
+
+    /// B2-2: swapping in a shared handle must be observable through the
+    /// freshly-registered `AgentTool` — writing a context into the handle
+    /// then executing with an empty team flow is the wiring the goal runner
+    /// depends on. We assert at the handle level: swap succeeds, the
+    /// replaced tool still answers, and the original handle is untouched.
+    #[test]
+    fn swap_agent_tool_context_swaps_and_reregisters() {
+        let mut registry = ToolRegistry::new();
+        let original = register_default_tools(&mut registry).unwrap();
+        assert!(registry.get("Agent").is_some(), "Agent tool registered");
+
+        let shared = Arc::new(std::sync::Mutex::new(None));
+        assert!(
+            swap_agent_tool_context(&mut registry, shared.clone()),
+            "swap should succeed when Agent tool is registered"
+        );
+
+        // The replacement is a distinct instance: writing through the shared
+        // handle must not be visible on the original handle.
+        let ctx = make_test_team_context();
+        *shared.lock().unwrap() = Some(ctx);
+        assert!(
+            original.lock().unwrap().is_none(),
+            "original handle must remain empty after swap"
+        );
+
+        // Swap again on an empty registry entry fails cleanly.
+        let mut empty = ToolRegistry::new();
+        assert!(
+            !swap_agent_tool_context(&mut empty, shared),
+            "swap must fail when no Agent tool is registered"
+        );
+    }
+
+    /// `register_team_tools_when_enabled` is a no-op when the handle is
+    /// empty and registers exactly the three team_task tools when it
+    /// carries a context.
+    #[test]
+    fn register_team_tools_when_enabled_gates_on_handle() {
+        let mut registry = ToolRegistry::new();
+        register_default_tools(&mut registry).unwrap();
+
+        // Empty handle: no team_task tools.
+        let empty = Arc::new(std::sync::Mutex::new(None));
+        register_team_tools_when_enabled(&mut registry, &empty).unwrap();
+        assert!(
+            registry.get("team_task_create").is_none(),
+            "empty handle must not register team_task tools"
+        );
+
+        // Populated handle: all three team_task tools registered.
+        let ctx = make_test_team_context();
+        let populated = Arc::new(std::sync::Mutex::new(Some(ctx)));
+        register_team_tools_when_enabled(&mut registry, &populated).unwrap();
+        assert!(registry.get("team_task_create").is_some());
+        assert!(registry.get("team_task_update").is_some());
+        assert!(registry.get("team_task_list").is_some());
+    }
+
+    /// Build a minimal real `TeamContext` (coordinator + registry) for the
+    /// gating test above. Falls back gracefully if the coordinator cannot
+    /// bind in constrained CI environments by panicking with a clear
+    /// message (same tradeoff as other coordinator-backed tests here).
+    fn make_test_team_context() -> crate::agent::AgentToolContext {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            crate::agent::AgentToolContext::new_unchecked(
+                shannon_engine::api::LlmClientConfig::default(),
+            )
+            .await
+            .expect("TeamContext::new_unchecked should succeed in test")
+        })
     }
 
     #[test]
@@ -722,6 +996,35 @@ mod tests {
         assert!(tools.len() > 30, "Expected >30 tools, got {}", tools.len());
     }
 
+    // ── §B.5 BackgroundProcess tool group ──────────────────────────────
+
+    /// The three background tools must register on the default (local) tool
+    /// set. Their visibility is gated on `process.capabilities().is_remote`
+    /// being false; the default world is local, so all three must appear.
+    #[test]
+    fn register_default_tools_registers_background_tools() {
+        let mut registry = ToolRegistry::new();
+        register_default_tools(&mut registry).unwrap();
+
+        let names: Vec<String> = registry
+            .list_tools_info()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert!(
+            names.contains(&"RunBackground".to_string()),
+            "RunBackground must register on local worlds"
+        );
+        assert!(
+            names.contains(&"WaitForLog".to_string()),
+            "WaitForLog must register on local worlds"
+        );
+        assert!(
+            names.contains(&"KillBackground".to_string()),
+            "KillBackground must register on local worlds"
+        );
+    }
+
     // ── A3/B3: project registration aligns file tools with the command sandbox ──
 
     /// B3 (docs/eval-findings-2026-09-glm.md): after a project-dir
@@ -790,8 +1093,14 @@ mod tests {
                 "with a relocating backend the echo must be the sandbox view"
             );
         } else {
+            // The tool canonicalizes paths for the echo/history key; on
+            // macOS canonicalize maps /var/... to /private/var/..., so
+            // compare resolved forms rather than raw spellings.
             assert_eq!(
-                echoed, host_str,
+                std::path::Path::new(&echoed).canonicalize().unwrap(),
+                std::path::Path::new(host_str.as_str())
+                    .canonicalize()
+                    .unwrap(),
                 "without a relocating backend the host path is the sandbox view"
             );
         }

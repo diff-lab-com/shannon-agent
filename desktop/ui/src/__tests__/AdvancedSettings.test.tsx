@@ -1,9 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import AdvancedSettings from '@/components/settings/AdvancedSettings'
 import * as api from '@/lib/tauri-api'
+import { setRemoteImagesAllowed, isRemoteImagesAllowed } from '@/lib/remoteImages'
+
+// B2: the「open log directory」entry resolves $HOME/.shannon through the
+// core path API (granted via capabilities) and opens it with the existing
+// reveal command. Mock the path module so the test controls the result.
+vi.mock('@tauri-apps/api/path', () => ({
+  homeDir: vi.fn().mockResolvedValue('/home/tester'),
+  join: vi.fn().mockResolvedValue('/home/tester/.shannon'),
+}))
+vi.mock('@tauri-apps/api/app', () => ({
+  getVersion: vi.fn().mockResolvedValue('0.11.0'),
+}))
 
 function wrap(ui: React.ReactElement) {
   return (
@@ -16,9 +28,9 @@ function wrap(ui: React.ReactElement) {
 }
 
 describe('AdvancedSettings', () => {
-  it('renders advanced settings heading', () => {
+  it('renders advanced settings subtitle', () => {
     render(wrap(<AdvancedSettings />))
-    expect(screen.getByText('Advanced Settings')).toBeInTheDocument()
+    expect(screen.getByText(/Configure underlying engine parameters/i)).toBeInTheDocument()
   })
 
   it('renders memory management section', () => {
@@ -51,9 +63,19 @@ describe('AdvancedSettings', () => {
     expect(screen.getByText('Reset to Factory Settings')).toBeInTheDocument()
   })
 
-  it('renders view system logs link', () => {
+  it('renders the open log directory entry with the real version badge', async () => {
     render(wrap(<AdvancedSettings />))
-    expect(screen.getByText('View System Logs')).toBeInTheDocument()
+    expect(screen.getByText('Open log directory')).toBeInTheDocument()
+    // B2: the version comes from getVersion() — the old fake logs modal
+    // hardcoded "v0.1.0".
+    await waitFor(() => expect(screen.getByText('v0.11.0')).toBeInTheDocument())
+  })
+
+  it('opens the Shannon log directory via openWithDefaultApp', async () => {
+    const spy = vi.mocked(api.openWithDefaultApp).mockClear()
+    render(wrap(<AdvancedSettings />))
+    fireEvent.click(screen.getByText('Open log directory'))
+    await waitFor(() => expect(spy).toHaveBeenCalledWith('/home/tester/.shannon'))
   })
 
   it('renders manage api keys link', () => {
@@ -73,56 +95,14 @@ describe('AdvancedSettings', () => {
     expect(screen.getByText('not on PATH')).toBeInTheDocument()
   })
 
-  // C1① — version & updates card
-  it('renders version & updates section with a check button', () => {
+  // Settings R3 (T1): the「版本与更新」card moved to Settings → 关于 — this
+  // page keeps only a cross-link into the About section. The update-check
+  // behaviour itself is covered by AboutSettings.test.tsx.
+  it('links to the About section where the update check now lives', () => {
     render(wrap(<AdvancedSettings />))
-    expect(screen.getByText('Version & updates')).toBeInTheDocument()
-    expect(screen.getByText('Check for updates')).toBeInTheDocument()
-  })
-
-  it('shows up-to-date badge and download page link after a check', async () => {
-    render(wrap(<AdvancedSettings />))
-    fireEvent.click(screen.getByText('Check for updates'))
-    await waitFor(() => expect(screen.getByText('up to date')).toBeInTheDocument())
-    expect(screen.getByText('Open download page')).toBeInTheDocument()
-    expect(screen.getByText('Current version: 0.11.0')).toBeInTheDocument()
-  })
-
-  it('announces an available update and opens the release page', async () => {
-    vi.mocked(api.checkAppUpdate).mockResolvedValueOnce({
-      currentVersion: '0.11.0',
-      latestVersion: 'v0.12.0',
-      updateAvailable: true,
-      releaseUrl: 'https://github.com/diff-lab-com/shannon-agent/releases/tag/v0.12.0',
-      error: null,
-    })
-    render(wrap(<AdvancedSettings />))
-    fireEvent.click(screen.getByText('Check for updates'))
-    await waitFor(() => expect(screen.getByText('v0.12.0 available')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Open download page'))
-    await waitFor(() =>
-      expect(api.openReleasePage).toHaveBeenCalledWith(
-        'https://github.com/diff-lab-com/shannon-agent/releases/tag/v0.12.0'
-      )
-    )
-  })
-
-  // US-SET-04: System Logs modal
-  it('opens system logs modal on View System Logs click', () => {
-    render(wrap(<AdvancedSettings />))
-    fireEvent.click(screen.getByText('View System Logs'))
-    expect(screen.getByText('System Logs')).toBeInTheDocument()
-    expect(screen.getByText('Shannon Desktop v0.1.0')).toBeInTheDocument()
-  })
-
-  it('closes system logs modal via close button', () => {
-    render(wrap(<AdvancedSettings />))
-    fireEvent.click(screen.getByText('View System Logs'))
-    expect(screen.getByText('System Logs')).toBeInTheDocument()
-    // Click the close button inside the modal
-    const modal = screen.getByText('System Logs').closest('.fixed')!
-    const closeBtn = modal.querySelector('button')
-    if (closeBtn) fireEvent.click(closeBtn)
+    const link = screen.getByTestId('updates-moved-link')
+    expect(within(link).getByText('Updates moved to About')).toBeInTheDocument()
+    expect(link.querySelector('a')).toHaveAttribute('href', '/settings/about')
   })
 
   // US-SET-04: API Keys modal
@@ -146,6 +126,90 @@ describe('AdvancedSettings', () => {
   it('renders skill extraction description', () => {
     render(wrap(<AdvancedSettings />))
     expect(screen.getByText(/After complex tasks, Shannon evaluates/)).toBeInTheDocument()
+  })
+
+  // B2 — agent teams (real sub-agent execution) card
+  it('renders agent teams section', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.getByText('Agent teams (subagents)')).toBeInTheDocument()
+  })
+
+  it('renders agent teams toggle with live-effect hint', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.getByText('Enable real sub-agent execution')).toBeInTheDocument()
+    expect(screen.getByText('Takes effect immediately — no restart needed.')).toBeInTheDocument()
+  })
+
+  // Dream distillation (梦境提炼) card — two switches next to the skill-loop
+  // block, persisted through the same handleToggle → configure path.
+  it('renders the dream distillation card with both toggles', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.getByText('Dream distillation')).toBeInTheDocument()
+    expect(screen.getByText('Nightly auto-distillation')).toBeInTheDocument()
+    expect(screen.getByText('Off by default — runs between 1–5 AM when idle, at most once a day.')).toBeInTheDocument()
+    expect(screen.getByText('Review before write')).toBeInTheDocument()
+    expect(screen.getByText('Distilled entries and skill candidates are written only after you approve them.')).toBeInTheDocument()
+  })
+
+  it('persists dream_enabled through configure when toggled', async () => {
+    render(wrap(<AdvancedSettings />))
+    const row = screen.getByText('Nightly auto-distillation').closest('div.flex.items-center.justify-between')!
+    fireEvent.click(within(row).getByRole('switch'))
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'dream_enabled', value: 'true' })
+    })
+  })
+
+  it('persists dream_skill_distill_enabled through configure when toggled', async () => {
+    render(wrap(<AdvancedSettings />))
+    const row = screen.getByText('Review before write').closest('div.flex.items-center.justify-between')!
+    fireEvent.click(within(row).getByRole('switch'))
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'dream_skill_distill_enabled', value: 'true' })
+    })
+  })
+
+  // 卡A GC — session storage management moved to Settings → 会话 (Settings
+  // R3 T6). The card itself (switch + retention gear, now with a 7-day gear)
+  // is covered by SessionSettings.test.tsx; this page keeps only a
+  // cross-link, and the old card must NOT still render here.
+  it('no longer renders the session GC card', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.queryByTestId('session-gc-card')).not.toBeInTheDocument()
+    expect(screen.queryByText('Session storage management')).not.toBeInTheDocument()
+  })
+
+  it('links to the Session section where session storage now lives', () => {
+    render(wrap(<AdvancedSettings />))
+    const link = screen.getByTestId('session-moved-link')
+    expect(within(link).getByText('Session storage moved to the Sessions section')).toBeInTheDocument()
+    expect(link.querySelector('a')).toHaveAttribute('href', '/settings/session')
+  })
+
+  // P2-4 (R9-④) — remote images card. Persistence is frontend-local (the
+  // lib/remoteImages localStorage store, like the theme/density keys): the
+  // switch drives the store directly and must NOT touch api.configure.
+  it('renders the remote-images card with the switch defaulting to off and the motivation copy', () => {
+    setRemoteImagesAllowed(false)
+    render(wrap(<AdvancedSettings />))
+    const card = screen.getByTestId('remote-images-card')
+    expect(within(card).getByRole('switch')).toHaveAttribute('aria-checked', 'false')
+    expect(within(card).getByText(/exfiltrate session content via their URLs/i)).toBeInTheDocument()
+  })
+
+  it('persists the remote-images switch to the frontend-local store, not configure', () => {
+    setRemoteImagesAllowed(false)
+    // The configure spy accumulates calls from the sibling tests above —
+    // clear it so this test proves exactly its own switch's write path.
+    vi.mocked(api.configure).mockClear()
+    render(wrap(<AdvancedSettings />))
+    const card = screen.getByTestId('remote-images-card')
+    fireEvent.click(within(card).getByRole('switch'))
+    expect(within(card).getByRole('switch')).toHaveAttribute('aria-checked', 'true')
+    expect(localStorage.getItem('shannon.chat.allowRemoteImages')).toBe('1')
+    expect(isRemoteImagesAllowed()).toBe(true)
+    expect(api.configure).not.toHaveBeenCalled()
+    setRemoteImagesAllowed(false)
   })
 })
 
@@ -180,7 +244,10 @@ describe('AdvancedSettings — Self-improvement approval', () => {
     expect(screen.getByText('1 pending')).toBeInTheDocument()
   })
 
-  it('opens SkillApprovalModal on Review click', async () => {
+  // IA T3 + X1: no second SkillApprovalModal lives here anymore —
+  // the「Review pending」entry links to /extensions/pending, the single
+  // skill-review surface (评审裁决 #2).
+  it('navigates to /extensions/pending on Review click (no modal)', async () => {
     vi.mocked(api.listSkillCandidates).mockResolvedValue([
       {
         id: 'cand-1',
@@ -192,10 +259,21 @@ describe('AdvancedSettings — Self-improvement approval', () => {
         originating_sessions: [],
       },
     ])
-    render(wrap(<AdvancedSettings />))
+    function LocationProbe() {
+      const location = useLocation()
+      return <div data-testid="adv-location">{location.pathname}</div>
+    }
+    render(
+      <AppProvider>
+        <MemoryRouter>
+          <AdvancedSettings />
+          <LocationProbe />
+        </MemoryRouter>
+      </AppProvider>
+    )
     await waitFor(() => { expect(screen.getByText('Review pending')).toBeInTheDocument() })
     fireEvent.click(screen.getByText('Review pending'))
-    await waitFor(() => { expect(screen.getByText('Save as skill?')).toBeInTheDocument() })
-    expect(screen.getByDisplayValue('Wrap commits')).toBeInTheDocument()
+    await waitFor(() => { expect(screen.getByTestId('adv-location')).toHaveTextContent('/extensions/pending') })
+    expect(screen.queryByText('Save as skill?')).not.toBeInTheDocument()
   })
 })

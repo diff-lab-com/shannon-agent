@@ -16,11 +16,17 @@
 
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
+import type { KeyObject } from "node:crypto";
 
 import type { Logger } from "../../adapters/types.js";
 import { dispatchNdjson } from "../dispatch.js";
 import type { MethodContext, MethodHandlers } from "../server.js";
-import { E2eChannel } from "./e2e.js";
+import {
+  E2eChannel,
+  deriveSessionKeyV2,
+  hostSharedSecret,
+  isE2eHello,
+} from "./e2e.js";
 
 export interface RelayHostOptions {
   /** Relay WebSocket URL (e.g. "wss://relay.shannon.example"). */
@@ -35,11 +41,41 @@ export interface RelayHostOptions {
   /** ms to wait for phone to join (default 75_000). */
   pairTimeout?: number;
   /**
+   * Auto-reconnect when the relay WS drops (default true). Re-registers with
+   * the same sid after an exponential backoff (1s doubling to a 30s cap), so
+   * a relay restart doesn't leave the gateway remote-unreachable until the
+   * next gateway restart. Phones re-join and re-`device.resume` as usual.
+   */
+  reconnect?: boolean;
+  /**
+   * Relay handshake auth tag (wire-protocol.md) — sent with `register` so the
+   * relay can pin it and reject sid-only squatters. Derived from the pair
+   * token (`deriveRelayAuthTag`); the phone presents the same value on join.
+   */
+  relayAuthTag?: string;
+  /**
+   * v0.3 E2E handshake (forward secrecy): the host's per-session ephemeral
+   * X25519 private key + the pair token. When set, the phone's first binary
+   * frame must be a plaintext `e2e_hello` carrying its ephemeral pubkey; both
+   * sides derive the v2 session key (token-mixed ECDH). A first frame that is
+   * NOT a hello falls back to the legacy token-derived `sessionKey` so older
+   * phones keep working.
+   */
+  hostE2E?: { privateKey: KeyObject; pairToken: string };
+  /**
    * Invoked when the phone pairs and the session's MethodContext is created
    * (parity with MobileServer's `onContext`). The dispatch hub uses it to
    * register the connection so pushes can reach the phone over the relay.
    */
   onContext?: (ctx: MethodContext) => void;
+  /**
+   * 修正1 (frame contract review 2026-10-05): invoked on EVERY successful
+   * (re-)registration (`host_ready`) — the control link (re)establishment
+   * that reconciles the desktop's persisted push expected state
+   * (expected on → push.bind, expected off → push.unbind; 末态制胜).
+   * Fire-and-forget from the host's perspective; must not throw.
+   */
+  onRegistered?: () => void;
 }
 
 export interface RelayHostHandle {
@@ -47,6 +83,27 @@ export interface RelayHostHandle {
   readonly paired: Promise<void>;
   /** Stop the relay host connection. */
   stop(): Promise<void>;
+  /**
+   * §O3/§T6 Push-to-Wake control side channel (docs/protocol/
+   * relay-push-wake-frames.md): send a `push.*` frame over the host's relay
+   * connection. False = link down (frame dropped, caller decides — wake is
+   * fire-and-forget, bind surfaces an unreachable error).
+   */
+  sendControl(frame: Record<string, unknown>): boolean;
+  /**
+   * v1.1 §6.1 version-skew capability gate: whether the CURRENT registration's
+   * `host_ready` advertised push.* support (`caps:["push"]`). False until such
+   * a host_ready arrives; re-evaluated at every (re-)registration. An old
+   * relay silently ignores push.* text frames, so callers must not attempt
+   * bind (degrade to not_configured per contract §6.1) — PushRelayBinding's
+   * `capable` option consumes this.
+   */
+  pushCapable(): boolean;
+  /**
+   * Subscribe to relay→desktop control frames whose `t` starts with `push.`
+   * (the ack leg of the same contract). Returns the unsubscribe function.
+   */
+  onControl(handler: (frame: Record<string, unknown>) => void): () => void;
 }
 
 /**
@@ -82,10 +139,25 @@ const PAIR_TIMEOUT_MS = 75_000;
  */
 export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
   const pairTimeout = opts.pairTimeout ?? PAIR_TIMEOUT_MS;
+  const reconnectEnabled = opts.reconnect !== false;
   const logger = opts.logger;
 
   let stopped = false;
   let ws: WebSocket | null = null;
+  let reconnectAttempts = 0;
+  let reconnectTimer: NodeJS.Timeout | null = null;
+  // §O3/§T6: subscribers to the push.* control side channel (see RelayHostHandle).
+  const controlHandlers: Array<(frame: Record<string, unknown>) => void> = [];
+  // v1.1 §6.1: whether the current registration advertised caps:["push"] —
+  // re-evaluated at every host_ready (reconnect to an upgraded relay flips it).
+  let pushCapableFlag = false;
+  // v0.3 ECDH mode: channels stay null until the phone's `e2e_hello` arrives
+  // (or a legacy sealed frame triggers the fallback). Once established, both
+  // channels follow the §G-rev2/§G-rev3 re-pair rules (recv reset, send kept).
+  const ecdh = opts.hostE2E ?? null;
+  let e2eEstablished = false;
+  /** The established session key (v2 when ECDH, legacy on fallback). */
+  let e2eKey: Buffer | null = null;
 
   // Separate E2E channels for send/recv with independent counters.
   // The send channel seals our outgoing messages; the recv channel opens
@@ -116,12 +188,33 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
     clearTimeout(pairTimer);
   }
 
+  /** Exponential backoff (1s doubling, 30s cap) until stopped. */
+  function scheduleReconnect(): void {
+    if (stopped || !reconnectEnabled || reconnectTimer) return;
+    const delay = Math.min(1000 * 2 ** reconnectAttempts, 30_000);
+    reconnectAttempts += 1;
+    logger.info(`relay host: reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (!stopped) connect();
+    }, delay);
+  }
+
   function connect(): void {
     ws = new WebSocket(opts.relayUrl);
 
     ws.on("open", () => {
       logger.info(`relay host: connected to ${opts.relayUrl}, registering sid=${opts.sid}`);
-      ws!.send(JSON.stringify({ t: "register", role: "host", sid: opts.sid }));
+      // The auth tag lets the relay pin the session to the pairing secret —
+      // a sid-only knower can't squat the host slot once this is pinned.
+      ws!.send(
+        JSON.stringify({
+          t: "register",
+          role: "host",
+          sid: opts.sid,
+          ...(opts.relayAuthTag ? { tag: opts.relayAuthTag } : {}),
+        }),
+      );
     });
 
     ws.on("message", (data, isBinary) => {
@@ -153,45 +246,67 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
     ws.on("close", () => {
       logger.info("relay host: WS closed");
       clearPairTimer();
+      if (!stopped) {
+        // Relay restart / network drop: re-register the same sid so the phone
+        // can re-join without a gateway restart (OPERATIONS.md §5 says every
+        // client reconnects — that must hold for the host leg too).
+        scheduleReconnect();
+      }
     });
   }
 
   function handleControlFrame(ctrl: Record<string, unknown>): void {
     const type = ctrl["t"] as string | undefined;
+    // §O3/§T6: push.* frames belong to the Push-to-Wake side channel, not the
+    // phone-join state machine — hand them to control subscribers verbatim.
+    if (typeof type === "string" && type.startsWith("push.")) {
+      for (const handler of controlHandlers) handler(ctrl);
+      return;
+    }
     switch (type) {
       case "host_ready":
         logger.info("relay host: registered, waiting for phone to join");
+        // Registration (re)succeeded — the backoff did its job.
+        reconnectAttempts = 0;
+        // v1.1 §6.1: capability advertisement — an old relay sends no caps,
+        // and the desktop degrades push to not_configured instead of timing
+        // out on a bind the relay would silently ignore.
+        pushCapableFlag =
+          Array.isArray(ctrl["caps"]) && (ctrl["caps"] as unknown[]).includes("push");
+        // 修正1: control link (re)established — re-assert the persisted push
+        // expected state (expected on → bind, off → unbind). A throw here must
+        // not break the join state machine, hence the guard.
+        if (opts.onRegistered) {
+          try {
+            opts.onRegistered();
+          } catch (err) {
+            logger.warn(`relay host: onRegistered reconcile hook failed: ${(err as Error).message}`);
+          }
+        }
         break;
 
       case "paired": {
         clearPairTimer();
         logger.info("relay host: phone joined — E2E session active");
-        // Recv: fresh channel on every pair (§G-rev2 defense in depth) — a
-        // reconnecting phone that lost its counter state restarts at 1 and
-        // must still be accepted.
-        recvChannel = new E2eChannel(opts.sessionKey);
-        // Send: create once, PRESERVE across re-paired (§G-rev3) — this host
-        // socket never dropped, so its send counter must stay monotonic; a
-        // reconnecting phone's recv is parked at k and would reject frames
-        // whose counter restarts at 1 (replay check), wedging host→phone.
-        // Host process restart is unaffected: the relay treats the fresh
-        // register as host replacement and the phone resets recv then.
-        if (!sendChannel) sendChannel = new E2eChannel(opts.sessionKey);
-        // The virtual socket routes sends through the send channel.
-        virtualSocket = new VirtualSocket((plaintext) => {
-          if (!sendChannel || !ws || ws.readyState !== WebSocket.OPEN) return;
-          const frame = sendChannel.seal(plaintext);
-          ws.send(frame);
-        });
-        // Fresh context — shannon/pair will set sessionId, and it persists
-        // for all subsequent messages on this relay session.
-        sessionCtx = {
-          socket: virtualSocket as unknown as WebSocket,
-          sessionId: null,
-          logger,
-        };
-        opts.onContext?.(sessionCtx);
-        if (pairResolve) pairResolve();
+        if (ecdh && !e2eEstablished) {
+          // v2 handshake: wait for the phone's plaintext `e2e_hello` first
+          // frame — both channels are created from the derived v2 key then.
+          recvChannel = null;
+          sendChannel = null;
+          virtualSocket = null;
+          sessionCtx = null;
+          break;
+        }
+        // Re-pair with an established session (§G-rev2/§G-rev3): recv fresh
+        // (a reconnecting phone restarts at counter 1), send PRESERVED (its
+        // counter must stay monotonic — the phone's recv is parked at k).
+        recvChannel = new E2eChannel(e2eKey ?? opts.sessionKey);
+        if (!sendChannel) sendChannel = new E2eChannel(e2eKey ?? opts.sessionKey);
+        attachVirtualSocket();
+        if (pairResolve) {
+          pairResolve();
+          pairResolve = null;
+        }
         break;
       }
 
@@ -207,9 +322,14 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
         break;
 
       case "error": {
-        const msg = (ctrl["message"] as string) ?? "relay error";
-        logger.error(`relay host: relay error: ${msg}`);
-        if (pairReject) pairReject(new Error(`relay error: ${msg}`));
+        // Relay sends `{t:"error", code}` (shannon-relay proto.rs); read `code`
+        // first, fall back to `message` for tolerant interop.
+        const detail =
+          (ctrl["code"] as string | undefined) ??
+          (ctrl["message"] as string | undefined) ??
+          "relay error";
+        logger.error(`relay host: relay error: ${detail}`);
+        if (pairReject) pairReject(new Error(`relay error: ${detail}`));
         break;
       }
 
@@ -218,15 +338,79 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
     }
   }
 
-  function handleBinaryFrame(data: unknown): void {
-    if (!recvChannel || !sessionCtx) {
-      logger.warn("relay host: binary frame before paired, ignoring");
-      return;
+  /** Legacy (token-derived) channel setup — §G-rev2/§G-rev3 re-pair rules. */
+  function establishLegacyChannels(): void {
+    // Recv: fresh channel on every pair (§G-rev2 defense in depth) — a
+    // reconnecting phone that lost its counter state restarts at 1 and
+    // must still be accepted.
+    recvChannel = new E2eChannel(opts.sessionKey);
+    // Send: create once, PRESERVE across re-paired (§G-rev3) — this host
+    // socket never dropped, so its send counter must stay monotonic; a
+    // reconnecting phone's recv is parked at k and would reject frames
+    // whose counter restarts at 1 (replay check), wedging host→phone.
+    // Host process restart is unaffected: the relay treats the fresh
+    // register as host replacement and the phone resets recv then.
+    if (!sendChannel) sendChannel = new E2eChannel(opts.sessionKey);
+    attachVirtualSocket();
+    e2eEstablished = true;
+    if (pairResolve) {
+      pairResolve();
+      pairResolve = null;
     }
-    const buf = toBuffer(data);
+  }
+
+  /** Wire the virtual socket to the (current) send channel + fresh context. */
+  function attachVirtualSocket(): void {
+    virtualSocket = new VirtualSocket((plaintext) => {
+      if (!sendChannel || !ws || ws.readyState !== WebSocket.OPEN) return;
+      const frame = sendChannel.seal(plaintext);
+      ws.send(frame);
+    });
+    // Fresh context — shannon/pair will set sessionId, and it persists
+    // for all subsequent messages on this relay session.
+    sessionCtx = {
+      socket: virtualSocket as unknown as WebSocket,
+      sessionId: null,
+      logger,
+    };
+    opts.onContext?.(sessionCtx);
+  }
+
+  function handleBinaryFrame(data: unknown): void {
+    if (!sessionCtx || !recvChannel || !sendChannel) {
+      if (ecdh && !e2eEstablished) {
+        const buf = toBuffer(data);
+        const hello = isE2eHello(buf);
+        if (hello) {
+          // v2: derive the token-mixed ECDH session key and bring both
+          // channels up. The hello itself carries no payload — consume it.
+          const shared = hostSharedSecret(ecdh.privateKey, hello.pub);
+          const k = deriveSessionKeyV2(ecdh.pairToken, shared);
+          recvChannel = new E2eChannel(k);
+          sendChannel = new E2eChannel(k);
+          attachVirtualSocket();
+          e2eEstablished = true;
+          logger.info("relay host: e2e v2 handshake complete (X25519 + token)");
+          if (pairResolve) {
+            pairResolve();
+            pairResolve = null;
+          }
+          return;
+        }
+        // Not a hello → a legacy phone sealed this with the token-derived
+        // key; fall back so older clients keep working.
+        logger.info("relay host: first frame is not e2e_hello — legacy token key");
+        establishLegacyChannels();
+        // fall through: process this frame through the legacy channels.
+      } else {
+        logger.warn("relay host: binary frame before paired, ignoring");
+        return;
+      }
+    }
+    const sealed = toBuffer(data);
     let plaintext: Buffer;
     try {
-      plaintext = recvChannel.open(buf);
+      plaintext = recvChannel!.open(sealed);
     } catch (err) {
       logger.warn(`relay host: E2E open failed: ${(err as Error).message}`);
       return;
@@ -234,7 +418,7 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
 
     void dispatchNdjson(
       plaintext.toString("utf8"),
-      sessionCtx,
+      sessionCtx!,
       opts.handlers,
       (text) => {
         if (!sendChannel || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -249,6 +433,10 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
     if (stopped) return;
     stopped = true;
     clearPairTimer();
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     if (ws) {
       ws.close();
       ws = null;
@@ -262,6 +450,21 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
       return paired;
     },
     stop,
+    sendControl(frame: Record<string, unknown>): boolean {
+      if (stopped || !ws || ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(JSON.stringify(frame));
+      return true;
+    },
+    onControl(handler: (frame: Record<string, unknown>) => void): () => void {
+      controlHandlers.push(handler);
+      return () => {
+        const i = controlHandlers.indexOf(handler);
+        if (i >= 0) controlHandlers.splice(i, 1);
+      };
+    },
+    pushCapable(): boolean {
+      return pushCapableFlag;
+    },
   };
 }
 

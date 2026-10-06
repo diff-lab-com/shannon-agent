@@ -622,17 +622,32 @@ fn parse_yaml_paths(yaml: &str) -> Option<Vec<String>> {
 
 /// Check if a file path matches any of the given glob patterns.
 fn matches_any_pattern(file_path: &Path, project_dir: &Path, patterns: &[String]) -> bool {
+    // Normalize via string logic, not `Path::is_absolute`/`join`: those are
+    // platform-relative (on unix, a `C:\...` path is relative, so `join`
+    // double-prefixes it — see test_matches_any_pattern_windows_separators,
+    // which deliberately runs on unix CI too). Everything becomes `/`-sep-
+    // arated first; the candidate is used as-is when it already sits under
+    // the directory, and prefixed with it otherwise.
+    let norm = |p: &Path| p.to_string_lossy().replace('\\', "/");
+    let dir_s = norm(project_dir);
+    let dir_s = dir_s.trim_end_matches('/');
+
     let mut builder = globset::GlobSetBuilder::new();
 
     for pattern in patterns {
-        let abs_pattern = if pattern.starts_with('/') {
-            pattern.clone()
+        let pat_s = pattern.replace('\\', "/");
+        // A pattern is absolute when it starts with `/` or a drive letter
+        // (`C:/`-style) after normalization; everything else is relative to
+        // the project directory.
+        let abs_pattern = if pat_s.starts_with('/') || pat_s.contains(":/") {
+            pat_s
         } else {
-            format!("{}/{}", project_dir.display(), pattern)
+            format!("{dir_s}/{pat_s}")
         };
 
         if let Ok(glob) = globset::GlobBuilder::new(&abs_pattern)
             .literal_separator(false)
+            .case_insensitive(cfg!(windows))
             .build()
         {
             builder.add(glob);
@@ -644,13 +659,14 @@ fn matches_any_pattern(file_path: &Path, project_dir: &Path, patterns: &[String]
         Err(_) => return false,
     };
 
-    let abs_path = if file_path.is_absolute() {
-        file_path.to_path_buf()
+    let file_s = norm(file_path);
+    let candidate = if file_s.starts_with('/') || file_s.contains(":/") {
+        file_s
     } else {
-        project_dir.join(file_path)
+        format!("{dir_s}/{file_s}")
     };
 
-    globset.is_match(&abs_path)
+    globset.is_match(candidate)
 }
 
 /// Resolve `@import` directives in content.
@@ -904,19 +920,27 @@ Another instruction"#;
 
     #[test]
     fn test_load_merged_finds_claude_paths() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        let claude_dir = tmp.join(".claude");
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_dir = tmp.path().join(".claude");
         fs::create_dir_all(&claude_dir).unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "Root CLAUDE.md instructions").unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "Root CLAUDE.md instructions").unwrap();
         fs::write(
             claude_dir.join("CLAUDE.md"),
             "Hidden claude dir instructions",
         )
         .unwrap();
-        fs::write(tmp.join("CLAUDE.local.md"), "Local gitignored instructions").unwrap();
-        fs::write(tmp.join("SHANNON.md"), "Shannon project instructions").unwrap();
+        fs::write(
+            tmp.path().join("CLAUDE.local.md"),
+            "Local gitignored instructions",
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("SHANNON.md"),
+            "Shannon project instructions",
+        )
+        .unwrap();
 
-        let manager = ProjectMemoryManager::new(tmp.clone());
+        let manager = ProjectMemoryManager::new(tmp.path().to_path_buf());
         let result = manager.load_merged().unwrap();
 
         assert!(
@@ -939,42 +963,38 @@ Another instruction"#;
             result.instructions.contains("Shannon project"),
             "Should contain SHANNON.md"
         );
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_load_memory_index() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
 
         // No MEMORY.md → returns None
-        assert!(load_memory_index(&tmp).is_none());
+        assert!(load_memory_index(tmp.path()).is_none());
 
         // With MEMORY.md
         let content: Vec<String> = (0..300).map(|i| format!("Line {i}")).collect();
-        fs::write(tmp.join("MEMORY.md"), content.join("\n")).unwrap();
+        fs::write(tmp.path().join("MEMORY.md"), content.join("\n")).unwrap();
 
-        let result = load_memory_index(&tmp);
+        let result = load_memory_index(tmp.path());
         assert!(result.is_some(), "Should find MEMORY.md");
         let text = result.unwrap();
         assert!(text.contains("=== Memory Index"), "Should have header");
         // Should be truncated to ~200 lines
         assert!(!text.contains("Line 250"), "Should not contain line 250+");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_resolve_imports() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(tmp.join("docs")).unwrap();
-        fs::write(tmp.join("README.md"), "# Readme content").unwrap();
-        fs::write(tmp.join("docs").join("guide.md"), "# Guide content").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        fs::write(tmp.path().join("README.md"), "# Readme content").unwrap();
+        fs::write(tmp.path().join("docs").join("guide.md"), "# Guide content").unwrap();
 
         // Test @import resolution
         let content = "Header line\n@README\nMiddle line\n@docs/guide.md\nFooter";
-        let result = resolve_imports(content, &tmp);
+        let result = resolve_imports(content, tmp.path());
 
         assert!(
             result.contains("Header line"),
@@ -991,24 +1011,20 @@ Another instruction"#;
             !result.contains("@README"),
             "Should not contain @README after resolution"
         );
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_resolve_imports_unresolved() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
 
         // @nonexistent should be kept as-is
         let content = "Line one\n@nonexistent_file_xyz\nLine two";
-        let result = resolve_imports(content, &tmp);
+        let result = resolve_imports(content, tmp.path());
         assert!(
             result.contains("@nonexistent_file_xyz"),
             "Unresolved imports kept as-is"
         );
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1024,20 +1040,18 @@ Another instruction"#;
 
     #[test]
     fn test_try_load_source() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
 
         // Nonexistent file
-        assert!(try_load_source(&tmp.join("nonexistent.md")).is_none());
+        assert!(try_load_source(&tmp.path().join("nonexistent.md")).is_none());
 
         // Valid file
-        fs::write(tmp.join("test.md"), "Test content").unwrap();
-        let result = try_load_source(&tmp.join("test.md"));
+        fs::write(tmp.path().join("test.md"), "Test content").unwrap();
+        let result = try_load_source(&tmp.path().join("test.md"));
         assert!(result.is_some(), "Should load valid file");
         let source = result.unwrap();
         assert!(source.config.content.contains("Test content"));
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     // ── Path-scoped rules tests ──────────────────────────────────
@@ -1108,6 +1122,40 @@ Another instruction"#;
             Path::new("/project/Cargo.toml"),
             dir,
             &["*.toml".to_string()]
+        ));
+    }
+
+    /// Windows-style paths must match `/`-separated globs: the project dir
+    /// renders with `\`, so both the built glob and the candidate are
+    /// normalized to `/` before matching. Pure string logic — also runs on
+    /// unix CI.
+    #[test]
+    fn test_matches_any_pattern_windows_separators() {
+        let dir = Path::new("C:\\repo");
+        assert!(matches_any_pattern(
+            Path::new("C:\\repo\\src\\main.rs"),
+            dir,
+            &["src/**/*.rs".to_string()]
+        ));
+        if cfg!(windows) {
+            // Windows path comparison is case-insensitive (NTFS default).
+            assert!(matches_any_pattern(
+                Path::new("c:\\REPO\\src\\lib.rs"),
+                dir,
+                &["SRC/**".to_string()]
+            ));
+        }
+        assert!(!matches_any_pattern(
+            Path::new("C:\\repo\\docs\\guide.md"),
+            dir,
+            &["src/**".to_string()]
+        ));
+        // Absolute pattern with a drive letter must not be joined onto the
+        // project dir.
+        assert!(matches_any_pattern(
+            Path::new("C:\\other\\a.rs"),
+            dir,
+            &["C:/other/**/*.rs".to_string()]
         ));
     }
 

@@ -55,10 +55,10 @@ export default function CalendarSidebarWidget({
   const hasActive = tasks.some(t => t.status === 'running' || t.status === 'in_progress')
 
   return (
-    <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg shadow-sm">
+    <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg shadow-e1">
       <div className="flex items-center justify-between mb-lg">
         <div>
-          <h4 className="font-headline-md text-[18px] text-on-surface">{t('tasks.calendarSidebarWidget.schedule')}</h4>
+          <h4 className="font-headline-md text-body-lg text-on-surface">{t('tasks.calendarSidebarWidget.schedule')}</h4>
           <span className="font-label-sm text-on-surface-variant">{monthName(intl.locale, viewMonth)} {viewYear}</span>
         </div>
         <div className="flex gap-sm">
@@ -69,7 +69,7 @@ export default function CalendarSidebarWidget({
             className="text-on-surface-variant hover:text-primary"
             onClick={onPrevMonth}
           >
-            <span className="material-symbols-outlined text-[20px]">chevron_left</span>
+            <span className="material-symbols-outlined icon-md">chevron_left</span>
           </Button>
           <Button
             variant="ghost"
@@ -78,16 +78,16 @@ export default function CalendarSidebarWidget({
             className="text-on-surface-variant hover:text-primary"
             onClick={onNextMonth}
           >
-            <span className="material-symbols-outlined text-[20px]">chevron_right</span>
+            <span className="material-symbols-outlined icon-md">chevron_right</span>
           </Button>
         </div>
       </div>
       <div className="grid grid-cols-7 text-center mb-sm">
-        {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-[10px] font-bold text-on-surface-variant uppercase">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
+        {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-label-2xs font-bold text-on-surface-variant uppercase">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
       </div>
-      <div className="grid grid-cols-7 gap-1 text-center font-label-md">
+      <div className="grid grid-cols-7 gap-xs text-center font-label-md">
         {Array.from({ length: startDay }, (_, i) => (
-          <span key={`prev-${i}`} aria-hidden="true" className="py-2 text-muted-foreground">{prevMonthDays - startDay + i + 1}</span>
+          <span key={`prev-${i}`} aria-hidden="true" className="py-sm text-muted-foreground">{prevMonthDays - startDay + i + 1}</span>
         ))}
         {Array.from({ length: daysInMonth }, (_, i) => {
           const day = i + 1
@@ -96,7 +96,7 @@ export default function CalendarSidebarWidget({
           return (
             <span
               key={day}
-              className={cn('py-2 rounded-lg cursor-pointer relative', isToday ? 'bg-primary text-on-primary font-bold' : hasFire ? 'bg-primary-container/20 text-primary font-bold' : 'hover:bg-surface-container')}
+              className={cn('py-sm rounded-lg cursor-pointer relative', isToday ? 'bg-primary text-on-primary font-bold' : hasFire ? 'bg-primary-container/20 text-primary font-bold' : 'hover:bg-surface-container')}
             >
               {day}
             </span>
@@ -116,7 +116,7 @@ export default function CalendarSidebarWidget({
               <div className="w-1 bg-primary h-8 rounded-full" />
               <div>
                 <p className="text-body-sm font-semibold">{task.title}</p>
-                <p className="text-[12px] text-on-surface-variant">{task.assignee || t('tasks.calendarSidebarWidget.unassigned')}</p>
+                <p className="text-label-sm text-on-surface-variant">{task.assignee || t('tasks.calendarSidebarWidget.unassigned')}</p>
               </div>
             </div>
           ))}
@@ -147,14 +147,14 @@ export default function CalendarSidebarWidget({
                   <span className="block text-body-sm font-semibold text-on-surface truncate">
                     {r.name}
                   </span>
-                  <span className="block text-[11px] text-on-surface-variant uppercase tracking-wider">
+                  <span className="block text-label-xs text-on-surface-variant uppercase tracking-wider">
                     {r.trigger_type}
                     {r.depends_on && r.depends_on.length > 0
                       ? intl.formatMessage({ id: 'tasks.calendarSidebarWidget.deps' }, { count: r.depends_on.length })
                       : ''}
                   </span>
                 </span>
-                <span className="material-symbols-outlined text-[14px] text-on-surface-variant">chevron_right</span>
+                <span className="material-symbols-outlined icon-sm text-on-surface-variant">chevron_right</span>
               </Button>
             ))}
           </div>

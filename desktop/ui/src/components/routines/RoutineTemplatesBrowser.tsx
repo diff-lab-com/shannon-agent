@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import LoadingState from '@/components/ui/loading-state'
+import ErrorState from '@/components/ui/error-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
+import { formatInterval } from '@/lib/formatInterval'
 import type { ScheduledRoutine } from '@/types'
 
 interface Props {
@@ -22,22 +24,27 @@ const CATEGORY_ICONS: Record<string, string> = {
 
 export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useCallback((id: string) => intl.formatMessage({ id }), [intl])
 
   const [templates, setTemplates] = useState<api.RoutineTemplate[]>([])
   const [loading, setLoading] = useState(true)
+  // B3 P1-17: a failed read used to be console.warn + "no templates" empty
+  // state — surface the failure with a retry instead.
+  const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<string>('all')
   const [instantiating, setInstantiating] = useState<string | null>(null)
 
-  useEffect(() => {
+  const refresh = useCallback(() => {
     let cancelled = false
+    setError(null)
+    setLoading(true)
     api
       .listRoutineTemplates()
       .then((list) => {
         if (!cancelled) setTemplates(list)
       })
       .catch((e) => {
-        console.warn('listRoutineTemplates error:', e)
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -46,6 +53,8 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => refresh(), [refresh])
 
   const categories = useMemo(() => {
     const set = new Set(templates.map((t) => t.category))
@@ -69,6 +78,27 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
     setInstantiating(null)
   }
 
+  // W2-7: humanize the trigger chip — cron keeps its expression, github
+  // triggers show event/repo/action semantics instead of a bare "0s", and
+  // intervals render as human durations instead of raw seconds.
+  const triggerLabel = useCallback(
+    (tmpl: api.RoutineTemplate): string => {
+      if (tmpl.trigger_type === 'cron') return tmpl.cron_expr ?? ''
+      if (tmpl.trigger_type === 'github') {
+        const parts = [
+          tmpl.github_event,
+          tmpl.github_repo === '*' ? t('routines.templates.trigger.anyRepo') : tmpl.github_repo,
+          tmpl.github_action,
+        ].filter((p): p is string => Boolean(p))
+        return parts.length > 0 ? parts.join(' · ') : t('routines.templates.trigger.onEvent')
+      }
+      return formatInterval(tmpl.interval_secs ?? 0, (id, values) =>
+        intl.formatMessage({ id }, values),
+      )
+    },
+    [intl, t],
+  )
+
   if (loading) {
     return (
       <div
@@ -77,6 +107,19 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
         aria-live="polite"
       >
         <LoadingState size="md" label={t('routines.templates.loading')} />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest/60">
+        <ErrorState
+          icon="bolt"
+          title={t('routines.templates.loadFailed')}
+          description={error}
+          action={{ label: t('common.retry'), onClick: refresh }}
+        />
       </div>
     )
   }
@@ -139,10 +182,11 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
               {tmpl.description}
             </p>
             <div className="flex items-center justify-between gap-sm pt-xs">
-              <code className="font-mono text-[11px] text-on-surface-variant bg-surface-container-high px-xs py-xxs rounded">
-                {tmpl.trigger_type === 'cron'
-                  ? tmpl.cron_expr ?? ''
-                  : `${tmpl.interval_secs ?? 0}s`}
+              <code
+                className="font-mono text-label-xs text-on-surface-variant bg-surface-container-high px-xs py-xs rounded-sm"
+                title={triggerLabel(tmpl)}
+              >
+                {triggerLabel(tmpl)}
               </code>
               <Button
                 onClick={() => handleInstantiate(tmpl)}

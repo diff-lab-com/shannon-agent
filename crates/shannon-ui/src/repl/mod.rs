@@ -12,6 +12,7 @@ mod helpers;
 mod input;
 pub mod loop_guard;
 mod mcp_completion;
+pub(crate) mod plugins;
 pub(crate) mod preferences;
 mod query;
 pub(crate) mod render;
@@ -34,6 +35,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
+use rust_i18n::t;
 use shannon_types::recover_lock;
 use std::collections::HashMap;
 
@@ -78,6 +80,22 @@ pub(super) use custom_commands::{
 };
 pub(crate) use custom_commands::{CustomCommandWatcher, SettingsWatcher};
 
+/// P1-18 residue: the CLI's provider-touching commands warn on stderr when
+/// `~/.shannon/providers.toml` exists but cannot be parsed as a provider
+/// config (the schema is `deny_unknown_fields` — one misspelled field in a
+/// hand edit rejects the WHOLE file). The REPL reads through the same store
+/// and degrades just as silently (every read shows "nothing connected",
+/// writes are refused), so startup emits the same one-line warning — the
+/// exact wording of the CLI's read-side hint. `None` when the file is
+/// absent, empty, or parses cleanly.
+fn providers_toml_corruption_warning() -> Option<String> {
+    let err = shannon_core::provider_config_store::parse_error(None)?;
+    Some(format!(
+        "warning: ~/.shannon/providers.toml exists but is not a valid provider config; \
+         it is being ignored until fixed (writes to it are refused):\n  {err}"
+    ))
+}
+
 /// Main REPL application struct
 pub struct Repl {
     /// Event handler for user input
@@ -108,12 +126,14 @@ pub struct Repl {
     pub(crate) shared_executor: SharedExecutor,
     /// Tokio runtime for async operations
     pub(crate) runtime: Runtime,
-    /// Permission request receiver (from QueryEngine to REPL UI)
+    /// Permission request receiver (from QueryEngine to REPL UI). Bounded
+    /// (review §P3-6): prompts are strictly sequential, so the small capacity
+    /// only guards against a UI that stopped draining.
     pub(crate) permission_req_rx:
-        tokio::sync::mpsc::UnboundedReceiver<shannon_core::query_engine::PermissionRequest>,
+        tokio::sync::mpsc::Receiver<shannon_core::query_engine::PermissionRequest>,
     /// Permission request sender (from REPL to QueryEngine)
     pub(crate) permission_req_tx:
-        tokio::sync::mpsc::UnboundedSender<shannon_core::query_engine::PermissionRequest>,
+        tokio::sync::mpsc::Sender<shannon_core::query_engine::PermissionRequest>,
     /// Last session listing cache (for /resume by number)
     pub(crate) last_session_list: Vec<shannon_core::session_log::StoredSessionInfo>,
     /// Command history with cursor navigation
@@ -142,6 +162,18 @@ pub struct Repl {
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
     /// Throttle timestamp for agent refresh (avoids block_on on every tick)
     pub(crate) last_agent_refresh: Option<std::time::Instant>,
+    /// Last task-board summary refresh. The summary is cached on the agent
+    /// dashboard and re-fetched at most every 500ms while the dashboard is
+    /// visible — `TaskBoard::summary()` is async, and blocking on it every
+    /// 50ms tick stalled input latency (review §P1-1).
+    pub(crate) last_task_board_summary: Option<std::time::Instant>,
+    /// Redraw gate (review §P2-5): set by any state change that justifies a
+    /// frame (input events, background drains, tick mutations). Cleared when
+    /// the frame is drawn. See `state::should_draw_frame`.
+    pub(crate) frame_dirty: bool,
+    /// When the last frame was completed; drives the idle heartbeat
+    /// (`state::IDLE_HEARTBEAT`) that bounds frame skips.
+    pub(crate) last_frame_at: Option<std::time::Instant>,
     /// Coordinator event receiver for agent dashboard live updates
     pub(crate) coordinator_event_rx:
         Option<tokio::sync::broadcast::Receiver<shannon_agents::CoordinatorEvent>>,
@@ -217,61 +249,10 @@ pub(crate) struct TabCompletionState {
 /// }
 /// ```
 fn load_permission_rules(pm: &mut PermissionManager) {
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let home = dirs::home_dir();
-
-    let mut paths = Vec::new();
-    if let Some(ref h) = home {
-        paths.push(h.join(".shannon").join("settings.json"));
-    }
-    paths.push(cwd.join(".shannon").join("settings.json"));
-    paths.push(cwd.join(".claude").join("settings.json"));
-
-    for path in paths {
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let doc: serde_json::Value = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("Skipping invalid settings file {}: {e}", path.display());
-                continue;
-            }
-        };
-
-        let perms = match doc.get("permissions") {
-            Some(p) => p,
-            None => continue,
-        };
-
-        if let Some(allow_arr) = perms.get("allow").and_then(|v| v.as_array()) {
-            for item in allow_arr {
-                if let Some(s) = item.as_str() {
-                    // Simple tool names like "Bash" or glob patterns like "mcp__*"
-                    if s.contains('(') || s.contains('*') || s.contains('?') {
-                        pm.allow_pattern(s);
-                    } else {
-                        pm.allow_tool(s);
-                    }
-                }
-            }
-        }
-
-        if let Some(deny_arr) = perms.get("deny").and_then(|v| v.as_array()) {
-            for item in deny_arr {
-                if let Some(s) = item.as_str() {
-                    if s.contains('(') || s.contains('*') || s.contains('?') {
-                        pm.deny_pattern(s);
-                    } else {
-                        pm.deny_tool(s);
-                    }
-                }
-            }
-        }
-
-        tracing::info!("Loaded permission rules from {}", path.display());
-    }
+    // P1-1/P1-2: delegate to the shared engine loader — same file precedence
+    // (user → project .shannon → project .claude), now also honouring the
+    // `ask` list and `permissions.defaultMode`.
+    shannon_engine::permissions::load_settings_permission_files(pm);
 }
 
 /// Extract a domain/URL from tool input for network-related tools.
@@ -312,6 +293,26 @@ impl Repl {
             self.state_manager.sessions_dir().to_path_buf(),
         )
     }
+
+    /// Mark the next main-loop frame as dirty (review §P2-5).
+    ///
+    /// Called by every mutation path that today justifies a frame: input
+    /// events, background drains, and tick-driven changes (toast expiry,
+    /// statusline cache update, elicitation dialog). Cleared when the frame
+    /// is drawn; the idle heartbeat bounds any site that forgets to call it.
+    pub(crate) fn mark_frame_dirty(&mut self) {
+        self.frame_dirty = true;
+    }
+
+    /// Update reduced motion and keep the spinner's static mode in lockstep
+    /// (same sync as REPL init). Session-scoped: toggled via
+    /// `/accessibility`; the env-level opt-in is `SHANNON_REDUCED_MOTION`
+    /// (review §P2-6).
+    pub(crate) fn set_reduced_motion(&mut self, enabled: bool) {
+        self.state.reduced_motion = enabled;
+        self.state.spinner.set_static_mode(enabled);
+        self.mark_frame_dirty();
+    }
     /// Minimal REPL for test mode — skips MCP, skills, memory, project instructions,
     /// but includes a lightweight query_engine with an unauthenticated LLM client.
     fn new_minimal(runtime: Runtime) -> Result<Self> {
@@ -319,7 +320,9 @@ impl Repl {
 
         let tool_registry = Arc::new(ToolRegistry::new());
         let mcp_pool = Arc::new(McpProcessPool::new());
-        let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::channel(
+            shannon_core::query_engine::PERMISSION_REQUEST_CHANNEL_CAPACITY,
+        );
 
         let command_registry = {
             let registry = CommandRegistry::new();
@@ -378,6 +381,9 @@ impl Repl {
             team_coordinator: None,
             agent_registry: None,
             last_agent_refresh: None,
+            last_task_board_summary: None,
+            frame_dirty: false,
+            last_frame_at: None,
             coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
@@ -422,6 +428,16 @@ impl Repl {
         // The DockerSandbox::is_available() and MCP discovery are also skipped.
         if cfg!(test) {
             return Self::new_minimal(runtime);
+        }
+
+        // P1-18 residue — corruption-warning parity with the CLI command
+        // surfaces: when `~/.shannon/providers.toml` exists but fails the
+        // provider-config schema, every read silently degrades to "nothing
+        // connected" and writes are refused. The REPL prints the same
+        // one-line warning at startup, before the inline viewport takes over
+        // the terminal (see [`providers_toml_corruption_warning`]).
+        if let Some(warning) = providers_toml_corruption_warning() {
+            eprintln!("{warning}");
         }
 
         // Create tool registry and register all tools (sandboxed to project
@@ -477,10 +493,13 @@ impl Repl {
             if mcp_count > 0 {
                 tracing::info!("Discovered {} MCP server configuration(s)", mcp_count);
 
-                // Load approval state for MCP server gating
-                let approval_path = std::path::PathBuf::from(".shannon/mcp_approvals.json");
+                // Load approval state for MCP server gating. review F6: state
+                // lives ONLY in the user domain (`~/.shannon/mcp_approvals.json`,
+                // or the SHANNON_MCP_APPROVALS override). `load_user_domain`
+                // refuses project-local approval files, so a repo cannot ship
+                // a pre-seeded "approved" list (trust-domain inversion).
                 let mut approval_manager = shannon_core::McpApprovalManager::with_defaults();
-                if let Err(e) = approval_manager.load_from_file(&approval_path) {
+                if let Err(e) = approval_manager.load_user_domain() {
                     tracing::debug!("Could not load MCP approval state: {}", e);
                 }
 
@@ -509,6 +528,14 @@ impl Repl {
                     );
                     if let Some(ref url) = config.url {
                         approval_req.server_url = Some(url.clone());
+                    }
+                    // review F6: bind the request to the exact server identity
+                    // so a changed command/argument set re-triggers approval
+                    // instead of inheriting a decision made for the old one.
+                    if let Some(ref cmd) = config.command {
+                        approval_req = approval_req.with_fingerprint(cmd, &config.args);
+                    } else if let Some(ref url) = config.url {
+                        approval_req = approval_req.with_fingerprint(url, &[]);
                     }
                     approval_req.capabilities.push("tools".to_string());
                     let decision = approval_manager
@@ -700,15 +727,24 @@ impl Repl {
                     }
                 }
 
-                // Persist approval state (auto-approved servers, any new denies)
-                if let Err(e) = approval_manager.save_to_file(&approval_path) {
+                // Persist approval state (auto-approved servers, any new denies).
+                // review F6: user domain only — a project-relative approvals
+                // file would be refused by the loader on next startup.
+                let approval_state_path = shannon_core::McpApprovalManager::default_state_path();
+                if let Err(e) = approval_manager.save_to_file(&approval_state_path) {
                     tracing::debug!("Could not save MCP approval state: {}", e);
                 }
             }
         }
 
-        // Load plugins from ~/.shannon/plugins/
-        if !cfg!(test) {
+        // Load plugins from ~/.shannon/plugins/ — exactly once (review
+        // §P2-22: the previous code ran this full load a second time inside
+        // the command-registry build below, spawning every stdio plugin
+        // process twice per startup). `enabled_plugins` is the shared
+        // snapshot both registration halves consume: tool plugins are
+        // registered right here (`register_plugin_tools`), Command / Skill
+        // plugins become prompt commands at the command-registry build.
+        let plugin_registry = if !cfg!(test) {
             let plugins_dir = dirs::home_dir()
                 .unwrap_or_default()
                 .join(".shannon")
@@ -719,102 +755,20 @@ impl Repl {
             if let Err(e) = runtime.block_on(plugin_registry.load_all()) {
                 tracing::warn!("some plugins failed to load and were skipped:\n{e}");
             }
-            {
-                let enabled = plugin_registry.list_enabled();
-                if !enabled.is_empty() {
-                    tracing::info!("Loaded {} plugin(s)", enabled.len());
-                    for plugin in &enabled {
-                        // §4.9: gate every Shannon-side execution point on
-                        // the manifest allow-set; empty declarations keep the
-                        // pre-enforcement lenient default.
-                        let policy = std::sync::Arc::new(
-                            shannon_core::plugin::PluginPermissionPolicy::from_manifest(
-                                &plugin.manifest,
-                            ),
-                        );
-                        // write_files enforcement ("declaration IS sandbox"):
-                        // a declared write_files face installs a manifest-
-                        // derived execution world around every stdio spawn
-                        // (discovery + per-call); anything else stays a
-                        // zero-overhead passthrough.
-                        let spawn_guard = shannon_tools::sandbox::plugin_spawn_guard_for_manifest(
-                            &policy,
-                            &plugin.manifest.name,
-                            &plugin.path,
-                        );
-                        match plugin.manifest.kind() {
-                            Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
-                                if let Some(command) = transport.command() {
-                                    let args = transport.args().to_vec();
-                                    match runtime.block_on(
-                                        shannon_core::plugin::gated_discover_tools_stdio_guarded(
-                                            &policy,
-                                            &plugin.manifest.name,
-                                            command,
-                                            &args,
-                                            &std::collections::HashMap::new(),
-                                            None,
-                                            spawn_guard,
-                                        ),
-                                    ) {
-                                        Ok(result) => {
-                                            tool_registry.attach_plugin_policy(
-                                                &plugin.manifest.name,
-                                                std::sync::Arc::clone(&policy),
-                                            );
-                                            let tool_count = result.tools.len();
-                                            for tool in result.tools {
-                                                if let Err(e) =
-                                                    tool_registry.register(Box::new(tool))
-                                                {
-                                                    tracing::debug!(
-                                                        "Plugin tool registration skipped: {}",
-                                                        e
-                                                    );
-                                                }
-                                            }
-                                            tracing::info!(
-                                                "Registered {} tool(s) from plugin '{}'",
-                                                tool_count,
-                                                plugin.manifest.name
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "Plugin '{}' tool discovery failed: {e}",
-                                                plugin.manifest.name
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                            Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
-                                tracing::info!(
-                                    "Command plugin '{}' ({}) loaded",
-                                    name,
-                                    description
-                                );
-                            }
-                            Ok(shannon_core::plugin::PluginKind::Skill {
-                                trigger,
-                                template: _,
-                            }) => {
-                                tracing::info!(
-                                    "Skill plugin '{}' (trigger: '{}') loaded",
-                                    plugin.manifest.name,
-                                    trigger
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Plugin '{}' has invalid config: {e}",
-                                    plugin.manifest.name
-                                );
-                            }
-                        }
-                    }
-                }
-            }
+            Some(plugin_registry)
+        } else {
+            None
+        };
+        let enabled_plugins: Vec<&shannon_core::plugin::InstalledPlugin> = plugin_registry
+            .as_ref()
+            .map(|registry| registry.list_enabled())
+            .unwrap_or_default();
+        if !enabled_plugins.is_empty() {
+            tracing::info!("Loaded {} plugin(s)", enabled_plugins.len());
+            runtime.block_on(plugins::register_plugin_tools(
+                &tool_registry,
+                &enabled_plugins,
+            ));
         }
 
         // Create LLM client
@@ -998,9 +952,27 @@ impl Repl {
         // Create permission manager
         let mut permission_manager = PermissionManager::new();
 
+        // P1-3: configured profile (strict/balanced/permissive/custom:<name>)
+        // applies before settings rules and session interactions.
+        if let Some(profile) =
+            shannon_core::unified_config::ShannonConfig::configured_permission_profile()
+        {
+            shannon_engine::permissions::apply_configured_profile(
+                &mut permission_manager,
+                &profile,
+            );
+        }
+
         // Register destructive MCP tools with permission manager
         for name in tool_registry.destructive_tool_names() {
             permission_manager.register_destructive_tool(name);
+        }
+
+        // review F17: feed the read-only fast-path veto real trait metadata
+        // so a plugin tool that merely names itself like a read-only builtin
+        // cannot ride the name list when its flags say otherwise.
+        for (name, read_only) in tool_registry.tool_read_only_flags() {
+            permission_manager.register_tool_read_only(name, read_only);
         }
 
         // Load permission allow/deny rules from settings files
@@ -1009,6 +981,11 @@ impl Repl {
         // Create state manager
         let state_manager = StateManager::new();
 
+        // The session's project key for memory reads/writes: pinned to the
+        // launch cwd so it matches the tool handles below (the process cwd
+        // itself is never used as a memory key anymore).
+        let repl_cwd = std::env::current_dir().unwrap_or_default();
+
         // Create query engine with optional memory store
         let base_engine = QueryEngine::with_defaults_arc(
             client,
@@ -1016,7 +993,8 @@ impl Repl {
             permission_manager,
             state_manager,
         )
-        .with_plan_mode_active(plan_mode_flag.clone());
+        .with_plan_mode_active(plan_mode_flag.clone())
+        .with_working_directory(repl_cwd.clone());
 
         // Initialize memory store at ~/.shannon/memories/
         let mut query_engine = {
@@ -1026,46 +1004,53 @@ impl Repl {
             let mut mem_store = shannon_core::MemoryStore::new(memory_path);
             // Load existing memories from disk (ignore errors on first run)
             let _ = mem_store.load();
-            base_engine.with_memory(mem_store)
+            // N-1: one shared in-memory instance for engine injection AND the
+            // model-facing tools — a MemorySave/MemoryForget takes effect on
+            // the very next prompt instead of after a process restart. The
+            // store stays multi-writer safe on disk for other processes.
+            let shared = std::sync::Arc::new(std::sync::RwLock::new(mem_store));
+            let _ = tool_registry.register(Box::new(
+                shannon_core::memory::tools::MemorySaveTool::with_shared_store(shared.clone())
+                    .with_working_dir(repl_cwd.display().to_string()),
+            ));
+            let _ = tool_registry.register(Box::new(
+                shannon_core::memory::tools::MemoryForgetTool::with_shared_store(shared.clone())
+                    .with_working_dir(repl_cwd.display().to_string()),
+            ));
+            // Episodic layer access: let the model search past session
+            // transcripts (previously only the REPL /search could, and the
+            // model had no path to history at all).
+            if let Some(sessions_dir) =
+                dirs::home_dir().map(|h| h.join(".shannon").join("sessions"))
+            {
+                let _ = tool_registry
+                    .register(Box::new(shannon_core::SessionSearchTool::new(sessions_dir)));
+            }
+            base_engine.with_memory_arc(shared)
         };
 
-        // Auto-load project instructions (Claude Code compatible hierarchy)
+        // R1-3: re-inject the todo/task checklist after compaction so a
+        // compacted agent retains its plan.
+        query_engine.add_reinjection_provider(shannon_tools::todo::todo_reinjection_block);
+
+        // Auto-load project instructions (Claude Code compatible hierarchy).
+        //
+        // Instruction/context injection is owned by the ENGINE (stable cache
+        // zone): `load_full_context` covers CLAUDE.md/AGENTS.md/SHANNON.md +
+        // cross-tool files, and the ContextInjector blocks cover MEMORY.md,
+        // .claude/rules and preferences. Appending them here as well injected
+        // CLAUDE.md 2–3× per request and put mutable git context inside the
+        // cached base prefix. The REPL only adds what the engine cannot:
+        // the skills list.
         {
             let cwd = std::env::current_dir().unwrap_or_default();
 
-            // 1. Load full CLAUDE.md hierarchy (global -> project -> parents)
-            let mem_manager = shannon_core::project_memory::ProjectMemoryManager::new(cwd.clone());
-            if let Ok(merged) = mem_manager.load_merged() {
-                if !merged.instructions.is_empty() {
-                    let resolved =
-                        shannon_core::project_memory::resolve_imports(&merged.instructions, &cwd);
-                    query_engine
-                        .append_system_prompt(&format!("# Project Instructions\n\n{resolved}"));
-                }
-                tracing::info!("Loaded {} project memory source(s)", merged.sources.len());
-            }
-
-            // 2. Load MEMORY.md index (first 200 lines)
-            if let Some(memory_content) = shannon_core::project_memory::load_memory_index(&cwd) {
-                query_engine.append_system_prompt(&memory_content);
-            }
-
-            // 3. Load .claude/rules/*.md
-            if let Some(rules) = shannon_core::project_memory::load_rules(&cwd) {
-                query_engine.append_system_prompt(&rules);
-            }
-
-            // 4. Load git context (branch, recent commits, status)
-            if let Some(git_ctx) = shannon_core::project_instructions::git_context(&cwd) {
-                query_engine.append_system_prompt(&git_ctx);
-            }
-
-            // 5. Inject available skills list so the LLM knows what slash commands exist
+            // Inject available skills list so the LLM knows what slash commands exist
             if !skills_for_llm.is_empty() {
                 query_engine.append_system_prompt(&skills_for_llm);
             }
 
-            // 6. Attach ContextInjector for hot-reload + compaction reinjection
+            // Attach ContextInjector for hot-reload + compaction reinjection
             let storage_dir = dirs::home_dir()
                 .map(|h| h.join(".shannon"))
                 .unwrap_or_else(|| cwd.clone());
@@ -1074,7 +1059,9 @@ impl Repl {
         }
 
         // Create permission request channel
-        let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::channel(
+            shannon_core::query_engine::PERMISSION_REQUEST_CHANNEL_CAPACITY,
+        );
 
         // Create command registry inside the runtime context so register_sync
         // can access the tokio runtime handle.
@@ -1206,192 +1193,141 @@ impl Repl {
             }
 
             // Load plugins from ~/.shannon/plugins/
-            {
-                let plugins_dir = dirs::home_dir()
-                    .unwrap_or_default()
-                    .join(".shannon")
-                    .join("plugins");
-                let mut plugin_registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
-                // §4.10: report broken manifests instead of silently
-                // skipping; valid siblings still load and proceed.
-                if let Err(e) = plugin_registry.load_all().await {
-                    tracing::warn!("some plugins failed to load and were skipped:\n{e}");
-                }
-                {
-                    let enabled = plugin_registry.list_enabled();
-                    if !enabled.is_empty() {
-                        tracing::info!("Loaded {} plugin(s)", enabled.len());
-                        for plugin in &enabled {
-                            // §4.9: gate every Shannon-side execution point on
-                            // the manifest allow-set; empty declarations keep
-                            // the pre-enforcement lenient default.
-                            let policy = std::sync::Arc::new(
-                                shannon_core::plugin::PluginPermissionPolicy::from_manifest(
-                                    &plugin.manifest,
-                                ),
+            //
+            // §P2-22: this site used to build a SECOND `PluginRegistry` and
+            // re-run the full load (`load_all()` + stdio tool discovery),
+            // spawning every plugin process twice per startup. It now
+            // consumes the single load snapshot (`enabled_plugins`, taken at
+            // the load site above) and only registers the prompt-based
+            // plugins as slash commands; tool plugins were already
+            // discovered and registered there exactly once.
+            for plugin in &enabled_plugins {
+                // §4.9: gate every Shannon-side execution point on the
+                // manifest allow-set; empty declarations keep the
+                // pre-enforcement lenient default.
+                let policy = std::sync::Arc::new(
+                    shannon_core::plugin::PluginPermissionPolicy::from_manifest(&plugin.manifest),
+                );
+                match plugin.manifest.kind() {
+                    // Tool plugins were handled by `register_plugin_tools` at
+                    // the single load site above — never re-spawn the stdio
+                    // plugin process here.
+                    Ok(shannon_core::plugin::PluginKind::Tool { .. }) => {}
+                    Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
+                        // Prompt-driven extension: the host reads
+                        // the entry file and the prompt drives
+                        // model turns — both faces must be granted.
+                        if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
+                            &policy,
+                            &plugin.manifest.name,
+                        ) {
+                            tracing::warn!(
+                                "Command plugin '{}' not registered: {e}",
+                                plugin.manifest.name
                             );
-                            // write_files enforcement: declared write_files ⇒
-                            // stdio spawns run inside the manifest-derived
-                            // execution world; otherwise passthrough.
-                            let spawn_guard = shannon_tools::sandbox::plugin_spawn_guard_for_manifest(
-                                &policy,
-                                &plugin.manifest.name,
-                                &plugin.path,
-                            );
-                            match plugin.manifest.kind() {
-                                Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
-                                    if let Some(command) = transport.command() {
-                                        let args = transport.args().to_vec();
-                                        match shannon_core::plugin::gated_discover_tools_stdio_guarded(
-                                            &policy,
-                                            &plugin.manifest.name,
-                                            command,
-                                            &args,
-                                            &std::collections::HashMap::new(),
-                                            None,
-                                            spawn_guard,
-                                        ).await {
-                                            Ok(result) => {
-                                                tool_registry.attach_plugin_policy(
-                                                    &plugin.manifest.name,
-                                                    std::sync::Arc::clone(&policy),
-                                                );
-                                                let tool_count = result.tools.len();
-                                                for tool in result.tools {
-                                                    if let Err(e) = tool_registry.register(Box::new(tool)) {
-                                                        tracing::debug!("Plugin tool registration skipped: {}", e);
-                                                    }
-                                                }
-                                                tracing::info!(
-                                                    "Registered {} tool(s) from plugin '{}'",
-                                                    tool_count,
-                                                    plugin.manifest.name
-                                                );
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!("Plugin '{}' tool discovery failed: {e}", plugin.manifest.name);
-                                            }
-                                        }
-                                    }
-                                }
-                                Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
-                                    // Prompt-driven extension: the host reads
-                                    // the entry file and the prompt drives
-                                    // model turns — both faces must be granted.
-                                    if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
-                                        &policy,
-                                        &plugin.manifest.name,
-                                    ) {
-                                        tracing::warn!(
-                                            "Command plugin '{}' not registered: {e}",
-                                            plugin.manifest.name
-                                        );
-                                        continue;
-                                    }
-                                    let plugin_dir = plugin.path.parent()
-                                        .map(|p| p.to_path_buf())
-                                        .unwrap_or_default();
-                                    let entry_path = plugin_dir.join(&plugin.manifest.entry);
-                                    let template = std::fs::read_to_string(&entry_path)
-                                        .unwrap_or_else(|_| plugin.manifest.entry.clone());
-                                    let cmd = Command::Prompt(Box::new(PromptCommand {
-                                        base: CommandBase {
-                                            name: format!("plugin:{name}"),
-                                            aliases: Vec::new(),
-                                            description: description.clone(),
-                                            has_user_specified_description: !description.is_empty(),
-                                            availability: vec![shannon_commands::CommandAvailability::All],
-                                            source: shannon_commands::CommandSource::Plugin,
-                                            is_enabled: true,
-                                            is_hidden: false,
-                                            argument_hint: Some("$ARGUMENTS".to_string()),
-                                            when_to_use: None,
-                                            version: Some(plugin.manifest.version.clone()),
-                                            disable_model_invocation: false,
-                                            user_invocable: true,
-                                            is_workflow: false,
-                                            immediate: false,
-                                            is_sensitive: false,
-                                            user_facing_name: None,
-                                        },
-                                        progress_message: format!("Running /{name}..."),
-                                        content_length: template.len(),
-                                        arg_names: vec!["$ARGUMENTS".to_string()],
-                                        allowed_tools: Vec::new(),
-                                        model: None,
-                                        hooks: HashMap::new(),
-                                        context: ExecutionContext::Inline,
-                                        agent: None,
-                                        paths: Vec::new(),
-                                        prompt_template: Some(template),
-                                    }));
-                                    registry.register_sync(cmd);
-                                    tracing::info!("Registered command '/plugin:{}' from plugin '{}'", name, plugin.manifest.name);
-                                }
-                                Ok(shannon_core::plugin::PluginKind::Skill { trigger, template }) => {
-                                    // Same prompt-extension faces as commands:
-                                    // entry read + model turns must be granted.
-                                    if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
-                                        &policy,
-                                        &plugin.manifest.name,
-                                    ) {
-                                        tracing::warn!(
-                                            "Skill plugin '{}' not registered: {e}",
-                                            plugin.manifest.name
-                                        );
-                                        continue;
-                                    }
-                                    let plugin_dir = plugin.path.parent()
-                                        .map(|p| p.to_path_buf())
-                                        .unwrap_or_default();
-                                    let entry_path = plugin_dir.join(&plugin.manifest.entry);
-                                    // Use entry file content if it exists, otherwise use inline template
-                                    let prompt_template = if entry_path.exists() {
-                                        std::fs::read_to_string(&entry_path).unwrap_or(template.clone())
-                                    } else {
-                                        template.clone()
-                                    };
-                                    // Strip leading slash from trigger for command name
-                                    let cmd_name = trigger.trim_start_matches('/');
-                                    let cmd = Command::Prompt(Box::new(PromptCommand {
-                                        base: CommandBase {
-                                            name: format!("plugin:{cmd_name}"),
-                                            aliases: vec![trigger.clone()],
-                                            description: plugin.manifest.description.clone(),
-                                            has_user_specified_description: true,
-                                            availability: vec![shannon_commands::CommandAvailability::All],
-                                            source: shannon_commands::CommandSource::Plugin,
-                                            is_enabled: true,
-                                            is_hidden: false,
-                                            argument_hint: Some("$ARGUMENTS".to_string()),
-                                            when_to_use: None,
-                                            version: Some(plugin.manifest.version.clone()),
-                                            disable_model_invocation: false,
-                                            user_invocable: true,
-                                            is_workflow: false,
-                                            immediate: false,
-                                            is_sensitive: false,
-                                            user_facing_name: Some(trigger.clone()),
-                                        },
-                                        progress_message: format!("Running skill /{trigger}…"),
-                                        content_length: prompt_template.len(),
-                                        arg_names: vec!["$ARGUMENTS".to_string()],
-                                        allowed_tools: Vec::new(),
-                                        model: None,
-                                        hooks: HashMap::new(),
-                                        context: ExecutionContext::Inline,
-                                        agent: None,
-                                        paths: Vec::new(),
-                                        prompt_template: Some(prompt_template),
-                                    }));
-                                    registry.register_sync(cmd);
-                                    tracing::info!("Registered skill '/{}' from plugin '{}'", trigger, plugin.manifest.name);
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Plugin '{}' has invalid config: {e}", plugin.manifest.name);
-                                }
-                            }
+                            continue;
                         }
+                        let plugin_dir = plugin.path.parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_default();
+                        let entry_path = plugin_dir.join(&plugin.manifest.entry);
+                        let template = std::fs::read_to_string(&entry_path)
+                            .unwrap_or_else(|_| plugin.manifest.entry.clone());
+                        let cmd = Command::Prompt(Box::new(PromptCommand {
+                            base: CommandBase {
+                                name: format!("plugin:{name}"),
+                                aliases: Vec::new(),
+                                description: description.clone(),
+                                has_user_specified_description: !description.is_empty(),
+                                availability: vec![shannon_commands::CommandAvailability::All],
+                                source: shannon_commands::CommandSource::Plugin,
+                                is_enabled: true,
+                                is_hidden: false,
+                                argument_hint: Some("$ARGUMENTS".to_string()),
+                                when_to_use: None,
+                                version: Some(plugin.manifest.version.clone()),
+                                disable_model_invocation: false,
+                                user_invocable: true,
+                                is_workflow: false,
+                                immediate: false,
+                                is_sensitive: false,
+                                user_facing_name: None,
+                            },
+                            progress_message: format!("Running /{name}..."),
+                            content_length: template.len(),
+                            arg_names: vec!["$ARGUMENTS".to_string()],
+                            allowed_tools: Vec::new(),
+                            model: None,
+                            hooks: HashMap::new(),
+                            context: ExecutionContext::Inline,
+                            agent: None,
+                            paths: Vec::new(),
+                            prompt_template: Some(template),
+                        }));
+                        registry.register_sync(cmd);
+                        tracing::info!("Registered command '/plugin:{}' from plugin '{}'", name, plugin.manifest.name);
+                    }
+                    Ok(shannon_core::plugin::PluginKind::Skill { trigger, template }) => {
+                        // Same prompt-extension faces as commands:
+                        // entry read + model turns must be granted.
+                        if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
+                            &policy,
+                            &plugin.manifest.name,
+                        ) {
+                            tracing::warn!(
+                                "Skill plugin '{}' not registered: {e}",
+                                plugin.manifest.name
+                            );
+                            continue;
+                        }
+                        let plugin_dir = plugin.path.parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_default();
+                        let entry_path = plugin_dir.join(&plugin.manifest.entry);
+                        // Use entry file content if it exists, otherwise use inline template
+                        let prompt_template = if entry_path.exists() {
+                            std::fs::read_to_string(&entry_path).unwrap_or(template.clone())
+                        } else {
+                            template.clone()
+                        };
+                        // Strip leading slash from trigger for command name
+                        let cmd_name = trigger.trim_start_matches('/');
+                        let cmd = Command::Prompt(Box::new(PromptCommand {
+                            base: CommandBase {
+                                name: format!("plugin:{cmd_name}"),
+                                aliases: vec![trigger.clone()],
+                                description: plugin.manifest.description.clone(),
+                                has_user_specified_description: true,
+                                availability: vec![shannon_commands::CommandAvailability::All],
+                                source: shannon_commands::CommandSource::Plugin,
+                                is_enabled: true,
+                                is_hidden: false,
+                                argument_hint: Some("$ARGUMENTS".to_string()),
+                                when_to_use: None,
+                                version: Some(plugin.manifest.version.clone()),
+                                disable_model_invocation: false,
+                                user_invocable: true,
+                                is_workflow: false,
+                                immediate: false,
+                                is_sensitive: false,
+                                user_facing_name: Some(trigger.clone()),
+                            },
+                            progress_message: format!("Running skill /{trigger}…"),
+                            content_length: prompt_template.len(),
+                            arg_names: vec!["$ARGUMENTS".to_string()],
+                            allowed_tools: Vec::new(),
+                            model: None,
+                            hooks: HashMap::new(),
+                            context: ExecutionContext::Inline,
+                            agent: None,
+                            paths: Vec::new(),
+                            prompt_template: Some(prompt_template),
+                        }));
+                        registry.register_sync(cmd);
+                        tracing::info!("Registered skill '/{}' from plugin '{}'", trigger, plugin.manifest.name);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Plugin '{}' has invalid config: {e}", plugin.manifest.name);
                     }
                 }
             }
@@ -1458,6 +1394,9 @@ impl Repl {
             team_coordinator: shared_coordinator,
             agent_registry: None,
             last_agent_refresh: None,
+            last_task_board_summary: None,
+            frame_dirty: false,
+            last_frame_at: None,
             coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
@@ -1611,40 +1550,58 @@ impl Repl {
                     tracing::debug!("SessionStart hook error: {e}");
                 }
             });
+            // The engine fires SessionStart itself at the start of the first
+            // query; tell it we already did, so it never double-fires.
+            engine.mark_session_start_emitted();
         }
 
-        // Check for updates in background to avoid blocking startup
+        // Check for updates in background to avoid blocking startup.
+        // Gated by the `update_check` feature flag (SHANNON_FEATURE_UPDATE_CHECK
+        // / settings.json `features.update_check`, default on) and throttled
+        // across restarts via ~/.shannon/update-check.json — without the state
+        // file every REPL launch hit the GitHub API once. Set
+        // SHANNON_FEATURE_UPDATE_CHECK=0 to keep Shannon fully offline.
         {
-            let (tx, rx) = std::sync::mpsc::channel::<String>();
-            self.update_check_rx = Some(std::sync::Mutex::new(rx));
-            let config = shannon_core::updater::UpdaterConfig {
-                repo: "shannon-code/shannon".to_string(),
-                check_interval: std::time::Duration::from_secs(86400),
-                enabled: true,
-                include_prereleases: false,
-            };
-            std::thread::spawn(move || {
-                let mut updater = shannon_core::updater::AutoUpdater::new(config);
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .ok();
-                let status = rt
-                    .as_ref()
-                    .map(|rt| rt.block_on(updater.check_for_update()));
-                if let Some(shannon_core::updater::UpdateStatus::UpdateAvailable {
-                    current,
-                    latest,
-                    release,
-                }) = status
-                {
-                    let msg = format!(
-                        "Update available: {} → {} ({}). Download: {}",
-                        current, latest, release.tag_name, release.html_url
-                    );
-                    let _ = tx.send(msg);
-                }
-            });
+            let update_check_enabled = shannon_core::feature_flags::FeatureFlagManager::new()
+                .is_enabled(&shannon_core::feature_flags::flags::UPDATE_CHECK);
+            let interval = std::time::Duration::from_secs(86400);
+            if update_check_enabled
+                && shannon_core::updater::UpdateCheckState::should_check(interval)
+            {
+                let (tx, rx) = std::sync::mpsc::channel::<String>();
+                self.update_check_rx = Some(std::sync::Mutex::new(rx));
+                let config = shannon_core::updater::UpdaterConfig {
+                    repo: "diff-lab-com/shannon-agent".to_string(),
+                    check_interval: interval,
+                    enabled: true,
+                    include_prereleases: false,
+                };
+                std::thread::spawn(move || {
+                    let mut updater = shannon_core::updater::AutoUpdater::new(config);
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .ok();
+                    let status = rt
+                        .as_ref()
+                        .map(|rt| rt.block_on(updater.check_for_update()));
+                    // Record the attempt regardless of outcome so the
+                    // next launch within the interval stays silent.
+                    shannon_core::updater::UpdateCheckState::store_now();
+                    if let Some(shannon_core::updater::UpdateStatus::UpdateAvailable {
+                        current,
+                        latest,
+                        release,
+                    }) = status
+                    {
+                        let msg = format!(
+                            "Update available: {} → {} ({}). Download: {}",
+                            current, latest, release.tag_name, release.html_url
+                        );
+                        let _ = tx.send(msg);
+                    }
+                });
+            }
         }
 
         // Auto-restore the most recent session if it was active within the last 2 hours.
@@ -1652,6 +1609,16 @@ impl Repl {
 
         // Main event loop
         while self.running {
+            // Drain finished inline `!shell` jobs (P0-1, non-blocking): the
+            // placeholder tool message is finalized in place when the worker
+            // reports completion / timeout / Esc-cancel.
+            let had_shell_job = self.state.shell_job.is_some();
+            commands::poll_inline_shell_jobs(self);
+            if had_shell_job && self.state.shell_job.is_none() {
+                // The placeholder was finalized — the chat area changed.
+                self.mark_frame_dirty();
+            }
+
             // Poll deferred update check result
             let update_msg = self
                 .update_check_rx
@@ -1660,6 +1627,7 @@ impl Repl {
             if let Some(msg) = update_msg {
                 self.chat.add_message(ChatRole::System, msg);
                 self.update_check_rx = None;
+                self.mark_frame_dirty();
             }
 
             // Check for permission requests (non-blocking)
@@ -1693,6 +1661,7 @@ impl Repl {
                             timestamp: chrono::Utc::now(),
                             source: Some(format!("permission:request:{tool_name}")),
                             action_id: None,
+                            kind: shannon_core::notifier::NotificationKind::NeedsAttention,
                         };
                         let _ = self.notifier.notify_dedup(&notification, 10_000);
                     }
@@ -1723,9 +1692,11 @@ impl Repl {
                             risk_level: risk,
                             detail: None,
                             domain,
+                            why: permission_req.prompt.reason.explain(),
                         },
                         permission_req.prompt.diff_preview.clone(),
                     );
+                    self.mark_frame_dirty();
                 }
             }
 
@@ -1752,6 +1723,9 @@ impl Repl {
                         self.state.theme.accent,
                     );
                 }
+                if had_updates {
+                    self.mark_frame_dirty();
+                }
             }
 
             // Refresh agent states for sidebar display
@@ -1761,10 +1735,15 @@ impl Repl {
 
             // Drain coordinator events into agent dashboard
             if let Some(ref mut rx) = self.coordinator_event_rx {
+                let mut had_events = false;
                 while let Ok(event) = rx.try_recv() {
                     if let Some(ref mut dashboard) = self.state.agent_dashboard {
                         dashboard.handle_coordinator_event(&event);
                     }
+                    had_events = true;
+                }
+                if had_events {
+                    self.mark_frame_dirty();
                 }
             }
 
@@ -1773,17 +1752,38 @@ impl Repl {
                 let mut dashboard = crate::widgets::agent_bar::AgentDashboardState::new();
                 dashboard.sync_from_agents(&self.state.active_agents);
                 self.state.agent_dashboard = Some(dashboard);
+                self.mark_frame_dirty();
             }
             // Sync dashboard entries from current agent state
             if let Some(ref mut dashboard) = self.state.agent_dashboard {
                 dashboard.sync_from_agents(&self.state.active_agents);
             }
-            // Fetch task board summary for the dashboard (P0-2: task ratio)
-            if let Some(ref coordinator) = self.team_coordinator {
-                if let Some(ref mut dashboard) = self.state.agent_dashboard {
-                    let task_board = coordinator.task_board();
-                    let summary = self.runtime.block_on(task_board.summary());
-                    dashboard.task_summary = Some(summary);
+            // Fetch task board summary for the dashboard (P0-2: task ratio).
+            //
+            // Review P1-1: `TaskBoard::summary()` is async, and the previous
+            // code blocked on it on EVERY loop iteration (50ms tick → up to
+            // 20x/s), stalling input latency. The summary is cached on the
+            // dashboard instead and refreshed at most every 500ms — and only
+            // while a dashboard actually renders (one exists exactly while it
+            // is on screen; it is auto-created with agents and dropped
+            // without them). The async runtime handle is kept; only the
+            // per-frame blocking is gone.
+            const TASK_BOARD_SUMMARY_REFRESH: std::time::Duration =
+                std::time::Duration::from_millis(500);
+            if self.team_coordinator.is_some() && self.state.agent_dashboard.is_some() {
+                let due = self
+                    .last_task_board_summary
+                    .is_none_or(|t| t.elapsed() >= TASK_BOARD_SUMMARY_REFRESH);
+                if due {
+                    if let Some(ref coordinator) = self.team_coordinator {
+                        let task_board = coordinator.task_board();
+                        let summary = self.runtime.block_on(task_board.summary());
+                        if let Some(ref mut dashboard) = self.state.agent_dashboard {
+                            dashboard.task_summary = Some(summary);
+                        }
+                        self.mark_frame_dirty();
+                    }
+                    self.last_task_board_summary = Some(std::time::Instant::now());
                 }
             }
             // Auto-remove dashboard when no agents (but keep if expanded)
@@ -1791,6 +1791,7 @@ impl Repl {
                 if let Some(ref dashboard) = self.state.agent_dashboard {
                     if !dashboard.expanded {
                         self.state.agent_dashboard = None;
+                        self.mark_frame_dirty();
                     }
                 }
             }
@@ -1821,6 +1822,7 @@ impl Repl {
                     format!("[Source changed: {preview}{suffix}]"),
                 );
                 self.state.diagnostic_store.mark_stale();
+                self.mark_frame_dirty();
 
                 // Invalidate streaming cache entries for changed files
                 if let Some(ref cache) = self.streaming_cache {
@@ -1839,15 +1841,16 @@ impl Repl {
                         if count > 0 {
                             self.chat.add_message(
                                 ChatRole::System,
-                                format!("[Diagnostics: {count} issue(s) found]"),
+                                t!("ui.diagnostics_issues", count => count).to_string(),
                             );
                         } else {
                             self.chat.add_message(
                                 ChatRole::System,
-                                "[Diagnostics: ✓ No issues]".to_string(),
+                                t!("ui.diagnostics_clean").to_string(),
                             );
                         }
                         self.diagnostic_rx = None;
+                        self.mark_frame_dirty();
                     }
                 } else {
                     // Spawn a new diagnostic run
@@ -1863,6 +1866,9 @@ impl Repl {
 
             // Check scheduled routines and inject due prompts
             let due = self.state.routine_manager.drain_due();
+            if !due.is_empty() {
+                self.mark_frame_dirty();
+            }
             for (name, prompt) in due {
                 self.chat
                     .add_message(ChatRole::System, format!("[Routine: {name}] {prompt}"));
@@ -1871,6 +1877,9 @@ impl Repl {
             // Check cron-based scheduled tasks and inject due prompts
             if std::env::var("SHANNON_DISABLE_CRON").is_err() {
                 let cron_due = self.state.cron_tool.drain_due();
+                if !cron_due.is_empty() {
+                    self.mark_frame_dirty();
+                }
                 for job in cron_due {
                     let overdue = if job.was_overdue { " (catch-up)" } else { "" };
                     let next = match &job.next_run {
@@ -1889,15 +1898,37 @@ impl Repl {
             if commands::maybe_fire_check_in(self) {
                 // The check-in submitted a query — fall through to the event
                 // loop; handle_query drives it to completion.
+                self.mark_frame_dirty();
             }
 
-            render::draw_frame(&mut terminal, self)?;
+            // Review P2-5: draw only when something can have changed. Input
+            // events, background drains, and tick mutations mark the frame
+            // dirty; spinner/progress animation and streaming keep today's
+            // per-tick cadence; a 500ms heartbeat bounds how long anything
+            // the flags missed can stay invisible. The gate only skips the
+            // draw call — the event-loop structure is untouched.
+            let frame_gate = state::FrameGate {
+                dirty: self.frame_dirty,
+                animating: self.state.animation_active(),
+                streaming: self.state.render_in_progress() || self.chat.streaming_active,
+                scrollback_pending: !self.chat.pending_scrollback.is_empty(),
+                since_last_draw: self.last_frame_at.map(|t| t.elapsed()),
+            };
+            if state::should_draw_frame(frame_gate) {
+                render::draw_frame(&mut terminal, self)?;
+                self.last_frame_at = Some(std::time::Instant::now());
+                self.frame_dirty = false;
+            }
 
             // Handle events
             if let Some(event) = self.events.next()? {
                 self.handle_event(event, Some(&mut terminal));
             }
         }
+
+        // P0-1 hygiene: a job still in flight at exit would orphan its whole
+        // process group — kill it before tearing down the terminal.
+        commands::cancel_inline_shell(self);
 
         // Save command history to ~/.shannon/history.jsonl
         {
@@ -1963,23 +1994,42 @@ impl Repl {
                 let total_cost = tracker.total_cost();
                 if tracker.total_input_tokens > 0 {
                     println!();
-                    println!("── Session Summary ──");
+                    println!("{}", t!("ui.session_summary_title"));
                     println!(
-                        "  Tokens: {} in + {} out  |  Cost: ${total_cost:.4}",
-                        tracker.total_input_tokens, tracker.total_output_tokens
+                        "{}",
+                        t!(
+                            "ui.session_summary_tokens",
+                            input => tracker.total_input_tokens,
+                            output => tracker.total_output_tokens,
+                            cost => format!("{total_cost:.4}")
+                        )
                     );
                     if let Some(budget) = tracker.budget_limit_usd {
                         let pct = (total_cost / budget) * 100.0;
-                        println!("  Budget: ${total_cost:.4} / ${budget:.2} ({pct:.0}%)");
+                        println!(
+                            "{}",
+                            t!(
+                                "ui.session_summary_budget",
+                                cost => format!("{total_cost:.4}"),
+                                budget => format!("{budget:.2}"),
+                                pct => format!("{pct:.0}")
+                            )
+                        );
                     }
-                    println!("  Model: {}", tracker.model_name);
+                    println!(
+                        "{}",
+                        t!("ui.session_summary_model", model => tracker.model_name)
+                    );
                     if let Some(started) = &self.session_started_at {
                         let elapsed = chrono::Utc::now() - *started;
                         let mins = elapsed.num_minutes();
                         let secs = elapsed.num_seconds() % 60;
-                        println!("  Duration: {mins}m {secs}s");
+                        println!(
+                            "{}",
+                            t!("ui.session_summary_duration", mins => mins, secs => secs)
+                        );
                     }
-                    println!("─────────────────────");
+                    println!("{}", t!("ui.session_summary_separator"));
                 }
             }
         }
@@ -1991,19 +2041,26 @@ impl Repl {
     fn handle_event(&mut self, event: crate::events::Event, terminal: Option<&mut query::Term>) {
         match event {
             crate::events::Event::Input(key) => {
+                self.mark_frame_dirty();
                 if let Err(e) = input::handle_input(self, key, terminal) {
                     // Display error in UI chat instead of stderr to prevent escape sequence leakage
-                    self.chat
-                        .add_message(ChatRole::System, format!("Input error: {e}"));
+                    self.chat.add_message(
+                        ChatRole::System,
+                        t!("repl.input_error", error => e).to_string(),
+                    );
                 }
             }
             crate::events::Event::Paste(content) => {
+                self.mark_frame_dirty();
                 let line_count = content.lines().count();
                 if line_count > PASTE_THRESHOLD_LINES {
                     self.state.paste_counter += 1;
                     let num = self.state.paste_counter;
                     self.state.pasted_texts.insert(num, content);
-                    let display = format!("[Pasted Text #{num} {line_count} lines]");
+                    // The "[Pasted Text #" prefix is machine-parsed on submit
+                    // (expand_pasted_texts) — locale files must keep it intact.
+                    let display =
+                        t!("ui.pasted_text_marker", num => num, count => line_count).to_string();
                     self.prompt.insert_text(&display);
                 } else {
                     self.prompt.insert_text(&content);
@@ -2012,6 +2069,7 @@ impl Repl {
             }
             crate::events::Event::Mouse(mouse) => {
                 if self.state.mouse_capture_enabled {
+                    self.mark_frame_dirty();
                     input::handle_mouse(self, mouse);
                 }
             }
@@ -2053,11 +2111,22 @@ impl Repl {
                 if let Some((_, started)) = self.state.toast {
                     if started.elapsed().as_secs() >= 5 {
                         self.state.toast = None;
+                        self.mark_frame_dirty();
                     }
                 }
 
-                // Refresh custom statusline (throttled internally)
+                // Refresh custom statusline (throttled internally). Mark the
+                // frame dirty only when the refreshed cache or the git
+                // branch actually changed — an unchanged refresh justifies
+                // no frame.
+                let statusline_before = self.state.cached_statusline.clone();
+                let branch_before = self.state.git_branch.clone();
                 self.refresh_statusline();
+                if self.state.cached_statusline != statusline_before
+                    || self.state.git_branch != branch_before
+                {
+                    self.mark_frame_dirty();
+                }
 
                 // Drain pending MCP elicitations: if no dialog is open and a
                 // request is queued, surface it as an InputDialog. The dialog
@@ -2091,11 +2160,13 @@ impl Repl {
                             self.state.input_dialog = Some(Box::new(dlg));
                             self.state.input_dialog_action = Some("__elicit__".to_string());
                             self.state.active_elicitation = Some(req);
+                            self.mark_frame_dirty();
                         }
                     }
                 }
             }
             crate::events::Event::Resize(_cols, _rows) => {
+                self.mark_frame_dirty();
                 // Reflow committed scrollback if terminal width changed
                 let width = _cols;
                 if self.chat.needs_reflow(width) {
@@ -2118,21 +2189,34 @@ impl Repl {
         let input = input.trim().to_string();
 
         if input.is_empty() {
-            return Err("No input provided on stdin.".into());
+            return Err(t!("repl.no_input").to_string().into());
+        }
+        self.run_pipe_with(input)
+    }
+
+    /// Pipe-mode body with caller-supplied input — used when the caller had
+    /// to drain stdin earlier (main.rs reads piped input to decide between
+    /// the noninteractive query and this path).
+    pub fn run_pipe_with(&mut self, input: String) -> Result<()> {
+        let input = input.trim().to_string();
+
+        if input.is_empty() {
+            return Err(t!("repl.no_input").to_string().into());
         }
 
-        // Process the input as a query (no TUI needed)
-        self.chat.add_message(ChatRole::User, input.clone());
-
         if input.starts_with('/') {
-            // Handle commands in pipe mode
-            commands::submit_input(self, None)?;
+            // Handle commands in pipe mode. `submit_input` reads the TUI
+            // prompt box — empty under a pipe — so the command text must be
+            // routed through submit_input_with_text; otherwise it silently
+            // no-ops and the command leaks to the model as chat input.
+            commands::submit_input_with_text(self, &input, &mut None);
             // Output last system/assistant message
             if let Some(msg) = self.chat.last_message() {
                 println!("{}", msg.content);
             }
         } else {
             // Process as AI query
+            self.chat.add_message(ChatRole::User, input.clone());
             query::handle_query(self, &input, &mut None)?;
             // Output the assistant response
             if let Some(msg) = self.chat.last_message() {

@@ -6,7 +6,12 @@
 // a route introduces a critical/serious violation. Run locally:
 //   VITE_MOCK_MODE=1 pnpm build
 //   WALKTHROUGH=1 pnpm exec playwright test -c playwright.walkthrough.config.ts
-// Output: test-results/walkthrough/*.png + axe-report.md
+// Output: test-results/walkthrough/*.png + axe-report-worker<N>.md (one file
+// per Playwright worker — `test.afterAll` runs once per worker process, so a
+// shared filename would let the last worker to finish overwrite the others;
+// the per-worker suffix makes every shard survive. CI pins --workers=1, so
+// there the report is the single axe-report-worker0.md; to read a manual
+// multi-worker run, concatenate/inspect every axe-report-worker*.md).
 
 import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
@@ -31,16 +36,34 @@ const ROUTES: { path: string; name: string }[] = [
   { path: '/timeline/demo-session', name: 'timeline' },
   { path: '/extensions/featured', name: 'extensions-featured' },
   { path: '/extensions/mcp-servers', name: 'extensions-mcp' },
+  { path: '/extensions/pending', name: 'extensions-pending' },
   { path: '/memory', name: 'memory' },
   { path: '/settings/general', name: 'settings-general' },
   { path: '/settings/models', name: 'settings-models' },
   { path: '/settings/theme', name: 'settings-theme' },
 ]
 
-const THEMES: { id: string; label: string }[] = [
+// Default pair keeps the historical default run (light material + one dark).
+// G7 (UI review 2026-09-29): any subset can be walked per theme via
+//   WALKTHROUGH_THEMES=material,ember,slate,solarized-light,gruvbox-light,...
+// (theme ids; label = id) — used for the light-theme glass legibility sweep.
+const ALL_THEMES: { id: string; label: string }[] = [
   { id: 'material', label: 'material' },
   { id: 'tokyo-night', label: 'dark-tokyo-night' },
+  { id: 'tokyo-night-light', label: 'tokyo-night-light' },
+  { id: 'catppuccin', label: 'catppuccin' },
+  { id: 'nord', label: 'nord' },
+  { id: 'ember', label: 'ember' },
+  { id: 'slate', label: 'slate' },
+  { id: 'solarized', label: 'solarized' },
+  { id: 'dracula', label: 'dracula' },
+  { id: 'gruvbox', label: 'gruvbox' },
+  { id: 'solarized-light', label: 'solarized-light' },
+  { id: 'gruvbox-light', label: 'gruvbox-light' },
 ]
+const THEMES = process.env.WALKTHROUGH_THEMES
+  ? ALL_THEMES.filter(t => process.env.WALKTHROUGH_THEMES!.split(',').includes(t.id))
+  : ALL_THEMES.slice(0, 2)
 
 const findings: string[] = []
 
@@ -84,6 +107,12 @@ for (const theme of THEMES) {
 }
 
 test.afterAll(async () => {
+  // `test.afterAll` runs in EVERY worker process, each with its own module
+  // state — `findings` here only covers the routes this worker executed.
+  // Writing a shared `axe-report.md` made the workers race (last writer
+  // wins, silently dropping the other workers' violations), which is why
+  // the suite used to require --workers=1 to be meaningful. The workerIndex
+  // suffix gives each shard its own file with the same table format.
   const report = [
     '# Full-rules axe audit (walkthrough run)',
     '',
@@ -95,5 +124,5 @@ test.afterAll(async () => {
       ? 'No critical/serious violations found.'
       : `${findings.length} critical/serious violation(s) — see rows above.`,
   ].join('\n')
-  writeFileSync(`${OUT_DIR}/axe-report.md`, report)
+  writeFileSync(`${OUT_DIR}/axe-report-worker${test.info().workerIndex}.md`, report)
 })

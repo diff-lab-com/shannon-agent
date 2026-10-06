@@ -101,14 +101,15 @@ mod tests {
 
     #[test]
     fn strike_budget_trips_even_with_interspersed_tool_calls() {
-        let mut c = GuardCounters::default();
         // Pattern: idle, idle(but anti-spin not tripped yet? no — 2 idles
         // trip anti-spin). Use productive/idle alternation so anti-spin
         // never fires but strikes accumulate: idle(+1), tool(-1→0)... that
         // never accumulates. Strikes trip needs mostly-idle history with
         // single tool calls resetting only anti-spin. Construct directly:
-        c.stall_strikes = MAX_STALL_STRIKES - 1;
-        c.no_tool_turns = 0;
+        let mut c = GuardCounters {
+            stall_strikes: MAX_STALL_STRIKES - 1,
+            no_tool_turns: 0,
+        };
         advance(&mut c, false);
         assert!(tripped(&c), "strike budget reached via idle turn");
         // And the reason names the budget, not anti-spin.

@@ -849,6 +849,8 @@ mod e2e_client_tests {
     /// Create an LlmClient pointing at the mock server.
     fn make_client(server: &ServerGuard, provider: LlmProvider) -> LlmClient {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
             model: "test-model".to_string(),
@@ -1219,6 +1221,8 @@ mod retry_tests {
         max_retries: u32,
     ) -> LlmClient {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
             model: "test-model".to_string(),
@@ -1240,6 +1244,8 @@ mod retry_tests {
 
     fn make_client_with_fallback(primary: &ServerGuard, fallback: &ServerGuard) -> LlmClient {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: primary.url(),
             model: "test-model".to_string(),
@@ -1500,6 +1506,8 @@ mod query_pipeline_tests {
 
     fn make_client(server: &ServerGuard) -> LlmClient {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
             model: "test-model".to_string(),
@@ -2379,6 +2387,7 @@ mod conversation_export_tests {
         );
         w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
             shannon_types::session_event::TurnEndPayload {
+                llm_steps: None,
                 reason: shannon_types::session_event::TurnEndPayload::REASON_COMPLETED.into(),
                 usage: Some(shannon_types::session_event::TokenUsage {
                     input_tokens: 1500,

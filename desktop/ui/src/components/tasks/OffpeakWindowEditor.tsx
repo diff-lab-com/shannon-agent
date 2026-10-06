@@ -15,6 +15,7 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
+import { DEFAULT_POLICY } from './shared'
 import type { ExecutionPolicy, ExecutionWindow, ScheduledRoutine, TaskExecution } from '@/types'
 
 interface OffpeakWindowEditorProps {
@@ -79,14 +80,13 @@ export default function OffpeakWindowEditor({ routine, onUpdated }: OffpeakWindo
         ? { start_hour: clampHour(startHour), end_hour: clampHour(endHour), timezone: timezone.trim() || null }
         : null
       // `update_scheduled_task` replaces the policy wholesale — send the
-      // full object with only execution_window changed.
+      // full object with only execution_window changed. The fallback object
+      // for a routine with no stored policy is the shared DEFAULT_POLICY
+      // (B3 顺带): the previous inline defaults (max_retries 0, auto-archive
+      // on, notify off) silently made the routine harsher than the create
+      // form's promised defaults the moment the window was saved.
       const policy: ExecutionPolicy = {
-        max_retries: 0,
-        timeout_secs: 0,
-        worktree: null,
-        notify_on_failure: false,
-        budget_usd: null,
-        auto_archive_when_empty: true,
+        ...DEFAULT_POLICY,
         ...routine.policy,
         execution_window,
       }
@@ -109,7 +109,7 @@ export default function OffpeakWindowEditor({ routine, onUpdated }: OffpeakWindo
         </span>
         {initial ? (
           <span
-            className="inline-flex items-center gap-1 px-sm py-0.5 rounded-full border border-secondary/30 bg-secondary-container text-on-secondary-container text-[11px] font-bold"
+            className="inline-flex items-center gap-xs px-sm py-0.5 rounded-full border border-secondary/30 bg-primary text-on-primary text-label-xs font-bold"
             title={t('tasks.offpeakEditor.badgeTip', { window: windowLabel(initial) })}
           >
             <span className="material-symbols-outlined icon-xs" aria-hidden="true">bedtime</span>
@@ -124,7 +124,7 @@ export default function OffpeakWindowEditor({ routine, onUpdated }: OffpeakWindo
       {isQueued ? (
         <div
           role="status"
-          className="font-label-sm text-[12px] text-secondary flex items-center gap-xs"
+          className="font-label-sm text-label-sm text-secondary flex items-center gap-xs"
         >
           <span className="material-symbols-outlined icon-sm" aria-hidden="true">hourglass_top</span>
           {intl.formatMessage(
@@ -144,14 +144,14 @@ export default function OffpeakWindowEditor({ routine, onUpdated }: OffpeakWindo
         />
         <span className="font-label-md text-on-surface">{t('tasks.offpeakEditor.enabled')}</span>
       </label>
-      <p className="font-label-sm text-[11px] text-on-surface-variant leading-tight">
+      <p className="font-label-sm text-label-xs text-on-surface-variant leading-tight">
         {t('tasks.offpeakEditor.hint')}
       </p>
 
       {enabled ? (
         <div className="grid grid-cols-2 gap-sm">
           <label className="flex flex-col gap-xs">
-            <span className="font-label-sm text-[11px] text-on-surface-variant">
+            <span className="font-label-sm text-label-xs text-on-surface-variant">
               {t('tasks.offpeakEditor.startHour')}
             </span>
             <input
@@ -165,7 +165,7 @@ export default function OffpeakWindowEditor({ routine, onUpdated }: OffpeakWindo
             />
           </label>
           <label className="flex flex-col gap-xs">
-            <span className="font-label-sm text-[11px] text-on-surface-variant">
+            <span className="font-label-sm text-label-xs text-on-surface-variant">
               {t('tasks.offpeakEditor.endHour')}
             </span>
             <input
@@ -179,7 +179,7 @@ export default function OffpeakWindowEditor({ routine, onUpdated }: OffpeakWindo
             />
           </label>
           <label className="flex flex-col gap-xs col-span-2">
-            <span className="font-label-sm text-[11px] text-on-surface-variant">
+            <span className="font-label-sm text-label-xs text-on-surface-variant">
               {t('tasks.offpeakEditor.timezone')}
             </span>
             <input
@@ -190,7 +190,7 @@ export default function OffpeakWindowEditor({ routine, onUpdated }: OffpeakWindo
               className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
               aria-label={t('tasks.offpeakEditor.timezone')}
             />
-            <span className="font-label-sm text-[10px] text-on-surface-variant">
+            <span className="font-label-sm text-label-2xs text-on-surface-variant">
               {intl.formatMessage({ id: 'tasks.offpeakEditor.timezoneHint' }, { zone: localTimeZone })}
             </span>
           </label>
@@ -206,7 +206,7 @@ export default function OffpeakWindowEditor({ routine, onUpdated }: OffpeakWindo
           aria-label={t('tasks.offpeakEditor.saveAria')}
           className="rounded-lg"
         >
-          <span className="material-symbols-outlined text-[18px]" aria-hidden="true">save</span>
+          <span className="material-symbols-outlined icon-md" aria-hidden="true">save</span>
           {saving ? t('tasks.offpeakEditor.saving') : t('tasks.offpeakEditor.save')}
         </Button>
       </div>

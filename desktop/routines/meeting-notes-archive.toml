@@ -1,0 +1,20 @@
+id = "meeting-notes-archive"
+name = "Meeting notes archive"
+description = "Every weekday at 07:30, scan a transcripts directory for new .srt/.vtt/.txt meeting transcripts and file a meeting-minutes Markdown summary per transcript into output/minutes/. Text transcripts only — audio/video are skipped and reported. Replace the {{transcripts_dir}} placeholder when instantiating."
+category = "productivity"
+trigger_type = "cron"
+cron_expr = "30 7 * * 1-5"
+timezone = ""
+prompt = """
+Archive new meeting transcripts as minutes. Scan the directory {{transcripts_dir}}
+(replace this placeholder when instantiating, e.g. ~/Recordings/transcripts) for
+.srt, .vtt, and .txt files newer than the most recent file already archived under
+output/minutes/ (track progress by comparing file names and modification times).
+
+For each new transcript, follow the meeting-minutes skill: produce
+output/minutes/minutes-<transcript-stem>-<YYYYMMDD>.md with Summary, Decisions,
+Action Items (owner + due only when the transcript states them), and Open Questions.
+Skip and list any audio/video files or empty files instead of guessing at their
+content. Finish with a one-paragraph run report: how many transcripts were archived,
+which were skipped and why, and the output/minutes/ paths written.
+"""

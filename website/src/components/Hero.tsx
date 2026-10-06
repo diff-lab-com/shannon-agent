@@ -8,7 +8,7 @@ export default function Hero({ lang }: HeroProps) {
   const t = getTranslations(lang);
 
   return (
-    <section style={{
+    <section className="hero-glow" style={{
       textAlign: 'center',
       padding: '80px 24px 60px',
     }}>
@@ -77,7 +77,7 @@ export default function Hero({ lang }: HeroProps) {
           {t.hero.getStarted} →
         </a>
         <a
-          href="https://github.com/shannon-agent/shannon-code"
+          href="https://github.com/diff-lab-com/shannon-agent"
           target="_blank"
           rel="noopener noreferrer"
           style={{

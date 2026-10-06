@@ -43,6 +43,7 @@ mod tests;
 pub use compact_messages::{
     CompactMessagesResult, CompactionConfig, CompactionStrategy, compact_messages,
 };
+pub use compact_messages::{has_tool_result, has_tool_use, safe_split_point};
 
 pub use engine::CompactEngine;
 pub use helpers::{

@@ -5,6 +5,7 @@ import {
 } from "../adapters/types.js";
 import { type AdapterRegistry } from "../adapters/registry.js";
 import { type EngineWsClient } from "../engine/wsClient.js";
+import { type ActiveQueryRegistry } from "./activeQueries.js";
 import { SessionLane } from "./lane.js";
 import { sessionKeyOf } from "./sessionKey.js";
 import { type TurnHandler } from "./types.js";
@@ -30,17 +31,28 @@ export class SessionRouter {
   private readonly registry: AdapterRegistry;
   private readonly clientFactory: EngineClientFactory;
   private readonly turnHandler: TurnHandler;
+  private readonly activeQueries: ActiveQueryRegistry | null;
 
   constructor(opts: {
     registry: AdapterRegistry;
     clientFactory: EngineClientFactory;
     turnHandler: TurnHandler;
     logger: Logger;
+    /**
+     * Shared in-flight query registry (see `activeQueries.ts`). When injected,
+     * the lane's engine client is registered under the session key for the
+     * duration of each turn (and removed on completion/failure/cancellation)
+     * so `shannon/cancel` can interrupt a dispatched task's turn — the engine
+     * bridge shares the same instance. Absent → no registration (legacy
+     * IM-only hosts keep their old behavior).
+     */
+    activeQueries?: ActiveQueryRegistry;
   }) {
     this.registry = opts.registry;
     this.clientFactory = opts.clientFactory;
     this.turnHandler = opts.turnHandler;
     this.logger = opts.logger;
+    this.activeQueries = opts.activeQueries ?? null;
   }
 
   /**
@@ -68,6 +80,10 @@ export class SessionRouter {
 
     return lane.enqueue(async () => {
       const client = await lane.getClient();
+      // Register the lane's client under this session key for the turn's
+      // duration — completion, failure and cancellation all fall through the
+      // finally below (one in-flight query per key: the lane serializes).
+      this.activeQueries?.set(key, client);
       try {
         await this.turnHandler.handle({
           inbound,
@@ -81,6 +97,8 @@ export class SessionRouter {
           `turn failed in lane ${key}: ${(err as Error).message}`,
         );
         throw err;
+      } finally {
+        this.activeQueries?.delete(key);
       }
     });
   }

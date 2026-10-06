@@ -21,6 +21,7 @@
 import { type Logger } from "../adapters/types.js";
 import type { MediaAttachment } from "../adapters/types.js";
 import type { MessageAttachment } from "../engine/types.gen.js";
+import { PLATFORM_HTTP_TIMEOUT_MS } from "../lib/netTimeouts.js";
 
 /** MIME types the engine's multimodal adapters serialize. */
 export const ENGINE_IMAGE_MIME_TYPES: readonly string[] = [
@@ -116,7 +117,10 @@ async function mediaBytes(
 ): Promise<Uint8Array | null> {
   if (m.data) return m.data;
   if (!m.url) return null;
-  const res = await fetchImpl(m.url);
+  // review §P2-23: media downloads must not hang the turn on a stalled CDN.
+  const res = await fetchImpl(m.url, {
+    signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const buf = await res.arrayBuffer();
   return new Uint8Array(buf);

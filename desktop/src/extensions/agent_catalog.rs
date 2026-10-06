@@ -201,31 +201,43 @@ fn manifest_to_entry(agent: AgentManifestEntry, upstream: &AgentUpstream) -> Cat
 
 /// Shannon built-in agent definitions.
 fn builtin_agents() -> Vec<CatalogEntry> {
-    let native_preamble =
-        |name: &str, description: &str, model: &str, tools: &[&str], tags: &[&str]| {
-            let mut metadata = std::collections::HashMap::new();
-            metadata.insert("model".to_string(), serde_json::json!(model));
-            metadata.insert(
-                "tools".to_string(),
-                serde_json::json!(tools.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
-            );
-            CatalogEntry {
-                id: format!("native:agent-{name}"),
-                kind: AddonKind::Agent,
-                name: name.to_string(),
-                description: description.to_string(),
-                author: Some("Shannon".into()),
-                version: Some(env!("CARGO_PKG_VERSION").into()),
-                homepage_url: None,
-                license: Some("Apache-2.0".into()),
-                stars: None,
-                last_updated: None,
-                source: CatalogSource::Native,
-                trust: TrustLevel::Verified,
-                metadata,
-                tags: tags.iter().map(|s| s.to_string()).collect(),
-            }
-        };
+    let native_preamble = |name: &str,
+                           description: &str,
+                           model: &str,
+                           tools: &[&str],
+                           tags: &[&str],
+                           system_prompt: &str| {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("model".to_string(), serde_json::json!(model));
+        metadata.insert(
+            "tools".to_string(),
+            serde_json::json!(tools.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+        );
+        // G1 P1-9: the install writes a flat AgentDefinition TOML — the
+        // system prompt must ride the catalog entry, not be improvised at
+        // install time (the old flow installed a body with NO system prompt,
+        // producing an agent the engine could not steer).
+        metadata.insert(
+            "system_prompt".to_string(),
+            serde_json::json!(system_prompt),
+        );
+        CatalogEntry {
+            id: format!("native:agent-{name}"),
+            kind: AddonKind::Agent,
+            name: name.to_string(),
+            description: description.to_string(),
+            author: Some("Shannon".into()),
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            homepage_url: None,
+            license: Some("Apache-2.0".into()),
+            stars: None,
+            last_updated: None,
+            source: CatalogSource::Native,
+            trust: TrustLevel::Verified,
+            metadata,
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+        }
+    };
 
     vec![
         native_preamble(
@@ -234,6 +246,10 @@ fn builtin_agents() -> Vec<CatalogEntry> {
             "claude-sonnet-4-6",
             &["read", "grep", "glob"],
             &["code", "review", "native"],
+            "You are a code reviewer. Analyze diffs and code for bugs, security issues, and \
+             best-practice violations. Cite file:line for every finding, rank findings by \
+             severity (critical/high/medium/low), and suggest concrete fixes. Never modify \
+             files.",
         ),
         native_preamble(
             "researcher",
@@ -241,6 +257,9 @@ fn builtin_agents() -> Vec<CatalogEntry> {
             "claude-sonnet-4-6",
             &["web_search", "read", "write"],
             &["research", "native"],
+            "You are a research agent. Gather information from the codebase and the web, \
+             cross-check claims across sources, and synthesize a concise, well-structured \
+             answer. Always cite sources; flag anything you could not verify.",
         ),
         native_preamble(
             "planner",
@@ -248,6 +267,9 @@ fn builtin_agents() -> Vec<CatalogEntry> {
             "claude-opus-4-7",
             &["read", "glob", "grep"],
             &["planning", "native"],
+            "You are a planning agent. Explore the relevant code, then produce a step-by-step \
+             implementation plan with specific file paths, ordered steps, risks, and \
+             dependencies. Do NOT modify files.",
         ),
         native_preamble(
             "implementer",
@@ -255,6 +277,9 @@ fn builtin_agents() -> Vec<CatalogEntry> {
             "claude-sonnet-4-6",
             &["read", "write", "edit", "bash"],
             &["code", "implementation", "native"],
+            "You are an implementation agent. Follow the given plan exactly: make the minimal, \
+             well-scoped edits, run the relevant tests, and iterate until they pass. Keep \
+             changes focused; report any plan step you could not complete and why.",
         ),
         native_preamble(
             "tester",
@@ -262,6 +287,9 @@ fn builtin_agents() -> Vec<CatalogEntry> {
             "claude-sonnet-4-6",
             &["read", "write", "bash", "grep"],
             &["testing", "native"],
+            "You are a test engineer. Design and implement tests that cover the stated scope: \
+             unit, integration, and edge cases. Follow the project's existing test patterns, \
+             keep tests deterministic and independent, and run them to prove they pass.",
         ),
         native_preamble(
             "debugger",
@@ -269,6 +297,9 @@ fn builtin_agents() -> Vec<CatalogEntry> {
             "claude-sonnet-4-6",
             &["read", "bash", "grep", "glob"],
             &["debug", "native"],
+            "You are a debugging agent. Reproduce the failure, form hypotheses, and test them \
+             with the cheapest probe first (logs, stack traces, targeted commands, bisect). \
+             State the confirmed root cause with evidence before proposing a fix.",
         ),
         native_preamble(
             "refactorer",
@@ -276,6 +307,9 @@ fn builtin_agents() -> Vec<CatalogEntry> {
             "claude-sonnet-4-6",
             &["read", "edit", "grep", "glob"],
             &["refactor", "native"],
+            "You are a refactoring agent. Apply behavior-preserving, scope-safe refactors \
+             (extract, inline, rename, dead-code removal). Never mix behavior changes into a \
+             refactor; after each step verify the affected tests still pass.",
         ),
         native_preamble(
             "doc-writer",
@@ -283,6 +317,9 @@ fn builtin_agents() -> Vec<CatalogEntry> {
             "claude-haiku-4-5-20251001",
             &["read", "write", "glob"],
             &["docs", "native"],
+            "You are a technical writer. Draft clear, accurate documentation from the code: \
+             READMEs, ADRs, API references, and CHANGELOG entries. Write for the stated \
+             audience, explain why rather than what, and never invent APIs you did not see.",
         ),
         native_preamble(
             "data-analyst",
@@ -290,6 +327,9 @@ fn builtin_agents() -> Vec<CatalogEntry> {
             "claude-sonnet-4-6",
             &["read", "bash", "write"],
             &["data", "analysis", "native"],
+            "You are a data analyst. Explore the dataset schema first, then compute summaries, \
+             distributions, and outliers with reproducible scripts. Present results with the \
+             exact commands/code used and state the limitations of the data.",
         ),
         native_preamble(
             "architect",
@@ -297,6 +337,10 @@ fn builtin_agents() -> Vec<CatalogEntry> {
             "claude-opus-4-7",
             &["read", "glob", "grep"],
             &["architecture", "design", "native"],
+            "You are a software architect. Propose designs with explicit trade-offs: list the \
+             realistic options, compare them in a trade-off matrix, and recommend one with \
+             rationale. Include sequence diagrams or component sketches where they clarify. \
+             Do NOT modify files.",
         ),
     ]
 }

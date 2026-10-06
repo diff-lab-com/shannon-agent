@@ -10,6 +10,7 @@ rust-version.workspace = true
 shannon-core = { path = "../shannon-core" }
 shannon-engine = { path = "../shannon-engine" }
 shannon-tool-interface = { path = "../shannon-tool-interface" }
+shannon-types = { path = "../shannon-types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

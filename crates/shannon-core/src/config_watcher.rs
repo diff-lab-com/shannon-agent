@@ -81,6 +81,12 @@ impl ConfigWatcher {
             return None;
         }
 
+        // FSEvents (macOS) never delivers events for paths containing
+        // symlinked components (/var, /tmp → /private/…) — the stream starts
+        // but stays silent. Canonicalize so the OS handle tracks the real
+        // path; the file-name filter below is unaffected by the prefix.
+        let watched_dir = watched_dir.canonicalize().unwrap_or(watched_dir);
+
         let target_name = watched_path
             .file_name()
             .map(|n| n.to_os_string())
@@ -229,7 +235,13 @@ mod tests {
         std::fs::write(&target, "# initial").unwrap();
         let watcher = ConfigWatcher::start(&target, |_change| {}).expect("watcher should start");
         assert_eq!(watcher.path(), target);
-        assert_eq!(watcher.dir(), dir.path());
+        // start() canonicalizes the watched dir (FSEvents symlink-path
+        // hygiene), so /var/folders/... tempdirs report the /private/var
+        // spelling — compare canonical forms.
+        assert_eq!(
+            watcher.dir().canonicalize().unwrap(),
+            dir.path().canonicalize().unwrap()
+        );
     }
 
     /// Real-filesystem integration test: writes to `.shannon.toml` are
@@ -283,7 +295,12 @@ mod tests {
             "expected modified/created, got {:?}",
             last.change_type
         );
-        assert_eq!(last.config_path, target.to_string_lossy().to_string());
+        // FSEvents reports the canonical (/private/var/...) spelling of the
+        // event path; compare resolved forms rather than raw strings.
+        assert_eq!(
+            Path::new(&last.config_path).canonicalize().unwrap(),
+            target.canonicalize().unwrap()
+        );
 
         // Drop the watcher and ensure further writes do not fire.
         drop(watcher);

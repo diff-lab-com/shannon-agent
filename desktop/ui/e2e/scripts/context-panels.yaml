@@ -1,0 +1,30 @@
+# ChatScript: context-panels — journey #14（矩阵#14）。
+#
+# /context /cost slash → SlashResultCard（demo get_session_context_stats /
+# seeded get_session_usage）；流中 query:usage 事件 → AppContext.usage 更新
+# → ComposerPanel 把它作为 usageTick 透传 → SessionUsageDialog /
+# ContextBreakdownCard 随 tick 重新拉数（L1 断言重拉，L2 断言弹框数值）。
+#
+# seed spentUsd 让 /cost 卡与 usage 弹框显示同一笔确定的花费（0.0731），
+# 与 budget 徽章/横幅的数据源（get_session_usage）一致。
+name: context-panels
+description: 上下文面板 journey — /context /cost SlashResultCard → query:usage 驱动 usage 弹框刷新（usageTick）
+seed:
+  config:
+    hasKey: true
+    spentUsd: 0.0731
+  sessions:
+    - id: script-sess-panels
+      title: Panels
+      messages: []
+turns:
+  - user: 查看一下当前用量
+    script:
+      - event: query:usage
+        payload:
+          input_tokens: 1200
+          output_tokens: 300
+          cost_usd: 0.012
+      # Park so the usage projection is observable while the dialog is open.
+      - waitFor: ui
+      - event: query:completed

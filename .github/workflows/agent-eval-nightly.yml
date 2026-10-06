@@ -1,11 +1,10 @@
 name: Agent Eval (nightly)
 
 # T2.3 — nightly real-model L1 eval. Catches capability regressions the
-# mock-only PR smoke (pr-smoke-test.yml) and the dry-run gate (ci.yml's
-# eval-dry-run job) can't see — both of those exercise the harness
-# without a real model. This workflow runs the cheapest tier subset
-# (read/edit/search) against the live API and uploads the report as a
-# workflow artifact for human review.
+# dry-run gate (the eval steps of ci.yml's Fast checks job) can't see —
+# that gate exercises the harness without a real model. This workflow runs
+# the cheapest tier subset (read/edit/search) against the live API and
+# uploads the report as a workflow artifact for human review.
 #
 # Cost guard: tier subset (3 of 5 tiers), single run per cron. ~$1-2 per
 # execution. Failures here do NOT block PRs (this is a scheduled workflow);
@@ -24,6 +23,9 @@ on:
     # 02:00 UTC, Mon–Fri (skip weekends; bench-regression still runs weekly).
     - cron: '0 2 * * 1-5'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -52,7 +54,14 @@ jobs:
           tool: just
 
       - name: Build
-        run: cargo build --workspace
+        # Only the two crates the eval needs: the CLI binary (eval target)
+        # and shannon-core (the eval_runner example compiles from it).
+        # A `--workspace` build here pulls in shannon-desktop (Tauri →
+        # glib-sys/webkit headers), which has no system deps installed in
+        # this job and turned the nightly red (2026-10-01: glib-sys build
+        # script failure). The dry-run gate proves `-p shannon-cli` needs
+        # no extra system packages on ubuntu.
+        run: cargo build -p shannon-cli -p shannon-core
 
       - name: Run real-model L1 eval (tier-filtered)
         id: eval
@@ -61,6 +70,16 @@ jobs:
           SHANNON_EVAL_BIN: ${{ github.workspace }}/target/debug/shannon
         run: |
           mkdir -p eval-out
+          # The real-model eval is a no-op without the repo secret. Until an
+          # admin configures SHANNON_API_KEY, skip loudly instead of failing
+          # every weekday — same guard and rationale as shannon-review.yml
+          # (this is the actual 2026-10-01 failure: the build fix landed,
+          # then the run died on an empty key).
+          if [ -z "$SHANNON_API_KEY" ]; then
+            echo "::notice title=eval skipped::SHANNON_API_KEY secret is not configured on this repo — the real-model eval ran nothing. Configure it (repo settings → secrets and variables → actions) to enable this nightly."
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # `just eval-real` already passes --real + --tasks internally;
           # we layer the per-tier filter and override --out. Per-task
           # budgets live in the TOML suite — there is no CLI budget knob.
@@ -76,6 +95,7 @@ jobs:
 
       - name: Locate report.json
         id: locate
+        if: steps.eval.outputs.skipped != 'true'
         run: |
           report="$(find "$GITHUB_WORKSPACE/eval-out" -name 'report.json' | head -1)"
           if [ -z "$report" ]; then
@@ -89,6 +109,13 @@ jobs:
         env:
           REPORT: ${{ steps.locate.outputs.report }}
         run: |
+          # `if: always()` runs us even when eval/locate failed; locate
+          # exits 2 when report.json is missing, leaving REPORT empty.
+          # Bail with a notice instead of crashing on an empty path.
+          if [ -z "$REPORT" ] || [ ! -f "$REPORT" ]; then
+            echo "::notice::no report.json to summarize — the eval step failed before producing one"
+            exit 0
+          fi
           python3 - "$REPORT" <<'PYEOF'
           """One-page summary: pass rate, per-tier breakdown, run anchor."""
           import json, sys
@@ -114,7 +141,8 @@ jobs:
 
       - name: Upload run artifacts
         if: always()
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874
+        # Align with the repo-wide pin used by ci.yml/benchmarks/vendor — one action, one SHA.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: agent-eval-${{ github.run_id }}
           path: |

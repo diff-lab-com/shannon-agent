@@ -71,7 +71,7 @@ function Banner({
           type="button"
           onClick={onDismiss}
           aria-label={dismissLabel}
-          className="shrink-0 p-xs rounded text-on-surface-variant hover:text-on-surface hover:bg-surface-container/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary cursor-pointer"
+          className="shrink-0 p-xs rounded-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary cursor-pointer"
         >
           <Icon name="close" className="icon-sm" aria-hidden="true" />
         </button>

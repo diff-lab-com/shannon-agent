@@ -212,4 +212,57 @@ describe("MobileServer (P1.1a)", () => {
     expect(closed).toBe(4001);
     await h.stop();
   });
+
+  // Cross-site WebSocket handshake defense: the gateway binds 0.0.0.0 in
+  // production, so a drive-by web page must not be able to open the socket
+  // and speak shannon/* (ungated methods would answer it).
+  it("rejects browser handshakes from a foreign Origin (403 before upgrade)", async () => {
+    const { port, stop } = await start({
+      "shannon/health": async () => ({ kind: "result", result: { gateway: "ok" } }),
+    });
+    const evil = await new Promise<Error>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/`, {
+        headers: { origin: "https://evil.example" },
+      });
+      socket.once("open", () => reject(new Error("cross-origin handshake must not open")));
+      socket.once("error", resolve);
+    });
+    expect(String(evil)).toContain("403");
+    await stop();
+  });
+
+  it("allows same-origin (built-in PWA) and Origin-less native clients", async () => {
+    const { port, stop } = await start({
+      "shannon/health": async () => ({ kind: "result", result: { gateway: "ok" } }),
+    });
+    // PWA served from the gateway itself: Origin authority === Host.
+    const pwa = await new Promise<WebSocket>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/`, {
+        headers: { origin: `http://127.0.0.1:${port}` },
+      });
+      socket.once("open", () => resolve(socket));
+      socket.once("error", reject);
+    });
+    pwa.close();
+
+    // Dart/Node native clients send no Origin header at all.
+    const native = await connect(port);
+    const res = await rpc(native, "shannon/health");
+    expect(res.result.gateway).toBe("ok");
+    native.close();
+    await stop();
+  });
+
+  it("rejects upgrades to non-WS paths with 403", async () => {
+    const { port, stop } = await start({
+      "shannon/health": async () => ({ kind: "result", result: { gateway: "ok" } }),
+    });
+    const err = await new Promise<Error>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/not-the-ws-path`);
+      socket.once("open", () => reject(new Error("wrong path must not open")));
+      socket.once("error", resolve);
+    });
+    expect(String(err)).toContain("403");
+    await stop();
+  });
 });

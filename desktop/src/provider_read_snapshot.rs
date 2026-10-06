@@ -139,6 +139,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         store.upsert_profile(profile, model_id);
         Box::new(store)
@@ -247,6 +248,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         let glm = ProviderProfile {
             id: "glm".into(),
@@ -262,6 +264,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         store.upsert_profile(anthropic, "claude-opus-4-8");
         store.upsert_profile(glm, "glm-4.6"); // last upsert → active

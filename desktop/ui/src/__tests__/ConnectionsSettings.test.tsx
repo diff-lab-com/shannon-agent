@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render as rtlRender, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import type { ReactElement } from 'react'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
 
 import ConnectionsSettings from '@/components/settings/ConnectionsSettings'
 import * as api from '@/lib/tauri-api'
@@ -9,12 +11,23 @@ import * as api from '@/lib/tauri-api'
 // sensible defaults — matching the BillingSettings/AdvancedSettings convention
 // (no beforeEach restore: that would wipe the factory mocks' mockResolvedValue).
 
+// X3 互链: the page carries a cross-link to Data Sources (useNavigate), so
+// every render must sit inside a router.
+function render(ui: ReactElement, options?: Parameters<typeof rtlRender>[1]) {
+  return rtlRender(<MemoryRouter>{ui}</MemoryRouter>, options)
+}
+
 describe('ConnectionsSettings', () => {
-  it('renders the title and all eight platforms, none configured by default', async () => {
+  it('renders the gateway subtitle and all eight platforms, none configured by default', async () => {
     render(<ConnectionsSettings />)
-    await waitFor(() => expect(screen.getByText('Social Connections')).toBeInTheDocument())
+    // The page-level h1 was retired — the global Header carries the page
+    // title; here we pin the subtitle as the page's distinctive marker.
+    await waitFor(() => expect(screen.getByText(/Wire chat platforms and external systems/)).toBeInTheDocument())
     expect(screen.getByText('Slack')).toBeInTheDocument()
-    expect(screen.getByText('DingTalk (钉钉)')).toBeInTheDocument()
+    // G7 i18n (P1-8): platform names resolve through `settings.connections.platform.*`
+    // — in en the Chinese-market platforms carry their English brand names.
+    expect(screen.getByText('DingTalk')).toBeInTheDocument()
+    expect(screen.getByText('WeCom (WeChat Work)')).toBeInTheDocument()
     // P1-4 status model: no credentials stored → every platform is 未配置.
     await waitFor(() => expect(screen.getAllByText('Not configured').length).toBe(8))
   })
@@ -170,13 +183,31 @@ describe('ConnectionsSettings', () => {
   })
 
   it('stops the supervised gateway on click', async () => {
+    // Review 2026-09-16: Stop is disabled while the gateway is stopped — mock
+    // a RUNNING supervisor so the action is enabled, then click it.
+    vi.spyOn(api, 'gatewaySupervisorStatus').mockResolvedValue({
+      managed: true,
+      status: { running: { pid: 1234 } },
+    })
     const stopSpy = vi
       .spyOn(api, 'gatewaySupervisorStop')
       .mockResolvedValue({ managed: true, status: 'stopped' })
     render(<ConnectionsSettings />)
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument())
+    await waitFor(() => {
+      expect(screen.getByTestId('gateway-status-badge')).toHaveTextContent('1234')
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     await waitFor(() => expect(stopSpy).toHaveBeenCalled())
+  })
+
+  it('disables Stop while the gateway is stopped (state-driven enablement)', async () => {
+    vi.spyOn(api, 'gatewaySupervisorStatus').mockResolvedValue({
+      managed: true,
+      status: 'stopped',
+    })
+    render(<ConnectionsSettings />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled())
   })
 
   // ── P1.3/P2-1 — mobile dispatch card (pairing entry + channel status) ──────
@@ -212,6 +243,30 @@ describe('ConnectionsSettings', () => {
       expect(screen.getByTestId('mobile-pair-error')).toHaveTextContent('no LAN IPv4 route'),
     )
     expect(screen.queryByTestId('mobile-qr')).not.toBeInTheDocument()
+  })
+
+  it('v0.12: the TLS toggle writes mobile.tls.enabled into the gateway config', async () => {
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+      mobile: { enabled: true, host: '0.0.0.0', port: 33430 },
+    })
+    const writeSpy = vi.spyOn(api, 'gatewayWriteConfig').mockImplementation(
+      async (cfg) => cfg,
+    )
+    vi.spyOn(api, 'mobileTlsStatus').mockResolvedValue({
+      enabled: false,
+      fingerprint: null,
+    })
+    render(<ConnectionsSettings />)
+
+    const toggle = await screen.findByTestId('mobile-tls-switch')
+    fireEvent.click(toggle)
+    await waitFor(() => expect(writeSpy).toHaveBeenCalled())
+    const written = writeSpy.mock.calls[0][0]
+    expect(written.mobile?.tls?.enabled).toBe(true)
+    // The status is re-read after the write.
+    await waitFor(() => expect(api.mobileTlsStatus).toHaveBeenCalled())
   })
 
   it('lists a paired device and revokes it through a confirm dialog', async () => {
@@ -326,6 +381,27 @@ describe('ConnectionsSettings', () => {
     })
     render(<ConnectionsSettings />)
     await screen.findByTestId('mobile-dispatch-loopback-note')
+  })
+
+  it('advertises https for the page URL when TLS is enabled (B2)', async () => {
+    vi.spyOn(api, 'mobileTlsStatus').mockResolvedValue({
+      enabled: true,
+      fingerprint: 'aa'.repeat(32),
+    })
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+      mobile: { enabled: true, host: '192.168.1.10', port: 33430 },
+    })
+    render(<ConnectionsSettings />)
+    const hint = await screen.findByTestId('mobile-dispatch-url-hint')
+    // pageUrl renders in two phases: the hint first paints with http://
+    // and switches to https:// once mobileTlsStatus resolves. Assert on
+    // the settled phase — the first paint raced here under CI timing
+    // (unmasked when the PR gate dropped vitest coverage instrumentation).
+    await waitFor(() => expect(hint).toHaveTextContent('https://192.168.1.10:33430/'))
+    // The live fingerprint renders alongside.
+    expect(screen.getByTestId('mobile-tls-fingerprint')).toBeInTheDocument()
   })
 
   it('describes the four dispatch actions in the card description', async () => {
@@ -531,6 +607,24 @@ describe('ConnectionsSettings', () => {
     const row = await screen.findByTestId('connection-telegram')
     const btn = within(row).getByRole('button', { name: 'Test connection' })
     expect(btn).toBeDisabled()
+  })
+
+  // X3 互链: gateway page explains the gateway vs data-sources split and
+  // deep links to /extensions/datasources.
+  it('cross-links to the Data Sources page', async () => {
+    rtlRender(
+      <MemoryRouter initialEntries={['/settings/connections']}>
+        <Routes>
+          <Route path="/settings/connections" element={<ConnectionsSettings />} />
+          <Route path="/extensions/datasources" element={<div data-testid="probe" />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await waitFor(() =>
+      expect(screen.getByText(/External data connections \(notes, mail, databases\) live in Data Sources/)).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('gateway-to-datasources-link'))
+    await waitFor(() => expect(screen.getByTestId('probe')).toBeInTheDocument())
   })
 
 })

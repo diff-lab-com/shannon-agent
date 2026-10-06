@@ -95,6 +95,9 @@ pub trait FileSystemProvider: Send + Sync + 'static {
     fn write_bytes_blocking(&self, path: &Path, contents: &[u8]) -> io::Result<()>;
     /// Blocking recursive directory creation.
     fn create_dir_all_blocking(&self, path: &Path) -> io::Result<()>;
+    /// Blocking atomic same-filesystem rename (temp-file commit step).
+    /// review §P2-15: ConfigManager::save uses this for crash-safe writes.
+    fn rename_blocking(&self, from: &Path, to: &Path) -> io::Result<()>;
     /// Blocking single-file removal (temp-file cleanup, snapshot pruning).
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()>;
     /// Blocking symlink-resolving canonicalization.
@@ -221,6 +224,12 @@ pub trait PipedChild: Send {
     async fn kill(&mut self);
     /// Reap the child and return its exit status (`Child::wait`).
     async fn wait(&mut self) -> io::Result<ProcessExit>;
+    /// Raw OS process handle (`HANDLE` as `isize`, Windows only) so callers
+    /// can attach the child to a Job Object. `None` off Windows and for
+    /// non-OS children (remote/fake providers).
+    fn raw_process_handle(&self) -> Option<isize> {
+        None
+    }
 }
 
 /// Request rewriting hook invoked immediately before OS spawn.

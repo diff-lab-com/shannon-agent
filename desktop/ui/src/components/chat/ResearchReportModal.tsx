@@ -60,13 +60,13 @@ export const ResearchReportModal = memo(function ResearchReportModal({
       // aria-modal + Esc-to-close + scroll lock still come from Modal.
       closeLabel={t('chat.report.close.aria')}
       showCloseButton={false}
-      className="max-w-6xl h-[85vh] flex flex-col overflow-hidden p-0"
+      className="max-w-medium h-[85vh] flex flex-col overflow-hidden p-0"
     >
       <div className="bg-surface-container-lowest w-full h-full flex flex-col overflow-hidden rounded-2xl">
         <header className="flex items-center justify-between gap-md px-lg py-md border-b border-outline-variant/30">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-sm mb-xs">
-              <span className="material-symbols-outlined text-primary text-[20px]">article</span>
+              <span className="material-symbols-outlined text-primary icon-md">article</span>
               <span className="text-label-sm text-on-surface-variant uppercase tracking-wide font-bold">
                 {t('chat.report.badge')}
               </span>
@@ -80,7 +80,7 @@ export const ResearchReportModal = memo(function ResearchReportModal({
               className="rounded-lg px-sm py-xs hover:bg-surface-container text-on-surface-variant"
               title={t('chat.report.export')}
             >
-              <span className="material-symbols-outlined text-[18px]">picture_as_pdf</span>
+              <span className="material-symbols-outlined icon-md">picture_as_pdf</span>
               <span className="text-label-sm ml-xs hidden sm:inline">{t('chat.report.export')}</span>
             </Button>
             <Button
@@ -105,7 +105,7 @@ export const ResearchReportModal = memo(function ResearchReportModal({
             {report.sections.map((s, i) => (
               <section key={i} className="mb-lg">
                 <h3 className="text-title-md font-bold text-on-surface mb-xs">{s.heading}</h3>
-                <div className="text-body-md text-on-surface leading-relaxed prose prose-sm max-w-none prose-p:my-2 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
+                <div className="text-body-md text-on-surface leading-relaxed prose prose-sm max-w-none prose-p:my-sm prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
                   <CitationMarkdown onCitationClick={handleCitationClick}>
                     {s.body}
                   </CitationMarkdown>
@@ -164,7 +164,7 @@ export const ResearchReportModal = memo(function ResearchReportModal({
                             rel="noreferrer"
                             className="inline-flex items-center gap-xs text-label-sm text-link hover:underline mt-xs"
                           >
-                            <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                            <span className="material-symbols-outlined icon-sm">open_in_new</span>
                             {t('chat.report.openSource')}
                           </a>
                         )}
@@ -212,7 +212,7 @@ function CitationMarkdown({ children, onCitationClick }: CitationMarkdownProps) 
             key={i}
             variant="ghost"
             onClick={() => onCitationClick(seg.id)}
-            className="inline-flex items-center align-super mx-[1px] px-[3px] h-[16px] rounded-full bg-primary-container text-on-primary-container text-[10px] font-bold leading-none hover:bg-primary hover:text-on-primary"
+            className="inline-flex items-center align-super mx-[1px] px-[3px] h-[16px] rounded-full bg-primary-container text-on-primary-container text-label-2xs font-bold leading-none hover:bg-primary hover:text-on-primary"
             aria-label={`Citation ${seg.id}`}
           >
             {seg.id}

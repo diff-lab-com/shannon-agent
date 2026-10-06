@@ -22,9 +22,8 @@ use shannon_core::query_engine::CostTracker;
 use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
 use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
 use shannon_engine::api::{ContentBlock, LlmClient, LlmClientConfig, LlmProvider, RetryConfig};
-use shannon_engine::permissions::PermissionManager;
+use shannon_engine::permissions::{ApprovalMode, PermissionManager};
 use shannon_engine::state::StateManager;
-use shannon_engine::streaming_tool_executor::{StreamingToolExecutor, ToolStatus};
 use uuid::Uuid;
 
 // ============================================================================
@@ -52,6 +51,8 @@ impl Drop for AnthropicKeyGuard {
 
 fn make_client(server: &ServerGuard, provider: LlmProvider) -> LlmClient {
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.url(),
         model: "test-model".to_string(),
@@ -86,6 +87,110 @@ fn make_context(message: &str) -> QueryContext {
             top_p: None,
         },
     }
+}
+
+/// End-to-end backpressure contract (review §P3-6): a deliberately slow
+/// consumer must receive a stream longer than the bounded channel's capacity
+/// completely, in order, and the producer may only make progress as the
+/// consumer drains (observable as wall-clock time: every capacity overflow
+/// forces the producer to wait out one consumer delay — a lower bound, so it
+/// stays CI-stable even on loaded runners).
+#[tokio::test]
+async fn test_e2e_slow_consumer_backpressure_preserves_order_and_completeness() {
+    let _guard = AnthropicKeyGuard::set();
+    let mut server = Server::new_async().await;
+
+    // 320 streamed text deltas (> QUERY_EVENT_CHANNEL_CAPACITY = 256), each a
+    // distinct, ordered token.
+    const DELTAS: usize = 320;
+    let mut sse = String::from(
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_bp\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":20,\"output_tokens\":0}}}\n\n",
+    );
+    sse.push_str(
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+    );
+    let mut expected = String::new();
+    for i in 0..DELTAS {
+        let token = format!("w{i} ");
+        sse.push_str(&format!(
+            "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{token}\"}}}}\n\n"
+        ));
+        expected.push_str(&token);
+    }
+    sse.push_str("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n");
+    sse.push_str(
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":20,\"output_tokens\":10}}\n\n",
+    );
+    sse.push_str("data: {\"type\":\"message_stop\"}\n\n");
+
+    server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse)
+        .create();
+
+    let client = make_client(&server, LlmProvider::Anthropic);
+    let registry = ToolRegistry::new();
+    let mut permissions = PermissionManager::new();
+    permissions.set_approval_mode(ApprovalMode::FullAuto);
+    let engine = QueryEngine::with_defaults(client, registry, permissions, StateManager::new());
+
+    let ctx = make_context("Produce the long stream");
+    let mut stream = engine.process_query(ctx, None).await;
+
+    // A deliberately slow consumer: it sleeps between recvs, so the bounded
+    // channel fills after 256 events and the producer must throttle to the
+    // consumer's pace.
+    let consumer_delay = std::time::Duration::from_millis(10);
+    let started = std::time::Instant::now();
+    let mut texts: Vec<String> = Vec::new();
+    let mut completed = false;
+    let drained = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(QueryEvent::Text { content, .. }) => texts.push(content),
+                Ok(QueryEvent::Completed { .. }) => completed = true,
+                Ok(_) => {}
+                Err(e) => panic!("Stream error: {e}"),
+            }
+            tokio::time::sleep(consumer_delay).await;
+        }
+    })
+    .await;
+    assert!(
+        drained.is_ok(),
+        "query did not complete — bounded backpressure deadlocked the pipeline"
+    );
+    let elapsed = started.elapsed();
+
+    // Completeness + ordering: every delta arrives exactly once, in order.
+    let joined: String = texts.concat();
+    assert_eq!(
+        joined, expected,
+        "streamed text must match the producer's order and content exactly"
+    );
+    assert!(
+        texts.len() >= DELTAS,
+        "expected at least {DELTAS} Text events, got {}",
+        texts.len()
+    );
+    assert!(completed, "query must deliver a Completed event");
+
+    // Producer progress is gated by capacity: at least
+    // (events - capacity) consumer delays must elapse while the producer
+    // waits for buffer space. Lower bound only — safe on loaded CI runners.
+    // (Capacity is 256; account the Text events alone conservatively.)
+    let min_expected = if texts.len() > 256 {
+        std::time::Duration::from_millis(((texts.len() - 256) * 10) as u64)
+    } else {
+        std::time::Duration::ZERO
+    };
+    assert!(
+        elapsed >= min_expected,
+        "producer was not throttled by the slow consumer: {elapsed:?} elapsed, \
+         but >256 queued events require at least {min_expected:?}"
+    );
 }
 
 /// A mock tool that records calls and returns configurable output.
@@ -151,46 +256,6 @@ fn anthropic_sse_text(msg_id: &str, text: &str) -> String {
             "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{txt}\"}}}}\n\n",
             "data: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n",
             "data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"input_tokens\":10,\"output_tokens\":8}}}}\n\n",
-            "data: {{\"type\":\"message_stop\"}}\n\n",
-        ),
-        mid = msg_id,
-        txt = text,
-    )
-}
-
-/// Build an SSE body for Anthropic with a single tool use followed by text.
-fn anthropic_sse_tool_then_text(
-    msg_id: &str,
-    tool_name: &str,
-    tool_id: &str,
-    tool_input: &str,
-    _final_text: &str,
-) -> String {
-    format!(
-        concat!(
-            "data: {{\"type\":\"message_start\",\"message\":{{\"id\":\"{mid}\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":15,\"output_tokens\":0}}}}}}\n\n",
-            "data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{tid}\",\"name\":\"{tname}\",\"input\":{{}}}}}}\n\n",
-            "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":\"{tinput}\"}}}}\n\n",
-            "data: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n",
-            "data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"tool_use\"}},\"usage\":{{\"input_tokens\":15,\"output_tokens\":10}}}}\n\n",
-            "data: {{\"type\":\"message_stop\"}}\n\n",
-        ),
-        mid = msg_id,
-        tid = tool_id,
-        tname = tool_name,
-        tinput = tool_input,
-    )
-}
-
-/// Build final text response after tool result.
-fn anthropic_sse_final_text(msg_id: &str, text: &str) -> String {
-    format!(
-        concat!(
-            "data: {{\"type\":\"message_start\",\"message\":{{\"id\":\"{mid}\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":25,\"output_tokens\":0}}}}}}\n\n",
-            "data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n",
-            "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{txt}\"}}}}\n\n",
-            "data: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n",
-            "data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"input_tokens\":25,\"output_tokens\":10}}}}\n\n",
             "data: {{\"type\":\"message_stop\"}}\n\n",
         ),
         mid = msg_id,
@@ -300,12 +365,14 @@ async fn test_e2e_tool_execution_pipeline() {
         )))
         .unwrap();
 
-    let engine = QueryEngine::with_defaults(
-        client,
-        registry,
-        PermissionManager::new(),
-        StateManager::new(),
-    );
+    // Headless pipeline test: no permission channel is attached, so the
+    // engine's fail-closed gate (R2/N-1) would deny the non-read-only bash
+    // tool before execution. Use the production headless approval posture
+    // (shannon-cli headless default: FullAuto) — this test exercises the
+    // tool-execution pipeline, not the permission gate.
+    let mut permissions = PermissionManager::new();
+    permissions.set_approval_mode(ApprovalMode::FullAuto);
+    let engine = QueryEngine::with_defaults(client, registry, permissions, StateManager::new());
 
     let ctx = make_context("List files in current directory");
     let mut stream = engine.process_query(ctx, None).await;
@@ -508,115 +575,6 @@ async fn test_e2e_openai_provider_text_response() {
 }
 
 // ============================================================================
-// E2E Test: Streaming tool executor lifecycle
-// ============================================================================
-
-#[tokio::test]
-async fn test_streaming_tool_executor_lifecycle() {
-    let executor = StreamingToolExecutor::new(16);
-
-    // Submit a tool
-    let tool_id = executor
-        .submit_tool("bash", json!({"command": "ls -la"}), true)
-        .await
-        .expect("submit should succeed");
-    assert!(!tool_id.is_empty(), "Tool ID should be assigned");
-
-    // Start the tool (transition to Executing)
-    executor
-        .start_tool(&tool_id)
-        .await
-        .expect("start should succeed");
-
-    // Check status is Executing via tools()
-    let tools = executor.tools().await;
-    let tool = tools
-        .iter()
-        .find(|t| t.id == tool_id)
-        .expect("tool should exist");
-    assert_eq!(tool.status, ToolStatus::Executing);
-
-    // Add progress
-    executor.add_progress(&tool_id, "Listing files...");
-
-    // Complete the tool
-    executor
-        .complete_tool(
-            &tool_id,
-            ToolOutput::success("file1.txt\nfile2.txt".to_string()),
-        )
-        .await
-        .expect("complete should succeed");
-
-    // Check status is Completed
-    let tools = executor.tools().await;
-    let tool = tools
-        .iter()
-        .find(|t| t.id == tool_id)
-        .expect("tool should exist");
-    assert_eq!(tool.status, ToolStatus::Completed);
-
-    // Abort should not panic on completed tool
-    executor.abort();
-    assert!(executor.is_aborted());
-}
-
-#[tokio::test]
-async fn test_streaming_tool_executor_multiple_concurrent_tools() {
-    let executor = StreamingToolExecutor::new(16);
-
-    let id1 = executor
-        .submit_tool("bash", json!({}), true)
-        .await
-        .expect("submit 1");
-    let id2 = executor
-        .submit_tool("read", json!({}), true)
-        .await
-        .expect("submit 2");
-
-    assert_ne!(id1, id2, "Each tool should get a unique ID");
-
-    // Start and complete both
-    executor.start_tool(&id1).await.expect("start 1");
-    executor.start_tool(&id2).await.expect("start 2");
-    executor
-        .complete_tool(&id1, ToolOutput::success("output1".to_string()))
-        .await
-        .expect("complete 1");
-    executor
-        .complete_tool(&id2, ToolOutput::success("output2".to_string()))
-        .await
-        .expect("complete 2");
-
-    let tools = executor.tools().await;
-    let t1 = tools.iter().find(|t| t.id == id1).expect("tool 1");
-    let t2 = tools.iter().find(|t| t.id == id2).expect("tool 2");
-    assert_eq!(t1.status, ToolStatus::Completed);
-    assert_eq!(t2.status, ToolStatus::Completed);
-}
-
-#[tokio::test]
-async fn test_streaming_tool_executor_fail() {
-    let executor = StreamingToolExecutor::new(16);
-
-    let tool_id = executor
-        .submit_tool("bash", json!({}), true)
-        .await
-        .expect("submit");
-    executor.start_tool(&tool_id).await.expect("start");
-    executor
-        .fail_tool(&tool_id, "Command not found")
-        .await
-        .expect("fail");
-
-    // Failed tools also land in Completed status with error output
-    let tools = executor.tools().await;
-    let tool = tools.iter().find(|t| t.id == tool_id).expect("tool");
-    assert_eq!(tool.status, ToolStatus::Completed);
-    assert!(tool.output.as_ref().unwrap().is_error);
-}
-
-// ============================================================================
 // E2E Test: CostTracker through pipeline
 // ============================================================================
 
@@ -816,6 +774,7 @@ fn test_session_persistence_round_trip() {
             );
             w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
                 shannon_types::session_event::TurnEndPayload {
+                    llm_steps: None,
                     reason: shannon_types::session_event::TurnEndPayload::REASON_COMPLETED.into(),
                     usage: Some(shannon_types::session_event::TokenUsage {
                         input_tokens: 1250,

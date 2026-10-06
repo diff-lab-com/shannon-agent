@@ -5,12 +5,22 @@
 //! 1. **Inbox items** — entries the user should look at (finished routine
 //!    runs, external triggers, …). Sources: `routine` (scheduled task runs),
 //!    `scheduled_task` (alias kept for UI clarity), `goal`, `trigger`
-//!    (executions fired through the HMAC trigger endpoint). Status flow:
+//!    (executions fired through the HMAC trigger endpoint), `batch`
+//!    (best-of-N batch runs), plus the T5 unified needs-attention sources
+//!    `session_approval` / `session_failed` / `skill_candidate` — those are
+//!    deduplicated on `(source, source_id)` via
+//!    [`InboxStore::upsert_pending`](inbox_store::InboxStore::upsert_pending)
+//!    and settled via
+//!    [`InboxStore::resolve_by_source`](inbox_store::InboxStore::resolve_by_source).
+//!    Status flow:
 //!    `pending` → `read` → `archived`.
-//! 2. **Automation run history** (`routine_runs`) — *new* run records are
-//!    written here going forward. The legacy JSONL store
-//!    (`crates/shannon_core::scheduled_runs`) keeps receiving the same runs
-//!    (mirrored by the desktop) until the UI switches over.
+//! 2. **Automation run history** (`routine_runs`) — the **authoritative**
+//!    read source for run history since T7 (`list_task_executions` reads it;
+//!    [`InboxStore::import_run`](inbox_store::InboxStore::import_run) is the idempotent backfill primitive for
+//!    legacy rows). The legacy JSONL store
+//!    (`crates/shannon_core::scheduled_runs`) still receives the same runs
+//!    (mirrored by the desktop, best-effort) and serves as the read
+//!    fallback when this store cannot be opened or queried.
 //!
 //! Session storage (`events.jsonl` / `meta.json`) is intentionally **not**
 //! touched — this module never reads or writes session logs.
@@ -18,10 +28,10 @@
 //! ## Legacy triage migration
 //!
 //! The previous inbox was `~/.shannon/triage.jsonl` (JSONL, latest-revision-
-//! wins). On the first [`InboxStore::open`] with an empty `inbox_items`
+//! wins). On the first [`InboxStore::open`](inbox_store::InboxStore::open) with an empty `inbox_items`
 //! table, existing triage entries are imported once and the `meta` key
 //! `legacy_triage_imported` is set to `1` so the migration never re-runs.
-//! Pass `legacy = None` (via [`InboxStore::open_with_legacy`]) to skip it —
+//! Pass `legacy = None` (via [`InboxStore::open_with_legacy`](inbox_store::InboxStore::open_with_legacy)) to skip it —
 //! tests use this to point the migrator at a fixture file.
 //!
 //! ## Mapping from triage items
@@ -51,6 +61,25 @@ pub const SOURCE_GOAL: &str = "goal";
 pub const SOURCE_TRIGGER: &str = "trigger";
 /// Inbox source: desktop best-of-N batch run lifecycle (P1-2).
 pub const SOURCE_BATCH: &str = "batch";
+/// Inbox source: a desktop background task (`start_background_task`, the
+/// ad-hoc prompt run surfaced on the Runs panel) finished **failed**. Only
+/// failures write an item — successes and user cancels are panel-only so the
+/// triage stream stays noise-free. Dedup entity: the task id (one-shot;
+/// each failure is a distinct task).
+pub const SOURCE_BACKGROUND_TASK: &str = "background_task";
+/// Inbox source: a session permission-approval request is awaiting the user
+/// (T5 unified needs-attention stream). Dedup entity: the session.
+pub const SOURCE_SESSION_APPROVAL: &str = "session_approval";
+/// Inbox source: the session's most recent turn failed (T5). Dedup entity:
+/// the session.
+pub const SOURCE_SESSION_FAILED: &str = "session_failed";
+/// Inbox source: a detected skill candidate awaits review (T5). Dedup
+/// entity: the candidate id.
+pub const SOURCE_SKILL_CANDIDATE: &str = "skill_candidate";
+/// Inbox source: a dream distillation pass finished and its report awaits
+/// review (dream pass). Dedup entity: the calendar day
+/// (`dream-{YYYY-MM-DD}`), so the daily noise budget is at most one card.
+pub const SOURCE_DREAM_REPORT: &str = "dream_report";
 
 /// Status vocabulary for inbox items (validated at the write boundary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +120,10 @@ pub enum InboxStoreError {
     Io(#[from] std::io::Error),
     #[error("invalid status: {0}")]
     BadStatus(String),
+    /// [`InboxStore::upsert_pending`] was called without a `source_id`, so
+    /// there is no dedup entity to key on.
+    #[error("upsert_pending requires a source_id (dedup entity)")]
+    MissingSourceId,
     #[error("invalid legacy triage line: {0}")]
     LegacyLine(String),
     #[error("inbox store lock poisoned")]
@@ -139,6 +172,43 @@ pub struct InboxStats {
     pub today: u64,
 }
 
+/// How a run was started (R7-①). Persisted on the `routine_runs` row and
+/// mirrored into the legacy JSONL history so the consecutive-failure
+/// auto pause can tell scheduler fires from user-initiated ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunTrigger {
+    /// Fired by the scheduler — the only trigger that advances (or can
+    /// complete) the consecutive-failure streak.
+    Scheduled,
+    /// Fired on demand by the user (`trigger_task_now`, the loopback
+    /// trigger endpoint).
+    RunNow,
+    /// Re-execution of an existing run's triage card (`rerun_inbox_item`).
+    Rerun,
+}
+
+impl RunTrigger {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scheduled => "scheduled",
+            Self::RunNow => "run_now",
+            Self::Rerun => "rerun",
+        }
+    }
+
+    /// Parse a persisted column/JSON value. Unrecognized strings fall back
+    /// to [`RunTrigger::Scheduled`] — the same conservative counting rule a
+    /// missing (pre-tagging) value gets.
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "run_now" => Self::RunNow,
+            "rerun" => Self::Rerun,
+            _ => Self::Scheduled,
+        }
+    }
+}
+
 /// One automation run record (`routine_runs` table).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -152,6 +222,22 @@ pub struct RunRecord {
     pub finished_at_ms: Option<i64>,
     pub duration_ms: Option<i64>,
     pub inbox_item_id: Option<i64>,
+    /// R2-W2-2: total USD cost the run's Usage events reported. `None` when
+    /// the run predates cost tracking (or never emitted usage) — consumers
+    /// render "no data", never an estimate.
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    /// R2-W2-2: total tokens the run's Usage events reported — the sum of
+    /// input, output, cache creation, and cache read tokens. `None` under
+    /// the same rule as the cost field above.
+    #[serde(default)]
+    pub token_usage: Option<u64>,
+    /// R7-①: how the run was started. `None` on rows/lines written before
+    /// trigger tagging existed — consumers treat that as
+    /// [`RunTrigger::Scheduled`] (the conservative fallback: pre-tagging
+    /// history counts toward the streak until it clears naturally).
+    #[serde(default)]
+    pub trigger: Option<RunTrigger>,
 }
 
 /// Legacy `triage.jsonl` line shape (subset — unknown fields are ignored).
@@ -198,7 +284,10 @@ CREATE TABLE IF NOT EXISTS routine_runs (
     started_at_ms INTEGER,
     finished_at_ms INTEGER,
     duration_ms INTEGER,
-    inbox_item_id INTEGER
+    inbox_item_id INTEGER,
+    cost_usd REAL,
+    token_usage INTEGER,
+    "trigger" TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_routine_runs_started ON routine_runs (started_at_ms DESC);
 
@@ -258,6 +347,7 @@ impl InboxStore {
         // the pragma is a no-op.
         let _ = conn.pragma_update(None, "busy_timeout", "2000");
         conn.execute_batch(SCHEMA_SQL)?;
+        Self::migrate_routine_runs_columns(&conn)?;
         let store = Self {
             conn: Mutex::new(conn),
         };
@@ -267,6 +357,45 @@ impl InboxStore {
 
     fn lock_conn(&self) -> Result<MutexGuard<'_, Connection>, InboxStoreError> {
         self.conn.lock().map_err(|_| InboxStoreError::Poisoned)
+    }
+
+    /// R2-W2-2 / R7-① migration: add the run cost/token and trigger columns
+    /// to a `routine_runs` table created before they existed. `CREATE TABLE
+    /// IF NOT EXISTS` above is a no-op on such databases, so missing columns
+    /// are added with `ALTER TABLE` when (and only when) `PRAGMA table_info`
+    /// shows them absent. Pre-existing rows read back `NULL` → `None` — the
+    /// UI hides the cost cell instead of inventing a number, and the auto-
+    /// pause streak treats untagged runs as `scheduled` (R7-① fallback).
+    fn migrate_routine_runs_columns(conn: &Connection) -> Result<(), InboxStoreError> {
+        let existing = {
+            let mut stmt = conn.prepare("PRAGMA table_info(routine_runs)")?;
+            let names = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            let mut names: std::collections::HashSet<String> = names.flatten().collect();
+            names.shrink_to_fit();
+            names
+        };
+        if !existing.contains("cost_usd") {
+            conn.execute("ALTER TABLE routine_runs ADD COLUMN cost_usd REAL", [])?;
+        }
+        if !existing.contains("token_usage") {
+            conn.execute(
+                "ALTER TABLE routine_runs ADD COLUMN token_usage INTEGER",
+                [],
+            )?;
+        }
+        if !existing.contains("trigger") {
+            conn.execute("ALTER TABLE routine_runs ADD COLUMN \"trigger\" TEXT", [])?;
+        }
+        Ok(())
+    }
+
+    /// `PRAGMA integrity_check` for diagnostics (`shannon doctor --deep`).
+    /// Returns the pragma's single-column verdict — `"ok"` when healthy,
+    /// otherwise SQLite's description of the corruption.
+    pub fn integrity_check(&self) -> Result<String, InboxStoreError> {
+        let conn = self.lock_conn()?;
+        conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+            .map_err(InboxStoreError::from)
     }
 
     /// Retry an inner closure until it succeeds or returns a non-busy error.
@@ -417,6 +546,99 @@ impl InboxStore {
             .ok_or(InboxStoreError::Sql(rusqlite::Error::QueryReturnedNoRows))
     }
 
+    /// Deduplicating append for the recurring "needs attention" sources
+    /// (T5 unified stream: `session_approval` / `session_failed` /
+    /// `skill_candidate`).
+    ///
+    /// Keyed on `(source, source_id)` — the dedup entity:
+    /// - no matching row → a fresh `pending` item is appended;
+    /// - matching row → its title/summary/error and `updated_at_ms` are
+    ///   refreshed in place (no second row is ever created) **and** the item
+    ///   is reset to `pending`: a new occurrence of a needs-attention event
+    ///   needs attention again even when a previous one was already read or
+    ///   archived. The `id`/`created_at_ms` of the original entry survive.
+    ///
+    /// Errors with [`InboxStoreError::MissingSourceId`] when `item.source_id`
+    /// is empty/absent — without a dedup entity the call is a caller bug.
+    pub fn upsert_pending(&self, item: InboxItemNew) -> Result<InboxItem, InboxStoreError> {
+        let dedup_id = item
+            .source_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or(InboxStoreError::MissingSourceId)?
+            .to_string();
+        let existing = self.find_by_source(&item.source, &dedup_id)?;
+        match existing {
+            Some(prev) => {
+                {
+                    let conn = self.lock_conn()?;
+                    self.with_busy_retry(|| {
+                        conn.execute(
+                            "UPDATE inbox_items
+                             SET title = ?1, summary = ?2, error = ?3,
+                                 status = 'pending', updated_at_ms = ?4
+                             WHERE id = ?5",
+                            params![item.title, item.summary, item.error, now_ms(), prev.id],
+                        )?;
+                        Ok(())
+                    })?;
+                }
+                self.get_item(prev.id)?
+                    .ok_or(InboxStoreError::Sql(rusqlite::Error::QueryReturnedNoRows))
+            }
+            None => self.append_item(item),
+        }
+    }
+
+    /// Find the deduplicated entry for `(source, source_id)`, if any.
+    pub fn find_by_source(
+        &self,
+        source: &str,
+        source_id: &str,
+    ) -> Result<Option<InboxItem>, InboxStoreError> {
+        let conn = self.lock_conn()?;
+        conn.query_row(
+            "SELECT id, source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms
+             FROM inbox_items WHERE source = ?1 AND source_id = ?2
+             ORDER BY id DESC LIMIT 1",
+            params![source, source_id],
+            row_to_item,
+        )
+        .optional()
+        .map_err(InboxStoreError::from)
+    }
+
+    /// Resolve the deduplicated entry for `(source, source_id)` — mark it
+    /// read / archive it once the underlying event has been handled (T5
+    /// "resolve-as-read"). Best-effort by design: `Ok(None)` when no matching
+    /// item exists or it is already in the requested status, so callers can
+    /// fire this on every command path without polling or error noise.
+    ///
+    /// One-way `archived` (卡 3b): an archived entry is never demoted back to
+    /// `read` (or re-touched at all) by a later resolve — archiving means
+    /// "not looking at this again". Only a fresh occurrence through
+    /// [`Self::upsert_pending`] re-opens it (reopen semantics unchanged).
+    pub fn resolve_by_source(
+        &self,
+        source: &str,
+        source_id: &str,
+        status: InboxStatus,
+    ) -> Result<Option<InboxItem>, InboxStoreError> {
+        let Some(item) = self.find_by_source(source, source_id)? else {
+            return Ok(None);
+        };
+        // One-way archived: resolve never demotes an archived entry back to
+        // read — "archived = 不再看". (`upsert_pending` still re-opens it.)
+        if item.status == InboxStatus::Archived.as_str() {
+            return Ok(Some(item));
+        }
+        if item.status == status.as_str() {
+            return Ok(Some(item));
+        }
+        self.update_status(item.id, status).map(Some)
+    }
+
     /// Badge counts: pending items and items created today (local time).
     pub fn stats(&self) -> Result<InboxStats, InboxStoreError> {
         let conn = self.lock_conn()?;
@@ -437,18 +659,38 @@ impl InboxStore {
 
     /// Record a new `running` run. Returns its id (used as the run id by
     /// every store, including the legacy JSONL mirror).
+    ///
+    /// Untagged form: the row reads back `trigger = NULL`, which consumers
+    /// treat as [`RunTrigger::Scheduled`] (the R7-① conservative fallback —
+    /// untagged history counts toward the auto-pause streak). Every current
+    /// production spawn point tags its runs through
+    /// [`Self::record_run_start_with_trigger`] instead.
     pub fn record_run_start(
         &self,
         task_id: &str,
         task_name: &str,
     ) -> Result<String, InboxStoreError> {
+        self.record_run_start_with_trigger(task_id, task_name, None)
+    }
+
+    /// Tagged variant of [`Self::record_run_start`] (R7-①): every spawn
+    /// point declares how the run was started (`scheduled` / `run_now` /
+    /// `rerun`) so the consecutive-failure streak can count scheduler fires
+    /// only. `None` writes the NULL column — the pre-tagging shape readers
+    /// treat as scheduled (conservative fallback).
+    pub fn record_run_start_with_trigger(
+        &self,
+        task_id: &str,
+        task_name: &str,
+        trigger: Option<RunTrigger>,
+    ) -> Result<String, InboxStoreError> {
         let id = uuid::Uuid::new_v4().to_string();
         let conn = self.lock_conn()?;
         self.with_busy_retry(|| {
             conn.execute(
-                "INSERT INTO routine_runs (id, task_id, task_name, status, started_at_ms)
-                 VALUES (?1, ?2, ?3, 'running', ?4)",
-                params![&id, task_id, task_name, now_ms()],
+                "INSERT INTO routine_runs (id, task_id, task_name, status, started_at_ms, \"trigger\")
+                 VALUES (?1, ?2, ?3, 'running', ?4, ?5)",
+                params![&id, task_id, task_name, now_ms(), trigger.map(|t| t.as_str())],
             )?;
             Ok(())
         })?;
@@ -456,7 +698,10 @@ impl InboxStore {
     }
 
     /// Complete a run: sets status/error, computes `duration_ms` from the
-    /// start timestamp, and links the inbox item produced by the run.
+    /// start timestamp, links the inbox item produced by the run, and
+    /// persists the run's cost/token totals (R2-W2-2 — `None` keeps the
+    /// columns NULL for runs that tracked nothing, so the UI keeps hiding
+    /// their cost cells).
     ///
     /// P2-7 fix round: retried on SQLITE_BUSY (busy_timeout + one short
     /// backoff) so a serve↔desktop writer collision cannot leave a routine
@@ -467,6 +712,8 @@ impl InboxStore {
         status: &str,
         error: Option<&str>,
         inbox_item_id: Option<i64>,
+        cost_usd: Option<f64>,
+        token_usage: Option<u64>,
     ) -> Result<(), InboxStoreError> {
         let conn = self.lock_conn()?;
         let now = now_ms();
@@ -475,9 +722,17 @@ impl InboxStore {
                 "UPDATE routine_runs
                  SET status = ?1, error = ?2, finished_at_ms = ?3,
                      duration_ms = ?3 - COALESCE(started_at_ms, ?3),
-                     inbox_item_id = ?4
-                 WHERE id = ?5",
-                params![status, error, now, inbox_item_id, run_id],
+                     inbox_item_id = ?4, cost_usd = ?5, token_usage = ?6
+                 WHERE id = ?7",
+                params![
+                    status,
+                    error,
+                    now,
+                    inbox_item_id,
+                    cost_usd,
+                    token_usage,
+                    run_id
+                ],
             )?;
             Ok(())
         })?;
@@ -496,19 +751,66 @@ impl InboxStore {
         let mut q = stmt.query(params![limit])?;
         let mut out = Vec::new();
         while let Some(row) = q.next()? {
-            out.push(RunRecord {
-                id: row.get(0)?,
-                task_id: row.get(1)?,
-                task_name: row.get(2)?,
-                status: row.get(3)?,
-                error: row.get(4)?,
-                started_at_ms: row.get(5)?,
-                finished_at_ms: row.get(6)?,
-                duration_ms: row.get(7)?,
-                inbox_item_id: row.get(8)?,
-            });
+            out.push(row_to_run(row)?);
         }
         Ok(out)
+    }
+
+    /// List runs of one task, newest first (T7 history read path:
+    /// `list_task_executions` filters by task through this instead of the
+    /// legacy JSONL `list_by_task`).
+    pub fn list_runs_by_task(
+        &self,
+        task_id: &str,
+        limit: u32,
+    ) -> Result<Vec<RunRecord>, InboxStoreError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {RUN_COLUMNS} FROM routine_runs WHERE task_id = ?1 \
+             ORDER BY started_at_ms DESC, rowid DESC LIMIT ?2"
+        ))?;
+        let limit = i64::from(limit.max(1));
+        let mut q = stmt.query(params![task_id, limit])?;
+        let mut out = Vec::new();
+        while let Some(row) = q.next()? {
+            out.push(row_to_run(row)?);
+        }
+        Ok(out)
+    }
+
+    /// Idempotent history-backfill primitive (T7): insert a run record
+    /// **iff** its id is not present yet. Returns `true` when a new row was
+    /// written, `false` when a row with that id already existed — so
+    /// repeated backfill passes (every startup) never duplicate history.
+    ///
+    /// `status` is stored verbatim: besides `running`/`succeeded`/`failed`
+    /// the scheduler mirrors `queued`/`cancelled` tombstones (T7), and the
+    /// table is a history log, not a status state machine.
+    pub fn import_run(&self, run: &RunRecord) -> Result<bool, InboxStoreError> {
+        let conn = self.lock_conn()?;
+        let inserted = self.with_busy_retry(|| {
+            let changed = conn.execute(
+                "INSERT OR IGNORE INTO routine_runs
+                    (id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id, cost_usd, token_usage, \"trigger\")
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    run.id,
+                    run.task_id,
+                    run.task_name,
+                    run.status,
+                    run.error,
+                    run.started_at_ms,
+                    run.finished_at_ms,
+                    run.duration_ms,
+                    run.inbox_item_id,
+                    run.cost_usd,
+                    run.token_usage,
+                    run.trigger.as_ref().map(|t| t.as_str()),
+                ],
+            )?;
+            Ok(changed > 0)
+        })?;
+        Ok(inserted)
     }
 
     // ── meta / legacy migration ─────────────────────────────────────────
@@ -616,7 +918,7 @@ impl std::fmt::Debug for InboxStore {
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 const ITEM_COLUMNS: &str = "id, source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms";
-const RUN_COLUMNS: &str = "id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id";
+const RUN_COLUMNS: &str = "id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id, cost_usd, token_usage, \"trigger\"";
 
 /// Shared list tail for [`InboxStore::list`]: newest first (created_at DESC,
 /// id DESC as tiebreaker for same-millisecond inserts). `limit` is a trusted
@@ -652,6 +954,24 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxItem> {
         status: row.get(7)?,
         created_at_ms: row.get(8)?,
         updated_at_ms: row.get(9)?,
+    })
+}
+
+fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
+    let trigger: Option<String> = row.get(11)?;
+    Ok(RunRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        task_name: row.get(2)?,
+        status: row.get(3)?,
+        error: row.get(4)?,
+        started_at_ms: row.get(5)?,
+        finished_at_ms: row.get(6)?,
+        duration_ms: row.get(7)?,
+        inbox_item_id: row.get(8)?,
+        cost_usd: row.get(9)?,
+        token_usage: row.get(10)?,
+        trigger: trigger.as_deref().map(RunTrigger::parse),
     })
 }
 
@@ -834,6 +1154,199 @@ mod tests {
         assert_eq!(store.list(None, None, 10).unwrap().len(), 1);
     }
 
+    // ── upsert_pending / resolve_by_source (T5 unified stream) ─────────
+
+    fn attention_item(source: &str, source_id: &str, title: &str) -> InboxItemNew {
+        InboxItemNew {
+            source: source.to_string(),
+            source_id: Some(source_id.to_string()),
+            session_id: Some("0195abcd-0000-7000-8000-000000000009".into()),
+            title: title.into(),
+            summary: "first occurrence".into(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn upsert_pending_dedups_one_row_per_entity_and_refreshes_content() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let first = store
+            .upsert_pending(attention_item(
+                SOURCE_SESSION_FAILED,
+                "sess-1",
+                "Session abc12345",
+            ))
+            .unwrap();
+        // Force a distinguishable creation timestamp so we can assert the
+        // original entry's id/created_at survive the refresh.
+        {
+            let conn = store.lock_conn().unwrap();
+            conn.execute(
+                "UPDATE inbox_items SET created_at_ms = 1_000 WHERE id = ?1",
+                params![first.id],
+            )
+            .unwrap();
+        }
+
+        // Same entity again: no second row, content refreshed in place.
+        let second = store
+            .upsert_pending(InboxItemNew {
+                summary: "second occurrence".into(),
+                error: Some("boom again".into()),
+                ..attention_item(SOURCE_SESSION_FAILED, "sess-1", "Session abc12345 renamed")
+            })
+            .unwrap();
+        assert_eq!(second.id, first.id, "dedup must update, never append");
+        assert_eq!(second.created_at_ms, 1_000, "original entry is kept");
+        assert_eq!(second.title, "Session abc12345 renamed");
+        assert_eq!(second.summary, "second occurrence");
+        assert_eq!(second.error.as_deref(), Some("boom again"));
+        assert_eq!(store.list(None, None, 10).unwrap().len(), 1);
+
+        // A different entity (or a different source) is a separate entry —
+        // "same turn fails then asks approval" style combinations never merge.
+        store
+            .upsert_pending(attention_item(
+                SOURCE_SESSION_FAILED,
+                "sess-2",
+                "other session",
+            ))
+            .unwrap();
+        store
+            .upsert_pending(attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "bash"))
+            .unwrap();
+        let all = store.list(None, None, 10).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(
+            store
+                .list(None, Some(SOURCE_SESSION_FAILED), 10)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn upsert_pending_reopens_a_handled_entry() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let item = store
+            .upsert_pending(attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "bash"))
+            .unwrap();
+        assert_eq!(item.status, "pending");
+        store.update_status(item.id, InboxStatus::Read).unwrap();
+        store.update_status(item.id, InboxStatus::Archived).unwrap();
+
+        // A new occurrence after the user dismissed the entry must surface
+        // again — the stream is "needs attention", not a log.
+        let again = store
+            .upsert_pending(attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "python"))
+            .unwrap();
+        assert_eq!(again.id, item.id);
+        assert_eq!(again.status, "pending", "re-opens after read/archived");
+    }
+
+    #[test]
+    fn upsert_pending_without_source_id_is_an_error() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let err = store
+            .upsert_pending(InboxItemNew {
+                source_id: None,
+                ..attention_item(SOURCE_SESSION_FAILED, "sess-1", "x")
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("source_id"));
+        let err = store
+            .upsert_pending(InboxItemNew {
+                source_id: Some("   ".into()),
+                ..attention_item(SOURCE_SESSION_FAILED, "sess-1", "x")
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("source_id"));
+        assert!(store.list(None, None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn resolve_by_source_marks_read_is_idempotent_and_tolerates_missing() {
+        let store = InboxStore::open_in_memory().unwrap();
+        // Nothing written yet: resolving is a silent no-op.
+        assert!(
+            store
+                .resolve_by_source(SOURCE_SESSION_FAILED, "sess-1", InboxStatus::Read)
+                .unwrap()
+                .is_none()
+        );
+
+        let item = store
+            .upsert_pending(attention_item(SOURCE_SESSION_FAILED, "sess-1", "Session x"))
+            .unwrap();
+        let resolved = store
+            .resolve_by_source(SOURCE_SESSION_FAILED, "sess-1", InboxStatus::Read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.id, item.id);
+        assert_eq!(resolved.status, "read");
+
+        // Already read → no-op, still Ok(Some) so callers need no special case.
+        let again = store
+            .resolve_by_source(SOURCE_SESSION_FAILED, "sess-1", InboxStatus::Read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.status, "read");
+
+        // A different entity stays untouched.
+        let other = store
+            .upsert_pending(attention_item(SOURCE_SESSION_FAILED, "sess-2", "Session y"))
+            .unwrap();
+        assert_eq!(other.status, "pending");
+    }
+
+    /// 卡 3b: `archived` is one-way across resolves — a later resolve
+    /// (session open / approval convergence) must not pull an archived
+    /// entry back into the stream as `read`.
+    #[test]
+    fn resolve_by_source_never_demotes_an_archived_entry() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let item = store
+            .upsert_pending(attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "bash"))
+            .unwrap();
+
+        // Baseline (unchanged semantics): a pending entry resolves to read.
+        let read = store
+            .resolve_by_source(SOURCE_SESSION_APPROVAL, "sess-1", InboxStatus::Read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.status, "read");
+
+        // Archive it — the forward transition still goes through resolve.
+        let archived = store
+            .resolve_by_source(SOURCE_SESSION_APPROVAL, "sess-1", InboxStatus::Archived)
+            .unwrap()
+            .unwrap();
+        assert_eq!(archived.status, "archived");
+
+        // A later resolve must not demote the archived entry…
+        let demote = store
+            .resolve_by_source(SOURCE_SESSION_APPROVAL, "sess-1", InboxStatus::Read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(demote.status, "archived", "archived is one-way");
+        // …and resolving to Archived again stays an idempotent no-op.
+        let again = store
+            .resolve_by_source(SOURCE_SESSION_APPROVAL, "sess-1", InboxStatus::Archived)
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.status, "archived");
+        assert_eq!(store.get_item(item.id).unwrap().unwrap().status, "archived");
+
+        // The reopen path is untouched: a fresh occurrence through
+        // upsert_pending still surfaces the entry as pending.
+        let reopened = store
+            .upsert_pending(attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "bash"))
+            .unwrap();
+        assert_eq!(reopened.id, item.id);
+        assert_eq!(reopened.status, "pending");
+    }
+
     // ── stats ───────────────────────────────────────────────────────────
 
     #[test]
@@ -883,7 +1396,7 @@ mod tests {
 
         let item = store.append_item(item_new("run output")).unwrap();
         store
-            .record_run_finish(&run_id, "succeeded", None, Some(item.id))
+            .record_run_finish(&run_id, "succeeded", None, Some(item.id), None, None)
             .unwrap();
 
         let done = &store.list_runs(10).unwrap()[0];
@@ -899,7 +1412,7 @@ mod tests {
         let store = InboxStore::open_in_memory().unwrap();
         let run_id = store.record_run_start("t", "T").unwrap();
         store
-            .record_run_finish(&run_id, "failed", Some("boom"), None)
+            .record_run_finish(&run_id, "failed", Some("boom"), None, None, None)
             .unwrap();
         let run = &store.list_runs(10).unwrap()[0];
         assert_eq!(run.status, "failed");
@@ -913,12 +1426,269 @@ mod tests {
         let first = store.record_run_start("t", "T").unwrap();
         let second = store.record_run_start("t", "T").unwrap();
         store
-            .record_run_finish(&first, "succeeded", None, None)
+            .record_run_finish(&first, "succeeded", None, None, None, None)
             .unwrap(); // keeps start older
         let runs = store.list_runs(10).unwrap();
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].id, second, "newest run first");
         assert_eq!(store.list_runs(1).unwrap().len(), 1);
+    }
+
+    // ── list_runs_by_task / import_run (T7 history read + backfill) ─────
+
+    #[test]
+    fn list_runs_by_task_filters_orders_and_limits() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let a1 = store.record_run_start("a", "A").unwrap();
+        let b1 = store.record_run_start("b", "B").unwrap();
+        let a2 = store.record_run_start("a", "A").unwrap();
+        store
+            .record_run_finish(&a1, "succeeded", None, None, None, None)
+            .unwrap();
+        store
+            .record_run_finish(&b1, "failed", Some("x"), None, None, None)
+            .unwrap();
+
+        let a_runs = store.list_runs_by_task("a", 10).unwrap();
+        assert_eq!(a_runs.len(), 2);
+        assert_eq!(a_runs[0].id, a2, "newest first");
+        assert_eq!(a_runs[1].id, a1);
+        assert!(a_runs.iter().all(|r| r.task_id == "a"));
+
+        assert_eq!(store.list_runs_by_task("a", 1).unwrap().len(), 1);
+        assert!(store.list_runs_by_task("missing", 10).unwrap().is_empty());
+    }
+
+    /// A full record (including tombstone statuses carried by the T7
+    /// scheduler mirror) round-trips through import_run + list_runs.
+    #[test]
+    fn import_run_roundtrips_all_fields() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let record = RunRecord {
+            id: "run-1".into(),
+            task_id: "task-1".into(),
+            task_name: Some("Task One".into()),
+            status: "queued".into(),
+            error: Some("outside execution window".into()),
+            started_at_ms: Some(1_700_000_000_000),
+            finished_at_ms: None,
+            duration_ms: None,
+            inbox_item_id: None,
+            cost_usd: None,
+            token_usage: None,
+            trigger: Some(RunTrigger::Scheduled),
+        };
+        assert!(store.import_run(&record).unwrap(), "first import inserts");
+
+        let runs = store.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0], record);
+    }
+
+    #[test]
+    fn import_run_is_idempotent_on_the_same_id() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let record = RunRecord {
+            id: "run-1".into(),
+            task_id: "task-1".into(),
+            task_name: Some("Task One".into()),
+            status: "succeeded".into(),
+            error: None,
+            started_at_ms: Some(1_700_000_000_000),
+            finished_at_ms: Some(1_700_000_005_000),
+            duration_ms: Some(5_000),
+            inbox_item_id: None,
+            cost_usd: Some(0.25),
+            token_usage: Some(4_096),
+            trigger: Some(RunTrigger::RunNow),
+        };
+        assert!(store.import_run(&record).unwrap());
+        // A second pass (e.g. the next startup's backfill) must neither
+        // duplicate the row nor overwrite the existing one.
+        assert!(!store.import_run(&record).unwrap(), "re-import is a no-op");
+        let mutated = RunRecord {
+            status: "failed".into(),
+            ..record.clone()
+        };
+        assert!(!store.import_run(&mutated).unwrap(), "existing id wins");
+        let runs = store.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, "succeeded", "original row preserved");
+
+        // record_run_start and import_run coexist on the same table.
+        store.record_run_start("task-2", "Two").unwrap();
+        assert_eq!(store.list_runs(10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn record_run_finish_persists_cost_and_tokens() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let run_id = store.record_run_start("t", "T").unwrap();
+        store
+            .record_run_finish(&run_id, "succeeded", None, None, Some(0.1234), Some(9_876))
+            .unwrap();
+
+        let runs = store.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].cost_usd, Some(0.1234));
+        assert_eq!(runs[0].token_usage, Some(9_876));
+
+        // A run that tracked nothing keeps both columns NULL (the UI hides
+        // the cost cell — no fabricated zeros).
+        let bare = store.record_run_start("t", "T").unwrap();
+        store
+            .record_run_finish(&bare, "failed", Some("boom"), None, None, None)
+            .unwrap();
+        let runs = store.list_runs(10).unwrap();
+        let bare_row = runs.iter().find(|r| r.id == bare).unwrap();
+        assert_eq!(bare_row.cost_usd, None);
+        assert_eq!(bare_row.token_usage, None);
+    }
+
+    #[test]
+    fn migration_adds_cost_columns_to_a_pre_cost_database() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("inbox.db");
+        // Simulate a database written by a pre-cost build: the routine_runs
+        // table exists WITHOUT the cost/token columns and already holds a row.
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE routine_runs (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    task_name TEXT,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    started_at_ms INTEGER,
+                    finished_at_ms INTEGER,
+                    duration_ms INTEGER,
+                    inbox_item_id INTEGER
+                );
+                INSERT INTO routine_runs (id, task_id, task_name, status, started_at_ms)
+                VALUES ('old-1', 't', 'T', 'succeeded', 1_700_000_000_000);",
+            )
+            .unwrap();
+        }
+
+        let store = InboxStore::open_with_legacy(&db, None).unwrap();
+
+        // The old row survived the migration and reads back cost-less.
+        let runs = store.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, "old-1");
+        assert_eq!(runs[0].cost_usd, None);
+        assert_eq!(runs[0].token_usage, None);
+
+        // And the migrated table accepts cost-bearing finishes.
+        let run_id = store.record_run_start("t", "T").unwrap();
+        store
+            .record_run_finish(&run_id, "succeeded", None, None, Some(0.5), Some(1_000))
+            .unwrap();
+        let runs = store.list_runs(10).unwrap();
+        let fresh = runs.iter().find(|r| r.id == run_id).unwrap();
+        assert_eq!(fresh.cost_usd, Some(0.5));
+        assert_eq!(fresh.token_usage, Some(1_000));
+    }
+
+    /// R7-① migration: a database written before trigger tagging existed
+    /// gains the `"trigger"` column on open — old rows survive and read back
+    /// `trigger = None` (consumers count them as scheduled), and tagged
+    /// starts are writable afterwards.
+    #[test]
+    fn migration_adds_trigger_column_to_a_pre_trigger_database() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("inbox.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE routine_runs (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    task_name TEXT,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    started_at_ms INTEGER,
+                    finished_at_ms INTEGER,
+                    duration_ms INTEGER,
+                    inbox_item_id INTEGER,
+                    cost_usd REAL,
+                    token_usage INTEGER
+                );
+                INSERT INTO routine_runs (id, task_id, task_name, status, started_at_ms)
+                VALUES ('old-1', 't', 'T', 'failed', 1_700_000_000_000);",
+            )
+            .unwrap();
+        }
+
+        let store = InboxStore::open_with_legacy(&db, None).unwrap();
+
+        // The pre-tagging row survived and reads back untagged…
+        let runs = store.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, "old-1");
+        assert_eq!(runs[0].trigger, None);
+
+        // …and the migrated table accepts tagged starts.
+        let run_id = store
+            .record_run_start_with_trigger("t", "T", Some(RunTrigger::Rerun))
+            .unwrap();
+        let runs = store.list_runs(10).unwrap();
+        let tagged = runs.iter().find(|r| r.id == run_id).unwrap();
+        assert_eq!(tagged.trigger, Some(RunTrigger::Rerun));
+    }
+
+    /// R7-①: the trigger tag round-trips through start → list, and the
+    /// untagged constructor stays the `NULL` (= scheduled-fallback) shape.
+    #[test]
+    fn run_trigger_tag_roundtrips_per_variant() {
+        let store = InboxStore::open_in_memory().unwrap();
+        for trigger in [RunTrigger::Scheduled, RunTrigger::RunNow, RunTrigger::Rerun] {
+            let id = store
+                .record_run_start_with_trigger("t", "T", Some(trigger))
+                .unwrap();
+            let row = store
+                .list_runs(10)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.id == id)
+                .unwrap();
+            assert_eq!(row.trigger, Some(trigger));
+        }
+
+        // Untagged start → NULL trigger (the pre-tagging / fallback shape).
+        let untagged = store.record_run_start("t", "T").unwrap();
+        let row = store
+            .list_runs(10)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == untagged)
+            .unwrap();
+        assert_eq!(row.trigger, None);
+
+        // A NULL column and an explicit "scheduled" are the same to readers.
+        let record = RunRecord {
+            id: "imported".into(),
+            task_id: "t".into(),
+            task_name: None,
+            status: "failed".into(),
+            error: None,
+            started_at_ms: Some(1),
+            finished_at_ms: Some(2),
+            duration_ms: Some(1),
+            inbox_item_id: None,
+            cost_usd: None,
+            token_usage: None,
+            trigger: None,
+        };
+        store.import_run(&record).unwrap();
+        let imported = store
+            .list_runs(10)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == "imported")
+            .unwrap();
+        assert_eq!(imported.trigger, None);
     }
 
     // ── legacy triage migration ─────────────────────────────────────────
@@ -1157,7 +1927,7 @@ mod tests {
         // Simulate the second writer (desktop-side) by opening its own
         // raw rusqlite Connection to the same file, mirroring how a
         // second process would talk to the shared inbox.db.
-        let mut desktop_conn = Connection::open(&path).unwrap();
+        let desktop_conn = Connection::open(&path).unwrap();
         desktop_conn
             .pragma_update(None, "busy_timeout", "2000")
             .unwrap();
@@ -1234,7 +2004,14 @@ mod tests {
                         // SQLITE_BUSY even when desktop writers are
                         // pounding the file concurrently.
                         serve
-                            .record_run_finish(&run_id, "succeeded", None, Some(item.id))
+                            .record_run_finish(
+                                &run_id,
+                                "succeeded",
+                                None,
+                                Some(item.id),
+                                None,
+                                None,
+                            )
                             .unwrap();
                     }
                 }));

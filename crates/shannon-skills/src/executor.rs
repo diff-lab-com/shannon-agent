@@ -40,6 +40,41 @@ fn block_shell_pattern() -> &'static Regex {
     PATTERN.get_or_init(|| Regex::new(r"```!\n(.+?)\n```").expect("block shell pattern is valid"))
 }
 
+/// True when the content contains any inline `!`cmd`` or block ```!``` shell
+/// command markers.
+fn contains_shell_commands(content: &str) -> bool {
+    inline_shell_pattern().is_match(content) || block_shell_pattern().is_match(content)
+}
+
+/// Emit the F26 "shell blocked" warning at most once per skill id.
+///
+/// Project-sourced skills default to `allow_shell = false`; the warning tells
+/// the skill author why their `!`cmd`` blocks are being passed through as
+/// literal text instead of executing.
+fn warn_shell_denied_once(
+    skill_id: &str,
+    skill_name: &str,
+    source: &crate::definition::SkillSource,
+) {
+    static WARNED: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let warned = WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    let Ok(mut set) = warned.lock() else {
+        return;
+    };
+    if set.insert(skill_id.to_string()) {
+        tracing::warn!(
+            skill_id = %skill_id,
+            skill = %skill_name,
+            source = ?source,
+            "Skill contains shell commands (!`cmd`) but shell execution is not \
+             allowed for its source; blocks are left as literal text. Project \
+             skills default to allow_shell=false — move the skill to \
+             ~/.shannon/skills or grant shell permissions explicitly to enable \
+             execution."
+        );
+    }
+}
+
 /// Engine for executing skills and generating prompt content
 pub struct SkillExecutor {
     /// Shell command executor
@@ -117,12 +152,19 @@ impl SkillExecutor {
         // Substitute environment variables
         content = self.substitute_variables(&content, context)?;
 
-        // Execute shell commands if allowed
-        let had_shell = if skill.source != crate::definition::SkillSource::Mcp
-            && context.permissions.allow_shell
-        {
+        // Execute shell commands if allowed. MCP-sourced skills never run
+        // shell. F26: skills whose permissions deny shell (project-sourced
+        // skills default to deny — see `SkillPermissions::for_source`) skip
+        // execution and leave the !`cmd` blocks as literal text, with a
+        // one-time warning so the author knows why nothing ran.
+        let had_shell = if skill.source == crate::definition::SkillSource::Mcp {
+            false
+        } else if context.permissions.allow_shell {
             self.execute_shell_commands(&mut content, context)?
         } else {
+            if contains_shell_commands(&content) {
+                warn_shell_denied_once(&skill.id, &skill.name, &skill.source);
+            }
             false
         };
 
@@ -269,11 +311,14 @@ impl SkillExecutor {
         let inline_pattern = inline_shell_pattern();
         let block_pattern = block_shell_pattern();
 
-        let mut had_commands = false;
-
-        // Execute inline commands
-        while inline_pattern.is_match(content) {
-            had_commands = true;
+        // F25: a single replace_all pass per pattern. The previous `while
+        // is_match` loop re-scanned the whole content — including the stdout
+        // of commands that had just run — so a command whose output contained
+        // a !`cmd` pattern got that output executed too, and self-reproducing
+        // output looped forever. Command output must be inert: it is inserted
+        // verbatim and never re-scanned.
+        let had_inline = inline_pattern.is_match(content);
+        if had_inline {
             *content = inline_pattern
                 .replace_all(content, |caps: &regex::Captures| {
                     let cmd = &caps[1];
@@ -285,9 +330,8 @@ impl SkillExecutor {
                 .to_string();
         }
 
-        // Execute block commands
-        while block_pattern.is_match(content) {
-            had_commands = true;
+        let had_block = block_pattern.is_match(content);
+        if had_block {
             *content = block_pattern
                 .replace_all(content, |caps: &regex::Captures| {
                     let cmd = &caps[1];
@@ -299,7 +343,7 @@ impl SkillExecutor {
                 .to_string();
         }
 
-        Ok(had_commands)
+        Ok(had_inline || had_block)
     }
 }
 
@@ -510,6 +554,130 @@ mod tests {
     #[test]
     fn test_validate_shell_command_rejects_newlines() {
         assert!(validate_shell_command("echo hello\nrm -rf /").is_err());
+    }
+
+    // --- Shell command execution (F25 / F26) ---
+
+    #[test]
+    fn test_shell_commands_are_executed_when_allowed() {
+        let executor = SkillExecutor::new();
+        let mut skill = Skill::new(
+            "sh".to_string(),
+            "Sh".to_string(),
+            "runs shell".to_string(),
+            "OUT !`echo shannon-skill-exec-ok`".to_string(),
+        );
+        skill.source = crate::definition::SkillSource::User;
+
+        let context = SkillContext {
+            arguments: vec![],
+            cwd: std::env::temp_dir(),
+            session_id: "test".to_string(),
+            effort_level: "medium".to_string(),
+            permissions: SkillPermissions::default(),
+        };
+
+        let result = executor.execute(&skill, &context).unwrap();
+        assert!(result.metadata.had_shell_commands);
+        assert!(
+            result.prompt_content.contains("shannon-skill-exec-ok"),
+            "command output should be inlined, got: {}",
+            result.prompt_content
+        );
+        assert!(!result.prompt_content.contains("!`"), "marker consumed");
+    }
+
+    /// F25 regression: command stdout is inert. A command whose output
+    /// contains a `!`cmd`` pattern must have that pattern passed through
+    /// literally — never re-scanned and executed. `\140` is printf's octal
+    /// escape for a backtick, keeping the executed command itself free of
+    /// backticks (which validate_shell_command rejects).
+    #[test]
+    fn test_shell_output_patterns_not_reexecuted() {
+        let executor = SkillExecutor::new();
+        let mut skill = Skill::new(
+            "injection".to_string(),
+            "Injection".to_string(),
+            "output contains a nested pattern".to_string(),
+            "!`printf 'A !\\140echo pwned\\140 B'`".to_string(),
+        );
+        skill.source = crate::definition::SkillSource::User;
+
+        let context = SkillContext {
+            arguments: vec![],
+            cwd: std::env::temp_dir(),
+            session_id: "test".to_string(),
+            effort_level: "medium".to_string(),
+            permissions: SkillPermissions::default(),
+        };
+
+        let result = executor.execute(&skill, &context).unwrap();
+        // The nested pattern appears verbatim in the final content...
+        assert!(
+            result.prompt_content.contains("!`echo pwned`"),
+            "nested pattern must pass through literally, got: {}",
+            result.prompt_content
+        );
+        // ...and the nested command was never executed (single pass).
+        assert_eq!(
+            result.prompt_content, "A !`echo pwned` B",
+            "command output must not be re-scanned"
+        );
+    }
+
+    /// F26 regression: project-sourced skills default to allow_shell=false,
+    /// so their `!`cmd`` blocks are left as literal text instead of running.
+    #[test]
+    fn test_project_skill_shell_blocks_not_executed() {
+        let executor = SkillExecutor::new();
+        let mut skill = Skill::new(
+            "proj".to_string(),
+            "Proj".to_string(),
+            "project skill with shell".to_string(),
+            "Run !`echo should-not-run` now".to_string(),
+        );
+        skill.source = crate::definition::SkillSource::Project;
+
+        let context = SkillContext {
+            arguments: vec![],
+            cwd: std::env::temp_dir(),
+            session_id: "test".to_string(),
+            effort_level: "medium".to_string(),
+            permissions: SkillPermissions::for_source(&skill.source),
+        };
+
+        let result = executor.execute(&skill, &context).unwrap();
+        assert!(!result.metadata.had_shell_commands, "nothing may execute");
+        assert_eq!(
+            result.prompt_content, "Run !`echo should-not-run` now",
+            "shell blocks stay as literal text"
+        );
+    }
+
+    /// F26: user-domain skills keep shell execution (the default grants it),
+    /// so the gate only engages for untrusted sources.
+    #[test]
+    fn test_user_skill_shell_blocks_still_execute() {
+        let executor = SkillExecutor::new();
+        let mut skill = Skill::new(
+            "user".to_string(),
+            "User".to_string(),
+            "user skill with shell".to_string(),
+            "!`echo user-shell-ok`".to_string(),
+        );
+        skill.source = crate::definition::SkillSource::User;
+
+        let context = SkillContext {
+            arguments: vec![],
+            cwd: std::env::temp_dir(),
+            session_id: "test".to_string(),
+            effort_level: "medium".to_string(),
+            permissions: SkillPermissions::for_source(&skill.source),
+        };
+
+        let result = executor.execute(&skill, &context).unwrap();
+        assert!(result.metadata.had_shell_commands);
+        assert!(result.prompt_content.contains("user-shell-ok"));
     }
 
     // --- Named argument substitution tests ---

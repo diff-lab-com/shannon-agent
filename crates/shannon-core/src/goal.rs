@@ -214,7 +214,7 @@ pub fn continuation_prompt(goal: &GoalState) -> String {
 }
 
 /// What should happen to the goal after a turn ends. Pure decision — all
-/// state mutations and side effects live in [`check_goal_continuation`].
+/// state mutations and side effects live in `check_goal_continuation`.
 /// Every non-`Inactive`/non-`Completed` verdict carries `next`: the fully
 /// advanced goal state (counters, streaks) the caller must persist, so the
 /// strike/streak math lives in exactly one place (this function).
@@ -240,7 +240,7 @@ pub enum GoalContinuation {
 }
 
 /// What a turn actually did, in terms the guard rails can compare. Filled
-/// in by the impure [`check_goal_continuation`] path from REPL state.
+/// in by the impure `check_goal_continuation` path from REPL state.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TurnFacts {
     /// True iff at least one tool message was produced since the last
@@ -292,7 +292,7 @@ fn normalize_reason(r: &str) -> String {
 }
 
 /// Turns the same blocker must persist before the goal pauses
-/// (Codex: "the same blocking condition [for] at least 3 goal turns").
+/// (Codex: "the same blocking condition \[for\] at least 3 goal turns").
 pub const BLOCKED_AUDIT_TURNS: usize = 3;
 
 /// Prompt block appended to a task prompt when an eval task declares a
@@ -583,7 +583,10 @@ mod tests {
         assert!(api.status().is_none());
         let g = api.set("ship it", 25, None, 0.0);
         assert_eq!(g.objective, "ship it");
-        assert_eq!(api.status().unwrap().status, GoalStatus::Active);
+        assert_eq!(
+            api.status().expect("goal present").status,
+            GoalStatus::Active
+        );
         assert!(api.clear());
         assert!(api.status().is_none());
     }
@@ -593,9 +596,12 @@ mod tests {
         let api = GoalApi::new();
         api.set("ship it", 0, Some(5.0), 1.0);
         api.pause();
-        assert_eq!(api.status().unwrap().status, GoalStatus::Paused);
+        assert_eq!(
+            api.status().expect("goal present").status,
+            GoalStatus::Paused
+        );
         api.resume(4.0);
-        let g = api.status().unwrap();
+        let g = api.status().expect("goal present");
         assert_eq!(g.status, GoalStatus::Active);
         assert_eq!(g.iterations, 0, "resume re-arms iteration budget");
         assert!(
@@ -617,14 +623,22 @@ mod tests {
         match api.evaluate(Some("thinking"), facts) {
             GoalContinuation::Continue { next, .. } => {
                 assert_eq!(next.consecutive_no_tool_turns, 1);
-                assert_eq!(api.status().unwrap().consecutive_no_tool_turns, 1);
+                assert_eq!(
+                    api.status()
+                        .expect("goal present")
+                        .consecutive_no_tool_turns,
+                    1
+                );
             }
             other => panic!("turn 1 should continue, got {other:?}"),
         }
         match api.evaluate(Some("still thinking"), facts) {
             GoalContinuation::PausedNoProgress { next, .. } => {
                 assert_eq!(next.status, GoalStatus::Paused);
-                assert_eq!(api.status().unwrap().status, GoalStatus::Paused);
+                assert_eq!(
+                    api.status().expect("goal present").status,
+                    GoalStatus::Paused
+                );
             }
             other => panic!("turn 2 should pause, got {other:?}"),
         }
@@ -650,6 +664,9 @@ mod tests {
             }
             other => panic!("expected BudgetLimited, got {other:?}"),
         }
-        assert_eq!(api.status().unwrap().status, GoalStatus::Paused);
+        assert_eq!(
+            api.status().expect("goal present").status,
+            GoalStatus::Paused
+        );
     }
 }

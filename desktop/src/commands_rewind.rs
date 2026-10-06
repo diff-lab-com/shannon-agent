@@ -192,18 +192,28 @@ pub async fn rewind_session(
                 match history.rewind_before_turn(key, turn_index) {
                     Ok(shannon_tools::RewindAction::Restore(content)) => {
                         if let Err(e) = std::fs::write(&fs_path, content) {
-                            eprintln!("rewind: failed to restore {fs_path:?}: {e}");
+                            tracing::error!("rewind: failed to restore {fs_path:?}: {e}");
                         }
                     }
                     Ok(shannon_tools::RewindAction::Delete) => {
+                        // Provable: earliest snapshot is turn-tagged (created
+                        // by this session).
                         if fs_path.exists() {
                             if let Err(e) = std::fs::remove_file(&fs_path) {
-                                eprintln!("rewind: failed to delete {fs_path:?}: {e}");
+                                tracing::error!("rewind: failed to delete {fs_path:?}: {e}");
                             }
                         }
                     }
+                    Ok(shannon_tools::RewindAction::SkipNoBaseline) => {
+                        // E-2: the earliest snapshot is a pre-modify capture —
+                        // the file predated the session; never delete on
+                        // inference alone.
+                        tracing::info!(
+                            "rewind: left {fs_path:?} untouched (existed before this session; delete manually if unwanted)"
+                        );
+                    }
                     Ok(shannon_tools::RewindAction::NoChange) => {}
-                    Err(e) => eprintln!("rewind: no history for {file}: {e}"),
+                    Err(e) => tracing::warn!("rewind: no history for {file}: {e}"),
                 }
             }
         }

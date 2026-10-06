@@ -1,0 +1,32 @@
+# ChatScript: cancel-approval-wait — cancel-matrix 场景 4（审批等待中 stop）。
+#
+# permission-request 把播放器停在 waitingPermission（引擎等 respond_permission
+# 的真实阻塞）→ 用户点 stop → cancel_query → query:cancelled 收敛本轮。
+# 弹窗残留语义按现状记录（QUERY_CANCELLED 不清 permissionRequest——
+# 横幅/弹窗留着）；随后 Allow 仍生效（respond_permission 正常回执、弹窗
+# 关闭），记录进报告。
+name: cancel-approval-wait
+description: cancel-matrix #4 — 审批等待中 stop → cancelled 收敛；弹窗残留现状 + 后续 respond 仍生效
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-cancel-approval
+      title: Cancel approval wait
+      messages: []
+turns:
+  - user: 删掉临时目录
+    script:
+      - event: query:text
+        chunks:
+          - "这条命令需要审批。"
+      - event: permission-request
+        payload:
+          request_id: pr-cancel-1
+          tool: Bash
+          risk: critical
+          input:
+            command: "rm -rf /tmp/build-cache"
+          reason:
+            source: rule
+            ruleName: "shell-command"

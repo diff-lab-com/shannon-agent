@@ -11,13 +11,14 @@ describe('Badge', () => {
   it('applies variant classes', () => {
     const { container } = render(<Badge variant="error">Failed</Badge>)
     const badge = container.querySelector('[data-slot="badge"]')!
-    expect(badge.className).toContain('bg-error/10')
-    expect(badge.className).toContain('text-error')
+    // G7 2026-09-30: error tone = MD3 container pair (was bg-error/10 + text-error).
+    expect(badge.className).toContain('bg-error-container')
+    expect(badge.className).toContain('text-on-error-container')
   })
 
   it('applies size sm classes', () => {
     const { container } = render(<Badge size="sm">x</Badge>)
-    expect(container.querySelector('[data-slot="badge"]')!.className).toContain('text-[10px]')
+    expect(container.querySelector('[data-slot="badge"]')!.className).toContain('text-label-2xs')
   })
 
   it('defaults to neutral variant', () => {

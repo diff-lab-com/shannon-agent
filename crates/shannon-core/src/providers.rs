@@ -98,6 +98,10 @@ impl FileSystemProvider for LocalFs {
         std::fs::create_dir_all(path)
     }
 
+    fn rename_blocking(&self, from: &Path, to: &Path) -> io::Result<()> {
+        std::fs::rename(from, to)
+    }
+
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
         std::fs::remove_file(path)
     }
@@ -158,11 +162,18 @@ impl FileSystemProvider for LocalFs {
             let Ok(meta) = entry.metadata() else {
                 continue;
             };
-            cb(&DirEntryInfo {
+            // Honor the trait contract: `false` from the consumer stops the
+            // walk. (The flat `ignore` iterator can't prune a single subtree,
+            // so `false` is a full stop — which is how every consumer — glob
+            // and grep quotas — uses it. Skipping this check silently made
+            // those quotas walk the entire tree.)
+            if !cb(&DirEntryInfo {
                 path,
                 len: meta.len(),
                 is_dir: meta.is_dir(),
-            });
+            }) {
+                break;
+            }
         }
         Ok(())
     }
@@ -363,6 +374,10 @@ impl ProcessProvider for LocalProcess {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
             let mut child = cmd.spawn()?;
+            // Windows baseline sandbox: confine to a kill-on-close job when
+            // the sandbox system armed the switch (no-op otherwise).
+            #[cfg(target_os = "windows")]
+            let _ = crate::sandbox::windows_job::confine_child(&child);
             // Feed stdin fully before waiting to avoid pipe-capacity deadlock.
             if let Some(mut stdin) = child.stdin.take() {
                 stdin.write_all(&stdin_bytes)?;
@@ -383,7 +398,18 @@ impl ProcessProvider for LocalProcess {
             let mut cmd = Self::build_blocking(&prepared);
             #[cfg(unix)]
             self.install_fork_init_std(&mut cmd);
-            cmd.output()?
+            // Spawn manually instead of `cmd.output()` so the Windows job
+            // confinement can attach to the child handle (same semantics:
+            // inherited stdin, piped stdout/stderr).
+            use std::process::Stdio;
+            let child = cmd
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            #[cfg(target_os = "windows")]
+            let _ = crate::sandbox::windows_job::confine_child(&child);
+            child.wait_with_output()?
         };
         Ok(CapturedOutput {
             stdout: output.stdout,
@@ -431,6 +457,10 @@ impl ProcessProvider for LocalProcess {
         self.install_fork_init_tokio(&mut cmd);
 
         let mut child = cmd.spawn()?;
+        // Windows baseline sandbox: confine to a kill-on-close job when
+        // armed (no-op otherwise).
+        #[cfg(target_os = "windows")]
+        let _ = crate::sandbox::windows_job::confine_tokio_child(&child);
         if let Some(bytes) = stdin_bytes {
             if let Some(mut stdin) = child.stdin.take() {
                 // Feed then close so the child sees EOF promptly.
@@ -507,6 +537,8 @@ impl ProcessProvider for LocalProcess {
         self.install_fork_init_tokio(&mut cmd);
 
         let child = cmd.spawn()?;
+        #[cfg(target_os = "windows")]
+        let _ = crate::sandbox::windows_job::confine_tokio_child(&child);
         Ok(Box::new(LocalPipedChild { child }))
     }
 }
@@ -578,6 +610,17 @@ impl PipedChild for LocalPipedChild {
             code: status.code(),
             success: status.success(),
         })
+    }
+
+    fn raw_process_handle(&self) -> Option<isize> {
+        #[cfg(target_os = "windows")]
+        {
+            self.child.raw_handle().map(|h| h as isize)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
     }
 }
 
@@ -676,14 +719,19 @@ mod tests {
         let out = proc_world.run_blocking(&req).expect("run");
         assert_eq!(out.exit.code, Some(7));
         assert!(!out.exit.success);
-        assert!(
-            out.stdout
-                .starts_with(dir.path().to_str().expect("utf8").as_bytes())
+        // The child's getcwd() reports the physical path — on macOS that is
+        // /private/var/… while TempDir hands out the /var/… alias, so compare
+        // canonical forms instead of raw prefixes.
+        let stdout = String::from_utf8(out.stdout).expect("utf8");
+        let reported_cwd = stdout.lines().next().expect("pwd output");
+        assert_eq!(
+            std::fs::canonicalize(reported_cwd).expect("canonicalize reported cwd"),
+            std::fs::canonicalize(dir.path()).expect("canonicalize expected cwd"),
+            "child must run with the requested cwd"
         );
         assert!(
-            String::from_utf8(out.stdout)
-                .expect("utf8")
-                .contains("env-ok")
+            stdout.contains("env-ok"),
+            "env must be visible to the child, got {stdout:?}"
         );
     }
 
@@ -799,6 +847,9 @@ mod tests {
 
     // ── §4.12 fork-time world initializer (pre_exec seam) ──────────────
 
+    // fork-init is a unix-only seam; its consumers (and this helper) are
+    // cfg'd out on Windows.
+    #[cfg(unix)]
     struct TouchInit {
         path: std::path::PathBuf,
         /// When set, initialization fails with this raw OS error instead of
@@ -806,6 +857,7 @@ mod tests {
         fail_with_raw: Option<i32>,
     }
 
+    #[cfg(unix)]
     impl ChildWorldInit for TouchInit {
         fn init_child(&self) -> io::Result<()> {
             if let Some(code) = self.fail_with_raw {
@@ -836,7 +888,8 @@ mod tests {
         let dir = tempdir();
         let marker = dir.path().join("boundary-marker");
         let host = host_with_init(marker.clone(), None);
-        host.run_blocking(&ProcessRequest::new("/bin/true", &[]))
+        // macOS ships true at /usr/bin/true only (/bin/true is a Linux path).
+        host.run_blocking(&ProcessRequest::new("/usr/bin/true", &[]))
             .expect("child with boundary installed");
         assert!(
             marker.exists(),
@@ -853,7 +906,8 @@ mod tests {
         let dir = tempdir();
         let marker = dir.path().join("never");
         let host = host_with_init(marker.clone(), Some(13)); // EACCES
-        let err = match host.run_blocking(&ProcessRequest::new("/bin/true", &[])) {
+        // macOS ships true at /usr/bin/true only (/bin/true is a Linux path).
+        let err = match host.run_blocking(&ProcessRequest::new("/usr/bin/true", &[])) {
             Ok(_) => panic!("failing initializer must abort the spawn"),
             Err(e) => e,
         };

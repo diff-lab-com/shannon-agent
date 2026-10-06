@@ -301,6 +301,75 @@ async fn test_pool_list_servers_empty() {
     assert!(servers.is_empty());
 }
 
+// W2-A: a failed start (stdio spawn or remote handshake) must stay
+// observable in the pool — the handle is kept carrying `Unhealthy(reason)`
+// — so consumers (desktop `list_mcp_servers`) can render a concrete
+// `last_error` instead of a bare Offline. The error itself still
+// propagates to the caller.
+#[tokio::test]
+async fn test_failed_stdio_start_stays_observable_as_unhealthy() {
+    let pool = McpProcessPool::new();
+    let err = pool
+        .start_server(
+            "broken-stdio",
+            "/nonexistent/shannon-mcp-test-binary",
+            &[],
+            &HashMap::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.contains("failed to spawn"), "{err}");
+
+    let state = pool
+        .list_servers()
+        .await
+        .into_iter()
+        .find(|(name, _)| name == "broken-stdio")
+        .map(|(_, state)| state);
+    assert!(
+        matches!(&state, Some(ServerState::Unhealthy(msg)) if msg.contains("failed to spawn")),
+        "failed start must be observable, got {state:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_failed_remote_start_stays_observable_as_unhealthy() {
+    let mut pool = McpProcessPool::new();
+    pool.set_request_timeout(Duration::from_millis(100));
+    pool.set_connection_timeout(Duration::from_millis(100));
+    let err = pool
+        .start_remote_server(
+            "dead-remote",
+            "http://127.0.0.1:1/mcp",
+            HashMap::new(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(!err.is_empty());
+
+    let state = pool
+        .list_servers()
+        .await
+        .into_iter()
+        .find(|(name, _)| name == "dead-remote")
+        .map(|(_, state)| state);
+    assert!(
+        matches!(&state, Some(ServerState::Unhealthy(msg)) if !msg.is_empty()),
+        "failed remote start must be observable, got {state:?}"
+    );
+
+    // stop_server cleans the failed handle up (the toggle/restart flow
+    // relies on this).
+    assert!(pool.stop_server("dead-remote").await.is_ok());
+    assert!(
+        pool.list_servers()
+            .await
+            .into_iter()
+            .all(|(name, _)| name != "dead-remote")
+    );
+}
+
 #[tokio::test]
 async fn test_pool_call_tool_not_found() {
     let pool = McpProcessPool::new();
@@ -327,6 +396,9 @@ async fn test_pool_server_state_not_found() {
 #[test]
 fn test_tool_annotations_read_only() {
     let pool = Arc::new(McpProcessPool::new());
+    // P1-2: is_concurrency_safe = read_only AND idempotent. read_only alone
+    // is necessary but not sufficient (a read tool may still hold a
+    // non-reentrant resource; idempotency is what licenses parallel calls).
     let annotations = crate::ToolAnnotations {
         read_only_hint: true,
         ..Default::default()
@@ -340,7 +412,10 @@ fn test_tool_annotations_read_only() {
         Some(annotations),
     );
     assert!(adapter.is_read_only());
-    assert!(adapter.is_concurrency_safe());
+    assert!(
+        !adapter.is_concurrency_safe(),
+        "read_only alone is not enough — idempotent_hint must also be set"
+    );
 }
 
 #[test]
@@ -365,6 +440,10 @@ fn test_tool_annotations_destructive() {
 #[test]
 fn test_tool_annotations_idempotent() {
     let pool = Arc::new(McpProcessPool::new());
+    // P1-2: is_concurrency_safe requires BOTH read_only_hint AND
+    // idempotent_hint (conservative AND matrix — see adapter.rs). A tool
+    // that's only idempotent but not read-only can still mutate shared
+    // state across an idempotent cycle, so it must serialize.
     let annotations = crate::ToolAnnotations {
         idempotent_hint: true,
         ..Default::default()
@@ -378,6 +457,26 @@ fn test_tool_annotations_idempotent() {
         Some(annotations),
     );
     assert!(!adapter.is_read_only());
+    assert!(
+        !adapter.is_concurrency_safe(),
+        "idempotent alone is not enough — read_only_hint must also be set"
+    );
+
+    // Setting both flips the gate to safe.
+    let both = crate::ToolAnnotations {
+        read_only_hint: true,
+        idempotent_hint: true,
+        ..Default::default()
+    };
+    let adapter = PooledMcpToolAdapter::new(
+        Arc::new(McpProcessPool::new()),
+        "srv".to_string(),
+        "cache_tool".to_string(),
+        "Read-only + idempotent tool".to_string(),
+        serde_json::json!({"type": "object"}),
+        Some(both),
+    );
+    assert!(adapter.is_read_only());
     assert!(adapter.is_concurrency_safe());
 }
 
@@ -1106,4 +1205,263 @@ async fn test_set_server_budget() {
     // Add 200 bytes → 700 > 600 → over budget
     pool.track_result_bytes_for("cfg-srv", 200);
     assert!(pool.is_over_budget("cfg-srv").await);
+}
+
+// ── F6: token-rotation callback seam ───────────────────────────────────────
+
+use crate::auth::OAuthTokenSnapshot;
+
+/// Minimal Streamable-HTTP MCP mock with a **rotatable** bearer gate (F6):
+/// requests carrying exactly the current required bearer pass; anything
+/// else gets HTTP 401 — so flipping the gate between connect and
+/// `call_tool` forces the 401 → refresh → retry path the rotation callback
+/// is fired from.
+struct MockRotatingAuthMcp {
+    url: String,
+    required: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl MockRotatingAuthMcp {
+    async fn start(initial_bearer: Option<&str>) -> Self {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let required = Arc::new(std::sync::Mutex::new(initial_bearer.map(str::to_string)));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let gate = required.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = Vec::with_capacity(1024);
+                let mut chunk = [0u8; 1024];
+                let header_end = loop {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break None,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break Some(pos);
+                            }
+                        }
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let head = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
+                let content_length = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let mut body = buf[header_end + 4..].to_vec();
+                while body.len() < content_length {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => body.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let raw_head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                let bearer = raw_head.lines().find_map(|l| {
+                    let (name, value) = l.split_once(':')?;
+                    if !name.eq_ignore_ascii_case("authorization") {
+                        return None;
+                    }
+                    Some(value.trim().to_string())
+                });
+                // Auth gate: reject any credential other than the current
+                // required bearer (read per request so tests can rotate it).
+                let required_now = gate.lock().unwrap().clone();
+                if bearer != required_now {
+                    let payload = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"unauthorized\"}}";
+                    let http = format!(
+                        "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        payload.len(),
+                        payload
+                    );
+                    let _ = socket.write_all(http.as_bytes()).await;
+                    let _ = socket.flush().await;
+                    continue;
+                }
+                let request: serde_json::Value =
+                    serde_json::from_slice(&body).unwrap_or(serde_json::json!({}));
+                let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                let result = match method {
+                    "initialize" => serde_json::json!({
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {"tools": {"listChanged": false}},
+                        "serverInfo": {"name": "mock-rotating", "version": "0.0.1"}
+                    }),
+                    "tools/call" => serde_json::json!({
+                        "content": [{"type": "text", "text": "ok"}]
+                    }),
+                    _ => serde_json::json!({}),
+                };
+                let response = if request.get("id").is_some() {
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": request["id"].clone(),
+                        "result": result,
+                    })
+                } else {
+                    serde_json::json!({})
+                };
+                let payload = serde_json::to_string(&response).unwrap();
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    payload.len(),
+                    payload
+                );
+                let _ = socket.write_all(http.as_bytes()).await;
+                let _ = socket.flush().await;
+            }
+        });
+
+        Self {
+            url: format!("http://{addr}/mcp"),
+            required,
+        }
+    }
+
+    /// Rotate the bearer the mock accepts — requests with the old
+    /// credential now get 401.
+    fn set_required_bearer(&self, bearer: Option<&str>) {
+        *self.required.lock().unwrap() = bearer.map(str::to_string);
+    }
+}
+
+fn stored_creds(token_url: String, access: &str, refresh: &str) -> StoredOAuthCredentials {
+    StoredOAuthCredentials {
+        client_id: "shannon-desktop".to_string(),
+        client_secret: None,
+        token_url,
+        access_token: access.to_string(),
+        refresh_token: Some(refresh.to_string()),
+        expires_at: None,
+        scopes: Vec::new(),
+    }
+}
+
+type RotationEvents = Arc<std::sync::Mutex<Vec<(String, OAuthTokenSnapshot)>>>;
+
+/// A tool-call-time 401 rotates the token, and the pool's token-rotation
+/// callback fires exactly once with the new snapshot (F6 seam contract).
+#[tokio::test]
+async fn token_rotation_callback_fires_on_call_time_401_with_new_snapshot() {
+    let token_url = crate::auth::test_support::spawn_mock_token_endpoint(
+        r#"{"access_token":"fresh-token","refresh_token":"rotated-refresh","expires_in":3600,"token_type":"Bearer"}"#,
+    )
+    .await;
+    let mock = MockRotatingAuthMcp::start(Some("Bearer stored-token")).await;
+    let pool = Arc::new(McpProcessPool::new());
+    let events: RotationEvents = Arc::default();
+    let sink = events.clone();
+    pool.set_on_token_refresh(Arc::new(move |server, snap| {
+        sink.lock()
+            .unwrap()
+            .push((server.to_string(), snap.clone()));
+    }))
+    .await;
+
+    pool.start_remote_oauth_server(
+        "rotator",
+        &mock.url,
+        stored_creds(token_url, "stored-token", "stored-refresh"),
+    )
+    .await
+    .unwrap();
+
+    // Connect used the stored token — no rotation, no callback.
+    assert!(events.lock().unwrap().is_empty());
+
+    // The vendor invalidated the stored access token: the next tool call
+    // gets 401 → refresh → retry — the call-time rotation.
+    mock.set_required_bearer(Some("Bearer fresh-token"));
+    let out = pool
+        .call_tool("rotator", "echo", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(!out.is_error, "retry with the refreshed token must succeed");
+
+    let evts = events.lock().unwrap();
+    assert_eq!(evts.len(), 1, "exactly one rotation notification: {evts:?}");
+    assert_eq!(evts[0].0, "rotator");
+    assert_eq!(evts[0].1.access_token, "fresh-token");
+    assert_eq!(evts[0].1.refresh_token.as_deref(), Some("rotated-refresh"));
+    assert!(evts[0].1.expires_at.is_some());
+}
+
+/// A refresh that fails fires no callback — only a *successful* rotation
+/// is notified (the presentation stays the W3-B needs_auth classification).
+#[tokio::test]
+async fn token_rotation_callback_not_fired_when_refresh_fails() {
+    // Unparseable 200 body → the refresh grant fails.
+    let token_url = crate::auth::test_support::spawn_mock_token_endpoint("not-json").await;
+    let mock = MockRotatingAuthMcp::start(Some("Bearer stored-token")).await;
+    let pool = Arc::new(McpProcessPool::new());
+    let events: RotationEvents = Arc::default();
+    let sink = events.clone();
+    pool.set_on_token_refresh(Arc::new(move |server, snap| {
+        sink.lock()
+            .unwrap()
+            .push((server.to_string(), snap.clone()));
+    }))
+    .await;
+
+    pool.start_remote_oauth_server(
+        "rotator-fail",
+        &mock.url,
+        stored_creds(token_url, "stored-token", "stored-refresh"),
+    )
+    .await
+    .unwrap();
+
+    mock.set_required_bearer(Some("Bearer never-issued"));
+    let result = pool
+        .call_tool("rotator-fail", "echo", serde_json::json!({}))
+        .await;
+    assert!(
+        result.is_err(),
+        "401 + failed refresh must surface an error"
+    );
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "a failed refresh is not a rotation — no callback"
+    );
+}
+
+/// No subscriber: the same 401 → refresh → retry flow succeeds with the
+/// rotation staying memory-only — the seam is optional.
+#[tokio::test]
+async fn token_rotation_without_subscriber_is_memory_only() {
+    let token_url = crate::auth::test_support::spawn_mock_token_endpoint(
+        r#"{"access_token":"fresh-token","refresh_token":"rotated-refresh","expires_in":3600,"token_type":"Bearer"}"#,
+    )
+    .await;
+    let mock = MockRotatingAuthMcp::start(Some("Bearer stored-token")).await;
+    let pool = Arc::new(McpProcessPool::new());
+
+    pool.start_remote_oauth_server(
+        "rotator-solo",
+        &mock.url,
+        stored_creds(token_url, "stored-token", "stored-refresh"),
+    )
+    .await
+    .unwrap();
+
+    mock.set_required_bearer(Some("Bearer fresh-token"));
+    let out = pool
+        .call_tool("rotator-solo", "echo", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(!out.is_error);
+
+    // The provider holds the rotated token in memory.
+    let snap = pool.remote_oauth_tokens("rotator-solo").await.unwrap();
+    assert_eq!(snap.access_token, "fresh-token");
+    assert_eq!(snap.refresh_token.as_deref(), Some("rotated-refresh"));
 }

@@ -615,6 +615,9 @@ fn test_complete_file_path_relative() {
 
 #[test]
 fn test_complete_file_path_tilde() {
+    // ~ expansion reads HOME — hold the shared env lock so concurrent
+    // HOME-swapping tests don't point it at an empty scratch dir.
+    let _env = crate::test_env::env_lock();
     let candidates = crate::repl::input::complete_file_path("~/");
     // Home directory should exist and have entries
     assert!(!candidates.is_empty());
@@ -1100,11 +1103,15 @@ fn test_repl_team_shutdown_without_create() {
 }
 
 // ── /permissions Command Tests ────────────────────────────────────
+// R1-6 (decision ② step 1): the primary /permissions name moved to the
+// permission-profile command (the /profile handler) — see the R1-6 tests at
+// the end of this section. The tool allow/deny view below lives on at its
+// short aliases /perms and /perm.
 
 #[test]
 fn test_repl_permissions_status() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions".to_string());
+    repl.prompt.set_input("/perms".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Permission Status"));
@@ -1114,7 +1121,7 @@ fn test_repl_permissions_status() {
 #[test]
 fn test_repl_permissions_status_subcommand() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Permission Status"));
@@ -1123,14 +1130,14 @@ fn test_repl_permissions_status_subcommand() {
 #[test]
 fn test_repl_permissions_allow_tool() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions allow Bash".to_string());
+    repl.prompt.set_input("/perms allow Bash".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("always allowed"));
     assert!(last_msg.contains("Bash"));
 
     // Verify it shows in status
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let status_msg = &repl.chat.last_message().unwrap().content;
     assert!(status_msg.contains("Always allowed"));
@@ -1140,15 +1147,14 @@ fn test_repl_permissions_allow_tool() {
 #[test]
 fn test_repl_permissions_deny_tool() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt
-        .set_input("/permissions deny FileWrite".to_string());
+    repl.prompt.set_input("/perms deny FileWrite".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("always denied"));
     assert!(last_msg.contains("FileWrite"));
 
     // Verify it shows in status
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let status_msg = &repl.chat.last_message().unwrap().content;
     assert!(status_msg.contains("Always denied"));
@@ -1158,36 +1164,36 @@ fn test_repl_permissions_deny_tool() {
 #[test]
 fn test_repl_permissions_allow_no_tool() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions allow".to_string());
+    repl.prompt.set_input("/perms allow".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage: /permissions allow"));
+    assert!(last_msg.contains("Usage: /perms allow"));
 }
 
 #[test]
 fn test_repl_permissions_deny_no_tool() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions deny".to_string());
+    repl.prompt.set_input("/perms deny".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage: /permissions deny"));
+    assert!(last_msg.contains("Usage: /perms deny"));
 }
 
 #[test]
 fn test_repl_permissions_reset() {
     let mut repl = Repl::new().unwrap();
     // Allow a tool first
-    repl.prompt.set_input("/permissions allow Bash".to_string());
+    repl.prompt.set_input("/perms allow Bash".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
 
     // Reset
-    repl.prompt.set_input("/permissions reset".to_string());
+    repl.prompt.set_input("/perms reset".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("cleared") || last_msg.contains("removed"));
 
     // Verify status shows no overrides
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let status_msg = &repl.chat.last_message().unwrap().content;
     assert!(status_msg.contains("No tool-level overrides"));
@@ -1196,13 +1202,13 @@ fn test_repl_permissions_reset() {
 #[test]
 fn test_repl_permissions_help() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions help".to_string());
+    repl.prompt.set_input("/perms help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/permissions status"));
-    assert!(last_msg.contains("/permissions allow"));
-    assert!(last_msg.contains("/permissions deny"));
-    assert!(last_msg.contains("/permissions reset"));
+    assert!(last_msg.contains("/perms status"));
+    assert!(last_msg.contains("/perms allow"));
+    assert!(last_msg.contains("/perms deny"));
+    assert!(last_msg.contains("/perms reset"));
 }
 
 #[test]
@@ -1236,7 +1242,7 @@ fn test_repl_permissions_alias_perm() {
 
 #[test]
 fn test_repl_permissions_tab_completion() {
-    let args = crate::repl::input::complete_command_args("permissions", "");
+    let args = crate::repl::input::complete_command_args("perms", "");
     assert!(args.contains(&"status".to_string()));
     assert!(args.contains(&"allow".to_string()));
     assert!(args.contains(&"deny".to_string()));
@@ -1245,7 +1251,7 @@ fn test_repl_permissions_tab_completion() {
 
 #[test]
 fn test_repl_permissions_tab_completion_prefix() {
-    let args = crate::repl::input::complete_command_args("permissions", "st");
+    let args = crate::repl::input::complete_command_args("perms", "st");
     assert!(args.contains(&"status".to_string()));
     assert!(!args.contains(&"allow".to_string()));
 }
@@ -1253,7 +1259,7 @@ fn test_repl_permissions_tab_completion_prefix() {
 #[test]
 fn test_repl_permissions_shows_policies() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     // Default policies should be registered
@@ -1265,18 +1271,109 @@ fn test_repl_permissions_shows_policies() {
 fn test_repl_permissions_allow_then_deny_same_tool() {
     let mut repl = Repl::new().unwrap();
     // Allow then deny the same tool
-    repl.prompt.set_input("/permissions allow Bash".to_string());
+    repl.prompt.set_input("/perms allow Bash".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    repl.prompt.set_input("/permissions deny Bash".to_string());
+    repl.prompt.set_input("/perms deny Bash".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
 
     // Should show in denied, not allowed
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Always denied"));
     assert!(msg.contains("Bash"));
     assert!(!msg.contains("Always allowed"));
+}
+
+// ── /permissions alias + /profile migration hint (R1-6, decision ②) ──
+
+/// Whole transcript joined — the R1-6 assertions look at message ordering
+/// (hint above output) and occurrence counts (hint once), not just the last
+/// message.
+fn r16_chat_text(repl: &Repl) -> String {
+    repl.chat
+        .messages()
+        .iter()
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `/permissions` must resolve to the same handler as /profile (the
+/// permission-profile prompt command), not to the old tool allow/deny view.
+#[test]
+fn test_repl_permissions_alias_resolves_to_profile_handler() {
+    let mut repl = Repl::new().unwrap();
+    // Detach the engine so the dispatch test stays offline: the profile
+    // prompt command funnels into handle_query, which exits early with an
+    // "engine unavailable" note when no engine is set.
+    repl.query_engine = None;
+    repl.prompt.set_input("/permissions list".to_string());
+    super::commands::submit_input(&mut repl, None).unwrap();
+
+    let all = r16_chat_text(&repl);
+    assert!(
+        all.contains("Running /profile..."),
+        "/permissions must dispatch the /profile handler, got: {all}"
+    );
+    assert!(
+        !all.contains("Permission Status"),
+        "/permissions must not fall back to the tool allow/deny view, got: {all}"
+    );
+}
+
+/// The first /profile of a session prints the migration hint above its
+/// output; a second /profile runs the command again but never repeats it.
+#[test]
+fn test_repl_profile_migration_hint_shown_once() {
+    let mut repl = Repl::new().unwrap();
+    repl.query_engine = None;
+
+    repl.prompt.set_input("/profile".to_string());
+    super::commands::submit_input(&mut repl, None).unwrap();
+
+    let first = r16_chat_text(&repl);
+    assert!(
+        first.contains("being renamed"),
+        "first /profile must carry the migration hint, got: {first}"
+    );
+    let hint_pos = first.find("being renamed").unwrap();
+    let out_pos = first.find("Running /profile...").unwrap();
+    assert!(
+        hint_pos < out_pos,
+        "hint must appear above the command output, got: {first}"
+    );
+
+    repl.prompt.set_input("/profile".to_string());
+    super::commands::submit_input(&mut repl, None).unwrap();
+
+    let both = r16_chat_text(&repl);
+    assert_eq!(
+        both.matches("being renamed").count(),
+        1,
+        "hint must appear exactly once per session, got: {both}"
+    );
+    assert_eq!(
+        both.matches("Running /profile...").count(),
+        2,
+        "/profile itself must still run on every invocation, got: {both}"
+    );
+}
+
+/// The new name never warns about itself.
+#[test]
+fn test_repl_permissions_alias_has_no_migration_hint() {
+    let mut repl = Repl::new().unwrap();
+    repl.query_engine = None;
+    repl.prompt.set_input("/permissions".to_string());
+    super::commands::submit_input(&mut repl, None).unwrap();
+
+    let all = r16_chat_text(&repl);
+    assert!(
+        all.contains("Running /profile..."),
+        "/permissions must dispatch the /profile handler, got: {all}"
+    );
+    assert!(!all.contains("being renamed"), "got: {all}");
 }
 
 // ── /plan Command Tests ──────────────────────────────────────────────
@@ -1353,7 +1450,8 @@ fn test_repl_plan_reject() {
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("rejected"));
     assert!(!repl.state.plan.active);
-    assert_eq!(repl.state.status, "Ready");
+    // P0-2: exiting plan restores the snapshotted ladder mode (auto-edit).
+    assert_eq!(repl.state.status, "Mode: EDIT");
 }
 
 #[test]
@@ -1376,7 +1474,8 @@ fn test_repl_plan_done() {
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("completed"));
     assert!(!repl.state.plan.active);
-    assert_eq!(repl.state.status, "Ready");
+    // P0-2: done exits plan and restores the snapshotted ladder mode.
+    assert_eq!(repl.state.status, "Mode: EDIT");
 }
 
 #[test]
@@ -2183,10 +2282,13 @@ fn test_repl_mode_shows_current() {
         "/mode should show current mode"
     );
     assert!(
-        last_msg.contains("default"),
-        "/mode should list available modes"
+        last_msg.contains("ask"),
+        "/mode should list the ask ladder stop"
     );
-    assert!(last_msg.contains("auto"), "/mode should list auto");
+    assert!(
+        last_msg.contains("auto-edit"),
+        "/mode should list auto-edit"
+    );
     assert!(
         last_msg.contains("full-auto"),
         "/mode should list full-auto"
@@ -2229,7 +2331,7 @@ fn test_repl_mode_invalid() {
         last_msg.contains("Unknown mode"),
         "/mode invalid should show error"
     );
-    assert!(last_msg.contains("default"), "should list valid modes");
+    assert!(last_msg.contains("ask"), "should list valid modes");
 }
 
 #[test]
@@ -2239,8 +2341,8 @@ fn test_repl_mode_suggest_alias() {
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
-        last_msg.contains("default"),
-        "'ask' should map to 'default' mode"
+        last_msg.contains("Approval mode set to: ask"),
+        "'ask' should select the ask mode"
     );
 }
 
@@ -2992,6 +3094,9 @@ fn test_rewind_command_zero() {
 
 #[test]
 fn test_rewind_untracked_file_path() {
+    // /rewind consults the file-history store under ~/.shannon — hold the
+    // shared env lock so concurrent HOME/cwd swaps can't yank it away.
+    let _env = crate::test_env::env_lock();
     // A non-numeric, non-keyword argument is now treated as a per-file rewind
     // target (W6-2 B.1). An untracked path reports no file history.
     let mut repl = Repl::new().unwrap();
@@ -3112,38 +3217,37 @@ fn test_rewind_then_rewind_again() {
 fn test_approval_mode_cycle_sequence() {
     use shannon_engine::permissions::ApprovalMode;
 
-    // Verify the cycle order: Suggest → AutoEdit → Plan → FullAuto → Suggest
-    let mode = ApprovalMode::Suggest;
+    // Verify the cycle order: Ask → AutoEdit → FullAuto → Ask
+    let mode = ApprovalMode::Ask;
     assert_eq!(mode.cycle_next(), ApprovalMode::AutoEdit);
 
     let mode = ApprovalMode::AutoEdit;
-    assert_eq!(mode.cycle_next(), ApprovalMode::Plan);
-
-    let mode = ApprovalMode::Plan;
     assert_eq!(mode.cycle_next(), ApprovalMode::FullAuto);
 
     let mode = ApprovalMode::FullAuto;
-    assert_eq!(mode.cycle_next(), ApprovalMode::Suggest);
+    assert_eq!(mode.cycle_next(), ApprovalMode::Ask);
 
-    // BypassPermissions and DontAsk cycle back to Suggest
+    // Plan and expert modes are not cycle stops — they reset to Ask
+    assert_eq!(ApprovalMode::Plan.cycle_next(), ApprovalMode::Ask);
+    assert_eq!(ApprovalMode::Readonly.cycle_next(), ApprovalMode::Ask);
     assert_eq!(
         ApprovalMode::BypassPermissions.cycle_next(),
-        ApprovalMode::Suggest
+        ApprovalMode::Ask
     );
-    assert_eq!(ApprovalMode::DontAsk.cycle_next(), ApprovalMode::Suggest);
+    assert_eq!(ApprovalMode::DontAsk.cycle_next(), ApprovalMode::Ask);
 }
 
 #[test]
 fn test_approval_mode_short_labels() {
     use shannon_engine::permissions::ApprovalMode;
 
-    assert_eq!(ApprovalMode::Suggest.short_label(), "ASK");
+    assert_eq!(ApprovalMode::Ask.short_label(), "ASK");
     assert_eq!(ApprovalMode::Plan.short_label(), "PLAN");
     assert_eq!(ApprovalMode::AutoEdit.short_label(), "EDIT");
-    assert_eq!(ApprovalMode::FullAuto.short_label(), "AUTO");
-    assert_eq!(ApprovalMode::BypassPermissions.short_label(), "FULL");
-    assert_eq!(ApprovalMode::DontAsk.short_label(), "FULL");
-    assert_eq!(ApprovalMode::Readonly.short_label(), "ASK");
+    assert_eq!(ApprovalMode::FullAuto.short_label(), "FULL");
+    assert_eq!(ApprovalMode::BypassPermissions.short_label(), "BYPASS");
+    assert_eq!(ApprovalMode::DontAsk.short_label(), "CI");
+    assert_eq!(ApprovalMode::Readonly.short_label(), "RO");
 }
 
 #[test]
@@ -3158,7 +3262,8 @@ fn test_approval_mode_default_is_auto() {
 fn test_repl_default_approval_label() {
     let state = ReplState::default();
     assert_eq!(
-        state.approval_mode_label, "EDIT",
+        state.approval_mode_label(),
+        "EDIT",
         "default label should match AutoEdit"
     );
 }
@@ -3171,7 +3276,7 @@ fn test_repl_set_bypass_pending_action() {
     super::commands::execute_pending_action(&mut repl, "set_bypass_mode").unwrap();
 
     // Verify label updated
-    assert_eq!(repl.state.approval_mode_label, "FULL");
+    assert_eq!(repl.state.approval_mode_label(), "BYPASS");
 
     // Verify PermissionManager was updated
     if let Some(ref engine) = repl.query_engine {
@@ -3188,6 +3293,10 @@ fn test_repl_set_bypass_pending_action() {
 #[test]
 fn test_load_permission_rules_from_file() {
     use std::io::Write;
+
+    // The test swaps the process cwd (restored below) — hold the shared env
+    // lock so concurrent HOME/cwd-sensitive tests see a stable environment.
+    let _env = crate::test_env::env_lock();
 
     // Create a temp directory with a settings file
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -3234,6 +3343,7 @@ fn test_load_permission_rules_from_file() {
 
 #[test]
 fn test_load_permission_rules_missing_file() {
+    let _env = crate::test_env::env_lock();
     // Ensure loading from a directory with no settings files does not panic
     let tmp_dir = tempfile::tempdir().unwrap();
     let orig_cwd = std::env::current_dir().unwrap();
@@ -3248,6 +3358,7 @@ fn test_load_permission_rules_missing_file() {
 
 #[test]
 fn test_load_permission_rules_invalid_json() {
+    let _env = crate::test_env::env_lock();
     use std::io::Write;
 
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -3270,6 +3381,7 @@ fn test_load_permission_rules_invalid_json() {
 
 #[test]
 fn test_load_permission_rules_claude_settings() {
+    let _env = crate::test_env::env_lock();
     use std::io::Write;
 
     // Test .claude/settings.json compatibility
@@ -3311,19 +3423,19 @@ fn test_load_permission_rules_claude_settings() {
 fn test_approval_mode_label_syncs_with_permissions() {
     let mut repl = Repl::new().unwrap();
 
-    // Default should be EDIT (AutoEdit)
-    assert_eq!(repl.state.approval_mode_label, "EDIT");
+    // Default should be EDIT (auto-edit)
+    assert_eq!(repl.state.approval_mode_label(), "EDIT");
 
     // Use /mode to change to readonly
     repl.prompt.set_input("/mode readonly".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
 
-    assert_eq!(repl.state.approval_mode_label, "ASK");
+    assert_eq!(repl.state.approval_mode_label(), "RO");
 
     // Change back to default
     repl.prompt.set_input("/mode default".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    assert_eq!(repl.state.approval_mode_label, "ASK");
+    assert_eq!(repl.state.approval_mode_label(), "ASK");
 }
 
 #[test]
@@ -3333,7 +3445,7 @@ fn test_permission_mode_bypass_not_in_cycle() {
     // Verify BypassPermissions is NOT reachable via cycle_next from any safe mode.
     // It can only be set via /mode or the confirmation dialog.
     let safe_modes = [
-        ApprovalMode::Suggest,
+        ApprovalMode::Ask,
         ApprovalMode::AutoEdit,
         ApprovalMode::Plan,
         ApprovalMode::FullAuto,
@@ -4886,4 +4998,122 @@ fn test_elicitation_default_state_has_no_channels() {
     assert!(state.pending_elicitation_tx.is_none());
     assert!(state.pending_elicitation_rx.is_none());
     assert!(state.active_elicitation.is_none());
+}
+
+// -- i18n: routed strings keep byte-identical English copy -----------------
+
+/// The strings routed through `t!` (paste marker, diagnostics banners, pipe
+/// errors, session summary) must render byte-identically in the default (en)
+/// locale, so chat history and snapshot expectations don't churn.
+#[test]
+fn i18n_en_copy_is_byte_identical_to_previous_hardcoded_strings() {
+    use rust_i18n::t;
+
+    // Paste marker (prefix is machine-parsed by expand_pasted_texts).
+    assert_eq!(
+        t!("ui.pasted_text_marker", num => 3, count => 42).to_string(),
+        "[Pasted Text #3 42 lines]"
+    );
+    // Diagnostics banners.
+    assert_eq!(
+        t!("ui.diagnostics_issues", count => 2).to_string(),
+        "[Diagnostics: 2 issue(s) found]"
+    );
+    assert_eq!(
+        t!("ui.diagnostics_clean").to_string(),
+        "[Diagnostics: ✓ No issues]"
+    );
+    // Pipe-mode + input errors (pre-existing repl.* keys).
+    assert_eq!(
+        t!("repl.no_input").to_string(),
+        "No input provided on stdin."
+    );
+    assert_eq!(
+        t!("repl.input_error", error => "boom").to_string(),
+        "Input error: boom"
+    );
+    // Exit session summary (formatting done at the call site).
+    assert_eq!(
+        t!("ui.session_summary_title").to_string(),
+        "── Session Summary ──"
+    );
+    assert_eq!(
+        t!(
+            "ui.session_summary_tokens",
+            input => 1234,
+            output => 567,
+            cost => format!("{:.4}", 0.5)
+        )
+        .to_string(),
+        "  Tokens: 1234 in + 567 out  |  Cost: $0.5000"
+    );
+    assert_eq!(
+        t!(
+            "ui.session_summary_budget",
+            cost => format!("{:.4}", 0.5),
+            budget => format!("{:.2}", 10.0),
+            pct => format!("{:.0}", 5.0)
+        )
+        .to_string(),
+        "  Budget: $0.5000 / $10.00 (5%)"
+    );
+    assert_eq!(
+        t!("ui.session_summary_model", model => "gpt-4o").to_string(),
+        "  Model: gpt-4o"
+    );
+    assert_eq!(
+        t!("ui.session_summary_duration", mins => 2, secs => 7).to_string(),
+        "  Duration: 2m 7s"
+    );
+    assert_eq!(
+        t!("ui.session_summary_separator").to_string(),
+        "─────────────────────"
+    );
+}
+
+// ── P1-18 residue: providers.toml corruption warning parity with the CLI ──
+
+#[test]
+#[serial]
+fn providers_toml_corruption_warning_flags_only_unparseable_files() {
+    // HOME swap via the shared, lock-serialized guard (see test_env docs):
+    // parse_error(None) reads $HOME/.shannon/providers.toml.
+    let _home = crate::test_env::HomeGuard::new();
+    let shannon_dir = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .expect("HOME set by HomeGuard")
+        .join(".shannon");
+    std::fs::create_dir_all(&shannon_dir).expect("mkdir ~/.shannon");
+    let providers_toml = shannon_dir.join("providers.toml");
+
+    // Absent file → silent (the "nothing connected" state is honest).
+    assert!(providers_toml_corruption_warning().is_none());
+
+    // Corrupt file (deny_unknown_fields rejects the whole document) → the
+    // one-line warning, same wording as the CLI's read-side hint.
+    std::fs::write(&providers_toml, "totally_unknown_field = true\n").expect("write corrupt");
+    let warning = providers_toml_corruption_warning().expect("corrupt file must warn");
+    assert!(warning.contains("providers.toml"), "{warning}");
+    assert!(
+        warning.contains("is being ignored until fixed"),
+        "warning must state the silent-degrade semantics: {warning}"
+    );
+    assert!(
+        warning.contains("writes to it are refused"),
+        "warning must state the write-refusal contract: {warning}"
+    );
+
+    // Empty file parses-as-absent → silent again.
+    std::fs::write(&providers_toml, "").expect("write empty");
+    assert!(providers_toml_corruption_warning().is_none());
+
+    // A valid minimal v2 doc → silent.
+    std::fs::write(
+        &providers_toml,
+        "version = 2\n\n[profiles.default]\nname = \"default\"\n\n\
+         [profiles.default.active_target]\nprovider_id = \"ollama\"\nmodel_id = \"llama3\"\n\
+         scope = \"global\"\n",
+    )
+    .expect("write valid");
+    assert!(providers_toml_corruption_warning().is_none());
 }

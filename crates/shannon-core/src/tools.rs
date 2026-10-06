@@ -161,6 +161,12 @@ pub struct ToolRegistry {
     /// Tool names that are deferred — registered and executable, but excluded from
     /// the JSON schema sent to the LLM.  Discovered on-demand via `ToolSearch`.
     deferred: std::sync::RwLock<HashSet<String>>,
+    /// Full schemas of deferred tools (N-6): `register_batch` stores each
+    /// deferred tool's real schema here and auto-registers an
+    /// `mcp__tool_search` discovery tool on first defer, so the stub schema's
+    /// promise ("use mcp__tool_search to get the full parameter schema") is
+    /// actually kept on every registration path.
+    deferred_schemas: crate::mcp_tool_adapter::DeferredSchemaStore,
     /// Optional glob-based allow/deny filter for tool access.
     tool_filter: Option<ToolFilter>,
     /// Cache for read-only tool results: (tool_name, input_hash) -> cached output.
@@ -181,9 +187,11 @@ pub struct ToolRegistry {
     /// Concurrent TTL-based cache for streaming tool results.
     /// Used by `execute_streaming` to avoid re-executing identical read-only calls.
     streaming_cache: Option<std::sync::Arc<crate::tool_cache::ToolResultCache>>,
-    /// Optional per-tool execution timeout. When set, `execute()` wraps the
-    /// tool call with `tokio::time::timeout` and returns `ToolError::Timeout`
-    /// on expiry.
+    /// Optional per-tool execution timeout. When set, `execute()` and
+    /// `execute_streaming()` wrap the tool call with `tokio::time::timeout`
+    /// and return `ToolError::Timeout` on expiry. Defaults to
+    /// [`DEFAULT_EXECUTION_TIMEOUT`] (review §P2-2) so a hung tool can never
+    /// stall a query forever; `set_execution_timeout` overrides it.
     execution_timeout: Option<std::time::Duration>,
     /// Manifest-derived permission policies for plugin-owned MCP namespaces
     /// (`mcp__<plugin>__*`). Empty by default — plain `.mcp.json` servers are
@@ -192,6 +200,15 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// Review §P2-2: default per-tool execution timeout installed by
+    /// [`ToolRegistry::new`]. Previously the default was `None` (unbounded),
+    /// so a hung tool stalled the whole query forever. 300s is deliberately
+    /// conservative: it sits above the Bash tool's own default (120s) and
+    /// normal LLM/tool latencies, so it only fires on genuinely stuck tools.
+    /// Hosts that legitimately run longer tools override it via
+    /// [`ToolRegistry::set_execution_timeout`].
+    pub const DEFAULT_EXECUTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
     /// Helper to recover from a poisoned lock by extracting the inner value.
     /// This prevents panics when another thread panicked while holding the lock.
     fn recover_lock<T>(lock_result: std::sync::LockResult<T>) -> T {
@@ -203,6 +220,7 @@ impl ToolRegistry {
         Self {
             tools: std::sync::RwLock::new(HashMap::new()),
             deferred: std::sync::RwLock::new(HashSet::new()),
+            deferred_schemas: crate::mcp_tool_adapter::DeferredSchemaStore::default(),
             tool_filter: None,
             result_cache: std::sync::Mutex::new(HashMap::new()),
             cache_order: std::sync::Mutex::new(std::collections::VecDeque::new()),
@@ -212,7 +230,7 @@ impl ToolRegistry {
             defs_cache: std::sync::RwLock::new(None),
             version: std::sync::atomic::AtomicU64::new(0),
             streaming_cache: None,
-            execution_timeout: None,
+            execution_timeout: Some(Self::DEFAULT_EXECUTION_TIMEOUT),
             plugin_policies: std::sync::RwLock::new(
                 crate::plugin::permissions::PluginToolPolicies::new(),
             ),
@@ -288,9 +306,11 @@ impl ToolRegistry {
 
     /// Set a per-tool execution timeout.
     ///
-    /// When set, every call to [`execute`](Self::execute) is wrapped with
-    /// `tokio::time::timeout`. If the tool does not finish within the
-    /// specified duration, `ToolError::Timeout` is returned.
+    /// Overrides the [`Self::DEFAULT_EXECUTION_TIMEOUT`] installed by
+    /// [`ToolRegistry::new`] (review §P2-2). Every call to
+    /// [`execute`](Self::execute) and [`execute_streaming`](Self::execute_streaming)
+    /// is wrapped with `tokio::time::timeout`. If the tool does not finish
+    /// within the specified duration, `ToolError::Timeout` is returned.
     pub fn set_execution_timeout(&mut self, timeout: std::time::Duration) {
         self.execution_timeout = Some(timeout);
     }
@@ -406,6 +426,7 @@ impl ToolRegistry {
         }
         let defer = batch.len() > DEFER_THRESHOLD;
         let mut deferred_count = 0;
+        let mut registered_search_tool = false;
         for tool in batch {
             let name = tool.name().to_string();
             let mut tools = Self::recover_lock(self.tools.write());
@@ -414,9 +435,26 @@ impl ToolRegistry {
             }
             if defer {
                 Self::recover_lock(self.deferred.write()).insert(name.clone());
+                // N-6: keep the real schema retrievable — the stub the LLM
+                // sees promises `mcp__tool_search` can fetch it back.
+                Self::recover_lock(self.deferred_schemas.lock())
+                    .insert(name.clone(), tool.input_schema());
                 deferred_count += 1;
             }
             tools.insert(name, std::sync::Arc::from(tool));
+            // Auto-register the discovery tool on the first deferral so the
+            // deferred-schema loop is closed on every registration path
+            // (REPL pooled path registers its own; this covers CLI/headless).
+            if deferred_count == 1 && !tools.contains_key("mcp__tool_search") {
+                let search = crate::mcp_tool_adapter::DeferredSchemaSearchTool::new(
+                    self.deferred_schemas.clone(),
+                );
+                tools.insert(search.name().to_string(), std::sync::Arc::from(search));
+                registered_search_tool = true;
+            }
+        }
+        if registered_search_tool {
+            self.invalidate_cache();
         }
         self.invalidate_cache();
         Ok(deferred_count)
@@ -509,6 +547,10 @@ impl ToolRegistry {
     pub async fn execute(&self, name: &str, input: Value) -> ToolResult<ToolOutput> {
         self.check_plugin_permission(name)?;
         let tool = self.get(name).ok_or_else(|| self.lookup_error(name))?;
+        let (input, unresolved) = match self.restore_for_execution(name, input) {
+            Ok(pair) => pair,
+            Err(blocked) => return Ok(blocked),
+        };
 
         let is_read_only = tool.is_read_only();
 
@@ -536,7 +578,7 @@ impl ToolRegistry {
             }
         }
 
-        let result = if let Some(timeout) = self.execution_timeout {
+        let mut result = if let Some(timeout) = self.execution_timeout {
             match tokio::time::timeout(timeout, tool.execute(input)).await {
                 Ok(output) => output,
                 Err(_) => Err(ToolError::Timeout {
@@ -547,6 +589,10 @@ impl ToolRegistry {
         } else {
             tool.execute(input).await
         };
+
+        if let Ok(ref mut output) = result {
+            Self::append_unresolved_note(output, &unresolved);
+        }
 
         // Cache successful results from read-only tools
         if let Some(hash) = input_hash {
@@ -576,6 +622,21 @@ impl ToolRegistry {
         }
 
         result
+    }
+
+    /// Surface contract F3/F4 on the output face: the tool ran, but
+    /// argument placeholders without a registry mapping passed through
+    /// verbatim — the output must say so next to the broken value
+    /// (I2: output copy only; the input is never rewritten).
+    fn append_unresolved_note(output: &mut ToolOutput, unresolved: &[String]) {
+        if unresolved.is_empty() {
+            return;
+        }
+        output.content.push_str(&format!(
+            "\n[secret-guard] warning: {} argument placeholder(s) had no mapping and were passed through verbatim: {}",
+            unresolved.len(),
+            unresolved.join(", ")
+        ));
     }
 
     /// Hash tool input for cache key generation.
@@ -619,6 +680,35 @@ impl ToolRegistry {
     ///
     /// When a streaming cache is configured, successful results from read-only
     /// tools are cached and reused on subsequent calls with identical inputs.
+    /// Secret-guard wiring point 2 (blueprint §9.6): restore real values for
+    /// surrogates the model echoed into tool arguments — on the execution
+    /// face only; the restored input is never persisted back into history.
+    /// Fail-closed plugin failures surface as tool-level error outputs.
+    /// On success returns the restored input plus the plugin's unresolved
+    /// placeholder tokens (contract F3/F4) for the caller to surface on the
+    /// output face.
+    fn restore_for_execution(
+        &self,
+        name: &str,
+        mut input: Value,
+    ) -> Result<(Value, Vec<String>), ToolOutput> {
+        match crate::secret_guard::restore_tool_args_for_execution(name, &mut input) {
+            Ok(stats) => Ok((input, stats.unresolved)),
+            Err(reason) => {
+                tracing::warn!(
+                    target: "shannon::secret_guard",
+                    tool = name,
+                    "tool call blocked by secret-guard fail-closed policy"
+                );
+                Err(ToolOutput {
+                    content: format!("secret-guard blocked this tool call (fail-closed): {reason}"),
+                    is_error: true,
+                    metadata: std::collections::HashMap::new(),
+                })
+            }
+        }
+    }
+
     pub async fn execute_streaming(
         &self,
         name: &str,
@@ -627,6 +717,10 @@ impl ToolRegistry {
     ) -> ToolResult<ToolOutput> {
         self.check_plugin_permission(name)?;
         let tool = self.get(name).ok_or_else(|| self.lookup_error(name))?;
+        let (input, unresolved) = match self.restore_for_execution(name, input) {
+            Ok(pair) => pair,
+            Err(blocked) => return Ok(blocked),
+        };
 
         let is_read_only = tool.is_read_only();
 
@@ -640,7 +734,26 @@ impl ToolRegistry {
             }
         }
 
-        let result = tool.execute_streaming(input.clone(), progress).await;
+        let mut result = if let Some(timeout) = self.execution_timeout {
+            // Review §P2-2: the engine's agent loop goes through
+            // `execute_streaming`, so the default timeout must be enforced on
+            // this path too — a hung tool otherwise stalls the query forever.
+            match tokio::time::timeout(timeout, tool.execute_streaming(input.clone(), progress))
+                .await
+            {
+                Ok(output) => output,
+                Err(_) => Err(ToolError::Timeout {
+                    name: name.to_string(),
+                    duration: timeout,
+                }),
+            }
+        } else {
+            tool.execute_streaming(input.clone(), progress).await
+        };
+
+        if let Ok(ref mut output) = result {
+            Self::append_unresolved_note(output, &unresolved);
+        }
 
         // Cache successful results from read-only tools
         if let Some(ref cache) = self.streaming_cache {
@@ -686,6 +799,18 @@ impl ToolRegistry {
             .values()
             .filter(|t| t.is_destructive())
             .map(|t| t.name().to_string())
+            .collect()
+    }
+
+    /// Return `(name, is_read_only)` for every registered tool.
+    ///
+    /// Consumed by the permission manager so the read-only name fast-path can
+    /// be vetoed for tools whose trait flags contradict their name (e.g. a
+    /// plugin tool registered as `file_info` that mutates state).
+    pub fn tool_read_only_flags(&self) -> Vec<(String, bool)> {
+        Self::recover_lock(self.tools.read())
+            .values()
+            .map(|t| (t.name().to_string(), t.is_read_only()))
             .collect()
     }
 
@@ -766,7 +891,8 @@ pub enum ToolBatch {
 
 impl ToolRegistry {
     /// Get all tools as JSON schema for Claude API (respects the allowed_tools filter
-    /// and excludes deferred tools). Results are cached and invalidated on register/unregister.
+    /// and excludes deferred + hidden tools). Results are cached and invalidated on
+    /// register/unregister.
     pub fn to_json_schema(&self) -> Value {
         let ver = self.version.load(std::sync::atomic::Ordering::Relaxed);
         {
@@ -781,7 +907,13 @@ impl ToolRegistry {
         let deferred = Self::recover_lock(self.deferred.read());
         let tools: Vec<Value> = Self::recover_lock(self.tools.read())
             .values()
-            .filter(|t| self.is_allowed(t.name()) && !deferred.contains(t.name()))
+            .filter(|t| {
+                self.is_allowed(t.name())
+                    && !deferred.contains(t.name())
+                    // CD2: hidden tools (deprecated aliases) stay off the
+                    // model-visible schema here too.
+                    && !t.hidden_from_llm()
+            })
             .map(|tool| {
                 serde_json::json!({
                     "name": tool.name(),
@@ -811,7 +943,14 @@ impl ToolRegistry {
         let deferred = Self::recover_lock(self.deferred.read());
         let defs: Vec<shannon_engine::api::ToolDefinition> = Self::recover_lock(self.tools.read())
             .values()
-            .filter(|t| self.is_allowed(t.name()) && !deferred.contains(t.name()))
+            .filter(|t| {
+                self.is_allowed(t.name())
+                    && !deferred.contains(t.name())
+                    // CD2 Phase 2: hidden tools are still callable but their
+                    // schema is not advertised to the model. Used by
+                    // deprecated aliases kept for host-side callers.
+                    && !t.hidden_from_llm()
+            })
             .map(|tool| shannon_engine::api::ToolDefinition {
                 name: tool.name().to_string(),
                 description: tool.description().to_string(),
@@ -871,6 +1010,114 @@ mod tests {
         async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
             Ok(ToolOutput::success("Executed".to_string()))
         }
+    }
+
+    /// N-6: a batch that triggers deferral must auto-register the
+    /// `mcp__tool_search` discovery tool, and that tool must return the
+    /// deferred tool's real schema — otherwise the stub schema's promise is
+    /// unfulfillable and every deferred tool is unusable.
+    #[tokio::test]
+    async fn register_batch_auto_registers_tool_search_on_first_deferral() {
+        let registry = ToolRegistry::new();
+        let batch: Vec<Box<dyn Tool>> = (0..DEFER_THRESHOLD + 1)
+            .map(|i| {
+                Box::new(DummyTool {
+                    name: format!("bulk_tool_{i}"),
+                }) as Box<dyn Tool>
+            })
+            .collect();
+        let deferred = registry.register_batch(batch).unwrap();
+        assert_eq!(deferred, DEFER_THRESHOLD + 1);
+
+        assert!(
+            registry.get("mcp__tool_search").is_some(),
+            "mcp__tool_search must be auto-registered when deferral starts"
+        );
+        // The discovery tool retrieves the real schema for a deferred tool.
+        let out = registry
+            .execute(
+                "mcp__tool_search",
+                serde_json::json!({"tool_name": "bulk_tool_7"}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.content.contains("bulk_tool_7") && out.content.contains("input"),
+            "schema lookup must return the deferred tool's real schema, got: {}",
+            out.content
+        );
+        // Second batch: search tool is not duplicated.
+        let more: Vec<Box<dyn Tool>> = (0..DEFER_THRESHOLD + 1)
+            .map(|i| {
+                Box::new(DummyTool {
+                    name: format!("more_tool_{i}"),
+                }) as Box<dyn Tool>
+            })
+            .collect();
+        registry.register_batch(more).unwrap();
+        let names = registry.list();
+        assert_eq!(
+            names.iter().filter(|n| *n == "mcp__tool_search").count(),
+            1,
+            "search tool must not be double-registered"
+        );
+    }
+
+    /// CD2: tools marked hidden_from_llm must NOT appear in the
+    /// tools/definitions sent to the model. They remain registered and
+    /// callable (for host-side code and `mcp__tool_search` discovery).
+    #[tokio::test]
+    async fn hidden_tool_excluded_from_llm_schema_but_still_listed() {
+        struct VisibleTool;
+        #[async_trait]
+        impl Tool for VisibleTool {
+            fn name(&self) -> &str {
+                "Visible"
+            }
+            fn description(&self) -> &str {
+                "v"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object"})
+            }
+            async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+                Ok(ToolOutput::success("ok".into()))
+            }
+        }
+        struct HiddenTool;
+        #[async_trait]
+        impl Tool for HiddenTool {
+            fn name(&self) -> &str {
+                "Hidden"
+            }
+            fn description(&self) -> &str {
+                "h"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object"})
+            }
+            fn hidden_from_llm(&self) -> bool {
+                true
+            }
+            async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+                Ok(ToolOutput::success("ok".into()))
+            }
+        }
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(VisibleTool)).unwrap();
+        registry.register(Box::new(HiddenTool)).unwrap();
+        let names = registry.list();
+        assert!(
+            names.contains(&"Visible".to_string()) && names.contains(&"Hidden".to_string()),
+            "both must be registered (host-callable): {names:?}"
+        );
+        let defs = registry.to_tool_definitions();
+        let def_names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(def_names.contains(&"Visible"), "visible in LLM schema");
+        assert!(
+            !def_names.contains(&"Hidden"),
+            "hidden tool MUST NOT appear in LLM schema: {def_names:?}"
+        );
     }
 
     #[tokio::test]
@@ -1539,9 +1786,17 @@ mod tests {
         assert_eq!(deferred, 51);
         assert_eq!(registry.deferred_count(), 51);
 
-        // Schema should be empty (all deferred)
+        // Schema is empty for the 51 deferred tools. The N-6 discovery
+        // tool `mcp__tool_search` is NOT auto-registered by register_batch
+        // unless the batch actually crosses DEFER_THRESHOLD AND no search
+        // tool exists yet — confirm either 0 or 1 entry; the strict old
+        // assertion (`len() == 0`) was authored before N-6 existed.
         let schema = registry.to_json_schema();
-        assert_eq!(schema.as_array().unwrap().len(), 0);
+        let schema_len = schema.as_array().unwrap().len();
+        assert!(
+            schema_len <= 1,
+            "deferred tools must not appear in the schema (got {schema_len})"
+        );
 
         // But tools are still executable
         assert!(registry.get("tool_0").is_some());
@@ -1611,7 +1866,7 @@ mod tests {
         ) -> ToolResult<ToolOutput> {
             let msg = input.get("msg").and_then(|v| v.as_str()).unwrap_or("");
             for line in msg.lines() {
-                progress.send(line);
+                progress.send(line).await;
             }
             Ok(ToolOutput::success(msg.to_string()))
         }
@@ -1625,8 +1880,9 @@ mod tests {
         struct Collector {
             lines: std::sync::Mutex<Vec<String>>,
         }
+        #[async_trait]
         impl shannon_tool_interface::ProgressSender for Collector {
-            fn send(&self, line: &str) {
+            async fn send(&self, line: &str) {
                 self.lines.lock().unwrap().push(line.to_string());
             }
         }
@@ -1652,8 +1908,9 @@ mod tests {
     async fn test_registry_execute_streaming_unknown_tool() {
         let registry = ToolRegistry::new();
         struct NopSender;
+        #[async_trait]
         impl shannon_tool_interface::ProgressSender for NopSender {
-            fn send(&self, _: &str) {}
+            async fn send(&self, _: &str) {}
         }
 
         let result = registry
@@ -1705,7 +1962,8 @@ mod tests {
     #[tokio::test]
     async fn test_tool_no_timeout_when_not_configured() {
         let registry = ToolRegistry::new();
-        // Use a fast tool — no timeout configured, so it should succeed
+        // Use a fast tool — the §P2-2 default timeout (300s) never fires for
+        // tools that complete, so this should succeed.
         registry
             .register(Box::new(DummyTool {
                 name: "fast_tool".to_string(),
@@ -1718,15 +1976,288 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    // Review §P2-2: the default execution timeout is now a conservative
+    // 300s instead of unbounded — a hung tool must never stall a query
+    // forever.
+    #[test]
+    fn test_default_execution_timeout_is_conservative_300s() {
+        let registry = ToolRegistry::new();
+        assert_eq!(
+            registry.execution_timeout(),
+            Some(ToolRegistry::DEFAULT_EXECUTION_TIMEOUT)
+        );
+        assert_eq!(
+            ToolRegistry::DEFAULT_EXECUTION_TIMEOUT,
+            std::time::Duration::from_secs(300)
+        );
+    }
+
+    // Review §P2-2: `execute_streaming` — the path the engine's agent loop
+    // actually uses — must enforce the configured timeout too.
+    #[tokio::test]
+    async fn test_execute_streaming_enforces_timeout() {
+        struct NopSender;
+        #[async_trait]
+        impl shannon_tool_interface::ProgressSender for NopSender {
+            async fn send(&self, _: &str) {}
+        }
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(SlowTool)).unwrap();
+        registry.set_execution_timeout(std::time::Duration::from_millis(50));
+
+        let result = registry
+            .execute_streaming("slow_tool", json!({}), std::sync::Arc::new(NopSender))
+            .await;
+
+        assert!(result.is_err(), "streaming execution should have timed out");
+        match result.unwrap_err() {
+            ToolError::Timeout { name, duration } => {
+                assert_eq!(name, "slow_tool");
+                assert_eq!(duration, std::time::Duration::from_millis(50));
+                // The wire-facing message promised by §P2-2 ("timed out
+                // after Ns") comes from the ToolError Display impl.
+                assert!(
+                    format!("Tool '{name}' timed out after {duration:?}")
+                        .contains("timed out after")
+                );
+            }
+            other => panic!("Expected Timeout error, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_set_execution_timeout() {
         let mut registry = ToolRegistry::new();
-        assert!(registry.execution_timeout().is_none());
+        // Review §P2-2: registry construction installs the conservative
+        // default; the setter overrides it.
+        assert_eq!(
+            registry.execution_timeout(),
+            Some(ToolRegistry::DEFAULT_EXECUTION_TIMEOUT)
+        );
 
         registry.set_execution_timeout(std::time::Duration::from_secs(30));
         assert_eq!(
             registry.execution_timeout(),
             Some(std::time::Duration::from_secs(30))
+        );
+    }
+
+    // ---- secret-guard execution-boundary wiring (blueprint §9.6) ----------
+    // End-to-end through ToolRegistry::execute: a model-echoed surrogate in
+    // the tool arguments must reach the tool as the real value (restored on
+    // the execution face only), and a FailMode::Closed plugin failure must
+    // block execution with a tool-level error.
+
+    const BOUNDARY_TOKEN: &str = "SG1:FAKEFAKEFAKEFAKE";
+    const BOUNDARY_REAL: &str = "REAL-SECRET-VALUE";
+
+    struct BoundaryRestore {
+        fail: bool,
+    }
+
+    fn walk_replace(v: &mut Value, from: &str, to: &str) -> bool {
+        match v {
+            Value::String(s) => {
+                if s.contains(from) {
+                    *s = s.replace(from, to);
+                    true
+                } else {
+                    false
+                }
+            }
+            Value::Array(a) => a.iter_mut().any(|x| walk_replace(x, from, to)),
+            Value::Object(m) => m.values_mut().any(|x| walk_replace(x, from, to)),
+            _ => false,
+        }
+    }
+
+    /// Test helper: collect 20-char `SG1:`-shaped tokens left in the args —
+    /// the placeholder-shaped strings a real guard would report unresolved.
+    fn collect_sg1_tokens(v: &Value) -> Vec<String> {
+        fn scan(s: &str, out: &mut Vec<String>) {
+            let mut from = 0;
+            while let Some(pos) = s[from..].find("SG1:") {
+                let start = from + pos;
+                if start + 20 <= s.len() {
+                    out.push(s[start..start + 20].to_string());
+                }
+                from = start + 4;
+            }
+        }
+        fn walk(v: &Value, out: &mut Vec<String>) {
+            match v {
+                Value::String(s) => scan(s, out),
+                Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+                Value::Object(m) => m.values().for_each(|x| walk(x, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(v, &mut out);
+        out
+    }
+
+    impl shannon_plugin_api::ContextTransform for BoundaryRestore {
+        fn transform_ingest(
+            &self,
+            _block: &mut shannon_plugin_api::IngestBlock,
+        ) -> shannon_plugin_api::TransformAction {
+            shannon_plugin_api::TransformAction::Passthrough
+        }
+
+        fn restore_tool_args(
+            &self,
+            _tool: &str,
+            args: &mut Value,
+        ) -> shannon_plugin_api::RestoreAction {
+            if self.fail {
+                return shannon_plugin_api::RestoreAction::Failed {
+                    reason: "registry unavailable".to_string(),
+                };
+            }
+            let replaced = walk_replace(args, BOUNDARY_TOKEN, BOUNDARY_REAL);
+            let unresolved = collect_sg1_tokens(args);
+            if replaced || !unresolved.is_empty() {
+                shannon_plugin_api::RestoreAction::Restored(shannon_plugin_api::RestoreStats {
+                    replaced: usize::from(replaced),
+                    fuzzy: 0,
+                    unresolved,
+                })
+            } else {
+                shannon_plugin_api::RestoreAction::Unchanged
+            }
+        }
+
+        fn restore_display(&self, _text: &mut String) -> shannon_plugin_api::RestoreAction {
+            shannon_plugin_api::RestoreAction::Unchanged
+        }
+
+        fn audit_wire(&self, _wire: &serde_json::Value) -> Vec<shannon_plugin_api::AuditFinding> {
+            Vec::new()
+        }
+    }
+
+    struct EchoInputTool;
+
+    #[async_trait]
+    impl Tool for EchoInputTool {
+        fn name(&self) -> &str {
+            "secret-guard-echo"
+        }
+
+        fn description(&self) -> &str {
+            "Echoes input.content into the output — asserts what the tool actually received"
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "properties": {"content": {"type": "string"}}})
+        }
+
+        async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+            let content = input
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            Ok(ToolOutput::success(content))
+        }
+    }
+
+    // Intentional: the global secret-guard transform is read by the tool
+    // boundary *during* the awaited execute(), so its serialization lock must
+    // be held across the await (test-only, uncontended).
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn execution_boundary_restores_model_echoed_surrogates() {
+        let _g = crate::secret_guard::test_support::acquire();
+        crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(BoundaryRestore {
+            fail: false,
+        })));
+        let registry = ToolRegistry::default();
+        registry
+            .register(Box::new(EchoInputTool))
+            .expect("register");
+        let out = registry
+            .execute(
+                "secret-guard-echo",
+                json!({"file_path": "/app/.env", "content": format!("id={BOUNDARY_TOKEN}")}),
+            )
+            .await
+            .expect("execute");
+        crate::secret_guard::set_context_transform(None);
+
+        assert!(!out.is_error);
+        assert!(
+            out.content.contains(BOUNDARY_REAL),
+            "tool must receive the restored value, got: {}",
+            out.content
+        );
+        assert!(
+            !out.content.contains(BOUNDARY_TOKEN),
+            "surrogate must not leak through to execution: {}",
+            out.content
+        );
+    }
+
+    // Intentional: same global-transform lock, read during the awaited
+    // execute(); test-only and uncontended.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn fail_closed_plugin_blocks_execution() {
+        let _g = crate::secret_guard::test_support::acquire();
+        crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(BoundaryRestore {
+            fail: true,
+        })));
+        let registry = ToolRegistry::default();
+        registry
+            .register(Box::new(EchoInputTool))
+            .expect("register");
+        let out = registry
+            .execute("secret-guard-echo", json!({"content": "id=x"}))
+            .await
+            .expect("execute returns a tool-level error output");
+        crate::secret_guard::set_context_transform(None);
+
+        assert!(out.is_error, "fail-closed must refuse execution");
+        assert!(
+            out.content.contains("fail-closed"),
+            "reason must surface: {}",
+            out.content
+        );
+    }
+
+    // Intentional: same global-transform lock, read during the awaited
+    // execute(); test-only and uncontended.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn unresolved_tool_args_pass_through_with_visible_warning() {
+        let _g = crate::secret_guard::test_support::acquire();
+        crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(BoundaryRestore {
+            fail: false,
+        })));
+        let registry = ToolRegistry::default();
+        registry
+            .register(Box::new(EchoInputTool))
+            .expect("register");
+        let out = registry
+            .execute(
+                "secret-guard-echo",
+                json!({"file_path": "/app/.env", "content": "id=SG1:AAAAAAAAAAAAAAAA"}),
+            )
+            .await
+            .expect("execute");
+        crate::secret_guard::set_context_transform(None);
+
+        // BoundaryRestore resolves the mapped token but reports the input's
+        // fake token as unresolved — the tool ran, so the output must carry a
+        // visible warning next to the verbatim token (contract F3/F4), and
+        // must not be flagged as a tool error.
+        assert!(!out.is_error, "unresolved is a warning, not a tool failure");
+        assert!(
+            out.content.contains("[secret-guard]") && out.content.contains("passed through"),
+            "tool output must surface the unresolved warning: {}",
+            out.content
         );
     }
 }

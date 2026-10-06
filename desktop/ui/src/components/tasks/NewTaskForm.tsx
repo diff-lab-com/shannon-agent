@@ -11,6 +11,7 @@
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { Form, FormField } from '@/components/ui/form'
 import { cn } from '@/lib/utils'
 
 export type Priority = 'low' | 'medium' | 'high'
@@ -25,7 +26,7 @@ export function composePrompt(prompt: string, assignee?: string, priority?: Prio
 interface NewTaskFormProps {
   value: string
   onChange: (value: string) => void
-  onSubmit: (rich: { prompt: string; assignee: string; priority: Priority }) => void
+  onSubmit: (rich: { prompt: string; assignee: string; priority: Priority }) => void | Promise<unknown>
   onCancel: () => void
 }
 
@@ -36,51 +37,65 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
   const [assignee, setAssignee] = useState('')
   const [priority, setPriority] = useState<Priority>('low')
   const [showMeta, setShowMeta] = useState(false)
+  // B3 P1-24: one submit in flight at a time — the create call is awaited
+  // before the busy flag drops so double clicks / Enter spam cannot start
+  // duplicate background tasks.
+  const [submitting, setSubmitting] = useState(false)
 
-  const submit = () => {
-    if (!value.trim()) return
-    onSubmit({ prompt: composePrompt(value, assignee, priority), assignee: assignee.trim(), priority })
+  const submit = async () => {
+    if (!value.trim() || submitting) return
+    setSubmitting(true)
+    try {
+      await onSubmit({ prompt: composePrompt(value, assignee, priority), assignee: assignee.trim(), priority })
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
-    <div className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm">
+    <Form
+      onSubmit={e => { e.preventDefault(); void submit() }}
+      className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-e1 !space-y-md"
+      data-testid="new-task-form"
+    >
       <div className="flex items-center justify-between">
         <h3 className="font-body-lg font-bold text-on-surface">{t('tasks.newTaskForm.title')}</h3>
         <Button
           variant="ghost"
           size="sm"
           type="button"
-          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
+          className="font-label-sm text-primary hover:bg-primary/10 rounded-sm px-sm py-xs gap-xs"
           onClick={() => setShowMeta(!showMeta)}
           aria-expanded={showMeta}
           aria-controls="new-task-meta"
         >
-          <span className="material-symbols-outlined text-[14px]">{showMeta ? 'remove' : 'add'}</span>
+          <span className="material-symbols-outlined icon-sm">{showMeta ? 'remove' : 'add'}</span>
           {showMeta ? t('tasks.newTaskForm.hideOptions') : t('tasks.newTaskForm.addOptions')}
         </Button>
       </div>
       <textarea
+        name="prompt"
+        aria-label={t('tasks.newTaskForm.placeholder')}
         className={cn('w-full h-20 p-sm bg-surface-container-low rounded-lg border text-body-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/30', !value.trim() ? 'border-outline-variant/30' : 'border-primary/30')}
         placeholder={t('tasks.newTaskForm.placeholder')}
         value={value}
         onChange={e => onChange(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && value.trim()) { e.preventDefault(); submit() } }}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && value.trim() && !submitting) { e.preventDefault(); void submit() } }}
         autoFocus
       />
       {showMeta ? (
         <div id="new-task-meta" className="grid grid-cols-1 md:grid-cols-2 gap-md">
-          <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface-variant">{t('tasks.newTaskForm.assigneeLabel')}</span>
+          <FormField name="assignee" label={t('tasks.newTaskForm.assigneeLabel')}>
             <input
+              id="assignee"
               type="text"
               placeholder={t('tasks.newTaskForm.assigneePlaceholder')}
               value={assignee}
               onChange={e => setAssignee(e.target.value)}
               className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
-          </label>
-          <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface-variant">{t('tasks.newTaskForm.priority')}</span>
+          </FormField>
+          <FormField name="priority" label={t('tasks.newTaskForm.priority')}>
             <select
               value={priority}
               onChange={e => setPriority(e.target.value as Priority)}
@@ -90,18 +105,19 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
               <option value="medium">{t('tasks.newTaskForm.medium')}</option>
               <option value="high">{t('tasks.newTaskForm.high')}</option>
             </select>
-          </label>
+          </FormField>
         </div>
       ) : null}
       <div className="flex items-center justify-between">
         <span className="font-label-sm text-on-surface-variant">{value.length > 0 ? intl.formatMessage({ id: 'tasks.newTaskForm.chars' }, { count: value.length }) : ''}</span>
         <div className="flex gap-sm">
           <Button
-            className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50"
-            onClick={submit}
-            disabled={!value.trim()}
+            type="submit"
+            className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={!value.trim() || submitting}
+            aria-busy={submitting || undefined}
           >
-            {t('tasks.newTaskForm.createTask')}
+            {submitting ? t('tasks.newTaskForm.creating') : t('tasks.newTaskForm.createTask')}
           </Button>
           <Button
             variant="ghost"
@@ -112,6 +128,6 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
           </Button>
         </div>
       </div>
-    </div>
+    </Form>
   )
 }

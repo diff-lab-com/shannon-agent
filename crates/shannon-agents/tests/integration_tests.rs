@@ -325,11 +325,11 @@ mod coordinator_tests {
             ..Default::default()
         };
         coordinator
-            .add_teammate("test-team", "agent-1".into(), cfg1)
+            .add_teammate("test-team", "agent-1".into(), cfg1, None)
             .await
             .unwrap();
         coordinator
-            .add_teammate("test-team", "agent-2".into(), cfg2)
+            .add_teammate("test-team", "agent-2".into(), cfg2, None)
             .await
             .unwrap();
 

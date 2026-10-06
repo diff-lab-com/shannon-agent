@@ -29,6 +29,12 @@ export interface ModalProps {
   description?: string
   size?: VariantProps<typeof modalSizes>["size"]
   role?: "dialog" | "alertdialog"
+  /** id of an element INSIDE the popup that names the dialog. Use when the
+   * caller renders its own header instead of the built-in `title` block —
+   * role=alertdialog/dialog must carry an accessible name (axe
+   * aria-dialog-name). Takes precedence over `aria-label` in accname
+   * resolution, so the visible heading text becomes the name. */
+  ariaLabelledBy?: string
   closeOnBackdrop?: boolean
   closeOnEscape?: boolean
   showCloseButton?: boolean
@@ -47,6 +53,7 @@ export function Modal({
   description,
   size = "md",
   role = "dialog",
+  ariaLabelledBy,
   closeOnBackdrop = true,
   closeOnEscape = true,
   showCloseButton = true,
@@ -79,15 +86,19 @@ export function Modal({
     <DialogPrimitive.Root open={open} onOpenChange={handleOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Backdrop
-          className="fixed inset-0 isolate z-flash bg-black/40 backdrop-blur-sm duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+          className="fixed inset-0 isolate z-flash bg-black/40 [backdrop-filter:var(--glass-blur-overlay)] duration-(--duration-fast) data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
         />
         <DialogPrimitive.Popup
           role={role}
           aria-modal="true"
           aria-label={title}
+          aria-labelledby={ariaLabelledBy}
           data-testid={testId}
           className={cn(
-            "fixed top-1/2 left-1/2 z-flash -translate-x-1/2 -translate-y-1/2 w-full max-w-[calc(100%-2rem)] bg-surface-container-lowest rounded-2xl shadow-[var(--shadow-e5)] border border-outline-variant/30 outline-none p-md duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+            // G3 (UI review 2026-09-29): the floating-layer family shares one
+            // glass-overlay material (bg/blur/border/shadow from the utility);
+            // the Backdrop above stays the plain scrim.
+            "fixed top-1/2 left-1/2 z-flash -translate-x-1/2 -translate-y-1/2 w-full max-w-[calc(100%-2rem)] glass-overlay rounded-2xl outline-none p-md duration-(--duration-fast) data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
             modalSizes({ size }),
             className
           )}

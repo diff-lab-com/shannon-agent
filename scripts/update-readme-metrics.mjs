@@ -286,7 +286,7 @@ function renderBlocks(lang, data) {
     return {
       badge: `[![Crates](https://img.shields.io/badge/crates-${data.members}-blue.svg)](./docs/metrics.md)`,
       intro: `Every line of code is auditable, and every behavior is verified by **${fmt(data.tests)} automated tests**.`,
-      diffrow: `| Test coverage | **${fmt(data.tests)}** tests across ${data.members} workspace members | Often zero tests |`,
+      diffrow: `| Test coverage | **${fmt(data.tests)}** tests across ${data.members} workspace members | n/a (closed source) | Varies |`,
       table: [
         '| Metric | Value |',
         '|--------|-------|',
@@ -307,7 +307,7 @@ function renderBlocks(lang, data) {
   return {
     badge: `[![Crates](https://img.shields.io/badge/crates-${data.members}-blue.svg)](./docs/metrics.md)`,
     intro: `每一行代码都可审计，每一个行为都经过 **${fmt(data.tests)}** 个自动化测试验证。`,
-    diffrow: `| 测试覆盖 | **${fmt(data.tests)}** 个测试，覆盖 ${data.members} 个 workspace 成员 | 通常零测试 |`,
+    diffrow: `| 测试覆盖 | **${fmt(data.tests)}** 个测试，覆盖 ${data.members} 个 workspace 成员 | 不适用（闭源） | 各不相同 |`,
     table: [
       '| 指标 | 数值 |',
       '|------|------|',

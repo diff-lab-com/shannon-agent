@@ -18,6 +18,62 @@ use crate::transport::Transport;
 // Remote Server Handle (HTTP/SSE transports)
 // ---------------------------------------------------------------------------
 
+/// Classified failure of a remote MCP connection (A2 failure presentation).
+///
+/// The desktop maps each kind to a distinct UI state — `NeedsAuth` offers
+/// re-authentication, `Unreachable` offers retry, `ServerError` offers
+/// retry plus a detail view — so the three never collapse into one generic
+/// Offline badge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteFailureKind {
+    /// The server answered 401/403 — stored credentials are missing,
+    /// expired, and (when a refresh was attempted) no longer accepted.
+    NeedsAuth,
+    /// Timeout, DNS failure, refused connection, or another transport-level
+    /// problem — retrying is meaningful.
+    Unreachable,
+    /// The server answered with a non-auth HTTP error status or a JSON-RPC
+    /// / parse error — a server-side problem.
+    ServerError,
+}
+
+impl RemoteFailureKind {
+    /// Stable wire token for the desktop IPC surface.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RemoteFailureKind::NeedsAuth => "needs_auth",
+            RemoteFailureKind::Unreachable => "unreachable",
+            RemoteFailureKind::ServerError => "server_error",
+        }
+    }
+}
+
+/// Classify a remote connection error message into a [`RemoteFailureKind`].
+///
+/// The patterns mirror the error strings `RemoteMcpServerHandle` produces
+/// in this file (kept adjacent so the two evolve together); unknown
+/// messages classify as `Unreachable` — the retryable default.
+pub fn classify_remote_failure(message: &str) -> RemoteFailureKind {
+    if message.contains("HTTP 401") || message.contains("HTTP 403") {
+        RemoteFailureKind::NeedsAuth
+    } else if message.contains("timed out")
+        || message.contains("HTTP request failed")
+        || message.contains("SSE stream error")
+        || message.contains("WebSocket")
+        || message.contains("connection refused")
+    {
+        RemoteFailureKind::Unreachable
+    } else if message.contains("returned HTTP")
+        || message.contains("' error: ")
+        || message.contains("response parse error")
+        || message.contains("SSE stream ended")
+    {
+        RemoteFailureKind::ServerError
+    } else {
+        RemoteFailureKind::Unreachable
+    }
+}
+
 /// Manages a remote MCP server connection via HTTP.
 ///
 /// Unlike `McpServerHandle` (which manages a child process over stdio),
@@ -74,6 +130,11 @@ pub(crate) struct RemoteMcpServerHandle {
     pub(crate) sampling_provider: Arc<Mutex<Option<SamplingProvider>>>,
     /// Channel for forwarding server notifications to the pool's notification handler.
     pub(crate) notification_tx: tokio::sync::mpsc::Sender<(String, Value)>,
+    /// Token-rotation callback shared with the pool (F6): fired after a
+    /// 401-triggered refresh replaced the in-memory credential, so the
+    /// embedding application can persist the new snapshot. `None` (no
+    /// subscriber) keeps rotation memory-only.
+    pub(crate) on_token_refresh: Arc<Mutex<Option<super::TokenUpdateCallback>>>,
 }
 
 impl RemoteMcpServerHandle {
@@ -182,6 +243,12 @@ impl RemoteMcpServerHandle {
             if let Some(provider) = &self.auth_provider {
                 info!(server = %self.name, "Got 401, attempting OAuth token refresh");
                 if provider.refresh_token().await.is_ok() {
+                    // F6: the refresh rotated the credential — hand the new
+                    // snapshot to the caller-side persistence seam before the
+                    // retry so a rotating refresh token survives restart even
+                    // when the retry itself fails.
+                    let snapshot = provider.token_snapshot().await;
+                    self.notify_token_refresh(&snapshot).await;
                     // Retry with refreshed token.
                     let retry = self.send_http_request(&request, timeout).await?;
                     if !retry.status().is_success() {
@@ -265,6 +332,18 @@ impl RemoteMcpServerHandle {
             self.parse_sse_response(response).await
         } else {
             self.parse_jsonrpc_response(response).await
+        }
+    }
+
+    /// Fire the pool's token-rotation callback (F6) with the post-refresh
+    /// snapshot. Fire-and-forget for the handle: persistence decisions
+    /// (dedup, locking, keyring vs plaintext) live entirely caller-side —
+    /// this crate never touches settings files or keyrings. No subscriber
+    /// is a no-op.
+    async fn notify_token_refresh(&self, snapshot: &crate::auth::OAuthTokenSnapshot) {
+        let callback = self.on_token_refresh.lock().await.clone();
+        if let Some(callback) = callback {
+            callback(&self.name, snapshot);
         }
     }
 
@@ -687,6 +766,11 @@ impl RemoteMcpServerHandle {
         if response.status().as_u16() == 401 {
             if let Some(provider) = &self.auth_provider {
                 if provider.refresh_token().await.is_ok() {
+                    // F6: same rotation notification as the single-request
+                    // path — the batch retry must not be the only record of
+                    // the new credential.
+                    let snapshot = provider.token_snapshot().await;
+                    self.notify_token_refresh(&snapshot).await;
                     let retry = self
                         .send_http_request(&serde_json::json!(batch), timeout)
                         .await?;
@@ -940,6 +1024,7 @@ mod tests {
             ws_transport: None,
             sampling_provider: Arc::new(Mutex::new(None)),
             notification_tx: ntx,
+            on_token_refresh: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1139,6 +1224,71 @@ mod tests {
     async fn protocol_version_initially_empty() {
         let handle = make_remote_handle("proto-test");
         assert!(handle.protocol_version.read().await.is_empty());
+    }
+
+    // -- failure classification --------------------------------------------
+
+    #[test]
+    fn classifies_auth_failures_as_needs_auth() {
+        for msg in [
+            "Remote MCP server 'x' returned HTTP 401 (unauthorized).",
+            "Remote MCP server 'x' returned HTTP 403",
+        ] {
+            assert_eq!(
+                classify_remote_failure(msg),
+                RemoteFailureKind::NeedsAuth,
+                "{msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_transport_failures_as_unreachable() {
+        for msg in [
+            "Remote MCP server 'x' request timed out after 30s",
+            "Remote MCP server 'x' HTTP request failed: error sending request",
+            "SSE stream error: connection reset",
+            "WebSocket connect failed for 'x': refused",
+            "Remote MCP server 'x' HTTP request failed: connection refused",
+        ] {
+            assert_eq!(
+                classify_remote_failure(msg),
+                RemoteFailureKind::Unreachable,
+                "{msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_server_side_failures_as_server_error() {
+        for msg in [
+            "Remote MCP server 'x' returned HTTP 500",
+            "Remote MCP server 'x' returned HTTP 503",
+            "Remote MCP server 'x' error: rate limited",
+            "Remote MCP server 'x' response parse error: eof",
+            "Remote MCP server 'x' SSE stream ended without JSON-RPC response",
+        ] {
+            assert_eq!(
+                classify_remote_failure(msg),
+                RemoteFailureKind::ServerError,
+                "{msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_messages_default_to_retryable_unreachable() {
+        assert_eq!(
+            classify_remote_failure("something entirely unexpected"),
+            RemoteFailureKind::Unreachable
+        );
+    }
+
+    #[test]
+    fn failure_kinds_have_stable_wire_tokens() {
+        assert_eq!(RemoteFailureKind::NeedsAuth.as_str(), "needs_auth");
+        assert_eq!(RemoteFailureKind::Unreachable.as_str(), "unreachable");
+        assert_eq!(RemoteFailureKind::ServerError.as_str(), "server_error");
     }
 
     // -- header commands safety check --------------------------------------

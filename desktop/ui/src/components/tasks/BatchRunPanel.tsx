@@ -3,7 +3,7 @@
 // `batch:updated` push), so branch chips (status color + filesChanged +
 // spentUsd) update the moment anything changes, without polling. Hidden
 // entirely when there is nothing to show — the entry point is the
-// Tasks-page「并行方案」form.
+// Tasks-page「多方案对比」form.
 //
 // When every branch is terminal the card's primary action is Compare, which
 // opens the side-by-side BatchDiffCompare dialog (diff review + adopt).
@@ -24,39 +24,43 @@ function batchStatusBadge(status: BatchRunStatus): {
   icon: string
   labelId: string
 } {
+  // Badge text is always `text-on-surface`: status-tinted text on its own
+  // 10% tint (e.g. green-600 on green-600/10 ≈ 2.9:1) is far below AA for
+  // the 11px uppercase label, and the card itself sits on a translucent
+  // glass panel. Status stays encoded in the dot + border tint.
   switch (status) {
     case 'running':
       return {
-        bg: 'bg-primary/10 text-primary border-primary/20',
+        bg: 'bg-primary/10 text-on-surface border-primary/20',
         dot: 'bg-primary animate-pulse',
         icon: 'autorenew',
         labelId: 'batch.status.running',
       }
     case 'completed':
       return {
-        bg: 'bg-green-600/10 text-green-600 border-green-600/20',
-        dot: 'bg-green-600',
+        bg: 'bg-success/10 text-on-surface border-success/20',
+        dot: 'bg-success',
         icon: 'check_circle',
         labelId: 'batch.status.completed',
       }
     case 'partially_failed':
       return {
-        bg: 'bg-tertiary/10 text-tertiary border-tertiary/20',
+        bg: 'bg-tertiary/10 text-on-surface border-tertiary/20',
         dot: 'bg-tertiary',
         icon: 'report',
         labelId: 'batch.status.partially_failed',
       }
     case 'failed':
       return {
-        bg: 'bg-error/10 text-error border-error/20',
+        bg: 'bg-error/10 text-on-surface border-error/20',
         dot: 'bg-error',
         icon: 'error',
         labelId: 'batch.status.failed',
       }
     case 'adopted':
       return {
-        bg: 'bg-green-600/10 text-green-600 border-green-600/20',
-        dot: 'bg-green-600',
+        bg: 'bg-success/10 text-on-surface border-success/20',
+        dot: 'bg-success',
         icon: 'call_merge',
         labelId: 'batch.status.adopted',
       }
@@ -71,13 +75,19 @@ function batchStatusBadge(status: BatchRunStatus): {
 }
 
 function branchChipClasses(status: BatchBranch['status']): string {
+  // Text is always `text-on-surface`: these chips sit on a translucent
+  // glass card, and low-margin pairs (on-primary-container on
+  // primary-container is only ~4.6:1 in material; `.opacity-80` drops any
+  // pair below AA) passed the sweep locally but failed on CI's compositor.
+  // Status lives in the dot + border color; the text keeps the
+  // maximum-margin surface pair.
   switch (status) {
     case 'running':
-      return 'bg-primary/10 text-primary border-primary/20'
+      return 'bg-primary/10 text-on-surface border-primary/30'
     case 'completed':
-      return 'bg-green-600/10 text-green-600 border-green-600/20'
+      return 'bg-success/10 text-on-surface border-success/20'
     case 'failed':
-      return 'bg-error/10 text-error border-error/20'
+      return 'bg-error/10 text-on-surface border-error/20'
   }
 }
 
@@ -97,14 +107,14 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
 
   return (
     <div
-      className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-sm bg-surface-container-lowest/80"
+      className="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-md shadow-e1"
       data-testid="batch-run-card"
       data-status={run.status}
     >
       <div className="flex items-start justify-between gap-md">
         <div className="flex items-start gap-md min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-tertiary/10 flex items-center justify-center text-tertiary shrink-0">
-            <span className="material-symbols-outlined text-[24px]">call_split</span>
+          <div className="w-10 h-10 rounded-xl bg-tertiary-container flex items-center justify-center text-on-tertiary-container shrink-0">
+            <span className="material-symbols-outlined icon-lg">call_split</span>
           </div>
           <div className="min-w-0">
             <h3 className="font-body-lg font-semibold text-on-surface truncate">
@@ -116,12 +126,12 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
         <div
           title={t(badge.labelId)}
           className={cn(
-            'flex items-center gap-xs px-sm py-1 rounded-full border shrink-0',
+            'flex items-center gap-xs px-sm py-xs rounded-full border shrink-0',
             badge.bg,
           )}
         >
           <span className={cn('w-2 h-2 rounded-full', badge.dot)} />
-          <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">
+          <span className="font-label-sm text-label-xs font-bold uppercase tracking-wider">
             {t(badge.labelId)}
           </span>
         </div>
@@ -135,13 +145,13 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
             data-testid={`batch-branch-chip-${branch.index}`}
             title={branch.error ?? branch.branchName}
             className={cn(
-              'flex items-center gap-1 px-sm py-1 rounded-lg border font-label-xs',
+              'flex items-center gap-xs px-sm py-xs rounded-lg border font-label-xs',
               branchChipClasses(branch.status),
             )}
           >
             <span className="font-bold">#{branch.index}</span>
             <span
-              className={cn('w-1.5 h-1.5 rounded-full', branch.status === 'running' && 'animate-pulse', branch.status === 'completed' ? 'bg-green-600' : branch.status === 'failed' ? 'bg-error' : 'bg-current')}
+              className={cn('w-1.5 h-1.5 rounded-full', branch.status === 'running' && 'animate-pulse', branch.status === 'completed' ? 'bg-success' : branch.status === 'failed' ? 'bg-error' : 'bg-current')}
             />
             {branch.summary ? (
               <span className="tabular-nums">
@@ -152,7 +162,7 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
             ) : (
               <span>…</span>
             )}
-            <span className="tabular-nums opacity-80">
+            <span className="tabular-nums">
               {intl.formatNumber(branch.spentUsd, { style: 'currency', currency: 'USD' })}
             </span>
           </li>
@@ -217,7 +227,7 @@ export default function BatchRunPanel() {
         id="batch-runs-heading"
         className="font-label-lg font-bold text-on-surface mb-sm flex items-center gap-xs"
       >
-        <span className="material-symbols-outlined text-[18px] text-tertiary" aria-hidden="true">
+        <span className="material-symbols-outlined icon-md text-tertiary" aria-hidden="true">
           call_split
         </span>
         {intl.formatMessage({ id: 'batch.panel.heading' })}

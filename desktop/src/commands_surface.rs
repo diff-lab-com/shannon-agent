@@ -78,6 +78,12 @@ fn shannon_on_path() -> Option<std::path::PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// The bundled sidecar CLI, else the first `shannon` on PATH — for commands
+/// that shell out to the engine CLI (diagnostics export).
+pub(crate) fn resolve_cli() -> Option<std::path::PathBuf> {
+    bundled_cli_path().or_else(shannon_on_path)
+}
+
 /// First whitespace-separated token that starts with a digit —
 /// `shannon 0.11.0` → `0.11.0`.
 fn probe_version(binary: &std::path::Path) -> Option<String> {
@@ -303,20 +309,490 @@ pub async fn check_app_update() -> Result<AppUpdateInfo, String> {
     Ok(info)
 }
 
+/// The only URL this command may open: an https URL on the official repo
+/// domain (repo root, releases tree — covers `/releases`, `/releases/tag/…`,
+/// `/blob/…` etc.).
+fn is_official_release_url(url: &str) -> bool {
+    let parsed = url::Url::parse(url);
+    match parsed {
+        Ok(u) => {
+            u.scheme() == "https"
+                && u.host_str() == Some("github.com")
+                && u.path().starts_with("/diff-lab-com/shannon-agent")
+        }
+        Err(_) => false,
+    }
+}
+
+/// Settings R3 — the Shannon data directory, shown read-only in
+/// Settings → 关于. `shannon_core::data_meta::home()` honors `$SHANNON_HOME`
+/// and falls back to `~/.shannon`; the UI only displays it (moving the
+/// directory is a manual migration, no command mutates it here).
+#[tauri::command]
+pub async fn get_shannon_home() -> Result<String, String> {
+    Ok(shannon_core::data_meta::home().display().to_string())
+}
+
+/// Settings R3 T3 — platform + keep-awake capability probe for the
+/// General settings' System cards.
+///
+/// The UI uses `platform` to hide the hardware-acceleration card on macOS
+/// (no escape hatch there) and `keepAwakeSupported` to disable + annotate
+/// the prevent-sleep switches where no backend exists. Supported matrix:
+/// macOS always (caffeinate), Windows always (process-domain PowerRequest
+/// at compile time), Linux only when `systemd-inhibit` resolves at runtime.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PowerCapabilities {
+    /// `std::env::consts::OS` (`"macos"` | `"windows"` | `"linux"` | …).
+    pub platform: String,
+    /// Whether the prevent-sleep backend is usable on this machine.
+    pub keep_awake_supported: bool,
+}
+
+#[tauri::command]
+pub async fn get_power_capabilities() -> PowerCapabilities {
+    let platform = std::env::consts::OS.to_string();
+    let keep_awake_supported = if cfg!(any(target_os = "macos", target_os = "windows")) {
+        true
+    } else if cfg!(target_os = "linux") {
+        shannon_core::prevent_sleep::systemd_inhibit_available()
+    } else {
+        false
+    };
+    PowerCapabilities {
+        platform,
+        keep_awake_supported,
+    }
+}
+
 /// C1①: open the release page in the system browser — same shell-open
 /// precedent as the OAuth flow in extensions_commands.rs.
+///
+/// Review §P3 (桌面): the URL comes back from the webview, i.e. from a
+/// potentially compromised renderer — it must not be opened unless it
+/// points at the official repository domain, otherwise the command is an
+/// arbitrary-URL opener (phishing / command-prompt abuse via `shell::open`).
 #[tauri::command]
 pub async fn open_release_page(app: tauri::AppHandle, url: String) -> Result<(), String> {
     use tauri_plugin_shell::ShellExt;
+    if !is_official_release_url(&url) {
+        tracing::warn!(url = %url, "open_release_page rejected non-official URL");
+        return Err(format!("refusing to open non-official URL: {url}"));
+    }
     #[allow(deprecated)]
     app.shell()
         .open(url, None)
         .map_err(|e| format!("failed to open browser: {e}"))
 }
 
+// ---------------------------------------------------------------------------
+// External open pipeline (2026-09-25 design doc §4 P0-A / P1-D / P1-E).
+//
+// `open_release_page` above deliberately whitelists a single domain; the
+// chat pipeline needs the general case, so the posture shifts from
+// "whitelist the URL" to "whitelist the scheme + scope the paths" (§5
+// decision 1): only http/https URLs leave the app, and path commands only
+// act inside $HOME/** / $TEMP/** — the same scope the asset protocol
+// already grants the webview.
+// ---------------------------------------------------------------------------
+
+/// Decision §5-1: only http/https URLs may be opened. Every other scheme
+/// (`file:`, `javascript:`, custom app handlers) is rejected so a
+/// compromised renderer cannot turn this command into an arbitrary opener.
+fn is_openable_url(url: &str) -> bool {
+    match url::Url::parse(url) {
+        Ok(u) => matches!(u.scheme(), "http" | "https") && u.host_str().is_some(),
+        Err(_) => false,
+    }
+}
+
+/// Path roots the external-open commands may touch. Mirrors the asset
+/// protocol scope in tauri.conf.json (`$HOME/**`, `$TEMP/**`). Bases are
+/// canonicalized the same way the probed path will be — macOS resolves
+/// `/var` → `/private/var` inside `std::env::temp_dir()`, and Windows
+/// `canonicalize` returns `\\?\`-prefixed verbatim paths, both of which
+/// would otherwise never `starts_with` the raw base (§review P1-3).
+pub(crate) fn allowed_path_bases() -> Vec<std::path::PathBuf> {
+    // Each base is admitted in BOTH spellings: the canonicalized form
+    // (/private/var/... on macOS) matches canonicalized candidates, and the
+    // raw form (/var/...) matches lexical probes of not-yet-existing paths
+    // under the /tmp|/var aliases — canonicalizing those is impossible and
+    // rejecting them would make /tmp paths unusable on macOS only.
+    let mut bases = Vec::new();
+    let mut push = |p: std::path::PathBuf| {
+        if !bases.contains(&p) {
+            bases.push(p);
+        }
+    };
+    for raw in [dirs::home_dir(), Some(std::env::temp_dir())]
+        .into_iter()
+        .flatten()
+    {
+        push(strip_windows_verbatim(&raw));
+        push(normalized_base(&raw));
+    }
+    bases
+}
+
+fn normalized_base(base: &std::path::Path) -> std::path::PathBuf {
+    let canonical = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    strip_windows_verbatim(&canonical)
+}
+
+fn strip_windows_verbatim(p: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        p.as_os_str()
+            .to_string_lossy()
+            .strip_prefix(r"\\?\")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| p.to_path_buf())
+    }
+    #[cfg(not(windows))]
+    {
+        p.to_path_buf()
+    }
+}
+
+/// Strict scope check for commands that *act* on a path (open / reveal /
+/// read): the path must exist and canonicalize inside an allowed base, so
+/// both `..` segments and symlink escapes fail.
+pub(crate) fn canonicalized_in_scope(path: &str) -> Result<std::path::PathBuf, String> {
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return Err(format!("path must be absolute: {path}"));
+    }
+    let canonical = p
+        .canonicalize()
+        .map_err(|e| format!("path not accessible: {path}: {e}"))?;
+    let canonical = strip_windows_verbatim(&canonical);
+    if allowed_path_bases()
+        .iter()
+        .any(|base| canonical.starts_with(base))
+    {
+        Ok(canonical)
+    } else {
+        Err(format!(
+            "path outside allowed scope ($HOME/**, $TEMP/**): {path}"
+        ))
+    }
+}
+
+/// Lexical scope check for pure existence probes: the probed path may not
+/// exist (that is what the probe is for), so there is nothing to
+/// canonicalize — reject non-absolute paths and any `..` traversal, then
+/// let the caller test the filesystem. Content is never returned through
+/// this path, so a symlink escape only leaks a boolean.
+pub(crate) fn is_probable_path_in_scope(path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return false;
+    }
+    if p.components().any(|c| c == std::path::Component::ParentDir) {
+        return false;
+    }
+    allowed_path_bases().iter().any(|base| p.starts_with(base))
+}
+
+/// Open an http/https URL in the system browser (chat links, web tabs).
+#[tauri::command]
+pub async fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    if !is_openable_url(&url) {
+        tracing::warn!(url = %url, "open_external rejected non-http(s) URL");
+        return Err(format!("refusing to open non-http(s) URL: {url}"));
+    }
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("failed to open URL: {e}"))
+}
+
+/// Open a local file with its OS default application.
+#[tauri::command]
+pub async fn open_with_default_app(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let canonical = canonicalized_in_scope(&path)?;
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(canonical.to_string_lossy(), None::<&str>)
+        .map_err(|e| format!("failed to open path: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Office Wave 1 — host runtime probe. The built-in document skills
+// (markdown → docx/xlsx/pdf conversion) shell out to python3/pandoc/
+// LibreOffice; this command tells the UI which of them are actually
+// installed before it offers those actions.
+// ---------------------------------------------------------------------------
+
+/// Availability of the host-run tools the built-in document skills need.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostRuntimeProbe {
+    /// A Python interpreter answered `--version` (`python3`, falling back
+    /// to `python` for distros that only ship the bare name).
+    pub python3: bool,
+    /// First version line the interpreter printed (e.g. `Python 3.12.3`),
+    /// `None` when no interpreter was found.
+    pub python_version: Option<String>,
+    pub pandoc: bool,
+    pub libreoffice: bool,
+}
+
+/// Wall-clock budget per probed binary. Version banners are instant; the
+/// budget only exists so a wedged wrapper script can never pin the probe.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Run `cmd args` and return the first non-empty output line — stdout
+/// first, stderr as fallback (older CPythons print `--version` to stderr).
+/// `None` when the binary is missing, exits non-zero, or hangs past
+/// [`PROBE_TIMEOUT`]. Never panics; split out so tests can exercise it
+/// with binaries that exist on any dev machine.
+fn probe_bin(cmd: &str, args: &[&str]) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?; // binary missing / not executable → silent false
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => return None,
+        }
+    };
+    if !status.success() {
+        return None;
+    }
+    // Version banners sit far below the OS pipe buffer, so reading after
+    // exit cannot block; anything bigger would starve the child and hit
+    // the timeout above instead.
+    let mut out = Vec::new();
+    if let Some(pipe) = child.stdout.as_mut() {
+        let _ = pipe.read_to_end(&mut out);
+    }
+    let mut err = Vec::new();
+    if let Some(pipe) = child.stderr.as_mut() {
+        let _ = pipe.read_to_end(&mut err);
+    }
+    let first_line = |bytes: &[u8]| {
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(String::from)
+    };
+    first_line(&out).or_else(|| first_line(&err))
+}
+
+/// Probe the host for python3/pandoc/LibreOffice. Purely informational:
+/// every probe is a `--version` invocation with a short timeout, a missing
+/// binary degrades to `false`/`None`, and the command never fails.
+#[tauri::command]
+pub async fn probe_host_runtime() -> Result<HostRuntimeProbe, String> {
+    // Three probes × up to PROBE_TIMEOUT each — run the sweep on the
+    // blocking pool so a slow tool never occupies an async executor thread
+    // (same pattern as the bounded file-tree walk).
+    tokio::task::spawn_blocking(|| {
+        // `python3 --version` first; fall back to bare `python` (older
+        // CPythons print the banner to stderr — probe_bin reads both).
+        let python_version =
+            probe_bin("python3", &["--version"]).or_else(|| probe_bin("python", &["--version"]));
+        Ok(HostRuntimeProbe {
+            python3: python_version.is_some(),
+            python_version,
+            pandoc: probe_bin("pandoc", &["--version"]).is_some(),
+            libreoffice: probe_bin("soffice", &["--version"]).is_some(),
+        })
+    })
+    .await
+    .map_err(|e| format!("host runtime probe task failed: {e}"))?
+}
+
+/// Show a local file in the OS file manager.
+#[tauri::command]
+pub async fn reveal_in_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let canonical = canonicalized_in_scope(&path)?;
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .reveal_item_in_dir(&canonical)
+        .map_err(|e| format!("failed to reveal path: {e}"))
+}
+
+const ARTIFACT_EXPORT_EXTS: [&str; 8] = [
+    "md", "markdown", "html", "htm", "svg", "mmd", "mermaid", "txt",
+];
+const MAX_ARTIFACT_EXPORT_BYTES: usize = 2 * 1024 * 1024;
+
+fn slugify_title(title: &str) -> String {
+    let mut slug = String::new();
+    for ch in title.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if !slug.ends_with('_') {
+            slug.push('_');
+        }
+    }
+    let slug = slug.trim_matches('_');
+    if slug.is_empty() {
+        "artifact".to_string()
+    } else {
+        slug.chars().take(48).collect()
+    }
+}
+
+/// Deterministic temp filename so re-exporting the same artifact rewrites
+/// its file instead of littering $TEMP with copies.
+fn artifact_temp_file_name(title: &str, source: &str, ext: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    format!(
+        "{}-{:08x}.{ext}",
+        slugify_title(title),
+        hasher.finish() as u32
+    )
+}
+
+/// P1-D escape hatch: render HTML (or other text artifacts) where the OS
+/// renders it best — write to $TEMP, then hand to the default application.
+/// Returns the temp path that was opened.
+#[tauri::command]
+pub async fn open_artifact_externally(
+    app: tauri::AppHandle,
+    title: String,
+    source: String,
+    ext: String,
+) -> Result<String, String> {
+    let ext = ext.to_ascii_lowercase();
+    if !ARTIFACT_EXPORT_EXTS.contains(&ext.as_str()) {
+        return Err(format!("unsupported artifact extension: {ext}"));
+    }
+    if source.len() > MAX_ARTIFACT_EXPORT_BYTES {
+        return Err(format!(
+            "artifact too large to export: {} bytes",
+            source.len()
+        ));
+    }
+    let dir = std::env::temp_dir().join("shannon-artifacts");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("failed to create temp dir: {e}"))?;
+    let path = dir.join(artifact_temp_file_name(&title, &source, &ext));
+    tokio::fs::write(&path, &source)
+        .await
+        .map_err(|e| format!("failed to write temp artifact: {e}"))?;
+    let path_str = path.to_string_lossy().into_owned();
+    open_with_default_app(app, path_str.clone()).await?;
+    Ok(path_str)
+}
+
+/// P1-E: the web tab probes the target server-side because X-Frame-Options
+/// / frame-ancestors rejections cannot be detected from inside a
+/// cross-origin iframe — this turns a blank frame into an immediate
+/// "open in browser" fallback card.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameProbe {
+    pub frameable: bool,
+    pub status: u16,
+    pub reason: Option<String>,
+}
+
+/// Pure header inspection for `probe_url_frameable`, split out for tests.
+/// Reads every CSP header (a site may emit several; the strictest wins) —
+/// `frame-ancestors` with any explicit list is treated as "not frameable"
+/// (the app origin is never on a third party's allowlist; `*` and absence
+/// of the directive frame freely).
+fn headers_allow_framing(xfo: Option<&str>, csps: &[&str]) -> (bool, Option<String>) {
+    if let Some(xfo) = xfo {
+        let v = xfo.to_ascii_lowercase();
+        if v.contains("deny") || v.contains("sameorigin") {
+            return (false, Some(format!("x-frame-options: {xfo}")));
+        }
+    }
+    for csp in csps {
+        for directive in csp.split(';') {
+            if let Some(rest) = directive.trim().strip_prefix("frame-ancestors") {
+                let rest = rest.trim();
+                if rest == "*" {
+                    return (true, None);
+                }
+                return (false, Some(format!("frame-ancestors: {rest}")));
+            }
+        }
+    }
+    (true, None)
+}
+
+#[tauri::command]
+pub async fn probe_url_frameable(url: String) -> Result<FrameProbe, String> {
+    if !is_openable_url(&url) {
+        return Err(format!("refusing to probe non-http(s) URL: {url}"));
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("user-agent", "Mozilla/5.0 (Shannon artifact frame probe)")
+        .send()
+        .await;
+    match resp {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let header = |name: &str| -> Vec<String> {
+                resp.headers()
+                    .get_all(name)
+                    .iter()
+                    .filter_map(|v| v.to_str().ok())
+                    .map(|s| s.to_string())
+                    .collect()
+            };
+            let xfo = header("x-frame-options");
+            let csps = header("content-security-policy");
+            let xfo_ref: Option<&str> = xfo.first().map(|s| s.as_str());
+            let csp_refs: Vec<&str> = csps.iter().map(|s| s.as_str()).collect();
+            let (frameable, reason) = headers_allow_framing(xfo_ref, &csp_refs);
+            Ok(FrameProbe {
+                frameable,
+                status,
+                reason,
+            })
+        }
+        // Transport failure: the embedded frame may still work (proxies,
+        // login-gated hosts) — let the iframe try rather than pre-failing.
+        Err(e) => Ok(FrameProbe {
+            frameable: true,
+            status: 0,
+            reason: Some(format!("probe transport error: {e}")),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::version_is_newer;
+    use super::{
+        ARTIFACT_EXPORT_EXTS, HostRuntimeProbe, artifact_temp_file_name, canonicalized_in_scope,
+        headers_allow_framing, is_official_release_url, is_openable_url, is_probable_path_in_scope,
+        probe_bin, slugify_title, version_is_newer,
+    };
 
     #[test]
     fn detects_newer_patch_minor_major() {
@@ -342,5 +818,207 @@ mod tests {
         assert!(version_is_newer("0.11", "v0.12"));
         assert!(version_is_newer("0.11.0", "0.12")); // missing parts are 0
         assert!(!version_is_newer("0.11.0", "0.11.0.0"));
+    }
+
+    #[test]
+    fn rejects_non_official_urls() {
+        // Wrong scheme / host / path / parse garbage — all refused.
+        assert!(!is_official_release_url(
+            "http://github.com/diff-lab-com/shannon-agent/releases"
+        ));
+        assert!(!is_official_release_url(
+            "https://evil.com/diff-lab-com/shannon-agent/releases"
+        ));
+        assert!(!is_official_release_url(
+            "https://github.com.evil.com/diff-lab-com/shannon-agent/releases"
+        ));
+        assert!(!is_official_release_url(
+            "https://github.com/other-org/shannon-agent/releases"
+        ));
+        assert!(!is_official_release_url("file:///etc/passwd"));
+        assert!(!is_official_release_url("not a url"));
+    }
+
+    #[test]
+    fn accepts_official_repo_urls() {
+        assert!(is_official_release_url(
+            "https://github.com/diff-lab-com/shannon-agent/releases"
+        ));
+        assert!(is_official_release_url(
+            "https://github.com/diff-lab-com/shannon-agent/releases/tag/v0.12.0"
+        ));
+        assert!(is_official_release_url(
+            "https://github.com/diff-lab-com/shannon-agent"
+        ));
+    }
+
+    // -- open pipeline (§4 P0-A) -------------------------------------------
+
+    #[test]
+    fn openable_urls_are_http_https_with_host() {
+        assert!(is_openable_url("https://example.com/docs"));
+        assert!(is_openable_url("http://localhost:1420/preview"));
+        assert!(!is_openable_url("file:///etc/passwd"));
+        assert!(!is_openable_url("javascript:alert(1)"));
+        assert!(!is_openable_url("ftp://example.com/a"));
+        assert!(!is_openable_url("https:"));
+        assert!(!is_openable_url("not a url"));
+    }
+
+    #[test]
+    fn canonical_scope_rejects_traversal_and_outside_paths() {
+        let base = std::env::temp_dir().join("shannon-scope-test");
+        std::fs::create_dir_all(&base).unwrap();
+        let inside = base.join("inside.txt");
+        std::fs::write(&inside, "ok").unwrap();
+
+        let got = canonicalized_in_scope(&inside.to_string_lossy());
+        assert!(got.is_ok(), "temp file must be in scope: {got:?}");
+
+        assert!(canonicalized_in_scope("relative/file.txt").is_err());
+        assert!(canonicalized_in_scope("/etc/passwd").is_err());
+        assert!(canonicalized_in_scope("/nonexistent-path-xyz").is_err());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn probable_scope_rejects_relative_and_traversal() {
+        let inside = std::env::temp_dir().join("somewhere/file.md");
+        assert!(is_probable_path_in_scope(&inside.to_string_lossy()));
+        assert!(!is_probable_path_in_scope("relative/file.md"));
+        let traversal = std::env::temp_dir()
+            .join("a/../../etc/passwd")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!is_probable_path_in_scope(&traversal));
+    }
+
+    // -- artifact export (§4 P1-D) ------------------------------------------
+
+    #[test]
+    fn artifact_ext_whitelist() {
+        assert!(ARTIFACT_EXPORT_EXTS.contains(&"html"));
+        assert!(!ARTIFACT_EXPORT_EXTS.contains(&"exe"));
+        assert!(!ARTIFACT_EXPORT_EXTS.contains(&"pdf"));
+    }
+
+    #[test]
+    fn slugify_takes_ascii_alnum_only() {
+        assert_eq!(slugify_title("My Report!"), "my_report");
+        assert_eq!(slugify_title("报告 文档"), "artifact");
+        assert_eq!(slugify_title("---"), "artifact");
+        assert_eq!(slugify_title("A B").len(), 3);
+    }
+
+    #[test]
+    fn artifact_temp_name_is_deterministic_per_source() {
+        let a = artifact_temp_file_name("Report", "content-a", "html");
+        let b = artifact_temp_file_name("Report", "content-a", "html");
+        let c = artifact_temp_file_name("Report", "content-b", "html");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert!(a.ends_with(".html"));
+    }
+
+    // -- web tab framing probe (§4 P1-E) ------------------------------------
+
+    #[test]
+    fn xfo_headers_block_framing() {
+        let (frameable, reason) = headers_allow_framing(Some("DENY"), &[]);
+        assert!(!frameable);
+        assert!(reason.unwrap().contains("DENY"));
+
+        let (frameable, _) = headers_allow_framing(Some("SAMEORIGIN"), &[]);
+        assert!(!frameable);
+
+        let (frameable, _) = headers_allow_framing(Some("allow-from https://a"), &[]);
+        assert!(frameable, "legacy allow-from is not the common block case");
+    }
+
+    #[test]
+    fn csp_frame_ancestors_blocks_framing_unless_star() {
+        let (frameable, _) = headers_allow_framing(
+            None,
+            &["default-src 'self'; frame-ancestors 'none'; script-src 'self'"],
+        );
+        assert!(!frameable);
+
+        let (frameable, _) = headers_allow_framing(
+            None,
+            &["default-src 'self'; frame-ancestors https://partner.example"],
+        );
+        assert!(!frameable);
+
+        let (frameable, _) = headers_allow_framing(
+            None,
+            &["default-src 'self'; frame-ancestors *; script-src 'self'"],
+        );
+        assert!(frameable);
+    }
+
+    #[test]
+    fn second_csp_header_with_ancestors_still_blocks() {
+        let (frameable, _) =
+            headers_allow_framing(None, &["default-src 'self'", "frame-ancestors 'none'"]);
+        assert!(!frameable);
+    }
+
+    #[test]
+    fn no_framing_headers_means_frameable() {
+        let (frameable, reason) = headers_allow_framing(None, &[]);
+        assert!(frameable);
+        assert!(reason.is_none());
+
+        let (frameable, _) = headers_allow_framing(None, &["default-src 'self'"]);
+        assert!(frameable);
+    }
+
+    // -- office Wave 1: host runtime probe ----------------------------------
+
+    #[test]
+    fn probe_bin_reads_first_line_of_stdout() {
+        // `rustc` exists on every machine that can compile this test, so
+        // the helper is testable without assuming python3/pandoc/soffice.
+        let version = probe_bin("rustc", &["--version"]).expect("rustc must be probeable");
+        assert!(version.starts_with("rustc "), "got: {version}");
+        assert!(!version.contains('\n'), "first line only, got: {version}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_bin_falls_back_to_stderr() {
+        // Older CPythons print their version banner to stderr — the helper
+        // must still surface it. `sh` exists on every Unix.
+        let line = probe_bin("sh", &["-c", "echo banner-to-stderr 1>&2"])
+            .expect("stderr-only output must be returned");
+        assert_eq!(line, "banner-to-stderr");
+    }
+
+    #[test]
+    fn probe_bin_returns_none_for_missing_binary() {
+        assert!(probe_bin("shannon-not-a-real-binary-xyz", &["--version"]).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_bin_returns_none_for_non_zero_exit() {
+        assert!(probe_bin("sh", &["-c", "echo boom >&2; exit 3"]).is_none());
+    }
+
+    #[test]
+    fn host_runtime_probe_serializes_camel_case() {
+        // The frontend's `HostRuntimeProbe` interface reads `pythonVersion`
+        // — the wire shape must stay camelCase.
+        let json = serde_json::to_value(HostRuntimeProbe {
+            python3: true,
+            python_version: Some("Python 3.12.3".to_string()),
+            pandoc: false,
+            libreoffice: false,
+        })
+        .unwrap();
+        assert_eq!(json["python3"], true);
+        assert_eq!(json["pythonVersion"], "Python 3.12.3");
+        assert_eq!(json["pandoc"], false);
+        assert_eq!(json["libreoffice"], false);
     }
 }

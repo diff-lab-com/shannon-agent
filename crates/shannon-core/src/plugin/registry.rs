@@ -129,6 +129,20 @@ impl PluginRegistry {
                         super::validate::warn_about(&warnings);
                     }
                     let name = manifest.name.clone();
+
+                    // F18(d): duplicate names used to overwrite silently
+                    // (last directory scanned won), hiding one plugin and
+                    // making its files unreachable through the registry.
+                    // Surface the collision as a load failure instead.
+                    if self.plugins.contains_key(&name) {
+                        failures.push(format!(
+                            "{}: duplicate plugin name '{name}' — a plugin with this name is \
+                             already loaded from another directory; rename one of the manifests",
+                            path.display()
+                        ));
+                        continue;
+                    }
+
                     let enabled = self.config.is_enabled(&name);
 
                     self.plugins.insert(
@@ -173,6 +187,8 @@ impl PluginRegistry {
 
         // Extract plugin name from repo URL
         let plugin_name = Self::extract_name_from_url(repo_url)?;
+        // F18: the name becomes a directory under the plugins dir.
+        Self::assert_safe_install_name(&plugin_name)?;
 
         // Check if already installed
         if self.plugins.contains_key(&plugin_name) {
@@ -198,6 +214,10 @@ impl PluginRegistry {
                 "Failed to clone {repo_url}"
             )));
         }
+
+        // F18 defense-in-depth: the clone must have landed inside the
+        // plugins directory (canonical paths resolve symlinks).
+        self.ensure_contained_in_plugins_dir(&target_dir).await?;
 
         // Load manifest and gate installation on it (§4.10 install-time checks)
         let manifest = self.load_manifest_from_dir(&target_dir).await?;
@@ -252,6 +272,11 @@ impl PluginRegistry {
 
         let plugin_name = manifest.name.clone();
 
+        // F18: the manifest-controlled name is joined onto the plugins
+        // directory below — a name like "../foo" (or an absolute path) must
+        // never escape it.
+        Self::assert_safe_install_name(&plugin_name)?;
+
         // Check if already installed
         if self.plugins.contains_key(&plugin_name) {
             return Err(PluginError::AlreadyInstalled(plugin_name));
@@ -263,6 +288,10 @@ impl PluginRegistry {
         // Create target and copy contents
         fs::create_dir_all(&target_dir).await?;
         Self::copy_dir_contents(path, &target_dir).await?;
+
+        // F18 defense-in-depth: verify the copy landed inside the plugins
+        // directory (canonical paths resolve symlinks).
+        self.ensure_contained_in_plugins_dir(&target_dir).await?;
 
         // Register the plugin
         self.plugins.insert(
@@ -283,9 +312,16 @@ impl PluginRegistry {
             .plugins
             .get(name)
             .ok_or_else(|| PluginError::NotFound(name.to_string()))?;
+        let path = plugin.path.clone();
+
+        // F18 defense-in-depth: the delete target is resolved through
+        // canonical paths (which follow symlinks) and must sit inside the
+        // plugins directory — a registry entry pointing elsewhere (legacy
+        // install, tampered state) is refused instead of remove_dir_all'd.
+        self.ensure_contained_in_plugins_dir(&path).await?;
 
         // Remove plugin directory
-        fs::remove_dir_all(&plugin.path).await?;
+        fs::remove_dir_all(&path).await?;
 
         // Remove from registry
         self.plugins.remove(name);
@@ -443,7 +479,13 @@ impl PluginRegistry {
         )))
     }
 
-    /// Extract plugin name from git URL
+    /// Extract plugin name from git URL.
+    ///
+    /// The raw last path segment becomes the clone target directory, so an
+    /// empty result (URL ending in `/`), `.` or `..` (URL ending in `/..`)
+    /// is rejected with an error instead of cloning into the plugins
+    /// directory root or outside it (review F18). The caller additionally
+    /// applies the full safe-name gate.
     fn extract_name_from_url(url: &str) -> PluginResult<String> {
         // Remove .git suffix if present
         let url = url.trim_end_matches(".git");
@@ -454,7 +496,44 @@ impl PluginRegistry {
             .next_back()
             .ok_or_else(|| PluginError::InvalidManifest(format!("Invalid URL: {url}")))?;
 
+        if name.is_empty() || name == "." || name == ".." {
+            return Err(PluginError::InvalidManifest(format!(
+                "cannot derive a plugin directory name from URL '{url}': last path segment is empty or unsafe"
+            )));
+        }
+
         Ok(name.to_string())
+    }
+
+    /// F18 defense-in-depth behind manifest validation: a plugin name is
+    /// joined onto the plugins directory (`plugins_dir.join(name)`) on every
+    /// install — it must be a single safe path component.
+    fn assert_safe_install_name(name: &str) -> PluginResult<()> {
+        if super::validate::is_safe_plugin_name(name) {
+            Ok(())
+        } else {
+            Err(PluginError::InvalidManifest(format!(
+                "plugin name '{name}' is not a safe directory name (must match [A-Za-z0-9][A-Za-z0-9._-]*)"
+            )))
+        }
+    }
+
+    /// F18 defense-in-depth for the destructive/copying operations: resolve
+    /// `target` and the plugins directory through canonical paths (which
+    /// follow symlinks) and refuse anything that would land outside.
+    async fn ensure_contained_in_plugins_dir(&self, target: &Path) -> PluginResult<()> {
+        let plugins_root = fs::canonicalize(&self.plugins_dir)
+            .await
+            .unwrap_or_else(|_| self.plugins_dir.clone());
+        let resolved = fs::canonicalize(target).await?;
+        if !resolved.starts_with(&plugins_root) {
+            return Err(PluginError::InvalidManifest(format!(
+                "plugin directory '{}' resolves outside the plugins directory '{}' — refusing to modify it",
+                resolved.display(),
+                plugins_root.display()
+            )));
+        }
+        Ok(())
     }
 
     /// Install-time gate shared by git/path/update flows (§4.10):
@@ -530,6 +609,160 @@ mod tests {
             PluginRegistry::extract_name_from_url("git@github.com:user/repo.git").unwrap(),
             "repo"
         );
+    }
+
+    // ---------- F18: traversal-safe install/uninstall -------------------
+
+    #[test]
+    fn extract_name_rejects_unsafe_url_segments() {
+        // F18(c): the last URL segment becomes the clone directory — an
+        // empty segment (trailing '/') used to clone into the plugins-dir
+        // ROOT, and `..` used to escape it. Both must be rejected.
+        for bad in [
+            "https://github.com/user/",
+            "https://github.com/user/.",
+            "https://github.com/user/..",
+            ".git",
+            "",
+            "/",
+        ] {
+            let err = PluginRegistry::extract_name_from_url(bad)
+                .expect_err(&format!("URL {bad:?} must not yield a plugin name"));
+            let msg = err.to_string();
+            assert!(
+                msg.contains("empty or unsafe") || msg.contains("Invalid URL"),
+                "clear error for {bad:?}, got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn safe_install_name_gate() {
+        for bad in ["../foo", "..", ".", "/abs", "a/b", ""] {
+            assert!(
+                PluginRegistry::assert_safe_install_name(bad).is_err(),
+                "unsafe install name {bad:?} must be refused"
+            );
+        }
+        for good in ["repo", "my.plugin", "a-b_c0"] {
+            assert!(PluginRegistry::assert_safe_install_name(good).is_ok());
+        }
+    }
+
+    /// F18(a)+(b): a manifest whose name escapes the plugins dir must be
+    /// refused before anything is written — and nothing may appear outside.
+    #[tokio::test]
+    async fn install_from_path_refuses_traversal_manifest_name() {
+        let temp_dir = TempDir::new().unwrap();
+        let source_dir = temp_dir.path().join("source");
+        fs::create_dir_all(&source_dir).await.unwrap();
+        fs::write(
+            source_dir.join("plugin.toml"),
+            r#"
+name = "../outside"
+version = "1.0.0"
+description = "tries to escape"
+type = "skill"
+entry = "t.md"
+trigger = "/t"
+template = "t"
+"#,
+        )
+        .await
+        .unwrap();
+
+        let plugins_dir = temp_dir.path().join("plugins");
+        let mut registry = PluginRegistry::new(plugins_dir);
+        let err = registry
+            .install_from_path(&source_dir)
+            .await
+            .expect_err("traversal name must be refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("../outside")
+                && (msg.contains("must match [A-Za-z0-9]") || msg.contains("safe directory name")),
+            "{msg}"
+        );
+
+        // Nothing was created outside the plugins dir…
+        assert!(
+            !temp_dir.path().join("outside").exists(),
+            "no directory may be created next to the plugins dir"
+        );
+        // …and the plugins dir itself was never polluted with a traversal
+        // attempt (the refusal happens before create_dir_all).
+        let mut entries = fs::read_dir(temp_dir.path().join("plugins")).await.unwrap();
+        assert!(
+            entries.next_entry().await.unwrap().is_none(),
+            "plugins dir must stay empty on refusal"
+        );
+    }
+
+    /// F18(b): uninstall must refuse — not delete — a registry entry whose
+    /// directory resolves outside the plugins dir.
+    #[tokio::test]
+    async fn uninstall_refuses_directories_outside_the_plugins_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let plugins_dir = temp_dir.path().join("plugins");
+        fs::create_dir_all(&plugins_dir).await.unwrap();
+
+        let victim = temp_dir.path().join("precious-data");
+        fs::create_dir_all(&victim).await.unwrap();
+        std::fs::write(victim.join("keep.txt"), "do not delete").unwrap();
+
+        let mut registry = PluginRegistry::new(plugins_dir);
+        // Simulate a tampered/legacy registry entry pointing outside.
+        registry.plugins.insert(
+            "hostile".to_string(),
+            InstalledPlugin {
+                manifest: PluginManifest::from_toml(
+                    "name = \"hostile\"\nversion = \"1.0.0\"\ndescription = \"d\"\ntype = \"skill\"\nentry = \"t.md\"\ntrigger = \"/h\"\ntemplate = \"t\"\n",
+                )
+                .unwrap(),
+                path: victim.clone(),
+                enabled: true,
+            },
+        );
+
+        let err = registry
+            .uninstall("hostile")
+            .await
+            .expect_err("deleting outside the plugins dir must be refused");
+        assert!(
+            err.to_string().contains("outside the plugins directory"),
+            "{err}"
+        );
+        assert!(
+            victim.join("keep.txt").exists(),
+            "the outside tree must be untouched"
+        );
+        // The registry entry stays (we did not delete anything).
+        assert!(registry.contains("hostile"));
+    }
+
+    /// F18(d): two directories claiming the same plugin name must not
+    /// silently overwrite each other — the collision is reported.
+    #[tokio::test]
+    async fn load_all_reports_duplicate_plugin_names() {
+        let temp_dir = TempDir::new().unwrap();
+        for dir in ["first-dupe", "second-dupe"] {
+            let d = temp_dir.path().join(dir);
+            fs::create_dir_all(&d).await.unwrap();
+            fs::write(
+                d.join("plugin.toml"),
+                "name = \"dupe\"\nversion = \"1.0.0\"\ndescription = \"d\"\ntype = \"skill\"\nentry = \"t.md\"\ntrigger = \"/d\"\ntemplate = \"t\"\n",
+            )
+            .await
+            .unwrap();
+        }
+
+        let mut registry = PluginRegistry::new(temp_dir.path().to_path_buf());
+        let err = registry.load_all().await.unwrap_err();
+        assert!(matches!(err, PluginError::LoadFailures(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("duplicate plugin name 'dupe'"), "{msg}");
+        // Exactly one registration survived the collision.
+        assert_eq!(registry.len(), 1);
     }
 
     #[tokio::test]

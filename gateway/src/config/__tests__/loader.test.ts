@@ -181,4 +181,72 @@ describe("loadConfig", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // ---- review §P0-6: config round-trip ----
+
+  it("preserves engine.authTokenKey (review §P0-6)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gw-cfg-"));
+    const path = join(dir, "config.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        engine: {
+          wsUrl: "ws://localhost:1/ws",
+          httpBaseUrl: "http://localhost:1",
+          authTokenKey: "my-secret-bearer",
+        },
+        adapters: [],
+      }),
+    );
+    try {
+      const cfg = loadConfig(path);
+      expect(cfg.engine.authTokenKey).toBe("my-secret-bearer");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves mobile.relay / mobile.tls / mobile.qrPayloadFile (review §P0-6)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gw-cfg-"));
+    const path = join(dir, "config.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        engine: { wsUrl: "ws://localhost:1/ws", httpBaseUrl: "http://localhost:1" },
+        adapters: [],
+        mobile: {
+          enabled: true,
+          relay: { url: "wss://relay.example", enabled: true },
+          tls: { enabled: true },
+          qrPayloadFile: "/tmp/qr.json",
+        },
+      }),
+    );
+    try {
+      const cfg = loadConfig(path);
+      expect(cfg.mobile?.relay).toEqual({ url: "wss://relay.example", enabled: true });
+      expect(cfg.mobile?.tls).toEqual({ enabled: true });
+      expect(cfg.mobile?.qrPayloadFile).toBe("/tmp/qr.json");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unknown top-level field (review §P0-6)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gw-cfg-"));
+    const path = join(dir, "config.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        engine: { wsUrl: "ws://localhost:1/ws", httpBaseUrl: "http://localhost:1" },
+        adapters: [],
+        mysteryField: true,
+      }),
+    );
+    try {
+      expect(() => loadConfig(path)).toThrow(/unknown top-level field 'mysteryField'/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

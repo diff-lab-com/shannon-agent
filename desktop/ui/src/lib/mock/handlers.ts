@@ -6,12 +6,12 @@ import { MOCK_TASKS, MOCK_AGENTS, MOCK_AGENT_DEFINITIONS, MOCK_SESSIONS, MOCK_ME
 import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOCK_PROFILES } from './data/automation'
 import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
-import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
-import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo } from '@/types'
-import { MOCK_TERMINAL_OUTPUT_EVENT } from '../runtime/terminalEvents'
+import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS, MOCK_PROVIDER_PROFILES } from './data/config'
+import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo, TerminalSettings, FileIndexEntry } from '@/types'
+import { MOCK_TERMINAL_OUTPUT_EVENT, MOCK_TERMINAL_EXIT_EVENT } from '../runtime/terminalEvents'
+import { dispatchEvent } from './eventBridge'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
-import type { MemoryGraph } from '@/lib/tauri-api'
-import type { WorkspaceLayout } from '@/components/workspace/layout'
+import type { MemoryGraph, VoiceLocalConfig, WhisperModelInfo } from '@/lib/tauri-api'
 import {
   MOCK_SKILL_CATALOG,
   MOCK_AGENT_CATALOG,
@@ -19,6 +19,26 @@ import {
   MOCK_INSTALLED_AGENTS,
   MOCK_INSTALLED_ADDONS,
 } from './data/catalog'
+// R1 chat-testing infra: when a ChatScript is loaded (scripted/player.ts →
+// setScriptSeed) these accessors answer with the script's seed data instead
+// of the global demo singletons; unarmed they all return null/undefined and
+// every handler below behaves exactly as before.
+import { clearRecordedSends, clearSeedSessionModel, getScriptSeed, recordSavedTextFile, recordSeedSessionArchived, recordSeedSessionDeleted,
+  recordSeedSessionRenamed, recordSeedSessionUnarchived, recordSeedUserSend, savedPlanForWorkingDir,
+  seedSaveTextFileShouldFail, seededArchivedSessions, seededBudget, seededCheckpoints, seededConfigPatch,
+  seededMessagesWithRecorded, seededProviderStatusPatch, seededRewoundMessages, seededSearchSessions,
+  seededSessionModel, seededSessions, seededUsage, seedSessionDeleteFails, setSeedSessionModel } from './scripted/seed'
+// wave-2 J15: canned /diff payloads behind the scripted seed gate (data/slash.ts).
+import { scriptedGitDiffFixture } from './data/slash'
+
+/**
+ * W2 journey #19: the scripted session mutations notify the rail exactly
+ * like the real backend (sessions-updated → refreshSessions). ARMED ONLY —
+ * the demo path keeps its current no-event behavior byte-identically.
+ */
+function notifySeededSessionsUpdated(): void {
+  if (seededSessions()) dispatchEvent('sessions-updated', {})
+}
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
 const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random() * 40))
@@ -26,10 +46,47 @@ const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random
 // Demo-build session mutations (see list_sessions above).
 const deletedSessions = new Set<string>()
 const renamedSessions = new Map<string, SessionInfo>()
+// W2 journey #19: demo twin of the backend's archived-session registry.
+const archivedSessions = new Set<string>()
+// Settings R3 T7: demo twin of the curation sidecar's pinned flags — the
+// list/search reads project them so the rail's pin sort survives a mock-mode
+// remount, exactly like the real backend reading curation.json back.
+// Persisted under `shannon.demo.pinnedSessions` (JSON array) so a reload
+// keeps the pin, mirroring the backend's curation.json durability.
+const DEMO_PINNED_KEY = 'shannon.demo.pinnedSessions'
+const pinnedSessions = new Set<string>(loadDemoPinned())
+function loadDemoPinned(): string[] {
+  try {
+    const raw = window.localStorage.getItem(DEMO_PINNED_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+function persistDemoPinned(): void {
+  try {
+    window.localStorage.setItem(DEMO_PINNED_KEY, JSON.stringify([...pinnedSessions]))
+  } catch {
+    // Storage unavailable — the in-memory set still covers the live session.
+  }
+}
 
 // P1-3: mutable desktop config so execution-mode / sandbox switches in the
 // demo feel live (get_config hands out a fresh clone of this).
 const demoConfig = clone(MOCK_CONFIG)
+
+// Wave-2 task 6: mutable local-voice (whisper-rs) config behind
+// get/save_voice_local_config. Starts disabled — the unarmed demo's
+// get_config gains a `voice_local` key ONLY after an explicit save, so the
+// un-scripted demo boot payload stays byte-identical to the pre-handler
+// behavior (seed-handlers.test.ts guards the defaults).
+const demoVoiceLocal: VoiceLocalConfig = {
+  enabled: false,
+  model: null,
+  language: null,
+  auto_download: true,
+}
 
 // P1-6: ids already imported in this demo session — re-applying the same
 // migration surfaces as skipped (conflict handling), never duplicates.
@@ -46,6 +103,60 @@ const state = {
   background: clone(MOCK_BACKGROUND_TASKS),
   providers: clone(MOCK_PROVIDERS),
   inbox: clone(MOCK_INBOX_ITEMS) as InboxItem[],
+  // S3-3: utility tier slots — the demo mirror of providers.toml v2's
+  // `auxiliary` map. Both slots start unset (follow the global default).
+  utilitySlots: {
+    compression: null as { provider: string; model: string } | null,
+    title_generation: null as { provider: string; model: string } | null,
+  },
+}
+
+// ── S4 (P-N20/P-N21) e2e scenario hooks ──────────────────────────────────
+// The real commands read the shell world (OLLAMA_HOST / upstream models.dev /
+// the credential store); a browser demo has none. The Welcome + catalog e2e
+// journeys arm deterministic scenarios through localStorage keys, the same
+// way specs already pin locale/theme (`shannon.locale` / `shannon-theme`).
+// PRODUCT CODE NEVER WRITES THESE — they are e2e-only seams, and every read
+// is wrapped so a denied storage partition degrades to the unarmed default.
+
+/** localStorage as the e2e scenario channel (never throws). */
+function demoHook(name: string): string | null {
+  try {
+    return window.localStorage.getItem(name)
+  } catch {
+    return null
+  }
+}
+
+/** `shannon.demo.envProvider` — JSON `{ provider, has_api_key? }`. Armed, the
+ *  Welcome mount probe (`detect_provider_from_env`) reports this hit — the
+ *  demo twin of a shell exporting OLLAMA_HOST / an API key (S1-4a's
+ *  bare-Ollama scenario). Unset → null, byte-identical to the old handler. */
+function demoEnvProvider(): { provider: string; has_api_key: boolean } | null {
+  const raw = demoHook('shannon.demo.envProvider')
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as { provider?: string; has_api_key?: boolean }
+    if (!parsed?.provider) return null
+    return { provider: parsed.provider, has_api_key: parsed.has_api_key === true }
+  } catch {
+    return null
+  }
+}
+
+/** `shannon.demo.unconfigured` — armed (`"1"`), `get_provider_status` reports
+ *  the "nothing configured, nothing in the env" snapshot so the empty-canvas
+ *  provider CTA (WelcomeState) and the Layout welcome gate see the fresh-user
+ *  world instead of the demo roster's seeded connection. */
+function demoUnconfigured(): boolean {
+  return demoHook('shannon.demo.unconfigured') === '1'
+}
+
+/** `shannon.demo.catalogRefreshFails` — armed (`"1"`), the models.dev overlay
+ *  refresh REJECTS with an upstream reason so the Settings refresh button's
+ *  failed state (inline reason) is drivable like its idle/busy/done states. */
+function demoCatalogRefreshShouldFail(): boolean {
+  return demoHook('shannon.demo.catalogRefreshFails') === '1'
 }
 
 // ids for inbox items created at runtime (rerun simulation).
@@ -53,6 +164,37 @@ let nextInboxId = Math.max(...MOCK_INBOX_ITEMS.map(i => i.id)) + 1
 
 // P0-4: demo session budget — null = no cap; set via the budget control.
 let demoBudgetUsd: number | null = null
+
+// office Wave 2 B9' — demo file index (list_file_index / register /
+// favorite). Newest first is enforced by the list handler; this seed is
+// already ordered that way. `old-deck.md` intentionally dangles so the
+// missing-file state is demoable.
+const demoFileIndex: FileIndexEntry[] = [
+  {
+    path: '/Users/demo/Documents/q3-review.pptx',
+    name: 'q3-review.pptx',
+    size_bytes: 2_483_112,
+    registered_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    favorite: true,
+    source: 'generated',
+  },
+  {
+    path: '/Users/demo/Downloads/notes.md',
+    name: 'notes.md',
+    size_bytes: 8_210,
+    registered_at: new Date(Date.now() - 26 * 3600_000).toISOString(),
+    favorite: false,
+    source: 'attachment',
+  },
+  {
+    path: '/Users/demo/Documents/old-deck.md',
+    name: 'old-deck.md',
+    size_bytes: null,
+    registered_at: new Date(Date.now() - 72 * 3600_000).toISOString(),
+    favorite: false,
+    source: 'generated',
+  },
+]
 
 // P1-5 C-1: demo live-preview lifecycle (single instance, like the backend).
 const demoPreview = {
@@ -66,20 +208,67 @@ const PREVIEW_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN
 
 // P1-5 D: demo PTY sessions + a tiny simulated shell. Output rides the same
 // shape as the real `terminal:output` event (base64 data) re-dispatched as a
-// window CustomEvent — `runtime/terminalEvents.listenTerminalOutput` is the
-// single subscriber that knows about this transport.
+// window CustomEvent, and process exit re-dispatches `terminal:exit`
+// (`{ terminalId }`) — `runtime/terminalEvents.listenTerminalOutput` /
+// `.listenTerminalExit` are the subscribers that know about this transport.
 const demoTerminals = new Map<string, TerminalInfo & { buffer: string }>()
 let nextTerminalSeq = 1
 
-// P1-5 C-2: per-project workspace layouts, session-scoped (in-memory stand-in
-// for ~/.shannon/desktop/workspace-layouts.json).
-const demoWorkspaceLayouts = new Map<string, WorkspaceLayout>()
+// P3-1: demo stand-in for the persisted `[terminal]` config table. Same
+// clamp ranges as the backend's `TerminalSettings::sanitized` so the
+// settings card shows the same effective-value behavior in demo mode.
+const demoTerminalSettings: TerminalSettings = {
+  shell: null,
+  fontSize: 12,
+  scrollback: 5000,
+  drawerHeight: 320,
+  screenReaderMode: false,
+  // Task 12: login-shell inheritance off, built-in font stack (null).
+  loginShell: false,
+  fontFamily: null,
+}
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.floor(v)))
+
+// P-E3/P-U2: in-memory stand-in for the engine project registry
+// (~/.shannon/projects.db). Same wire shape as the Rust ProjectRecord
+// (camelCase). Mutations update rows in place; archived rows leave the
+// active list but stay recoverable (unarchive clears the stamp).
+interface DemoProject {
+  path: string
+  name: string | null
+  icon: string | null
+  color: string | null
+  archivedAtMs: number | null
+  createdAtMs: number
+}
+const demoProjects: DemoProject[] = [
+  { path: '/home/demo/workspace/shannon', name: 'Shannon', icon: null, color: null, archivedAtMs: null, createdAtMs: Date.now() - 30 * 24 * 3600_000 },
+  { path: '/home/demo/workspace/website', name: null, icon: null, color: null, archivedAtMs: null, createdAtMs: Date.now() - 10 * 24 * 3600_000 },
+]
+function findDemoProject(path: string): DemoProject | undefined {
+  return demoProjects.find(p => p.path === path)
+}
+function ensureDemoProject(path: string): DemoProject {
+  let row = findDemoProject(path)
+  if (!row) {
+    row = { path, name: null, icon: null, color: null, archivedAtMs: null, createdAtMs: Date.now() }
+    demoProjects.push(row)
+  }
+  return row
+}
 
 // P2-1: mobile dispatch demo state — a minted pair token + the paired-device
 // registry the gateway would own (~/.shannon/mobile-devices.json).
 let demoPairToken: { token: string; expiresAt: number; lanEndpoint: string; qrDataUrl: string } | null = null
 let demoDevices: Array<{ deviceId: string; publicKey: string; label?: string | null; addedAt: number; lastSeenAt: number }> = [
   { deviceId: 'demo-4f8a2c1e9b7d3a05c6e1f2b4a8d60317', publicKey: 'demo-key-x', label: 'Pixel 9', addedAt: 1735689600000, lastSeenAt: 1735693200000 },
+]
+
+// T9: IM pairing-approval demo state — two pending pairing challenges; the
+// approve handler moves the approved one out (mirrors the gateway store).
+const demoPairingRequests: Array<{ code: string; platform: string; senderId: string; requestedAt: number; expiresAt: number }> = [
+  { code: '246810', platform: 'slack', senderId: 'U0DEMO1', requestedAt: Date.now() - 60_000, expiresAt: Date.now() + 240_000 },
+  { code: '135791', platform: 'telegram', senderId: 'TEDEMO2', requestedAt: Date.now() - 30_000, expiresAt: Date.now() + 270_000 },
 ]
 
 function demoTerminalEmit(terminalId: string, text: string) {
@@ -121,7 +310,17 @@ function demoShellRun(terminalId: string, input: string) {
       out = `sh: command not found: ${line.split(/\s+/)[0]}\r\n$ `
     }
     demoTerminalEmit(terminalId, out)
-    if (out.includes('process exited')) demoTerminals.delete(terminalId)
+    if (out.includes('process exited')) {
+      demoTerminals.delete(terminalId)
+      // P3-6: the printed notice is for humans only — the tab is ended by
+      // the dedicated `terminal:exit` event, exactly like the real backend.
+      // Fired after the output emit so the exit text renders first.
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent(MOCK_TERMINAL_EXIT_EVENT, {
+          detail: { terminalId },
+        }))
+      }, 120 + Math.random() * 60)
+    }
   }
 }
 
@@ -183,7 +382,8 @@ const demoPatch = (branch: number) =>
 // one finished; start_goal_run appends new running rows with live feel.
 const goalRuns = [
   {
-    sessionId: '0196aaaa-0000-7000-8000-000000000001',
+    // P2-⑥: bound to a seeded sidebar session so the goal badge shows in demo.
+    sessionId: 'sess-002',
     title: 'Harden the upload pipeline',
     objective: 'Add retry + tests to the upload pipeline so flaky network errors cannot lose files',
     status: 'running',
@@ -195,6 +395,9 @@ const goalRuns = [
     lastError: null,
     startedAtMs: Date.now() - 26 * 60_000,
     updatedAtMs: Date.now() - 2 * 60_000,
+    // P-E2: inherited from the originating session. P-U3: aligned with the
+    // demoProjects registry row so /tasks?project= resolves the run.
+    workingDir: '/home/demo/workspace/shannon',
   },
   {
     sessionId: '0196aaaa-0000-7000-8000-000000000002',
@@ -209,6 +412,7 @@ const goalRuns = [
     lastError: null,
     startedAtMs: Date.now() - 27 * 60 * 60_000,
     updatedAtMs: Date.now() - 26.5 * 60 * 60_000,
+    workingDir: null,
   },
 ] as Array<Record<string, unknown> & { sessionId: string; status: string }>
 
@@ -217,48 +421,409 @@ function providersFile() {
   return clone(state.providers)
 }
 
+// S3-3: one utility slot row (role + provider/model or the unset nulls).
+function utilitySlotValue(v: { provider: string; model: string } | null) {
+  return v ? { provider: v.provider, model: v.model, resolves: true } : { provider: null, model: null, resolves: false }
+}
+
+// S3-3: candidate models of one demo roster provider — the curated vault
+// (`models` declarations) when present, else the active model as a minimal
+// honest candidate list.
+function demoRosterModels(p: { id: string; models?: { id: string }[] }) {
+  const declared = (p.models ?? []).map((m) => m.id).filter(Boolean)
+  if (declared.length > 0) return declared
+  return [MOCK_CONFIG.model].filter((m): m is string => typeof m === 'string' && m.length > 0)
+}
+
 function findTask(id: string) {
   return state.tasks.find(t => t.id === id)
 }
 
+// R2-1: per-session model override demo state — mirrors the backend's
+// `SessionState.model_override` (in-memory, keyed by session id). The
+// composer chip writes via set_session_model and reads back via
+// get_session_model, so demo switches stay visible per session. A null
+// sessionId resolves to the active session backend-side; demo mirrors that
+// with an `__active__` bucket.
+const demoSessionModels = new Map<string, { provider: string; model: string }>()
+const demoSessionKey = (id?: string | null) => id ?? '__active__'
+
+// P2-5: per-session "temporary chat" demo state — same bucketing as the
+// model overrides (null sessionId resolves to the active session).
+const demoMemoryBypass = new Set<string>()
+
+// R2-2: fake models.dev overlay generation — bumped on every demo refresh so
+// the Settings button's success payload visibly changes.
+let demoCatalogGeneration = 1
+
+// R3-2: demo model-profile roster — same ordering contract as the backend
+// ("default" pinned first, rest alphabetical).
+const demoProviderProfiles = clone(MOCK_PROVIDER_PROFILES)
+function sortDemoProfiles() {
+  demoProviderProfiles.sort((a, b) => {
+    const aDefault = a.name === 'default' ? 1 : 0
+    const bDefault = b.name === 'default' ? 1 : 0
+    if (aDefault !== bDefault) return bDefault - aDefault
+    return a.name.localeCompare(b.name)
+  })
+}
+
+// ── R5 (Agent B): profile rename/delete + per-provider API keys ──────────
+// Demo mirrors of commands_profiles::rename/delete_provider_profile and the
+// commands_keys.rs block. FULL key material lives only in this demo store —
+// every wire response carries masked hints only (mirrors the backend's
+// mask_key contract: head 6 + "…" + tail 4, short keys collapse entirely).
+
+/** Same masking the Rust `mask_key` performs — the demo must not leak full
+ *  keys into the DOM either. */
+function maskKeyHint(key: string): string {
+  if (key.length <= 8) return '…'
+  return `${key.slice(0, 6)}…${key.slice(-4)}`
+}
+
+/** provider id → rotation-ordered key list (slot 0 = ACTIVE). Seeded so the
+ *  panel has both shapes to show: a rotation (Anthropic, 2 keys) and a
+ *  single-key provider (GLM — remove disabled, per the engine's
+ *  last-key-refusal contract). */
+const demoProviderKeys = new Map<string, string[]>([
+  ['prov-anthropic', ['sk-ant-demo03-activekey0000000001', 'sk-ant-demo03-sparekey000000002']],
+  ['prov-glm', ['sk-glm-demo03-onlykey000000000003']],
+])
+
+function demoKeySummaries(providerId: string) {
+  const keys = demoProviderKeys.get(providerId) ?? []
+  return keys.map((k, index) => ({ index, active: index === 0, masked_hint: maskKeyHint(k) }))
+}
+
+/** The active model profile's rename/delete demo twin of the engine's
+ *  fallback rule (default first, else first remaining alphabetically). */
+function demoProfileFallback(name: string): string | null {
+  const remaining = demoProviderProfiles.filter((p) => p.name !== name).map((p) => p.name)
+  if (name !== 'default' && remaining.includes('default')) return 'default'
+  return [...remaining].sort()[0] ?? null
+}
+
+
 // Mutable notification prefs so DND/quiet-hours toggling feels live in demo mode.
+// Audit §P2-3 (round 6): start with events off so the new empty-state
+// guidance card is visible on first visit — instead of the page looking
+// "already configured" by default.
 let notificationPrefs = {
   master_enabled: true,
   dnd_enabled: false,
   dnd_start: null as string | null,
   dnd_end: null as string | null,
-  on_completed: true,
-  on_failed: true,
+  on_completed: false,
+  on_failed: false,
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MockHandler = (args: any) => unknown | Promise<unknown>
 export const handlers: Record<string, MockHandler> = {
+  // --- Office Wave 1: host runtime probe + file copy (save-as) ---
+  async probe_host_runtime() {
+    await delay(40)
+    return { python3: true, pythonVersion: 'Python 3.12.3', pandoc: false, libreoffice: false }
+  },
+  async copy_file() {
+    await delay(60)
+    return null
+  },
+  // W2 journey #20: the demo twin of the disk write (previously unmocked —
+  // save-as/export in demo mode could only fail). Records into the mock
+  // store so get_session_plan serves a PlanPanel write-back; with the seed's
+  // `config.saveTextFileFails` armed the write REJECTS (the PlanPanel
+  // rollback-to-engine-truth fixture — scripted-only, never the demo path).
+  async save_text_file(args: { path?: string; content?: string }) {
+    await delay(40)
+    if (!args?.path || seedSaveTextFileShouldFail()) {
+      throw new Error(`save_text_file failed${args?.path ? ` for ${args.path}` : ''}`)
+    }
+    recordSavedTextFile(args.path, args.content ?? '')
+    return true
+  },
+  // W2 journey #19: the plugin-dialog save() twin — demo has no native
+  // dialog, so the mock reports the user-cancel resolution (null), which is
+  // the exact shape FileCard's save-as "cancel backs out silently" branch
+  // handles.
+  // W2 journey #20: the chat-fence HTML artifact's interactive registration
+  // — demo mode has no artifact scripting host, so the registration ALWAYS
+  // fails and HtmlRenderer falls back to the static preview (the honest
+  // "could not run interactively" hint). Throwing (not absent) keeps the
+  // failure off coreMock's console.error path, so the watchdog stays clean.
+  async register_interactive_artifact() {
+    await delay(30)
+    throw new Error('artifact scripting host unavailable in demo mode')
+  },
+  async unregister_interactive_artifact() {
+    await delay(20)
+    return null
+  },
+  // --- Office Wave 3 C3: companion Quick Capture window ---
+  // Demo mode has no real webview to spawn — the mock just reports the
+  // fixed label the Rust command would return.
+  async open_companion_window() {
+    await delay(40)
+    return { label: 'companion' }
+  },
+  async set_companion_always_on_top() {
+    await delay(30)
+    return null
+  },
   // --- Chat ---
-  async send_message() {
+  // (send_message interception when a script is armed happens in coreMock —
+  // the scripted player owns the command and replays the turn's events.)
+  async send_message(args: { message?: string; sessionId?: string | null }) {
     await delay(120)
+    // S-4 fix: fall-through sends (script exhausted/absent) are durable too —
+    // record into the seeded session's tail. Scripted sends were already
+    // recorded by the player before this handler is reached; unarmed (demo)
+    // seeds make recordSeedUserSend a no-op.
+    recordSeedUserSend(args?.sessionId ?? null, args?.message ?? null)
     return { query_id: `q-${Date.now()}` }
   },
   async get_conversation() {
     await delay()
+    // R1 scripted-backend: a loaded script's first seeded session answers
+    // (the scripted "current conversation"); unarmed → demo default.
+    // S-4 fix: the read includes the session's recorded send tail — the
+    // scripted counterpart of the L0 log projection.
+    const seeded = seededMessagesWithRecorded()
+    if (seeded) return clone(seeded)
     return clone(MOCK_MESSAGES)
   },
+  // A-6 fix (R4 group 3): the scripted active session is the FIRST seeded
+  // session — the one get_conversation answers for (seed.ts's "current
+  // conversation"). Demo mode has no session identity behind its canned
+  // conversation → null, byte-identical to the pre-A-6 boot (unbound).
+  async get_active_session_id() {
+    await delay()
+    const seeded = seededSessions()
+    return seeded?.[0]?.id ?? null
+  },
   async cancel_query() { await delay(30) },
+  // B1-4 (P1-3): the stop watchdog's reconciliation read. Demo runs never
+  // stream a live query, so the honest answer is always idle.
+  async get_session_querying() { await delay(); return false },
+
+  // --- S3-6: pre-send cost estimate (demo twin) ---
+  // Deterministic stand-in for the backend's billing-grade command: same
+  // wire shape (camelCase), derived from the draft + a canned context so the
+  // composer's estimate row renders in demo/e2e. The range math mirrors the
+  // real contract (floor = input-only, ceiling = input at max output).
+  async estimate_send_cost(args: { draftText?: string; filePaths?: string[] | null }) {
+    await delay()
+    const draft = String(args?.draftText ?? '')
+    const draftTokens = draft.length === 0 ? 0 : Math.max(1, Math.ceil(draft.length / 4))
+    const contextTokens = 1200
+    const attachmentTokens = (args?.filePaths ?? []).length * 100
+    const inputTokens = contextTokens + draftTokens + attachmentTokens
+    const model = demoConfig.model ?? MOCK_CONFIG.model ?? ''
+    // Rough per-Mtok table (mirrors the real catalog's shape, not its data):
+    // gpt-family 1.25/10, claude-family 3/15, everyone else 1/2.
+    const [priceIn, priceOut] = /gpt/i.test(model)
+      ? [1.25, 10]
+      : /claude/i.test(model)
+        ? [3, 15]
+        : [1, 2]
+    const maxOutput = 4096
+    const cost = (outputTokens: number) =>
+      (inputTokens / 1_000_000) * priceIn + (outputTokens / 1_000_000) * priceOut
+    return {
+      model,
+      inputTokens,
+      contextTokens,
+      draftTokens,
+      attachmentTokens,
+      maxOutputTokens: maxOutput,
+      costLow: cost(0),
+      costHigh: cost(maxOutput),
+      budgetUsd: demoBudgetUsd,
+      spentUsd: 0,
+    }
+  },
+
+  // --- Speech-to-text (wave-2 task 6, voice-input journey) ---
+  // Previously these five voice commands were UNMOCKED_ALLOWLIST entries
+  // ("no browser equivalent") and demo mode threw for them. The nightly
+  // voice-input journey exercises the real UI path (MicButton →
+  // MediaRecorder → base64 → transcribe command → transcript into the
+  // composer draft), so the two transcribe commands and the local-voice
+  // config pair now answer deterministically instead. Model
+  // download/delete stays unmocked (GB-scale OS work, still allowlisted).
+  // Fixed transcripts are deliberately DIFFERENT per command so a journey
+  // can prove WHICH provider served a recording (cloud default vs local
+  // whisper after the config switch below).
+  async transcribe_audio() {
+    await delay(60)
+    return { text: 'Cloud transcript: stand up the staging cluster.' }
+  },
+  async transcribe_audio_local_base64() {
+    await delay(60)
+    return { text: 'Local transcript: whisper ran on device.' }
+  },
+  async transcribe_audio_local() {
+    await delay(60)
+    return { text: 'Local transcript: whisper ran on device.' }
+  },
+
+  // P2-5e local-voice config — mutable like demoConfig so the Settings
+  // card's toggle "feels live". Saving mirrors the value into
+  // demoConfig.voice_local (the get_config projection ChatInput reads to
+  // pick its provider) and re-emits `config-updated`, exactly like the
+  // real backend's config-write path, so the composer flips provider
+  // without a reload.
+  async get_voice_local_config() {
+    await delay()
+    return clone(demoVoiceLocal)
+  },
+  async save_voice_local_config(args: { voiceLocal?: VoiceLocalConfig }) {
+    await delay()
+    const next = args?.voiceLocal
+    if (!next) return
+    demoVoiceLocal.enabled = !!next.enabled
+    demoVoiceLocal.model = next.model ?? null
+    demoVoiceLocal.language = next.language ?? null
+    demoVoiceLocal.auto_download = next.auto_download !== false
+    demoConfig.voice_local = clone(demoVoiceLocal)
+    dispatchEvent('config-updated', {})
+  },
+  // Cloud-STT (Whisper endpoint) config: the Settings card probes it on
+  // mount. Null = "not configured" — the honest demo default (the real
+  // unset state), so the card renders its setup affordances instead of
+  // console-noising.
+  async get_stt_config() {
+    await delay()
+    return null
+  },
+  async list_whisper_models() {
+    await delay()
+    return [
+      { model: 'tiny.en', filename: 'ggml-tiny.en.bin', approx_size_mb: 78, downloaded: true, verified: true, size_bytes: 81_905_536 },
+      { model: 'base', filename: 'ggml-base.bin', approx_size_mb: 148, downloaded: false, verified: false, size_bytes: null },
+    ] satisfies WhisperModelInfo[]
+  },
 
   // --- Config ---
-  async get_config() { await delay(); return clone(demoConfig) },
-  async configure(args: { key: string; value: string }) {
+  async get_config() {
     await delay()
-    // P1-3: keep the persisted keys the new settings surfaces touch in sync.
-    if (args?.key === 'sandbox.mode') {
-      const mode = String(args.value || 'off') as 'off' | 'local' | 'landlock'
+    const config = clone(demoConfig)
+    // R1 scripted-backend: seed.config can retarget the provider and strip
+    // the API key (hasKey:false → the "no key" shape). W2 journey #17: it
+    // also arms the boot `approval_mode` (any engine value — the composer
+    // pill echoes values outside the quick-switch table verbatim).
+    const patch = seededConfigPatch()
+    if (patch) {
+      if (patch.provider != null) config.provider = patch.provider
+      if (patch.api_key === null) config.api_key = undefined
+      if (patch.approval_mode != null) config.approval_mode = patch.approval_mode
+    }
+    return config
+  },
+  // Wire shape note: the desktop command takes `{ update: { key, value } }`
+  // (tauri-api configure wraps it); the flat shape is accepted too so older
+  // callers keep working. Before this was fixed, EVERY configure in demo
+  // mode was a silent no-op — approval_mode/model/effort switches "succeeded"
+  // but never persisted, which masked the Base UI Select commit bug.
+  async configure(args: { key?: string; value?: string; update?: { key: string; value: string } }) {
+    await delay()
+    const { key, value } = (args && args.update) ? args.update : (args as { key: string; value: string })
+    if (key === 'sandbox.mode') {
+      const mode = String(value || 'off') as 'off' | 'local' | 'landlock'
       demoConfig.sandbox = { mode }
-    } else if (args?.key === 'approval_mode') {
-      demoConfig.approval_mode = args.value
-    } else if (args?.key === 'offpeak.model_override') {
+    } else if (key === 'approval_mode') {
+      demoConfig.approval_mode = value
+    } else if (key === 'model') {
+      // P0-③: model switching (composer chip / header) mirrors the engine.
+      demoConfig.model = value
+    } else if (key === 'provider') {
+      demoConfig.provider = value
+    } else if (key === 'effort_level') {
+      // Audit D8: reasoning-effort picker persists the same key as the CLI.
+      (demoConfig as Record<string, unknown>).effort_level = value
+    } else if (key === 'plan_tier' || key === 'act_tier') {
+      // R3-3: plan/act phase tiers — 'inherit'/empty clears (stored null),
+      // canonical tier names store verbatim, anything else is rejected
+      // (the backend validates the same way).
+      const tier = String(value ?? '').trim().toLowerCase()
+      if (tier === '' || tier === 'inherit') {
+        demoConfig[key] = null
+      } else if (tier === 'fast' || tier === 'standard' || tier === 'pro') {
+        demoConfig[key] = tier
+      } else {
+        throw new Error(`invalid phase tier \`${value}\` — expected inherit, fast, standard or pro`)
+      }
+    } else if (key === 'offpeak.model_override') {
       // P2-5: frozen config key — empty value disables the override.
-      const trimmed = String(args.value ?? '').trim()
+      const trimmed = String(value ?? '').trim()
       demoConfig.offpeak = { model_override: trimmed ? trimmed : null }
+    } else if (key === 'enabled_providers') {
+      // S4 (P-N21): the provider-visibility override — 'null' clears the
+      // desktop override (engine env vars decide), otherwise a JSON slug
+      // array. Mirrors the backend arm so get_provider_allowlist answers
+      // the persisted state and the panel's toggles persist in demo mode
+      // (previously a silent no-op: unknown keys fell through).
+      const raw = String(value ?? 'null').trim()
+      try {
+        const parsed = JSON.parse(raw) as unknown
+        if (parsed === null) {
+          delete (demoConfig as Record<string, unknown>).enabled_providers
+        } else if (Array.isArray(parsed) && parsed.every((v) => typeof v === 'string')) {
+          ;(demoConfig as Record<string, unknown>).enabled_providers = parsed
+        } else {
+          throw new Error('not a string array or null')
+        }
+      } catch (e) {
+        throw new Error(`invalid enabled_providers value \`${value}\`: ${String(e)}`)
+      }
+    } else if (key === 'agent_teams_enabled') {
+      // B2: real sub-agent execution toggle (demo persists the flag; there
+      // is no live registry behind it).
+      demoConfig.agent_teams_enabled = String(value) === 'true'
+    } else if (key === 'hardware_acceleration') {
+      // Settings R3 T3: restart-app escape hatch — demo persists the flag.
+      demoConfig.hardware_acceleration = String(value) === 'true'
+    } else if (key === 'power.keep_awake') {
+      // Settings R3 T3: always-on wake lock (backend would start/stop the
+      // OS-level refcount; the demo just persists).
+      demoConfig.power_keep_awake = String(value) === 'true'
+    } else if (key === 'power.block_sleep_during_tasks') {
+      // Settings R3 T3: run-time sleep blocker.
+      demoConfig.power_block_sleep_during_tasks = String(value) === 'true'
+    } else if (key === 'context.auto_compact') {
+      // Settings R3 T6: engine-level auto-compaction switch (a flip lands on
+      // the next message).
+      demoConfig.context_auto_compact = String(value) === 'true'
+    } else if (key === 'session.auto_archive_enabled') {
+      // Settings R3 T7: timed auto-archive scan switch.
+      demoConfig.session_auto_archive_enabled = String(value) === 'true'
+    } else if (key === 'session.auto_archive_days') {
+      // Settings R3 T7: archive retention gear — stored as a number, clamped
+      // 1..=365 like the backend configure arm (options are inside the clamp).
+      const days = Math.round(Number(value))
+      if (Number.isFinite(days) && days >= 1) {
+        demoConfig.session_auto_archive_days = Math.min(365, days)
+      }
+    } else if (key === 'chat.ask_user_auto_continue') {
+      // Settings R3 T8: auto-answer an agent question left unanswered 5 min.
+      demoConfig.chat_ask_user_auto_continue = String(value) === 'true'
+    } else if (key === 'suggestions.enabled') {
+      // D5 方案①: 主动任务推荐 presentation toggle (completion chips +
+      // welcome refresh/filter). Persisted so the Settings switch reads
+      // back; the demo UI surfaces gate on it live.
+      demoConfig.suggestions_enabled = String(value) === 'true'
+    } else if (key === 'network.proxy_url' || key === 'network.no_proxy' || key === 'network.ca_cert_path') {
+      // Settings R3 T4 (B1): corporate-network trio — empty clears (R1:
+      // the implicit env fallback stays). The demo does not re-check the
+      // CA file existence; that gate lives in the backend configure arm.
+      const trimmed = String(value ?? '').trim()
+      const field =
+        key === 'network.proxy_url'
+          ? 'network_proxy_url'
+          : key === 'network.no_proxy'
+            ? 'network_no_proxy'
+            : 'network_ca_cert_path'
+      ;(demoConfig as Record<string, unknown>)[field] = trimmed ? trimmed : null
     }
   },
 
@@ -268,6 +833,76 @@ export const handlers: Record<string, MockHandler> = {
     // enough to exercise the success toast and the Test button state.
     await delay(400)
     return { kind: 'success' }
+  },
+  // 2026-09-29 provider review: the provider-status snapshot gates fire from
+  // globally-mounted components (Layout welcome gate, ApiKeyBanner,
+  // WelcomeState CTA) on every route — without a handler demo mode's
+  // unconfigured signal bounces fresh contexts to /welcome (e2e app.smoke
+  // regression). Mirror the demo roster's active provider.
+  async get_provider_status() {
+    await delay()
+    // S4 (P-N20): the empty-canvas CTA journey arms the fresh-user snapshot —
+    // no managed connection, nothing in the env — the honest answer for a
+    // browser demo asked to pretend no provider exists.
+    if (demoUnconfigured()) {
+      return {
+        active_provider_id: null,
+        display_name: null,
+        kind: null,
+        has_api_key: false,
+        model: MOCK_CONFIG.model ?? null,
+        env_provider: null,
+      }
+    }
+    const active = MOCK_PROVIDERS.providers.find(p => p.id === MOCK_PROVIDERS.active_provider_id)
+    const status = {
+      active_provider_id: MOCK_PROVIDERS.active_provider_id,
+      display_name: active ? active.display_name : null,
+      kind: active ? active.kind : null,
+      has_api_key: active ? active.has_api_key : false,
+      model: MOCK_CONFIG.model ?? null,
+      env_provider: null,
+    }
+    // R1 scripted-backend: seed.config.provider / hasKey flip the snapshot
+    // (hasKey:false keeps the provider but reports keyless → "no-key" banner).
+    const patch = seededProviderStatusPatch()
+    return patch ? { ...status, ...patch } : status
+  },
+  async fetch_provider_models() {
+    await delay(200)
+    return ['claude-sonnet-4-6', 'claude-haiku-4-5']
+  },
+  async test_provider_credentials() {
+    await delay(200)
+    return { kind: 'success' }
+  },
+  // S4 (P-N21): previously UNMOCKED_ALLOWLISTed ("engine/gateway probe demo
+  // never reaches") — clicking Test-all in demo mode could only ever toast
+  // "not available". The demo twin mirrors the batch shape the Rust command
+  // returns (one ProviderTestRow per managed connection, roster order): the
+  // demo has no real endpoints, so every probe reports the same success
+  // verdict the single-provider test_provider_credentials handler gives,
+  // each with a small round-trip latency.
+  async test_all_providers() {
+    await delay(300)
+    return state.providers.providers.map((p, i) => ({
+      id: p.id,
+      label: p.display_name,
+      provider_kind: p.kind,
+      result: { kind: 'success' },
+      latency_ms: 20 + i * 15 + Math.round(Math.random() * 10),
+    }))
+  },
+  // S4 (P-N21): the provider-visibility panel's effective allowlist read —
+  // previously unmocked on the same allowlist row. The demo answers with the
+  // desktop override it persists through configure('enabled_providers'):
+  // null (engine env vars decide) until the user toggles a checkbox, then
+  // the explicit slug list — exactly the wire contract getProviderAllowlist
+  // documents.
+  async get_provider_allowlist() {
+    await delay()
+    const override = (demoConfig as Record<string, unknown>).enabled_providers
+    return clone(override ?? null) as string[] | null
   },
   async list_providers() { await delay(); return providersFile() },
   async save_provider(args: { input: ProviderInput }) {
@@ -284,17 +919,79 @@ export const handlers: Record<string, MockHandler> = {
         kind: input.kind,
         has_api_key: keepKey ? existing.has_api_key : !!input.api_key,
         base_url: input.base_url || null,
+        // S4 (P-N23 残留): the v2 `models_url` field finally has an input —
+        // mirror it onto the connection so the edit round trip is observable
+        // in demos (empty input keeps the stored value, like base_url).
+        models_url: input.models_url ?? (existing as { models_url?: string | null }).models_url ?? null,
       })
-    } else {
-      state.providers.providers.push({
-        id: `prov-${Date.now()}`,
-        display_name: input.display_name,
-        kind: input.kind,
-        has_api_key: !!input.api_key,
-        base_url: input.base_url || null,
-      })
+      return providersFile()
     }
+    const id = `prov-${Date.now()}`
+    state.providers.providers.push({
+      id,
+      display_name: input.display_name,
+      kind: input.kind,
+      has_api_key: !!input.api_key,
+      base_url: input.base_url || null,
+      models_url: input.models_url || null,
+    })
+    // Backend contract (commands_config.rs save_provider →
+    // land_profile_in_engine_store → upsert(profile, model_id,
+    // make_active = true)): EVERY save — insert or edit — repoints the
+    // store's active target at the saved slot, which the returned file
+    // mirrors as `active_provider_id`. The AddProviderModal's 固化 step
+    // reads it to target the new connection's vault write, and Welcome's
+    // handleAddProviderSaved activates the id it carries. The demo
+    // previously kept the old pointer, so a fresh connection's curated
+    // models landed on the WRONG provider's slot.
+    state.providers.active_provider_id = id
     return providersFile()
+  },
+  // S2-1 (模型仓固化): demo mode stores the curated vault on the demo
+  // connection so a fetch→curate→save round trip is observable in demos.
+  async set_provider_models(args: { providerId: string; models: { id: string }[] }) {
+    await delay(120)
+    const conn = state.providers.providers.find(p => p.id === args.providerId)
+    if (conn) (conn as { models?: { id: string }[] }).models = args.models
+    return {
+      provider_id: args.providerId,
+      model_profile: 'default',
+      models: args.models,
+    }
+  },
+  // S3-4 (推荐降级链): demo recommendation = the demo roster's other
+  // providers as qualified hops (candidates only — nothing persisted until
+  // set_provider_fallback_models below). set stores the chain on the demo
+  // connection so the apply round trip is observable in demos.
+  async recommend_fallback_chain(args: { providerId: string }) {
+    await delay(200)
+    const hops = state.providers.providers
+      .filter(p => p.id !== args.providerId)
+      .slice(0, 2)
+      .map(p => ({
+        entry: `${p.id}/model-${p.id}`,
+        model: `model-${p.id}`,
+        provider_id: p.id,
+        provider_label: p.display_name,
+        same_provider: false,
+        tier: 'pro',
+      }))
+    return {
+      provider_id: args.providerId,
+      model_profile: 'default',
+      current_model: null,
+      hops,
+    }
+  },
+  async set_provider_fallback_models(args: { providerId: string; fallbackModels: string[] }) {
+    await delay(120)
+    const conn = state.providers.providers.find(p => p.id === args.providerId)
+    if (conn) (conn as { fallback_models?: string[] }).fallback_models = args.fallbackModels
+    return {
+      provider_id: args.providerId,
+      model_profile: 'default',
+      fallback_models: args.fallbackModels,
+    }
   },
   async delete_provider(args: { id: string }) {
     await delay(100)
@@ -304,41 +1001,495 @@ export const handlers: Record<string, MockHandler> = {
     }
     return providersFile()
   },
+  // --- S3-3: utility tier slots (compaction + session summary) ---
+  // Demo mirror of the providers.toml v2 `auxiliary` map: both slots start
+  // unset (follow the global default); set stores the target on the demo
+  // roster so the selection round trip is observable in demos. Write-time
+  // validation mirrors the backend: the provider must be in the roster.
+  async get_utility_slots() {
+    await delay()
+    return {
+      slots: [
+        { role: 'compression', ...utilitySlotValue(state.utilitySlots.compression) },
+        { role: 'title_generation', ...utilitySlotValue(state.utilitySlots.title_generation) },
+      ],
+      roster: state.providers.providers.map((p) => ({
+        provider_id: p.id,
+        display_name: p.display_name,
+        models: demoRosterModels(p),
+      })),
+      profile: 'default',
+    }
+  },
+  async set_utility_slot(args: { role: string; provider: string | null; model: string | null }) {
+    await delay(120)
+    const key =
+      args.role === 'compression'
+        ? 'compression'
+        : args.role === 'title_generation'
+          ? 'title_generation'
+          : null
+    if (!key) throw new Error(`set_utility_slot: unknown utility role \`${args.role}\``)
+    if (args.provider == null || args.model == null) {
+      state.utilitySlots[key] = null
+    } else {
+      if (!state.providers.providers.some((p) => p.id === args.provider)) {
+        throw new Error(
+          `no provider slot with id '${args.provider}' in the active profile of providers.toml`,
+        )
+      }
+      state.utilitySlots[key] = { provider: args.provider, model: args.model }
+    }
+    return { role: key, provider: args.provider, model: args.model }
+  },
   async set_active_provider(args: { id: string }) {
     await delay(150)
     state.providers.active_provider_id = args.id
   },
 
+  // --- R3-2: provider model profiles (Settings → Models "Profiles") ---
+  // Demo mirror of the engine providers.toml v2 profiles map + the
+  // active_profile pointer: list / create / switch against mutable demo
+  // state, with the same validation contract as the backend (shared
+  // validate_profile_name rules; empty-profile switch allowed).
+  async list_provider_profiles() {
+    await delay()
+    return clone(demoProviderProfiles)
+  },
+  async create_provider_profile(args: { name: string }) {
+    await delay(120)
+    const name = String(args.name ?? '').trim()
+    if (!name) throw new Error('profile name must not be empty')
+    if (name.length > 64) throw new Error(`profile name is too long (max 64): '${name}'`)
+    if (/\s/.test(name)) throw new Error(`profile name must not contain whitespace: '${name}'`)
+    if (demoProviderProfiles.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error(`A profile named '${name}' already exists`)
+    }
+    demoProviderProfiles.push({ name, provider_count: 0, active: false, model: null })
+    sortDemoProfiles()
+    return clone(demoProviderProfiles)
+  },
+  async set_active_provider_profile(args: { name: string }) {
+    await delay(150)
+    const row = demoProviderProfiles.find((p) => p.name === args.name)
+    if (!row) {
+      throw new Error(
+        `profile '${args.name}' not found; available profiles: ${demoProviderProfiles.map((p) => p.name).join(', ')}`,
+      )
+    }
+    demoProviderProfiles.forEach((p) => { p.active = p.name === row.name })
+    // Mirrors the backend's client-config rebuild: the global default model
+    // follows the switched profile (null when it has none — get_status then
+    // falls back to the seeded status model).
+    if (row.model) demoConfig.model = row.model
+    return clone(demoProviderProfiles)
+  },
+
+  // ── R5 (Agent B): profile rename/delete (the R3-2 deferred slice) ─────
+  // Same contracts as the Rust commands: shared name validation, duplicate
+  // / not-found refusals, the active pointer follows a rename, and an
+  // active delete falls back (default first, else first remaining).
+  async rename_provider_profile(args: { old: string; new: string }) {
+    await delay(120)
+    const oldName = String(args.old ?? '').trim()
+    const newName = String(args.new ?? '').trim()
+    if (!newName) throw new Error('profile name must not be empty')
+    if (newName.length > 64) throw new Error(`profile name is too long (max 64): '${newName}'`)
+    if (/\s/.test(newName)) throw new Error(`profile name must not contain whitespace: '${newName}'`)
+    const row = demoProviderProfiles.find((p) => p.name === oldName)
+    if (!row) {
+      throw new Error(
+        `profile '${oldName}' not found; available profiles: ${demoProviderProfiles.map((p) => p.name).join(', ')}`,
+      )
+    }
+    if (oldName !== newName) {
+      if (demoProviderProfiles.some((p) => p.name === newName)) {
+        throw new Error(`A profile named '${newName}' already exists`)
+      }
+      // The engine moves the map entry and follows the active pointer; the
+      // demo row IS the entry, and its `active` flag rides along.
+      row.name = newName
+      sortDemoProfiles()
+    }
+    return clone(demoProviderProfiles)
+  },
+  async delete_provider_profile(args: { name: string; force?: boolean }) {
+    await delay(140)
+    const name = String(args.name ?? '').trim()
+    const row = demoProviderProfiles.find((p) => p.name === name)
+    if (!row) {
+      throw new Error(
+        `profile '${name}' not found; available profiles: ${demoProviderProfiles.map((p) => p.name).join(', ')}`,
+      )
+    }
+    if (demoProviderProfiles.length <= 1) {
+      throw new Error(
+        `cannot delete profile '${name}': it is the only profile; create another one first`,
+      )
+    }
+    const wasActive = row.active
+    demoProviderProfiles.splice(demoProviderProfiles.indexOf(row), 1)
+    let becameActive: string | null = null
+    if (wasActive) {
+      becameActive = demoProfileFallback(name)
+      demoProviderProfiles.forEach((p) => { p.active = p.name === becameActive })
+      // The global default follows the fallback profile's model.
+      const fb = demoProviderProfiles.find((p) => p.active)
+      if (fb?.model) demoConfig.model = fb.model
+    }
+    return { profiles: clone(demoProviderProfiles), became_active: becameActive }
+  },
+
+  // ── R5 (Agent B): per-provider multi-key management (R4-3 desktop) ────
+  // Same contracts as commands_keys.rs: rotation order (slot 0 = ACTIVE),
+  // duplicate/blank add refusals, remove promotes the next key (last
+  // remaining refused), activate = swap to slot 0. Wire responses carry
+  // masked hints ONLY.
+  async list_provider_keys(args: { providerId: string }) {
+    await delay()
+    if (!state.providers.providers.some((p) => p.id === args.providerId)) {
+      throw new Error(`provider '${args.providerId}' is not configured — add one in Settings → Models first`)
+    }
+    return demoKeySummaries(args.providerId)
+  },
+  async add_provider_key(args: { providerId: string; key: string }) {
+    await delay(120)
+    const key = String(args.key ?? '').trim()
+    if (!key) throw new Error('cannot add an empty key')
+    if (!state.providers.providers.some((p) => p.id === args.providerId)) {
+      throw new Error(`provider '${args.providerId}' is not configured — add one in Settings → Models first`)
+    }
+    const keys = demoProviderKeys.get(args.providerId) ?? []
+    const existingSlot = keys.indexOf(key)
+    if (existingSlot !== -1) {
+      throw new Error(`key is already registered at slot ${existingSlot}`)
+    }
+    keys.push(key)
+    demoProviderKeys.set(args.providerId, keys)
+    // First key added → the roster's key-set flag flips (the backend's
+    // has_api_key derives from credential-store presence).
+    const conn = state.providers.providers.find((p) => p.id === args.providerId)
+    if (conn) conn.has_api_key = true
+    return demoKeySummaries(args.providerId)
+  },
+  async remove_provider_key(args: { providerId: string; index: number }) {
+    await delay(120)
+    const keys = demoProviderKeys.get(args.providerId) ?? []
+    if (args.index < 0 || args.index >= keys.length) {
+      throw new Error(`key index ${args.index} out of range (provider '${args.providerId}' has ${keys.length} keys)`)
+    }
+    if (keys.length === 1) {
+      throw new Error('cannot remove the last remaining key; delete the credential instead')
+    }
+    keys.splice(args.index, 1)
+    demoProviderKeys.set(args.providerId, keys)
+    return demoKeySummaries(args.providerId)
+  },
+  async activate_provider_key(args: { providerId: string; index: number }) {
+    await delay(120)
+    const keys = demoProviderKeys.get(args.providerId) ?? []
+    if (args.index < 0 || args.index >= keys.length) {
+      throw new Error(`key index ${args.index} out of range (provider '${args.providerId}' has ${keys.length} keys)`)
+    }
+    if (args.index !== 0) {
+      const [promoted] = keys.splice(args.index, 1)
+      keys.unshift(promoted)
+      demoProviderKeys.set(args.providerId, keys)
+    }
+    return demoKeySummaries(args.providerId)
+  },
+
   // --- Models & Status ---
   async list_models() { await delay(); return clone(MOCK_MODELS) },
-  async get_status() { await delay(40); return clone(MOCK_STATUS) },
+  // R2-1: session-scoped model override (composer chip). Writes/reads the
+  // per-session demo map; null sessionId → the active-session bucket, like
+  // the backend's `resolve_explicit_or_active(None)` fallback.
+  // W2 journey #17: while a script is armed the SEED's registry answers —
+  // `session.modelOverride` pre-arms the override the chip renders with the
+  // "· session" suffix, and chip switches update the same registry so the
+  // player's next send observes the switch. Unarmed → demo map, unchanged.
+  async set_session_model(args: { sessionId?: string | null; provider: string; model: string }) {
+    await delay(60)
+    setSeedSessionModel(args.sessionId, { provider: args.provider, model: args.model })
+    demoSessionModels.set(demoSessionKey(args.sessionId), { provider: args.provider, model: args.model })
+  },
+  async clear_session_model(args: { sessionId?: string | null }) {
+    await delay(30)
+    clearSeedSessionModel(args.sessionId)
+    demoSessionModels.delete(demoSessionKey(args.sessionId))
+  },
+  async get_session_model(args: { sessionId?: string | null }) {
+    await delay()
+    // W2 journey #17: a seeded session's override answers first (the R2-1
+    // comment below describes the unarmed shape, which is unchanged — the
+    // demoSessionModels Map-miss → null).
+    const seeded = seededSessionModel(args.sessionId)
+    if (seeded) return { ...seeded }
+    // R1 scripted-backend: unarmed scripted sessions intentionally resolve
+    // to null (a fresh scripted session has no model override) — the
+    // demoSessionModels Map-miss already produces exactly that shape.
+    return demoSessionModels.get(demoSessionKey(args.sessionId)) ?? null
+  },
+  // S2-4a (P-N9): pre-send vision pre-check. Demo resolves the effective
+  // model the same way the composer chip renders it (session override →
+  // MOCK_STATUS fallback), then reads the vision bit off the seeded
+  // catalog. Demo models are vision-known entries, so the hold path is
+  // reachable by scripting a text-only override — a real handler, not an
+  // allowlist park, so e2e can drive the confirm bar.
+  async check_vision_send(args: { sessionId?: string | null }) {
+    await delay()
+    const override =
+      seededSessionModel(args.sessionId)
+      ?? demoSessionModels.get(demoSessionKey(args.sessionId))
+      ?? null
+    const model = override?.model ?? MOCK_STATUS.model
+    const entry = MOCK_MODELS.find(m => m.id === model)
+    const vision = entry == null ? null : entry.vision ?? null
+    const suggestion =
+      vision === false
+        ? (() => {
+            const candidate = MOCK_MODELS.find(m => m.id !== model && m.vision === true)
+            return candidate == null
+              ? null
+              : { provider: candidate.provider, model: candidate.id, name: candidate.name }
+          })()
+        : null
+    return {
+      model,
+      provider: override?.provider ?? MOCK_STATUS.provider,
+      vision,
+      suggestion,
+    }
+  },
+  // S2-4b (P-N9): pre-send tools pre-check — the mirror of check_vision_send
+  // above. The demo send path always rides tools (as the real desktop one
+  // does), so `applies` is constant true; the three-state verdict reads the
+  // `tools` bit off the seeded catalog (MOCK_STATUS.model is tools:true, so
+  // ordinary demo/e2e sends pass; scripting llama-4-70b reaches the hold).
+  // NO artificial delay() here, unlike the vision twin: this check rides
+  // EVERY send, so a simulated round-trip would tax every demo message and
+  // re-order the wire record against e2e assertions that read
+  // `mockSnapshot().sends[i]` right after the composer settles (the budget
+  // spec's poll was the vision-specific workaround; don't spread it).
+  async check_tools_send(args: { sessionId?: string | null }) {
+    const override =
+      seededSessionModel(args.sessionId)
+      ?? demoSessionModels.get(demoSessionKey(args.sessionId))
+      ?? null
+    const model = override?.model ?? MOCK_STATUS.model
+    const entry = MOCK_MODELS.find(m => m.id === model)
+    const tools = entry == null ? null : entry.tools ?? null
+    const suggestion =
+      tools === false
+        ? (() => {
+            const candidate = MOCK_MODELS.find(m => m.id !== model && m.tools === true)
+            return candidate == null
+              ? null
+              : { provider: candidate.provider, model: candidate.id, name: candidate.name }
+          })()
+        : null
+    return {
+      model,
+      provider: override?.provider ?? MOCK_STATUS.provider,
+      applies: true,
+      tools,
+      suggestion,
+    }
+  },
+  // P2-5: session-level "temporary chat" — demo mirrors the backend's
+  // durable sidecar with an in-memory set so the composer toggle persists
+  // within a demo session.
+  async set_session_memory_bypass(args: { sessionId?: string | null; disabled: boolean }) {
+    await delay(30)
+    const key = demoSessionKey(args.sessionId)
+    if (args.disabled) demoMemoryBypass.add(key)
+    else demoMemoryBypass.delete(key)
+  },
+  async get_session_memory_bypass(args: { sessionId?: string | null }) {
+    await delay()
+    return demoMemoryBypass.has(demoSessionKey(args.sessionId))
+  },
+  // R2-2: demo refresh pretends to re-fetch models.dev — reports the seeded
+  // catalog size and bumps the generation so the success line moves. S4
+  // (P-N20): the catalog-refresh journey arms the failure fixture so the
+  // button's failed state (inline upstream reason) is drivable like its
+  // idle/busy/done states.
+  async refresh_model_catalog() {
+    await delay(700)
+    if (demoCatalogRefreshShouldFail()) {
+      throw new Error('models.dev upstream unreachable (demo failure fixture)')
+    }
+    demoCatalogGeneration += 1
+    return { count: MOCK_MODELS.length, generation: demoCatalogGeneration }
+  },
+  // Status mirrors demoConfig so model switching (composer chip / header)
+  // visibly updates both selectors in the demo — they stay in sync the way
+  // the real engine does.
+  async get_status() {
+    await delay(40)
+    return {
+      ...clone(MOCK_STATUS),
+      model: demoConfig.model ?? MOCK_STATUS.model,
+      provider: demoConfig.provider ?? MOCK_STATUS.provider,
+      // S3-1 (P-N11): the ACTIVE profile name — the demo mirrors the
+      // backend's `active_profile_key` (the "default" sentinel when unset),
+      // feeding the pickers' "pinned by profile X" why-active label.
+      active_profile: demoProviderProfiles.find((p) => p.active)?.name ?? 'default',
+    }
+  },
+  // S3-2 (P-N10): the demo mirror of the durable override sidecar — the
+  // per-session override map's size. Chat-surface switches (chip) write the
+  // same map, so arming an override then counting returns 1.
+  async count_session_model_overrides() {
+    await delay()
+    return demoSessionModels.size
+  },
   async list_tools() { await delay(); return clone(MOCK_TOOLS) },
 
   // --- Sessions ---
   // Deleted ids / renamed titles are tracked so the demo build and e2e flows
   // observe their own mutations (list/search reflect them on refresh).
   async new_session() { await delay(60); return `sess-${Date.now()}` },
+  // R1 chat-script e2e: the sidebar fetches archived rows on every boot —
+  // without a handler demo mode console.error'd 5× on /chat (the coverage
+  // tripwire allowlisted it as "never reached", which the /chat boot proves
+  // false). Demo keeps no archived sessions.
+  async list_archived_sessions() {
+    await delay(30)
+    // W2 journey #19: the seeded archive registry answers while armed;
+    // unarmed → the demo registry (rows archived via the new
+    // archive_session handler).
+    const seeded = seededArchivedSessions()
+    if (seeded) return clone(seeded)
+    return clone(MOCK_SESSIONS)
+      .filter(s => archivedSessions.has(s.id))
+      .map(s => ({ id: s.id, title: s.title, updated_at: s.updated_at }))
+  },
   async list_sessions() {
     await delay()
+    // R1 scripted-backend: a loaded script's seeded sessions replace the
+    // demo roster wholesale (deletions/renames apply to the demo list only).
+    const seeded = seededSessions()
+    if (seeded) return clone(seeded).map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
     return clone(MOCK_SESSIONS)
-      .filter(s => !deletedSessions.has(s.id))
+      .filter(s => !deletedSessions.has(s.id) && !archivedSessions.has(s.id))
       .map(s => renamedSessions.get(s.id) ?? s)
+      .map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
   },
   async search_sessions(args: { query: string }) {
     await delay()
+    // W2 journey #19: while a seed is armed the search answers from the
+    // seeded roster (title-first, the backend's contract) — previously a
+    // scripted rail's search leaked the demo roster into the filtered list.
+    const seeded = seededSearchSessions(args.query ?? '')
+    if (seeded) return clone(seeded).map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
     const q = (args.query ?? '').toLowerCase()
     return clone(MOCK_SESSIONS)
       .filter(s => !deletedSessions.has(s.id))
       .map(s => renamedSessions.get(s.id) ?? s)
       .filter(s => s.title.toLowerCase().includes(q))
+      .map(s => ({ ...s, pinned: pinnedSessions.has(s.id) }))
   },
-  async load_session() { await delay(); return clone(MOCK_MESSAGES) },
-  async switch_session() { await delay(); return clone(MOCK_MESSAGES) },
-  async delete_session(args: { id: string }) { await delay(60); deletedSessions.add(args.id); return true },
+  // P0 plan dock: a demo plan so the dock's 计划 tab has content in mock mode.
+  async get_session_plan(args: { workingDir?: string }) {
+    await delay()
+    if (!args?.workingDir) return null
+    // W2 journey #20: a plan file written back through save_text_file (the
+    // PlanPanel checkbox tick) IS the plan — serve the written content so
+    // the tick survives its own refresh, like the real backend reading the
+    // file back from disk.
+    const written = savedPlanForWorkingDir(args.workingDir)
+    if (written) return written
+    return {
+      id: 'demo-plan',
+      title: 'Q3 roadmap execution plan',
+      status: 'approved',
+      created_at: new Date(Date.now() - 3600_000).toISOString(),
+      content: [
+        '## Steps',
+        '',
+        '1. OAuth scaffolding for the 5 launch partners',
+        '2. Webhook reliability SLA (99.95%) — retries + dead-letter queue',
+        '3. Billing schema v2 dual-write, cutover behind a flag',
+        '4. Onboarding product tour ship + activation instrumentation',
+        '',
+        '- [x] Survey partner API surface',
+        '- [ ] Draft the OAuth gallery spec',
+        '- [ ] Load-test the webhook path',
+      ].join('\n'),
+    }
+  },
+  // R2 scripted-backend: a seeded session's own messages answer (previously
+  // these returned the demo conversation unconditionally, so switching to a
+  // scripted session replaced it with demo data). Unarmed → demo default,
+  // byte-identical to before.
+  // S-4 fix: seeded reads project seed + the session's recorded send tail —
+  // a just-sent (possibly still unsettled) bubble survives the round trip,
+  // like the real backend's log-backed reload.
+  async load_session(args: { id?: string | null }) {
+    await delay()
+    const seeded = seededMessagesWithRecorded(args?.id ?? null)
+    if (seeded) return clone(seeded)
+    return clone(MOCK_MESSAGES)
+  },
+  async switch_session(args: { id?: string | null }) {
+    await delay()
+    const seeded = seededMessagesWithRecorded(args?.id ?? null)
+    if (seeded) return clone(seeded)
+    return clone(MOCK_MESSAGES)
+  },
+  async delete_session(args: { id: string }) {
+    await delay(60)
+    // W2 journey #19: the deleteFails fixture — a seeded session marked
+    // `deleteFails` refuses the delete (the deterministic stand-in for the
+    // real backend's refused delete; the dialog stays open, the shared
+    // banner carries the error).
+    if (seedSessionDeleteFails(args.id)) throw new Error('session is busy; delete refused')
+    recordSeedSessionDeleted(args.id)
+    notifySeededSessionsUpdated()
+    deletedSessions.add(args.id)
+    return true
+  },
   async rename_session(args: { id: string; title: string }) {
     await delay(60)
+    // W2 journey #19: a rename of a SEEDED session must survive the armed
+    // list_sessions read (which answers from the seed, not this map).
+    recordSeedSessionRenamed(args.id, args.title)
+    notifySeededSessionsUpdated()
     const base = renamedSessions.get(args.id) ?? MOCK_SESSIONS.find(s => s.id === args.id)
     if (base) renamedSessions.set(args.id, { ...base, title: args.title })
+    return true
+  },
+  // W2 journey #19: archive/restore used to be unmocked (UNMOCKED_ALLOWLIST
+  // "session mutation on a live engine session") — the sidebar's Archive
+  // action could only ever toast failure in demo mode. The demo twin keeps
+  // an in-memory archived set alongside deletedSessions; scripted sessions
+  // record into the seed registry so the armed list_sessions /
+  // list_archived_sessions reads project them.
+  async archive_session(args: { id: string }) {
+    await delay(60)
+    recordSeedSessionArchived(args.id)
+    notifySeededSessionsUpdated()
+    archivedSessions.add(args.id)
+    return true
+  },
+  async unarchive_session(args: { id: string }) {
+    await delay(60)
+    recordSeedSessionUnarchived(args.id)
+    notifySeededSessionsUpdated()
+    archivedSessions.delete(args.id)
+    return true
+  },
+  // Settings R3 T7: the pin twin — same in-memory-set contract as the
+  // archive handlers, so a demo pin survives remounts through the
+  // list_sessions/search_sessions projections above; the localStorage
+  // mirror (`shannon.demo.pinnedSessions`) makes it survive a full reload,
+  // standing in for the backend curation sidecar's curation.json.
+  async set_session_pinned(args: { id: string; pinned: boolean }) {
+    await delay(60)
+    if (args.pinned) pinnedSessions.add(args.id)
+    else pinnedSessions.delete(args.id)
+    persistDemoPinned()
     return true
   },
   async duplicate_session(args: { id: string }) {
@@ -415,25 +1566,53 @@ export const handlers: Record<string, MockHandler> = {
   },
   // /rewind: demo has no checkpoints (record_turn runs in the desktop Rust
   // process), so the rewind affordance stays hidden and these are safety nets.
-  async list_checkpoints() { await delay(30); return [] },
+  // R3 scripted-backend: a seeded session derives one checkpoint per user
+  // turn (the pre-turn snapshot the edit-commit flow rewinds onto) and
+  // rewind_session truncates the seeded conversation to that boundary —
+  // unarmed both return their demo defaults, byte-identical.
+  async list_checkpoints(args: { sessionId?: string | null }) {
+    await delay(30)
+    const seeded = seededCheckpoints(args?.sessionId ?? null)
+    if (seeded) return clone(seeded)
+    return []
+  },
   async list_message_feedback() { await delay(30); return {} },
   async record_message_feedback() { await delay(30) },
   async list_feedback_sessions() { await delay(30); return [] },
-  async rewind_session() { await delay(80); return clone(MOCK_MESSAGES) },
+  async rewind_session(args: { sessionId?: string | null; turnIndex?: number }) {
+    await delay(80)
+    // S-4 fix consistency: a rewind truncates the session's history — its
+    // recorded send tail dies with the truncated turns.
+    clearRecordedSends(args?.sessionId ?? null)
+    const seeded = seededRewoundMessages(args?.sessionId ?? null, args?.turnIndex ?? 0)
+    if (seeded) return clone(seeded)
+    return clone(MOCK_MESSAGES)
+  },
   // Slash-command backends: /context and /cost return readable demo numbers,
   // /diff reports a non-repo so the demo composer shows the calm notice.
   async get_session_context_stats() {
     await delay(30)
     return { estimated_tokens: 4820, context_window: 200000 }
   },
-  async get_session_usage() {
+  async get_session_usage(args: { sessionId?: string | null }) {
     await delay(30)
+    // R1 scripted-backend: seeded sessions report a pristine ledger — spend
+    // arrives via budget:* events, not history. Unknown/unarmed → demo data.
+    const seeded = seededUsage(args?.sessionId)
+    if (seeded) return seeded
     return { input_tokens: 12400, output_tokens: 3150, cache_creation_tokens: 0, cache_read_tokens: 9800, cost_usd: 0.0731, events: 6 }
   },
   // P0-4 cost observability: demo budget (mutable so the banner flow is
   // explorable), a fixed six-category breakdown and two attributed
   // sessions for the Usage page's per-session view.
-  async get_session_budget() { await delay(30); return demoBudgetUsd },
+  async get_session_budget(args: { sessionId?: string | null }) {
+    await delay(30)
+    // R1 scripted-backend: seed.config.budgetUsd answers for the active
+    // fallback or a seeded session id; undefined → demo budget (default null).
+    const budget = seededBudget(args?.sessionId)
+    if (budget !== undefined) return budget
+    return demoBudgetUsd
+  },
   async set_session_budget(args: { budgetUsd: number | null }) {
     await delay(30)
     demoBudgetUsd = args.budgetUsd
@@ -465,6 +1644,15 @@ export const handlers: Record<string, MockHandler> = {
   },
   async get_session_git_diff() {
     await delay(30)
+    // wave-2 J15 (slash-commands journey): while a ChatScript is armed, a
+    // FIRST seeded session whose id carries the `diff:<case>` sentinel swaps
+    // in a canned GitDiffSummary (data/slash.ts) so the SlashResultCard's
+    // four shapes are drivable — the script schema has no diff field, so the
+    // seam lives in the mock layer. Un-armed (demo) seeds never match the
+    // sentinel and keep the historical not-repo default below verbatim
+    // (CONTRIBUTING iron rule 4).
+    const fixture = scriptedGitDiffFixture(getScriptSeed())
+    if (fixture) return fixture
     return { is_repo: false, files: [], patch: '', truncated: false }
   },
   async compact_session() {
@@ -483,6 +1671,10 @@ export const handlers: Record<string, MockHandler> = {
   // --- Permissions ---
   async respond_permission() { await delay(20) },
 
+  // --- Ask user (Settings R3 T8) — demo ask-user-request events come from
+  // the scripted player; answers are accepted and discarded. ---
+  async respond_ask_user() { await delay(20) },
+
   // --- Files ---
   async get_file_diff(args: { path: string }) {
     await delay()
@@ -494,6 +1686,68 @@ export const handlers: Record<string, MockHandler> = {
     }
   },
   async apply_diff() { await delay(100) },
+  // office Wave 2 B9' — reference-style file index. Mutable demo state so
+  // favorite toggles and attach-time registrations feel live; the third
+  // entry points at a path that does not exist so the "moved or deleted"
+  // treatment is visible in the demo Files page.
+  async list_file_index() {
+    await delay()
+    return clone(
+      [...demoFileIndex].sort(
+        (a, b) => new Date(b.registered_at).getTime() - new Date(a.registered_at).getTime(),
+      ),
+    )
+  },
+  async register_file_index_entry(args: { path: string; source: string }) {
+    await delay(20)
+    const existing = demoFileIndex.find(f => f.path === args.path)
+    if (existing) {
+      existing.source = args.source
+      return
+    }
+    const name = args.path.split('/').pop() ?? args.path
+    demoFileIndex.push({
+      path: args.path,
+      name,
+      size_bytes: 12_400,
+      registered_at: new Date().toISOString(),
+      favorite: false,
+      source: args.source,
+    })
+  },
+  async set_file_index_favorite(args: { path: string; favorite: boolean }) {
+    await delay(20)
+    const entry = demoFileIndex.find(f => f.path === args.path)
+    if (entry) entry.favorite = args.favorite
+  },
+  // P0-3 attachment preflight — demo mode has no real working-directory
+  // boundary, so every demo path checks clean and the composer's chips
+  // never show refusal flags.
+  async check_attachment_paths(args: { paths: string[] }) {
+    await delay(10)
+    return args.paths.map(path => ({ path, ok: true }))
+  },
+  // G3b P1-6 composer clipboard-image paste — demo mode persists nothing;
+  // return a plausible absolute path so the pasted image enters the demo
+  // attachment list like a real one would.
+  async save_pasted_image(args: { dataBase64: string; ext: string }) {
+    await delay(10)
+    return `/Users/demo/.shannon/cache/pasted/${Date.now()}-demo.${args.ext || 'png'}`
+  },
+  // office Wave 2: the Files page's missing-detection probe (and FileRefChip's
+  // anti-hallucination backstop) — in demo mode only indexed demo paths exist.
+  async path_exists(args: { path: string }) {
+    await delay(10)
+    return demoFileIndex.some(f => f.path === args.path)
+  },
+  // Capped text read for disk artifacts (the dock's file tabs read the
+  // produced file's content — ArtifactLinkHost.openDiskArtifact). Demo mode
+  // has no disk: return a plausible in-memory body for any path.
+  async read_text_file(args: { path: string; maxBytes?: number | null }) {
+    await delay(20)
+    const content = `[demo] ${args.path.split('/').pop() ?? args.path}\n\nMock content served by the demo backend.`
+    return { path: args.path, content, sizeBytes: content.length }
+  },
   async get_file_tree() {
     await delay()
     return {
@@ -518,6 +1772,12 @@ export const handlers: Record<string, MockHandler> = {
       status: 'dirty',
     }
   },
+  // D5 方案① — welcome card workspace probe. The demo workspace is a Rust
+  // repo, so the coding-oriented example cards stay visible.
+  async detect_workspace_markers() {
+    await delay()
+    return ['Cargo.toml']
+  },
 
   // --- MCP ---
   async list_mcp_servers() { await delay(); return clone(MOCK_MCP_SERVERS) },
@@ -529,7 +1789,20 @@ export const handlers: Record<string, MockHandler> = {
   async restart_mcp_server(args: { name: string }) {
     await delay(400)
     const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
-    return srv ? { ...clone(srv), connected: true, last_connected: new Date().toISOString() } : null
+    return srv ? { ...clone(srv), connected: true, last_connected: Date.now() } : null
+  },
+  async set_mcp_server_enabled(args: { name: string; enabled: boolean }) {
+    await delay(200)
+    const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
+    return srv ? { ...clone(srv), enabled: args.enabled, connected: args.enabled } : null
+  },
+  // W3-B (A2): re-auth flips a needs_auth OAuth row back to connected.
+  async reauthenticate_mcp_server(args: { name: string }) {
+    await delay(400)
+    const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
+    return srv
+      ? { ...clone(srv), connected: true, failure_kind: null, last_error: null, last_connected: Date.now() }
+      : null
   },
   async get_mcp_server_config(args: { name: string }) {
     await delay()
@@ -547,12 +1820,24 @@ export const handlers: Record<string, MockHandler> = {
 
   // --- Plugins ---
   async list_plugins() { await delay(); return clone(MOCK_PLUGINS) },
-  async install_plugin() { await delay(800); return 'plugin-installed' },
-  async install_plugin_from_git() { await delay(1200); return 'plugin-installed-git' },
-  async uninstall_plugin() { await delay() },
-  async enable_plugin() { await delay() },
-  async disable_plugin() { await delay() },
-  async update_plugin() { await delay() },
+  async install_plugin() { await delay(800); return { name: 'plugin-installed', warnings: [] } },
+  async install_plugin_from_git() { await delay(1200); return { name: 'plugin-installed-git', warnings: [] } },
+  async uninstall_plugin() { await delay(); return { warnings: [] } },
+  async enable_plugin() { await delay(); return { warnings: [] } },
+  async disable_plugin() { await delay(); return { warnings: [] } },
+  async update_plugin() { await delay(); return { warnings: [] } },
+  // X5 trust preview — a demo bundle for the install dialog checklist.
+  async inspect_plugin_source() {
+    await delay()
+    return {
+      name: 'shannon-starter',
+      source_format: 'claude-json',
+      skills: ['brainstorm', 'tdd'],
+      agents: ['reviewer.md'],
+      commands: ['ship.md', 'triage.md'],
+      mcp_servers: ['filesystem'],
+    }
+  },
   async list_plugin_marketplace() { await delay(); return [] },
 
   // --- Background Tasks ---
@@ -602,6 +1887,42 @@ export const handlers: Record<string, MockHandler> = {
     return clone(t)
   },
 
+  // --- Projects (P-E3 registry, P-U2 rail) ---
+  async list_projects(args: { includeArchived?: boolean }) {
+    await delay()
+    const rows = demoProjects.filter(p => args.includeArchived || !p.archivedAtMs)
+    return clone(rows)
+  },
+  async register_project(args: { path: string }) {
+    await delay()
+    return clone(ensureDemoProject(args.path))
+  },
+  async rename_project(args: { path: string; name: string | null }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.name = args.name ?? null
+    return clone(row)
+  },
+  async set_project_appearance(args: { path: string; icon: string | null; color: string | null }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.icon = args.icon ?? null
+    row.color = args.color ?? null
+    return clone(row)
+  },
+  async archive_project(args: { path: string }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.archivedAtMs = Date.now()
+    return clone(row)
+  },
+  async unarchive_project(args: { path: string }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.archivedAtMs = null
+    return clone(row)
+  },
+
   // --- Scheduled ---
   async list_scheduled_tasks() { await delay(); return clone(state.scheduled) },
   async create_scheduled_task(args: { payload: { name: string } }) {
@@ -624,9 +1945,15 @@ export const handlers: Record<string, MockHandler> = {
     if (r) (r as { enabled: boolean }).enabled = args.enabled
     return r ? clone(r) : null
   },
-  async trigger_task_now() {
+  async trigger_task_now(args: { id: string }) {
     await delay(200)
-    return { triggered: true, message: 'Task triggered. Result will appear shortly.' }
+    // Same shape as the real TriggerResponse { run_id, task_id, task_name }.
+    const r = state.scheduled.find(x => x.id === args.id)
+    return {
+      run_id: `mock-run-${Date.now()}`,
+      task_id: args.id,
+      task_name: r?.name ?? args.id,
+    }
   },
   async preview_cron(args: { expr: string }) {
     await delay(40)
@@ -700,6 +2027,73 @@ export const handlers: Record<string, MockHandler> = {
     return item.sessionId
   },
 
+  // --- Usage (UI audit C13 — keeps the cost panel non-empty in demo mode) ---
+  async get_usage_stats(args: { days: number }) {
+    await delay()
+    const days = Math.min(args.days ?? 30, 365)
+    const today = new Date()
+    const byDay = Array.from({ length: Math.min(days, 30) }, (_, i) => {
+      const d = new Date(today)
+      d.setDate(today.getDate() - (days - 1 - i))
+      const label = d.toISOString().slice(0, 10)
+      const peak = Math.sin((i / days) * Math.PI) * 0.4 + 0.6
+      return {
+        label,
+        input_tokens: Math.round(3800 + 12000 * peak + (i % 3) * 400),
+        output_tokens: Math.round(900 + 2400 * peak),
+        cache_creation_tokens: Math.round(800 + 4200 * peak),
+        cache_read_tokens: Math.round(8000 + 35000 * peak),
+        cost_usd: Number((0.05 + 0.42 * peak).toFixed(3)),
+        requests: 4 + Math.round(20 * peak),
+      }
+    })
+    const totals = byDay.reduce(
+      (acc, d) => ({
+        label: 'total',
+        input_tokens: acc.input_tokens + d.input_tokens,
+        output_tokens: acc.output_tokens + d.output_tokens,
+        cache_creation_tokens: acc.cache_creation_tokens + d.cache_creation_tokens,
+        cache_read_tokens: acc.cache_read_tokens + d.cache_read_tokens,
+        cost_usd: Number((acc.cost_usd + d.cost_usd).toFixed(3)),
+        requests: acc.requests + d.requests,
+      }),
+      { label: 'total', input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0, requests: 0 },
+    )
+    return {
+      days,
+      totals,
+      by_model: [
+        { ...totals, label: 'claude-sonnet-4-6' },
+        { label: 'glm-5.3', input_tokens: Math.round(totals.input_tokens * 0.18), output_tokens: Math.round(totals.output_tokens * 0.18), cache_creation_tokens: Math.round(totals.cache_creation_tokens * 0.12), cache_read_tokens: Math.round(totals.cache_read_tokens * 0.12), cost_usd: Number((totals.cost_usd * 0.15).toFixed(3)), requests: Math.round(totals.requests * 0.22) },
+      ],
+      by_provider: [
+        { ...totals, label: 'anthropic', requests: totals.requests - Math.round(totals.requests * 0.22) },
+      ],
+      by_day: byDay,
+    }
+  },
+  // --- Usage governance (P2-1 — sidebar % bar + budget card, demo at 62%) ---
+  async get_usage_governance() {
+    await delay()
+    const monthCostUsd = 6.2
+    const budgetUsd = 10.0
+    const percent = (monthCostUsd / budgetUsd) * 100
+    return {
+      month: new Date().toISOString().slice(0, 7),
+      monthCostUsd,
+      last7dCostUsd: 1.84,
+      budgetUsd,
+      percent,
+      warned80: percent >= 80,
+      hit100: percent >= 100,
+      thresholdReached: percent >= 100 ? '100' : percent >= 80 ? '80' : null,
+    }
+  },
+  // --- Pre-task cost estimate (P2-6 — creation-confirm hints) ---
+  async estimate_task_cost() {
+    await delay()
+    return { hasHistory: true, runsCounted: 6, minUsd: 0.08, maxUsd: 0.41, avgUsd: 0.19, lastUsd: 0.14 }
+  },
   // --- Goal runs (P0-2 desktop goal runner) ---
   async list_goal_runs() {
     await delay()
@@ -728,6 +2122,7 @@ export const handlers: Record<string, MockHandler> = {
       lastError: null,
       startedAtMs: Date.now(),
       updatedAtMs: Date.now(),
+      workingDir: null,
     })
     return { sessionId }
   },
@@ -778,6 +2173,25 @@ export const handlers: Record<string, MockHandler> = {
       output_preview: 'Task output preview...',
     }))
   },
+  // P2-8: cross-agent run table — demo derives the rows from the same
+  // synthetic history, joining a session/model on the newer half so both the
+  // "open session" and the plain-detail paths are visible.
+  async list_agent_runs() {
+    await delay()
+    return Array.from({ length: 8 }).map((_, i) => ({
+      run_id: `exec-${1000 - i}`,
+      task_id: MOCK_SCHEDULED_ROUTINES[i % MOCK_SCHEDULED_ROUTINES.length].id,
+      task_name: MOCK_SCHEDULED_ROUTINES[i % MOCK_SCHEDULED_ROUTINES.length].name,
+      started_at: Math.floor((Date.now() - i * 86400_000) / 1000),
+      finished_at: Math.floor((Date.now() - i * 86400_000 + 600) / 1000),
+      status: i === 0 ? 'failed' : i === 3 ? 'queued' : 'succeeded',
+      error_message: i === 0 ? 'exit code 1' : undefined,
+      cost_usd: 0.25,
+      token_usage: 4200,
+      session_id: i % 2 === 0 ? `demo-sess-${i}` : undefined,
+      model: i % 2 === 0 ? 'claude-sonnet-4-6' : undefined,
+    }))
+  },
   async get_execution_detail(args: { id: string }) {
     await delay()
     return {
@@ -823,8 +2237,8 @@ export const handlers: Record<string, MockHandler> = {
     }
     demoConfig.active_permission_profile = name === '' ? null : name
     // Mirror the backend's mode mapping so the demo header reflects it.
-    if (name === 'strict' || name === 'balanced') demoConfig.approval_mode = 'suggest'
-    else if (name === 'permissive') demoConfig.approval_mode = 'auto_edit'
+    if (name === 'strict' || name === 'balanced') demoConfig.approval_mode = 'ask'
+    else if (name === 'permissive') demoConfig.approval_mode = 'auto-edit'
     return { active: name === '' ? null : name, approval_mode: demoConfig.approval_mode }
   },
   async save_custom_profile(args: { name: string; description?: string; auto_approve: string[]; confirm: string[]; deny: string[] }) {
@@ -877,6 +2291,27 @@ export const handlers: Record<string, MockHandler> = {
       language_id: 'rust',
     }
   },
+  // wave-2 J18: the chat-inline editor runs diagnostics on every file load —
+  // without a handler the demo console.error'd on each open (the watchdog
+  // would flag every editor journey). A quiet empty verdict: the demo has no
+  // LSP server to talk to, and "no diagnostics" is the honest shape.
+  async run_file_diagnostics() {
+    await delay(60)
+    return { diagnostics: [], timed_out: false }
+  },
+  // wave-2 J15: /export's save-dialog pair. plugin-dialog talks through the
+  // same invoke alias, so without these handlers the demo console.error'd
+  // "unhandled plugin:dialog|save" on every export. The dialog resolves null
+  // (the user-cancel semantics the app already treats as a calm no-op)
+  // EXCEPT for the journey sentinel: a suggested filename prefixed
+  // `ExportSuccess` "saves" to the demo Downloads path, so the slash
+  // journey can drive BOTH halves of the success/cancel pair. The write
+  // itself is a demo no-op (no fs behind the mock).
+  async 'plugin:dialog|save'(args: { options?: { defaultPath?: string } }) {
+    await delay(30)
+    const suggested = args?.options?.defaultPath ?? ''
+    return suggested.startsWith('ExportSuccess') ? '/Users/demo/Downloads/ExportSuccess.md' : null
+  },
 
   // --- Memory ---
   async list_memories(args?: { project?: string | null; category?: string | null; query?: string | null }) {
@@ -920,6 +2355,17 @@ export const handlers: Record<string, MockHandler> = {
     await delay()
     const m = MOCK_MEMORIES.find((x) => x.id === args.memoryId)
     return m?.source_session_id ? { sessionId: m.source_session_id } : null
+  },
+  // P2-5: the memories injected into a session's current context — demo
+  // projects the newest memory entries through the same title/source shape.
+  async get_session_injected_memories() {
+    await delay()
+    return MOCK_MEMORIES.slice(0, 3).map((m) => ({
+      id: m.id,
+      title: m.content.split('\n')[0].slice(0, 80),
+      category: m.category,
+      sourceSessionId: m.source_session_id ?? null,
+    }))
   },
   async get_memory_graph(args?: { project?: string | null }) {
     await delay()
@@ -1153,6 +2599,30 @@ export const handlers: Record<string, MockHandler> = {
     await delay()
     notificationPrefs = { ...args.prefs }
   },
+  // P1-7 — settings "send test webhook" one-shot probe. Demo has no real
+  // receiver, so the mock answers with a successful verdict.
+  async test_webhook(args: { title: string; body: string }) {
+    await delay()
+    return { success: true, status: 200, detail: 'HTTP 200', ...args }
+  },
+
+  // ── Settings R3 — About section: read-only data directory ────────────
+  // The AboutSettings card displays the path verbatim (no fs access), so a
+  // plausible absolute path is the whole contract — same default the Rust
+  // command resolves to when $SHANNON_HOME is unset (~/.shannon).
+  async get_shannon_home() {
+    await delay(20)
+    return '/home/ed/.shannon'
+  },
+
+  // ── Settings R3 T3 — hardware acceleration + prevent sleep ───────────
+  // The General settings' System cards key the hw-accel card's visibility
+  // and the keep-awake switches' enabled state off this probe; demo poses
+  // as a supported Linux host.
+  async get_power_capabilities() {
+    await delay(20)
+    return { platform: 'linux', keepAwakeSupported: true }
+  },
 
   // --- Extensions Hub: Featured ---
   async list_featured_vendors() { await delay(); return clone(MOCK_FEATURED_VENDORS) },
@@ -1313,15 +2783,34 @@ export const handlers: Record<string, MockHandler> = {
     await delay()
     return [...demoTerminals.values()].map(({ buffer: _buffer, ...info }) => info)
   },
-
-  // --- Draggable panel workspace (P1-5 C-2, per-project, session-scoped) ---
-  async workspace_get_layout(args: { projectKey: string }) {
+  async terminal_get_settings() {
     await delay()
-    return clone(demoWorkspaceLayouts.get(args.projectKey) ?? null)
+    return clone(demoTerminalSettings)
   },
-  async workspace_set_layout(args: { projectKey: string; layout: WorkspaceLayout }) {
+  async terminal_set_settings(args: { settings: TerminalSettings }) {
     await delay()
-    demoWorkspaceLayouts.set(args.projectKey, clone(args.layout))
+    const s = args?.settings
+    if (!s || typeof s !== 'object') throw new Error('invalid terminal settings')
+    const shell = (s.shell ?? '').trim()
+    // Task 12: same sanitize discipline as the backend for the new knobs.
+    const fontFamily = (s.fontFamily ?? '').trim()
+    Object.assign(demoTerminalSettings, {
+      shell: shell === '' ? null : shell,
+      fontSize: clamp(Number(s.fontSize) || 0, 8, 32),
+      scrollback: clamp(Number(s.scrollback) || 0, 0, 100000),
+      drawerHeight: clamp(Number(s.drawerHeight) || 0, 120, 1200),
+      screenReaderMode: s.screenReaderMode === true,
+      loginShell: s.loginShell === true,
+      fontFamily: fontFamily === '' ? null : fontFamily.slice(0, 200),
+    })
+    return clone(demoTerminalSettings)
+  },
+  async terminal_history(_args: { terminalId: string }) {
+    await delay()
+    // The demo shell keeps no replay ring — empty payload, same "unknown
+    // id is not an error" contract as the real command (Task 6 wires the
+    // consumer flow).
+    return { data: '' }
   },
 
   async discard_batch_run(args: { batchId: string }) {
@@ -1374,6 +2863,46 @@ export const handlers: Record<string, MockHandler> = {
     const before = demoDevices.length
     demoDevices = demoDevices.filter(d => d.deviceId !== args.deviceId)
     return demoDevices.length < before
+  },
+  async mobile_tls_status() {
+    await delay(20)
+    return { enabled: false, fingerprint: null }
+  },
+
+  // T9 — desktop pairing approval: list + approve the demo pairing requests.
+  async gateway_pairing_pending() {
+    await delay(40)
+    return clone(demoPairingRequests)
+  },
+  async gateway_pairing_approve(args: { code: string }) {
+    await delay()
+    const idx = demoPairingRequests.findIndex((r) => r.code === args.code)
+    if (idx < 0) throw new Error(`Unknown or expired pairing code ${args.code}`)
+    const [record] = demoPairingRequests.splice(idx, 1)
+    return record
+  },
+
+  // Review 2026-09-16: these fire from globally-mounted components on every
+  // page (SkillProposalsManager) and from the Welcome flow — the missing
+  // handlers logged "[mock] unhandled Tauri command" on every single route.
+  async list_skill_candidates() {
+    await delay();
+    return [];
+  },
+  // IA X1: the Extensions → Pending page embeds the proposal-draft review
+  // panel, which fetches on every mount — without this handler demo mode
+  // error-toasts on each visit.
+  async skill_loop_list_proposals() {
+    await delay();
+    return [];
+  },
+  // S4 (P-N20): the Welcome mount probe. The real command scans the shell
+  // env (3 API keys + OLLAMA_HOST, plus S1-4a's default-endpoint probe);
+  // the browser demo has no shell, so it answers the e2e hook (null when
+  // unarmed — byte-identical to the previous unconditional null).
+  async detect_provider_from_env() {
+    await delay();
+    return demoEnvProvider();
   },
 }
 

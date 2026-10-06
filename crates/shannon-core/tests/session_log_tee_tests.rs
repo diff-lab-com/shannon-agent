@@ -15,6 +15,10 @@
 //!    reconstruction byte for byte.
 
 #![allow(clippy::unwrap_used)]
+// Every test below holds `global_state_lock()` across awaits: the guarded
+// `SHANNON_HOME` is read mid-run by the engine, and the lock is uncontended
+// per-process (nextest: one process per test), so it cannot deadlock.
+#![allow(clippy::await_holding_lock)]
 
 mod session_log_tee {
     use async_trait::async_trait;
@@ -27,7 +31,7 @@ mod session_log_tee {
     use shannon_core::session_log::{SessionLogReader, session_events_path};
     use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
     use shannon_engine::api::{LlmClientConfig, LlmProvider};
-    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::permissions::{ApprovalMode, PermissionManager};
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use tempfile::TempDir;
@@ -113,6 +117,8 @@ mod session_log_tee {
 
     fn make_engine(mock_url: &str, session_id: Uuid) -> QueryEngine {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
@@ -471,6 +477,8 @@ mod session_log_tee {
             .create();
 
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.clone(),
             model: "claude-sonnet-4-20250514".to_string(),
@@ -489,10 +497,18 @@ mod session_log_tee {
         };
         let registry = ToolRegistry::new();
         registry.register(Box::new(LeakyTool)).unwrap();
+        // The leak tool is not read-only, so the engine's fail-closed gate
+        // (R2/N-1) would deny it before execution with no approval channel
+        // attached — the secret would then never reach the log and the
+        // redaction path would go untested. Run under the production
+        // headless approval posture (FullAuto) so the tool executes and its
+        // output is teed through the redaction policy.
+        let mut permissions = PermissionManager::new();
+        permissions.set_approval_mode(ApprovalMode::FullAuto);
         let engine = QueryEngine::with_session_id(
             shannon_engine::api::LlmClient::new(config),
             registry,
-            PermissionManager::new(),
+            permissions,
             StateManager::new(),
             QueryEngineConfig::default(),
             session_id,

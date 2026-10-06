@@ -8,6 +8,7 @@
 //!
 //! Note: These tests require a terminal environment and may not work in
 //! headless CI without a PTY.
+#![cfg(unix)] // rexpect is unix-only; also depends on std::os::unix APIs.
 
 use rexpect::session::PtySession;
 use rexpect::spawn;

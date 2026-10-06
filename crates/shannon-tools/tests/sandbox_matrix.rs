@@ -8,6 +8,7 @@
 //! Landlock cells execute only when this host actually enforces Landlock;
 //! otherwise they print the probe reason and return early (an explicit,
 //! labeled skip per the master-plan constraint).
+#![cfg(unix)] // POSIX permissions + Landlock; the sandbox matrix is a unix contract.
 
 use shannon_core::tools::Tool;
 use shannon_tool_interface::{ProcessProvider, ProcessRequest, SandboxMode};
@@ -420,7 +421,7 @@ async fn registry_assembly_swaps_worlds_without_touching_tools() {
     shannon_tools::register_default_tools_with_providers(&mut sandboxed, &assembled.providers)
         .expect("sandboxed registration");
 
-    let mut names_of = |reg: &ToolRegistry| -> Vec<String> {
+    let names_of = |reg: &ToolRegistry| -> Vec<String> {
         let mut names = reg
             .list_tools_info()
             .iter()
@@ -505,6 +506,6 @@ async fn plain_bash_tool_has_no_sandbox_metadata() {
         .await
         .expect("run");
     assert!(!output.is_error);
-    assert!(output.metadata.get("classification").is_none());
+    assert!(!output.metadata.contains_key("classification"));
     assert!(output.content.contains("hi"));
 }

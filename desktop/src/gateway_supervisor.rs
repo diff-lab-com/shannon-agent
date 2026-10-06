@@ -404,9 +404,17 @@ mod e2e_tests {
     }
 
     /// `kill(pid, 0)` returns true iff the process exists (and we may signal it).
+    #[cfg(unix)]
     fn proc_is_alive(pid: u32) -> bool {
         // Safety: kill with signal 0 is a standard POSIX existence check; it
         // performs no action other than error-checking.
         unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+
+    /// Windows has no `kill(pid, 0)` existence probe; for the supervisor's
+    /// tests we report false (the OS-level reaping is the truth).
+    #[cfg(not(unix))]
+    fn proc_is_alive(_pid: u32) -> bool {
+        false
     }
 }

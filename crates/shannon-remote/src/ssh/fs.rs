@@ -3,7 +3,7 @@
 //! The SFTP session runs as a dedicated `ssh ... -s sftp` subsystem child
 //! spawned on the [`SshRuntime`]'s private runtime (works with or without
 //! ControlMaster mux, so Windows gets file ops too). Every call marshals onto
-//! that runtime; blocking faces use [`block_on_anywhere`].
+//! that runtime; blocking faces use `block_on_anywhere`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -327,6 +327,16 @@ impl FileSystemProvider for SshFs {
         })
     }
 
+    fn rename_blocking(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+        // SFTP transport: no native atomic rename in the v3 protocol and
+        // copy+delete is not safe enough to silently offer as "atomic".
+        // Callers should fall back to writing the new path directly.
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "rename not supported over SFTP",
+        ))
+    }
+
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
         let sftp = self.sftp.clone();
         let path = path.to_path_buf();
@@ -468,6 +478,97 @@ impl FileSystemProvider for SshFs {
     }
 }
 
+// Non-unix stand-in: same type/trait surface, every operation reports
+// `Unsupported` (see `ssh::unsupported_transport`).
+#[cfg(not(unix))]
+pub struct SshFs {
+    _priv: (),
+}
+
+#[cfg(not(unix))]
+impl SshFs {
+    /// Fails fast: the SFTP transport does not build on this platform.
+    pub async fn connect(_rt: Arc<SshRuntime>) -> io::Result<Arc<Self>> {
+        Err(super::unsupported_transport())
+    }
+}
+
+#[cfg(not(unix))]
+#[async_trait]
+impl FileSystemProvider for SshFs {
+    async fn read_text(&self, _path: &Path) -> io::Result<String> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn read_bytes(&self, _path: &Path) -> io::Result<Vec<u8>> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn metadata(&self, _path: &Path) -> io::Result<FileMeta> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn create_dir_all(&self, _path: &Path) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn write_bytes(&self, _path: &Path, _contents: &[u8]) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn rename(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn canonicalize(&self, _path: &Path) -> io::Result<PathBuf> {
+        Err(super::unsupported_transport())
+    }
+
+    fn read_text_blocking(&self, _path: &Path) -> io::Result<String> {
+        Err(super::unsupported_transport())
+    }
+
+    fn write_bytes_blocking(&self, _path: &Path, _contents: &[u8]) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    fn create_dir_all_blocking(&self, _path: &Path) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    fn rename_blocking(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    fn remove_file_blocking(&self, _path: &Path) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    fn canonicalize_blocking(&self, _path: &Path) -> io::Result<PathBuf> {
+        Err(super::unsupported_transport())
+    }
+
+    fn metadata_blocking(&self, _path: &Path) -> io::Result<FileMeta> {
+        Err(super::unsupported_transport())
+    }
+
+    fn read_prefix_blocking(&self, _path: &Path, _max_bytes: usize) -> io::Result<Vec<u8>> {
+        Err(super::unsupported_transport())
+    }
+
+    fn walk_blocking(
+        &self,
+        _root: &Path,
+        _cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+    ) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    fn list_dir_blocking(&self, _path: &Path) -> io::Result<Vec<DirEntryInfo>> {
+        Err(super::unsupported_transport())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,92 +638,5 @@ mod tests {
         fs.remove_file_blocking(&file).unwrap();
         // Best-effort cleanup of the unique workspace subdir.
         let _ = fs.remove_file_blocking(&dst);
-    }
-}
-
-// Non-unix stand-in: same type/trait surface, every operation reports
-// `Unsupported` (see `ssh::unsupported_transport`).
-#[cfg(not(unix))]
-pub struct SshFs {
-    _priv: (),
-}
-
-#[cfg(not(unix))]
-impl SshFs {
-    /// Fails fast: the SFTP transport does not build on this platform.
-    pub async fn connect(_rt: Arc<SshRuntime>) -> io::Result<Arc<Self>> {
-        Err(super::unsupported_transport())
-    }
-}
-
-#[cfg(not(unix))]
-#[async_trait]
-impl FileSystemProvider for SshFs {
-    async fn read_text(&self, _path: &Path) -> io::Result<String> {
-        Err(super::unsupported_transport())
-    }
-
-    async fn read_bytes(&self, _path: &Path) -> io::Result<Vec<u8>> {
-        Err(super::unsupported_transport())
-    }
-
-    async fn metadata(&self, _path: &Path) -> io::Result<FileMeta> {
-        Err(super::unsupported_transport())
-    }
-
-    async fn create_dir_all(&self, _path: &Path) -> io::Result<()> {
-        Err(super::unsupported_transport())
-    }
-
-    async fn write_bytes(&self, _path: &Path, _contents: &[u8]) -> io::Result<()> {
-        Err(super::unsupported_transport())
-    }
-
-    async fn rename(&self, _from: &Path, _to: &Path) -> io::Result<()> {
-        Err(super::unsupported_transport())
-    }
-
-    async fn canonicalize(&self, _path: &Path) -> io::Result<PathBuf> {
-        Err(super::unsupported_transport())
-    }
-
-    fn read_text_blocking(&self, _path: &Path) -> io::Result<String> {
-        Err(super::unsupported_transport())
-    }
-
-    fn write_bytes_blocking(&self, _path: &Path, _contents: &[u8]) -> io::Result<()> {
-        Err(super::unsupported_transport())
-    }
-
-    fn create_dir_all_blocking(&self, _path: &Path) -> io::Result<()> {
-        Err(super::unsupported_transport())
-    }
-
-    fn remove_file_blocking(&self, _path: &Path) -> io::Result<()> {
-        Err(super::unsupported_transport())
-    }
-
-    fn canonicalize_blocking(&self, _path: &Path) -> io::Result<PathBuf> {
-        Err(super::unsupported_transport())
-    }
-
-    fn metadata_blocking(&self, _path: &Path) -> io::Result<FileMeta> {
-        Err(super::unsupported_transport())
-    }
-
-    fn read_prefix_blocking(&self, _path: &Path, _max_bytes: usize) -> io::Result<Vec<u8>> {
-        Err(super::unsupported_transport())
-    }
-
-    fn walk_blocking(
-        &self,
-        _root: &Path,
-        _cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
-    ) -> io::Result<()> {
-        Err(super::unsupported_transport())
-    }
-
-    fn list_dir_blocking(&self, _path: &Path) -> io::Result<Vec<DirEntryInfo>> {
-        Err(super::unsupported_transport())
     }
 }

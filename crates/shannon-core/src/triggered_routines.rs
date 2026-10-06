@@ -252,12 +252,10 @@ impl TriggeredRoutineRegistry {
             return Err(TriggeredRoutineError::Disabled(name.to_string()));
         }
 
+        let (program, args) = shannon_types::shell::local_shell(&def.command);
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(def.timeout),
-            tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(&def.command)
-                .output(),
+            tokio::process::Command::new(program).args(&args).output(),
         )
         .await
         .map_err(|_| TriggeredRoutineError::Timeout {

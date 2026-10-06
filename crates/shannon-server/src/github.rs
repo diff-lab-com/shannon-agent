@@ -15,11 +15,13 @@
 //! - `[hooks.github] secret` not configured → `503`
 //!
 //! Idempotency: `X-GitHub-Delivery` ids are deduped in a bounded in-memory
-//! replay cache; a redelivered id returns the original `202` runIds without
-//! re-executing. The cache is intentionally not persisted — a serve restart
-//! forgets seen ids (GitHub redeliveries may re-execute then); persistence
-//! (e.g. a `meta` row in the shared inbox DB) is a deliberate non-goal for
-//! the MVP and is documented in `docs/integrations/github-triggers.md`.
+//! replay cache; the id is atomically *reserved* before any execution
+//! (§P3-2), so a redelivered id — including one arriving while the original
+//! delivery is still spawning — never re-executes. The cache is intentionally
+//! not persisted — a serve restart forgets seen ids (GitHub redeliveries may
+//! re-execute then); persistence (e.g. a `meta` row in the shared inbox DB)
+//! is a deliberate non-goal for the MVP and is documented in
+//! `docs/integrations/github-triggers.md`.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -31,7 +33,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use shannon_core::github_triggers::{GitHubEventInfo, matching_github_routines};
-use shannon_core::inbox_store::{InboxItemNew, InboxStore};
+use shannon_core::inbox_store::{InboxItemNew, InboxStore, RunTrigger};
 use shannon_core::query_engine::{QueryContext, QueryEvent};
 use shannon_core::scheduled_routines::ScheduledRoutine;
 
@@ -50,11 +52,22 @@ const DOC_NOTE: &str = "see docs/integrations/github-triggers.md";
 
 // ── Delivery replay cache ───────────────────────────────────────────────
 
+/// Lifecycle state of a delivery id in the replay cache.
+#[derive(Debug, Clone)]
+enum DeliveryState {
+    /// Reserved by a request that is still spawning its runs (§P3-2: the
+    /// reservation happens atomically *before* any execution, closing the
+    /// old check-then-insert double-execution window).
+    Pending,
+    /// The original delivery finished spawning; run ids are replayed verbatim.
+    Done(Vec<String>),
+}
+
 /// Bounded FIFO cache of recently seen `X-GitHub-Delivery` ids mapping to
-/// the runIds accepted for them. Not persistent (see module docs).
+/// their lifecycle state. Not persistent (see module docs).
 #[derive(Default)]
 pub struct DeliveryCache {
-    entries: HashMap<String, Vec<String>>,
+    entries: HashMap<String, DeliveryState>,
     order: VecDeque<String>,
     cap: usize,
 }
@@ -69,19 +82,57 @@ impl DeliveryCache {
     }
 
     /// RunIds previously accepted for this delivery id, if any.
-    pub fn get(&self, delivery: &str) -> Option<&Vec<String>> {
-        self.entries.get(delivery)
+    #[cfg(test)]
+    fn get(&self, delivery: &str) -> Option<&Vec<String>> {
+        match self.entries.get(delivery) {
+            Some(DeliveryState::Done(run_ids)) => Some(run_ids),
+            _ => None,
+        }
+    }
+
+    /// Atomically reserve the delivery id.
+    ///
+    /// Returns `None` when this caller won the reservation (unseen id — the
+    /// cache now holds a `Pending` marker). Returns `Some(run_ids)` when the
+    /// id was already claimed: the recorded ids of a finished delivery, or an
+    /// empty list while the original request is still in flight. Either way
+    /// the redelivery must NOT re-execute (§P3-2).
+    pub fn reserve(&mut self, delivery: &str) -> Option<Vec<String>> {
+        use std::collections::hash_map::Entry;
+        match self.entries.entry(delivery.to_string()) {
+            Entry::Occupied(entry) => match entry.get() {
+                DeliveryState::Pending => Some(Vec::new()),
+                DeliveryState::Done(run_ids) => Some(run_ids.clone()),
+            },
+            Entry::Vacant(_) => {
+                self.evict_oldest_if_full();
+                self.entries
+                    .insert(delivery.to_string(), DeliveryState::Pending);
+                self.order.push_back(delivery.to_string());
+                None
+            }
+        }
+    }
+
+    /// Record the run ids for a delivery this caller previously reserved.
+    pub fn complete(&mut self, delivery: String, run_ids: Vec<String>) {
+        self.entries.insert(delivery, DeliveryState::Done(run_ids));
     }
 
     /// Record a delivery and its runIds, evicting the oldest entry beyond capacity.
-    pub fn insert(&mut self, delivery: String, run_ids: Vec<String>) {
+    #[cfg(test)]
+    fn insert(&mut self, delivery: String, run_ids: Vec<String>) {
+        self.evict_oldest_if_full();
+        self.order.push_back(delivery.clone());
+        self.entries.insert(delivery, DeliveryState::Done(run_ids));
+    }
+
+    fn evict_oldest_if_full(&mut self) {
         if self.entries.len() >= self.cap {
             if let Some(oldest) = self.order.pop_front() {
                 self.entries.remove(&oldest);
             }
         }
-        self.order.push_back(delivery.clone());
-        self.entries.insert(delivery, run_ids);
     }
 }
 
@@ -185,22 +236,31 @@ pub async fn github_hook(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    // Idempotency: a redelivered id returns the original acceptance.
-    if !delivery.is_empty() {
-        let cached = state
-            .github_deliveries
-            .lock()
-            .ok()
-            .and_then(|cache| cache.get(delivery).cloned());
-        if let Some(run_ids) = cached {
-            tracing::info!(delivery, "replaying cached GitHub delivery acceptance");
-            return (StatusCode::ACCEPTED, Json(GitHubHookAccepted { run_ids })).into_response();
-        }
-    }
-
     let matched = matching_github_routines(&state.routines, &info);
     if matched.is_empty() {
         return StatusCode::NO_CONTENT.into_response();
+    }
+
+    // §P3-2: atomically reserve the delivery id *before* spawning any run.
+    // The old get()-check … insert() pairing left a window in which two
+    // concurrent deliveries of the same id both missed the cache and
+    // double-executed the matched routines. With the reservation in place a
+    // redelivery either replays the recorded run ids, or (while the original
+    // request is still spawning) receives the accepted-shaped empty list —
+    // GitHub then sees a 2xx and stops redelivering.
+    let mut reserved = false;
+    if !delivery.is_empty() {
+        let replay = state.github_deliveries.lock().ok().and_then(|mut cache| {
+            let replay = cache.reserve(delivery);
+            if replay.is_none() {
+                reserved = true;
+            }
+            replay
+        });
+        if let Some(run_ids) = replay {
+            tracing::info!(delivery, "replaying cached GitHub delivery acceptance");
+            return (StatusCode::ACCEPTED, Json(GitHubHookAccepted { run_ids })).into_response();
+        }
     }
 
     let mut run_ids = Vec::with_capacity(matched.len());
@@ -209,9 +269,9 @@ pub async fn github_hook(
         run_ids.push(run_id);
     }
 
-    if !delivery.is_empty() {
+    if reserved {
         if let Ok(mut cache) = state.github_deliveries.lock() {
-            cache.insert(delivery.to_string(), run_ids.clone());
+            cache.complete(delivery.to_string(), run_ids.clone());
         }
     }
 
@@ -239,7 +299,15 @@ async fn spawn_github_routine_run(
     payload: &serde_json::Value,
 ) -> String {
     let inbox = state.inbox.clone();
-    let run_id = match inbox.record_run_start(&routine.id, &routine.name) {
+    // R7-①: a GitHub-event fire is system-initiated automation, not a user
+    // action — it is tagged `scheduled`, so its failures keep counting
+    // toward the desktop's consecutive-failure auto-pause streak exactly as
+    // they did before the trigger tag existed.
+    let run_id = match inbox.record_run_start_with_trigger(
+        &routine.id,
+        &routine.name,
+        Some(RunTrigger::Scheduled),
+    ) {
         Ok(id) => id,
         Err(e) => {
             tracing::warn!(
@@ -258,7 +326,25 @@ async fn spawn_github_routine_run(
 
     let started = Instant::now();
     // Session creation identical to POST /v1/sessions.
-    let engine = crate::routes::build_engine(client_config);
+    // Routine serve is fire-and-forget: a bootstrap failure logs and falls
+    // back to the legacy bare engine rather than 500-ing the webhook.
+    let engine = match crate::routes::build_engine(client_config, None) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!(error = %e, "routine serve: engine bootstrap failed; legacy fallback");
+            let client = if state.client_config.provider.requires_auth() {
+                shannon_engine::api::LlmClient::new(state.client_config.clone())
+            } else {
+                shannon_engine::api::LlmClient::new_unauthenticated(state.client_config.clone())
+            };
+            shannon_core::query_engine::QueryEngine::with_defaults(
+                client,
+                shannon_core::tools::ToolRegistry::new(),
+                shannon_engine::permissions::PermissionManager::new(),
+                shannon_engine::state::StateManager::new(),
+            )
+        }
+    };
     let session_id = sessions.create(engine).await.id;
 
     let run_id_for_task = run_id.clone();
@@ -386,7 +472,17 @@ fn finalize_run(
     } else {
         "failed"
     };
-    if let Err(e) = inbox.record_run_finish(run_id, status, failure.as_deref(), inbox_item_id) {
+    // Serve-side runs carry no cost/token accounting (the engine's Usage
+    // ledger is the desktop-side source of truth) — the columns stay NULL so
+    // the UI hides their cost cells.
+    if let Err(e) = inbox.record_run_finish(
+        run_id,
+        status,
+        failure.as_deref(),
+        inbox_item_id,
+        None,
+        None,
+    ) {
         tracing::warn!(run_id, error = %e, "could not record run finish");
     }
 }
@@ -548,6 +644,7 @@ mod tests {
 
     fn test_config() -> shannon_engine::api::LlmClientConfig {
         shannon_core::LlmClientConfig {
+            thinking_type: None,
             provider: shannon_engine::api::types::LlmProvider::Ollama,
             model: "test-model".into(),
             base_url: "http://127.0.0.1:1".into(),
@@ -660,6 +757,7 @@ mod tests {
             github_secret.map(str::to_string),
             routines,
             inbox.clone(),
+            Some(crate::auth::HostGuardConfig::default()),
         );
         TestApp { app, inbox }
     }
@@ -709,10 +807,11 @@ mod tests {
     }
 
     /// Wait (bounded) for the spawned run of `run_id` to leave `running`.
-    /// Generous bound: the engine's retry policy (3 retries with exponential
-    /// backoff) applies before a failed run finalizes.
+    /// Generous bound: a failing run now traverses the client retry ladder
+    /// (3 retries, exponential backoff) up to A8's turn-retry count (3
+    /// ladders ≈ 21-25 s) before finalizing.
     async fn wait_for_run(inbox: &InboxStore, run_id: &str) {
-        for _ in 0..300 {
+        for _ in 0..1000 {
             let runs = inbox.list_runs(50).unwrap();
             if runs.iter().any(|r| r.id == run_id && r.status != "running") {
                 return;
@@ -789,6 +888,7 @@ mod tests {
                 Some("opened"),
             )],
             inbox.clone(),
+            Some(crate::auth::HostGuardConfig::default()),
         );
         let payload = issues_opened();
         let req = Request::builder()
@@ -842,6 +942,10 @@ mod tests {
             items[0].session_id.is_some(),
             "session id recorded for continue"
         );
+        // R7-①: serve-side event fires are tagged `scheduled` —
+        // system-initiated automation keeps counting toward the streak.
+        let runs = harness.inbox.list_runs(10).unwrap();
+        assert_eq!(runs[0].trigger, Some(RunTrigger::Scheduled));
     }
 
     #[tokio::test]
@@ -1204,5 +1308,60 @@ mod tests {
         assert!(cache.get("a").is_none(), "oldest evicted");
         assert_eq!(cache.get("b").unwrap(), &vec!["2".to_string()]);
         assert_eq!(cache.get("c").unwrap(), &vec!["3".to_string()]);
+    }
+
+    // ── §P3-2: atomic reservation (check-then-insert race) ─────────────
+
+    #[test]
+    fn delivery_reserve_is_atomic_first_wins() {
+        let mut cache = DeliveryCache::new(8);
+        assert!(
+            cache.reserve("d-1").is_none(),
+            "first caller wins the reservation"
+        );
+        // Concurrent redelivery while the original is still spawning: gets a
+        // (pending) replay instead of a second reservation.
+        assert_eq!(
+            cache.reserve("d-1").unwrap(),
+            Vec::<String>::new(),
+            "pending redelivery must not re-reserve nor re-execute"
+        );
+
+        cache.complete("d-1".into(), vec!["run-1".into()]);
+        assert_eq!(
+            cache.reserve("d-1").unwrap(),
+            vec!["run-1".to_string()],
+            "finished delivery replays its run ids"
+        );
+    }
+
+    #[test]
+    fn delivery_reserve_concurrent_callers_exactly_one_wins() {
+        // The actual §P3-2 race: N threads reserving the same delivery id
+        // concurrently — exactly one may win (get None); every other caller
+        // must see the reservation instead of a second execution window.
+        let cache = std::sync::Arc::new(std::sync::Mutex::new(DeliveryCache::new(8)));
+        const THREADS: usize = 8;
+        let mut handles = Vec::new();
+        for _ in 0..THREADS {
+            let cache = cache.clone();
+            handles.push(std::thread::spawn(move || {
+                // Contend on the lock: all threads hammer reserve in a tight
+                // loop until the id exists, so scheduling order varies.
+                for _ in 0..64 {
+                    let mut guard = cache.lock().unwrap();
+                    if guard.reserve("d-race").is_none() {
+                        return true;
+                    }
+                }
+                false
+            }));
+        }
+        let winners: Vec<bool> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(
+            winners.iter().filter(|w| **w).count(),
+            1,
+            "exactly one concurrent caller may win the reservation"
+        );
     }
 }

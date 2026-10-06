@@ -47,6 +47,13 @@ describe('KeyboardShortcutsHelp', () => {
     expect(screen.getByText('Cycle active artifact in panel')).toBeInTheDocument()
   })
 
+  it('includes the terminal-panel toggle under Chat section', () => {
+    // P3-4: Ctrl+` (TerminalPanel's capture-phase handler) is documented
+    // like every other live binding.
+    renderHelp()
+    expect(screen.getByText('Toggle the terminal panel')).toBeInTheDocument()
+  })
+
   it('includes diff-review shortcuts', () => {
     renderHelp()
     expect(screen.getAllByText('Next diff hunk').length).toBeGreaterThan(0)
@@ -62,9 +69,12 @@ describe('KeyboardShortcutsHelp', () => {
   it('filters shortcuts by query', () => {
     renderHelp()
     const input = screen.getByPlaceholderText('Search shortcuts') as HTMLInputElement
-    expect(screen.getByText('Toggle sidebar')).toBeInTheDocument()
+    // B1-16: Ctrl+/ is a real binding now and shares the「Show all
+    // shortcuts」label with `?`; the old「Toggle sidebar」label advertised a
+    // binding that never existed.
+    expect(screen.getAllByText('Show all shortcuts').length).toBeGreaterThan(0)
     fireEvent.change(input, { target: { value: 'plan' } })
-    expect(screen.queryByText('Toggle sidebar')).not.toBeInTheDocument()
+    expect(screen.queryByText('Show all shortcuts')).not.toBeInTheDocument()
     expect(screen.getByText('Toggle Plan mode')).toBeInTheDocument()
   })
 

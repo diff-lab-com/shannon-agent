@@ -37,7 +37,11 @@ describe('usePagedVisible', () => {
     expect(result.current.remaining).toBe(0)
   })
 
-  it('resets to initial count when the input array identity changes', () => {
+  // B3 P1-18: the reset keys on list LENGTH, not array identity. A
+  // same-length re-filter (unmemoized `filtered` recomputed every render,
+  // e.g. Skills under search) must NOT bounce "Show more" back to the first
+  // page — that was the bug.
+  it('keeps the visible count when a same-length list arrives (identity change)', () => {
     const items = Array.from({ length: 50 }, (_, i) => i + 1)
     const { result, rerender } = renderHook(({ data }) => usePagedVisible(data, 10), {
       initialProps: { data: items },
@@ -46,8 +50,21 @@ describe('usePagedVisible', () => {
     expect(result.current.slice).toHaveLength(20)
     const next = Array.from({ length: 50 }, (_, i) => i + 100)
     rerender({ data: next })
-    expect(result.current.slice).toHaveLength(10)
+    expect(result.current.slice).toHaveLength(20)
     expect(result.current.slice[0]).toBe(100)
+  })
+
+  it('resets to the initial count when the list length changes', () => {
+    const items = Array.from({ length: 50 }, (_, i) => i + 1)
+    const { result, rerender } = renderHook(({ data }) => usePagedVisible(data, 10), {
+      initialProps: { data: items },
+    })
+    act(() => result.current.showMore())
+    expect(result.current.slice).toHaveLength(20)
+    rerender({ data: items.slice(0, 12) })
+    expect(result.current.slice).toHaveLength(10)
+    expect(result.current.hasMore).toBe(true)
+    expect(result.current.remaining).toBe(2)
   })
 
   it('honors a custom initialCount', () => {
