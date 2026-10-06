@@ -34,7 +34,7 @@
 
 **实施中的重大查证发现**(均已修或钉,细节在各 PR):①Azure wire 此前必然 404(#296 修复);②桌面 `configure('effort_level')` 从未 arm——写入静默无效(#311 修复);③vision 能力前缀碰撞确会误继承(glm-4.5-air 类),钉为已知问题待 schema 语义决策(#297);④桌面 send_message 无条件挂载工具、`enable_tools` 在桌面路径不被读取(#305 查证,applies 位预留);⑤会话摘要/自动标题全仓无 LLM 消费点(#312 诚实落位);⑥save_provider 会静默清空既有模型仓声明 + demo 端不重指 active 槽位(#298/#314 修复)。
 
-**遗留跟进**(均有归属,非阻塞):①摘要槽消费点(未来 LLM 摘要/标题生成点接 `lookup_auxiliary_target(TitleGeneration)` 即活);②无人值守 runner(goal/batch 等)未接 compaction 槽(各 runner 自建引擎,机械增量);③引擎 `model_supports_toolsets` 硬编码名单保持(与能力位对齐有依赖方向障碍,PR #305 说明);④loop 级 LLM 压缩在 async 内的 runtime panic(**既有问题**,建议单独立项);⑤TUI ForcePicker 的 picker 内手动输入语义(#296 遗留);⑥`chat-script.tool-task-file` 全并行偶发流式 flake(既有,--workers=2 稳定);⑦vision 前缀碰撞的 schema 语义决策。
+**遗留跟进(2026-10-05 晚间状态:①④⑤⑦ 已修复合入;②③ 调研完毕有结论;⑥ 维持)**:①✅ 摘要槽消费点已落——LLM 会话标题生成接入 TitleGeneration 槽(PR #321;默认零行为变化,槽未配置维持确定性标题,CAS 保护手动命名);②⏸ 调研完毕——desktop 4 个 QueryEngine runner 接入为一个 S 批(顺序:goal>background>batch>routine,清单/钉测冲突核查/`/compact` 漏网点,见 [2026-10-05-unattended-compaction-and-toolset-alignment.md](../research/2026-10-05-unattended-compaction-and-toolset-alignment.md)),待排期;③✅ 调研结论=维持现状——`model_supports_toolsets`(家族 API 面)与 TOOL_USE 位(通用能力)是两个不同谓词,强行对齐引入 400 回归或近乎 no-op;原始"依赖方向障碍"表述不精确(位已在 types),已用调研文档钉住结论,路线 C(调用方注入)条件触发;④✅ loop 级压缩 runtime panic 已修——RCA=producer task 内新建 runtime,修复=ambient handle+block_in_place,并补上 S3-3 遗留的 loop 级 utility 槽端到端钉测(PR #320);⑤✅ TUI ForcePicker 手输已修——查证确认手输落在旧 provider,修复为作用于切换目标并与显式语法共享路径(PR #318);⑥⏸ 维持(既有,--workers=2 稳定);⑦✅ vision 前缀碰撞已修——dated-digit 后缀才继承段边界规则,`glm-4.5-air` 类不再误继承,tier 同源(PR #319)。
 
 ---
 

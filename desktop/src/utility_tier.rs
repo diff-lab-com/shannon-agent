@@ -178,6 +178,21 @@ pub(crate) async fn resolve_auxiliary_client(
     state: &AppState,
     role: AuxRole,
 ) -> Option<shannon_engine::api::LlmClient> {
+    resolve_auxiliary_client_config(state, role)
+        .await
+        .map(shannon_engine::api::LlmClient::new)
+}
+
+/// Config-returning variant of [`resolve_auxiliary_client`]: same lookup,
+/// same dangling-slot fallback warn, but hands back the
+/// [`shannon_engine::api::LlmClientConfig`] so a consumer can tune the
+/// engine-default knobs for its one background request (the title task
+/// caps `max_tokens`/`timeout_seconds`; the interactive compaction path
+/// keeps the plain client). NotConfigured/Dangling → `None`.
+pub(crate) async fn resolve_auxiliary_client_config(
+    state: &AppState,
+    role: AuxRole,
+) -> Option<shannon_engine::api::LlmClientConfig> {
     let lookup = {
         let store = state.provider_store.lock().await;
         lookup_auxiliary_target(store.config(), role)
@@ -197,9 +212,7 @@ pub(crate) async fn resolve_auxiliary_client(
             );
             None
         }
-        AuxLookup::Resolved { .. } => {
-            auxiliary_client_config(&lookup).map(shannon_engine::api::LlmClient::new)
-        }
+        AuxLookup::Resolved { .. } => auxiliary_client_config(&lookup),
     }
 }
 

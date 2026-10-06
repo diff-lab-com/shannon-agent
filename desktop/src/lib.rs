@@ -324,6 +324,10 @@ pub mod commands_projects;
 #[cfg(feature = "tauri")]
 pub mod commands_sessions;
 
+// Legacy ① — LLM session title generation (TitleGeneration utility slot).
+#[cfg(feature = "tauri")]
+pub mod session_title;
+
 #[cfg(feature = "tauri")]
 pub mod commands_tasks;
 

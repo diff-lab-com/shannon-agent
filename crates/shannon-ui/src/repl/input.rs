@@ -2164,6 +2164,12 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 ///
 /// Typed characters build the model id; Backspace deletes; Enter confirms the
 /// typed id (closing the picker) only when non-empty; Esc returns to the list.
+///
+/// Landing semantics differ by how the picker was opened (ruling ⑤
+/// follow-up): a picker forced open by `/provider <name>` (catalog-less
+/// target) confirms as `<target>/<typed id>` through the single switch path,
+/// while a plain `/model` picker keeps the id on the currently selected
+/// provider as before.
 fn handle_model_picker_manual_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Char(c) => {
@@ -2186,6 +2192,22 @@ fn handle_model_picker_manual_input(repl: &mut Repl, key: KeyEvent) -> Result<()
                 }
             });
             if let Some(id) = typed {
+                // Ruling ⑤ follow-up: a picker opened by a forced `/provider`
+                // switch carries the switch's target provider. A manually
+                // typed id confirmed here is that switch's explicit model, so
+                // it lands on the TARGET through the same shared path as
+                // `/provider <target> <id>` — never as a replacement id on
+                // the still-active pre-switch provider.
+                if let Some(target) = repl
+                    .state
+                    .model_picker
+                    .as_ref()
+                    .and_then(|mp| mp.switch_target().cloned())
+                {
+                    repl.state.model_picker = None;
+                    crate::repl::commands::apply_explicit_provider_model(repl, target, &id)?;
+                    return Ok(());
+                }
                 repl.state.model_picker = None;
                 repl.state.model = Some(id);
                 crate::repl::preferences::save_preferences(
@@ -2884,6 +2906,90 @@ fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ruling ⑤ follow-up (legacy ⑤): a picker forced open by
+    /// `/provider <catalog-less-target>` must land a manually typed id on
+    /// the switch TARGET through the single switch path — not as a
+    /// replacement id on the still-active pre-switch provider.
+    #[test]
+    fn force_picker_manual_input_lands_on_switch_target() {
+        use crate::widgets::select::ModelPickerWidget;
+        use shannon_engine::api::LlmProvider;
+
+        let mut repl = Repl::new().unwrap();
+        // Pre-switch state: Anthropic / Sonnet active.
+        repl.state.model = Some("claude-sonnet-4-20250514".to_string());
+        repl.state.selected_provider = Some(LlmProvider::Anthropic);
+
+        // The exact picker state the ForcePicker arm leaves behind
+        // (provider.rs): current-model picker focused onto the target.
+        let mut picker = ModelPickerWidget::new(repl.state.model.as_deref());
+        picker.focus_provider(&LlmProvider::Bedrock);
+        repl.state.model_picker = Some(picker);
+
+        // `i` opens manual entry; typed chars build the id; Enter confirms.
+        let key = |code: KeyCode| KeyEvent::new(code, KeyModifiers::NONE);
+        handle_input(&mut repl, key(KeyCode::Char('i')), None).unwrap();
+        for c in "my-bedrock-profile".chars() {
+            handle_input(&mut repl, key(KeyCode::Char(c)), None).unwrap();
+        }
+        handle_input(&mut repl, key(KeyCode::Enter), None).unwrap();
+
+        assert!(
+            repl.state.model_picker.is_none(),
+            "confirming closes the picker"
+        );
+        assert_eq!(
+            repl.state.selected_provider,
+            Some(LlmProvider::Bedrock),
+            "manual id in a forced picker must land on the switch target provider"
+        );
+        assert_eq!(repl.state.model, Some("my-bedrock-profile".to_string()));
+        // The shared explicit-path message (same as `/provider <name> <id>`),
+        // not the plain picker's "Model set to:" line.
+        let last = repl.chat.last_message().unwrap().content.clone();
+        assert!(last.contains("my-bedrock-profile"), "got {last}");
+        assert!(
+            !last.contains("Model set to:"),
+            "forced-picker confirm uses the provider-switch message: {last}"
+        );
+    }
+
+    /// The plain `/model` picker's manual entry keeps its pre-existing
+    /// semantics: the typed id replaces the model on the CURRENT provider,
+    /// which itself is untouched.
+    #[test]
+    fn plain_picker_manual_input_keeps_current_provider() {
+        use crate::widgets::select::ModelPickerWidget;
+        use shannon_engine::api::LlmProvider;
+
+        let mut repl = Repl::new().unwrap();
+        repl.state.model = Some("gpt-4o".to_string());
+        repl.state.selected_provider = Some(LlmProvider::OpenAI);
+        // Plain `/model` picker: constructed without focus_provider, so no
+        // switch target is recorded.
+        repl.state.model_picker = Some(ModelPickerWidget::new(Some("gpt-4o")));
+
+        let key = |code: KeyCode| KeyEvent::new(code, KeyModifiers::NONE);
+        handle_input(&mut repl, key(KeyCode::Char('i')), None).unwrap();
+        for c in "my-fine-tune".chars() {
+            handle_input(&mut repl, key(KeyCode::Char(c)), None).unwrap();
+        }
+        handle_input(&mut repl, key(KeyCode::Enter), None).unwrap();
+
+        assert!(repl.state.model_picker.is_none());
+        assert_eq!(repl.state.model, Some("my-fine-tune".to_string()));
+        assert_eq!(
+            repl.state.selected_provider,
+            Some(LlmProvider::OpenAI),
+            "a plain picker's manual id must keep the active provider"
+        );
+        let last = repl.chat.last_message().unwrap().content.clone();
+        assert!(
+            last.contains("Model set to: my-fine-tune"),
+            "plain picker keeps the model-set message: {last}"
+        );
+    }
 
     /// F34: the Ctrl+A / Alt+A dispatch table. Ctrl+A belongs to the agents
     /// panel (the documented binding); the dashboard toggle lives on Alt+A;

@@ -94,34 +94,25 @@ fn vision_gate_message(model_id: &str) -> String {
     )
 }
 
-/// Static-catalog stages of the vision lookup: exact id, then forward
-/// prefix (catalog entry starts with the queried id — dated ids like
-/// `gpt-4o-2024-08-06` shorten to their base entry), then reverse prefix
-/// (queried id starts with a catalog entry, longest entry wins).
+/// Static-catalog stage of the vision lookup: exact id, then the shared
+/// segment-boundary variant match
+/// ([`crate::model_registry::find_capability_source`]) — dated ids like
+/// `gpt-4o-2024-08-06` resolve to their base entry, while a cross-product
+/// extension like `glm-4.5-air` no longer inherits `glm-4.5`'s vision bit
+/// (legacy ⑦, #297).
 ///
 /// Parameterized over the catalog slice purely so the S2-4a prefix-
-/// collision pin test can run this EXACT matching strategy against a
-/// synthetic two-entry catalog; production passes [`MODEL_CATALOG`].
-/// Behavior is identical to the previous inlined form.
+/// collision pin tests can run this EXACT matching strategy against a
+/// synthetic catalog; production passes [`MODEL_CATALOG`].
 fn vision_support_in_catalog(
     catalog: &[crate::model_registry::ModelInfo],
     model_id: &str,
 ) -> Option<bool> {
-    let has_vision = |info: &crate::model_registry::ModelInfo| {
+    let info = crate::model_registry::find_capability_source(catalog, model_id)?;
+    Some(
         info.capabilities
-            .has(crate::model_registry::ModelCapabilities::vision())
-    };
-    if let Some(info) = catalog.iter().find(|m| m.id == model_id) {
-        return Some(has_vision(info));
-    }
-    if let Some(info) = catalog.iter().find(|m| m.id.starts_with(model_id)) {
-        return Some(has_vision(info));
-    }
-    let info = catalog
-        .iter()
-        .filter(|m| model_id.starts_with(m.id))
-        .max_by_key(|m| m.id.len())?;
-    Some(has_vision(info))
+            .has(crate::model_registry::ModelCapabilities::vision()),
+    )
 }
 
 /// Three-state vision lookup for [`vision_gate_violation`]:
@@ -133,9 +124,11 @@ fn vision_support_in_catalog(
 /// 1. `declared_models` (R2-4 providers.toml v2 registry) — a declaration
 ///    that lists ANY capabilities is authoritative (exact-id match only);
 ///    a capability-less declaration defers to the catalog.
-/// 2. Static catalog — exact id, then prefix/reverse-prefix (same strategy
-///    as `context_window_for_opt`, so dated ids like
-///    `gpt-4o-2024-08-06` resolve to their base entry).
+/// 2. Static catalog — exact id, then the segment-boundary dated-variant
+///    match shared with `tier_label_for_id`
+///    (`crate::model_registry::find_capability_source`), so dated ids like
+///    `gpt-4o-2024-08-06` resolve to their base entry while cross-product
+///    prefixes like `glm-4.5-air` stay unknown (legacy ⑦, #297).
 /// 3. models.dev dynamic overlay — exact id for freshly pulled models.
 fn model_supports_vision(model_id: &str) -> Option<bool> {
     use shannon_types::provider_config::ModelCapability;
@@ -5750,21 +5743,40 @@ mod vision_gate_tests {
 
     #[test]
     fn dated_catalog_ids_resolve_via_prefix_strategies() {
-        // Reverse-prefix: the dated id starts with the catalog entry id.
+        // Reverse variant: the dated id extends the catalog entry with a
+        // purely numeric release suffix.
         assert_eq!(model_supports_vision("gpt-4o-2024-08-06"), Some(true));
+        // Acceptance (a) of legacy ⑦ (#297), pinned on the live catalog:
+        // `claude-sonnet-4-6` (vision) is inherited by its dated variant
+        // `claude-sonnet-4-6-20260101`.
+        assert_eq!(
+            model_supports_vision("claude-sonnet-4-6-20260101"),
+            Some(true),
+            "dated variant of the same model inherits the vision bit"
+        );
+        // Acceptance (b) contrast on the same entry shape: a letter-suffix
+        // product split (`-air`-style) must NOT inherit. The live catalog
+        // carries no claude-sonnet-4-6-air; the synthetic pin in
+        // `cross_product_prefix_no_longer_inherits_vision_bit` covers the
+        // strategy on exactly that shape.
+        assert_eq!(
+            model_supports_vision("claude-sonnet-4-6-air"),
+            None,
+            "letter-suffix extension is a different product — unknown, not inheriting"
+        );
     }
 
-    // ── S2-4a (P-N9): capability prefix-collision pins ─────────────────
+    // ── S2-4a (P-N9) → legacy ⑦ (#297): capability prefix-collision pins ──
     //
-    // The catalog fallback matches bidirectionally on id prefixes. The
-    // intended direction is pinned above (dated ids resolve to the base
-    // entry). The tests below pin the COLLISION direction: a capability
-    // bit is inherited by any queried id that merely STARTS WITH a
-    // catalog entry's id. The review's example (glm-4.5 / glm-4.5-air) is
-    // constructed on a synthetic catalog because MODEL_CATALOG is fixed
-    // at compile time and carries no such pair today — the pin locks the
-    // MATCHING STRATEGY, so a future catalog addition that would make the
-    // collision real cannot slip in unnoticed.
+    // The catalog fallback used to match bidirectionally on RAW id
+    // prefixes, so any queried id that merely STARTED WITH a catalog
+    // entry's id inherited its capability bit — `glm-4.5-air` picked up
+    // `glm-4.5`'s vision bit and the gate let its attachments through to a
+    // provider 400. Legacy ⑦ replaced that with the shared segment-
+    // boundary rule (`model_registry::is_capability_variant_of`): prefix
+    // inheritance requires the leftover tail to be a purely numeric
+    // release suffix (dated snapshots like `-20250715`), everything else
+    // resolves to "unknown". The tests below pin the fixed strategy.
 
     /// One plain catalog row; only `id` and `capabilities` matter to the
     /// lookup, the rest mirrors a typical static entry.
@@ -5783,30 +5795,31 @@ mod vision_gate_tests {
         }
     }
 
-    /// KNOWN ISSUE (P-N9, review 2026-10-05): the reverse-prefix stage
-    /// (`model_id.starts_with(entry.id)`, longest entry wins) cannot tell
-    /// "a dated/suffixed variant of the same model" from "a DIFFERENT,
-    /// smaller product whose id merely shares a prefix". Given a catalog
-    /// entry `glm-4.5` with vision, the query `glm-4.5-air` — a text-only
-    /// variant absent from the catalog — INHERITS the vision bit and the
-    /// gate lets its image attachments through to a provider 400. This
-    /// test pins that current behavior deliberately: the honest fix
-    /// (separator-aware matching, or exact-only capability lookups) is a
-    /// schema-semantics change that would re-classify existing models and
-    /// is explicitly out of scope for S2-4a. If this test starts failing,
-    /// the semantics moved — update this pin together with the review
-    /// issue, not silently.
+    /// FIXED (legacy ⑦, #297; formerly the known-issue pin
+    /// `reverse_prefix_collision_inherits_vision_bit_known_issue`): a
+    /// cross-product extension of a catalog entry no longer inherits the
+    /// entry's capability bit. Given an entry `glm-4.5` with vision, the
+    /// query `glm-4.5-air` — a text-only variant absent from the catalog —
+    /// resolves to UNKNOWN (`None`), and the gate's forward-compat path
+    /// lets it pass instead of vouching for vision it does not have.
     #[test]
-    fn reverse_prefix_collision_inherits_vision_bit_known_issue() {
+    fn cross_product_prefix_no_longer_inherits_vision_bit() {
         let synthetic = [catalog_entry("glm-4.5", ModelCapabilities::vision())];
         assert_eq!(
             vision_support_in_catalog(&synthetic, "glm-4.5-air"),
-            Some(true),
-            "current semantics: glm-4.5-air inherits glm-4.5's vision bit \
-             via reverse prefix — KNOWN ISSUE, see P-N9"
+            None,
+            "glm-4.5-air is a different product, not a snapshot of glm-4.5 — \
+             the vision bit must NOT be inherited"
         );
-        // The symmetric, INTENDED case for contrast: a dated/suffixed id
-        // of the SAME model is exactly what reverse-prefix exists for.
+        // Glued (non-boundary) extensions are equally unknown.
+        assert_eq!(
+            vision_support_in_catalog(&synthetic, "glm-4.5v"),
+            None,
+            "no segment boundary → no inheritance at all"
+        );
+        // The INTENDED inheritance for contrast: a purely numeric dated
+        // suffix of the SAME model is exactly what variant matching
+        // exists for.
         assert_eq!(
             vision_support_in_catalog(&synthetic, "glm-4.5-20250715"),
             Some(true),
@@ -5815,17 +5828,20 @@ mod vision_gate_tests {
     }
 
     /// A real catalog entry for the QUERIED id always wins before any
-    /// prefix stage runs — the collision only bites ids the catalog does
-    /// not list. Pinned on the live catalog: glm-5.1-air is not listed,
-    /// but glm-5.1 is (coding/reasoning, no vision), so the hypothetical
-    /// id inherits the FALSE bit and would be gated; glm-5.1-flash's own
-    /// entry shields it from glm-5.1's bit.
+    /// variant stage runs — and since legacy ⑦ (#297), ids the catalog
+    /// does not list no longer inherit anything from letter-suffixed
+    /// ancestors either. Pinned on the live catalog: glm-5.1-flash is
+    /// listed (no vision) and keeps its own FALSE bit; glm-5.1-flash-x is
+    /// NOT listed and now resolves to UNKNOWN — capability-unknown ids
+    /// pass the gate (forward-compat) instead of inheriting the nearest
+    /// listed ancestor's bit.
     #[test]
     fn live_catalog_exact_entry_shields_from_prefix_collision() {
         // Exact id → own capabilities, regardless of any prefix ancestor.
         assert_eq!(model_supports_vision("glm-5.1-flash"), Some(false));
-        // No exact id → longest reverse-prefix ancestor's capabilities.
-        assert_eq!(model_supports_vision("glm-5.1-flash-x"), Some(false));
+        // No exact id → cross-product prefix extension is UNKNOWN, not an
+        // inheritor of the nearest ancestor's capabilities.
+        assert_eq!(model_supports_vision("glm-5.1-flash-x"), None);
     }
 }
 
