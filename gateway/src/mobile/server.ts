@@ -183,9 +183,14 @@ export class MobileServer {
             res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
             res.end("not found");
           })
-          .catch(() => {
-            res.writeHead(500, { "content-type": "application/json" });
-            res.end(JSON.stringify({ error: { message: "handler error" } }));
+          .catch((err) => {
+            const tooLarge = err instanceof BodyTooLargeError;
+            res.writeHead(tooLarge ? 413 : 500, { "content-type": "application/json" });
+            res.end(
+              JSON.stringify({
+                error: { message: tooLarge ? "payload too large" : "handler error" },
+              }),
+            );
           });
         return;
       }
@@ -325,6 +330,9 @@ export class MobileServer {
 /** Cap for POST bodies (the pairing-access JSON is a token + a 6-digit code). */
 const MAX_HTTP_BODY_BYTES = 64 * 1024;
 
+/** Thrown when a POST body exceeds the cap; the socket is paused so a 413 can still be written. */
+class BodyTooLargeError extends Error {}
+
 /** Collect a request body, rejecting early once `max` bytes are exceeded. */
 function readBody(req: IncomingMessage, max: number): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -333,8 +341,11 @@ function readBody(req: IncomingMessage, max: number): Promise<string> {
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > max) {
-        req.destroy(); // stop reading; the response write below still works
-        reject(new Error("body too large"));
+        // Pause — do NOT destroy: destroy() tears down the socket, so the
+        // 413 written by the catch below never reaches the client (same
+        // contract as readWebhookBodyOr413 in lib/webhookBody.ts).
+        req.pause();
+        reject(new BodyTooLargeError());
         return;
       }
       chunks.push(chunk);

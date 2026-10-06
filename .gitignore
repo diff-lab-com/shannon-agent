@@ -88,6 +88,7 @@ flamegraph.svg
 # 依赖缓存
 .cargo/*
 !.cargo/config.toml
+!.cargo/audit.toml
 .cached/
 
 # 构建输出

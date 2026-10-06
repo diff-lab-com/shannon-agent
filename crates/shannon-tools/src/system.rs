@@ -598,6 +598,32 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
         }
     }
 
+    // Home-relative credential stores: the agent's own key material.
+    // Reading these is exactly how a prompt-injected session exfiltrates
+    // provider keys or SSH identities, and they classify as read-only/Low
+    // today. Same substring posture as SENSITIVE_PATHS, with `~` and the
+    // resolved `$HOME` form both covered.
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        let home_str = home.to_string_lossy().to_lowercase();
+        for dir in [
+            "~/.ssh",
+            "~/.aws",
+            "~/.gnupg",
+            "~/.config/gcloud",
+            "~/.shannon/credentials",
+        ] {
+            let absolute = format!("{home_str}{}", &dir[1..]);
+            if lower_command.contains(dir) || lower_command.contains(&absolute) {
+                risk_level = SecurityLevel::Critical;
+                warnings.push(format!(
+                    "Credential store access detected: {dir} — confirm before running"
+                ));
+                is_destructive = true;
+                break;
+            }
+        }
+    }
+
     // Check for IFS (Internal Field Separator) manipulation
     // Used to bypass word splitting detection
     if lower_command.contains("${ifs}") || lower_command.contains("ifs=") {
@@ -1654,7 +1680,12 @@ impl Tool for BashTool {
             let cmd = bash_input.command.clone();
             let cwd = bash_input.cwd.clone();
             let env = bash_input.env.clone();
-            let timeout = bash_input.timeout;
+            // Always pass a resolved timeout: `execute_in_pty(None)` waits
+            // unbounded in `child.wait()`, and cancelling this spawned
+            // blocking task (registry timeout) neither stops the wait nor
+            // kills the child — a hung PTY command leaked a blocking-pool
+            // thread + live process per call.
+            let timeout = Some(resolve_timeout_ms(bash_input.timeout));
             tokio::task::spawn_blocking(move || {
                 match crate::pty::execute_in_pty(&cmd, cwd.as_deref(), env.as_ref(), timeout) {
                     Ok(pty_out) => Ok(CommandOutput {

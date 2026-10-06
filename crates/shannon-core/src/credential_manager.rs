@@ -242,6 +242,13 @@ impl CredentialManager {
     /// Create a CredentialManager with a custom storage directory.
     pub fn with_dir(dir: PathBuf) -> Result<Self, CredentialError> {
         fs::create_dir_all(&dir)?;
+        #[cfg(unix)]
+        {
+            // The dir lists every service that has a stored credential —
+            // keep it owner-only (matches the pairing-token dir posture).
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+        }
         let manager = Self {
             credentials_dir: dir,
             store: CredentialStore::default(),
@@ -600,14 +607,15 @@ impl CredentialManager {
             const SECURE_MODE: u32 = 0o600;
             let file_mode = meta.permissions().mode() & 0o777;
             if file_mode != SECURE_MODE {
-                // Warn but don't fail in tests or non-strict contexts.
-                // In production, we would auto-fix or fail.
+                // Auto-fix (was warn-only: a 0644 credential file stayed
+                // world-readable forever) and surface what happened.
                 warn!(
                     path = %path.display(),
                     actual = format!("{:#o}", file_mode),
                     expected = format!("{:#o}", SECURE_MODE),
-                    "Credential file has insecure permissions"
+                    "Credential file has insecure permissions — tightening to 0600"
                 );
+                self.set_secure_permissions(path)?;
             }
         }
 

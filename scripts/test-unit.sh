@@ -33,7 +33,11 @@ echo ""
 
 if command -v cargo-nextest &>/dev/null; then
     echo "Running unit tests with cargo-nextest (skipping performance tests)..."
-    exec cargo nextest run --workspace $FAIL_FAST "${EXTRA_ARGS[@]}"
+    # Honor the header contract: exclude the 12 perf-threshold tests
+    # (`just perf` runs them separately). Same names verify via
+    # `cargo nextest list` in the justfile perf recipe.
+    PERF_FILTER='not (test(cache_accumulation) + test(cache_hit_rate) + test(compaction_100_turns) + test(five_turn) + test(message_serialization) + test(session_load) + test(single_turn) + test(snapshot_render) + test(sse_round_trip) + test(streaming_parse) + test(token_estimation) + test(tool_chain))'
+    exec cargo nextest run --workspace $FAIL_FAST -E "$PERF_FILTER" "${EXTRA_ARGS[@]}"
 else
     echo "cargo-nextest not found, falling back to cargo test..."
     # Default cargo test skips #[ignore] tests

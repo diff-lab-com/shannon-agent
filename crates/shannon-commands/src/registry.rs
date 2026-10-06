@@ -3,10 +3,17 @@
 use crate::command::{Command, CommandError, CommandResult};
 use crate::context::CommandContext;
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 /// Command registry - central registry for all commands
+///
+/// The maps sit behind `std::sync::RwLock` (not tokio's): critical sections
+/// are single map operations with no `.await` inside, and callers include
+/// sync contexts that run **outside** any tokio runtime (the REPL event loop
+/// hot-reload path). `tokio::sync::RwLock` made those callers panic —
+/// `Handle::current()` has no entered runtime to return there. The async
+/// API is kept so existing callers are unaffected; guards are never held
+/// across an await.
 #[derive(Debug)]
 pub struct CommandRegistry {
     /// Map of command name to command
@@ -14,6 +21,19 @@ pub struct CommandRegistry {
 
     /// Map of aliases to command names
     aliases: Arc<RwLock<HashMap<String, String>>>,
+}
+
+/// Lock a map for writing; a poisoned lock still yields its (consistent or
+/// not) data rather than panicking the caller — a registry write failure
+/// must never take the REPL down.
+fn write_map<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    lock.write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// See [`write_map`].
+fn read_map<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl CommandRegistry {
@@ -25,30 +45,21 @@ impl CommandRegistry {
         }
     }
 
-    /// Register a command (blocking — uses block_in_place, safe inside tokio)
+    /// Register a command from a sync context.
     ///
-    /// Use this from sync contexts or from within a tokio runtime.
-    /// Uses `tokio::task::block_in_place` to avoid deadlocking.
+    /// Safe on any thread, with or without a tokio runtime (see the type
+    /// doc: the maps are plain `std::sync::RwLock`).
     pub fn register_sync(&self, command: Command) {
         let name = command.name().to_string();
         let cmd_aliases = command.aliases().to_vec();
 
-        let commands = Arc::clone(&self.commands);
-        let aliases = Arc::clone(&self.aliases);
+        let mut commands = write_map(&self.commands);
+        commands.insert(name.clone(), Arc::new(command));
 
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-                commands
-                    .write()
-                    .await
-                    .insert(name.clone(), Arc::new(command.clone()));
-
-                let mut aliases_map = aliases.write().await;
-                for alias in cmd_aliases {
-                    aliases_map.insert(alias, name.clone());
-                }
-            });
-        });
+        let mut aliases_map = write_map(&self.aliases);
+        for alias in cmd_aliases {
+            aliases_map.insert(alias, name.clone());
+        }
     }
 
     /// Register a command
@@ -57,13 +68,10 @@ impl CommandRegistry {
         let aliases = command.aliases().to_vec();
 
         // Store the command
-        self.commands
-            .write()
-            .await
-            .insert(name.clone(), Arc::new(command.clone()));
+        write_map(&self.commands).insert(name.clone(), Arc::new(command.clone()));
 
         // Register aliases
-        let mut aliases_map = self.aliases.write().await;
+        let mut aliases_map = write_map(&self.aliases);
         for alias in aliases {
             aliases_map.insert(alias, name.clone());
         }
@@ -82,18 +90,13 @@ impl CommandRegistry {
     /// Get a command by name
     pub async fn get(&self, name: &str) -> CommandResult<Arc<Command>> {
         // Check direct name first
-        let commands = self.commands.read().await;
-        if let Some(cmd) = commands.get(name) {
+        if let Some(cmd) = read_map(&self.commands).get(name) {
             return Ok(Arc::clone(cmd));
         }
-        drop(commands);
 
         // Check aliases
-        let aliases = self.aliases.read().await;
-        if let Some(actual_name) = aliases.get(name).cloned() {
-            drop(aliases);
-            let commands = self.commands.read().await;
-            if let Some(cmd) = commands.get(&actual_name) {
+        if let Some(actual_name) = read_map(&self.aliases).get(name).cloned() {
+            if let Some(cmd) = read_map(&self.commands).get(&actual_name) {
                 return Ok(Arc::clone(cmd));
             }
         }
@@ -103,17 +106,15 @@ impl CommandRegistry {
 
     /// List all registered command names
     pub async fn list_names(&self) -> Vec<String> {
-        self.commands.read().await.keys().cloned().collect()
+        read_map(&self.commands).keys().cloned().collect()
     }
 
     /// List all command names including aliases
     pub async fn list_names_with_aliases(&self) -> Vec<String> {
-        let commands = self.commands.read().await;
-        let aliases = self.aliases.read().await;
-        let mut names: Vec<String> = commands
+        let mut names: Vec<String> = read_map(&self.commands)
             .keys()
             .cloned()
-            .chain(aliases.keys().cloned())
+            .chain(read_map(&self.aliases).keys().cloned())
             .collect();
         names.sort();
         names.dedup();
@@ -122,9 +123,7 @@ impl CommandRegistry {
 
     /// List all enabled commands
     pub async fn list_enabled(&self) -> Vec<Arc<Command>> {
-        self.commands
-            .read()
-            .await
+        read_map(&self.commands)
             .values()
             .filter(|cmd| cmd.is_enabled())
             .cloned()
@@ -133,9 +132,7 @@ impl CommandRegistry {
 
     /// List visible (non-hidden) commands
     pub async fn list_visible(&self) -> Vec<Arc<Command>> {
-        self.commands
-            .read()
-            .await
+        read_map(&self.commands)
             .values()
             .filter(|cmd| cmd.is_enabled() && !cmd.is_hidden())
             .cloned()
@@ -144,10 +141,10 @@ impl CommandRegistry {
 
     /// Remove a command by name
     pub async fn unregister(&self, name: &str) -> CommandResult<()> {
-        let mut commands = self.commands.write().await;
+        let mut commands = write_map(&self.commands);
         if commands.remove(name).is_some() {
             // Remove aliases pointing to this command
-            let mut aliases = self.aliases.write().await;
+            let mut aliases = write_map(&self.aliases);
             aliases.retain(|_, v| v != name);
             Ok(())
         } else {
@@ -155,41 +152,35 @@ impl CommandRegistry {
         }
     }
 
-    /// Remove a command by name (sync wrapper).
+    /// Remove a command by name (sync wrapper). Safe on any thread —
+    /// see the type doc.
     pub fn unregister_sync(&self, name: &str) {
-        let commands = Arc::clone(&self.commands);
-        let aliases = Arc::clone(&self.aliases);
         let name = name.to_string();
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-                let mut cmds = commands.write().await;
-                if cmds.remove(&name).is_some() {
-                    aliases.write().await.retain(|_, v| *v != name);
-                }
-            });
-        });
+        let mut cmds = write_map(&self.commands);
+        if cmds.remove(&name).is_some() {
+            write_map(&self.aliases).retain(|_, v| *v != name);
+        }
     }
 
     /// Check if a command exists
     pub async fn contains(&self, name: &str) -> bool {
-        let commands = self.commands.read().await;
-        commands.contains_key(name) || self.aliases.read().await.contains_key(name)
+        read_map(&self.commands).contains_key(name) || read_map(&self.aliases).contains_key(name)
     }
 
     /// Get command count
     pub async fn count(&self) -> usize {
-        self.commands.read().await.len()
+        read_map(&self.commands).len()
     }
 
     /// Clear all commands
     pub async fn clear(&self) {
-        self.commands.write().await.clear();
-        self.aliases.write().await.clear();
+        write_map(&self.commands).clear();
+        write_map(&self.aliases).clear();
     }
 
     /// Find commands matching a pattern
     pub async fn search(&self, pattern: &str) -> Vec<Arc<Command>> {
-        let commands = self.commands.read().await;
+        let commands = read_map(&self.commands);
         let pattern_lower = pattern.to_lowercase();
 
         commands
@@ -345,6 +336,27 @@ mod tests {
             paths: vec![],
             prompt_template: None,
         }))
+    }
+
+    #[test]
+    fn register_sync_works_without_runtime_context() {
+        // Regression: `register_sync`/`unregister_sync` used
+        // `block_in_place` + `Handle::current()`, which panicked on any
+        // thread without an entered tokio runtime — exactly the REPL
+        // event-loop thread running the command hot-reload path. This test
+        // deliberately runs with NO runtime entered.
+        let registry = CommandRegistry::new();
+        registry.register_sync(create_test_command("sync-cmd", "Sync"));
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let found = rt.block_on(async { registry.get("sync-cmd").await });
+        assert!(found.is_ok(), "registered command must be findable");
+
+        registry.unregister_sync("sync-cmd");
+        let gone = rt.block_on(async { registry.contains("sync-cmd").await });
+        assert!(!gone, "unregistered command must be gone");
     }
 
     #[tokio::test]

@@ -1063,8 +1063,9 @@ impl Repl {
             shannon_core::query_engine::PERMISSION_REQUEST_CHANNEL_CAPACITY,
         );
 
-        // Create command registry inside the runtime context so register_sync
-        // can access the tokio runtime handle.
+        // The registry uses std::sync::RwLock internally, so its sync
+        // registration helpers are safe from any thread (including the
+        // event-loop thread that runs command hot-reload).
         let command_registry = runtime.block_on(async {
             let registry = CommandRegistry::new();
             builtin_commands::register_all(&registry);

@@ -197,8 +197,8 @@ mod tests {
         assert!(matches!(result, Err(CommandError::ExecutionError(_))));
     }
 
-    // `register_sync` takes a blocking write lock — needs the multi-thread
-    // flavor.
+    // The registry maps are std::sync::RwLock, so `register_sync` works on
+    // any thread; the multi-thread flavor is kept for realistic scheduling.
     #[tokio::test(flavor = "multi_thread")]
     async fn shared_executor_exposes_the_registry() {
         let registry = CommandRegistry::new();

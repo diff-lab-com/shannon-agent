@@ -745,7 +745,7 @@ struct Cli {
     /// CI/CD headless mode: non-interactive prompt (pipe-friendly).
     /// Skips TUI entirely. Use with --output-format, --allowed-tools, --max-turns.
     /// Example: shannon -p "fix the bug" --allowed-tools Read,Edit,Bash --output-format json
-    #[arg(short = 'p', long = "prompt")]
+    #[arg(short = 'p', long = "prompt", conflicts_with = "prompt")]
     headless_prompt: Option<String>,
 
     // NOTE: `--allowed-tools` is defined above as `team_allowed_tools` (shared
@@ -2590,12 +2590,13 @@ fn load_schema(input: &str) -> Result<shannon_core::StructuredOutputConfig> {
 ///   `--emit-legacy-output-events` escape hatch, which replaces (never
 ///   duplicates) the unified stream.
 ///
-/// Exit codes are integers 0-7 everywhere (review F35 — the single canonical
+/// Exit codes are integers 0-8 everywhere (review F35 — the single canonical
 /// form, identical in `--output-format json`'s `exit_code` field and the
 /// json-stream `done` event): 0 success, 1 error, 2 max turns reached,
 /// 3 timeout (retries exhausted after read/timeouts), 4 rate limited
 /// (retries exhausted), 5 context overflow, 6 permission denied,
-/// 7 no usable progress.
+/// 7 no usable progress, 8 auto-approval budget exhausted
+/// (`max_auto_approvals` breaker tripped).
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn run_headless_query(
@@ -2615,6 +2616,7 @@ fn run_headless_query(
     goal: Option<String>,
     mcp_approve: &[String],
     permission_mode: Option<&str>,
+    yes: bool,
     max_auto_approvals: u32,
 ) -> Result<()> {
     // Arm structured crash capture when the dogfood loop (or any CI harness)
@@ -2801,6 +2803,14 @@ fn run_headless_query(
                     shannon_engine::permissions::ensure_bypass_allowed().map_err(|e| anyhow::anyhow!(e))?;
                 }
                 parsed
+            }
+            // `--yes` in headless mode means bypassPermissions per its help
+            // text ("even critical tools are allowed") — it was silently
+            // ignored here before. Same guardrails as --permission-mode
+            // bypass: root refusal + SHANNON_DISABLE_BYPASS kill switch.
+            None if yes => {
+                shannon_engine::permissions::ensure_bypass_allowed().map_err(|e| anyhow::anyhow!(e))?;
+                shannon_engine::permissions::ApprovalMode::BypassPermissions
             }
             None => shannon_engine::permissions::ApprovalMode::FullAuto,
         };
@@ -5815,6 +5825,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.goal.clone(),
             &cli.mcp_approve,
             cli.permission_mode.as_deref(),
+            cli.yes,
             cli.max_auto_approvals,
         );
     }

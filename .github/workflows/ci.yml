@@ -134,7 +134,7 @@ jobs:
             ci:
               - '.github/workflows/**'
   fast-checks:
-    # The five "seconds, not minutes" checks (facade-facts, fmt,
+    # The five "seconds, not minutes" checks (version lockstep, fmt,
     # guard-headless, audit, rustsec-audit) used to be five separate jobs.
     # Merged 2026-10-01 (P4 of the CI speed plan): each paid ~1 min of
     # checkout/toolchain setup on its own runner (~7 runner-min total and,

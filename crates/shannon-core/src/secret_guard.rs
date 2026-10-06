@@ -708,20 +708,38 @@ fn load_or_create_key(home: &std::path::Path) -> Option<Vec<u8>> {
     let key: [u8; 32] = sha2::Sha256::digest(raw.as_bytes()).into();
     let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
     std::fs::create_dir_all(home).ok();
-    if let Err(e) = std::fs::write(&path, &hex) {
+    // Create with 0600 from the first write (no world-readable window between
+    // create and chmod, matching credential_manager::atomic_write_secure), and
+    // tighten a pre-existing file that was created loose. A chmod failure
+    // disables the guard rather than leaving an unsecurable key on disk.
+    let persisted = (|| -> std::io::Result<()> {
+        use std::io::Write as _;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&path)?;
+        f.write_all(hex.as_bytes())?;
+        f.flush()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = persisted {
         tracing::warn!(
             target: "shannon::secret_guard",
             path = %path.display(),
             error = %e,
-            "cannot persist secret_guard.key — secret guard stays disabled \
+            "cannot persist secret_guard.key (0600) — secret guard stays disabled \
              (surrogates would not survive a restart)"
         );
         return None;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
     }
     Some(key.to_vec())
 }

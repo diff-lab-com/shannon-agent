@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 // ── Error type ──────────────────────────────────────────────────────────
 
@@ -236,12 +236,14 @@ impl WebhookReceiver {
         self.shutdown_tx = Some(shutdown_tx);
 
         tokio::spawn(async move {
-            axum::serve(listener, app)
+            if let Err(e) = axum::serve(listener, app)
                 .with_graceful_shutdown(async {
                     let _ = shutdown_rx.await;
                 })
                 .await
-                .ok();
+            {
+                error!("webhook receiver terminated unexpectedly: {e}");
+            }
         });
 
         Ok(())
@@ -300,12 +302,14 @@ impl WebhookReceiver {
                     };
                     let _ = ready_tx.send(Ok(()));
                     info!("Webhook receiver listening on {addr}");
-                    axum::serve(listener, app)
+                    if let Err(e) = axum::serve(listener, app)
                         .with_graceful_shutdown(async {
                             let _ = shutdown_rx.await;
                         })
                         .await
-                        .ok();
+                    {
+                        error!("webhook receiver terminated unexpectedly: {e}");
+                    }
                 });
             })
             .map_err(|e| WebhookError::Server(e.to_string()))?;

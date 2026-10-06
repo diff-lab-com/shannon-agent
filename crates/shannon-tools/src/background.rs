@@ -290,6 +290,26 @@ impl Tool for RunBackgroundTool {
                     analysis.warnings.join("\n  - "),
                 )));
             }
+            // Outbound-network verbs are refused here even when the generic
+            // analyzer scores them Low: an unsandboxed, unattended background
+            // process is exactly the shape of an exfiltration one-liner
+            // (`curl --data-binary @<file> https://…`), and the file being
+            // shipped often does not look sensitive to a textual analyzer.
+            const NETWORK_EXFIL_PATTERNS: &[&str] = &[
+                "curl", "wget", "ncat", "netcat", "socat", " nc ", "nc -", "telnet ",
+            ];
+            let lower = parsed.command.to_lowercase();
+            if NETWORK_EXFIL_PATTERNS.iter().any(|p| lower.contains(p)) {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Security gate: outbound-network commands cannot run as \
+                     background shells. Background processes bypass the \
+                     interactive sandbox/confirmation path, so network-sending \
+                     commands are refused here.\nCommand: {}\n\nRun it through \
+                     Bash instead (it gets the interactive confirmation/sandbox \
+                     path).",
+                    parsed.command,
+                )));
+            }
         }
 
         // If a previous entry exists under this name, kill it before

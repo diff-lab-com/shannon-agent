@@ -53,7 +53,6 @@ clippy_cmd=(cargo clippy --workspace --
     -A clippy::derivable_impls
     -A clippy::manual_is_multiple_of
     -A clippy::manual_checked_div
-    -A clippy::unwrap_used
     -A clippy::unnecessary_sort_by
 )
 # 3) Tests (matches `test`/`insta` jobs)

@@ -76,11 +76,11 @@ fmt:
     cargo fmt --all
 
 # Clippy runs against EVERY target (lib, bins, tests, benches, examples) via
-# --all-targets, matching the CI Clippy job. All targets are clippy-clean —
-# including the shannon-core `unwrap_used` warn (tests use expect()/expect_err()
-# with reasons) — so any regression in any target fails this gate.
+# --all-targets, matching the CI Clippy job — same flag list, including CI's
+# allow list, so this gate fails exactly when CI's Clippy job fails. (unwrap_used
+# is deliberately NOT allowed: tests use expect()/expect_err() with reasons.)
 lint:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings -A unknown-lints -A clippy::collapsible_if -A clippy::collapsible_match -A clippy::derivable_impls -A clippy::manual_is_multiple_of -A clippy::manual_checked_div -A clippy::unnecessary_sort_by
     cd desktop/ui && pnpm lint
     cd gateway && pnpm typecheck
 
@@ -165,7 +165,7 @@ test: test-rust test-ui test-gateway
 # Version lockstep guard (review F48): the six release-version sources (root
 # Cargo.toml + desktop/Cargo.toml + tauri.conf.json + gateway/package.json +
 # desktop/ui/package.json + shannon-plugin-api) must agree with the workspace
-# version. Wired into `just dev`; ci.yml's facade-facts job runs the same
+# version. Wired into `just dev`; ci.yml's Fast checks job runs the same
 # script so drift can never reach release.yml's prep guard again.
 version-check:
     @bash scripts/check-version-lockstep.sh
@@ -187,10 +187,10 @@ ci: fmt lint deny gen-protocol test
 # ---------- Metrics (docs/metrics.md) ----------
 
 # Regenerate docs/metrics.md (test/line/clippy/deny counts). Needs cargo-nextest.
-# CI regenerates this as an artifact on every run (ci.yml `Generate Metrics`);
-# this recipe refreshes the *committed* snapshot locally — e.g. before a
-# test-count-changing PR or a release. See .github/workflows/metrics-update.yml
-# for the automated weekly refresh (cron fires from `main`; PRs the result).
+# The committed snapshot is refreshed weekly by .github/workflows/metrics-update.yml
+# (cron fires from `main`; it PRs the result) — there is no per-PR metrics job.
+# This recipe refreshes the snapshot locally, e.g. before a test-count-changing
+# PR or a release.
 metrics:
     bash scripts/gen-metrics.sh
 

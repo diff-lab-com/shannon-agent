@@ -439,14 +439,37 @@ impl WorktreeTool {
                 change_directory(&session.original_cwd)?;
             }
             ExitAction::Remove => {
-                // Remove worktree
-                let (_, stderr, success) =
-                    self.run_git(&["worktree", "remove", &session.worktree_path])?;
+                // Remove worktree. `discard_changes: true` is the only way
+                // past the dirty gate above, so pass `--force` — plain
+                // `git worktree remove` refuses dirty worktrees and the
+                // session stayed wedged after the user explicitly opted in.
+                let discard = input.discard_changes.unwrap_or(false);
+                let remove_args: Vec<&str> = if discard {
+                    vec!["worktree", "remove", "--force", &session.worktree_path]
+                } else {
+                    vec!["worktree", "remove", &session.worktree_path]
+                };
+                let (_, stderr, success) = self.run_git(&remove_args)?;
 
                 if !success {
                     return Err(ToolError::ExecutionFailed(format!(
                         "Failed to remove worktree: {stderr}"
                     )));
+                }
+
+                // Delete the session branch (`worktree/<name>`) created by
+                // enter, so repeated enter/remove cycles don't accumulate
+                // branches. Best-effort: the worktree is gone either way.
+                if let Some(ref branch) = session.worktree_branch {
+                    match self.run_git(&["branch", "-D", branch]) {
+                        Ok((_, _, true)) => {}
+                        Ok((_, stderr, false)) => {
+                            tracing::warn!(branch = %branch, "could not delete worktree branch: {stderr}");
+                        }
+                        Err(e) => {
+                            tracing::warn!(branch = %branch, "could not delete worktree branch: {e}");
+                        }
+                    }
                 }
 
                 // Return to original directory

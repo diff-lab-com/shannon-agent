@@ -2,8 +2,33 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
-## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
-## [Unreleased] — Approval transparency + mobile approval scope (2026-10-05 follow-up)
+## [Unreleased]
+
+Waves queued for the next release, newest first:
+
+- §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
+- Approval transparency + mobile approval scope (2026-10-05 follow-up)
+- Permission-mode convergence (2026-10-05)
+- Hardening pass (2026-10-07 full-repo review)
+
+### Hardening pass (2026-10-07 full-repo review)
+
+Six-dimension review (core correctness, security, tools/MCP, UI/CLI, TS, build/docs) with the fixes landed:
+
+- **REPL crash (P0)**: command hot-reload and `/mcp` prompt registration used `block_in_place` + `Handle::current()` on the runtime-less event-loop thread and panicked the TUI on any `.claude/commands`/`.shannon/commands` file change. The `CommandRegistry` maps are plain `std::sync::RwLock` now — sync registration is safe on any thread.
+- **Config mojibake**: the `{env:}`/`{file:}` substitution byte-scanner re-encoded every non-ASCII config string as Latin-1 on load (`配置` → `é…ç½®`). Char-safe scan + regression tests.
+- **Session/key file permissions**: `events.jsonl` transcripts and the `secret_guard.key` master key are created `0600` from the first write (session dirs `0700`); the credentials dir is tightened to `0700` and `validate_file_permissions` now auto-fixes loose credential files instead of warn-only.
+- **Timeout/leak sweep**: fire-and-forget HTTP hooks honor their timeout; the PTY path gets the resolved Bash timeout (a hung PTY command no longer leaks a blocking thread + live child); a failed MCP `initialize` tears down the spawned server process; the updater never falls back to a no-timeout client; webhook receiver crashes are logged instead of swallowed.
+- **MCP stdio routing**: server→client requests (spec `ping` and others) no longer consume the client's pending request with the same small integer id — answered `-32601`/empty-result like the WebSocket handle; progress tokens mint via `fetch_add` (no collision between concurrent calls).
+- **Agent process manager**: stdin writes happen outside the agents map lock — one stalled agent can no longer deadlock `kill_agent`/`spawn_agent` for every other agent.
+- **Security gates**: RunBackground refuses outbound-network one-liners (`curl`/`wget`/`nc`/…); the command analyzer flags credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.shannon/credentials`) as critical; `is_loopback_host` parses IP literals (a `127.evil.com` DNS name can no longer get a token-less bind).
+- **CLI/agent**: `--yes` is honored in `--prompt` headless mode (bypass with the root/`SHANNON_DISABLE_BYPASS` guardrails) instead of being silently ignored; `shannon-agent --workdir` is applied; `shannon "x" --prompt "y"` is now a clap conflict instead of silently dropping the positional; auto-commit git failures are logged.
+- **TUI streaming**: the streaming input loop drains all pending events (typing no longer capped at ~20 keys/sec; bracketed pastes no longer dropped); the `<think>` fallback matches real tags; `/goal pause` renders its `%{max}` placeholder.
+- **Gateway/desktop**: oversized mobile POST bodies get a real 413 (the socket is paused, not destroyed); pair-token comparison is timing-safe; `listen()` rejections are caught (`useBudgetGuard`, `Layout`).
+- **Worktree tooling**: `ExitWorktree remove` honors `discard_changes: true` (`--force`) and deletes the `worktree/*` branch instead of leaking it.
+- **Build/docs**: the three clippy gates (justfile, ci-local.sh, local-check.sh pre-push) now share CI's exact flag list; `update-readme-metrics.mjs --check` understands the README floor claims and is green again; CHANGELOG has one `[Unreleased]` block; README crate trees include `shannon-browser`; `desktop/ui/index.html.bak` untracked; `.cargo/audit.toml` gitignore whitelisted; stale `Generate Metrics`/`facade-facts` CI job references corrected.
+
+### Approval transparency + mobile approval scope (2026-10-05 follow-up)
 
 Follow-up to the permission-mode convergence (#278), implementing plan items P3-1 and P3-3.
 
@@ -12,7 +37,7 @@ Follow-up to the permission-mode convergence (#278), implementing plan items P3-
 - **P3-1 approval transparency**: the deciding rule / classifier verdict now shows on every approval surface — TUI permission dialog and the `tool_approval` overlay render `DecisionReason::explain()` ("matched rule \`Bash(git *)\`" / "LLM safety classifier (87% confidence)"), the desktop `PERMISSION_REQUEST` payload carries the engine's free-text `riskReason` (additive field) under the rule line, and a new `/permissions history` subcommand lists the session's permission-decision audit rows (tool — decision — mode — reason) read from the session log.
 - **P3-3 mobile approval scope**: `shannon/approval/decide` accepts `scope: "session"` — the engine maps it to a new `always_allow_session` wire choice that is remembered in the per-session memory and **never persisted**; a session scope is bound into the decision signature (`...:session` suffix in v1/v2 messages) so a captured once-decision cannot be replayed as a session grant. New RPCs `shannon/approval.state` (read the session's current approval token) and `shannon/approval.set` (tighten-only — the gateway forwards nothing but `readonly`; the engine route rejects escalation and upserts the clamp so it survives to the session's next turn). Protocol schema regenerated.
 
-## [Unreleased] — Permission-mode convergence (2026-10-05)
+### Permission-mode convergence (2026-10-05)
 
 Permission modes converge to a 4+3 model ([design](docs/plans/2026-10-04-permission-mode-naming-design.md), [plan](docs/plans/2026-10-04-permission-modes-improvement-plan.md)). **Read the breaking notes before upgrading.**
 

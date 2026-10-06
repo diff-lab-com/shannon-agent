@@ -160,10 +160,12 @@ export function Layout() {
       const sessionId = (e.payload as { sessionId?: string }).sessionId
       if (!sessionId) return
       void switchSession(sessionId).then(() => navigate('/chat'))
-    }).then(fn => {
-      if (cancelled) { fn(); return }
-      unlisten = fn
     })
+      .then(fn => {
+        if (cancelled) { fn(); return }
+        unlisten = fn
+      })
+      .catch(() => { /* event API unavailable — same posture as useTauriEvent */ })
     return () => {
       cancelled = true
       unlisten?.()

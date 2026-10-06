@@ -159,17 +159,49 @@ impl SessionLogWriter {
     fn open_path(path: PathBuf, session_id: &str) -> Result<Self, SessionLogError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                // Session dirs hold full conversation transcripts (including
+                // tool output) — keep them owner-only. Best-effort on the
+                // chmod: an existing dir we cannot tighten must not block
+                // recording, but the condition is worth surfacing.
+                if let Err(e) =
+                    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                {
+                    tracing::warn!(
+                        path = %parent.display(),
+                        error = %e,
+                        "could not restrict session directory to 0700"
+                    );
+                }
+            }
         }
 
         // One handle, opened read+append+create. The read right lets the
         // recovery scan share this handle's lifetime (see `scan_tail`); the
         // flock below makes the ownership of the file exclusive to this
-        // writer.
-        let mut file = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(&path)?;
+        // writer. The log is created 0600 (and tightened if it pre-exists
+        // with looser perms) — transcripts can contain pasted secrets.
+        let mut opts = OpenOptions::new();
+        opts.read(true).append(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.mode(0o600);
+        }
+        let mut file = opts.open(&path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            if let Err(e) = file.set_permissions(std::fs::Permissions::from_mode(0o600)) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "could not restrict session log to 0600"
+                );
+            }
+        }
         // Fail fast when another writer holds the log (plan §4.1 ④).
         FileExt::try_lock_exclusive(&file).map_err(|source| SessionLogError::AlreadyLocked {
             path: path.clone(),

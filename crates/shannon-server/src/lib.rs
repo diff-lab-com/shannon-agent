@@ -348,7 +348,16 @@ pub fn validate_serve_bind(
 /// must either pass an explicit loopback address (`127.0.0.1`) or set
 /// `allow_nonloopback = true` with an auth token (review §P0-2).
 pub fn is_loopback_host(host: &str) -> bool {
-    matches!(host, "localhost" | "::1") || host.starts_with("127.")
+    if host == "localhost" {
+        return true;
+    }
+    // Parse as an IP literal — a string-prefix check would classify DNS
+    // names like `127.evil.com` (which resolve to a public IP) as loopback
+    // and hand them a token-less bind.
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip.is_loopback(),
+        Err(_) => false,
+    }
 }
 
 pub async fn run(
@@ -661,6 +670,28 @@ mod tests {
     // -------------------------------------------------------------------
     // review §P0-2: serve bind guard
     // -------------------------------------------------------------------
+
+    #[test]
+    fn is_loopback_host_rejects_dns_lookalikes() {
+        // The old `host.starts_with("127.")` prefix check classified DNS
+        // names like `127.evil.com` (resolving to a public IP) as loopback
+        // and let `validate_serve_bind` hand them a token-less bind.
+        for host in [
+            "127.evil.com",
+            "127.0.0.1.evil.com",
+            "example.com",
+            "0.0.0.0",
+            "",
+        ] {
+            assert!(
+                !is_loopback_host(host),
+                "host '{host}' must not count as loopback"
+            );
+        }
+        for host in ["127.0.0.1", "127.8.8.8", "::1"] {
+            assert!(is_loopback_host(host), "host '{host}' must count as loopback");
+        }
+    }
 
     #[test]
     fn validate_serve_bind_loopback_always_ok() {
