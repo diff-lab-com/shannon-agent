@@ -643,32 +643,34 @@ mod tests {
         // The request went to the SLOT target with the one-small-request
         // budget — model from the auxiliary target, token cap on the wire
         // (the OpenAI wire emits the cap as `max_completion_tokens`).
-        let bodies = captured.lock().unwrap();
-        assert_eq!(bodies.len(), 1, "exactly one small request");
-        let body = &bodies[0];
-        assert_eq!(body["model"], "title-model-1");
-        assert_eq!(body["max_completion_tokens"], TITLE_MAX_TOKENS);
-        // Wire shape: system prompt + ONE user message carrying the
-        // truncated first exchange.
-        let messages = body["messages"].as_array().unwrap();
-        assert_eq!(messages.len(), 2);
-        assert_eq!(
-            messages[0]["role"], "system",
-            "the title system prompt rides the system field... as the wire's system message"
-        );
-        assert!(
-            messages[0]["content"]
-                .as_str()
-                .unwrap()
-                .contains("concise conversation titles")
-        );
-        assert_eq!(messages[1]["role"], "user");
-        let prompt = messages[1]["content"].as_str().unwrap();
-        assert!(prompt.contains("Help me plan a trip to Tokyo next spring"));
-        assert!(prompt.contains("Sure — flights, hotels, and a rail pass."));
+        // Scoped block: the guard must drop before the `.await` below.
+        {
+            let bodies = captured.lock().unwrap();
+            assert_eq!(bodies.len(), 1, "exactly one small request");
+            let body = &bodies[0];
+            assert_eq!(body["model"], "title-model-1");
+            assert_eq!(body["max_completion_tokens"], TITLE_MAX_TOKENS);
+            // Wire shape: system prompt + ONE user message carrying the
+            // truncated first exchange.
+            let messages = body["messages"].as_array().unwrap();
+            assert_eq!(messages.len(), 2);
+            assert_eq!(
+                messages[0]["role"], "system",
+                "the title system prompt rides the system field... as the wire's system message"
+            );
+            assert!(
+                messages[0]["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("concise conversation titles")
+            );
+            assert_eq!(messages[1]["role"], "user");
+            let prompt = messages[1]["content"].as_str().unwrap();
+            assert!(prompt.contains("Help me plan a trip to Tokyo next spring"));
+            assert!(prompt.contains("Sure — flights, hotels, and a rail pass."));
+        }
 
         // One attempt per session: a second settled trigger does not retry.
-        drop(bodies);
         run_title_task(
             &app,
             session_id,
