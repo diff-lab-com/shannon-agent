@@ -32,6 +32,12 @@ vi.mock('@/lib/tauri-api', () => ({
   checkAppUpdate: vi.fn().mockRejectedValue(new Error('skip')),
   // office B6'-ui: ScheduleForm probes the webhook config on mount.
   getWebhookConfig: vi.fn().mockResolvedValue(null),
+  // P2-6/F6: filling the required fields flips ScheduleForm's valid gate,
+  // which mounts CostEstimateHint — its 350ms debounce then calls
+  // estimateTaskCost. Missing here = TypeError thrown inside that timer
+  // whenever a test outlives the debounce (intermittent unhandled-error
+  // flake), so every function the render path touches must exist.
+  estimateTaskCost: vi.fn().mockResolvedValue({ hasHistory: false, runsCounted: 0, minUsd: null, maxUsd: null, avgUsd: null, lastUsd: null }),
 }))
 
 function windowedRoutine(): ScheduledRoutine {

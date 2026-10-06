@@ -10,6 +10,10 @@ vi.mock('@/lib/tauri-api', () => ({
   previewCron: (...args: unknown[]) => previewCron(...args),
   // office B6'-ui: ScheduleForm probes the webhook config on mount.
   getWebhookConfig: vi.fn().mockResolvedValue(null),
+  // P2-6/F6: a filled/prefilled form mounts CostEstimateHint, whose 350ms
+  // debounce calls estimateTaskCost — must exist or the timer throws an
+  // unhandled error whenever a test outlives the debounce.
+  estimateTaskCost: vi.fn().mockResolvedValue({ hasHistory: false, runsCounted: 0, minUsd: null, maxUsd: null, avgUsd: null, lastUsd: null }),
 }))
 
 beforeEach(() => {
