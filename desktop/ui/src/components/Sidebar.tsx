@@ -48,6 +48,10 @@ export function useSidebarMode(): [SidebarMode, () => void] {
       window.localStorage.setItem(SIDEBAR_MODE_KEY, next)
       return next
     })
+    // D4: non-Sidebar readers (lib/sidebarMode) subscribe to this event so
+    // mounted cards re-render without a reload — importing Sidebar to get
+    // the mode would pull the React tree into chat components.
+    window.dispatchEvent(new Event('shannon-sidebar-mode-changed'))
   }, [])
   return [mode, toggle]
 }

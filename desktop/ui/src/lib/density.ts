@@ -3,6 +3,8 @@
 // styles/tokens.css); persistence mirrors the theme keys' localStorage
 // pattern.
 
+import { readSidebarMode } from './sidebarMode'
+
 export type Density = 'comfortable' | 'compact'
 
 const DENSITY_KEY = 'shannon.density'
@@ -38,14 +40,9 @@ export function resolveDensity(pref: DensityPref, sidebarMode: 'advanced' | 'sim
 export function readDensity(): Density {
   const pref = readDensityPref()
   if (pref !== 'auto') return pref
-  // Sidebar mode key lives in localStorage ('dev' = Advanced); read directly
-  // to avoid importing Sidebar (which pulls the React tree).
-  let mode: 'advanced' | 'simple' | null = null
-  try {
-    const raw = localStorage.getItem('shannon-sidebar-mode')
-    mode = raw === 'dev' ? 'advanced' : raw === 'basic' ? 'simple' : null
-  } catch { /* noop */ }
-  return resolveDensity(pref, mode)
+  // Sidebar mode read via lib/sidebarMode (key lives in localStorage;
+  // reading it here avoids importing Sidebar, which pulls the React tree).
+  return resolveDensity(pref, readSidebarMode())
 }
 
 export function applyDensity(density: Density) {

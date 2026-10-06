@@ -1,12 +1,19 @@
 // Settings R3 T11 (C6) — ToolGroupCard: collapsed header (icon + i18n title
 // + count badge + first/last tool-name summary), expand renders the original
 // tool cards in place, collapse hides them again.
+//
+// D4 — simple sidebar mode is the concise render branch: the header drops
+// the technical tool-name summary (icon + title + count + chevron stay) and
+// the card flips live when the mode toggle fires its change event; dev mode
+// keeps the full header. Expansion is the escape hatch in both modes.
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import ToolGroupCard from '@/components/chat/ToolGroupCard'
 import type { ToolCall } from '@/types'
+
+const MODE_KEY = 'shannon-sidebar-mode'
 
 function card(id: string, name = 'read_file') {
   return { tool_use_id: id, tool_name: name, tool_input: {}, status: 'completed' as const }
@@ -22,6 +29,8 @@ beforeEach(() => {
 
 describe('ToolGroupCard', () => {
   it('renders the collapsed header with the i18n title, count badge and summary', () => {
+    // Dev mode — the full header is unchanged by D4.
+    localStorage.setItem(MODE_KEY, 'dev')
     bubble(
       <ToolGroupCard kind="explore" count={3} firstToolName="Read" lastToolName="Glob">
         <div>card-a</div>
@@ -29,7 +38,9 @@ describe('ToolGroupCard', () => {
     )
     const header = screen.getByTestId('tool-group-header')
     expect(header).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.getByTestId('tool-group-card')).toHaveAttribute('data-group-kind', 'explore')
+    const root = screen.getByTestId('tool-group-card')
+    expect(root).toHaveAttribute('data-group-kind', 'explore')
+    expect(root).not.toHaveAttribute('data-concise')
     expect(screen.getByText('Explore tools')).toBeInTheDocument()
     expect(screen.getByTestId('tool-group-count')).toHaveTextContent('3 calls')
     const summary = screen.getByTestId('tool-group-summary')
@@ -40,6 +51,7 @@ describe('ToolGroupCard', () => {
   })
 
   it('shows only the first tool name when the run is single-named', () => {
+    localStorage.setItem(MODE_KEY, 'dev')
     bubble(
       <ToolGroupCard kind="changes" count={2} firstToolName="write_file" lastToolName="write_file">
         <div>card-a</div>
@@ -79,5 +91,46 @@ describe('ToolGroupCard', () => {
     unmount()
     bubble(<ToolGroupCard kind="changes" count={2}><div /></ToolGroupCard>)
     expect(screen.getByText('File changes')).toBeInTheDocument()
+  })
+
+  it('simple mode (unset key) hides the technical summary but keeps the count badge', () => {
+    // Unset localStorage — the default is simple (D4 concise branch).
+    bubble(
+      <ToolGroupCard kind="terminal" count={2} firstToolName="Bash" lastToolName="git">
+        <div>card-a</div>
+      </ToolGroupCard>,
+    )
+    const root = screen.getByTestId('tool-group-card')
+    expect(root).toHaveAttribute('data-concise', 'true')
+    expect(screen.queryByTestId('tool-group-summary')).toBeNull()
+    expect(screen.getByText('Terminal commands')).toBeInTheDocument()
+    expect(screen.getByTestId('tool-group-count')).toHaveTextContent('2 calls')
+    // The escape hatch is unaffected: expansion still renders the cards.
+    fireEvent.click(screen.getByTestId('tool-group-header'))
+    expect(screen.getByText('card-a')).toBeInTheDocument()
+  })
+
+  it('re-renders in place when the mode toggle fires its change event', () => {
+    bubble(
+      <ToolGroupCard kind="explore" count={2} firstToolName="Read" lastToolName="Glob">
+        <div>card-a</div>
+      </ToolGroupCard>,
+    )
+    expect(screen.queryByTestId('tool-group-summary')).toBeNull()
+    // Sidebar's toggle persists then dispatches — same sequence here, no
+    // remount (same render() instance throughout).
+    act(() => {
+      localStorage.setItem(MODE_KEY, 'dev')
+      window.dispatchEvent(new Event('shannon-sidebar-mode-changed'))
+    })
+    expect(screen.getByTestId('tool-group-summary')).toHaveTextContent('Read')
+    expect(screen.getByTestId('tool-group-card')).not.toHaveAttribute('data-concise')
+    // …and back: 'basic' maps to simple again.
+    act(() => {
+      localStorage.setItem(MODE_KEY, 'basic')
+      window.dispatchEvent(new Event('shannon-sidebar-mode-changed'))
+    })
+    expect(screen.queryByTestId('tool-group-summary')).toBeNull()
+    expect(screen.getByTestId('tool-group-card')).toHaveAttribute('data-concise', 'true')
   })
 })
