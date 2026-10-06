@@ -1,8 +1,10 @@
 // Settings R3 T5 — notificationChime unit tests.
 //
 // Covers: the pure DND window helper (incl. the overnight wrap), the chime
-// gate matrix (`chimeAllowed`), and the Web Audio synthesis path against a
-// fake AudioContext (no throw + oscillator call sequence).
+// gate matrix (`chimeAllowed`), the Web Audio synthesis path against a
+// fake AudioContext (no throw + oscillator call sequence), and the F3
+// multi-window dedup layer (visibility rule, all-background fallback,
+// BroadcastChannel records, TTL expiry) against a faithful channel double.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as api from '@/lib/tauri-api'
@@ -11,8 +13,11 @@ import {
   chimeAllowed,
   playTaskChime,
   maybePlayTaskChime,
+  chimeKey,
+  CHIME_DEDUP_TTL_MS,
   invalidateNotificationPrefsCache,
   resetChimeAudioContextForTest,
+  resetChimeDedupForTest,
   type ChimePrefs,
 } from '@/lib/notificationChime'
 
@@ -89,11 +94,15 @@ beforeEach(() => {
   vi.clearAllMocks()
   resetChimeAudioContextForTest()
   invalidateNotificationPrefsCache()
+  resetChimeDedupForTest()
   getNotificationPrefs.mockResolvedValue(allOnPrefs)
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  // Drop a test's own visibilityState shadow (jsdom's prototype getter —
+  // 'prerender' in jsdom — resumes).
+  Reflect.deleteProperty(document, 'visibilityState')
 })
 
 describe('isWithinDnd', () => {
@@ -300,5 +309,214 @@ describe('maybePlayTaskChime (prefs-gated entry point)', () => {
 
     await expect(maybePlayTaskChime('failed')).resolves.toBeUndefined()
     expect(oscs).toEqual([])
+  })
+})
+
+// === F3 multi-window dedup ==================================================
+
+/** Own-property visibilityState shadow. jsdom reports 'prerender' (never
+ *  'visible'), so dedup tests always pin the state explicitly. afterEach in
+ *  this file deletes the own property, restoring jsdom's prototype getter. */
+function stubVisibility(state: 'visible' | 'hidden' | 'prerender'): void {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+}
+
+/**
+ * BroadcastChannel double with real same-process semantics: instances of the
+ * same channel name live in a shared registry and postMessage delivers to
+ * every OTHER live instance — so a test can open a "sibling window" channel
+ * and the module's channel receives its records (and vice versa).
+ */
+function makeBroadcastChannelMock() {
+  const registry = new Map<string, Set<MockChannel>>()
+  class MockChannel {
+    name: string
+    onmessage: ((ev: { data: unknown }) => void) | null = null
+    posted: Array<unknown> = []
+    closed = false
+    constructor(name: string) {
+      this.name = name
+      let set = registry.get(name)
+      if (!set) {
+        set = new Set()
+        registry.set(name, set)
+      }
+      set.add(this)
+    }
+    postMessage(data: unknown) {
+      this.posted.push(data)
+      for (const peer of registry.get(this.name) ?? []) {
+        if (peer !== this && !peer.closed) peer.onmessage?.({ data })
+      }
+    }
+    close() {
+      this.closed = true
+      registry.get(this.name)?.delete(this)
+    }
+  }
+  return { MockChannel, registry }
+}
+
+describe('multi-window dedup (F3)', () => {
+  /** Audio stub + oscillator capture; each two-tone chime = 2 oscillators. */
+  function stubAudio() {
+    const { FakeAudioContext } = makeFakeAudioContext()
+    const oscs = captureOscillators(FakeAudioContext)
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    return oscs
+  }
+
+  it('derives stable keys via chimeKey (missing parts dropped)', () => {
+    expect(chimeKey('query:completed', 's1', 'q1')).toBe('query:completed:s1:q1')
+    expect(chimeKey('permission', null, 'req-1')).toBe('permission:req-1')
+    expect(chimeKey('query:failed', undefined, undefined)).toBe('query:failed')
+  })
+
+  it('plays the same key only once across two events', async () => {
+    const oscs = stubAudio()
+    stubVisibility('visible')
+
+    await maybePlayTaskChime('completed', 'query:completed:s1:q1')
+    await maybePlayTaskChime('completed', 'query:completed:s1:q1')
+    expect(oscs).toHaveLength(2) // one two-tone chime, not two
+  })
+
+  it('plays different keys independently', async () => {
+    const oscs = stubAudio()
+    stubVisibility('visible')
+
+    await maybePlayTaskChime('completed', 'k1')
+    await maybePlayTaskChime('failed', 'k2')
+    expect(oscs).toHaveLength(4)
+  })
+
+  it('suppresses a key announced by another window (received record)', async () => {
+    const oscs = stubAudio()
+    stubVisibility('visible')
+    const { MockChannel, registry } = makeBroadcastChannelMock()
+    vi.stubGlobal('BroadcastChannel', MockChannel)
+
+    // First call opens the module's channel ('shannon-chime'); a sibling
+    // window's channel then shares the registry with it.
+    await maybePlayTaskChime('completed', 'warmup')
+    expect([...(registry.get('shannon-chime') ?? [])]).toHaveLength(1)
+    const sibling = new MockChannel('shannon-chime')
+    sibling.postMessage({ key: 'k1', ts: Date.now() })
+
+    // Visible, gates open, but another window already sounded k1 → silent.
+    await maybePlayTaskChime('completed', 'k1')
+    expect(oscs).toHaveLength(2) // only the warmup chime
+  })
+
+  it('broadcasts {key, ts} after the local play', async () => {
+    const oscs = stubAudio()
+    stubVisibility('visible')
+    const { MockChannel, registry } = makeBroadcastChannelMock()
+    vi.stubGlobal('BroadcastChannel', MockChannel)
+
+    await maybePlayTaskChime('completed', 'k1')
+    expect(oscs).toHaveLength(2)
+    const [mine] = [...(registry.get('shannon-chime') ?? [])]
+    expect(mine?.posted).toEqual([{ key: 'k1', ts: expect.any(Number) }])
+  })
+
+  it('hidden window plays as the all-background fallback (no records)', async () => {
+    const oscs = stubAudio()
+    stubVisibility('hidden')
+    const { MockChannel } = makeBroadcastChannelMock()
+    vi.stubGlobal('BroadcastChannel', MockChannel)
+
+    // Nothing has played anywhere → the fallback must fire so an
+    // all-windows-minimized setup still gets its notice.
+    await maybePlayTaskChime('completed', 'k1')
+    expect(oscs).toHaveLength(2)
+  })
+
+  it('hidden window stays silent once any window played within the TTL', async () => {
+    const oscs = stubAudio()
+    stubVisibility('hidden')
+    const { MockChannel } = makeBroadcastChannelMock()
+    vi.stubGlobal('BroadcastChannel', MockChannel)
+
+    await maybePlayTaskChime('completed', 'k1') // fallback play (seen table empty)
+    // A different key, but a window already played within the TTL and this
+    // window is hidden — the focused window owns the sound.
+    await maybePlayTaskChime('failed', 'k2')
+    expect(oscs).toHaveLength(2)
+  })
+
+  it('plays again after the TTL expires', async () => {
+    vi.useFakeTimers()
+    try {
+      const oscs = stubAudio()
+      stubVisibility('visible')
+      const { MockChannel } = makeBroadcastChannelMock()
+      vi.stubGlobal('BroadcastChannel', MockChannel)
+
+      await maybePlayTaskChime('completed', 'k1')
+      expect(oscs).toHaveLength(2)
+
+      vi.advanceTimersByTime(CHIME_DEDUP_TTL_MS + 100)
+      await maybePlayTaskChime('completed', 'k1')
+      expect(oscs).toHaveLength(4)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('received records older than the TTL no longer suppress', async () => {
+    vi.useFakeTimers()
+    try {
+      const oscs = stubAudio()
+      stubVisibility('visible')
+      const { MockChannel } = makeBroadcastChannelMock()
+      vi.stubGlobal('BroadcastChannel', MockChannel)
+
+      await maybePlayTaskChime('completed', 'warmup')
+      const sibling = new MockChannel('shannon-chime')
+      sibling.postMessage({ key: 'k1', ts: Date.now() })
+      await maybePlayTaskChime('completed', 'k1')
+      expect(oscs).toHaveLength(2)
+
+      vi.advanceTimersByTime(CHIME_DEDUP_TTL_MS + 100)
+      await maybePlayTaskChime('completed', 'k1')
+      expect(oscs).toHaveLength(4)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('degrades to direct play without BroadcastChannel (even hidden)', async () => {
+    const oscs = stubAudio()
+    stubVisibility('hidden')
+    vi.stubGlobal('BroadcastChannel', undefined)
+
+    // No cross-window channel → pre-F3 behavior: every gates-open event plays.
+    await maybePlayTaskChime('completed', 'k1')
+    await maybePlayTaskChime('completed', 'k1')
+    expect(oscs).toHaveLength(4)
+  })
+
+  it('keyless calls keep the pre-F3 always-play behavior', async () => {
+    const oscs = stubAudio()
+    stubVisibility('visible')
+    const { MockChannel } = makeBroadcastChannelMock()
+    vi.stubGlobal('BroadcastChannel', MockChannel)
+
+    // Unique per-call keys → no same-key suppression for legacy callers.
+    await maybePlayTaskChime('completed')
+    await maybePlayTaskChime('completed')
+    expect(oscs).toHaveLength(4)
+  })
+
+  it('a hidden keyless call after another play stays silent (fallback rule)', async () => {
+    const oscs = stubAudio()
+    stubVisibility('hidden')
+    const { MockChannel } = makeBroadcastChannelMock()
+    vi.stubGlobal('BroadcastChannel', MockChannel)
+
+    await maybePlayTaskChime('completed', 'k1')
+    await maybePlayTaskChime('failed') // hidden + records exist → suppressed
+    expect(oscs).toHaveLength(2)
   })
 })
