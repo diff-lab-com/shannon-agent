@@ -6,10 +6,16 @@
 // collapsed, children render in place when opened). The grouping decision —
 // WHICH cards land here — lives in lib/toolGrouping; this component is the
 // shell only. Streaming keeps per-card rendering by ruling R10.
+//
+// D4 (research 2026-10-05-d4-interface-mode §1.6): simple sidebar mode is
+// the concise render branch — the header hides the technical tool-name
+// summary (icon + title + count + chevron only); dev mode keeps the full
+// header. Expanding in place stays the escape hatch in both modes.
 
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { cn } from '@/lib/utils'
+import { useSidebarModeValue } from '@/lib/sidebarMode'
 import type { ToolGroupKind } from '@/lib/toolGrouping'
 
 const KIND_ICONS: Record<ToolGroupKind, string> = {
@@ -46,10 +52,16 @@ export interface ToolGroupCardProps {
 export function ToolGroupCard({ kind, count, firstToolName, lastToolName, children }: ToolGroupCardProps) {
   const intl = useIntl()
   const [expanded, setExpanded] = useState(false)
+  const concise = useSidebarModeValue() === 'simple'
   const showLast = count > 1 && lastToolName != null && lastToolName !== firstToolName
 
   return (
-    <div className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest/60 overflow-hidden" data-testid="tool-group-card" data-group-kind={kind}>
+    <div
+      className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest/60 overflow-hidden"
+      data-testid="tool-group-card"
+      data-group-kind={kind}
+      data-concise={concise ? 'true' : undefined}
+    >
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
@@ -68,7 +80,9 @@ export function ToolGroupCard({ kind, count, firstToolName, lastToolName, childr
         >
           {intl.formatMessage({ id: 'chat.toolGroup.count' }, { count })}
         </span>
-        {firstToolName != null && (
+        {/* D4: simple mode skips the technical summary — the count badge
+            already says how much is folded; expanding reveals the names. */}
+        {!concise && firstToolName != null && (
           <span className="font-mono text-label-xs text-on-surface-variant truncate flex-1" data-testid="tool-group-summary">
             {firstToolName}
             {showLast && <span aria-hidden="true"> … {lastToolName}</span>}
