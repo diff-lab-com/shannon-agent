@@ -11,6 +11,12 @@
 // behavior, so it must evaluate DND here, not trust the backend handler).
 // `invalidateNotificationPrefsCache()` is wired to CONFIG_UPDATED
 // (key = notifications) in AppContext.
+//
+// R3 followups F3 — multi-window dedup: every window's AppContext receives
+// the same backend events, so a completed/failed/attention chime used to
+// sound once PER WINDOW. The dedup layer below (see "Multi-window dedup")
+// keeps it to a single audible chime per event without touching the prefs
+// gate above.
 
 import * as api from '@/lib/tauri-api'
 
@@ -115,19 +121,161 @@ export function chimeAllowed(prefs: ChimePrefs | null, kind: ChimeKind, now: Dat
   return true
 }
 
+// === Multi-window dedup (F3) ================================================
+//
+// One audible chime per event across all windows, via three cooperating rules:
+//
+//  1. Visibility rule — only a window whose `document.visibilityState` is
+//     'visible' plays locally. A buried window would only duplicate the
+//     focused one's sound.
+//  2. All-background fallback — when THIS window is not visible and no window
+//     has played anything within the TTL (the local seen table is empty), this
+//     window plays anyway, so a fully minimized setup still gets its notice.
+//  3. Cross-window records — every play is announced on
+//     `BroadcastChannel('shannon-chime')` as `{key, ts}`. Received records are
+//     written into the local seen table; the same key is not replayed while a
+//     record is younger than CHIME_DEDUP_TTL_MS.
+//
+// Per-play ordering: check seen → mark self → play → broadcast. Marking
+// before playing makes same-window duplicate deliveries (double listener,
+// re-fired event) single-shot; broadcasting after means an announcement never
+// precedes an actual sound. Two windows deciding in the same tick — before
+// either broadcast has arrived — can both play; that millisecond-scale race
+// is accepted, and the visibility rule shrinks it to the rare case of several
+// simultaneously visible windows. Without BroadcastChannel (SSR, test envs)
+// the layer degrades to the pre-F3 direct play via try/catch.
+
+const CHIME_DEDUP_CHANNEL = 'shannon-chime'
+
+/** How long a play record suppresses its key (and the hidden-window fallback). */
+export const CHIME_DEDUP_TTL_MS = 2000
+
 /**
- * Play the task chime for `kind` if the cached prefs allow it. Fire-and-
- * forget: never throws, never rejects — a chime is best-effort by design.
+ * Keys recently played anywhere we know of — this window's own marks plus
+ * records received from other windows. Value = wall-clock ms of the play.
  */
-export async function maybePlayTaskChime(kind: ChimeKind): Promise<void> {
+const seenChimePlays = new Map<string, number>()
+let chimeChannel: BroadcastChannel | null = null
+let chimeChannelUnavailable = false
+
+function getChimeChannel(): BroadcastChannel | null {
+  if (chimeChannel) return chimeChannel
+  if (chimeChannelUnavailable) return null
+  try {
+    if (typeof BroadcastChannel === 'undefined') throw new Error('BroadcastChannel unavailable')
+    chimeChannel = new BroadcastChannel(CHIME_DEDUP_CHANNEL)
+    chimeChannel.onmessage = (ev: MessageEvent) => {
+      try {
+        const record = ev.data as { key?: unknown; ts?: unknown } | null
+        if (!record || typeof record.key !== 'string') return
+        seenChimePlays.set(record.key, typeof record.ts === 'number' ? record.ts : Date.now())
+      } catch {
+        // A malformed record from a peer is never worth throwing over.
+      }
+    }
+    return chimeChannel
+  } catch {
+    // SSR / environments without BroadcastChannel: remember the failure so we
+    // don't retry on every event; callers degrade to direct play.
+    chimeChannelUnavailable = true
+    return null
+  }
+}
+
+/** Test hook — drop the seen table and the channel so a test starts clean. */
+export function resetChimeDedupForTest(): void {
+  seenChimePlays.clear()
+  try {
+    chimeChannel?.close()
+  } catch {
+    // Already closed, or a test double without close().
+  }
+  chimeChannel = null
+  chimeChannelUnavailable = false
+}
+
+function pruneExpiredChimePlays(now: number): void {
+  for (const [key, ts] of seenChimePlays) {
+    if (now - ts > CHIME_DEDUP_TTL_MS) seenChimePlays.delete(key)
+  }
+}
+
+function isThisWindowVisible(): boolean {
+  try {
+    return document.visibilityState === 'visible'
+  } catch {
+    return true // No DOM to ask (SSR-ish) → behave like the focused window.
+  }
+}
+
+/**
+ * Reserve the right to play `key` in THIS window. False means the dedup layer
+ * suppresses it: the same key was already played within the TTL (by this
+ * window or a received broadcast), or this window is hidden while some window
+ * played anything recently (the focused window is expected to own the sound).
+ * No BroadcastChannel → always true (pre-F3 direct play).
+ */
+function tryClaimChime(key: string): boolean {
+  if (!getChimeChannel()) return true
+  const now = Date.now()
+  pruneExpiredChimePlays(now)
+  // ① Seen check — same key already sounded within the TTL → stay silent.
+  if (seenChimePlays.has(key)) return false
+  // ①+② Visibility rule: visible windows play; hidden ones only as the
+  //     all-background fallback (nobody has played anything recently).
+  if (!isThisWindowVisible() && seenChimePlays.size > 0) return false
+  // ② Mark self BEFORE playing so a same-tick duplicate delivery in this
+  //    window cannot double-play.
+  seenChimePlays.set(key, now)
+  return true
+}
+
+/** ③ Announce the play to the other windows — strictly after the local play. */
+function broadcastChimePlayed(key: string): void {
+  try {
+    chimeChannel?.postMessage({ key, ts: Date.now() })
+  } catch {
+    // Announcing is best-effort; the local chime already happened.
+  }
+}
+
+/**
+ * Dedup key for one chime event, derived from the stable payload identifiers
+ * all windows see (event name + session id / query id / request id …). Every
+ * window derives the SAME key for the same backend event — that is what makes
+ * the seen-table check line up across windows. Empty/missing parts are
+ * dropped, so legacy payloads without ids still produce a stable key.
+ */
+export function chimeKey(event: string, ...ids: Array<string | null | undefined>): string {
+  return [event, ...ids].filter((part) => typeof part === 'string' && part !== '').join(':')
+}
+
+/**
+ * Play the task chime for `kind` if the cached prefs allow it AND the
+ * multi-window dedup layer lets this window sound it (see the F3 block
+ * above). `key` should be derived from stable payload ids via [`chimeKey`];
+ * without one the call is treated as always-unique and keeps the pre-dedup
+ * always-play behavior. Fire-and-forget: never throws, never rejects — a
+ * chime is best-effort by design.
+ */
+export async function maybePlayTaskChime(kind: ChimeKind, key?: string): Promise<void> {
   try {
     const prefs = await loadPrefs()
     if (!chimeAllowed(prefs, kind, new Date())) return
+    // Keyless callers: unique per-call key (same-ms calls included), so their
+    // gates-open behavior is exactly the pre-F3 one; cross-window suppression
+    // for them rides on the hidden-window fallback rule alone.
+    const dedupKey = key ?? `${kind}:#${++keylessChimeSeq}`
+    if (!tryClaimChime(dedupKey)) return
     playTaskChime(kind)
+    broadcastChimePlayed(dedupKey)
   } catch {
     // Swallow everything — audio is strictly optional.
   }
 }
+
+/** Sequence for keyless calls — same-millisecond calls must not share a key. */
+let keylessChimeSeq = 0
 
 // === Synthesis ==============================================================
 
