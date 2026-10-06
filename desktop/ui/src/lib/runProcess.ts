@@ -12,6 +12,15 @@
 // dock renders its snapshot. Lifecycle: beginRun() on send (clears the
 // previous turn — content survives until the NEXT run starts), endRun() on
 // completed/failed/cancelled, reset to idle on session switch.
+//
+// D5 方案① (主动任务推荐): `hadChanges` records whether the run made at
+// least one file-mutating tool call, classified by the SAME `classifyTool`
+// lib/toolGrouping.ts uses for its Changes bucket. It survives the settle
+// (activeToolCalls are cleared on completed/failed, so the post-run chips
+// need this one retained bit) and is the sole input to the 「提交这些改动」
+// chip rule. Zero backend fields — derived from tool-start events only.
+
+import { classifyTool } from './toolGrouping'
 
 /** Aggregated snapshot of the visible session's current/most recent run. */
 export interface RunProcessState {
@@ -28,6 +37,10 @@ export interface RunProcessState {
   summary: string | null
   lastTool: string | null
   toolCount: number
+  /** D5 方案①: the run contained ≥1 tool call that `classifyTool` puts in
+   *  the Changes (file-mutating) bucket. Sticky within a run; reset by
+   *  beginRun. */
+  hadChanges: boolean
 }
 
 export function initialRunProcess(): RunProcessState {
@@ -40,6 +53,7 @@ export function initialRunProcess(): RunProcessState {
     summary: null,
     lastTool: null,
     toolCount: 0,
+    hadChanges: false,
   }
 }
 
@@ -132,6 +146,9 @@ export function noteToolStart(
     startedAt: prev.startedAt ?? at,
     sources,
     outputs,
+    // D5 方案①: sticky — any single Changes-bucket tool call in the run
+    // qualifies it for the post-run 「提交这些改动」 chip.
+    hadChanges: prev.hadChanges || classifyTool(name) === 'changes',
     lastTool: name || prev.lastTool,
     toolCount: prev.toolCount + 1,
     summary: name ? name : prev.summary,

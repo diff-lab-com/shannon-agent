@@ -467,6 +467,10 @@ fn main() {
             commands_tasks::update_task,
             commands_files::get_file_tree,
             commands_files::get_working_dir_info,
+            // D5 方案① — welcome card workspace probe (Cargo.toml /
+            // package.json / pyproject.toml / go.mod stat sweep, no model
+            // calls) behind the suggestions.enabled presentation toggle.
+            commands_files::detect_workspace_markers,
             commands_files::read_attachment,
             commands_files::read_attachments,
             // P0-3 preflight — the composer flags refused attachments at

@@ -471,6 +471,10 @@ fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Resu
         // (`ask_user_question`). Read live by the ask_user handler before
         // each question's wait — a flip applies to the NEXT question.
         "chat.ask_user_auto_continue" => cfg.chat_ask_user_auto_continue = enabled,
+        // D5 方案①: 主动任务推荐 presentation toggle. The backend never
+        // gates anything on it — the UI reads it live for the completion
+        // chips + welcome-card refresh/filter, so a flip is immediate.
+        "suggestions.enabled" => cfg.suggestions_enabled = enabled,
         other => return Err(format!("Unrecognized boolean key: {other}")),
     }
     Ok(())
@@ -2784,11 +2788,13 @@ mod tests {
             "session.auto_archive_enabled" => Some(cfg.session_auto_archive_enabled),
             // Settings R3 T8 — 提问自动继续.
             "chat.ask_user_auto_continue" => Some(cfg.chat_ask_user_auto_continue),
+            // D5 方案① — 主动任务推荐 (presentation toggle).
+            "suggestions.enabled" => Some(cfg.suggestions_enabled),
             _ => None,
         }
     }
 
-    const TOGGLE_KEYS: [&str; 14] = [
+    const TOGGLE_KEYS: [&str; 15] = [
         "memory_enabled",
         "telemetry",
         "encryption",
@@ -2803,6 +2809,7 @@ mod tests {
         "context.auto_compact",
         "session.auto_archive_enabled",
         "chat.ask_user_auto_continue",
+        "suggestions.enabled",
     ];
 
     #[test]
@@ -2858,6 +2865,9 @@ mod tests {
             // Settings R3 T8: ask auto-continue defaults false; pinned like
             // the rest so the round trip starts deterministic.
             cfg.chat_ask_user_auto_continue = false;
+            // D5 方案①: suggestions default true — pinned false like the
+            // rest so the round trip starts deterministic.
+            cfg.suggestions_enabled = false;
         }
 
         let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());

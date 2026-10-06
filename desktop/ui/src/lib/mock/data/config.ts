@@ -56,6 +56,10 @@ export const MOCK_CONFIG: DesktopConfig = {
   // Settings R3 T8: 提问自动继续 off — the backend default, verbatim (the
   // agent waits for the user's answer indefinitely).
   chat_ask_user_auto_continue: false,
+  // D5 方案①: 主动任务推荐 on — the backend default, verbatim. Purely a
+  // presentation toggle (completion chips + welcome refresh/filter); the
+  // backend never gates anything on it.
+  suggestions_enabled: true,
 }
 
 // Managed-providers roster for the Models P2 UI (mirrors the Rust

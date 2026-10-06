@@ -1579,6 +1579,36 @@ fn get_working_dir_info_inner(working_dir: &Path) -> WorkingDirInfo {
     }
 }
 
+/// D5 方案① — lightweight workspace probe for the welcome card's
+/// workspace-aware example filtering. Checks the session working directory
+/// (the same root every file/project command resolves) for a fixed set of
+/// code-project marker files and returns the ones present. A pure stat
+/// sweep — no model calls, no shell-outs, missing root simply reports an
+/// empty list.
+#[tauri::command]
+pub async fn detect_workspace_markers(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    // Same resolution as `get_working_dir_info`: configured working dir,
+    // process CWD only as last-resort fallback.
+    let working_dir = resolve_working_dir(&state).await;
+    Ok(detect_workspace_markers_inner(&working_dir))
+}
+
+/// The marker filenames [`detect_workspace_markers`] looks for, in report
+/// order. Any one of them signals "coding-oriented examples apply here".
+const WORKSPACE_MARKERS: [&str; 4] = ["Cargo.toml", "package.json", "pyproject.toml", "go.mod"];
+
+/// Internal helper for [`detect_workspace_markers`]. Pure sync so tests can
+/// exercise it against a tempdir without Tauri app state.
+fn detect_workspace_markers_inner(working_dir: &Path) -> Vec<String> {
+    WORKSPACE_MARKERS
+        .iter()
+        .filter(|m| working_dir.join(m).is_file())
+        .map(|m| (*m).to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2932,5 +2962,54 @@ mod tests {
         let json = serde_json::to_value(&err).unwrap();
         assert_eq!(json["code"], "file_too_large");
         assert_eq!(json["message"], "too big");
+    }
+
+    // ── D5 方案①: detect_workspace_markers ─────────────────────────────
+    // The welcome card's workspace filter only flips its coding examples
+    // when a real marker file exists, so both directions are pinned:
+    // present markers are reported verbatim (in fixed order), absent ones
+    // yield an empty list — never an error.
+
+    #[test]
+    fn detect_workspace_markers_reports_present_marker_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Two of the four markers exist; the rest of the directory content
+        // must be ignored.
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"x\"").unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("README.md"), "not a marker").unwrap();
+
+        let markers = detect_workspace_markers_inner(dir.path());
+        assert_eq!(
+            markers,
+            vec!["Cargo.toml".to_string(), "package.json".to_string()],
+            "present markers reported in the fixed WORKSPACE_MARKERS order"
+        );
+    }
+
+    #[test]
+    fn detect_workspace_markers_empty_when_no_marker_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("README.md"), "plain docs workspace").unwrap();
+
+        let markers = detect_workspace_markers_inner(dir.path());
+        assert!(
+            markers.is_empty(),
+            "no markers → empty list, got {markers:?}"
+        );
+    }
+
+    #[test]
+    fn detect_workspace_markers_ignores_directories_named_like_markers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A directory named `package.json` is not a marker — the probe
+        // requires a regular file.
+        std::fs::create_dir_all(dir.path().join("package.json")).unwrap();
+
+        let markers = detect_workspace_markers_inner(dir.path());
+        assert!(
+            markers.is_empty(),
+            "directory must not count, got {markers:?}"
+        );
     }
 }

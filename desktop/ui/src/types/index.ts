@@ -803,6 +803,12 @@ export interface DesktopConfig {
    *  Default false (wait forever). Written via
    *  `configure('chat.ask_user_auto_continue')`; read live per question. */
   chat_ask_user_auto_continue?: boolean
+  /** D5 方案①: 主动任务推荐 presentation toggle — the post-completion
+   *  action chips + the welcome card's 换一批 refresh / workspace-aware
+   *  example filtering. Purely a UI surface switch the frontend reads live;
+   *  the backend never gates anything on it. Default true (missing key /
+   *  old backend → shown). Written via `configure('suggestions.enabled')`. */
+  suggestions_enabled?: boolean
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */

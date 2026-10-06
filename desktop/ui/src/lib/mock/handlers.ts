@@ -807,6 +807,11 @@ export const handlers: Record<string, MockHandler> = {
     } else if (key === 'chat.ask_user_auto_continue') {
       // Settings R3 T8: auto-answer an agent question left unanswered 5 min.
       demoConfig.chat_ask_user_auto_continue = String(value) === 'true'
+    } else if (key === 'suggestions.enabled') {
+      // D5 方案①: 主动任务推荐 presentation toggle (completion chips +
+      // welcome refresh/filter). Persisted so the Settings switch reads
+      // back; the demo UI surfaces gate on it live.
+      demoConfig.suggestions_enabled = String(value) === 'true'
     } else if (key === 'network.proxy_url' || key === 'network.no_proxy' || key === 'network.ca_cert_path') {
       // Settings R3 T4 (B1): corporate-network trio — empty clears (R1:
       // the implicit env fallback stays). The demo does not re-check the
@@ -1766,6 +1771,12 @@ export const handlers: Record<string, MockHandler> = {
       modified_files: ['src/billing/invoice.rs', 'src/webhooks/stripe.rs', 'README.md'],
       status: 'dirty',
     }
+  },
+  // D5 方案① — welcome card workspace probe. The demo workspace is a Rust
+  // repo, so the coding-oriented example cards stay visible.
+  async detect_workspace_markers() {
+    await delay()
+    return ['Cargo.toml']
   },
 
   // --- MCP ---

@@ -1001,6 +1001,15 @@
       }
     },
     {
+      "identifier": "allow-detect-workspace-markers",
+      "description": "Enables the detect_workspace_markers command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "detect_workspace_markers"
+        ]
+      }
+    },
+    {
       "identifier": "allow-inspect-plugin-source",
       "description": "Enables the inspect_plugin_source command without any pre-configured scope.",
       "commands": {
@@ -3206,6 +3215,7 @@
         "allow-apply-diff",
         "allow-check-attachment-paths",
         "allow-copy-file",
+        "allow-detect-workspace-markers",
         "allow-get-file-diff",
         "allow-get-file-tree",
         "allow-get-working-dir-info",

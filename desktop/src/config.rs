@@ -302,6 +302,17 @@ pub struct DesktopConfig {
     /// `configure("chat.ask_user_auto_continue")`.
     #[serde(default)]
     pub chat_ask_user_auto_continue: bool,
+    /// D5 方案① — 主动任务推荐 master switch. Purely a PRESENTATION toggle:
+    /// the backend never gates anything on it. When true — the default —
+    /// the UI shows the post-completion action chips (failed → 重试/分析
+    /// 失败原因; succeeded with file changes → 提交这些改动) and the
+    /// welcome card's 换一批 refresh + workspace-aware example filtering.
+    /// All of it is static frontend rules over data the run already
+    /// produced — zero model calls, zero token cost. Read live by the UI
+    /// on every render (a flip applies immediately, no restart). Written
+    /// via `configure("suggestions.enabled")`.
+    #[serde(default = "default_true")]
+    pub suggestions_enabled: bool,
 }
 
 /// Settings R3 T7 — the auto-archive retention default (7 days).
@@ -943,6 +954,7 @@ impl Default for DesktopConfig {
             session_auto_archive_enabled: false,
             session_auto_archive_days: default_session_auto_archive_days(),
             chat_ask_user_auto_continue: false,
+            suggestions_enabled: default_true(),
         }
     }
 }
@@ -2020,6 +2032,35 @@ mod tests {
         let back: DesktopConfig = serde_json::from_str(&json).unwrap();
         assert!(back.session_auto_archive_enabled, "true must round-trip");
         assert_eq!(back.session_auto_archive_days, 30, "days must round-trip");
+    }
+
+    /// D5 方案①: `suggestions_enabled` defaults to `true` — a legacy
+    /// config.json without the key keeps the proactive-suggestion surfaces
+    /// (completion chips + welcome refresh/filter) ON, and an explicit
+    /// `false` survives a save/load round trip. Purely a presentation key:
+    /// the backend itself never reads it.
+    #[test]
+    fn test_suggestions_enabled_default_compat_and_round_trip() {
+        // Legacy JSON: no `suggestions_enabled` key at all → default true.
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(
+            legacy.suggestions_enabled,
+            "missing key must default to suggestions ON"
+        );
+        assert!(DesktopConfig::default().suggestions_enabled);
+
+        // Explicit off persists and reloads as off.
+        let config = DesktopConfig {
+            suggestions_enabled: false,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"suggestions_enabled\":false"), "{json}");
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert!(!back.suggestions_enabled, "false must round-trip");
     }
 
     /// Settings R3 T4 (B1): `network_env` is a pure function — given a

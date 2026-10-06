@@ -414,6 +414,10 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
     status: 'ready',
   }),
   getTools: vi.fn().mockResolvedValue([]),
+  // D5 方案① — welcome-card workspace probe. Default: markers PRESENT so
+  // every existing suite renders the full four-card welcome (the permissive
+  // default, like checkVisionSend); the filtering tests override with [].
+  detectWorkspaceMarkers: vi.fn().mockResolvedValue(['Cargo.toml']),
   newSession: vi.fn().mockResolvedValue('session-1'),
   listSessions: vi.fn().mockResolvedValue([]),
   searchSessions: vi.fn().mockResolvedValue([]),
