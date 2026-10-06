@@ -154,13 +154,14 @@ pub struct AppState {
     /// turn, goal run, batch branch, routine attempt, background task),
     /// keyed by session id with a per-session run count. The
     /// `DesktopQuestionHandler` reads it before emitting
-    /// `ask-user-request`: exactly one entry → the payload carries that
-    /// session id (the card is scoped to windows viewing that session);
-    /// zero or several → `None` (the card stays visible in every window —
-    /// the pre-F2 behavior). Runs register through
-    /// [`ActiveSessionRunGuard`] at the same task boundary as the T3
-    /// prevent-sleep guard. `DashMap` (sync): the critical sections are
-    /// pure map edits, never held across an await.
+    /// `ask-user-request`: exactly one entry whose session is reachable
+    /// from the rail (in [`AppState::sessions`] — final-review C1) → the
+    /// payload carries that session id (the card is scoped to windows
+    /// viewing that session); zero, several, or rail-unreachable → `None`
+    /// (the card stays visible in every window — the pre-F2 behavior).
+    /// Runs register through [`ActiveSessionRunGuard`] at the same task
+    /// boundary as the T3 prevent-sleep guard. `DashMap` (sync): the
+    /// critical sections are pure map edits, never held across an await.
     pub(crate) active_run_sessions: Arc<DashMap<String, usize>>,
     /// Session metadata for session list. (P0-4: kept on AppState for
     /// now; this is the *display* list (titles, message counts), not the
@@ -827,13 +828,16 @@ impl ActiveSessionRunGuard {
 
 impl std::ops::Drop for ActiveSessionRunGuard {
     fn drop(&mut self) {
-        if let Some(mut count) = self.map.get_mut(&self.session_id) {
+        // Final-review M1 — decrement + removal as ONE entry operation. The
+        // old get_mut → remove pair released the shard lock between the two
+        // steps, so a concurrent `register` landing in that window (count
+        // back to 1..2) was still wiped by the follow-up `remove`,
+        // un-registering a live run. `remove_if_mut` holds the shard lock
+        // across the decrement and the removal.
+        self.map.remove_if_mut(&self.session_id, |_key, count| {
             *count -= 1;
-            if *count == 0 {
-                drop(count);
-                self.map.remove(&self.session_id);
-            }
-        }
+            *count == 0
+        });
     }
 }
 
@@ -843,14 +847,34 @@ impl AppState {
     /// unambiguous single run → the request is scoped to that session;
     /// anything else → `None`, and the card falls back to visible-in-every-
     /// window (the pre-F2 behavior) instead of guessing.
+    ///
+    /// Final-review C1 — the sole run's session must ALSO be reachable from
+    /// the UI, i.e. present in the [`AppState::sessions`] display list the
+    /// window rail renders. background/batch/routine runs register their
+    /// (usually hidden) sessions too, and those sessions never enter the
+    /// rail — so an unscoped stamp would route the ask_user card to a
+    /// session no window can show, and with 提问自动继续 off the question
+    /// would hang silently. Missing from the rail → `None` → the every-
+    /// window fallback. A contended `sessions` lock degrades the same way
+    /// (fail-open): the lock is only ever held for short snapshots, so this
+    /// is effectively never, and the fallback is the safe pre-F2 direction.
     pub(crate) fn sole_active_run_session(&self) -> Option<String> {
         if self.active_run_sessions.len() != 1 {
             return None;
         }
-        self.active_run_sessions
+        let run_session = self
+            .active_run_sessions
             .iter()
             .next()
-            .map(|entry| entry.key().clone())
+            .map(|entry| entry.key().clone())?;
+        // `sessions` is a tokio Mutex (kept across awaits elsewhere), and
+        // this fn is sync — `try_lock` keeps it sync; on contention we give
+        // up the scoping instead of blocking (None → every-window card).
+        let sessions = self.sessions.try_lock().ok()?;
+        sessions
+            .iter()
+            .any(|meta| meta.id == run_session)
+            .then_some(run_session)
     }
 
     /// The L0 session store over this app's sessions directory (§4.6).
@@ -3119,10 +3143,34 @@ pub async fn cancel_background_task(
 mod tests {
     // === Settings R3 followup F2 — active-run registration ===
 
+    use crate::commands::SessionMeta;
+
+    /// Seed a `sessions` display-list entry (the rail's membership source
+    /// for the C1 reachability check) without a tokio runtime — the lock is
+    /// uncontended in these tests, so `try_lock` always wins.
+    fn seed_rail_session(state: &AppState, id: &str) {
+        state
+            .sessions
+            .try_lock()
+            .expect("sessions lock uncontended in test")
+            .push(SessionMeta {
+                id: id.to_string(),
+                title: "rail session".into(),
+                created_at: 0,
+                message_count: 0,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            });
+    }
+
     #[test]
     fn active_run_guard_registers_and_raii_unregisters() {
         let state = AppState::new();
         assert_eq!(state.sole_active_run_session(), None);
+
+        // C1: the reachability check needs the session on the rail.
+        seed_rail_session(&state, "11111111-1111-1111-1111-111111111111");
 
         let guard = ActiveSessionRunGuard::register(
             &state.active_run_sessions,
@@ -3162,6 +3210,37 @@ mod tests {
             state.sole_active_run_session(),
             None,
             "ambiguous (two runs) → None → every-window fallback"
+        );
+    }
+
+    /// Final-review C1 — a sole run whose session is NOT in the display
+    /// list (the background/batch/routine case: hidden session, never on
+    /// the rail) must fall back to `None` so the ask_user card stays
+    /// visible in every window instead of routing to an unreachable
+    /// session and hanging there.
+    #[test]
+    fn sole_run_on_a_rail_unreachable_session_falls_back_to_every_window() {
+        let state = AppState::new();
+        let _guard =
+            ActiveSessionRunGuard::register(&state.active_run_sessions, "ghost".to_string());
+        assert_eq!(
+            state.sole_active_run_session(),
+            None,
+            "session absent from the display list → None → every-window fallback"
+        );
+    }
+
+    /// Final-review C1 — the happy path is unchanged when the sole run's
+    /// session IS on the rail.
+    #[test]
+    fn sole_run_on_a_rail_session_is_scoped() {
+        let state = AppState::new();
+        seed_rail_session(&state, "sess-rail");
+        let _guard =
+            ActiveSessionRunGuard::register(&state.active_run_sessions, "sess-rail".to_string());
+        assert_eq!(
+            state.sole_active_run_session().as_deref(),
+            Some("sess-rail")
         );
     }
 

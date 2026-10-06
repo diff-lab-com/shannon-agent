@@ -313,9 +313,24 @@ mod tests {
         let (handle, _app) = mock_app_with_state();
         let captured = capture_requests(&handle).await;
 
-        // Exactly one live run → its session id rides on the payload.
+        // Exactly one live run → its session id rides on the payload. C1:
+        // the scoping additionally requires the session to be reachable
+        // from the rail (`state.sessions` display list), so seed it there.
         let guard = {
             let state = handle.state::<AppState>();
+            state
+                .sessions
+                .lock()
+                .await
+                .push(crate::commands::SessionMeta {
+                    id: "sess-solo".to_string(),
+                    title: "solo".into(),
+                    created_at: 0,
+                    message_count: 0,
+                    working_dir: None,
+                    parent_id: None,
+                    branch_point: None,
+                });
             crate::commands::ActiveSessionRunGuard::register(
                 &state.active_run_sessions,
                 "sess-solo".to_string(),
