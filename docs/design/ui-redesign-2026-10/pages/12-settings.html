@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>12 · 设置 — Shannon v2</title>
+<link rel="stylesheet" href="../assets/shannon-ui.css">
+<style>
+  /* 页内:设置服务商卡片 */
+  .prov { display: flex; flex-direction: column; padding: 14px; }
+  .prov .top { display: flex; align-items: center; gap: 10px; }
+  .prov .top b { font-size: 13.5px; font-weight: 650; white-space: nowrap; }
+  .prov .kvrow { margin-top: 10px; }
+  .prov .note { margin-top: 8px; font-size: 12.5px; color: var(--t3); }
+  .ico32 { width: 32px; height: 32px; border-radius: 9px; flex: none; display: grid; place-items: center; }
+  .ico32 .ic { width: 16px; height: 16px; }
+  .ico32.vio { background: var(--vio-dim); color: var(--vio-2); }
+  .ico32.info { background: var(--info-dim); color: var(--info); }
+  .ico32.warn { background: var(--warn-dim); color: var(--warn); }
+  .ico32.mute { background: rgba(255,255,255,.05); color: var(--t2); }
+  .cardhead { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 650; margin-bottom: 12px; }
+  .cardhead .ic { width: 14px; height: 14px; color: var(--t3); }
+  .slider-row { display: flex; align-items: center; gap: 12px; }
+  .slider-row .lb { width: 108px; flex: none; font-size: 12.5px; color: var(--t2); }
+  .slider-row .val { width: 44px; flex: none; text-align: right; font-family: var(--mono); font-size: 12px; color: var(--t1); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<!-- Shannon v2 mockup icon sprite —— 粘贴到 <body> 之后即可用 <svg class="ic"><use href="#i-plus"/></svg> -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-logo" viewBox="0 0 24 24"><path d="M3 13h3l2-7 4 13 3-10 1.6 4H21" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+  <symbol id="i-chev-d" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-chev-r" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5l13 7.5-13 7.5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 4h2.5v16H8zM13.5 4H16v16h-2.5z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 4 5.5 4 9s-1.5 6.5-4 9c-2.5-2.5-4-5.5-4-9s1.5-6.5 4-9z"/></symbol>
+  <symbol id="i-panel-r" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></symbol>
+  <symbol id="i-panel-l" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2l10 5-10 5L2 7l10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 3v6h6M3.5 9A9 9 0 1 1 3 12"/><path d="M12 7v5l3 3"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></symbol>
+  <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></symbol>
+  <symbol id="i-command" viewBox="0 0 24 24"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></symbol>
+  <symbol id="i-up-right" viewBox="0 0 24 24"><path d="M7 17L17 7M7 7h10v10"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+  <symbol id="i-zap-off" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8zM2 2l20 20" /></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol>
+  <symbol id="i-kanban" viewBox="0 0 24 24"><rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="5" height="8" rx="1"/></symbol>
+</svg>
+<div class="ambient"></div>
+<div class="app">
+
+  <!-- ═══════════ 左侧栏(L1 玻璃) ═══════════ -->
+  <aside class="rail glass-1">
+    <div class="rail-brand">
+      <div class="brandmark"><svg><use href="#i-logo"/></svg></div>
+      <div>
+        <div class="brand-name">Shannon</div>
+        <div class="brand-sub">你的 AI 工作空间</div>
+      </div>
+    </div>
+
+    <div class="rail-pad">
+      <button class="newchat">
+        <svg class="ic"><use href="#i-plus"/></svg> 新对话
+        <svg class="ic caret"><use href="#i-chev-d"/></svg>
+      </button>
+      <div class="searchbox">
+        <svg class="ic" style="width:13px;height:13px"><use href="#i-search"/></svg>
+        <input placeholder="搜索对话、文件、操作…">
+        <span class="kbd">⌘K</span>
+      </div>
+    </div>
+
+    <div class="rail-scroll">
+      <div class="proj-head"><svg class="ic"><use href="#i-folder"/></svg> shannon-mono</div>
+      <button class="sess on">
+        <span class="t">修复 billing webhook 签名校验</span>
+        <span class="q">1</span>
+      </button>
+      <button class="sess"><span class="t">Q3 路线图头脑风暴</span></button>
+
+      <div class="group-label">导航 <svg class="ic"><use href="#i-chev-d"/></svg></div>
+      <button class="nav-item"><svg class="ic"><use href="#i-chat"/></svg> 对话 <span class="tail"><span class="kbd">⌘1</span></span></button>
+      <button class="nav-item"><svg class="ic"><use href="#i-folder"/></svg> 文件</button>
+      <button class="nav-item"><svg class="ic"><use href="#i-bolt"/></svg> 任务 <span class="tail"><span class="dot-ind warn"></span></span></button>
+      <button class="nav-item"><svg class="ic"><use href="#i-inbox"/></svg> 收件箱 <span class="tail"><span class="badge-num">2</span></span></button>
+      <button class="nav-item"><svg class="ic"><use href="#i-grid"/></svg> 连接 <span class="tail"><span class="kbd">⌘3</span></span></button>
+      <button class="nav-item"><svg class="ic"><use href="#i-db"/></svg> 记忆 <span class="tail"><span class="kbd">⌘4</span></span></button>
+      <button class="nav-item"><svg class="ic"><use href="#i-kanban"/></svg> 指挥台</button>
+
+      <div class="group-label">资源</div>
+      <button class="nav-item"><svg class="ic"><use href="#i-chart"/></svg> 用量 <span class="tail"><span class="money" style="font-size:11px;color:var(--t3)">$4.18</span></span></button>
+    </div>
+
+    <div class="rail-foot">
+      <div>
+        <div class="meter-row"><span>本月用量 / 预算 $20</span><b>$4.18</b></div>
+        <div class="meter mt8"><i style="width:21%"></i></div>
+      </div>
+      <div class="model-row">
+        <svg class="ic"><use href="#i-key"/></svg><span class="lbl">ANTHROPIC · claude-sonnet-4-6</span>
+        <span class="mode-pill">开发模式</span>
+      </div>
+      <button class="nav-item on" style="margin-bottom:0"><svg class="ic"><use href="#i-gear"/></svg> 设置</button>
+    </div>
+  </aside>
+
+  <!-- ═══════════ 主区:settings-shell(无 topbar) ═══════════ -->
+  <div class="main">
+    <div class="settings-shell" style="flex:1;min-height:0">
+
+      <!-- 设置左轨:11 分区 -->
+      <nav class="settings-rail">
+        <div class="sec-title" style="padding:0 8px 14px">设置</div>
+        <button class="nav-item"><svg class="ic"><use href="#i-sliders"/></svg> 通用</button>
+        <button class="nav-item"><svg class="ic"><use href="#i-image"/></svg> 外观</button>
+        <button class="nav-item on"><svg class="ic"><use href="#i-spark"/></svg> 模型</button>
+        <button class="nav-item"><svg class="ic"><use href="#i-shield"/></svg> 权限与安全</button>
+        <button class="nav-item"><svg class="ic"><use href="#i-inbox"/></svg> 通知</button>
+        <button class="nav-item"><svg class="ic"><use href="#i-grid"/></svg> 连接</button>
+        <button class="nav-item"><svg class="ic"><use href="#i-target"/></svg> 关于</button>
+        <button class="nav-item"><svg class="ic"><use href="#i-term"/></svg> 高级
+          <span class="tail"><span class="st mute" style="height:15px;padding:0 6px;font-size:9.5px">dev</span></span>
+        </button>
+      </nav>
+
+      <!-- 设置内容 -->
+      <div class="settings-body">
+        <div class="settings-pane">
+
+          <!-- a. 标题 -->
+          <div class="sec-title">模型与服务商</div>
+          <div class="sec-sub">BYOK 直连:密钥只写入本机,请求不经过任何中间服务器</div>
+
+          <!-- b. 服务商卡片 ×4 -->
+          <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px">
+
+            <!-- ANTHROPIC -->
+            <div class="card prov">
+              <div class="top">
+                <div class="ico32 vio"><svg class="ic"><use href="#i-key"/></svg></div>
+                <b>ANTHROPIC</b>
+                <span class="st vio"><svg class="ic"><use href="#i-check"/></svg>使用中</span>
+                <span class="spacer"></span>
+                <button class="btn ghost sm">测试连接</button>
+                <button class="btn ghost sm">密钥管理</button>
+              </div>
+              <div class="kv kvrow">
+                <span class="row" style="gap:8px">密钥
+                  <span class="st ok"><svg class="ic"><use href="#i-check"/></svg>已配置 · 上次验证 5 分钟前</span>
+                </span>
+                <span style="font-size:12px;color:var(--t2)">本月 <b class="money" style="font-size:12px">$3.96</b></span>
+              </div>
+              <div class="row" style="margin-top:10px;gap:6px">
+                <button class="chip acc"><svg class="ic"><use href="#i-spark"/></svg><span class="cv">claude-sonnet-4-6</span></button>
+                <button class="chip"><span class="cv">claude-opus-4-1</span></button>
+              </div>
+            </div>
+
+            <!-- GLM -->
+            <div class="card prov">
+              <div class="top">
+                <div class="ico32 info"><svg class="ic"><use href="#i-spark"/></svg></div>
+                <b>GLM</b>
+                <span class="mono" style="font-size:11px;color:var(--t3)">GLM-5.3</span>
+                <span class="st mute">可启用</span>
+                <span class="spacer"></span>
+                <button class="btn soft sm">设为默认</button>
+                <button class="btn ghost sm">测试</button>
+              </div>
+              <div class="kv kvrow">
+                <span class="row" style="gap:8px">密钥
+                  <span class="st ok"><svg class="ic"><use href="#i-check"/></svg>已配置</span>
+                </span>
+              </div>
+            </div>
+
+            <!-- OpenAI -->
+            <div class="card prov">
+              <div class="top">
+                <div class="ico32 warn"><svg class="ic"><use href="#i-key"/></svg></div>
+                <b>OpenAI</b>
+                <span class="st warn"><svg class="ic"><use href="#i-alert"/></svg>密钥缺失</span>
+                <span class="spacer"></span>
+                <button class="btn sm soft"><svg class="ic"><use href="#i-plus"/></svg>添加密钥</button>
+              </div>
+              <p class="note">添加 <span class="mono">sk-</span> 密钥后可用 <span class="mono">gpt-5-mini</span> 跑轻任务</p>
+            </div>
+
+            <!-- Ollama(本地) -->
+            <div class="card prov">
+              <div class="top">
+                <div class="ico32 mute"><svg class="ic"><use href="#i-bolt"/></svg></div>
+                <b>Ollama</b>
+                <span style="font-size:11px;color:var(--t3)">本地</span>
+                <span class="st mute">未运行</span>
+                <span class="spacer"></span>
+                <button class="btn ghost sm">启动指南</button>
+              </div>
+              <p class="note"><span class="mono">ollama serve</span> 启动后自动发现</p>
+            </div>
+
+          </div>
+
+          <!-- c. 参数 -->
+          <div class="card pad" style="margin-top:12px">
+            <div class="cardhead"><svg class="ic"><use href="#i-sliders"/></svg>参数</div>
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div class="slider-row">
+                <span class="lb">Temperature</span>
+                <div class="progress" style="flex:1"><i style="width:70%"></i></div>
+                <span class="val">0.70</span>
+              </div>
+              <div class="slider-row">
+                <span class="lb">Top P</span>
+                <div class="progress" style="flex:1"><i style="width:95%"></i></div>
+                <span class="val">0.95</span>
+              </div>
+            </div>
+            <p class="muted" style="font-size:11.5px;margin-top:12px">对 reasoning 模型部分参数会被服务商忽略</p>
+          </div>
+
+          <!-- d. 执行模式 -->
+          <div class="card pad" style="margin-top:12px">
+            <div class="cardhead"><svg class="ic"><use href="#i-shield"/></svg>执行模式</div>
+            <div class="seg">
+              <button class="on"><svg class="ic"><use href="#i-shield"/></svg>逐项确认</button>
+              <button>自动编辑</button>
+              <button>计划</button>
+              <button>完全访问</button>
+            </div>
+            <p class="muted" style="font-size:12px;margin-top:10px">逐项确认:每个高风险操作(写入、网络外发)单独询问;可在 composer 随时切换,无需回到设置</p>
+          </div>
+
+          <!-- e. 底部安全说明 -->
+          <div class="row" style="margin-top:16px;gap:8px">
+            <svg class="ic" style="width:14px;height:14px;color:var(--ok)"><use href="#i-shield"/></svg>
+            <span class="muted" style="font-size:12px">API 密钥保存在本机 <span class="mono">0600</span> 权限文件与系统 keyring,永不上传</span>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+<div class="mocktag">12 · 设置 · shannon v2 设计稿</div>
+</body>
+</html>

@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>10 · 回放时间线 — Shannon v2</title>
+<link rel="stylesheet" href="../assets/shannon-ui.css">
+<style>
+  /* —— 页内辅助 —— */
+  .lgd { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
+  .svgtext { font-family: var(--mono); font-size: 8.5px; fill: var(--t3); }
+  .evrow { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,.045); font-size: 11.5px; }
+  .evrow:last-child { border-bottom: 0; }
+  .evrow .tm { font-family: var(--mono); font-size: 10.5px; color: var(--t3); flex: none; width: 56px; }
+  .evrow .nm2 { font-family: var(--mono); font-size: 11px; color: var(--t2); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<div class="ambient"></div>
+<!-- Shannon v2 mockup icon sprite —— 粘贴到 <body> 之后即可用 <svg class="ic"><use href="#i-plus"/></svg> -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-logo" viewBox="0 0 24 24"><path d="M3 13h3l2-7 4 13 3-10 1.6 4H21" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+  <symbol id="i-chev-d" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-chev-r" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5l13 7.5-13 7.5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 4h2.5v16H8zM13.5 4H16v16h-2.5z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 4 5.5 4 9s-1.5 6.5-4 9c-2.5-2.5-4-5.5-4-9s1.5-6.5 4-9z"/></symbol>
+  <symbol id="i-panel-r" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></symbol>
+  <symbol id="i-panel-l" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2l10 5-10 5L2 7l10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 3v6h6M3.5 9A9 9 0 1 1 3 12"/><path d="M12 7v5l3 3"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></symbol>
+  <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></symbol>
+  <symbol id="i-command" viewBox="0 0 24 24"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></symbol>
+  <symbol id="i-up-right" viewBox="0 0 24 24"><path d="M7 17L17 7M7 7h10v10"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+  <symbol id="i-zap-off" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8zM2 2l20 20" /></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol>
+  <symbol id="i-kanban" viewBox="0 0 24 24"><rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="5" height="8" rx="1"/></symbol>
+</svg>
+<div class="app">
+
+  <!-- ═══════════ 左侧栏(L1 玻璃) ═══════════ -->
+  <aside class="rail glass-1">
+    <div class="rail-brand">
+      <div class="brandmark"><svg><use href="#i-logo"/></svg></div>
+      <div>
+        <div class="brand-name">Shannon</div>
+        <div class="brand-sub">你的 AI 工作空间</div>
+      </div>
+    </div>
+
+    <div class="rail-pad">
+      <button class="newchat">
+        <svg class="ic"><use href="#i-plus"/></svg> 新对话
+        <svg class="ic caret"><use href="#i-chev-d"/></svg>
+      </button>
+      <div class="searchbox">
+        <svg class="ic" style="width:13px;height:13px"><use href="#i-search"/></svg>
+        <input placeholder="搜索对话、文件、操作…">
+        <span class="kbd">⌘K</span>
+      </div>
+    </div>
+
+    <div class="rail-scroll">
+      <div class="proj-head"><svg class="ic"><use href="#i-folder"/></svg> shannon-mono</div>
+      <button class="sess on">
+        <span class="t">修复 billing webhook 签名校验</span>
+        <span class="q">1</span>
+      </button>
+      <button class="sess"><span class="t">结算对账脚本重构</span><span class="meta">$0.41</span></button>
+      <button class="sess"><span class="t">Q3 路线图头脑风暴</span></button>
+
+      <div class="group-label">导航 <svg class="ic"><use href="#i-chev-d"/></svg></div>
+      <button class="nav-item on"><svg class="ic"><use href="#i-chat"/></svg> 对话 <span class="tail"><span class="kbd">⌘1</span></span></button>
+      <button class="nav-item"><svg class="ic"><use href="#i-folder"/></svg> 文件</button>
+      <button class="nav-item"><svg class="ic"><use href="#i-bolt"/></svg> 任务 <span class="tail"><span class="dot-ind warn"></span></span></button>
+      <button class="nav-item"><svg class="ic"><use href="#i-inbox"/></svg> 收件箱 <span class="tail"><span class="badge-num">2</span></span></button>
+      <button class="nav-item"><svg class="ic"><use href="#i-grid"/></svg> 连接 <span class="tail"><span class="kbd">⌘3</span></span></button>
+      <button class="nav-item"><svg class="ic"><use href="#i-db"/></svg> 记忆 <span class="tail"><span class="kbd">⌘4</span></span></button>
+      <button class="nav-item"><svg class="ic"><use href="#i-kanban"/></svg> 指挥台</button>
+
+      <div class="group-label">资源</div>
+      <button class="nav-item"><svg class="ic"><use href="#i-chart"/></svg> 用量 <span class="tail"><span class="money" style="font-size:11px;color:var(--t3)">$4.18</span></span></button>
+    </div>
+
+    <div class="rail-foot">
+      <div>
+        <div class="meter-row"><span>本月用量 / 预算 $20</span><b>$4.18</b></div>
+        <div class="meter mt8"><i style="width:21%"></i></div>
+      </div>
+      <div class="model-row">
+        <svg class="ic"><use href="#i-key"/></svg><span class="lbl">ANTHROPIC · claude-sonnet-4-6</span>
+        <span class="mode-pill">开发模式</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══════════ 主区 ═══════════ -->
+  <div class="main">
+    <header class="topbar glass-1" style="border-radius:0">
+      <span class="title">回放 · 修复 billing webhook 签名校验</span>
+      <span class="crumb mono">events.jsonl · 214 个事件</span>
+      <span class="spacer"></span>
+      <button class="btn ghost"><svg class="ic"><use href="#i-download"/></svg>导出 HTML</button>
+      <button class="iconbtn"><svg class="ic"><use href="#i-panel-r"/></svg></button>
+      <button class="iconbtn"><svg class="ic"><use href="#i-phone"/></svg></button>
+      <button class="iconbtn"><svg class="ic"><use href="#i-user"/></svg></button>
+    </header>
+
+    <div class="content">
+
+      <!-- 页头 -->
+      <div class="pagehead">
+        <div>
+          <div class="sec-title">回放时间线</div>
+          <div class="sec-sub">每一轮、每个工具调用都可在本地重演 —— 像行车记录仪一样</div>
+        </div>
+      </div>
+
+      <!-- 概览指标 -->
+      <div style="padding:0 24px 4px">
+        <div class="grid4">
+          <div class="stat glass">
+            <div class="k"><svg class="ic"><use href="#i-clock"/></svg>总时长</div>
+            <div class="v">4m12s</div>
+            <div class="d">2 轮对话 · 214 个事件</div>
+          </div>
+          <div class="stat glass">
+            <div class="k"><svg class="ic"><use href="#i-term"/></svg>工具调用</div>
+            <div class="v">15</div>
+            <div class="d">读 7 · 写 2 · 网络 2</div>
+          </div>
+          <div class="stat glass">
+            <div class="k"><svg class="ic"><use href="#i-layers"/></svg>Tokens</div>
+            <div class="v">74.2k</div>
+            <div class="d">输入 60.1k · 输出 14.1k</div>
+          </div>
+          <div class="stat glass">
+            <div class="k"><svg class="ic"><use href="#i-chart"/></svg>成本</div>
+            <div class="v money">$0.087</div>
+            <div class="d">预算 $1.00 · 已用 8.7%</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 执行瀑布 -->
+      <div style="padding:8px 24px 0">
+        <div class="card pad">
+          <div class="row mb12">
+            <b style="font-size:13.5px">执行瀑布</b>
+            <span class="muted" style="font-size:11.5px">10 个关键事件 · 其余 5 个已折叠</span>
+            <span class="spacer"></span>
+            <span class="src-chain">events.jsonl · 4m12s</span>
+          </div>
+
+          <div class="group-label" style="padding:2px 0 6px">第 1 轮 · 用户报障</div>
+          <div class="tl-row"><span class="nm">think 已思考</span><div class="tl-track"><span class="tl-bar" style="left:0%;width:3%"></span></div><span class="tl-dur">6.0s</span></div>
+          <div class="tl-row"><span class="nm">grep signature</span><div class="tl-track"><span class="tl-bar read" style="left:3.4%;width:0.8%"></span></div><span class="tl-dur">0.4s</span></div>
+          <div class="tl-row"><span class="nm">read verify.rs</span><div class="tl-track"><span class="tl-bar read" style="left:4.5%;width:0.6%"></span></div><span class="tl-dur">0.2s</span></div>
+          <div class="tl-row"><span class="nm">read tests.rs</span><div class="tl-track"><span class="tl-bar read" style="left:5.4%;width:0.5%"></span></div><span class="tl-dur">0.1s</span></div>
+          <div class="tl-row"><span class="nm">terminal cargo test</span><div class="tl-track"><span class="tl-bar net" style="left:6.2%;width:8.5%"></span></div><span class="tl-dur">18.2s</span></div>
+          <div class="tl-row"><span class="nm">think 已思考</span><div class="tl-track"><span class="tl-bar" style="left:16%;width:2%"></span></div><span class="tl-dur">3.1s</span></div>
+          <div class="tl-row"><span class="nm">edit verify.rs</span><div class="tl-track"><span class="tl-bar write" style="left:18.6%;width:0.8%"></span></div><span class="tl-dur">0.3s</span></div>
+          <div class="tl-row"><span class="nm">edit tests.rs</span><div class="tl-track"><span class="tl-bar write" style="left:19.7%;width:1%"></span></div><span class="tl-dur">0.4s</span></div>
+          <div class="tl-row"><span class="nm">terminal cargo test</span><div class="tl-track"><span class="tl-bar read" style="left:21.2%;width:7%"></span></div><span class="tl-dur">14.8s</span></div>
+
+          <div class="group-label" style="padding:10px 0 6px">第 2 轮 · 用户确认创建 PR</div>
+          <div class="tl-row"><span class="nm">gh pr create</span><div class="tl-track"><span class="tl-bar net" style="left:88%;width:1.8%"></span></div><span class="tl-dur">2.1s</span></div>
+
+          <div class="row mt12" style="gap:16px;font-size:11px;color:var(--t3)">
+            <span class="row" style="gap:6px"><span class="lgd" style="background:rgba(255,255,255,.18)"></span>read 读</span>
+            <span class="row" style="gap:6px"><span class="lgd" style="background:var(--vio-dim-2);border:1px solid rgba(139,124,247,.5)"></span>write 写</span>
+            <span class="row" style="gap:6px"><span class="lgd" style="background:var(--aur-dim);border:1px solid rgba(86,200,221,.4)"></span>network 网络</span>
+            <span class="row" style="gap:6px"><span class="lgd" style="background:var(--warn-dim);border:1px solid rgba(245,184,61,.45)"></span>高风险</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 累计曲线 -->
+      <div style="padding:12px 24px 0">
+        <div class="grid2">
+          <div class="card pad">
+            <div class="row mb8">
+              <b style="font-size:13px">累计成本</b>
+              <span class="spacer"></span>
+              <span class="muted" style="font-size:11px">按事件累计</span>
+            </div>
+            <svg viewBox="0 0 300 90" style="width:100%;height:auto;display:block">
+              <line x1="34" y1="10" x2="292" y2="10" stroke="rgba(255,255,255,.06)"/>
+              <line x1="34" y1="40" x2="292" y2="40" stroke="rgba(255,255,255,.05)"/>
+              <line x1="34" y1="70" x2="292" y2="70" stroke="rgba(255,255,255,.09)"/>
+              <text class="svgtext" x="30" y="13" text-anchor="end">$0.09</text>
+              <text class="svgtext" x="30" y="73" text-anchor="end">$0</text>
+              <polyline points="34,70 40,68 60,62 80,55 100,44 130,42.5 200,41 275,40 285,32 292,13" fill="none" stroke="var(--vio)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="292" cy="13" r="3.2" fill="var(--vio)"/>
+              <text class="svgtext" x="286" y="9" text-anchor="end" style="fill:var(--vio-2);font-size:9px">$0.087</text>
+              <text class="svgtext" x="34" y="86">0:00</text>
+              <text class="svgtext" x="292" y="86" text-anchor="end">4:12</text>
+            </svg>
+          </div>
+          <div class="card pad">
+            <div class="row mb8">
+              <b style="font-size:13px">累计 Tokens</b>
+              <span class="spacer"></span>
+              <span class="row" style="gap:12px;font-size:11px;color:var(--t3)">
+                <span class="row" style="gap:5px"><span class="lgd" style="width:8px;height:8px;border-radius:99px;background:var(--vio)"></span>输入</span>
+                <span class="row" style="gap:5px"><span class="lgd" style="width:8px;height:8px;border-radius:99px;background:var(--aur)"></span>输出</span>
+              </span>
+            </div>
+            <svg viewBox="0 0 300 90" style="width:100%;height:auto;display:block">
+              <line x1="34" y1="10" x2="292" y2="10" stroke="rgba(255,255,255,.06)"/>
+              <line x1="34" y1="40" x2="292" y2="40" stroke="rgba(255,255,255,.05)"/>
+              <line x1="34" y1="70" x2="292" y2="70" stroke="rgba(255,255,255,.09)"/>
+              <text class="svgtext" x="30" y="13" text-anchor="end">80k</text>
+              <text class="svgtext" x="30" y="73" text-anchor="end">0</text>
+              <polyline points="34,64 40,60 60,50 80,38 100,26 130,24 200,23 275,22 285,18 292,14" fill="none" stroke="var(--vio)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <polyline points="34,72 40,71 60,68 80,64 100,57 130,56 200,55.5 275,55 285,50 292,42" fill="none" stroke="var(--aur)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="292" cy="14" r="3" fill="var(--vio)"/>
+              <circle cx="292" cy="42" r="3" fill="var(--aur)"/>
+              <text class="svgtext" x="34" y="86">0:00</text>
+              <text class="svgtext" x="292" y="86" text-anchor="end">4:12</text>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- 检查点行 -->
+      <div style="padding:12px 24px 24px">
+        <div class="card pad" style="display:flex;align-items:center;gap:10px">
+          <svg class="ic" style="color:var(--vio-2)"><use href="#i-history"/></svg>
+          <b style="font-size:13px">检查点</b>
+          <button class="chip">T1 报障</button>
+          <button class="chip">T2 定位完成</button>
+          <button class="chip acc">T3 修复验证</button>
+          <button class="chip">T4 PR 已建</button>
+          <span class="spacer"></span>
+          <span class="muted" style="font-size:11.5px">任意检查点可一键还原代码与对话</span>
+          <button class="btn ghost sm mono">/rewind</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══════════ 右停靠面板(L1 玻璃) ═══════════ -->
+  <aside class="dock glass-1">
+    <div class="dock-tabs">
+      <button class="tab on">事件 <span class="n">214</span></button>
+      <button class="tab">检查点</button>
+      <button class="tab">上下文</button>
+      <span class="spacer"></span>
+      <button class="iconbtn" style="width:26px;height:26px"><svg class="ic" style="width:13px;height:13px"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="dock-body">
+      <div class="dock-sec" style="margin-top:0">回放控制</div>
+      <div class="card pad" style="padding:12px">
+        <div class="row">
+          <button class="btn sm pri"><svg class="ic"><use href="#i-play"/></svg>播放</button>
+          <button class="chip">倍速 1×</button>
+          <span class="spacer"></span>
+          <span class="money muted" style="font-size:11px">T+3:58</span>
+        </div>
+        <div class="progress mt8"><i style="width:93%"></i></div>
+      </div>
+
+      <div class="dock-sec">最近事件</div>
+      <div class="card" style="padding:6px 12px">
+        <div class="evrow"><span class="tm">T+4:10.2</span><span class="nm2">gh pr create</span><span class="st vio">#333</span></div>
+        <div class="evrow"><span class="tm">T+3:52.6</span><span class="nm2">terminal cargo test</span><span class="st ok"><svg class="ic"><use href="#i-check"/></svg>14 通过</span></div>
+        <div class="evrow"><span class="tm">T+3:37.8</span><span class="nm2">edit tests.rs</span><span class="st mute">+20</span></div>
+        <div class="evrow"><span class="tm">T+3:37.4</span><span class="nm2">edit verify.rs</span><span class="st mute">+12</span></div>
+        <div class="evrow"><span class="tm">T+3:34.3</span><span class="nm2">think 已思考</span><span class="st mute">3.1s</span></div>
+        <div class="evrow"><span class="tm">T+1:03.9</span><span class="nm2">terminal cargo test</span><span class="st bad">1 failed</span></div>
+      </div>
+
+      <div class="dock-sec">此回合</div>
+      <div class="kv"><span>事件总数</span><b>214</b></div>
+      <div class="kv"><span>工具调用</span><b>15</b></div>
+      <div class="kv"><span>Tokens</span><b>74.2k</b></div>
+      <div class="kv"><span>成本</span><b class="money">$0.087</b></div>
+    </div>
+  </aside>
+
+</div>
+<div class="mocktag">10 · 回放时间线 · shannon v2 设计稿</div>
+</body>
+</html>
