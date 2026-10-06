@@ -1,4 +1,11 @@
-# desktop↔relay Push-to-Wake 帧契约（**ACCEPTED v1.1**，2026-10-05 评审定稿）
+# desktop↔relay Push-to-Wake 帧契约（**ACCEPTED v1.1**，2026-10-05 评审定稿；已降级为指引）
+
+> **⚡ 状态（2026-10-06）：已降级为指引。** 本文帧定义已**原样搬入 relay 仓
+> `docs/wire-protocol.md`**（§Push-to-Wake，随 PR #1/#6/#5 落地 relay main
+> `bdb6201`，含 `caps:["push"]` 能力位与 `wake.ack` seq 回显）。自此刻起
+> **帧定义事实源 = relay 仓 `docs/wire-protocol.md`**；本文保留为决策记录与
+> 背景指引（评审结论、修正的来龙去脉、跨仓验证项），不再随实现演演进更新——
+> 后续帧面变更一律改 relay 文档并走契约评审。
 
 > 状态：**ACCEPTED（v1 基线）**——v0.1 提案经 mobile 侧评审定稿
 > （mobile 仓 `docs/frame-contract-review-2026-10-05.md`：接受为 v1 基线，附六条
@@ -14,7 +21,8 @@
 > ③校准**数据期纪律**措辞——push.* 关闭/应答义务为数据期首例新纪律，wake 未绑定
 > **必须应答** `accepted:false`（§1/§4）；④措辞修正——转发族表述、`v1`/`v:1` 消歧、
 > wake 无 `id` 系有意、待发窗口内存态、bind 限频按连接（§1/§4/§6.5）；⑤**副本
-> 纪律**：本文为唯一事实源，mono 仓同名副本随分支同步、禁止本地演化。
+> 纪律**：本文为唯一事实源（2026-10-06 起事实源移转 relay 仓 `wire-protocol.md`，
+> 见顶部降级状态）。
 > 手机可见面不受本文影响——§O2（`shannon/push.register`）与 §O1（payload 锁死
 > `{handle, seq}`）已钉，本文只锁桌面与 relay 之间的事。
 
