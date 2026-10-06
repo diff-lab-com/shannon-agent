@@ -23,8 +23,13 @@ pub(crate) use goal::maybe_fire_check_in;
 // Re-export the single switch-path helper so the REPL init/resume paths
 // (repl/mod.rs) can refresh the first-screen StatusCard through the same
 // derivation used by every /connect, /model, /provider switch
-// (ADR-0008 Decision 1+2).
-pub(crate) use config::{apply_model_selection, provider_unconfigured, sync_active_to_chat};
+// (ADR-0008 Decision 1+2). `apply_explicit_provider_model` is the
+// explicit-id shape of that path, shared by the `/provider <name> <id>`
+// grammar and the ForcePicker manual-entry confirm (model picker input).
+pub(crate) use config::{
+    apply_explicit_provider_model, apply_model_selection, provider_unconfigured,
+    sync_active_to_chat,
+};
 
 // Re-export public API
 #[allow(unused_imports)]
