@@ -1377,9 +1377,7 @@ pub(crate) fn detect_argv_sandbox_rewrite(
     let env_override = std::env::var("SHANNON_SANDBOX").ok();
     let posture = resolve_sandbox_posture(executor.sandbox_type(), env_override.as_deref());
     match posture {
-        SandboxPosture::Active => Some(std::sync::Arc::new(SandboxExecutorRewrite::new(
-            executor,
-        ))),
+        SandboxPosture::Active => Some(std::sync::Arc::new(SandboxExecutorRewrite::new(executor))),
         _ => None,
     }
 }
@@ -2638,6 +2636,24 @@ mod tests {
             .await
             .unwrap();
         assert!(!output.metadata.contains_key("sandbox"));
+    }
+
+    #[test]
+    fn detect_argv_sandbox_rewrite_honors_shannon_sandbox_off() {
+        // The sibling-tool decoration must respect the same opt-out as Bash:
+        // `SHANNON_SANDBOX=off` leaves the process world undecorated. (The
+        // Active path is environment-dependent — bwrap/Seatbelt presence —
+        // and covered end-to-end by BashTool's own detected-sandbox tests.)
+        let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY: unique env key pinned for the duration of the test.
+        unsafe { std::env::set_var("SHANNON_SANDBOX", "off") };
+        let rewrite = super::detect_argv_sandbox_rewrite(tmp.path());
+        // SAFETY: see above.
+        unsafe { std::env::remove_var("SHANNON_SANDBOX") };
+        assert!(
+            rewrite.is_none(),
+            "SHANNON_SANDBOX=off must leave sibling tools undecorated"
+        );
     }
 
     #[test]

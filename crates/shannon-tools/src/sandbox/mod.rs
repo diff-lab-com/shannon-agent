@@ -977,6 +977,146 @@ mod tests {
         }
     }
 
+    // ── LocalArgvSandbox ─────────────────────────────────────────────
+
+    /// Records every request handed to it and reports a pinned locality.
+    struct RecordingProcess {
+        remote: std::sync::atomic::AtomicBool,
+        seen: std::sync::Mutex<Vec<ProcessRequest>>,
+    }
+
+    impl RecordingProcess {
+        fn new(remote: bool) -> Arc<Self> {
+            Arc::new(Self {
+                remote: std::sync::atomic::AtomicBool::new(remote),
+                seen: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn requests(&self) -> Vec<ProcessRequest> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ProcessProvider for RecordingProcess {
+        fn run_blocking(&self, request: &ProcessRequest) -> io::Result<CapturedOutput> {
+            self.seen.lock().unwrap().push(request.clone());
+            Ok(CapturedOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: shannon_tool_interface::ProcessExit {
+                    code: Some(0),
+                    success: true,
+                },
+            })
+        }
+
+        async fn run_async(&self, request: &ProcessRequest) -> io::Result<CapturedOutput> {
+            self.run_blocking(request)
+        }
+
+        async fn spawn_piped(&self, spec: &PipedSpawn) -> io::Result<Box<dyn PipedChild>> {
+            // Record and fail: the tests only observe the prepared request.
+            self.seen.lock().unwrap().push(spec.request.clone());
+            Err(io::Error::other("fake provider: no child"))
+        }
+
+        fn capabilities(&self) -> shannon_tool_interface::ExecCaps {
+            shannon_tool_interface::ExecCaps {
+                is_remote: self.remote.load(std::sync::atomic::Ordering::Relaxed),
+            }
+        }
+    }
+
+    /// Appends a marker arg so tests can see the rewrite landed.
+    struct TagRewrite;
+
+    impl SpawnRewrite for TagRewrite {
+        fn rewrite(&self, mut request: ProcessRequest) -> Result<ProcessRequest, String> {
+            request.args.push("SANDBOX-TAG".to_string());
+            Ok(request)
+        }
+    }
+
+    fn tag_request() -> ProcessRequest {
+        ProcessRequest::new("echo", &["hello"])
+    }
+
+    #[test]
+    fn local_argv_sandbox_rewrites_local_spawns() {
+        let inner = RecordingProcess::new(false);
+        let sandboxed = LocalArgvSandbox::new(inner.clone(), Arc::new(TagRewrite));
+
+        let out = sandboxed.run_blocking(&tag_request()).expect("local run");
+        assert!(out.exit.success);
+        let reqs = inner.requests();
+        assert_eq!(reqs.len(), 1);
+        assert!(
+            reqs[0].args.iter().any(|a| a == "SANDBOX-TAG"),
+            "rewrite must apply on local worlds: {:?}",
+            reqs[0].args
+        );
+        assert!(!sandboxed.capabilities().is_remote, "locality delegates");
+    }
+
+    #[tokio::test]
+    async fn local_argv_sandbox_rewrites_async_and_piped_paths() {
+        let inner = RecordingProcess::new(false);
+        let sandboxed = LocalArgvSandbox::new(inner.clone(), Arc::new(TagRewrite));
+
+        sandboxed
+            .run_async(&tag_request())
+            .await
+            .expect("local run_async");
+        let spec = PipedSpawn {
+            request: tag_request(),
+            ..Default::default()
+        };
+        // The fake inner fails after recording; only the prepared request matters.
+        let _ = sandboxed.spawn_piped(&spec).await;
+
+        let reqs = inner.requests();
+        assert_eq!(reqs.len(), 2, "async + piped both reach the inner world");
+        for req in &reqs {
+            assert!(
+                req.args.iter().any(|a| a == "SANDBOX-TAG"),
+                "every spawn shape gets the rewrite: {:?}",
+                req.args
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn local_argv_sandbox_bypasses_remote_worlds() {
+        let inner = RecordingProcess::new(true);
+        let sandboxed = LocalArgvSandbox::new(inner.clone(), Arc::new(TagRewrite));
+
+        let out = sandboxed
+            .run_blocking(&tag_request())
+            .expect("remote passthrough");
+        assert!(out.exit.success);
+        let spec = PipedSpawn {
+            request: tag_request(),
+            ..Default::default()
+        };
+        let _ = sandboxed.spawn_piped(&spec).await;
+
+        let reqs = inner.requests();
+        assert_eq!(reqs.len(), 2);
+        for req in &reqs {
+            assert!(
+                !req.args.iter().any(|a| a == "SANDBOX-TAG"),
+                "remote worlds must never be argv-rewritten: {:?}",
+                req.args
+            );
+        }
+        assert!(
+            sandboxed.capabilities().is_remote,
+            "capabilities must delegate so tools' remote gates keep working"
+        );
+    }
+
     // ── Settings resolution ────────────────────────────────────────────
 
     #[test]

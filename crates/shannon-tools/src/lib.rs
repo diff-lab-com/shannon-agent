@@ -666,6 +666,19 @@ pub fn register_default_tools_with_project_dir(
 
 /// Like [`register_default_tools_with_project_dir_ex`] but with
 /// caller-supplied execution worlds (§4.11/§4.12 assembly point).
+///
+/// NOTE on `[sandbox] mode` (design tension, deliberately unresolved): this
+/// entry does NOT run [`crate::sandbox::SandboxSettings::detect`] the way
+/// the no-providers `_ex` variant does. Kernel-mode assembly wraps BOTH
+/// worlds, and its fs policy is anchored to local absolute roots — it cannot
+/// follow a `/remote use` swap the way the process side can (see
+/// [`crate::sandbox::LocalArgvSandbox`], which re-checks locality per
+/// spawn). Assembling a local-rooted fs mirror under a swappable world would
+/// deny every remote file operation, so the honest options are "fs policy
+/// that rides the `WorldSandboxHandle` retargeting" (future work) or a
+/// process-only kernel world. The legacy argv wrapper DOES cover the
+/// sibling process tools on this entry (see `register_all_tools`); the
+/// desktop wires its own `sandbox.mode` through `sandbox_assembly`.
 pub fn register_default_tools_with_project_dir_ex_with_providers(
     registry: &mut ToolRegistry,
     project_dir: &std::path::Path,
