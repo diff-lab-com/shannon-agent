@@ -7,6 +7,7 @@ import type { Virtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
 import WelcomeState from '@/components/WelcomeState'
 import { MessageBubble, type RegeneratePayload } from '@/components/chat/MessageBubble'
+import RunCompletionChips from '@/components/chat/RunCompletionChips'
 import StreamingResponse from '@/components/chat/StreamingResponse'
 import { useChat } from '@/context/ChatContext'
 import type { StreamNotice } from '@/context/ChatContext'
@@ -558,6 +559,13 @@ export default function MessageArea({
           <ComposerRetryButton />
         </Banner>
       ) : null}
+
+      {/* D5 方案① (主动任务推荐): static post-completion action chips for
+          the settled run (failed → 重试/分析失败原因; succeeded with file
+          changes → 提交这些改动). Zero model calls; chips fill the composer,
+          never auto-send; the next send dismisses them (runProcess reset).
+          Gated internally on suggestions.enabled. */}
+      <RunCompletionChips />
 
       <div ref={messagesEndRef} />
 

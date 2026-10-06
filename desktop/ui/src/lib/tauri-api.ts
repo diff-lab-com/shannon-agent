@@ -1435,6 +1435,14 @@ export async function getWorkingDirInfo(): Promise<WorkingDirInfo> {
   return invoke('get_working_dir_info')
 }
 
+/** D5 方案① — code-workspace probe for the welcome card's example
+ *  filtering: the marker files (Cargo.toml / package.json / pyproject.toml /
+ *  go.mod) present in the session working directory, in fixed order. A pure
+ *  stat sweep — empty list = no code markers (office examples only). */
+export async function detectWorkspaceMarkers(): Promise<string[]> {
+  return invoke('detect_workspace_markers')
+}
+
 // --- MCP Servers ---
 
 export async function listMcpServers(): Promise<McpServerInfo[]> {

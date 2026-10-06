@@ -313,4 +313,42 @@ describe('GeneralSettings', () => {
       })
     })
   })
+
+  // D5 方案① — 主动任务推荐 (suggestions) presentation toggle. A pure
+  // configure round-trip like the System group: the backend never gates
+  // anything on the key; the UI reads it live for the completion chips and
+  // the welcome card's refresh/filter.
+  describe('D5 suggestions toggle', () => {
+    const cfg = {
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      api_key: 'sk-test',
+      working_dir: '/tmp',
+      approval_mode: 'normal',
+    }
+    it('defaults to ON when the config omits suggestions_enabled', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue({ ...cfg })
+      render(wrap(<GeneralSettings />))
+      const sw = await screen.findByTestId('settings-suggestions-switch')
+      expect(sw).toHaveAttribute('aria-checked', 'true')
+    })
+
+    it('hydrates from the persisted config (off stays off)', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue({ ...cfg, suggestions_enabled: false })
+      render(wrap(<GeneralSettings />))
+      const sw = await screen.findByTestId('settings-suggestions-switch')
+      await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'false'))
+    })
+
+    it('persists suggestions.enabled through configure when toggled', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue({ ...cfg })
+      render(wrap(<GeneralSettings />))
+      const sw = await screen.findByTestId('settings-suggestions-switch')
+      await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'true'))
+      fireEvent.click(sw)
+      await waitFor(() => {
+        expect(api.configure).toHaveBeenCalledWith({ key: 'suggestions.enabled', value: 'false' })
+      })
+    })
+  })
 })

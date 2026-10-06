@@ -139,6 +139,17 @@ export default function GeneralSettings() {
     } catch (e) { toastError(t('settings.system.updateFailed'), e) }
   }
 
+  // D5 方案① — 主动任务推荐 presentation toggle. A pure configure write:
+  // the backend never gates anything on this key — the UI reads it live
+  // (completion chips + welcome refresh/filter), so a flip applies
+  // immediately with no restart.
+  const handleSuggestionsToggle = async (value: boolean) => {
+    try {
+      await api.configure({ key: 'suggestions.enabled', value: String(value) })
+      await refreshConfig()
+    } catch (e) { toastError(t('settings.general.suggestions.updateFailed'), e) }
+  }
+
   return (
     <div className="max-w-narrow">
       <p className="font-body-md text-on-surface-variant mb-md">{t('settings.general.subheader')}</p>
@@ -328,6 +339,32 @@ export default function GeneralSettings() {
                 </button>
               ))}
             </div>
+          </div>
+        </section>
+
+        {/* D5 方案① — 主动任务推荐: the post-completion action chips and
+            the welcome card's 「换一批」 refresh + workspace-aware example
+            filtering. Purely a presentation switch — static local rules,
+            zero model calls either way; a flip applies immediately. */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>recommend</span>
+            <h3 className="font-headline-md text-headline-md">{t('settings.general.suggestions.title')}</h3>
+            <span className="flex-1" />
+            <EffectBadge kind="instant" />
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.general.suggestions.help')}</p>
+          <div className="flex justify-between items-center py-sm gap-md">
+            <span className="min-w-0">
+              <span className="font-label-md text-on-surface block">{t('settings.general.suggestions.toggle')}</span>
+              <span className="font-label-sm text-on-surface-variant block">{t('settings.general.suggestions.toggleDesc')}</span>
+            </span>
+            <Switch
+              checked={config?.suggestions_enabled !== false}
+              onCheckedChange={v => void handleSuggestionsToggle(v)}
+              aria-label={t('settings.general.suggestions.title')}
+              data-testid="settings-suggestions-switch"
+            />
           </div>
         </section>
 

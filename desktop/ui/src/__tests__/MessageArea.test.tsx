@@ -24,6 +24,8 @@ const ctx = vi.hoisted(() => ({
   toolProgress: null as any,
   streamNotices: [] as any[],
   checkpoints: [] as any[],
+  // D5 方案①: RunCompletionChips reads the run snapshot (idle → no chips).
+  runProcess: { status: 'idle', startedAt: null, endedAt: null, sources: [], outputs: [], summary: null, lastTool: null, toolCount: 0, hadChanges: false },
   sessionActivity: {} as Record<string, any>,
   switchingSession: false,
   currentSessionId: 'session-1' as string | null,

@@ -114,3 +114,34 @@ describe('endRun', () => {
     expect(endRun(done, 3, false)).toBe(done)
   })
 })
+
+// D5 方案① — `hadChanges` feeds the post-run 「提交这些改动」 chip rule:
+// ≥1 Changes-bucket tool call (the same classifyTool lib/toolGrouping.ts
+// uses) qualifies the run. Sticky within a run, reset by beginRun.
+describe('hadChanges (D5 方案①)', () => {
+  it('a file-mutating tool call marks the run, and the flag survives the settle', () => {
+    let state = beginRun({ at: 1 })
+    expect(state.hadChanges).toBe(false)
+    state = noteToolStart(state, 'read_file', { path: '/w/src/main.rs' }, 2)
+    expect(state.hadChanges).toBe(false)
+    state = noteToolStart(state, 'edit', { file_path: '/w/src/main.rs' }, 3)
+    expect(state.hadChanges).toBe(true)
+    state = endRun(state, 9, false)
+    expect(state.status).toBe('done')
+    expect(state.hadChanges).toBe(true, 'the chip rule reads the settled snapshot')
+  })
+
+  it('a read-only run never qualifies', () => {
+    let state = beginRun({ at: 1 })
+    state = noteToolStart(state, 'read_file', { path: '/w/a' }, 2)
+    state = noteToolStart(state, 'grep_search', { pattern: 'x' }, 3)
+    state = endRun(state, 9, false)
+    expect(state.hadChanges).toBe(false)
+  })
+
+  it('the next beginRun resets the flag (chips dismiss on the new send)', () => {
+    const changed = noteToolStart(beginRun({ at: 1 }), 'write', { path: '/b' }, 2)
+    expect(changed.hadChanges).toBe(true)
+    expect(beginRun({ at: 10 }).hadChanges).toBe(false)
+  })
+})
