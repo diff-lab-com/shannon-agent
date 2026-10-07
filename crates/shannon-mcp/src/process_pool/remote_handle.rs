@@ -833,7 +833,18 @@ impl RemoteMcpServerHandle {
         };
 
         for item in items {
-            let id = item.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+            // JSON-RPC ids are legally numbers OR strings; all OUR batch ids
+            // are numeric, so a server echoing "5" must still match request
+            // 5. Id-less entries (notifications) have nothing to file under
+            // and are skipped instead of piling onto id 0.
+            let id = match item.get("id") {
+                Some(Value::Number(n)) => n.as_u64(),
+                Some(Value::String(s)) => s.parse::<u64>().ok(),
+                _ => None,
+            };
+            let Some(id) = id else {
+                continue;
+            };
 
             if let Some(error) = item.get("error") {
                 let msg = error

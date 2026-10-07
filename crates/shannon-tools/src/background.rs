@@ -49,6 +49,12 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 /// Lines retained per stream (stdout, stderr). Older lines are evicted FIFO.
 pub const RING_CAPACITY: usize = 512;
 
+/// How long a finished entry stays in [`REGISTRY`] after its exit code is
+/// recorded. Spawns sweep the registry, dropping entries finished longer
+/// than this — a long session with many unique names must not accumulate
+/// ring buffers forever.
+const FINISHED_RETENTION_MS: u64 = 60 * 60 * 1000;
+
 /// Default `WaitForLog` poll interval when the caller does not specify one.
 pub const DEFAULT_POLL_MS: u64 = 200;
 
@@ -67,6 +73,9 @@ pub struct BackgroundEntry {
     pub stderr: Arc<Mutex<VecDeque<String>>>,
     /// Optional shared exit code (filled in when `wait()` completes).
     pub exit_code: Arc<Mutex<Option<i32>>>,
+    /// When the exit code was recorded (drives registry pruning: finished
+    /// entries are kept only for the retention window after this moment).
+    pub finished_at_unix_ms: Arc<Mutex<Option<u64>>>,
     /// review §P1-8: oneshot kill signal sender. The wait task holds the
     /// receiver and calls `child.kill().await` on fire. KillBackground
     /// sends on this to actually terminate the running process (previously
@@ -375,6 +384,7 @@ impl Tool for RunBackgroundTool {
         let stderr_buf: Arc<Mutex<VecDeque<String>>> =
             Arc::new(Mutex::new(VecDeque::with_capacity(RING_CAPACITY)));
         let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
+        let finished_at: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
         // review §P1-8: kill signal channel. The wait task holds `kill_rx`
         // and forwards the kill to `child.kill().await` when fired; the
         // entry stores the sender so KillBackground can drive it.
@@ -387,6 +397,7 @@ impl Tool for RunBackgroundTool {
             stdout: stdout_buf.clone(),
             stderr: stderr_buf.clone(),
             exit_code: exit_code.clone(),
+            finished_at_unix_ms: finished_at.clone(),
             kill_tx: kill_tx.clone(),
             #[cfg(windows)]
             job: JobGuard::confine(child.raw_process_handle()),
@@ -430,11 +441,19 @@ impl Tool for RunBackgroundTool {
             let entry_name = parsed.name.clone();
             let exit_code = exit_code.clone();
             tokio::spawn(async move {
+                let record_exit = |code: i32, finished_at: &Arc<Mutex<Option<u64>>>| {
+                    *exit_code.lock().unwrap() = Some(code);
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    *finished_at.lock().unwrap() = Some(now);
+                };
                 tokio::select! {
                     status = child.wait() => {
                         if let Ok(s) = status {
                             let code = s.code.unwrap_or(-1);
-                            *exit_code.lock().unwrap() = Some(code);
+                            record_exit(code, &finished_at);
                             tracing::debug!(
                                 name = %entry_name,
                                 code,
@@ -452,17 +471,27 @@ impl Tool for RunBackgroundTool {
                         // driven by the kill rather than leaving it as None.
                         if let Ok(status) = child.wait().await {
                             let code = status.code.unwrap_or(-1);
-                            *exit_code.lock().unwrap() = Some(code);
+                            record_exit(code, &finished_at);
                         }
                     }
                 }
             });
         }
 
-        REGISTRY
-            .lock()
-            .unwrap()
-            .insert(parsed.name.clone(), entry.clone());
+        {
+            let mut registry = REGISTRY.lock().unwrap();
+            // Prune entries finished longer than the retention window so a
+            // long session cannot grow the registry without bound (unique
+            // names accumulate; each holds ring buffers). Running entries
+            // are never touched — WaitForLog/KillBackground still need them,
+            // and a pruned finished entry only loses its exit record after
+            // the window.
+            registry.retain(|_, e| match *e.finished_at_unix_ms.lock().unwrap() {
+                Some(at) => started_at_unix_ms.saturating_sub(at) < FINISHED_RETENTION_MS,
+                None => true,
+            });
+            registry.insert(parsed.name.clone(), entry.clone());
+        }
 
         Ok(ToolOutput {
             content: format!(

@@ -204,7 +204,7 @@ pub struct AgentHandle {
     #[allow(dead_code)] // KEEP: watcher lifecycle
     event_tx: mpsc::Sender<AgentEvent>,
     /// Kill handle sender — drop the child on shutdown.
-    _kill_tx: oneshot::Sender<()>,
+    kill_tx: Option<oneshot::Sender<()>>,
     /// Original config used to spawn this agent (for restart).
     config: AgentProcessConfig,
     /// Number of times this agent has been restarted.
@@ -494,7 +494,7 @@ impl AgentProcessManager {
             status: AgentProcessStatus::Starting,
             pending_rpcs,
             event_tx: self.event_tx.clone(),
-            _kill_tx: kill_tx,
+            kill_tx: Some(kill_tx),
             config,
             restart_count: 0,
             last_seen: Instant::now(),
@@ -644,6 +644,12 @@ impl AgentProcessManager {
     pub async fn kill_agent(&self, agent_name: &str) -> Result<(), AgentProcessError> {
         let mut agents = self.agents.write().await;
         if let Some(mut handle) = agents.remove(agent_name) {
+            // Fire the kill signal first so the exit watcher emits
+            // ProcessExited immediately (previously the channel never
+            // carried a signal — the watcher only woke on the sender's drop).
+            if let Some(kill_tx) = handle.kill_tx.take() {
+                kill_tx.send(()).ok();
+            }
             if let Err(e) = handle.child.kill().await {
                 tracing::debug!(agent = %agent_name, error = %e, "Failed to kill agent process");
             }
@@ -922,7 +928,7 @@ impl AgentProcessManager {
                                                     status: AgentProcessStatus::Starting,
                                                     pending_rpcs: rpc_map,
                                                     event_tx: event_tx.clone(),
-                                                    _kill_tx: kill_tx,
+                                                    kill_tx: Some(kill_tx),
                                                     config,
                                                     restart_count,
                                                     last_seen: Instant::now(),
