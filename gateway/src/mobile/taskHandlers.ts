@@ -5,15 +5,17 @@
  * Both REQUIRE a bound device session (pairing gate) — dispatching tasks and
  * reading the journal from an unpaired connection is rejected with
  * PAIRING_REQUIRED before anything is touched:
- *  - dispatch takes `{prompt, agent_id?}` (§K1). This host has NO agent roster
- *    (the engineBridge agent.list is an empty stub), so ANY non-empty
- *    `agent_id` is rejected with INVALID_PARAMS instead of being silently
- *    routed to some other agent. The response is the full §K task object
- *    (`{task: {id, prompt, status, agent_id, created_at}}`), synchronously,
+ *  - dispatch takes `{prompt, agent_id?}` (§K1). The engine has NO per-agent
+ *    routing face (`shannon/agent.list` is a read-only roster view, not a
+ *    dispatch target list), so ANY non-empty `agent_id` is rejected with
+ *    INVALID_PARAMS instead of being silently routed to some other agent.
+ *    The response is the full §K task object
+ *    (`{task: {id, prompt, status, agent_id, created_at, …}}`), synchronously,
  *    before the §K3 event stream starts; the streamed content reaches the
  *    initiating device as `shannon/event`s whose `session_id` IS the task id.
  *  - list is a read-only §K2 projection of the in-memory task journal
- *    (`{tasks: [{id, prompt, status, agent_id, created_at}]}`, newest first).
+ *    (`{tasks: [{id, prompt, status, agent_id, created_at, …}]}`, newest
+ *    first; B1a adds the optional title/finished_at/error keys).
  *
  * §K also removed the P2-1 Y/N-text approval settle from this face: a
  * dispatch ALWAYS creates a task; pending approvals are answered via the
@@ -71,8 +73,9 @@ export function createTaskHandlers(opts: TaskHandlersOptions): MethodHandlers {
           message: "params.prompt (non-empty string) is required",
         };
       }
-      // §K1: unknown agent_id → INVALID_PARAMS, never a silent re-route. This
-      // host has no roster at all, so every non-empty value is "unknown".
+      // §K1: unknown agent_id → INVALID_PARAMS, never a silent re-route. The
+      // engine has no per-agent routing face, so every non-empty value is
+      // "unknown" — the B0 roster is a read view, not a dispatch target list.
       if (params.agent_id != null && String(params.agent_id).trim().length > 0) {
         return {
           kind: "error",

@@ -62,7 +62,8 @@
         "shannon/approval.set",
         "shannon/session.list",
         "shannon/session.history",
-        "shannon/push.register"
+        "shannon/push.register",
+        "shannon/usage.budget"
       ]
     },
     "errorCodes": {

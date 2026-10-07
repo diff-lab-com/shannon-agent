@@ -234,20 +234,68 @@ describe("mobile dispatch — hub & handlers", () => {
 
     const res = (await handlers["shannon/task.list"]!({ limit: 10 }, mine)) as any;
     expect(res.result.tasks.map((t: any) => t.prompt)).toEqual(["mine second", "mine first"]);
-    // §K2 wire shape is exactly these five keys — the P2-1 keys are gone.
+    // §K2 + B1a wire shape: the five §K2 keys plus the additive `title`
+    // (these tasks are still running here, so finished_at/error stay absent).
     expect(Object.keys(res.result.tasks[0])).toEqual([
       "id",
       "prompt",
       "status",
       "agent_id",
       "created_at",
+      "title",
     ]);
+    expect(res.result.tasks[0]!.title).toBe("mine second");
     expect(res.result.tasks[0]!.agent_id).toBeNull();
     expect(new Date(res.result.tasks[0]!.created_at).toISOString()).toBe(
       res.result.tasks[0]!.created_at,
     );
     // limit semantics preserved (default 20, cap 100, floor 1).
     expect(((await handlers["shannon/task.list"]!({ limit: 1 }, mine)) as any).result.tasks).toHaveLength(1);
+  });
+
+  it("B1a: completed tasks add finished_at, failed tasks add error — additive keys only", async () => {
+    const hub = new MobileDispatchHub({ logger });
+    hub.setSubmit(async (inbound) => {
+      if (inbound.chatId === "dev-bad") throw new Error("boom");
+    });
+    const okCtx = fakeCtx("dev-ok");
+    const badCtx = fakeCtx("dev-bad");
+    hub.registerConnection(okCtx);
+    hub.registerConnection(badCtx);
+    const handlers = createTaskHandlers({ hub });
+
+    await handlers["shannon/task.dispatch"]!({ prompt: "fine task" }, okCtx);
+    await handlers["shannon/task.dispatch"]!({ prompt: "doomed task" }, badCtx);
+    await vi.waitFor(() => expect(hub.listTasks("dev-ok")[0]!.status).toBe("completed"));
+    await vi.waitFor(() => expect(hub.listTasks("dev-bad")[0]!.status).toBe("failed"));
+
+    const okList = (await handlers["shannon/task.list"]!({}, okCtx)) as any;
+    expect(Object.keys(okList.result.tasks[0])).toEqual([
+      "id",
+      "prompt",
+      "status",
+      "agent_id",
+      "created_at",
+      "title",
+      "finished_at",
+    ]);
+    expect(new Date(okList.result.tasks[0]!.finished_at).toISOString()).toBe(
+      okList.result.tasks[0]!.finished_at,
+    );
+    expect(okList.result.tasks[0]).not.toHaveProperty("error");
+
+    const badList = (await handlers["shannon/task.list"]!({}, badCtx)) as any;
+    expect(Object.keys(badList.result.tasks[0])).toEqual([
+      "id",
+      "prompt",
+      "status",
+      "agent_id",
+      "created_at",
+      "title",
+      "finished_at",
+      "error",
+    ]);
+    expect(badList.result.tasks[0]!.error).toBe("boom");
   });
 
   it("a failed submit lands in the journal as failed AND closes the phone's stream with query.failed", async () => {
@@ -326,6 +374,77 @@ describe("mobile dispatch — approval registry integration", () => {
     expect(hub.settleApproval("req-reg-1", "allow")).toBe(true);
     await expect(pending).resolves.toBe("allow");
     expect(approvals.listPending()).toEqual([]);
+  });
+
+  it("B1b: engine-rich fields ride BOTH the push event and the registry record", async () => {
+    // Same frozen clock as the injected ts — the registry's TTL sweep would
+    // otherwise prune a 2023-era record against the real clock.
+    const approvals = new ApprovalRegistry({ now: () => 1_700_000_123_456 });
+    const hub = new MobileDispatchHub({ logger, approvals });
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+
+    void hub.requestApproval("dev-1", {
+      ...req,
+      requestId: "req-rich-1",
+      ts: 1_700_000_123_456,
+      agent: { id: "agent-1", name: "Scout" },
+      risk: { destructive: true, scope: "system", reversible: false },
+    });
+
+    const ev = eventsOf(ctx).find((e) => e.type === "approval.request")!;
+    expect(ev).toEqual({
+      seq: expect.any(Number),
+      type: "approval.request",
+      request_id: "req-rich-1",
+      tool_name: "Bash",
+      tool_input: { command: "echo hi" },
+      description: "运行命令",
+      is_destructive: false,
+      diff_preview: null,
+      ts: 1_700_000_123_456,
+      agent: { id: "agent-1", name: "Scout" },
+      risk: { destructive: true, scope: "system", reversible: false },
+    });
+
+    const rec = approvals.listPending().find((r) => r.requestId === "req-rich-1")!;
+    expect(rec).toMatchObject({
+      ts: 1_700_000_123_456,
+      agent: { id: "agent-1", name: "Scout" },
+      risk: { destructive: true, scope: "system", reversible: false },
+    });
+  });
+
+  it("B1b: an engine event without rich fields gets nothing invented", async () => {
+    const approvals = new ApprovalRegistry({ now: () => 1_700_000_000_000 });
+    const hub = new MobileDispatchHub({
+      logger,
+      approvals,
+      now: () => 1_700_000_000_000,
+    });
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+
+    void hub.requestApproval("dev-1", { ...req, requestId: "req-plain-1" });
+
+    // The push stays byte-identical to the legacy shape — no ts/agent/risk keys.
+    const ev = eventsOf(ctx).find((e) => e.type === "approval.request")!;
+    expect(Object.keys(ev).sort()).toEqual([
+      "description",
+      "diff_preview",
+      "is_destructive",
+      "request_id",
+      "seq",
+      "tool_input",
+      "tool_name",
+      "type",
+    ]);
+    // The restore-face record still carries a ts (hub-clock fallback), with
+    // the rich fields normalized to null rather than invented.
+    const rec = approvals.listPending()[0]!;
+    expect(rec.ts).toBe(1_700_000_000_000);
+    expect(rec.agent).toBeNull();
+    expect(rec.risk).toBeNull();
   });
 
   it("settleApproval is a no-op for unknown/already-settled requests", () => {
@@ -809,7 +928,7 @@ describe("mobile dispatch — server page + bootstrap end-to-end", () => {
         ).toBe(true),
       );
 
-      // 看任务：journal shows the completed task in the §K2 shape.
+      // 看任务：journal shows the completed task in the §K2 + B1a shape.
       const list = await rpc("shannon/task.list", { limit: 10 });
       expect(list.tasks).toHaveLength(1);
       expect(list.tasks[0]).toEqual({
@@ -818,6 +937,9 @@ describe("mobile dispatch — server page + bootstrap end-to-end", () => {
         status: "completed",
         agent_id: null,
         created_at: expect.any(String),
+        // B1a additive: title rides (non-empty), finished_at once terminal.
+        title: "deploy the staging env",
+        finished_at: expect.any(String),
       });
 
       // 未配对设备拒绝：a second, unpaired connection can't dispatch or list.

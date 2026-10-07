@@ -14,6 +14,9 @@ importers:
       selfsigned:
         specifier: ^2.4.1
         version: 2.4.1
+      smol-toml:
+        specifier: ^1.9.0
+        version: 1.9.0
       ws:
         specifier: ^8.21.0
         version: 8.21.0
@@ -627,6 +630,10 @@ packages:
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
 
+  smol-toml@1.9.0:
+    resolution: {integrity: sha512-hpd+HLON7HdZXqYchMM/+LaTTbdK0AU3NngIJ4KVyWbY9bfQqdL9cD+4yf6dUoU2Ap4VsU0JkQi6FxAI1B2mXQ==}
+    engines: {node: '>= 18'}
+
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
@@ -1194,6 +1201,8 @@ snapshots:
       node-forge: 1.4.0
 
   siginfo@2.0.0: {}
+
+  smol-toml@1.9.0: {}
 
   source-map-js@1.2.1: {}
 

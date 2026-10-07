@@ -144,6 +144,10 @@ export interface MessageReceipt {
 /**
  * A tool-use approval to render in-channel. Mirrors the engine's
  * ApprovalRequest (engine wire: snake_case) in gateway-internal camelCase.
+ *
+ * B1b (v2.3 additive): the engine's rich fields ride through when supplied —
+ * older engines (and older call sites) keep the legacy six-key shape, and no
+ * consumer may invent values for absent keys.
  */
 export interface ApprovalReq {
   requestId: string;
@@ -152,6 +156,19 @@ export interface ApprovalReq {
   description: string;
   isDestructive: boolean;
   diffPreview: string | null;
+  /** §L1 (additive): engine-side epoch-ms timestamp of the ask. */
+  ts?: number;
+  /** §L1 (additive): the requesting agent, when the engine supplies it. */
+  agent?: { id: string | null; name: string | null };
+  /**
+   * §L1 (additive): the engine's three-dimensional risk, when present — same
+   * normalized shape `mapEngineEvent` emits on the mobile wire.
+   */
+  risk?: {
+    destructive?: boolean;
+    scope: "local" | "repo" | "system";
+    reversible: boolean;
+  };
 }
 
 /** User's decision on a rendered approval. Maps to the engine's PermissionChoice. */

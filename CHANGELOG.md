@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- mobile batch B · task 富化 + 真实 agent roster + 只读预算面（2026-10-07）
 - §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 - Approval transparency + mobile approval scope (2026-10-05 follow-up)
 - Permission-mode convergence (2026-10-05)
@@ -15,6 +16,14 @@ Waves queued for the next release, newest first:
 ### Breaking / behavior changes
 
 - **`secret-guard` defaults to `redact` (was `audit`)**: with no `$SHANNON_SECRET_GUARD` and no `[secret_guard] mode` configured, secret-shaped content in outbound requests is now replaced with deterministic surrogates before it reaches the provider (restored locally for tool execution and display; byte-stable, so prompt caching is unaffected). Opt out with `SHANNON_SECRET_GUARD=audit` (observe-only), `SHANNON_SECRET_GUARD=off`, or `[secret_guard] mode` in config — env beats config, and an explicit `off` always wins. A one-time notice after the first hit explains what happened and names these switches.
+
+### mobile batch B（v2.3 additive，2026-10-07）
+
+三个向后兼容的 `shannon/*` 协议变更：全部是可选字段/新方法，引擎 Rust 侧零改动；协议 schema 的方法枚举已同步（`docs/protocol/shannon-mobile-protocol.schema.json`）。
+
+- **B1 task 富化（§K2 additive）**：`shannon/task.dispatch` / `shannon/task.list` 的任务对象在原五键（`id`/`prompt`/`status`/`agent_id`/`created_at`）之上新增可选键 `title`（非空即带）、`finished_at`（ISO-8601，仅终态出现）、`error`（仅 `failed` 且有错误时出现）。同批把 §L1 引擎富字段（`ts`/`agent`/`risk`）对齐进派发审批链路：hub 的 `approval.request` push 事件与 approvalRegistry 记录都携带引擎值（缺失不发明——旧引擎 wire 字节不变；`ts` 仅引擎提供时上 push，记录回落 hub 时钟），派发任务的审批因此在 `shannon/approval.list` 投影（agentId/agentName/scope）与直连查询路径完全一致。
+- **B0 `agent.list` 真实 roster**：从空 stub 改为读取 `~/.shannon/agents/*.toml`（新依赖 `smol-toml`；解析失败的文件跳过、目录缺失返回空数组），返回 `{id, name, role?, model?, status: "idle", activity: []}`——`id` 取 toml `name` 原文，`role`/`model` 缺省不带。`status`/`activity` 是前向占位（配置面而非进程面）；`~/.claude/agents/*.md` 与项目级目录 v1 不做。注意：元素旧形状 `{session_id, platform, active}` 是 mock 时代遗留、真实 gateway 从未产出过，本次为**有意的契约修正**（非 additive）。`shannon/agent.detail` 仍 NOT_IMPLEMENTED；`task.dispatch` 的 `agent_id` 仍恒拒（引擎无 per-agent 路由面，接受即撒谎）。
+- **B2 预算只读面**：新方法 `shannon/usage.budget`（params `{}`），返回 `{month, monthCostUsd, budgetUsd, sessionCapUsd}`——月度花费按本地时区当月 1 日 0 点聚合 `~/.shannon/usage.jsonl`（口径同 desktop `usage_governance.rs` 的 `summarize_windows`/`month_start_ms`；坏行跳过，缺文件/不可读诚实地报 0，不报错），预算读 `~/.shannon/desktop/config.json`（`monthly_budget_usd`/`monthlyBudgetUsd` 双拼写容错，缺失/非数为 null），`sessionCapUsd` v1 恒 null（per-session cap 在 session sidecar，不读）。**边界**：usage.jsonl 只含桌面引擎会话花费，gateway/mobile 侧任务花费尚未入账——`monthCostUsd` 是下界。
 
 ### Hardening follow-up (2026-10-07, same day)
 
