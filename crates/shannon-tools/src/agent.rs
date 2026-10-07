@@ -1674,10 +1674,15 @@ mod tests {
 
     #[test]
     fn test_agent_defs_builtin_has_system_prompts() {
-        let tool = AgentTool::new();
-        let defs = tool.get_agent_defs();
+        // Assert against the BUILT-IN definitions, not the merged registry:
+        // `get_agent_defs` deliberately folds in user overrides
+        // (~/.shannon/agents, .claude/agents), so a user file named
+        // `code-reviewer.toml` with a custom prompt would otherwise fail
+        // this test on any developer machine that has one.
+        let mut builtins = shannon_agents::AgentDefinitionRegistry::new();
+        builtins.with_builtin_defaults();
 
-        let explorer = defs.get("explorer").unwrap();
+        let explorer = builtins.get("explorer").unwrap();
         assert!(explorer.system_prompt.is_some());
         assert!(
             explorer
@@ -1687,7 +1692,7 @@ mod tests {
                 .contains("code explorer")
         );
 
-        let reviewer = defs.get("code-reviewer").unwrap();
+        let reviewer = builtins.get("code-reviewer").unwrap();
         assert!(reviewer.system_prompt.is_some());
         assert!(
             reviewer
