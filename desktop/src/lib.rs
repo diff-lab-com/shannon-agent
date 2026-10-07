@@ -491,6 +491,12 @@ mod tests {
 #[cfg(feature = "tauri")]
 pub mod batch_commands;
 
+/// 04b — structured test-count extraction behind the batch verification
+/// card (strict final-summary-line parse; `None` = no data, never a guess).
+/// Gated with its only consumer.
+#[cfg(feature = "tauri")]
+pub(crate) mod test_verdict;
+
 /// P1-5 C-1 — dev-server preview: detect/start/stop/status/capture
 /// commands + the `PreviewManager` lifecycle owner (also backs the
 /// desktop-only `preview_screenshot` engine tool).

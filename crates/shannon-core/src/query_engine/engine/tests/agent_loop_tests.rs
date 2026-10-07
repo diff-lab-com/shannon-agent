@@ -248,6 +248,20 @@ async fn secret_guard_query_loop_completes_with_redacted_wire() {
     });
 
     let _g = crate::secret_guard::test_support::acquire();
+    // Hermeticity vs ambient machine state: `process_query` consults the
+    // real enablement sources (`$SHANNON_SECRET_GUARD`, then
+    // `~/.shannon/config.toml`'s `[secret_guard] mode` via
+    // `init_from_env_or_config`). An explicit decision there is
+    // install/replace by design — it would clobber the test-installed
+    // transform below with the built-in guard (whose detector does not
+    // match this test's fake secret, so the raw value would ride the wire
+    // and the surrogate assertions would fail on any machine dogfooding
+    // `mode = "redact"`). Pinning the documented env override to an
+    // explicit "off" beats both ambient sources (env > config precedence)
+    // and leaves the test's transform authoritative — exactly the
+    // host/plugin-installed-transform contract this test pins.
+    let saved_secret_guard_env = std::env::var("SHANNON_SECRET_GUARD").ok();
+    unsafe { std::env::set_var("SHANNON_SECRET_GUARD", "off") };
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let config = LlmClientConfig {
         alternate_api_keys: Vec::new(),
@@ -301,6 +315,10 @@ async fn secret_guard_query_loop_completes_with_redacted_wire() {
         }
     }
     crate::secret_guard::set_context_transform(None);
+    match saved_secret_guard_env {
+        Some(v) => unsafe { std::env::set_var("SHANNON_SECRET_GUARD", v) },
+        None => unsafe { std::env::remove_var("SHANNON_SECRET_GUARD") },
+    }
 
     assert!(completed, "query must complete; failed: {failed}");
     let bodies = captured.lock().unwrap().clone();
@@ -2031,6 +2049,16 @@ async fn secret_guard_system_prompt_redacted_on_wire() {
     });
 
     let _g = crate::secret_guard::test_support::acquire();
+    // Same ambient-state hermeticity pin as
+    // `secret_guard_query_loop_completes_with_redacted_wire` above: an
+    // explicit `[secret_guard] mode` in ambient `~/.shannon/config.toml`
+    // would (by design) replace this test's transform with the built-in
+    // guard inside `process_query`, and the fake secret below is not
+    // detector-shaped, so it would ride the wire raw. Explicit env "off"
+    // beats the config section (env > config) and keeps the test
+    // transform authoritative.
+    let saved_secret_guard_env = std::env::var("SHANNON_SECRET_GUARD").ok();
+    unsafe { std::env::set_var("SHANNON_SECRET_GUARD", "off") };
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let config = LlmClientConfig {
         alternate_api_keys: Vec::new(),
@@ -2087,6 +2115,10 @@ async fn secret_guard_system_prompt_redacted_on_wire() {
         }
     }
     crate::secret_guard::set_context_transform(None);
+    match saved_secret_guard_env {
+        Some(v) => unsafe { std::env::set_var("SHANNON_SECRET_GUARD", v) },
+        None => unsafe { std::env::remove_var("SHANNON_SECRET_GUARD") },
+    }
 
     assert!(completed, "query must complete; failed: {failed}");
     let bodies = captured.lock().unwrap().clone();

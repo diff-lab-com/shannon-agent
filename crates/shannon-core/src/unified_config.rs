@@ -932,6 +932,45 @@ mod tests {
 
         std::fs::remove_dir_all(dir).ok();
     }
+
+    /// D1 flip-kit pin (`docs/plans/d1-redact-default-flip.md`): for an
+    /// UNSET secret-guard decision — no `$SHANNON_SECRET_GUARD`, no
+    /// `[secret_guard] mode` key — the section this module owns carries
+    /// `mode: None`, and the release default applied to that `None` is
+    /// `audit` (since v0.11.0, ADR 0012; observation period pending the
+    /// flip to `redact`).
+    ///
+    /// The resolution itself lives one module over:
+    /// `crate::secret_guard::resolve_mode_with_default` turns
+    /// `(None, None)` into `Some(SecretGuardMode::Audit)` and is pinned
+    /// there by
+    /// `resolve_mode_with_default_unset_is_audit_and_off_still_opts_out`.
+    /// This test pins the config-side half of the contract so a flip PR
+    /// must consciously touch both files — see the flip kit for the full
+    /// checklist.
+    #[test]
+    fn secret_guard_unset_mode_is_none_and_release_default_stays_audit() {
+        // "Unset" is exactly `mode: None` — the state whose resolution
+        // carries the release default. It must stay None or the
+        // "unset ⇒ default" contract silently changes meaning.
+        assert_eq!(SecretGuardSection::default().mode, None);
+        assert_eq!(SecretGuardSection::load_from(&[]).mode, None);
+
+        // Type-checked pins. The redact-default flip PR changes the first
+        // reference to `SecretGuardMode::Redact` (and the `mode` field's
+        // doc comment above) in the same change as `secret_guard.rs`,
+        // keeping the second as the documented rollback value.
+        let _pinned_release_default: crate::secret_guard::SecretGuardMode =
+            crate::secret_guard::SecretGuardMode::Audit;
+        let _post_flip_rollback_value: crate::secret_guard::SecretGuardMode =
+            crate::secret_guard::SecretGuardMode::Audit;
+
+        // The rollback value keeps parsing as an explicit mode — after the
+        // flip, `mode = "audit"` is how unset-averse users opt back.
+        let parsed: SecretGuardSection =
+            toml::from_str("mode = \"audit\"").expect("explicit audit mode parses");
+        assert_eq!(parsed.mode.as_deref(), Some("audit"));
+    }
     use super::*;
     use shannon_engine::api::{LlmClientConfig, LlmProvider};
     use shannon_types::provider_config::{
