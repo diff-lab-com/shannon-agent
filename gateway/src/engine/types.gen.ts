@@ -68,6 +68,12 @@ export interface ApprovalRespondRequest {
   request_id: string;
 }
 
+export type ApprovalDecision =
+  | "allow_once"
+  | "always_allow"
+  | "always_allow_session"
+  | "deny";
+
 export interface ApprovalModeState {
   mode: string;
 }
@@ -76,12 +82,6 @@ export interface ApprovalModeRequest {
   mode: string;
   session_id: string;
 }
-
-export type ApprovalDecision =
-  | "allow_once"
-  | "always_allow"
-  | "always_allow_session"
-  | "deny";
 
 export type SseEventName =
   | "completed"

@@ -15,6 +15,9 @@ const installMcpStdio = vi.hoisted(() => vi.fn())
 // Batch E4: the featured page now also reads the installed list (personal
 // tab + icon row) — default to an empty machine.
 const listInstalledAddons = vi.hoisted(() => vi.fn(async () => []))
+// B4: Featured cards embed the SecurityBadge (community/unknown trust scans
+// the description) — the api mock must expose the scan command.
+const scanPromptInjectionWithReadme = vi.hoisted(() => vi.fn(async () => ({ risk: 'clean', matches: [], match_count: 0 })))
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
@@ -24,12 +27,18 @@ vi.mock('@/lib/tauri-api', () => ({
   installMcpOAuthComplete: (...a: unknown[]) => installMcpOAuthComplete(...a),
   installMcpStdio: (...a: unknown[]) => installMcpStdio(...a),
   listInstalledAddons: (...a: unknown[]) => listInstalledAddons(...a),
+  scanPromptInjectionWithReadme: (...a: unknown[]) => scanPromptInjectionWithReadme(...a),
 }))
 
-function renderWithRouter() {
+function renderWithRouter({ withManageRoute = false } = {}) {
   return render(
     <MemoryRouter initialEntries={['/extensions/featured']}>
       <Routes>
+        {/* Explicit sibling outranks the featured splat — lets the 「管理」
+            navigation assertion observe the real route change. */}
+        {withManageRoute && (
+          <Route path="/extensions/mcp-servers" element={<div data-testid="mcp-servers-page" />} />
+        )}
         <Route path="/*" element={<Shell />}>
           <Route path="*" element={<Featured />} />
         </Route>
@@ -74,12 +83,42 @@ const stdioVendor = {
   homepage_url: 'https://example.com',
 }
 
+// B4: community-trust vendor — exercises the SecurityBadge scan path.
+const communityVendor = {
+  slug: 'acme-tools',
+  display_name: 'Acme Tools',
+  description: 'Community-built toolbox of dubious provenance',
+  icon: 'handyman',
+  category: 'productivity',
+  trust: 'community',
+  install_kind: {
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', '@acme/mcp'],
+    env_vars: [],
+    display_name: 'Acme Tools',
+  },
+  homepage_url: 'https://example.com',
+}
+
+const installedRow = (slug: string) => ({
+  id: `mcp:${slug}`,
+  kind: 'mcp',
+  name: slug,
+  enabled: true,
+})
+
 beforeEach(() => {
   listFeaturedVendors.mockReset()
   installMcpOAuthLoopback.mockReset()
   installMcpOAuthAuthorizeUrl.mockReset()
   installMcpOAuthComplete.mockReset()
   installMcpStdio.mockReset()
+  scanPromptInjectionWithReadme.mockReset()
+  scanPromptInjectionWithReadme.mockResolvedValue({ risk: 'clean', matches: [], match_count: 0 })
+  // Default to an empty machine; installed-state tests override per test.
+  listInstalledAddons.mockReset()
+  listInstalledAddons.mockResolvedValue([])
 })
 
 describe('Featured (P2 wire-up)', () => {
@@ -98,27 +137,74 @@ describe('Featured (P2 wire-up)', () => {
     expect(screen.getByText(/boom/)).toBeInTheDocument()
   })
 
-  it('renders OAuth vendor with Connect button', async () => {
+  // B4 (F-11): the unified foot has ONE primary action per card —
+  // 未安装 → 「Add」 for both oauth and stdio kinds (the install IS the
+  // auth flow, so no separate Connect label / needs-auth state).
+  it('renders an uninstalled OAuth vendor with a single Add action', async () => {
     listFeaturedVendors.mockResolvedValue([oauthVendor])
     renderWithRouter()
     await waitFor(() => {
       expect(screen.getByText('Google Drive')).toBeInTheDocument()
     })
-    expect(screen.getByText('Connect')).toBeInTheDocument()
-    expect(screen.getByText('Verified')).toBeInTheDocument()
+    expect(screen.getByTestId('featured-action-google-drive')).toHaveTextContent('Add')
+    expect(screen.queryByText('Connect')).not.toBeInTheDocument()
+    // Honesty: no connection state can be derived → no 已连接/去认证 claim.
+    expect(screen.queryByText('Connected')).not.toBeInTheDocument()
+    expect(screen.queryByText(/needs auth/i)).not.toBeInTheDocument()
   })
 
-  it('renders stdio vendor with Install button', async () => {
+  it('renders an uninstalled stdio vendor with a single Add action', async () => {
     listFeaturedVendors.mockResolvedValue([stdioVendor])
     renderWithRouter()
     await waitFor(() => {
       expect(screen.getByText('Filesystem')).toBeInTheDocument()
     })
-    expect(screen.getByText('Install')).toBeInTheDocument()
-    expect(screen.getByText('Official')).toBeInTheDocument()
+    expect(screen.getByTestId('featured-action-filesystem')).toHaveTextContent('Add')
+    expect(screen.queryByText('Install')).not.toBeInTheDocument()
   })
 
-  it('invokes installMcpStdio when stdio vendor Install clicked', async () => {
+  it('renders an installed vendor with a Manage action', async () => {
+    listFeaturedVendors.mockResolvedValue([oauthVendor])
+    listInstalledAddons.mockResolvedValue([installedRow('google-drive')])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByTestId('featured-action-google-drive')).toHaveTextContent('Manage')
+    })
+    expect(screen.queryByText('Add')).not.toBeInTheDocument()
+  })
+
+  it('navigates to the MCP managers when Manage is clicked', async () => {
+    listFeaturedVendors.mockResolvedValue([oauthVendor])
+    listInstalledAddons.mockResolvedValue([installedRow('google-drive')])
+    renderWithRouter({ withManageRoute: true })
+    await waitFor(() => {
+      expect(screen.getByTestId('featured-action-google-drive')).toHaveTextContent('Manage')
+    })
+    fireEvent.click(screen.getByTestId('featured-action-google-drive'))
+    await waitFor(() => {
+      expect(screen.getByTestId('mcp-servers-page')).toBeInTheDocument()
+    })
+  })
+
+  it('flips to Manage after a successful install (installed list refresh)', async () => {
+    listFeaturedVendors.mockResolvedValue([stdioVendor])
+    // First read (mount): not installed. The shannon:extension-installed
+    // event triggers a reload that now reports the vendor.
+    listInstalledAddons.mockResolvedValueOnce([]).mockResolvedValue([installedRow('filesystem')])
+    installMcpStdio.mockResolvedValue({ id: 'stdio:filesystem', name: 'filesystem', install_path: null })
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByTestId('featured-action-filesystem')).toHaveTextContent('Add')
+    })
+    fireEvent.click(screen.getByTestId('featured-action-filesystem'))
+    // The install dispatches shannon:extension-installed; Featured reloads
+    // listInstalledAddons and re-renders the foot as Manage.
+    await waitFor(() => {
+      expect(screen.getByTestId('featured-action-filesystem')).toHaveTextContent('Manage')
+    })
+  })
+
+  it('invokes installMcpStdio when stdio vendor Add is clicked', async () => {
     listFeaturedVendors.mockResolvedValue([stdioVendor])
     installMcpStdio.mockResolvedValue({
       id: 'stdio:filesystem',
@@ -127,9 +213,9 @@ describe('Featured (P2 wire-up)', () => {
     })
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('Install')).toBeInTheDocument()
+      expect(screen.getByTestId('featured-action-filesystem')).toHaveTextContent('Add')
     })
-    fireEvent.click(screen.getByText('Install'))
+    fireEvent.click(screen.getByTestId('featured-action-filesystem'))
     await waitFor(() => {
       expect(installMcpStdio).toHaveBeenCalledWith({
         server_name: 'filesystem',
@@ -151,9 +237,9 @@ describe('Featured (P2 wire-up)', () => {
     window.addEventListener('shannon:extension-installed', onEvent)
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('Install')).toBeInTheDocument()
+      expect(screen.getByTestId('featured-action-filesystem')).toHaveTextContent('Add')
     })
-    fireEvent.click(screen.getByText('Install'))
+    fireEvent.click(screen.getByTestId('featured-action-filesystem'))
     await waitFor(() => {
       expect(installMcpStdio).toHaveBeenCalled()
     })
@@ -165,7 +251,7 @@ describe('Featured (P2 wire-up)', () => {
     window.removeEventListener('shannon:extension-installed', onEvent)
   })
 
-  it('invokes installMcpOAuthLoopback when OAuth Connect clicked (success)', async () => {
+  it('invokes installMcpOAuthLoopback when OAuth vendor Add is clicked (success)', async () => {
     listFeaturedVendors.mockResolvedValue([oauthVendor])
     installMcpOAuthLoopback.mockResolvedValue({
       id: 'oauth:google-drive',
@@ -174,9 +260,9 @@ describe('Featured (P2 wire-up)', () => {
     })
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('Connect')).toBeInTheDocument()
+      expect(screen.getByTestId('featured-action-google-drive')).toHaveTextContent('Add')
     })
-    fireEvent.click(screen.getByText('Connect'))
+    fireEvent.click(screen.getByTestId('featured-action-google-drive'))
     await waitFor(() => {
       expect(installMcpOAuthLoopback).toHaveBeenCalledWith('google-drive')
     })
@@ -189,9 +275,9 @@ describe('Featured (P2 wire-up)', () => {
     installMcpOAuthLoopback.mockRejectedValue(new Error('loopback bind failed'))
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('Connect')).toBeInTheDocument()
+      expect(screen.getByTestId('featured-action-google-drive')).toHaveTextContent('Add')
     })
-    fireEvent.click(screen.getByText('Connect'))
+    fireEvent.click(screen.getByTestId('featured-action-google-drive'))
     await waitFor(() => {
       expect(installMcpOAuthLoopback).toHaveBeenCalledWith('google-drive')
     })
@@ -216,5 +302,49 @@ describe('Featured (P2 wire-up)', () => {
       expect(screen.getByText('Verified')).toBeInTheDocument()
       expect(screen.getByText('Official')).toBeInTheDocument()
     })
+  })
+})
+
+// B4 (design 07-connectors foot): every featured card carries a visible
+// security indicator on the foot's left slot — the standing "secured" line
+// when the scan has nothing to flag, the scan's verdict chip otherwise.
+describe('Featured card security indicator (F-11 foot)', () => {
+  it('shows the secured line on a verified card without scanning', async () => {
+    listFeaturedVendors.mockResolvedValue([oauthVendor])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Injection-scanned · Signed')).toBeInTheDocument()
+    })
+    expect(scanPromptInjectionWithReadme).not.toHaveBeenCalled()
+  })
+
+  it('shows the secured line for a community card with a clean scan', async () => {
+    listFeaturedVendors.mockResolvedValue([communityVendor])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Acme Tools')).toBeInTheDocument()
+    })
+    await waitFor(() => {
+      expect(scanPromptInjectionWithReadme).toHaveBeenCalled()
+    })
+    await waitFor(() => {
+      expect(screen.getByText('Injection-scanned · Signed')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Injection risk')).not.toBeInTheDocument()
+    expect(screen.queryByText('Review')).not.toBeInTheDocument()
+  })
+
+  it('swaps the secured line for the scan verdict chip when the scan flags risk', async () => {
+    scanPromptInjectionWithReadme.mockResolvedValue({
+      risk: 'dangerous',
+      matches: [{ pattern: 'ignore previous', matched_substring: 'ignore previous', category: 'system_override' }],
+      match_count: 1,
+    })
+    listFeaturedVendors.mockResolvedValue([communityVendor])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Injection risk')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Injection-scanned · Signed')).not.toBeInTheDocument()
   })
 })

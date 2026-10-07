@@ -76,15 +76,17 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       { id: 'p-set', label: t('nav.settings'), icon: 'settings', category: t('palette.category.pages'), action: () => navigate('/settings') },
       // R2-P1-9: every settings subpage is reachable from the palette, not
       // just theme/models — same group, rail icons, and plain navigate as
-      // the existing two entries (routes mirror App.tsx /settings/*).
-      { id: 'p-theme', label: t('palette.page.themeSettings'), icon: 'palette', category: t('palette.category.settings'), action: () => navigate('/settings/theme') },
-      { id: 'p-models', label: t('palette.page.modelSettings'), icon: 'neurology', category: t('palette.category.settings'), action: () => navigate('/settings/models') },
+      // the existing entries. IA 2026-10 (ADVERSARIAL-REVIEW §2): the group
+      // mirrors the 8-section rail exactly (network/session/remotes deep
+      // links redirect in App.tsx, so they no longer get palette entries).
       { id: 'p-set-general', label: t('nav.general'), icon: 'tune', category: t('palette.category.settings'), action: () => navigate('/settings/general') },
+      { id: 'p-theme', label: t('nav.theme'), icon: 'palette', category: t('palette.category.settings'), action: () => navigate('/settings/theme') },
+      { id: 'p-models', label: t('nav.models'), icon: 'smart_toy', category: t('palette.category.settings'), action: () => navigate('/settings/models') },
       { id: 'p-set-permissions', label: t('nav.permissions'), icon: 'shield', category: t('palette.category.settings'), action: () => navigate('/settings/permissions') },
-      { id: 'p-set-advanced', label: t('nav.advanced'), icon: 'developer_mode', category: t('palette.category.settings'), action: () => navigate('/settings/advanced') },
       { id: 'p-set-notifications', label: t('nav.notifications'), icon: 'notifications', category: t('palette.category.settings'), action: () => navigate('/settings/notifications') },
       { id: 'p-set-connections', label: t('nav.connections'), icon: 'cloud', category: t('palette.category.settings'), action: () => navigate('/settings/connections') },
-      { id: 'p-set-remotes', label: t('nav.remotes'), icon: 'settings_remote', category: t('palette.category.settings'), action: () => navigate('/settings/remotes') },
+      { id: 'p-set-about', label: t('nav.about'), icon: 'info', category: t('palette.category.settings'), action: () => navigate('/settings/about') },
+      { id: 'p-set-advanced', label: t('nav.advanced'), icon: 'developer_mode', category: t('palette.category.settings'), action: () => navigate('/settings/advanced') },
     ]
     // 2026-09 review: remove the hard 5/8/10 slice caps so the palette
     // surfaces every task / agent / session / model (cmdk filters the

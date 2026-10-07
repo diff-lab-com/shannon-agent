@@ -16,6 +16,7 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { shouldShowWelcome } from '@/pages/Welcome';
 import { listen } from '@tauri-apps/api/event';
 import { SESSION_WINDOW_REVEAL_EVENT } from '@/lib/windowSession';
+import { dispatchPaletteVisibility } from '@/lib/paletteVisibility';
 
 interface SidebarContextValue {
   open: boolean
@@ -118,6 +119,17 @@ export function Layout() {
     return () => window.removeEventListener('shannon:toggle-palette', handler)
   }, [])
 
+  // Aurora redesign F-9 companion: while the palette is open, the chat
+  // page's RightDock drops its backdrop-filter (`.dock-solid`) so a fresh
+  // glass layer never stacks on the dock's (on-screen budget ≤ 4 holds).
+  // Layout owns the palette state; the dock lives in route pages, so the
+  // state crosses via the shannon:* window-event convention (see
+  // lib/paletteVisibility). Fires on mount too, so late subscribers
+  // (navigating into /chat with the palette already up) start correct.
+  useEffect(() => {
+    dispatchPaletteVisibility(paletteOpen)
+  }, [paletteOpen])
+
   // 2026-09-29 provider review §3-A1: `config.provider` is dead since
   // ADR-0005 (always undefined) — the gate ran on a permanent "no
   // provider". Use the reliable snapshot; an env-detected provider
@@ -160,12 +172,10 @@ export function Layout() {
       const sessionId = (e.payload as { sessionId?: string }).sessionId
       if (!sessionId) return
       void switchSession(sessionId).then(() => navigate('/chat'))
+    }).then(fn => {
+      if (cancelled) { fn(); return }
+      unlisten = fn
     })
-      .then(fn => {
-        if (cancelled) { fn(); return }
-        unlisten = fn
-      })
-      .catch(() => { /* event API unavailable — same posture as useTauriEvent */ })
     return () => {
       cancelled = true
       unlisten?.()

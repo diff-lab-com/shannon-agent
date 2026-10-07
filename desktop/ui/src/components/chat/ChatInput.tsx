@@ -34,6 +34,8 @@ import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow'
 import { modelWhyFor, type ModelWhyContext } from '@/lib/modelWhy'
 import { writeGlobalModelDefault } from '@/lib/modelSwitch'
 import { APPROVAL_MODES, approvalModeOption } from '@/lib/approvalModes'
+import { ExecutionModeSwitcher } from '@/components/chat/ExecutionModeSwitcher'
+import { PhaseTierSwitcher } from '@/components/chat/PhaseTierSwitcher'
 import { VISION_IMAGE_EXTENSIONS as IMAGE_EXTENSIONS } from '@/lib/fileRefs'
 
 /**
@@ -1453,7 +1455,16 @@ export default function ChatInput({
                   {() => <span className="truncate">{selectedMode.rawLabel ?? t(selectedMode.labelKey)}</span>}
                 </SelectValue>
               </SelectTrigger>
-              <SelectContent>
+              {/* The composer sits on the window's bottom edge, and the
+                  default trigger-aligned popup opens DOWNWARD from the
+                  selected item — the ladder + high-risk note then overflow
+                  the viewport and the popup scrolls internally (bug:
+                  权限模式弹出框显示不全面). Open upward with standard
+                  popover positioning instead: the whole ladder and the note
+                  fit in the ~550px between the composer and the header.
+                  min-w-56 stops the two-line descriptions wrapping three
+                  deep (the trigger-aligned w-(--anchor-width) was pill-width). */}
+              <SelectContent side="top" alignItemWithTrigger={false} className="min-w-56">
                 {APPROVAL_MODES.map(mode => (
                   <SelectItem key={mode.value} value={mode.value}>
                     <div className="flex items-start gap-xs py-0.5">
@@ -1697,6 +1708,14 @@ export default function ChatInput({
                 {currentEffortLabel}
               </span>
             )}
+            {/* Aurora redesign 2026-10 (02-chat.html 三要素归位): the
+                execution-mode + plan/act tier switchers live in the composer
+                now — moved out of the chat Header. Compact variants, same
+                testids/aria/IPC as the old header form (e2e anchors by
+                testid, not container). They render before the right-cluster
+                controls so the row wraps, never squeezes the send button. */}
+            <ExecutionModeSwitcher compact />
+            <PhaseTierSwitcher compact />
           </div>
 
           <div className="flex items-center gap-xs shrink-0">

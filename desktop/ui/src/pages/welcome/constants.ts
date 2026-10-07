@@ -56,6 +56,42 @@ export const TASKS: TaskOption[] = [
   },
 ]
 
+// ─── Recommended-tool display metadata (01b Done-step follow-up) ────────────
+// The Done step lists each of the task's recommended tools as a chip: display
+// name + a fixed one-line reason. Names are brand proper nouns where possible
+// (git, playwright, tavily) but `filesystem` / `web_search` are common nouns
+// and translate — so display names route through i18n (`welcome.tool.*`),
+// keeping this file read-only. Reasons live in `welcome.done.reason.*`, one
+// key per tool id, mirroring `TASKS[].tools` above: every id that can appear
+// in a `tools` array must have both keys in all 10 locales (en is the
+// i18n-check baseline). An unknown id — a tool added to `TASKS` without
+// updating these maps — falls back to the raw id and the generic extension
+// icon instead of crashing the Done step.
+export const TOOL_LABEL_KEYS: Record<string, string> = {
+  filesystem: 'welcome.tool.filesystem',
+  git: 'welcome.tool.git',
+  playwright: 'welcome.tool.playwright',
+  web_search: 'welcome.tool.web_search',
+  tavily: 'welcome.tool.tavily',
+}
+
+export const TOOL_REASON_KEYS: Record<string, string> = {
+  filesystem: 'welcome.done.reason.filesystem',
+  git: 'welcome.done.reason.git',
+  playwright: 'welcome.done.reason.playwright',
+  web_search: 'welcome.done.reason.web_search',
+  tavily: 'welcome.done.reason.tavily',
+}
+
+/** Semantic chip icon per known tool (subset of the MCP server icons). */
+export const TOOL_ICONS: Record<string, string> = {
+  filesystem: 'folder',
+  git: 'hub',
+  playwright: 'theater_comedy',
+  web_search: 'search',
+  tavily: 'travel_explore',
+}
+
 export const PROVIDERS = [
   { id: 'anthropic', label: 'Anthropic', descKey: 'welcome.model.anthropic.desc' },
   { id: 'openai', label: 'OpenAI', descKey: 'welcome.model.openai.desc' },

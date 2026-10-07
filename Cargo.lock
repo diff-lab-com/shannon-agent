@@ -7111,6 +7111,7 @@ dependencies = [
 name = "shannon-browser"
 version = "0.12.0"
 dependencies = [
+ "base64 0.22.1",
  "chromiumoxide",
  "chromiumoxide_cdp",
  "filetime",

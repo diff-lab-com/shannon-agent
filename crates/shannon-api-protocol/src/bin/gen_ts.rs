@@ -94,10 +94,11 @@ fn collect_entries() -> Vec<TypeEntry> {
         entry_struct::<ToolEntry>("ToolEntry"),
         entry_struct::<ToolsListResponse>("ToolsListResponse"),
         entry_struct::<ApprovalRespondRequest>("ApprovalRespondRequest"),
-        // P3-3 approval-mode REST payloads (`GET/POST /api/approval/mode`).
+        entry_enum_simple::<ApprovalDecision>("ApprovalDecision"),
+        // P3-3 approval-mode endpoints (GET returns State, POST takes Request;
+        // the mobile gateway's one-tap TIGHTEN-to-readonly flow).
         entry_struct::<ApprovalModeState>("ApprovalModeState"),
         entry_struct::<ApprovalModeRequest>("ApprovalModeRequest"),
-        entry_enum_simple::<ApprovalDecision>("ApprovalDecision"),
         entry_enum_simple::<SseEventName>("SseEventName"),
         // R2-W2 session-enumeration + approval-enrichment payload types.
         entry_struct::<SessionSummary>("SessionSummary"),

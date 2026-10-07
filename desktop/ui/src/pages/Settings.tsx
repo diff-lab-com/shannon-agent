@@ -3,31 +3,31 @@ import { useIntl } from 'react-intl';
 import { cn } from '@/lib/utils';
 import { useSidebarMode } from '@/components/Sidebar';
 
-// Review 2026-09-16 (UI-review §P1): the eight settings panes were reachable
-// only through the Sidebar's 设置 disclosure — users bouncing between e.g.
-// Models and Theme had to detour through the sidebar every time. This layout
-// adds the in-page section nav competitors (Codex / Claude Desktop) have.
-// Labels reuse the sidebar's `nav.*` keys so wording can't drift.
+// Review 2026-09-16 (UI-review §P1): the settings panes were reachable only
+// through the Sidebar's 设置 disclosure — users bouncing between e.g. Models
+// and Theme had to detour through the sidebar every time. This layout adds
+// the in-page section nav competitors (Codex / Claude Desktop) have. Labels
+// reuse the sidebar's `nav.*` keys so wording can't drift.
 //
 // 2026-09 dedup: the sidebar's disclosure was retired; this rail is now the
 // only section switcher. 高级 stays dev-gated here — same contract as before
 // (Sidebar.tsx:386-388 historical).
 //
-// Settings R3 (T1): 网络 / 会话 / 关于 join the rail (about absorbs the
-// update-check content that used to live behind the dev-gated 高级), and
-// 高级 moves to the end of the list — it is the least-frequently visited
-// section and already hidden outside dev mode.
+// IA redesign 2026-10 (ADVERSARIAL-REVIEW §2): 11 sections → 8. 网络 merges
+// into 连接 (bottom of ConnectionsPane), 会话 merges into 通用 (bottom of
+// GeneralPane), 远程目标 merges into 连接 (middle of ConnectionsPane). The
+// old deep links /settings/network|session|remotes redirect in App.tsx —
+// no bookmark breaks. Labels still reuse existing `nav.*` keys: nav.theme
+// is now displayed as 外观/Appearance and nav.connections as 连接/Connections
+// (its only consumers are this rail + the command palette, both updated).
 
 const SECTIONS: Array<{ to: string; labelId: string; icon: string }> = [
   { to: '/settings/general', labelId: 'nav.general', icon: 'tune' },
   { to: '/settings/theme', labelId: 'nav.theme', icon: 'palette' },
   { to: '/settings/models', labelId: 'nav.models', icon: 'smart_toy' },
   { to: '/settings/permissions', labelId: 'nav.permissions', icon: 'shield' },
-  { to: '/settings/network', labelId: 'nav.network', icon: 'lan' },
-  { to: '/settings/session', labelId: 'nav.session', icon: 'forum' },
   { to: '/settings/notifications', labelId: 'nav.notifications', icon: 'notifications' },
   { to: '/settings/connections', labelId: 'nav.connections', icon: 'cloud' },
-  { to: '/settings/remotes', labelId: 'nav.remotes', icon: 'settings_remote' },
   { to: '/settings/about', labelId: 'nav.about', icon: 'info' },
   // Dev-gated — filtered out below in simple mode; always rendered last.
   { to: '/settings/advanced', labelId: 'nav.advanced', icon: 'developer_mode' },

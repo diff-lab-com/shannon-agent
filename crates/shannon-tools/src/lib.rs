@@ -604,9 +604,14 @@ fn register_all_tools(
     registry.register(Box::new(browser_tools::BrowserSnapshotTool))?;
     registry.register(Box::new(browser_tools::BrowserTextTool))?;
     registry.register(Box::new(browser_tools::BrowserFillTool))?;
+    registry.register(Box::new(browser_tools::BrowserSelectOptionTool))?;
+    registry.register(Box::new(browser_tools::BrowserHoverTool))?;
     registry.register(Box::new(browser_tools::BrowserPressKeyTool))?;
     registry.register(Box::new(browser_tools::BrowserScrollTool))?;
+    registry.register(Box::new(browser_tools::BrowserWaitForTool))?;
     registry.register(Box::new(browser_tools::BrowserEvaluateTool))?;
+    registry.register(Box::new(browser_tools::BrowserUploadTool))?;
+    registry.register(Box::new(browser_tools::BrowserPdfTool))?;
     registry.register(Box::new(browser_tools::BrowserScreenshotTool))?;
     registry.register(Box::new(browser_tools::BrowserTabsTool))?;
     registry.register(Box::new(browser_tools::BrowserCloseTool))?;

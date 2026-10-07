@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shannon Desktop v2 · 新版 UI 设计稿总览</title>
+<link rel="stylesheet" href="assets/shannon-ui.css">
+<style>
+  body { overflow: auto; }
+  .ix-wrap { position: relative; z-index: 1; max-width: 1060px; margin: 0 auto; padding: 52px 32px 90px; }
+  .ix-hero { margin-bottom: 44px; }
+  .ix-eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 1.5px; color: var(--vio-2); text-transform: uppercase; margin-bottom: 14px; }
+  .ix-hero h1 { font-size: 34px; font-weight: 780; letter-spacing: .2px; line-height: 1.25; }
+  .ix-hero h1 .grad { background: var(--grad-aurora); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .ix-hero .sub { font-size: 14.5px; color: var(--t2); margin-top: 12px; max-width: 720px; line-height: 1.7; }
+  .ix-sec { margin-top: 44px; }
+  .ix-sec > h2 { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 9px; margin-bottom: 4px; }
+  .ix-sec > h2 .ic { width: 15px; height: 15px; color: var(--vio-2); }
+  .ix-sec > .desc { font-size: 12.5px; color: var(--t3); margin-bottom: 16px; }
+  .ix-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .ix-grid.two { grid-template-columns: 1fr 1fr; }
+  a.ix-card { display: block; background: var(--ink-2); border: 1px solid var(--hair); border-radius: 14px; padding: 15px 16px; color: var(--t1); transition: border-color .12s, transform .12s; }
+  a.ix-card:hover { border-color: rgba(139,124,247,.45); transform: translateY(-1px); }
+  a.ix-card .no { font-family: var(--mono); font-size: 10.5px; color: var(--t3); }
+  a.ix-card .t { font-size: 13.5px; font-weight: 650; margin-top: 3px; display: flex; align-items: center; gap: 7px; }
+  a.ix-card .t .ic { width: 14px; height: 14px; color: var(--vio-2); }
+  a.ix-card .p { font-size: 11.5px; color: var(--t3); margin-top: 5px; line-height: 1.55; }
+  .ix-note { font-size: 12px; color: var(--t2); line-height: 1.8; }
+  table.ix { width: 100%; border-collapse: collapse; font-size: 12.5px; background: var(--ink-2); border: 1px solid var(--hair); border-radius: 12px; overflow: hidden; }
+  table.ix th { text-align: left; padding: 9px 14px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .7px; color: var(--t3); border-bottom: 1px solid var(--hair); }
+  table.ix td { padding: 9px 14px; border-bottom: 1px solid rgba(255,255,255,.045); color: var(--t2); vertical-align: top; }
+  table.ix tr:last-child td { border-bottom: 0; }
+  table.ix td b { color: var(--t1); }
+  .tok-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .tok { display: flex; align-items: center; gap: 9px; background: var(--ink-2); border: 1px solid var(--hair); border-radius: 10px; padding: 8px 12px; font-size: 11.5px; color: var(--t2); }
+  .tok i { width: 20px; height: 20px; border-radius: 6px; flex: none; display: block; border: 1px solid var(--hair); }
+</style>
+</head>
+<body>
+<div class="ambient"></div>
+<!-- Shannon v2 mockup icon sprite —— 粘贴到 <body> 之后即可用 <svg class="ic"><use href="#i-plus"/></svg> -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-logo" viewBox="0 0 24 24"><path d="M3 13h3l2-7 4 13 3-10 1.6 4H21" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+  <symbol id="i-chev-d" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-chev-r" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5l13 7.5-13 7.5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 4h2.5v16H8zM13.5 4H16v16h-2.5z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 4 5.5 4 9s-1.5 6.5-4 9c-2.5-2.5-4-5.5-4-9s1.5-6.5 4-9z"/></symbol>
+  <symbol id="i-panel-r" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></symbol>
+  <symbol id="i-panel-l" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2l10 5-10 5L2 7l10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 3v6h6M3.5 9A9 9 0 1 1 3 12"/><path d="M12 7v5l3 3"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></symbol>
+  <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></symbol>
+  <symbol id="i-command" viewBox="0 0 24 24"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></symbol>
+  <symbol id="i-up-right" viewBox="0 0 24 24"><path d="M7 17L17 7M7 7h10v10"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+  <symbol id="i-zap-off" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8zM2 2l20 20" /></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol>
+  <symbol id="i-kanban" viewBox="0 0 24 24"><rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="5" height="8" rx="1"/></symbol>
+</svg>
+<div class="ix-wrap">
+
+  <div class="ix-hero">
+    <div class="ix-eyebrow">SHANNON DESKTOP · UI REDESIGN V2 · 2026-10</div>
+    <h1>新版设计稿 <span class="grad">Aurora Glass</span></h1>
+    <p class="sub">
+      对 Shannon Desktop 全部 14 个界面逐一重绘的高保真设计稿。深色优先、Liquid Glass 三级材质、品牌紫 × 极光青签名;
+      布局语法与术语体系对齐 Codex Desktop、Claude Desktop / Claude Code、WorkBuddy、ZCode、Hermes Desktop 的公共范式,
+      并保留 Shannon 独有资产(BYOK 成本治理、事件溯源回放、安全扫描可视化)的一等曝光。
+      点开下方每一页即为 1440×900 视口下的成品级静态稿,所有页面共享同一套 <b>shannon-ui.css</b> 设计系统。
+    </p>
+  </div>
+
+  <div class="ix-sec">
+    <h2><svg class="ic"><use href="#i-layers"/></svg> 全部页面(14 页)</h2>
+    <p class="desc">按用户旅程排序:上手 → 日常交付 → 自动化闭环 → 生态 → 治理 → 配置。每页标题旁是它对位的竞品范式。</p>
+    <div class="ix-grid">
+      <a class="ix-card" href="pages/01-welcome.html"><span class="no">01</span><div class="t"><svg class="ic"><use href="#i-spark"/></svg>欢迎引导</div><p class="p">2 步上手:任务+模型同屏。对位 ChatGPT/Claude 首启;首问直跑,配置后置。完成态见 <a href="pages/01b-welcome-done.html">01b</a>。</p></a>
+      <a class="ix-card" href="pages/02-chat.html"><span class="no">02</span><div class="t"><svg class="ic"><use href="#i-chat"/></svg>对话 · 主工作台</div><p class="p">composer 恒见 + 三要素(权限/模型/推理);内联工具卡与 diff。对位 ZCode 三要素 + Claude Code 面板语法。</p></a>
+      <a class="ix-card" href="pages/03-chat-review.html"><span class="no">03</span><div class="t"><svg class="ic"><use href="#i-branch"/></svg>对话 · Diff 评审态</div><p class="p">逐 hunk 接受/拒绝、键盘流。对位 Codex review queue / Claude Code diff pane。</p></a>
+      <a class="ix-card" href="pages/04-tasks.html"><span class="no">04</span><div class="t"><svg class="ic"><use href="#i-bolt"/></svg>任务 · 自动化中心</div><p class="p">自动化 / 目标 / 后台任务 / 多方案对比四子区,单一主 CTA。对位 Codex Automations + ZCode Goal Mode。对比视图见 <a href="pages/04b-best-of-n.html">04b</a>。</p></a>
+      <a class="ix-card" href="pages/05-inbox.html"><span class="no">05</span><div class="t"><svg class="ic"><use href="#i-inbox"/></svg>收件箱</div><p class="p">自动化结果回流 +「继续会话」闭环主按钮。对位 Codex review queue 最后一公里。</p></a>
+      <a class="ix-card" href="pages/06-usage.html"><span class="no">06</span><div class="t"><svg class="ic"><use href="#i-chart"/></svg>用量与成本</div><p class="p">BYOK 成本治理一等公民:KPI 玻璃卡 + 上下文构成 + 缓存命中。对位 Hermes 状态栏 + ZCode Usage。</p></a>
+      <a class="ix-card" href="pages/07-connectors.html"><span class="no">07</span><div class="t"><svg class="ic"><use href="#i-grid"/></svg>连接 · 扩展目录</div><p class="p">MCP/技能/智能体/数据源/插件目录化,安全徽章前置。对位 Claude Connectors;诚实标注未支持形态。</p></a>
+      <a class="ix-card" href="pages/08-memory.html"><span class="no">08</span><div class="t"><svg class="ic"><use href="#i-db"/></svg>记忆</div><p class="p">注入预览 + 溯源回跳 + 旁路开关。对位 Hermes Memory Graph 的透明度范式。</p></a>
+      <a class="ix-card" href="pages/09-mission-control.html"><span class="no">09</span><div class="t"><svg class="ic"><use href="#i-kanban"/></svg>指挥台 · 多智能体</div><p class="p">使命焦点 + agent 集群 + 五列看板,枚举全部中文化。Shannon 独有资产,对位 Claude Code Mission Control 词汇。</p></a>
+      <a class="ix-card" href="pages/10-timeline.html"><span class="no">10</span><div class="t"><svg class="ic"><use href="#i-history"/></svg>回放时间线</div><p class="p">事件溯源「行车记录仪」:turn 瀑布 + 成本曲线 + 导出。Shannon 独有。</p></a>
+      <a class="ix-card" href="pages/11-files.html"><span class="no">11</span><div class="t"><svg class="ic"><use href="#i-folder"/></svg>文件库</div><p class="p">附件与 agent 产出统一索引,预览面板 + 缺失检测。</p></a>
+      <a class="ix-card" href="pages/12-settings.html"><span class="no">12</span><div class="t"><svg class="ic"><use href="#i-gear"/></svg>设置 · 8 分区</div><p class="p">IA 从 11 分区重组为 8:通用(+会话)/ 外观 / 模型 / 权限与安全(+审批默认档)/ 通知 / 连接(+远程执行+网络)/ 关于 / 高级。子页设计稿见下方链接行。</p></a>
+      <a class="ix-card" href="pages/13-companion.html"><span class="no">13</span><div class="t"><svg class="ic"><use href="#i-phone"/></svg>伴随窗 · 快速捕获</div><p class="p">置顶小窗,随手记 → 主窗口草稿(不自动发送)。</p></a>
+      <a class="ix-card" href="pages/14-command-palette.html"><span class="no">14</span><div class="t"><svg class="ic"><use href="#i-command"/></svg>命令面板(叠加态)</div><p class="p">⌘K 万能入口:页面/会话/模型/设置直达。对位 Codex / Raycast 语法。</p></a>
+    </div>
+    <p class="ix-note mt12" style="font-size:12px">
+      设置子页(S1–S6):
+      <a href="pages/12-settings-general.html">S1 通用</a> ·
+      <a href="pages/12-settings-appearance.html">S2 外观</a> ·
+      <a href="pages/12-settings.html">模型</a> ·
+      <a href="pages/12-settings-security.html">S3 权限与安全</a> ·
+      <a href="pages/12-settings-notifications.html">S4 通知</a> ·
+      <a href="pages/12-settings-connections.html">S5 连接</a> ·
+      <a href="pages/12-settings-advanced.html">S6 关于与高级</a>
+      　·　对抗性审查:<a href="ADVERSARIAL-REVIEW.md">ADVERSARIAL-REVIEW.md</a>(20 项发现待裁决)
+    </p>
+  </div>
+
+  <div class="ix-sec">
+    <h2><svg class="ic"><use href="#i-shield"/></svg> 设计原则</h2>
+    <p class="desc">四条贯穿全部 14 页的硬规则,审核时可逐页对照检查。</p>
+    <div class="ix-grid two">
+      <div class="card pad">
+        <div class="row mb8"><b style="font-size:13px">① 玻璃只给悬浮层,内容区保持实体</b></div>
+        <p class="ix-note">L1 玻璃(blur 28px)用于侧栏/顶栏/composer/右停靠;L2 玻璃(blur 44px)只用于弹层。消息流、表格、卡片全部实体色,保证可读性与滚动性能;同屏 backdrop-filter ≤ 4 个,弹层打开时右停靠自动降为实体色。</p>
+      </div>
+      <div class="card pad">
+        <div class="row mb8"><b style="font-size:13px">② 语义色只有四色 + 极光签名</b></div>
+        <p class="ix-note">成功 苔绿 / 警示 琥珀 / 危险 珊瑚 / 信息 天青,全站唯一;品牌紫只做「可交互」信号。签名元素是玻璃面板上缘 1px 极光发丝线(violet→cyan),只在 composer、命令面板、激活卡出现。</p>
+      </div>
+      <div class="card pad">
+        <div class="row mb8"><b style="font-size:13px">③ 一个概念一个词,四处一致</b></div>
+        <p class="ix-note">任务 / 收件箱 / 连接 / 指挥台 / 多方案对比 —— 侧栏 = 页头 = 面包屑 = 快捷键提示统一;状态枚举永不直出数据库值。详见下方术语表。</p>
+      </div>
+      <div class="card pad">
+        <div class="row mb8"><b style="font-size:13px">④ 诚实优先:能力边界可视化</b></div>
+        <p class="ix-note">不支持的能力用琥珀虚线徽章明说(如 remote MCP「桌面端即将支持」);自动暂停、预算触顶、附件被拒全部给结构化回执,不造「说谎 UI」。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="ix-sec">
+    <h2><svg class="ic"><use href="#i-edit"/></svg> 术语与信息架构对位表</h2>
+    <p class="desc">路由与代码标识符不变,只改显示层;对位竞品公共词汇,降低迁移认知成本。</p>
+    <table class="ix">
+      <tr><th style="width:24%">Shannon v2 统一术语</th><th style="width:19%">对位竞品词汇</th><th>替代的旧多轨说法</th></tr>
+      <tr><td><b>任务 Tasks</b>(内含 自动化 / 目标 / 后台任务 / 多方案对比)</td><td>Codex Automations · Claude Routines · ZCode 自动化/Goal</td><td>已排程 / 定时任务 / 例行程序 / mission-control / goals 分页</td></tr>
+      <tr><td><b>收件箱 Inbox</b></td><td>Codex Review Queue</td><td>分流队列 / 收件箱双轨</td></tr>
+      <tr><td><b>连接 Connectors</b>(内含 技能 / 智能体 / 数据源 / 插件)</td><td>Claude Connectors · Hermes Skills Hub</td><td>扩展(一个词盖 7 种东西)</td></tr>
+      <tr><td><b>指挥台 Mission Control</b></td><td>Claude Code Mission Control</td><td>单人公司 OPC(开发语言)</td></tr>
+      <tr><td><b>多方案对比 Best-of-N</b></td><td>Codex attempts</td><td>并行方案 / best-of-N 英文混排</td></tr>
+      <tr><td><b>执行模式四档</b>:逐项确认 / 自动编辑 / 计划 / 完全访问</td><td>ZCode Shift+Tab 四档</td><td>5 档 slider(文案重叠)</td></tr>
+    </table>
+  </div>
+
+  <div class="ix-sec">
+    <h2><svg class="ic"><use href="#i-chart"/></svg> 设计令牌速览</h2>
+    <p class="desc">完整定义见 assets/shannon-ui.css;12 套主题仅替换表面色,材质公式与语义色全局统一。</p>
+    <div class="tok-row">
+      <div class="tok"><i style="background:#0a0b10"></i>ink 窗口底 #0A0B10</div>
+      <div class="tok"><i style="background:rgba(22,25,34,.8)"></i>glass-1 侧栏/composer</div>
+      <div class="tok"><i style="background:rgba(29,33,45,.6)"></i>glass-2 弹层</div>
+      <div class="tok"><i style="background:#8b7cf7"></i>violet 主色 #8B7CF7</div>
+      <div class="tok"><i style="background:linear-gradient(93deg,#8b7cf7,#56c8dd)"></i>aurora 签名渐变</div>
+      <div class="tok"><i style="background:#3ddc97"></i>ok</div>
+      <div class="tok"><i style="background:#f5b83d"></i>warn</div>
+      <div class="tok"><i style="background:#fb7185"></i>bad</div>
+      <div class="tok"><i style="background:#4cc3f7"></i>info</div>
+    </div>
+    <p class="ix-note mt12">字体:Inter Variable(界面)+ JetBrains Mono(数据/代码/diff/来源链);中文回退 PingFang SC / Noto Sans SC。字阶 11 / 12 / 13.5 / 14 / 19 / 24 / 30,正文 13.5 起,消息流正文 14。圆角 8 / 12 / 16 / 18;阅读列宽 max 792px。</p>
+  </div>
+
+  <div class="ix-sec">
+    <h2><svg class="ic"><use href="#i-eye"/></svg> 审核提示</h2>
+    <p class="ix-note">
+      · 每页为独立静态 HTML(无 JS 依赖),用浏览器打开即可,设计视口 1440×900。<br>
+      · 玻璃材质需浏览器渲染 backdrop-filter,截图工具请用无头 Chromium。<br>
+      · 数据均为演示用虚构内容;真实接口字段以现有 Tauri 命令为准,不改动任何路由。<br>
+      · 逐页改动清单与竞品对照见 README.md(与本总览同目录)。
+    </p>
+  </div>
+
+</div>
+</body>
+</html>

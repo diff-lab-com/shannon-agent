@@ -17,8 +17,12 @@ test.describe('Add provider — full journey (P-N20)', () => {
     await page.goto('/settings/models')
     await page.locator('main').first().waitFor({ timeout: 15000 })
 
-    // The demo roster seeds Anthropic + GLM (Zhipu).
-    await expect(page.getByText('Anthropic', { exact: true })).toBeVisible({ timeout: 15000 })
+    // The demo roster seeds Anthropic + GLM (Zhipu). Anchor on the roster
+    // card: bare getByText('Anthropic') also matches kindLabel('anthropic')
+    // and vault rows once the model catalog hydrates (CI has network).
+    await expect(
+      page.getByTestId('provider-card').filter({ hasText: 'Anthropic' }).first(),
+    ).toBeVisible({ timeout: 15000 })
 
     // ── open the canonical modal ───────────────────────────────────────────
     await page.getByRole('button', { name: 'Add provider' }).click()

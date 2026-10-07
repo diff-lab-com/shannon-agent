@@ -14,6 +14,11 @@ const ctx = vi.hoisted(() => ({
   thinkingText: '',
   isQuerying: false,
   activeToolCalls: [] as any[],
+  // U2 — RightDock open/close state (Chat wires the dock to it; the dock's
+  // Aurora F-9 mount default exercises onClose → setContextPanelOpen).
+  contextPanelOpen: false,
+  setContextPanelOpen: vi.fn(),
+  toggleContextPanel: vi.fn(),
   // R5-2 — in-stream retry notices (failover / key rotation).
   streamNotices: [] as any[],
   usage: null as any,
@@ -76,6 +81,9 @@ function resetCtx() {
   ctx.thinkingText = ''
   ctx.isQuerying = false
   ctx.activeToolCalls = []
+  ctx.contextPanelOpen = false
+  ctx.setContextPanelOpen = vi.fn()
+  ctx.toggleContextPanel = vi.fn()
   ctx.streamNotices = []
   ctx.usage = null
   ctx.sessions = []

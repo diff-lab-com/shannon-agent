@@ -43,17 +43,17 @@ const Plugins = lazy(() => import('./components/extensions/Plugins'));
 const Installed = lazy(() => import('./components/extensions/Installed'));
 // IA X1: Extensions → Pending — the single skill-review surface (评审裁决 #2).
 const Pending = lazy(() => import('./components/extensions/Pending'));
-const GeneralSettings = lazy(() => import('./components/settings/GeneralSettings'));
 const ThemeSettings = lazy(() => import('./components/settings/ThemeSettings'));
 const ModelsSettings = lazy(() => import('./components/settings/ModelsSettings'));
 const AdvancedSettings = lazy(() => import('./components/settings/AdvancedSettings'));
 const NotificationsSettings = lazy(() => import('./components/settings/NotificationsSettings'));
-const ConnectionsSettings = lazy(() => import('./components/settings/ConnectionsSettings'));
-const RemotesSettings = lazy(() => import('./components/settings/RemotesSettings'));
-const PermissionsSettings = lazy(() => import('./components/settings/PermissionsSettings'));
-// Settings R3 (T1) — 网络/会话/关于 sections + the advanced dev-mode guard.
-const NetworkSettings = lazy(() => import('./components/settings/NetworkSettings'));
-const SessionSettings = lazy(() => import('./components/settings/SessionSettings'));
+// IA redesign 2026-10 (ADVERSARIAL-REVIEW §2) — 11 sections → 8. The merged
+// panes stack the original components (which stay untouched) behind group
+// headings; 网络/会话/远程 deep links redirect below.
+const GeneralPane = lazy(() => import('./pages/settings/GeneralPane'));
+const ConnectionsPane = lazy(() => import('./pages/settings/ConnectionsPane'));
+const PermissionsPane = lazy(() => import('./pages/settings/PermissionsPane'));
+// Settings R3 (T1) — 关于 section + the advanced dev-mode guard.
 const AboutSettings = lazy(() => import('./components/settings/AboutSettings'));
 const RequireDevMode = lazy(() => import('./components/settings/RequireDevMode'));
 
@@ -204,17 +204,22 @@ export default function App() {
                 <Route path="/timeline/:id" element={<TurnTimeline />} />
                 <Route path="/settings" element={<Settings />}>
                   <Route index element={<Navigate to="general" replace />} />
-                  <Route path="general" element={<GeneralSettings />} />
+                  {/* IA 2026-10 (ADVERSARIAL-REVIEW §2): 通用 absorbs 会话,
+                      连接 absorbs 远程执行 + 网络 — the panes stack the
+                      original components under group headings. */}
+                  <Route path="general" element={<GeneralPane />} />
                   <Route path="theme" element={<ThemeSettings />} />
                   <Route path="models" element={<ModelsSettings />} />
-                  <Route path="permissions" element={<PermissionsSettings />} />
-                  {/* Settings R3 (T1) — 网络/会话 skeletons + 关于 (absorbs
-                      the update check from the dev-gated 高级). */}
-                  <Route path="network" element={<NetworkSettings />} />
-                  <Route path="session" element={<SessionSettings />} />
+                  <Route path="permissions" element={<PermissionsPane />} />
+                  {/* Legacy deep links from the 11-section layout — keep
+                      bookmarks working by redirecting to the absorbing
+                      section (session defaults → 通用, remotes + network →
+                      连接). */}
+                  <Route path="network" element={<Navigate to="/settings/connections" replace />} />
+                  <Route path="session" element={<Navigate to="/settings/general" replace />} />
+                  <Route path="remotes" element={<Navigate to="/settings/connections" replace />} />
                   <Route path="notifications" element={<NotificationsSettings />} />
-                  <Route path="connections" element={<ConnectionsSettings />} />
-                  <Route path="remotes" element={<RemotesSettings />} />
+                  <Route path="connections" element={<ConnectionsPane />} />
                   <Route path="about" element={<AboutSettings />} />
                   {/* 高级 stays dev-only — deep links from a simple-mode
                       session redirect to General (RequireDevMode). */}

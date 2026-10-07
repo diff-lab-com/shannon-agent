@@ -41,6 +41,7 @@ import { WebRenderer } from '@/components/artifact/WebRenderer'
 import { ArtifactZoomBar, useArtifactZoom } from '@/components/artifact/ArtifactZoomBar'
 import { openDiskArtifact } from '@/components/artifact/ArtifactLinkHost'
 import { registerLinkPanelRouter } from '@/lib/openLink'
+import { onPaletteVisibility } from '@/lib/paletteVisibility'
 import { projectOf } from '@/components/SidebarSessions'
 import DiffReviewBody from '@/components/diff/DiffReviewBody'
 import type { ToolCall, UsagePayload } from '@/types'
@@ -63,6 +64,10 @@ const DEFAULT_WIDTH = 340
 /** B3 §P2-21: resizer keyboard step (ArrowLeft/ArrowRight). */
 const RESIZE_STEP_PX = 16
 const UTILITY_TABS: readonly UtilityTab[] = ['context', 'plan', 'run', 'live', 'diff']
+
+/** F-9 (Aurora redesign, 02-chat.html 规格标注): below this width the dock
+ *  starts COLLAPSED — the responsive default fires once at mount only. */
+const F9_COLLAPSE_BREAKPOINT_PX = 1360
 
 /** Batch D4: dock fullscreen — the reading position from the dead-code
  *  ArtifactPanel, revived inside the unified dock. */
@@ -165,11 +170,36 @@ export default function RightDock({
   const [hintDismissed, setHintDismissed] = useState<boolean>(
     () => typeof window !== 'undefined' && localStorage.getItem('shannon.dock.hintSeen') === '1'
   )
+  // Aurora F-9 companion: while the CommandPalette (or another floating
+  // layer) is open this dock goes SOLID (`.dock-solid`) — a new glass layer
+  // must never stack its backdrop-filter on the dock's. Layout (the palette
+  // owner) announces via lib/paletteVisibility; the class is inert unless
+  // the palette is actually up.
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  useEffect(() => onPaletteVisibility(setPaletteOpen), [])
   const dismissHint = useCallback(() => {
     setHintDismissed(true)
     try { localStorage.setItem('shannon.dock.hintSeen', '1') } catch { /* noop */ }
   }, [])
   const draggingRef = useRef(false)
+
+  // F-9: narrow windows start with the dock COLLAPSED — the responsive
+  // default governs the INITIAL mount only (one shot; no resize listener).
+  // After it has fired, a manual expand (Header toggle / Ctrl+\) wins for
+  // the whole session — the user's in-session choice is never re-collapsed.
+  // The header toggle icon is the recall affordance the design names
+  // (02-chat.html 规格标注: <1360px 右停靠自动折叠,图标呼出). On wide
+  // windows nothing changes and the persisted shannon.dock.open preference
+  // keeps ruling as before.
+  const f9AppliedRef = useRef(false)
+  useEffect(() => {
+    if (f9AppliedRef.current) return
+    f9AppliedRef.current = true
+    if (typeof window === 'undefined') return
+    if (window.innerWidth >= F9_COLLAPSE_BREAKPOINT_PX) return
+    if (open) onClose()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only responsive default
+  }, [])
 
   useEffect(() => {
     try { localStorage.setItem(TAB_KEY, tab) } catch { /* ignore */ }
@@ -387,6 +417,11 @@ export default function RightDock({
               // G1: the dock is persistent window chrome → glass-surface
               // (was glass-panel + bg/50, an off-system third recipe).
               'glass-surface shrink-0 relative flex flex-col overflow-hidden',
+              // Aurora F-9 companion: palette (floating layer) open → the
+              // dock's blur is killed for the solid surface fill, keeping
+              // the on-screen backdrop-filter budget at ≤ 4. Unlayered
+              // class, deterministic over glass-surface utilities.
+              paletteOpen && 'dock-solid',
               // §P2-22: suppress the open/close width transition while the
               // user is dragging the resizer — otherwise every pointermove
               // chases a 300ms ease and the panel lags like a rubber band.

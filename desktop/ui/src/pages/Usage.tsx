@@ -540,9 +540,13 @@ export default function Usage() {
             />
           </div>
 
-          {/* Charts — primary read. Hover a bar for the exact segment split. */}
+          {/* Charts — primary read. Hover a bar for the exact segment split.
+              F-4 (ui-redesign 06): the chart title must match the active
+              filter — compose the static label with the selected range
+              (reusing the range-button key), e.g. "Daily tokens · 30 days"
+              / "每日 token · 近 30 天". */}
           <ChartCard
-            title={t('usage.chart.byDay.title')}
+            title={`${t('usage.chart.byDay.title')} · ${intl.formatMessage({ id: 'usage.range' }, { days })}`}
             subtitle={t('usage.chart.byDay.subtitle')}
             icon="calendar_month"
             empty={dailyBars.length === 0}

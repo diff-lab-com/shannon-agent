@@ -16,6 +16,19 @@
  * need an entry in a hardcoded selector list here. */
 @custom-variant dark (&:where([data-theme-mode="dark"]));
 
+/* ── Aurora v2 responsive contract (docs/design/ui-redesign-2026-10,
+   adjudication F-9) — COMMENT ONLY; no breakpoints ship in this file.
+   Component media queries must converge on these canonical widths:
+     < 1360px — the right dock (Diff/Preview/Context/Plan tabs) collapses
+       from the full panel to its collapsed rail/trigger form.
+     < 1200px — the composer's execution-mode 4-segment control collapses
+       to a single "current mode" chip (the full segment stays reachable
+       through the chip's menu).
+   All three composer elements (mode / model / reasoning) remain reachable
+   at every width — only their form changes. The JS/layout side of this
+   contract lands in components (separate workstreams); if breakpoint
+   tokens are ever promoted into @theme, keep them in sync with this block. */
+
 @theme {
   /* Theme COLOR tokens are GENERATED below from scripts/theme-source.json —
    * edit the source, then run `pnpm generate:themes`. The region must stay
@@ -308,6 +321,14 @@
   --glass-overlay-alpha: 0.6;
 }
 
+/* Aurora v2 contrast guardrail (AA 4.5:1) — audited 2026-10-07 against the
+   default dark theme (tokyo-night): --color-on-surface-variant #a9b1d6 over
+   --color-surface-container #1f2335 = 7.37:1, and muted-foreground #8d95b8
+   over the same surface = 5.28:1 (still 4.56:1 on container-highest
+   #292e42). All pass, so NO override layer is needed here. Re-audit (and
+   add the override in THIS unlayered region, never in the generated block)
+   only if theme-source.json ever lifts those text token values. */
+
 @utility glass-surface {
   background: color-mix(in srgb, var(--color-surface-container-lowest) calc(var(--glass-tint-alpha) * 100%), transparent);
   backdrop-filter: var(--glass-blur-surface);
@@ -330,6 +351,30 @@
   /* No `contain: paint` (unlike glass-surface): overlays host focusable
      controls near their edges (dialog close buttons, first/last menu items)
      and the containment would clip their focus rings. */
+}
+
+/* ── Aurora signature: hairline gradient light (docs/design/ui-redesign-2026-10
+   §1 签名) ── The app's ONLY decorative element: a 1px violet→cyan light on
+   the TOP EDGE of a glass panel — "the signal leaving this machine for the
+   model". RESTRICTED to four surfaces: the composer, the command palette,
+   the activated card, the mission hero. Do not spread it to ordinary
+   cards/rows. Purely static paint — no animation, so prefers-reduced-motion
+   needs no (and has no) fallback path. */
+@utility aurora-line {
+  position: relative;
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 12%;
+    right: 12%;
+    height: 1px;
+    /* Literal rgba is deliberate: the aurora is a fixed brand signature
+       (design --vio #8b7cf7 @ .55 / --aur #56c8dd @ .45), NOT a per-theme
+       token — it must read identically across all 12 themes. */
+    background: linear-gradient(90deg, transparent, rgba(139, 124, 247, 0.55), rgba(86, 200, 221, 0.45), transparent);
+    pointer-events: none;
+  }
 }
 
 /* Elevation utilities for solid (non-glass) cards — replaces ad-hoc
@@ -391,6 +436,20 @@
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
+}
+
+/* Dock solid degradation (Aurora redesign, adjudication F-9): applied to the
+   right dock while a floating layer (dialog / menu / palette / popover) is
+   open — swaps the dock's glass fill for the solid surface-container color
+   and kills its blur, so a new backdrop-filter never stacks on top of the
+   dock's and the on-screen budget (≤ 4) holds. Deliberately a plain
+   UNLAYERED class, same as the fallbacks above: unlayered declarations beat
+   the @layer utilities that glass-surface emits, so it wins deterministically
+   regardless of class order or Tailwind's utility sort. */
+.dock-solid {
+  background: var(--color-surface-container);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* Thin themed scrollbar for overflow surfaces (KanbanBoard column strips

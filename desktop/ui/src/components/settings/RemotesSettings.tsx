@@ -56,8 +56,10 @@ function RemotesSettings(): React.JSX.Element {
       // so a reload reflects reality instead of the previous explicit no-op
       // (`setDefaultTarget((prev) => prev ?? null)`).
       const list = await api.remoteListTargets()
-      setTargets(list.targets)
-      setDefaultTarget(list.defaultTarget)
+      // 审查修复: mock 后端对未实现命令返回 {},防御契约漂移导致渲染期
+      // `targets.length` 裸崩(读写对称口径,同 R2-P2-10)。
+      setTargets(list?.targets ?? [])
+      setDefaultTarget(list?.defaultTarget ?? null)
       setLoaded(true)
     } catch (e) {
       toastError(t('settings.remotes.loadFailed'), e)

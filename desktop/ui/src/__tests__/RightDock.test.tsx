@@ -203,3 +203,77 @@ describe('RightDock web tab dedup (§P1-12)', () => {
     expect(screen.getByTestId('artifact-count')).toHaveTextContent('2')
   })
 })
+
+// Aurora redesign 2026-10 (F-9 + 弹层降实体):
+//   F-9   — below 1360px the dock starts COLLAPSED, once at mount (the
+//           responsive default; the header toggle icon is the recall).
+//           Manual expansion afterwards is never re-collapsed — the effect
+//           does not re-run, and no resize listener exists.
+//   solid — while the CommandPalette is open, Layout announces
+//           shannon:palette-visibility and the dock paints `.dock-solid`
+//           (blur off, solid fill) so backdrop-filters never stack.
+describe('RightDock — Aurora F-9 mount default + palette dock-solid', () => {
+  it('a narrow window (<1360px) collapses the dock once at mount', () => {
+    window.innerWidth = 1200
+    const onClose = vi.fn()
+    render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} onCloseDiff={vi.fn()} />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('the default fires once — a re-render does not re-collapse a manual expand', () => {
+    window.innerWidth = 1200
+    const onClose = vi.fn()
+    const { rerender } = render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} onCloseDiff={vi.fn()} />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    rerender(
+      <I18nProvider>
+        <ArtifactProvider>
+          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} onCloseDiff={vi.fn()} />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('a wide window keeps the dock open (default only governs narrow)', () => {
+    window.innerWidth = 1600
+    const onClose = vi.fn()
+    render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} onCloseDiff={vi.fn()} />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('palette open adds dock-solid to the aside; close removes it', () => {
+    window.innerWidth = 1600
+    const { container } = renderDock()
+    const aside = container.querySelector('aside') as HTMLElement
+    expect(aside.className).toContain('glass-surface')
+    expect(aside.className).not.toContain('dock-solid')
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('shannon:palette-visibility', { detail: { open: true } }))
+    })
+    expect(aside.className).toContain('dock-solid')
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('shannon:palette-visibility', { detail: { open: false } }))
+    })
+    expect(aside.className).not.toContain('dock-solid')
+  })
+})
