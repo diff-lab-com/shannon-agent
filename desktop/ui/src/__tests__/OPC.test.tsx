@@ -39,6 +39,18 @@ describe('OPC page', () => {
     expect(screen.getByText("Today's Mission")).toBeInTheDocument()
   })
 
+  // ui-redesign 09 pagehead: the page contributes a muted subtitle line
+  // above the mission card / view tabs (the H1 stays in the Header).
+  it('renders the page subtitle above the view tabs', () => {
+    resetCtx()
+    renderOPC()
+    expect(
+      screen.getByText(
+        'One mission, a team of agents — tasks run here in parallel, every state replayable',
+      ),
+    ).toBeInTheDocument()
+  })
+
   it('renders active agents heading', () => {
     resetCtx()
     renderOPC()

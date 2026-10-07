@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useIntl } from 'react-intl'
 import {
   scanPromptInjectionWithReadme,
@@ -20,6 +20,7 @@ export function SecurityBadge({
   text,
   trust,
   readmeUrl,
+  fallback,
 }: {
   text: string
   trust: "verified" | "official" | "community" | "unknown"
@@ -28,6 +29,14 @@ export function SecurityBadge({
    * the README body. Leave undefined to scan description only (legacy mode).
    */
   readmeUrl?: string
+  /**
+   * B4 (F-11 unified card anatomy): rendered when the badge has NOTHING to
+   * warn about — verified/official trust (scan skipped), scan still pending,
+   * scan failure, or a clean report. Lets a card keep its always-visible
+   * "secured" line in the same slot and swap to the risk chip only when the
+   * scan actually finds something. Omit for the legacy warn-only behaviour.
+   */
+  fallback?: ReactNode
 }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -51,7 +60,7 @@ export function SecurityBadge({
     }
   }, [text, skip, readmeUrl])
 
-  if (skip || risk === null || risk === "clean") return null
+  if (skip || risk === null || risk === "clean") return fallback ?? null
 
   if (risk === "dangerous") {
     return (

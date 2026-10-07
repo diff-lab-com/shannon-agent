@@ -134,4 +134,27 @@ describe('OPCAgentSwarm', () => {
     const icon = card.querySelector('.material-symbols-outlined')
     expect(icon?.textContent).toBe('smart_toy')
   })
+
+  // F-5 (ui-redesign 09): a blocked agent consumes no compute — its load
+  // reads "—" with the explanatory tooltip, never a number or progress bar.
+  it('shows an em-dash load with blocked tooltip (no percent) for blocked agents', () => {
+    renderSwarm([{ id: 'b1', name: 'Ops', status: 'blocked', progress: 55 } as AgentInfo])
+    const load = screen.getByTestId('opc-agent-load-b1')
+    expect(load).toHaveAttribute('title', 'Blocked — no compute being consumed')
+    expect(load).toHaveTextContent('Blocked')
+    expect(load).toHaveTextContent('—')
+    expect(screen.queryByText('55%')).not.toBeInTheDocument()
+    // No progress bar either.
+    expect(load.querySelector('.h-1')).toBeNull()
+  })
+
+  it('shows the numeric progress meter for running agents', () => {
+    renderSwarm([{ id: 'r1', name: 'Scaler', status: 'running', progress: 72 } as AgentInfo])
+    expect(screen.getByText('72%')).toBeInTheDocument()
+  })
+
+  it('omits the load row when the agent has no progress data', () => {
+    renderSwarm([{ id: 'n1', name: 'Idle Bot', status: 'idle' } as AgentInfo])
+    expect(screen.queryByTestId('opc-agent-load-n1')).not.toBeInTheDocument()
+  })
 })

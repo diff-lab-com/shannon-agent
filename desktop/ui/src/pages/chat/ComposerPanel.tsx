@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import ChatInput from '@/components/chat/ChatInput'
+import ChatStatusBar from '@/components/chat/ChatStatusBar'
 import SlashResultCard from '@/components/chat/SlashResultCard'
 import QueueChips from './QueueChips'
 import { useT } from '@/i18n'
@@ -9,7 +10,6 @@ import { useChat } from '@/context/ChatContext'
 import { useSessions } from '@/context/SessionContext'
 import { useCatalog } from '@/context/CatalogContext'
 import { changeSessionWorkingDir } from '@/lib/sessionActions'
-import { formatDirBreadcrumb } from './utils'
 import { useComposer } from './ComposerContext'
 
 interface ComposerPanelProps {
@@ -46,7 +46,11 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
   return (
     <div className="shrink-0 w-full px-lg md:px-xl pb-md pt-xs">
       <div className="max-w-4xl mx-auto">
-        <div className="glass-surface rounded-2xl">
+        {/* Aurora signature (ui-redesign-2026-10 §1): the composer is one of
+            the four surfaces allowed to carry the aurora-line — a 1px
+            violet→cyan hairline on the glass top edge. Pure paint (no
+            backdrop-filter), so the on-screen glass budget stays ≤ 4. */}
+        <div className="glass-surface rounded-2xl aurora-line">
           {slashResult && <SlashResultCard result={slashResult} onDismiss={dismissSlashResult} />}
           {/* B1 §4-8: while editing, the banner identifies the target message
               and offers the escape hatch (restores the pre-edit draft). */}
@@ -80,24 +84,17 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
             sessionId={currentSessionId}
           />
         </div>
-        {/* Single-child row — plain start alignment (the old justify-between
-            implied a second trailing slot that no longer exists). */}
-        <div className="mt-xs flex items-center gap-md px-sm text-label-sm text-on-surface-variant">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => void changeSessionWorkingDir(currentSessionId, t)}
-            disabled={!currentSessionId}
-            className="flex items-center gap-xs min-w-0 hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title={sessionWorkingDir || t('chat.input.footer.workingDir.unset')}
-            aria-label={t('chat.input.footer.workingDir.aria')}
-          >
-            <span className="material-symbols-outlined icon-sm shrink-0">folder</span>
-            <span className="truncate font-mono">
-              {sessionWorkingDir ? formatDirBreadcrumb(sessionWorkingDir) : t('chat.input.footer.workingDir.unset')}
-            </span>
-          </Button>
-        </div>
+        {/* Aurora redesign 2026-10 (02-chat.html 状态条): the strip under the
+            composer. Absorbs the old working-directory row (same button,
+            aria label and breadcrumb) and adds the session spend / budget /
+            context segments — each hides when its data source is absent
+            (honesty contract, see ChatStatusBar). */}
+        <ChatStatusBar
+          workingDir={sessionWorkingDir}
+          usage={usage}
+          sessionId={currentSessionId}
+          onChangeWorkingDir={() => void changeSessionWorkingDir(currentSessionId, t)}
+        />
       </div>
     </div>
   )

@@ -40,6 +40,11 @@ import {
  * phases stay visible and pickable without reopening — a pick does NOT
  * close the popover (`closeOnClick={false}`), matching the pre-Base-UI
  * behavior and the Cline-style plan/act workflow.
+ *
+ * `compact` (Aurora redesign 2026-10, 02-chat.html): the same pair in its
+ * new composer home — tighter trigger padding beside the model chip.
+ * Trigger-only restyle: testid, aria label, popover content and the
+ * `configure` writes are identical to the header form.
  */
 
 const PREFS: readonly PhaseTierPref[] = ['inherit', 'fast', 'standard', 'pro'] as const
@@ -93,7 +98,7 @@ function PhaseGroup({
   )
 }
 
-export function PhaseTierSwitcher() {
+export function PhaseTierSwitcher({ compact = false }: { compact?: boolean }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) =>
     intl.formatMessage({ id }, values)
@@ -140,7 +145,10 @@ export function PhaseTierSwitcher() {
             aria-label={ariaLabel}
             title={ariaLabel}
             data-testid="phase-tier-switcher"
-            className="flex items-center gap-xs px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
+            className={cn(
+              'flex items-center gap-xs rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all',
+              compact ? 'px-sm py-xs' : 'px-md py-sm',
+            )}
           >
             <span className="material-symbols-outlined icon-md" aria-hidden="true">alt_route</span>
             <span className="font-label-sm text-label-sm whitespace-nowrap tabular-nums">
