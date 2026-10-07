@@ -186,8 +186,9 @@ fn parse_pinned_fingerprint(normalized: &str) -> Option<[u8; 32]> {
 
 /// HTTPS client whose TLS layer pins the gateway cert by fingerprint.
 fn pinned_https_client(pinned_hex: &str) -> Result<reqwest::Client, String> {
-    let pinned = parse_pinned_fingerprint(pinned_hex)
-        .ok_or_else(|| format!("pairing RPC: pinned fingerprint is not 64 hex chars: {pinned_hex}"))?;
+    let pinned = parse_pinned_fingerprint(pinned_hex).ok_or_else(|| {
+        format!("pairing RPC: pinned fingerprint is not 64 hex chars: {pinned_hex}")
+    })?;
     let provider = rustls::crypto::ring::default_provider();
     let mut config = rustls::ClientConfig::builder_with_provider(provider.clone().into())
         .with_safe_default_protocol_versions()
@@ -276,7 +277,6 @@ impl rustls::client::danger::ServerCertVerifier for FingerprintVerifier {
             .supported_schemes()
     }
 }
-
 
 #[derive(Debug, Deserialize)]
 struct PairingRpcErrorBody {
@@ -611,10 +611,7 @@ mod tests {
     fn fingerprint_normalization_and_parse() {
         // The gateway publishes lowercase colon-less hex (mobileTls.ts);
         // the colon-separated OpenSSL form is tolerated too.
-        assert_eq!(
-            normalize_fingerprint("AA:BB:0C:0D:0E:0F"),
-            "aabb0c0d0e0f"
-        );
+        assert_eq!(normalize_fingerprint("AA:BB:0C:0D:0E:0F"), "aabb0c0d0e0f");
         let normalized = normalize_fingerprint(
             "3A:F9:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:01:23:45:67:89:AB:CD:EF:FE:DC:BA:98:76:54:32",
         );
@@ -649,7 +646,11 @@ mod tests {
         let name = rustls::pki_types::ServerName::try_from("127.0.0.1".to_string())
             .expect("ip server name");
 
-        assert!(verifier.verify_server_cert(&cert, &[], &name, &[], rustls::pki_types::UnixTime::now()).is_ok());
+        assert!(
+            verifier
+                .verify_server_cert(&cert, &[], &name, &[], rustls::pki_types::UnixTime::now())
+                .is_ok()
+        );
 
         let other = rustls::pki_types::CertificateDer::from(vec![0xCDu8; 512]);
         let err = verifier

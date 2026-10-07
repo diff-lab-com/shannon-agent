@@ -461,8 +461,8 @@ impl ShellExecutor {
     /// (no shell invocation) to prevent command injection. The child gets a
     /// null stdin, both output pipes are drained on dedicated reader threads
     /// (a full pipe must never be able to block the child), and the whole
-    /// call is bounded by [`Self::timeout`] — on expiry the child is killed
-    /// and an error returned.
+    /// call is bounded by the configured `timeout` — on expiry the child is
+    /// killed and an error returned.
     pub fn execute(&self, command: &str, cwd: &Path) -> SkillResult<String> {
         debug!("Executing shell command: {}", command);
 
@@ -571,7 +571,9 @@ struct PipeCapture {
 /// result back when the pipe hits EOF. The thread outlives the call only in
 /// the grandchild case (someone else holds the write end); it is then
 /// detached and its buffer dropped.
-fn spawn_pipe_reader(pipe: impl std::io::Read + Send + 'static) -> std::sync::mpsc::Receiver<PipeCapture> {
+fn spawn_pipe_reader(
+    pipe: impl std::io::Read + Send + 'static,
+) -> std::sync::mpsc::Receiver<PipeCapture> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut pipe = pipe;
@@ -836,13 +838,12 @@ mod tests {
         // 3 MiB of NUL bytes — comfortably over the 1 MiB cap.
         let executor = ShellExecutor::new().with_timeout(Duration::from_secs(60));
         let out = executor
-            .execute(
-                "dd if=/dev/zero bs=1024 count=3072",
-                &std::env::temp_dir(),
-            )
+            .execute("dd if=/dev/zero bs=1024 count=3072", &std::env::temp_dir())
             .expect("dd must succeed");
         assert!(
-            out.contains("[skill command output truncated: showing first 1048576 of 3145728 bytes]"),
+            out.contains(
+                "[skill command output truncated: showing first 1048576 of 3145728 bytes]"
+            ),
             "truncation marker with true total expected, got tail: {:?}",
             &out[out.len().saturating_sub(200)..]
         );
