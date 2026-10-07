@@ -468,6 +468,10 @@ impl ComputerUseTool {
             "end" => enigo::Key::End,
             "pageup" | "page_up" | "pgup" => enigo::Key::PageUp,
             "pagedown" | "page_down" | "pgdn" => enigo::Key::PageDown,
+            // enigo's Key enum gates some variants per platform: Insert and
+            // F21-F24 don't exist on macOS — cfg the arms so the mapping is
+            // simply absent there instead of failing to compile.
+            #[cfg(not(target_os = "macos"))]
             "insert" => enigo::Key::Insert,
             "capslock" | "caps_lock" => enigo::Key::CapsLock,
             "f1" => enigo::Key::F1,
@@ -490,9 +494,13 @@ impl ComputerUseTool {
             "f18" => enigo::Key::F18,
             "f19" => enigo::Key::F19,
             "f20" => enigo::Key::F20,
+            #[cfg(not(target_os = "macos"))]
             "f21" => enigo::Key::F21,
+            #[cfg(not(target_os = "macos"))]
             "f22" => enigo::Key::F22,
+            #[cfg(not(target_os = "macos"))]
             "f23" => enigo::Key::F23,
+            #[cfg(not(target_os = "macos"))]
             "f24" => enigo::Key::F24,
             f if f.len() >= 2 && f.starts_with('f') => {
                 // f21..f24 and any other f-prefixed name are not mapped;
@@ -2316,11 +2324,19 @@ mod tests {
     #[test]
     fn test_str_to_key_extended_names() {
         assert_eq!(ComputerUseTool::str_to_key("F13"), Some(enigo::Key::F13));
-        assert_eq!(ComputerUseTool::str_to_key("f24"), Some(enigo::Key::F24));
-        assert_eq!(
-            ComputerUseTool::str_to_key("insert"),
-            Some(enigo::Key::Insert)
-        );
+        assert_eq!(ComputerUseTool::str_to_key("f20"), Some(enigo::Key::F20));
+        // Insert/F21-F24 only exist on non-macOS enigo builds — on macOS the
+        // names are (correctly) rejected as unknown rather than mapped.
+        if !cfg!(target_os = "macos") {
+            assert_eq!(ComputerUseTool::str_to_key("f24"), Some(enigo::Key::F24));
+            assert_eq!(
+                ComputerUseTool::str_to_key("insert"),
+                Some(enigo::Key::Insert)
+            );
+        } else {
+            assert_eq!(ComputerUseTool::str_to_key("f24"), None);
+            assert_eq!(ComputerUseTool::str_to_key("insert"), None);
+        }
         assert_eq!(
             ComputerUseTool::str_to_key("pgdn"),
             Some(enigo::Key::PageDown)
