@@ -1137,7 +1137,18 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         }
                         continue;
                     }
-                    Ok(_) => continue, // Mouse/Resize/Focus: next frame redraws
+                    Ok(crossterm::event::Event::Mouse(mouse)) => {
+                        // Same gate as the idle event loop: the wheel used to
+                        // be dropped here with "next frame redraws" — but a
+                        // redraw alone never scrolls, so streaming output
+                        // could not be wheel-navigated.
+                        if repl.state.mouse_capture_enabled {
+                            repl.mark_frame_dirty();
+                            super::input::handle_mouse(repl, mouse);
+                        }
+                        continue;
+                    }
+                    Ok(_) => continue, // Resize/Focus: next frame redraws
                     Err(_) => break,
                 };
                 {

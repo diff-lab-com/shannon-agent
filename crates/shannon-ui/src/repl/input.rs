@@ -260,6 +260,17 @@ pub fn handle_input(
         // F8: toggle mouse capture (when off, terminal handles text selection/copy)
         KeyCode::F(8) => {
             repl.state.mouse_capture_enabled = !repl.state.mouse_capture_enabled;
+            // Flip the TERMINAL mode too — the flag alone only gates the
+            // handler, so events kept flowing and clicks stayed captured
+            // while the toast claimed "text selection enabled".
+            let mode_result = if repl.state.mouse_capture_enabled {
+                crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)
+            } else {
+                crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)
+            };
+            if let Err(e) = mode_result {
+                tracing::debug!("failed to toggle mouse capture: {e}");
+            }
             let label = if repl.state.mouse_capture_enabled {
                 "Mouse scroll ON (Shift+drag to copy)"
             } else {
@@ -358,8 +369,11 @@ pub fn handle_input(
             } else {
                 current
             };
-            // Suspend raw mode so the editor can take over the terminal
-            let _ = crossterm::terminal::disable_raw_mode();
+            // Suspend the terminal for the editor: raw mode off AND mouse
+            // capture / bracketed paste disabled — with capture left on, a
+            // click inside the editor arrives as garbage escape sequences
+            // (crate::tui documents the pair).
+            let _ = crate::tui::restore_terminal_for_external();
             match open_external_editor(&editor_content) {
                 Ok(edited) => {
                     // Trim trailing newline that editors often append
@@ -373,8 +387,8 @@ pub fn handle_input(
                         .add_message(ChatRole::System, format!("Editor error: {e}"));
                 }
             }
-            // Re-enable raw mode for the TUI
-            let _ = crossterm::terminal::enable_raw_mode();
+            // Re-arm the terminal for the TUI
+            let _ = crate::tui::restore_terminal_after_external();
             Ok(())
         }
         // Ctrl+R: activate incremental history search

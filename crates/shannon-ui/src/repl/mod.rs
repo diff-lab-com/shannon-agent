@@ -1489,7 +1489,11 @@ impl Repl {
                 fn drop(&mut self) {
                     use std::io::Write as _;
                     let mut stdout = io::stdout();
-                    let _ = crossterm::execute!(stdout, crossterm::event::DisableBracketedPaste);
+                    let _ = crossterm::execute!(
+                        stdout,
+                        crossterm::event::DisableBracketedPaste,
+                        crossterm::event::DisableMouseCapture
+                    );
                     if !self.ran.get() {
                         let _ = crossterm::execute!(
                             stdout,
@@ -1508,8 +1512,16 @@ impl Repl {
         };
 
         let mut stdout = io::stdout();
-        // Enable bracketed paste mode for proper multi-line paste handling
-        execute!(stdout, crossterm::event::EnableBracketedPaste)?;
+        // Enable bracketed paste mode for proper multi-line paste handling,
+        // and mouse capture so the wheel scrolls the transcript (the
+        // `mouse_capture_enabled` flag defaults on — F8 toggles both the
+        // flag and the terminal mode). Without capture the wheel events
+        // never reach us and the handlers stay dead code.
+        execute!(
+            stdout,
+            crossterm::event::EnableBracketedPaste,
+            crossterm::event::EnableMouseCapture
+        )?;
 
         let backend = CrosstermBackend::new(stdout);
         let term_size = crossterm::terminal::size().unwrap_or((80, 24));
@@ -1971,10 +1983,12 @@ impl Repl {
         // Persist UI state for next session
         self.save_ui_state();
 
-        // Restore terminal — disable bracketed-paste BEFORE raw mode to prevent escape leakage
+        // Restore terminal — disable paste + mouse capture BEFORE raw mode to
+        // prevent escape leakage
         execute!(
             terminal.backend_mut(),
-            crossterm::event::DisableBracketedPaste
+            crossterm::event::DisableBracketedPaste,
+            crossterm::event::DisableMouseCapture
         )?;
         // Scroll the inline viewport frame into scrollback so the last
         // frame (input box / status bar / help bar) doesn't linger under
