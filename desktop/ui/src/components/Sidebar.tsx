@@ -247,10 +247,16 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         <div className="absolute right-0 top-0 bottom-0 w-1 transition-colors group-hover:bg-primary/30 group-focus-visible:bg-primary/30 group-active:bg-primary/50" />
       </div>
       <div className="flex items-center gap-3 mb-xl px-sm min-w-0">
-        {/* U8: brand mark `cognitive` (filled) — a knowledge-graph knot reads as
-            "connected intelligence" and nods to Shannon's information theory. */}
-        <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center text-on-primary shadow-lg shadow-primary/30 shrink-0">
-          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>cognitive</span>
+        {/* U8: brand mark `hub` (filled) — a knowledge-graph knot reads as
+            "connected intelligence" and nods to Shannon's information theory.
+            W9 theme-audit 2026-10-07: was `cognitive`, but the bundled
+            Material Symbols subset has no such ligature, so the raw word
+            rendered at 24px-per-letter and spilled across the sidebar
+            (black/white letters visible on solarized-light, gruvbox-light,
+            solarized; clipped white fragments on every other theme). `hub`
+            is the same connected-nodes metaphor and IS in the font. */}
+        <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center text-on-primary shadow-lg shadow-primary/30 shrink-0 overflow-hidden">
+          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>hub</span>
         </div>
         <div className="min-w-0">
           <h1 className="font-headline-md text-body-lg font-bold text-on-surface leading-tight truncate">Shannon</h1>

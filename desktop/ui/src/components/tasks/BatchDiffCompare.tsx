@@ -15,14 +15,118 @@
 // list plus guidance that the worktrees were kept for manual handling.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useIntl } from 'react-intl'
+import { useIntl, type IntlShape } from 'react-intl'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Modal, ModalBody } from '@/components/ui/modal'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Spinner } from '@/components/ui/loading-state'
 import { cn } from '@/lib/utils'
+import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
-import type { BatchBranch, BatchRunDto } from '@/types'
+import type { BatchBranch, BatchRunDto, BatchVerification } from '@/types'
+
+/** The component's localized-string helper shape (matches `t` below). */
+type Translate = (id: string, values?: Record<string, string | number>) => string
+
+/**
+ * W4 — deterministic "smallest diff" fact: the completed branch whose
+ * worktree changed the fewest lines (+additions −deletions). The per-branch
+ * +/− already rides the `BatchBranch.summary` contract (same numbers the
+ * chips render), so this needs no extra IPC — and unlike a per-file helper
+ * (`fetchDiffLineStats` is single-file over `getFileDiff`), it covers every
+ * branch, selected or not. Needs ≥2 branches with stats to say "smallest"
+ * of something; ties keep the lowest index (strict `<`).
+ */
+export function smallestDiffBranchIndex(run: BatchRunDto): number | null {
+  const candidates = run.branches.filter(b => b.status === 'completed' && b.summary !== null)
+  if (candidates.length < 2) return null
+  let best = candidates[0]
+  for (const b of candidates.slice(1)) {
+    const size = (x: typeof b) => x.summary!.additions + x.summary!.deletions
+    if (size(b) < size(best)) best = b
+  }
+  return best.index
+}
+
+/**
+ * Full localized verification phrase (verdict card + Markdown export).
+ * null = the branch carries no verification data (old backend payload) —
+ * callers must not render a row at all.
+ */
+export function verificationFactText(v: BatchVerification, t: Translate): string {
+  if (v.exitOk) {
+    if (v.testsPassed !== undefined && v.testsTotal !== undefined) {
+      return t('batch.compare.testsPassedCount', { passed: v.testsPassed, total: v.testsTotal })
+    }
+    return t('batch.compare.testsPassed')
+  }
+  if (v.testsPassed !== undefined && v.testsTotal !== undefined) {
+    return t('batch.compare.testsFailedCount', {
+      passed: v.testsPassed,
+      total: v.testsTotal,
+      failed: v.testsTotal - v.testsPassed,
+    })
+  }
+  return t('batch.compare.verificationFailed')
+}
+
+/**
+ * Markdown export for the compare dialog (same "decidable facts only"
+ * discipline as the verdict card): batch title, then one block per branch —
+ * name, status, diff summary, spend, verification facts (only when the
+ * backend sent them), worktree path — closed by the derived conclusions.
+ */
+export function buildCompareMarkdown(run: BatchRunDto, t: Translate, intl: IntlShape): string {
+  const spent = (usd: number) => intl.formatNumber(usd, { style: 'currency', currency: 'USD' })
+  const lines: string[] = [`# ${t('batch.compare.title', { title: run.title })}`, '']
+  for (const b of run.branches) {
+    lines.push(`## ${t('batch.compare.export.mdBranch', { index: b.index })} — ${b.branchName}`, '')
+    lines.push(`- ${t('batch.compare.export.mdStatus')}: ${t(`batch.branchStatus.${b.status}`)}`)
+    if (b.summary) {
+      lines.push(
+        `- ${t('batch.compare.export.mdChanges')}: ${t('batch.compare.branchStat', {
+          files: b.summary.filesChanged,
+          additions: b.summary.additions,
+          deletions: b.summary.deletions,
+        })}`,
+      )
+    }
+    lines.push(`- ${t('batch.compare.export.mdSpent')}: ${spent(b.spentUsd)}`)
+    if (b.verification) {
+      lines.push(
+        `- ${t('batch.compare.export.mdVerification')}: ${verificationFactText(b.verification, t)}`,
+      )
+    }
+    lines.push(`- ${t('batch.compare.export.mdWorktree')}: \`${b.worktreePath}\``)
+    lines.push('')
+  }
+  // Derived conclusions, only when decidable (mirrors the verdict card).
+  const verdict: string[] = []
+  for (const b of run.branches) {
+    if (b.verification) {
+      verdict.push(`- #${b.index}: ${verificationFactText(b.verification, t)}`)
+    }
+  }
+  const smallest = smallestDiffBranchIndex(run)
+  const smallestBranch = smallest === null ? null : run.branches.find(b => b.index === smallest)
+  if (smallestBranch?.summary) {
+    verdict.push(
+      `- #${smallestBranch.index}: ${t('batch.compare.smallestDiff')} — ${t('batch.compare.branchStat', {
+        files: smallestBranch.summary.filesChanged,
+        additions: smallestBranch.summary.additions,
+        deletions: smallestBranch.summary.deletions,
+      })}`,
+    )
+  }
+  if (smallest !== null && run.branches.some(b => b.index === smallest && b.verification?.exitOk)) {
+    verdict.push(`- #${smallest}: ${t('batch.compare.recommended')}`)
+  }
+  if (verdict.length > 0) {
+    lines.push(`## ${t('batch.compare.verdictTitle')}`, '', ...verdict, '')
+  }
+  return lines.join('\n')
+}
 
 /** Read-only unified-patch renderer: +/-/@@ line coloring, monospace. */
 export function DiffPatchView({ patch, className }: { patch: string; className?: string }) {
@@ -163,6 +267,10 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
   const [confirmIndex, setConfirmIndex] = useState<number | null>(null)
   const [adopting, setAdopting] = useState(false)
   const [conflicts, setConflicts] = useState<{ index: number; files: string[] } | null>(null)
+  // W4 — Markdown export: same backend-dialog flow as the timeline HTML
+  // export (the user's dialog pick is the authorization; cancelling is a
+  // decision, not an error).
+  const [exporting, setExporting] = useState(false)
   // 2b — worktree-path copy feedback, same delayed-callback hygiene as
   // WebhookTriggerCard: a re-copy restarts the window instead of stacking
   // timers, and a pending timer never fires into an unmounted component.
@@ -193,6 +301,38 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
   // is what the user must open to resolve conflicts manually.
   const conflictBranch =
     conflicts ? run.branches.find(b => b.index === conflicts.index) ?? null : null
+
+  // W4 — decidable facts shared by the chip badges, the verdict card and the
+  // Markdown export. Verification is contract-optional (`verification?`):
+  // when NO branch carries it (old payload), none of the verification UI
+  // renders at all — no silent "unknown" placeholders.
+  const smallestIndex = smallestDiffBranchIndex(run)
+  const verifiedBranches = run.branches.filter(b => b.verification !== undefined)
+  const hasVerification = verifiedBranches.length > 0
+  // Recommendation = tests passed AND smallest diff (design 04b); when no
+  // branch satisfies both, no branch is marked — never a guessed pick.
+  const recommendedIndex =
+    smallestIndex !== null &&
+    run.branches.some(b => b.index === smallestIndex && b.verification?.exitOk)
+      ? smallestIndex
+      : null
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const savedPath = await api.saveTextFileViaDialog(
+        buildCompareMarkdown(run, t, intl),
+        `batch-${run.batchId}-compare.md`,
+      )
+      if (savedPath === null) return // dialog cancelled — back out silently
+      toast.success(t('batch.compare.export.success'))
+    } catch (e) {
+      toastError(t('batch.compare.export.failed'), e)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const toggle = (index: number) => {
     setSelected(prev => {
       const next = new Set(prev)
@@ -241,49 +381,127 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
               spend, both already on the `BatchBranch` contract: the summary
               is truncated in the chip (narrow branch names get max-w) and
               the full text rides on the `title`; spentUsd uses the same
-              currency formatting as the card's branch chips. */}
-          <div className="flex flex-wrap items-center gap-xs mb-sm">
-            {run.branches.map(branch => {
-              const summary = branch.summary
-                ? t('batch.compare.branchStat', {
-                    files: branch.summary.filesChanged,
-                    additions: branch.summary.additions,
-                    deletions: branch.summary.deletions,
-                  })
-                : null
-              const spent = intl.formatNumber(branch.spentUsd, {
-                style: 'currency',
-                currency: 'USD',
-              })
-              return (
-                <button
-                  key={branch.index}
-                  type="button"
-                  role="checkbox"
-                  aria-checked={selected.has(branch.index)}
-                  onClick={() => toggle(branch.index)}
-                  data-testid={`batch-compare-chip-${branch.index}`}
-                  title={[`#${branch.index}`, branch.branchName, summary, spent]
-                    .filter(Boolean)
-                    .join(' · ')}
-                  className={cn(
-                    'flex items-center gap-xs whitespace-nowrap min-w-0 px-sm py-xs rounded-lg border font-label-xs cursor-pointer transition-colors',
-                    selected.has(branch.index)
-                      ? 'bg-primary-container text-on-primary-container border-primary/30'
-                      : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30',
-                  )}
-                >
-                  <span className="font-bold shrink-0">#{branch.index}</span>
-                  <span className="truncate max-w-[16ch]">{branch.branchName}</span>
-                  {summary && (
-                    <span className="tabular-nums truncate max-w-[20ch] text-on-surface-variant">
-                      {summary}
-                    </span>
-                  )}
-                  <span className="tabular-nums shrink-0">{spent}</span>
-                </button>
-              )
-            })}
+              currency formatting as the card's branch chips.
+              W4 — the header row also carries the Markdown export (ghost,
+              right-aligned per design 04b) and each chip can surface three
+              derived badges: the deterministic 「smallest diff」 fact, the
+              contract-optional verification outcome, and the tests-passed ∧
+              smallest-diff recommendation. */}
+          <div className="flex items-start justify-between gap-md mb-sm">
+            <div className="flex flex-wrap items-center gap-xs flex-1 min-w-0">
+              {run.branches.map(branch => {
+                const summary = branch.summary
+                  ? t('batch.compare.branchStat', {
+                      files: branch.summary.filesChanged,
+                      additions: branch.summary.additions,
+                      deletions: branch.summary.deletions,
+                    })
+                  : null
+                const spent = intl.formatNumber(branch.spentUsd, {
+                  style: 'currency',
+                  currency: 'USD',
+                })
+                // Verification badge: short on the chip (icon + counts when
+                // the backend parsed them), full phrase on the `title`.
+                const v = branch.verification
+                const vBadge = v
+                  ? v.exitOk
+                    ? v.testsPassed !== undefined && v.testsTotal !== undefined
+                      ? `${v.testsPassed}/${v.testsTotal}`
+                      : t('batch.compare.testsPassed')
+                    : t('batch.compare.verificationFailed')
+                  : null
+                const vTitle = v ? verificationFactText(v, t) : null
+                const isSmallest = smallestIndex === branch.index
+                const isRecommended = recommendedIndex === branch.index
+                return (
+                  <button
+                    key={branch.index}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={selected.has(branch.index)}
+                    onClick={() => toggle(branch.index)}
+                    data-testid={`batch-compare-chip-${branch.index}`}
+                    title={[
+                      `#${branch.index}`,
+                      branch.branchName,
+                      summary,
+                      vTitle,
+                      spent,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                    className={cn(
+                      'flex items-center gap-xs whitespace-nowrap min-w-0 px-sm py-xs rounded-lg border font-label-xs cursor-pointer transition-colors',
+                      selected.has(branch.index)
+                        ? 'bg-primary-container text-on-primary-container border-primary/30'
+                        : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30',
+                    )}
+                  >
+                    <span className="font-bold shrink-0">#{branch.index}</span>
+                    <span className="truncate max-w-[16ch]">{branch.branchName}</span>
+                    {summary && (
+                      <span className="tabular-nums truncate max-w-[20ch] text-on-surface-variant">
+                        {summary}
+                      </span>
+                    )}
+                    <span className="tabular-nums shrink-0">{spent}</span>
+                    {isSmallest && (
+                      <span
+                        data-testid={`batch-compare-smallest-${branch.index}`}
+                        title={t('batch.compare.smallestDiff')}
+                        className="shrink-0 flex items-center gap-[2px] font-bold text-on-surface"
+                      >
+                        <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                          compress
+                        </span>
+                        {t('batch.compare.smallestDiff')}
+                      </span>
+                    )}
+                    {vBadge && (
+                      <span
+                        data-testid={`batch-compare-verification-${branch.index}`}
+                        title={vTitle ?? undefined}
+                        className={cn(
+                          'shrink-0 flex items-center gap-[2px] font-bold tabular-nums',
+                          v?.exitOk ? 'text-success' : 'text-error',
+                        )}
+                      >
+                        <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                          {v?.exitOk ? 'check' : 'close'}
+                        </span>
+                        {vBadge}
+                      </span>
+                    )}
+                    {isRecommended && (
+                      <span
+                        data-testid={`batch-compare-recommended-${branch.index}`}
+                        className="shrink-0 flex items-center gap-[2px] font-bold text-primary"
+                      >
+                        <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                          check
+                        </span>
+                        {t('batch.compare.recommended')}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={t('batch.compare.export.aria')}
+              data-testid="batch-compare-export"
+              disabled={exporting}
+              className="cursor-pointer shrink-0"
+              onClick={() => void handleExport()}
+            >
+              <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                download
+              </span>
+              {exporting ? t('batch.compare.export.busy') : t('batch.compare.export.button')}
+            </Button>
           </div>
 
           {/* Conflict guidance banner. */}
@@ -336,6 +554,79 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
                   <li key={f}>{f}</li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {/* W4 — compare verdict (design 04b): only decidable facts, and
+              only when the backend actually sent verification data for at
+              least one branch. All-old payload → the whole card stays
+              unrendered (honest absence, no "unknown" rows). */}
+          {hasVerification && (
+            <div
+              data-testid="batch-compare-verdict"
+              className="mb-sm p-sm rounded-xl border border-outline-variant/20 bg-surface-container-low"
+            >
+              <div className="flex items-center gap-xs">
+                <p className="font-label-md font-bold text-on-surface">
+                  {t('batch.compare.verdictTitle')}
+                </p>
+                <span className="ml-auto font-label-xs font-bold text-primary shrink-0">
+                  {t('batch.compare.verdictAuto')}
+                </span>
+              </div>
+              <ul className="mt-xs">
+                {verifiedBranches.map(b => (
+                  <li
+                    key={b.index}
+                    data-testid={`batch-compare-verdict-row-${b.index}`}
+                    className="font-label-sm text-on-surface-variant flex items-start gap-xs py-xs"
+                  >
+                    <span
+                      className={cn(
+                        'material-symbols-outlined icon-sm shrink-0',
+                        b.verification!.exitOk ? 'text-success' : 'text-error',
+                      )}
+                      aria-hidden="true"
+                    >
+                      {b.verification!.exitOk ? 'check' : 'close'}
+                    </span>
+                    <span>
+                      <span className="font-bold text-on-surface">#{b.index}</span>{' '}
+                      {verificationFactText(b.verification!, t)}
+                    </span>
+                  </li>
+                ))}
+                {smallestIndex !== null &&
+                  (() => {
+                    const b = run.branches.find(x => x.index === smallestIndex)
+                    if (!b?.summary) return null
+                    return (
+                      <li
+                        data-testid="batch-compare-verdict-smallest"
+                        className="font-label-sm text-on-surface-variant flex items-start gap-xs py-xs"
+                      >
+                        <span
+                          className="material-symbols-outlined icon-sm shrink-0 text-success"
+                          aria-hidden="true"
+                        >
+                          check
+                        </span>
+                        <span>
+                          <span className="font-bold text-on-surface">#{b.index}</span>{' '}
+                          {t('batch.compare.smallestDiff')}:{' '}
+                          {t('batch.compare.branchStat', {
+                            files: b.summary.filesChanged,
+                            additions: b.summary.additions,
+                            deletions: b.summary.deletions,
+                          })}
+                        </span>
+                      </li>
+                    )
+                  })()}
+              </ul>
+              <p className="font-label-xs text-on-surface-variant mt-xs pt-xs border-t border-outline-variant/20">
+                {t('batch.compare.verdictFootnote')}
+              </p>
             </div>
           )}
 

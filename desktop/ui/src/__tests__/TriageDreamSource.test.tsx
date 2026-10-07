@@ -24,10 +24,13 @@ describe('Triage — dream_report source mapping', () => {
 })
 
 describe('Triage — background_task source mapping (R2-P1-5)', () => {
-  it('maps background_task to the bolt icon, error colour, and its label key', () => {
+  it('maps background_task to the bolt icon, neutral tertiary colour, and its label key', () => {
+    // R2-P1-5 now delivers COMPLETED and failed tasks, so the source chip
+    // is status-neutral (tertiary); the per-card outcome chip carries the
+    // verdict (error tint lives there, not on the source).
     expect(sourceMeta('background_task')).toEqual({
       icon: 'bolt',
-      color: 'text-error',
+      color: 'text-tertiary',
       labelKey: 'inbox.source.background_task',
     })
   })

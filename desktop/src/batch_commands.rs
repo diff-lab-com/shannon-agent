@@ -81,6 +81,27 @@ pub struct BranchDiffSummary {
     pub deletions: u64,
 }
 
+/// Decidable verification facts for one branch (04b best-of-N comparison
+/// card). ADDITIVE contract surface: recorded at `finalize_branch`; batches
+/// finalized before this field existed carry `None` (serde default on read,
+/// skipped on write) and the frontend treats that as "no verification data".
+///
+/// Honesty rules: `exit_ok` is derived only from the branch's own terminal
+/// state (normal completion, no error); `tests_passed`/`tests_total` are
+/// filled ONLY from a structured source. Today no branch run produces one
+/// (the engine stream's `ToolUseResult` is unstructured text), so they stay
+/// `None` — never parsed out of session text, never guessed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchVerification {
+    /// Branch reached a normal terminal state with no error.
+    pub exit_ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests_passed: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests_total: Option<u32>,
+}
+
 /// One parallel candidate branch as rendered by the Tasks-page batch card.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,6 +114,10 @@ pub struct BatchBranchDto {
     pub error: Option<String>,
     pub summary: Option<BranchDiffSummary>,
     pub spent_usd: f64,
+    /// ADDITIVE contract surface: verification facts once the branch
+    /// finalized (`None` while running / for pre-field batches).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<BatchVerification>,
 }
 
 /// One best-of-N batch run.
@@ -157,6 +182,10 @@ pub(crate) struct BatchBranchRecord {
     pub error: Option<String>,
     pub summary: Option<BranchDiffSummary>,
     pub spent_usd: f64,
+    /// ADDITIVE: `None` for batches finalized before this field existed —
+    /// defaulted on load, skipped on write (old disk records stay clean).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<BatchVerification>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +229,7 @@ impl BatchRunRecord {
                     error: b.error.clone(),
                     summary: b.summary,
                     spent_usd: b.spent_usd,
+                    verification: b.verification,
                 })
                 .collect(),
             adopted_index: self.adopted_index,
@@ -1104,6 +1134,17 @@ async fn finalize_branch<R: tauri::Runtime>(
                 .as_deref()
                 .map(|e| truncate_chars(e, ERROR_MAX_CHARS));
             branch.summary = summary;
+            // 04b verification facts — recorded only here, at the single
+            // terminal-state choke point. `exit_ok` = normal terminal state
+            // AND no error (the same two facts the status/error fields above
+            // carry). `tests_passed`/`tests_total` need a structured source
+            // no branch run produces today, so they stay `None` — never
+            // guessed from session text.
+            branch.verification = Some(BatchVerification {
+                exit_ok: observation.completed && observation.error.is_none(),
+                tests_passed: None,
+                tests_total: None,
+            });
         }
 
         let was_running = record.status == "running";
@@ -1395,6 +1436,7 @@ pub(crate) async fn start_batch_run_inner<R: tauri::Runtime, F: BranchRunnerFact
                 error: None,
                 summary: None,
                 spent_usd: 0.0,
+                verification: None,
             })
             .collect(),
         adopted_index: None,
@@ -1838,6 +1880,7 @@ mod tests {
                 error: (*status == "failed").then(|| "engine exploded".to_string()),
                 summary: None,
                 spent_usd: 0.0,
+                verification: None,
             });
         }
         let mut record = BatchRunRecord {
@@ -2036,6 +2079,7 @@ mod tests {
                     deletions: 2,
                 }),
                 spent_usd: 0.5,
+                verification: None,
             }],
             adopted_index: None,
             base_branch: "main".into(),
@@ -2073,12 +2117,152 @@ mod tests {
             );
         }
         assert!(branch["error"].is_null(), "None error serializes as null");
+        assert!(
+            branch.get("verification").is_none(),
+            "None verification is skipped (additive field, legacy shape preserved)"
+        );
         for key in ["filesChanged", "additions", "deletions"] {
             assert!(
                 branch["summary"].get(key).is_some(),
                 "missing summary field {key}"
             );
         }
+    }
+
+    // ── verification facts (04b additive contract) ───────────────────────
+
+    #[test]
+    fn verification_serializes_camel_case_and_skips_missing_counts() {
+        let mut record = BatchRunRecord {
+            batch_id: "b-verify".into(),
+            title: "T".into(),
+            prompt: "P".into(),
+            count: 1,
+            status: "completed".into(),
+            created_at_ms: 42,
+            branches: vec![BatchBranchRecord {
+                verification: Some(BatchVerification {
+                    exit_ok: true,
+                    tests_passed: Some(14),
+                    tests_total: Some(14),
+                }),
+                ..batch_branch_template()
+            }],
+            adopted_index: None,
+            base_branch: "main".into(),
+            base_commit: "c0ffee".into(),
+            repo_root: "/repo".into(),
+            inbox_item_id: None,
+        };
+        let wire = serde_json::to_value(record.dto()).unwrap();
+        let v = &wire["branches"][0]["verification"];
+        assert_eq!(v["exitOk"], true, "camelCase exitOk");
+        assert_eq!(v["testsPassed"], 14, "camelCase testsPassed");
+        assert_eq!(v["testsTotal"], 14, "camelCase testsTotal");
+        assert!(v.get("exit_ok").is_none(), "no snake_case leakage");
+
+        // Without a structured source the counts stay None — and the keys
+        // are skipped, so the card can distinguish "0 tests" from "unknown".
+        record.branches[0].verification = Some(BatchVerification {
+            exit_ok: false,
+            tests_passed: None,
+            tests_total: None,
+        });
+        let wire = serde_json::to_value(record.dto()).unwrap();
+        let v = &wire["branches"][0]["verification"];
+        assert_eq!(v["exitOk"], false);
+        assert!(v.get("testsPassed").is_none());
+        assert!(v.get("testsTotal").is_none());
+    }
+
+    #[test]
+    fn legacy_records_without_verification_default_to_none_and_roundtrip() {
+        // A record written before the field existed (no "verification" key on
+        // the branch) must load with verification = None.
+        let legacy = serde_json::json!({
+            "batchId": "b-legacy",
+            "title": "T",
+            "prompt": "P",
+            "count": 1,
+            "status": "completed",
+            "createdAtMs": 42,
+            "branches": [{
+                "index": 0,
+                "branchName": "batch-b-legacy-0",
+                "worktreePath": "/wt",
+                "status": "completed",
+                "error": null,
+                "summary": null,
+                "spentUsd": 0.0
+            }],
+            "adoptedIndex": null,
+            "baseBranch": "main",
+            "baseCommit": "c0ffee",
+            "repoRoot": "/repo",
+            "inboxItemId": null
+        });
+        let loaded: BatchRunRecord = serde_json::from_value(legacy).unwrap();
+        assert!(loaded.branches[0].verification.is_none());
+        // And it re-persists without the key (skip_serializing_if).
+        let raw = serde_json::to_string(&loaded).unwrap();
+        assert!(
+            !raw.contains("verification"),
+            "None verification must not leak into the persisted JSON: {raw}"
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_records_verification_exit_ok_per_branch_outcome() {
+        let env = env();
+        let mut specs = HashMap::new();
+        specs.insert(
+            1,
+            StubSpec {
+                completed: false,
+                error: Some("provider exploded".into()),
+                ..StubSpec::default()
+            },
+        );
+        let factory = Arc::new(StubFactory::new(specs));
+
+        let started = start_batch_run_inner(
+            &env.deps,
+            &env.registry,
+            &env.app,
+            BatchStartRequest::new(
+                "Verify me".into(),
+                "do it".into(),
+                2,
+                Some(env.repo_root.clone()),
+            ),
+            factory,
+        )
+        .await
+        .unwrap();
+        let handle = env.registry.get_or_load(&started.batch_id).await.unwrap();
+        let dto = wait_terminal(&handle).await;
+
+        // Completed branch: normal terminal state, no error → exit_ok true.
+        let ok = dto.branches[0]
+            .verification
+            .expect("finalize always records verification");
+        assert!(ok.exit_ok);
+        assert_eq!(ok.tests_passed, None, "no structured test source yet");
+        assert_eq!(ok.tests_total, None);
+
+        // Failed branch: error present → exit_ok false.
+        let bad = dto.branches[1]
+            .verification
+            .expect("finalize records verification for failures too");
+        assert!(!bad.exit_ok);
+
+        // The facts survive the disk roundtrip (persisted record shape —
+        // pretty-printed, hence the space after the colon).
+        let raw = std::fs::read_to_string(env.store_dir.join(format!("{}.json", started.batch_id)))
+            .unwrap();
+        assert!(raw.contains("\"exitOk\": true"), "{raw}");
+        assert!(raw.contains("\"exitOk\": false"), "{raw}");
+        assert!(!raw.contains("testsPassed"), "no fabricated counts: {raw}");
     }
 
     #[test]
@@ -2107,6 +2291,7 @@ mod tests {
             error: None,
             summary: None,
             spent_usd: 0.0,
+            verification: None,
         }
     }
 

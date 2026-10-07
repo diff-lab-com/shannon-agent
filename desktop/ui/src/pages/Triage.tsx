@@ -3,10 +3,11 @@
 // `get_inbox_stats` / `rerun_inbox_item` / `continue_inbox_item_session`).
 // Items are produced by scheduled routine runs (`routine`/`scheduled_task`),
 // goal events, the external trigger endpoint, parallel batch-run
-// completions (`batch`), failed desktop background tasks (`background_task`,
-// R2-P1-5), session permission prompts / failed turns
-// (`session_approval`/`session_failed`) and detected skill candidates
-// (`skill_candidate`) — see `inbox_commands.rs` / `inbox_session_events.rs`.
+// completions (`batch`), finished desktop background tasks (`background_task`,
+// R2-P1-5 — completed and failed both write), session permission prompts /
+// failed turns (`session_approval`/`session_failed`) and detected skill
+// candidates (`skill_candidate`) — see `inbox_commands.rs` /
+// `inbox_session_events.rs`.
 //
 // Layout: header with stats summary → filter bar (status chips + source
 // chips + sort) → bulk-action bar when items selected → list of InboxCard
@@ -96,9 +97,10 @@ export function sourceMeta(source: InboxSource): { icon: string; color: string; 
       // language as the batch runner panel (call_split icon, tertiary color).
       return { icon: 'call_split', color: 'text-tertiary', labelKey: 'inbox.source.batch' }
     case 'background_task':
-      // R2-P1-5: a failed desktop background task (bolt-on-error mirrors the
-      // Runs panel's in-flight icon + the failure severity of `trigger`).
-      return { icon: 'bolt', color: 'text-error', labelKey: 'inbox.source.background_task' }
+      // R2-P1-5: a finished desktop background task (bolt mirrors the Runs
+      // panel's in-flight icon; the outcome chip below carries the verdict,
+      // so the icon stays status-neutral rather than error-tinted).
+      return { icon: 'bolt', color: 'text-tertiary', labelKey: 'inbox.source.background_task' }
     case 'session_approval':
       // T5: a session permission prompt is waiting on the user (lock_open =
       // an action is gated); secondary color reads "needs your action".

@@ -143,6 +143,17 @@ pub(crate) fn sanitize_persisted_session_windows(list: &[String]) -> Vec<String>
         .collect()
 }
 
+/// Drop persisted ids whose session no longer exists on disk (W10 audit).
+/// `live_ids` is one `SessionStore::list()` pass over the sessions dir.
+/// Compare as UUIDs so formatting/case differences between the persisted
+/// strings and the store listing can never drop a live id.
+fn drop_dead_session_ids(persisted: Vec<String>, live_ids: &[Uuid]) -> Vec<String> {
+    persisted
+        .into_iter()
+        .filter(|id| Uuid::parse_str(id).is_ok_and(|u| live_ids.contains(&u)))
+        .collect()
+}
+
 /// Mirror the registry's session ids into the persisted desktop config.
 async fn persist_session_windows(state: &AppState) {
     let mut config = state.desktop_config.write().await;
@@ -344,9 +355,33 @@ pub fn restore_session_windows(app: &tauri::AppHandle) {
     if persisted.is_empty() {
         return;
     }
-    tracing::info!(count = persisted.len(), "restoring session windows");
 
     let state = app.state::<AppState>();
+    // W10 audit fix: prune ids whose L0 log no longer exists (the session
+    // was deleted while the app was closed) BEFORE opening — a ghost window
+    // is not just an empty chat: its boot `switch_session` promotes the dead
+    // id to the GLOBAL active-session pointer (the `None => Vec::new()` arm
+    // never errors), so the main window could cold-start on a deleted
+    // session. One listing pass; a listing failure keeps the list unchanged
+    // (degrades to the pre-fix behavior — per-id restore failures below
+    // still self-heal the persisted list).
+    let persisted = match state.l0_store().list() {
+        Ok(infos) => {
+            let live_ids: Vec<Uuid> = infos.into_iter().map(|i| i.session_id).collect();
+            drop_dead_session_ids(persisted, &live_ids)
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "session-window restore: listing failed; skipping the dead-id prune"
+            );
+            persisted
+        }
+    };
+    if persisted.is_empty() {
+        return;
+    }
+    tracing::info!(count = persisted.len(), "restoring session windows");
     let mut restored = Vec::new();
     for session_id in persisted {
         match tauri::async_runtime::block_on(open_session_window_inner(
@@ -440,6 +475,36 @@ mod tests {
                 "7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f2".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn restore_prune_keeps_live_ids_and_drops_deleted_ones() {
+        let live = "7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1";
+        let dead = "deadbeef-0000-0000-0000-000000000000";
+        let pruned = drop_dead_session_ids(
+            vec![live.to_string(), dead.to_string(), "garbage".into()],
+            &[Uuid::parse_str(live).unwrap()],
+        );
+        assert_eq!(pruned, vec![live.to_string()]);
+    }
+
+    #[test]
+    fn restore_prune_matches_ids_regardless_of_case() {
+        // sanitize_persisted_session_windows lowercases, but the prune must
+        // not depend on that upstream normalization.
+        let live = "7E6C3F18-4A2E-4F6A-9A52-6D1C1A0F83F1";
+        let pruned =
+            drop_dead_session_ids(vec![live.to_string()], &[Uuid::parse_str(live).unwrap()]);
+        assert_eq!(pruned.len(), 1);
+    }
+
+    #[test]
+    fn restore_prune_with_empty_listing_prunes_everything() {
+        // A successful listing that names NO sessions means every session
+        // was deleted — nothing may be restored as a ghost window.
+        let pruned =
+            drop_dead_session_ids(vec!["7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1".into()], &[]);
+        assert!(pruned.is_empty());
     }
 
     #[test]

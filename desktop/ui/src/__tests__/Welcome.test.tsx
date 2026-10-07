@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { toast } from 'sonner'
 import * as api from '@/lib/tauri-api'
 import Welcome, { shouldShowWelcome, markWelcomeSeen, WELCOME_SEEN_KEY } from '@/pages/Welcome'
@@ -278,14 +278,26 @@ describe('Welcome component — 2-step flow', () => {
   })
 
   // 01b — the Done step itemizes the recommendation: one chip per tool with
-  // its fixed reason, still phrased as "recommended" (never "enabled"), and
-  // the chips are inert — clicking one must not flip any config (4-B).
-  it('Done step lists each recommended tool as a chip with its reason', async () => {
+  // its fixed reason, still phrased as "recommended" (never "enabled"). W5:
+  // chips deep-link to Settings → Connections — navigation only, Welcome
+  // itself still flips no config (decision 4-B holds).
+  it('Done step lists each recommended tool as a chip that deep-links to Settings → Connections', async () => {
     vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
       provider: 'anthropic',
       has_api_key: true,
     })
-    wrap()
+    // Local wrapper with a stub pane so the chip's navigation is observable
+    // (the shared wrap() has no Routes to land on).
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={['/welcome']}>
+          <Routes>
+            <Route path="*" element={<Welcome />} />
+            <Route path="/settings/connections" element={<div data-testid="connections-pane" />} />
+          </Routes>
+        </MemoryRouter>
+      </I18nProvider>
+    )
     // Code task → filesystem, git, playwright.
     fireEvent.click(screen.getByRole('button', { name: /Build apps, write scripts, debug and refactor\./ }))
     await waitFor(() => {
@@ -301,10 +313,18 @@ describe('Welcome component — 2-step flow', () => {
     expect(screen.getByText('Git')).toBeInTheDocument()
     expect(screen.getByText('Playwright')).toBeInTheDocument()
     expect(screen.getByText(/3 recommended tools — enable them in Settings/)).toBeInTheDocument()
-    // Chips are informational spans, not toggles (decision 4-B holds).
+    // Link-style buttons: settings hint in the tooltip + a trailing chevron
+    // affordance; the accessible name still comes from the visible content.
     for (const chip of chips) {
-      expect(chip.tagName).toBe('SPAN')
+      expect(chip.tagName).toBe('BUTTON')
+      expect(chip).toHaveAttribute('title', 'View and enable in Settings')
+      expect(within(chip).getByText('chevron_right')).toBeInTheDocument()
     }
+    // Clicking deep-links to Settings → Connections without any configure
+    // call — recommendation stays read-only (decision 4-B).
+    fireEvent.click(chips[0])
+    await waitFor(() => expect(screen.getByTestId('connections-pane')).toBeInTheDocument())
+    expect(api.configure).not.toHaveBeenCalled()
   })
 
   it('Done step shows chosen task in summary', async () => {
