@@ -36,7 +36,7 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 ### 2. 密钥不出门
 
 - **API 密钥直连你选择的提供商** —— 没有中间服务器，没有云端凭据池。LLM 凭据只存在本机 `~/.shannon/credentials/` 下的 `0600` 文件里；IM 渠道凭据存 OS keyring。
-- **出站 secret 扫描** —— 内置 `secret-guard`（默认 audit 只记录，`redact` 一键开启；基于 `shannon-plugin-api` 内容变换契约）在消息发往模型前扫描 secret 形态的内容并记录或改写；改写字节稳定，prompt 缓存照常命中。
+- **出站 secret 扫描** —— 内置 `secret-guard`（v0.13.0 起默认 `redact`；`audit` 只记录、`off` 关闭；基于 `shannon-plugin-api` 内容变换契约）在消息发往模型前把 secret 形态的内容替换为确定性代理 token，本地工具执行/显示面自动还原真值；改写字节稳定，prompt 缓存照常命中。
 - **OS 级沙箱** —— Landlock（Linux）、macOS Seatbelt、bubblewrap；规则 + LLM 辅助的权限系统，严格/均衡/宽松/自定义配置，高危工具逐动作确认。
 - **提示注入扫描 + 签名校验** 覆盖 skills 与 MCP 服务器；webhook 事件 HMAC-SHA256 签名。
 - **默认零遥测** —— 没有任何遥测管道。除你选择的提供商外，唯一的自动外呼是新版本可用性检查（至多每 24 小时一次；`SHANNON_FEATURE_UPDATE_CHECK=0` 可完全关闭）。本地语音输入（whisper.rs）永不外发音频。

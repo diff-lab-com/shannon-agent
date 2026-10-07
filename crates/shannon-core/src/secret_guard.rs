@@ -70,33 +70,45 @@ pub fn audit_wire_and_log(wire: &serde_json::Value) -> usize {
     count
 }
 
-// ---- T5: redaction opt-in suggestion --------------------------------------
+// ---- T5: one-time mode notice ---------------------------------------------
 //
-// The unset default mode is `audit`: detected secret values are forwarded
-// to the provider AND written to events.jsonl, while redaction is opt-in —
-// and nothing ever told the user that opt-in exists. These lock-free
-// latches record that at least one audit hit occurred so hosts can surface
-// a one-time hint after the current turn.
+// The first hit under the built-in guard arms a ONE-TIME notice describing
+// what actually happened to the detected values and naming the escape
+// hatches — whichever mode is active:
+// - `audit`: raw values were forwarded to the provider; redaction is
+//   available and the notice says how to switch it on.
+// - `redact` (the release default since v0.13.0): values were replaced with
+//   surrogates before leaving the machine; the notice says how to forward
+//   raw or disable entirely.
+// The message copy is owned HERE so the surface and the behavior cannot
+// drift apart (the TUI/CLI used to carry their own stale copies). External
+// transforms (`None`) manage their own policy and user surface — no notice.
 
 /// Total audit findings observed this process (all modes; observability).
 static AUDIT_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Latched: an audit-mode hit occurred and the suggestion was not handed
-/// out yet. Cleared by [`take_redaction_suggestion`].
-static SUGGESTION_PENDING: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-/// Latched: the suggestion was already handed out once — it never re-arms.
-static SUGGESTION_TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Latched notice kind: 0 = none, 1 = audit suggestion, 2 = redact notice.
+/// Cleared by [`take_redaction_suggestion`].
+static NOTICE_PENDING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+/// Latched: a notice was already handed out once — it never re-arms.
+static NOTICE_TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Feed one audit finding into the suggestion latch. Only a hit under the
-/// built-in guard in `Audit` mode arms the suggestion — in `Redact` mode
-/// there is nothing to suggest, and an external transform (`None`) manages
-/// its own policy and user surface.
+/// Feed one audit finding into the notice latch. A hit under the built-in
+/// guard arms the mode-appropriate one-time notice; an external transform
+/// (`None`) manages its own policy and user surface and arms nothing.
 fn record_audit_hit(mode: Option<SecretGuardMode>) {
-    AUDIT_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if mode == Some(SecretGuardMode::Audit)
-        && !SUGGESTION_TAKEN.load(std::sync::atomic::Ordering::Relaxed)
-    {
-        SUGGESTION_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+    use std::sync::atomic::Ordering::Relaxed;
+    AUDIT_HITS.fetch_add(1, Relaxed);
+    if NOTICE_TAKEN.load(Relaxed) {
+        return;
+    }
+    match mode {
+        Some(SecretGuardMode::Audit) => {
+            NOTICE_PENDING.store(1, Relaxed);
+        }
+        Some(SecretGuardMode::Redact) => {
+            NOTICE_PENDING.store(2, Relaxed);
+        }
+        None => {}
     }
 }
 
@@ -106,36 +118,39 @@ pub fn audit_hits() -> u64 {
     AUDIT_HITS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// One-time redaction opt-in suggestion: returns `true` exactly once after
-/// the first audit-mode hit, then `false` for every later call. Hosts call
-/// this after a query turn completes and surface the notice when it fires;
-/// the `tracing::warn!` here covers headless hosts that have no REPL.
-///
-/// The suggestion names the actual opt-in keys: `[secret_guard] mode =
-/// "redact"` in `.shannon.toml` (or `~/.shannon/config.toml`), or
-/// `$SHANNON_SECRET_GUARD=redact` — see [`init_from_env_or_config`].
-pub fn take_redaction_suggestion() -> bool {
+/// One-time mode notice: returns the message exactly once after the first
+/// built-in-guard hit (whichever mode), then `None` for every later call.
+/// Hosts call this after a query turn completes and surface the returned
+/// copy when it fires; the `tracing::warn!` here covers headless hosts that
+/// have no REPL. The copy lives here so host surfaces cannot drift from the
+/// actual behavior — see the T5 section docs.
+pub fn take_redaction_suggestion() -> Option<String> {
     use std::sync::atomic::Ordering::Relaxed;
-    if SUGGESTION_PENDING
-        .compare_exchange(true, false, Relaxed, Relaxed)
-        .is_ok()
-    {
-        SUGGESTION_TAKEN.store(true, Relaxed);
-        tracing::warn!(
-            target: "shannon::secret_guard",
-            "secrets were detected in outbound requests while secret-guard \
-             is in audit-only mode: raw values were forwarded to the \
-             provider. The local session log does NOT hold them — the tee \
-             masks secret-shaped values under the redaction policy — so the \
-             residual exposure is the provider side, not this machine. Stop \
-             the forwarding with [secret_guard] mode = \"redact\" in \
-             .shannon.toml (or ~/.shannon/config.toml), or \
-             SHANNON_SECRET_GUARD=redact"
-        );
-        true
-    } else {
-        false
+    let kind = NOTICE_PENDING.swap(0, Relaxed);
+    if kind == 0 {
+        return None;
     }
+    NOTICE_TAKEN.store(true, Relaxed);
+    let message = if kind == 1 {
+        "Secret-guard detected secret-shaped content in outbound requests \
+         while in audit-only mode: raw values were forwarded to the \
+         provider (the local session log masks them under the redaction \
+         policy, so the residual exposure is the provider side, not this \
+         machine). Stop the forwarding with [secret_guard] mode = \
+         \"redact\" in .shannon.toml (or ~/.shannon/config.toml), or \
+         SHANNON_SECRET_GUARD=redact."
+            .to_string()
+    } else {
+        "Secret-guard replaced secret-shaped content in outbound requests \
+         with surrogates before it left this machine (values are restored \
+         locally for tool execution and display; the session log holds no \
+         raw values). Forward raw values instead with \
+         SHANNON_SECRET_GUARD=audit, or disable the guard with \
+         SHANNON_SECRET_GUARD=off."
+            .to_string()
+    };
+    tracing::warn!(target: "shannon::secret_guard", "{}", message);
+    Some(message)
 }
 
 /// Test seam: clear the process-global suggestion latches (and the latched
@@ -144,8 +159,8 @@ pub fn take_redaction_suggestion() -> bool {
 fn reset_redaction_suggestion() {
     ENABLED.store(0, std::sync::atomic::Ordering::Relaxed);
     AUDIT_HITS.store(0, std::sync::atomic::Ordering::Relaxed);
-    SUGGESTION_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
-    SUGGESTION_TAKEN.store(false, std::sync::atomic::Ordering::Relaxed);
+    NOTICE_PENDING.store(0, std::sync::atomic::Ordering::Relaxed);
+    NOTICE_TAKEN.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// ---- Phase 2 wiring points (blueprint §9.6) -------------------------------
@@ -445,7 +460,8 @@ static UNRESOLVED_SG1: Lazy<Regex> =
 /// Outbound policy for the built-in guard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretGuardMode {
-    /// Detect and count only (default posture for `audit`).
+    /// Detect and count only (the `audit` posture; an explicit opt-in
+    /// since the v0.13.0 default flip).
     Audit,
     /// Replace detected secrets with deterministic surrogates at ingest.
     Redact,
@@ -802,10 +818,13 @@ fn resolve_mode(env_raw: Option<&str>, section_mode: Option<&str>) -> Option<Sec
 }
 
 /// [`resolve_mode`] plus the release default: when neither env nor config
-/// expresses a preference, the guard installs in `audit` mode (detect and
-/// log secret-shaped content in outbound context — zero behavior change to
-/// prompts). An explicit `"off"` in either source still disables entirely;
-/// this helper never overrides a decision `resolve_mode` already made.
+/// expresses a preference, the guard installs in `redact` mode (since
+/// v0.13.0 — detected secret-shaped values are replaced with deterministic
+/// surrogates before leaving the machine, and restored locally for tool
+/// execution and display). An explicit `"off"` in either source still
+/// disables entirely, and `audit` remains available as the observe-only
+/// posture; this helper never overrides a decision `resolve_mode` already
+/// made.
 fn resolve_mode_with_default(
     env_raw: Option<&str>,
     section_mode: Option<&str>,
@@ -820,7 +839,7 @@ fn resolve_mode_with_default(
     match resolve_mode(env_raw, section_mode) {
         Some(mode) => Some(mode),
         None if explicit_off => None,
-        None => Some(SecretGuardMode::Audit),
+        None => Some(SecretGuardMode::Redact),
     }
 }
 
@@ -867,13 +886,16 @@ pub fn init_from_env() -> Option<SecretGuardMode> {
 /// (one-shot per process). Called from the engine's query entry so every
 /// host (CLI / desktop / server) picks up `[secret_guard]` automatically.
 ///
-/// Since v0.11.0 the unset default is `audit`: outbound context is scanned
-/// and secret-shaped hits are logged, but nothing is rewritten. The implicit
-/// default is vacuum-only: when neither source expresses a decision AND a
-/// context transform is already installed (e.g. by a host or plugin), that
-/// transform is left untouched rather than replaced by the built-in guard.
-/// An explicit `$SHANNON_SECRET_GUARD` or `[secret_guard] mode` always
-/// decides — `"off"` disables entirely, `"redact"` enables rewriting.
+/// Since v0.11.0 the built-in guard installs by default; since v0.13.0 the
+/// unset default mode is `redact`: outbound context is scanned and
+/// secret-shaped values are replaced with deterministic surrogates (restored
+/// locally for tool execution and display). The implicit default is
+/// vacuum-only about TRANSFORM IDENTITY: when neither source expresses a
+/// decision AND a context transform is already installed (e.g. by a host or
+/// plugin), that transform is left untouched rather than replaced by the
+/// built-in guard. An explicit `$SHANNON_SECRET_GUARD` or `[secret_guard]
+/// mode` always decides — `"off"` disables entirely, `"audit"` observes
+/// without rewriting.
 pub fn init_from_env_or_config() -> Option<SecretGuardMode> {
     if let Some(existing) = enabled_mode() {
         return Some(existing);
@@ -1574,11 +1596,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_mode_with_default_unset_is_audit_and_off_still_opts_out() {
-        // Unset on both sources → release default: audit.
+    fn resolve_mode_with_default_unset_is_redact_and_off_still_opts_out() {
+        // Unset on both sources → release default since v0.13.0: redact.
         assert_eq!(
             resolve_mode_with_default(None, None),
-            Some(SecretGuardMode::Audit)
+            Some(SecretGuardMode::Redact)
         );
         // Explicit modes pass through unchanged.
         assert_eq!(
@@ -1601,51 +1623,71 @@ mod tests {
         );
     }
 
-    // ---- T5: redaction opt-in suggestion latch ------------------------------
+    // ---- T5: one-time mode notice latch --------------------------------------
     //
-    // Audit mode is the unset default: detected secrets are forwarded to the
-    // provider and logged, and nothing told the user redaction exists. The
-    // latch must arm on the first audit-mode hit, hand the suggestion out
-    // exactly once, and stay silent when redaction is already active (or an
-    // external transform manages policy).
+    // The first hit under the built-in guard arms exactly one notice naming
+    // what happened to the values and the escape hatches — audit hits get
+    // the "switch redaction on" suggestion, redact hits (the default) get
+    // the informational notice. External transforms stay silent. The copy
+    // is returned so hosts render what the core means.
 
     #[test]
-    fn redaction_suggestion_fires_exactly_once_after_audit_hit() {
+    fn audit_hit_arms_the_audit_suggestion_exactly_once() {
         let _g = global_lock();
         reset_redaction_suggestion();
         assert!(
-            !take_redaction_suggestion(),
+            take_redaction_suggestion().is_none(),
             "no hit yet — nothing to suggest"
         );
 
         record_audit_hit(Some(SecretGuardMode::Audit));
         assert_eq!(audit_hits(), 1, "hit counter is lock-free but exact");
-        assert!(take_redaction_suggestion(), "first hit arms the suggestion");
+        let notice = take_redaction_suggestion().expect("first hit arms the notice");
+        assert!(notice.contains("audit-only mode"), "audit copy: {notice}");
+        assert!(notice.contains("SHANNON_SECRET_GUARD=redact"));
         assert!(
-            !take_redaction_suggestion(),
-            "suggestion must hand out exactly once"
+            take_redaction_suggestion().is_none(),
+            "notice must hand out exactly once"
         );
-        // Later hits never re-arm a consumed suggestion.
+        // Later hits never re-arm a consumed notice.
         record_audit_hit(Some(SecretGuardMode::Audit));
-        assert!(!take_redaction_suggestion(), "one-shot per process");
+        assert!(
+            take_redaction_suggestion().is_none(),
+            "one-shot per process"
+        );
     }
 
     #[test]
-    fn redaction_suggestion_absent_when_redaction_already_on() {
+    fn redact_hit_arms_the_redact_notice_naming_the_escape_hatches() {
         let _g = global_lock();
         reset_redaction_suggestion();
 
-        // Redact mode: nothing to suggest.
         record_audit_hit(Some(SecretGuardMode::Redact));
-        assert!(!take_redaction_suggestion());
+        let notice = take_redaction_suggestion().expect("a redact-mode hit arms the notice");
+        assert!(
+            notice.contains("replaced secret-shaped content"),
+            "{notice}"
+        );
+        assert!(notice.contains("SHANNON_SECRET_GUARD=audit"));
+        assert!(notice.contains("SHANNON_SECRET_GUARD=off"));
+        assert!(
+            take_redaction_suggestion().is_none(),
+            "one-shot per process"
+        );
+    }
+
+    #[test]
+    fn external_transform_hits_never_arm_a_notice() {
+        let _g = global_lock();
+        reset_redaction_suggestion();
 
         // External transform (built-in guard did not install): its host owns
-        // the user surface, so the built-in opt-in hint must not fire.
+        // the user surface, so the built-in notice must not fire.
         record_audit_hit(None);
-        assert!(!take_redaction_suggestion());
+        assert!(take_redaction_suggestion().is_none());
         assert_eq!(
             audit_hits(),
-            2,
+            1,
             "hits are counted in every mode for observability"
         );
     }
@@ -1665,7 +1707,7 @@ mod tests {
         set_context_transform(None);
         assert_eq!(n, 1);
         assert_eq!(audit_hits(), 1);
-        assert!(!take_redaction_suggestion());
+        assert!(take_redaction_suggestion().is_none());
     }
 
     // ---- Audit-mode durable guarantee: the session log stays secret-free ---
