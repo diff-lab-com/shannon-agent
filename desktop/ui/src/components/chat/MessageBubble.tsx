@@ -14,6 +14,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
 import { summarizeDiffLineStats, type DiffLineStats } from '@/components/chat/diffStats'
+import { InlineDiffCard } from '@/components/chat/InlineDiffCard'
 import {
   Message,
   MessageAvatar,
@@ -917,18 +918,10 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
             {toolCall.tokens_used!.toLocaleString()} tok
           </span>
         )}
-        {canDiff && (
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={intl.formatMessage({ id: 'chat.message.diff.aria' }, { path: filePath })}
-            className="gap-xs px-xs py-[2px] text-tertiary hover:bg-tertiary-container/40"
-            onClick={(e) => { e.stopPropagation(); onViewDiff(filePath!) }}
-          >
-            <span className="material-symbols-outlined icon-sm">difference</span>
-            {t('chat.message.diff')}
-          </Button>
-        )}
+        {/* Aurora redesign 2026-10: the header's inline "Diff" chip moved
+            into the InlineDiffCard strip below the tool row (02-chat.html
+            内联 diff 卡) — same action, same aria contract
+            (chat.message.diff.aria), one row instead of a cramped chip. */}
         <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">{expanded ? 'expand_less' : 'expand_more'}</span>
       </ToolHeader>
       {expanded && (
@@ -948,20 +941,30 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
         </ToolContent>
       )}
       </Tool>
-      {/* office Wave 1 (A5): a COMPLETED file-mutating tool with a path input
-          is the same reliable write signal the Diff button gates on
-          (FILE_MUTATING_TOOLS × extractToolInputPath × status) — surface the
-          produced file as a FileCard directly under the tool block. No
+      {/* Aurora redesign 2026-10 (02-chat.html 内联 diff 卡): a COMPLETED
+          file-mutating call with a path input renders the compact diff card
+          at the tool card's position — mono path + "+N −N" (only when the
+          getFileDiff computation actually yields counts) + 「打开 Diff」,
+          which reuses this bubble's onViewDiff (Chat.tsx setDiffPath →
+          RightDock diff tab). The card carries the aria label the old
+          header Diff chip had (chat.message.diff.aria), so e2e/AT anchors
+          survive the move. */}
+      {canDiff && (
+        <InlineDiffCard path={filePath!} onOpenDiff={() => onViewDiff(filePath!)} />
+      )}
+      {/* office Wave 1 (A5): the artifact FileCard stays directly under the
+          diff card — the OS actions (open / reveal / save as / preview /
+          batch run) and the Files-page index registration live there. No
           heuristic path scraping of results; failed / running writes never
-          render a card. */}
+          render either card. */}
       {canDiff && (
         <FileCard
           name={basenameOf(filePath!)}
           path={filePath!}
           source="generated"
           // B7' — engine-written file: the "Review changes" button docks the
-          // single-file diff in the RightDock (same diffPath path the tool
-          // header's Diff button drives).
+          // single-file diff in the RightDock (same diffPath path the
+          // InlineDiffCard's action drives).
           onReviewDiff={() => onViewDiff(filePath!)}
         />
       )}

@@ -251,9 +251,28 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
           </div>
         </div>
         <div className="flex items-center gap-sm shrink-0">
+          {/* Primary action (audit §3.4): the Codex review-queue loop is
+              "result → resume the original thread". IA T6: for approval /
+              failed sources the same jump reads "View session" — the target
+              is a permission prompt or a failure to inspect.
+              2026-10 redesign (05-inbox.html): the primary leads the ops
+              cluster — solid primary button first, secondary jumps/icons
+              trail it. */}
+          {item.sessionId && (
+            <Button
+              size="sm"
+              aria-label={t(isSessionSource ? 'inbox.action.viewSession.aria' : 'inbox.continue.aria')}
+              title={t(isSessionSource ? 'inbox.action.viewSession.aria' : 'inbox.continue.aria')}
+              className="cursor-pointer inline-flex items-center gap-xs"
+              onClick={() => onContinue(item)}
+            >
+              <span className="material-symbols-outlined icon-sm">{isSessionSource ? 'visibility' : 'forum'}</span>
+              {t(isSessionSource ? 'inbox.action.viewSession' : 'inbox.action.resume')}
+            </Button>
+          )}
           {/* IA T2: routine/scheduled_task results link back to the
               automation that produced them (opens RoutineDetailDrawer on
-              /tasks). 「继续会话」 stays the primary action. */}
+              /tasks). */}
           {openSource && (
             <Button
               size="sm"
@@ -296,21 +315,6 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
             >
               <span className="material-symbols-outlined icon-sm">bedtime</span>
               {t('inbox.viewReport.label')}
-            </Button>
-          )}
-          {item.sessionId && (
-            /* Primary action (audit §3.4): the Codex review-queue loop is
-               "result → resume the original thread". IA T6: for approval /
-               failed sources the same jump reads "View session" — the target
-               is a permission prompt or a failure to inspect. */
-            <Button
-              size="sm"
-              aria-label={t(isSessionSource ? 'inbox.action.viewSession.aria' : 'inbox.continue.aria')}
-              className="cursor-pointer inline-flex items-center gap-xs"
-              onClick={() => onContinue(item)}
-            >
-              <span className="material-symbols-outlined icon-sm">{isSessionSource ? 'visibility' : 'forum'}</span>
-              {t(isSessionSource ? 'inbox.action.viewSession' : 'inbox.action.resume')}
             </Button>
           )}
           <Button

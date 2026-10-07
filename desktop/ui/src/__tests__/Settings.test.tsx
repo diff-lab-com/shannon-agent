@@ -64,7 +64,7 @@ describe('Settings', () => {
     it('hides the Advanced section in simple mode (default)', () => {
       renderSettings()
       expect(screen.getByText('General')).toBeInTheDocument()
-      expect(screen.getByText('Theme')).toBeInTheDocument()
+      expect(screen.getByText('Appearance')).toBeInTheDocument()
       expect(screen.getByText('Models')).toBeInTheDocument()
       expect(screen.queryByText('Advanced')).not.toBeInTheDocument()
     })
@@ -75,24 +75,34 @@ describe('Settings', () => {
       expect(screen.getByText('Advanced')).toBeInTheDocument()
     })
 
-    // Settings R3 (T1): 网络 / 会话 / 关于 join the rail; 高级 moves to the
-    // end and stays the only dev-gated entry — 10 entries in simple mode,
-    // 11 in dev.
-    it('renders the three new sections and 10 entries in simple mode', () => {
+    // IA redesign 2026-10 (ADVERSARIAL-REVIEW §2): 11 sections → 8. 网络
+    // merged into 连接, 会话 into 通用, 远程目标 into 连接 — the rail shows
+    // the merged set and the old entries are gone (their deep links redirect
+    // in App.tsx). 8 entries in simple mode, 9 in dev.
+    it('renders the merged 8 sections and no legacy entries in simple mode', () => {
       renderSettings()
-      expect(screen.getByText('Network')).toBeInTheDocument()
-      expect(screen.getByText('Sessions')).toBeInTheDocument()
-      expect(screen.getByText('About')).toBeInTheDocument()
       const links = screen.getAllByRole('link').map((l) => l.getAttribute('href'))
-      expect(links).toHaveLength(10)
+      expect(links).toEqual([
+        '/settings/general',
+        '/settings/theme',
+        '/settings/models',
+        '/settings/permissions',
+        '/settings/notifications',
+        '/settings/connections',
+        '/settings/about',
+      ])
+      // The absorbed sections no longer appear on the rail.
+      expect(links).not.toContain('/settings/network')
+      expect(links).not.toContain('/settings/session')
+      expect(links).not.toContain('/settings/remotes')
       expect(links).not.toContain('/settings/advanced')
     })
 
-    it('renders 11 entries in dev mode with Advanced last', () => {
+    it('renders 8 entries in dev mode with Advanced last', () => {
       localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
       renderSettings()
       const links = screen.getAllByRole('link').map((l) => l.getAttribute('href'))
-      expect(links).toHaveLength(11)
+      expect(links).toHaveLength(8)
       expect(links.indexOf('/settings/about')).toBeLessThan(links.indexOf('/settings/advanced'))
       expect(links[links.length - 1]).toBe('/settings/advanced')
     })

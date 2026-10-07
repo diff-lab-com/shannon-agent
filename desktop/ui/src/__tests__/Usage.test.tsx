@@ -54,7 +54,9 @@ describe('Usage page', () => {
     })
     // Overview is the default surface — assert the chart titles, not the
     // audit-mode table headers.
-    expect(screen.getByText('Daily tokens')).toBeInTheDocument()
+    // F-4 (ui-redesign 06): the byDay chart title follows the selected
+    // range (default 30) — "Daily tokens · 30 days".
+    expect(screen.getByText('Daily tokens · 30 days')).toBeInTheDocument()
     expect(screen.getByText('Tokens by provider')).toBeInTheDocument()
     // 2024-01-02 still appears in the chart's x-axis labels (MM-DD slice).
     expect(screen.getByText('01-02')).toBeInTheDocument()
@@ -104,5 +106,23 @@ describe('Usage page', () => {
 
     fireEvent.click(screen.getByText('7 days'))
     await waitFor(() => expect(api.getUsageStats).toHaveBeenCalledWith(7))
+  })
+
+  // F-4 (ui-redesign 06): the byDay chart title must match the active
+  // range filter — switching 30 → 7 updates the title text, not just the
+  // data behind it.
+  it('updates the byDay chart title when the range filter changes', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    renderUsage()
+
+    await waitFor(() => {
+      expect(screen.getByText('Daily tokens · 30 days')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByText('7 days'))
+    await waitFor(() => {
+      expect(screen.getByText('Daily tokens · 7 days')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Daily tokens · 30 days')).not.toBeInTheDocument()
   })
 })

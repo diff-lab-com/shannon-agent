@@ -348,9 +348,9 @@ describe('Header component', () => {
     expect(screen.getByText('Settings')).toBeInTheDocument()
   })
 
-  it('renders Extensions title on /extensions route', () => {
+  it('renders Connectors title on /extensions route (IA 2026-10 扩展 → 连接)', () => {
     render(wrap(<Header />, { route: '/extensions/skills' }))
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
   })
 
   it('renders notifications and help buttons', () => {
@@ -444,6 +444,9 @@ describe('Header — skill candidate badge', () => {
 })
 
 // ── P1-3: execution-mode switcher + approval-dialog decision reason ──
+// Aurora redesign 2026-10 (02-chat.html 三要素归位): the switchers moved
+// into the composer's compose row (see ComposerSwitchers.test.tsx for the
+// relocated activation/aria coverage). The Header half pins the ABSENCE.
 describe('Header — P1-3 execution mode + decision reason', () => {
   beforeEach(() => {
     // Top-level describe — the outer beforeEach does not run here, so
@@ -454,39 +457,17 @@ describe('Header — P1-3 execution mode + decision reason', () => {
     vi.mocked(api.listSkillCandidates).mockResolvedValue([])
   })
 
-  it('renders the execution-mode switcher on /chat with the current tier', () => {
+  it('no longer renders the execution-mode switcher on /chat (moved into the composer)', () => {
     render(wrap(<Header />, { route: '/chat' }))
-    expect(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' })).toBeInTheDocument()
+    expect(screen.queryByTestId('execution-mode-switcher')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Execution mode:/ })).not.toBeInTheDocument()
+    // Same for the plan/act tier pair.
+    expect(screen.queryByTestId('phase-tier-switcher')).not.toBeInTheDocument()
   })
 
   it('does not render the execution-mode switcher on other pages', () => {
     render(wrap(<Header />, { route: '/tasks' }))
     expect(screen.queryByRole('button', { name: /Execution mode:/ })).not.toBeInTheDocument()
-  })
-
-  it('shows a custom profile name on the custom tier', () => {
-    mockCtx.config = { ...mockCtx.config, active_permission_profile: 'research-mode' }
-    render(wrap(<Header />, { route: '/chat' }))
-    expect(screen.getByRole('button', { name: 'Execution mode: Custom: research-mode. Press to change.' })).toBeInTheDocument()
-  })
-
-  it('dispatches activate_permission_profile and refreshes config on tier switch', async () => {
-    vi.mocked(api.activatePermissionProfile).mockResolvedValue({ active: 'strict', approval_mode: 'suggest' })
-    render(wrap(<Header />, { route: '/chat' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' }))
-    fireEvent.click(await screen.findByRole('option', { name: 'Strict' }))
-    await waitFor(() => {
-      expect(api.activatePermissionProfile).toHaveBeenCalledWith('strict')
-      expect(mockCtx.refreshConfig).toHaveBeenCalled()
-    })
-  })
-
-  it('marks the active tier aria-selected in the menu', async () => {
-    render(wrap(<Header />, { route: '/chat' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' }))
-    const balanced = await screen.findByRole('option', { name: 'Balanced' })
-    expect(balanced).toHaveAttribute('aria-selected', 'true')
-    expect(await screen.findByRole('option', { name: 'Strict' })).toHaveAttribute('aria-selected', 'false')
   })
 
   // ── P1-3: approval-dialog decision reason ────────────────────────────

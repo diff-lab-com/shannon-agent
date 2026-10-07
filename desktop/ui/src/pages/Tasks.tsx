@@ -41,7 +41,8 @@ import TasksHeader from '@/components/tasks/TasksHeader'
 import RoutineTemplatesBrowser from '@/components/routines/RoutineTemplatesBrowser'
 import TasksFilters from '@/components/tasks/TasksFilters'
 import NewTaskForm from '@/components/tasks/NewTaskForm'
-import ScheduleForm from '@/components/tasks/ScheduleForm'
+import ScheduleForm, { type ScheduleFormInitial } from '@/components/tasks/ScheduleForm'
+import NlRoutineQuickCreate, { type NlRoutinePrefill } from '@/components/tasks/NlRoutineQuickCreate'
 import TaskList from '@/components/tasks/TaskList'
 import TaskCalendarView from '@/components/tasks/TaskCalendarView'
 import TaskDAGView from '@/components/tasks/TaskDAGView'
@@ -122,6 +123,10 @@ export default function Tasks() {
   // P1-2: best-of-N batch creation form + its data panel (live cards below).
   const [showBatchForm, setShowBatchForm] = useState(false)
   const [showSchedule, setShowSchedule] = useState(false)
+  // B2 NL quick create: the routines tab's one-line card hands its parsed
+  // values here for the 调整 path — ScheduleForm re-seeds from it on every
+  // mount (the form renders conditionally). null = plain create form.
+  const [nlPrefill, setNlPrefill] = useState<ScheduleFormInitial | null>(null)
   const [newTaskPrompt, setNewTaskPrompt] = useState('')
   const [taskPage, setTaskPage] = useState(1)
   const [cancelTarget, setCancelTarget] = useState<string | null>(null)
@@ -215,6 +220,7 @@ export default function Tasks() {
   // I2: 新建例行 marker → open the create form, drain the marker param.
   useEffect(() => {
     if (!newRoutineMarker) return
+    setNlPrefill(null)
     setShowSchedule(true)
     const next = new URLSearchParams(searchParams)
     next.delete('new')
@@ -241,6 +247,38 @@ export default function Tasks() {
         setShowSchedule(false)
       }
     } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.createRoutine')); toastError(t('tasks.toast.failed.createRoutine'), e) }
+  }
+
+  // B2 NL quick create — 激活 path: create straight from the one-line card.
+  // The hook owns the failure toast + list refresh (createScheduled resolves
+  // null on failure); the success announcement mirrors handleCreateSchedule.
+  // A deep-linked project houses the routine, same as the form path.
+  const handleNlActivate = async (payload: CreateTaskPayload): Promise<boolean> => {
+    const created = await createScheduled({
+      ...payload,
+      working_dir: payload.working_dir ?? projectKey ?? undefined,
+    })
+    if (!created) return false
+    if (created.trigger_type === 'webhook') {
+      toast.success(t('tasks.toast.webhookReady'))
+    } else {
+      toast.success(intl.formatMessage({ id: 'tasks.toast.routineScheduled' }, { name: created.name }))
+    }
+    return true
+  }
+
+  // 调整 path: the parsed values move into the full ScheduleForm, which
+  // re-seeds from `initial` on mount.
+  const handleNlAdjust = (prefill: NlRoutinePrefill) => {
+    setNlPrefill(prefill)
+    setShowSchedule(true)
+  }
+
+  // Plain create entry (header CTA, NL parse-failure guidance): never inherit
+  // a stale NL prefill.
+  const openScheduleForm = () => {
+    setNlPrefill(null)
+    setShowSchedule(true)
   }
 
   const handleCancelTask = async (id: string) => {
@@ -315,7 +353,12 @@ export default function Tasks() {
           onToggleDag={() => { setDagView(!dagView); if (!dagView) setCalendarView(false) }}
           onToggleNewTask={() => setShowNewTask(!showNewTask)}
           onToggleBatch={() => setShowBatchForm(!showBatchForm)}
-          onToggleSchedule={() => setShowSchedule(!showSchedule)}
+          onToggleSchedule={() => {
+            // Keep the CTA's toggle semantics; a fresh open just never
+            // inherits a stale NL prefill.
+            if (!showSchedule) setNlPrefill(null)
+            setShowSchedule(!showSchedule)
+          }}
           teams={teams}
           teamFilter={teamFilter}
           onTeamFilterChange={setTeamFilter}
@@ -377,6 +420,13 @@ export default function Tasks() {
           <WorktreePanel />
         ) : tab === 'routines' ? (
           <div className="space-y-gutter">
+            {/* B2: NL quick create sits at the top of the automation tab —
+                preview → 调整 (full form) or 激活 (direct create). */}
+            <NlRoutineQuickCreate
+              onActivate={handleNlActivate}
+              onAdjust={handleNlAdjust}
+              onOpenForm={openScheduleForm}
+            />
             <ScheduleDAGView routines={scopedRoutines} onSelectRoutine={setSelectedRoutineId} queuedTaskIds={queuedRoutineIds} />
             <WebhookTriggerCard routines={scopedRoutines} />
             <RoutineTemplatesBrowser onInstantiated={() => void refreshScheduled()} />
@@ -391,6 +441,14 @@ export default function Tasks() {
         {/* 操作员视图（§5-1 裁决）— the panels below (batch cards, goal runs,
             subagent inventory) are the operator surfaces; stay out of scope
             for the nav/IA redesign unless the proposal says otherwise. */}
+        {/* B2/审查修复: NL quick create 也挂在默认 active 视图顶部 ——
+            routines 是 dev tab,简单模式用户从设计稿 04 页预期的入口在这里。 */}
+        <NlRoutineQuickCreate
+          onActivate={handleNlActivate}
+          onAdjust={handleNlAdjust}
+          onOpenForm={openScheduleForm}
+        />
+
         {/* P1-2: best-of-N batch cards (live per-branch chips) + form. */}
         <BatchRunPanel />
 
@@ -439,8 +497,9 @@ export default function Tasks() {
 
         {showSchedule && (
           <ScheduleForm
+            initial={nlPrefill ?? undefined}
             onSubmit={handleCreateSchedule}
-            onCancel={() => setShowSchedule(false)}
+            onCancel={() => { setNlPrefill(null); setShowSchedule(false) }}
           />
         )}
 

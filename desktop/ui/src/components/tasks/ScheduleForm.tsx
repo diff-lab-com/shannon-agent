@@ -27,9 +27,22 @@ import type {
   CronPreview,
 } from '@/types'
 
+/** B2 NL quick-create hand-off: values the edit step is seeded with.
+ *  Read ONCE at mount — the page renders the form conditionally, so every
+ *  open re-seeds from the current prop. */
+export interface ScheduleFormInitial {
+  name?: string
+  prompt?: string
+  triggerType?: TriggerType
+  cronExpr?: string
+}
+
 interface ScheduleFormProps {
   onSubmit: (payload: CreateTaskPayload) => void | Promise<unknown>
   onCancel: () => void
+  /** NlRoutineQuickCreate's 调整 path: start the edit step from the values
+   *  the one-line card already parsed and previewed. */
+  initial?: ScheduleFormInitial
 }
 
 type TriggerOption = {
@@ -51,15 +64,16 @@ const TRIGGER_OPTIONS: TriggerOption[] = [
   { value: 'event', icon: 'bolt' },
 ]
 
-export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) {
+export default function ScheduleForm({ onSubmit, onCancel, initial }: ScheduleFormProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
-  const [name, setName] = useState('')
-  const [prompt, setPrompt] = useState('')
-  const [triggerType, setTriggerType] = useState<TriggerType>('interval')
+  // `initial` is read only here (mount-time seed — see ScheduleFormInitial).
+  const [name, setName] = useState(initial?.name ?? '')
+  const [prompt, setPrompt] = useState(initial?.prompt ?? '')
+  const [triggerType, setTriggerType] = useState<TriggerType>(initial?.triggerType ?? 'interval')
   const [intervalSecs, setIntervalSecs] = useState(3600)
-  const [cronExpr, setCronExpr] = useState('0 9 * * *')
+  const [cronExpr, setCronExpr] = useState(initial?.cronExpr ?? '0 9 * * *')
   const [maxFires, setMaxFires] = useState<number | ''>('')
   const [showPolicy, setShowPolicy] = useState(false)
   const [policy, setPolicy] = useState<ExecutionPolicy>(DEFAULT_POLICY)

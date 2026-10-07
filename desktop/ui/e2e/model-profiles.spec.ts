@@ -29,11 +29,13 @@ test.describe('Provider model profiles + phase tiers (R3-2/R3-3)', () => {
     await expect(newRow.getByTestId('profile-switch-e2e-profile')).toBeVisible()
   })
 
-  test('the chat header carries the plan/act tier pair', async ({ page }) => {
+  test('the chat page carries the plan/act tier pair (composer, ex-Header)', async ({ page }) => {
     await page.goto('/chat')
     const switcher = page.getByTestId('phase-tier-switcher')
-    // The header mounts with /chat regardless of welcome-vs-composer state;
-    // the control reads the demo config (both tiers inherit by default).
+    // The composer (the switcher's home since the Aurora redesign 2026-10;
+    // testid unchanged) mounts with /chat regardless of welcome-vs-composer
+    // state; the control reads the demo config (both tiers inherit by
+    // default).
     await expect(switcher).toBeVisible({ timeout: 15000 })
     await expect(switcher).toHaveAttribute('aria-label', /Inherit.*Inherit/)
   })

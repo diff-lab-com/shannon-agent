@@ -40,7 +40,8 @@ function modelChip(page: Page) {
 function approvalPill(page: Page) {
   return page.getByTestId(APPROVAL_PILL_TESTID).or(page.getByRole('combobox', { name: 'Permission mode' }))
 }
-/** The header execution-mode switcher trigger. */
+/** The composer execution-mode switcher trigger (moved out of the Header,
+ *  Aurora redesign 2026-10 — the testid is unchanged). */
 function execModeTrigger(page: Page) {
   return page.getByTestId(EXEC_MODE_TESTID).or(page.getByRole('button', { name: /^Execution mode:/ }))
 }
@@ -175,7 +176,7 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await openSession(page)
 
     // Turn 1 first: the empty conversation renders the WelcomeState overlay
-    // over the message area, which would swallow the header dropdowns; the
+    // over the message area, which would swallow the composer dropdowns; the
     // settled run also matches the journey narrative (confirm, then switch).
     await chat.send(script.turns[0]!.user)
     await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })

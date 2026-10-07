@@ -16,8 +16,6 @@ import * as api from '@/lib/tauri-api';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { toastError } from '@/lib/errorToast';
 import { useSessionBudget } from '@/hooks/useSessionBudget';
-import { ExecutionModeSwitcher } from '@/components/chat/ExecutionModeSwitcher';
-import { PhaseTierSwitcher } from '@/components/chat/PhaseTierSwitcher';
 import AskUserCard from '@/components/chat/AskUserCard';
 import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow';
 import { modelWhyFor, type ModelWhyContext } from '@/lib/modelWhy';
@@ -378,13 +376,12 @@ export function Header() {
               {(sessionUsage?.cost_usd ?? 0).toFixed(2)} / ${sessionBudget.toFixed(2)}
             </span>
           )}
-          {/* P1-3: execution-mode switcher (严格/平衡/宽松/自定义) — chat
-              header only, kept next to the model selector. */}
-          {isChat && <ExecutionModeSwitcher />}
-          {/* R3-3: plan/act model-tier pair (规划/执行档位) — chat header
-              only. Global preference; per-session overrides (R2-1) always
-              win over it. */}
-          {isChat && <PhaseTierSwitcher />}
+          {/* Aurora redesign 2026-10 (02-chat.html 三要素归位): the execution
+              mode + plan/act tier switchers moved OUT of the chat Header into
+              the composer's compose row (ChatInput) — the header keeps only
+              the ContextPanel toggle and the budget badge on /chat, and the
+              model selector stays the non-chat-only surface. The switchers'
+              testids are unchanged (e2e anchors by testid, not container). */}
           {/* Model selector — non-chat pages only: on /chat the composer
               model chip is the single surface (issue: 三处模型名重复).
               Both write the same config keys, so switching stays in sync.

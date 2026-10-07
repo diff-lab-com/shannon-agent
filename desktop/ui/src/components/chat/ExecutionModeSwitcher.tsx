@@ -55,8 +55,13 @@ const TIER_LABEL_KEY: Record<string, string> = {
  * `menuitem` roles would read as a command menu, while these rows are a
  * single-value selection — Base UI lets the ARIA roles be overridden per
  * part without losing its roving-focus/typeahead machinery.
+ *
+ * `compact` (Aurora redesign 2026-10, 02-chat.html): the same switcher in
+ * its new composer home — tighter padding so it sits beside the model chip
+ * in the compose row. Trigger-only restyle: testids, aria labels, menu
+ * content and the activation IPC are byte-identical to the header form.
  */
-export function ExecutionModeSwitcher() {
+export function ExecutionModeSwitcher({ compact = false }: { compact?: boolean }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) =>
     intl.formatMessage({ id }, values)
@@ -114,12 +119,15 @@ export function ExecutionModeSwitcher() {
             data-testid="execution-mode-switcher"
             aria-label={t('execMode.toggle.aria', { tier: currentLabel })}
             title={t('execMode.toggle.title')}
-            className="flex items-center gap-xs px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
+            className={cn(
+              'flex items-center gap-xs rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all',
+              compact ? 'px-sm py-xs' : 'px-md py-sm',
+            )}
           >
             <span className="material-symbols-outlined icon-md" aria-hidden="true">
               tune
             </span>
-            <span className="font-label-sm text-label-sm whitespace-nowrap max-w-[110px] truncate">
+            <span className={cn('font-label-sm text-label-sm whitespace-nowrap truncate', compact ? 'max-w-[92px]' : 'max-w-[110px]')}>
               {currentLabel}
             </span>
             <span className="material-symbols-outlined icon-sm" aria-hidden="true">

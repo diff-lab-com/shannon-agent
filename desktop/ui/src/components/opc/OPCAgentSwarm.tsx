@@ -193,6 +193,35 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                     {agent.task || intl.formatMessage({ id: `status.${agent.status}`, defaultMessage: agent.status })}
                   </span>
                 </div>
+                {/* F-5 (ui-redesign 09): honest load display. A blocked agent
+                    consumes no compute, so its load reads "—" with an
+                    explanatory tooltip — never a number or progress bar.
+                    Running agents render the real progress meter. Display
+                    only; the AgentInfo data is untouched. */}
+                {agent.status === 'blocked' ? (
+                  <div
+                    className="mt-sm flex items-center gap-xs font-label-sm text-label-2xs text-on-surface-variant/80 bg-surface-container-low/60 rounded-sm px-1.5 py-0.5 self-start"
+                    title={intl.formatMessage({ id: 'opc.load.blocked' })}
+                    data-testid={`opc-agent-load-${agent.id}`}
+                  >
+                    <span className="material-symbols-outlined icon-xs" aria-hidden="true">pause_circle</span>
+                    <span>
+                      {intl.formatMessage({ id: 'status.blocked' })} · {intl.formatMessage({ id: 'opc.load.label' })} —
+                    </span>
+                  </div>
+                ) : typeof agent.progress === 'number' ? (
+                  <div className="mt-sm flex items-center gap-xs" data-testid={`opc-agent-load-${agent.id}`}>
+                    <div className="h-1 flex-1 rounded-full bg-outline-variant/50 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-tertiary transition-all duration-(--duration-normal)"
+                        style={{ width: `${Math.min(100, Math.max(0, agent.progress))}%` }}
+                      />
+                    </div>
+                    <span className="font-label-sm text-label-2xs font-bold text-on-surface-variant tabular-nums">
+                      {Math.min(100, Math.max(0, Math.round(agent.progress)))}%
+                    </span>
+                  </div>
+                ) : null}
                 {agent.worktree_path ? (
                   <div className="mt-sm flex items-center gap-xs font-label-sm text-label-2xs text-on-surface-variant/80 bg-surface-container-low/60 rounded-sm px-1.5 py-0.5 self-start">
                     <span className="material-symbols-outlined icon-xs">fork_right</span>
