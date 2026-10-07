@@ -302,6 +302,58 @@ describe('BatchDiffCompare', () => {
     expect(screen.getByTestId('batch-diff-columns')).toBeTruthy()
   })
 
+  // 2a — selection chips surface the branch's diff summary + spend (both
+  // already on the BatchBranch contract): truncated inside the chip, full
+  // text on `title`, spend formatted like the card's branch chips.
+  it('surfaces each branch summary and spend on its selection chip', () => {
+    render(<BatchDiffCompare run={makeBatch({})} onClose={() => {}} onAdopt={async () => null} />, {
+      wrapper,
+    })
+
+    const chip0 = screen.getByTestId('batch-compare-chip-0')
+    // en branchStat: "3 files · +10 −2"; spend in USD.
+    expect(chip0.textContent).toContain('+10')
+    expect(chip0.textContent).toContain('$0.25')
+    expect(chip0.getAttribute('title')).toContain('batch-abcd1234-0')
+    expect(chip0.getAttribute('title')).toContain('$0.25')
+
+    const chip1 = screen.getByTestId('batch-compare-chip-1')
+    expect(chip1.textContent).toContain('4 files')
+    expect(chip1.textContent).toContain('$0.50')
+    // Chips remain interactive selection toggles.
+    expect(chip1.getAttribute('aria-checked')).toBe('true')
+  })
+
+  // 2b — the conflict guidance names the kept worktree (mono path) and can
+  // copy it, so "manual handling" starts one click closer.
+  it('shows the conflicting branch worktree path and copies it on click', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const onAdopt = vi.fn().mockResolvedValue({ merged: false, conflicts: ['src/search.ts'] })
+    render(<BatchDiffCompare run={makeBatch({})} onClose={() => {}} onAdopt={onAdopt} />, {
+      wrapper,
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: /adopt branch #1|采纳分支 #1/i }))
+    fireEvent.click(screen.getByRole('button', { name: /merge & clean up|合并并清理/i }))
+
+    await screen.findByTestId('batch-conflict-banner')
+    const path = screen.getByTestId('batch-conflict-worktree')
+    expect(path.textContent).toBe('/repo/.shannon/scheduled-worktrees/batch-abcd1234-1')
+
+    const copyBtn = screen.getByRole('button', { name: /copy the worktree path of branch #1/i })
+    fireEvent.click(copyBtn)
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith('/repo/.shannon/scheduled-worktrees/batch-abcd1234-1'),
+    )
+    // Button flips to "Copied" feedback after the write resolves.
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /copy the worktree path of branch #1/i }).textContent,
+      ).toContain('Copied'),
+    )
+  })
+
   it('marks the adopted column and hides adopt buttons once adopted', async () => {
     render(
       <BatchDiffCompare

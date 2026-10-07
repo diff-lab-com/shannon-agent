@@ -277,6 +277,36 @@ describe('Welcome component — 2-step flow', () => {
     expect(screen.queryByText(/tools? enabled/i)).not.toBeInTheDocument()
   })
 
+  // 01b — the Done step itemizes the recommendation: one chip per tool with
+  // its fixed reason, still phrased as "recommended" (never "enabled"), and
+  // the chips are inert — clicking one must not flip any config (4-B).
+  it('Done step lists each recommended tool as a chip with its reason', async () => {
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+      provider: 'anthropic',
+      has_api_key: true,
+    })
+    wrap()
+    // Code task → filesystem, git, playwright.
+    fireEvent.click(screen.getByRole('button', { name: /Build apps, write scripts, debug and refactor\./ }))
+    await waitFor(() => {
+      const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
+      expect(continueBtns[continueBtns.length - 1]).not.toBeDisabled()
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: /Continue/ }).at(-1)!)
+    await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
+
+    const chips = screen.getAllByTestId('welcome-done-tool-chip')
+    expect(chips).toHaveLength(3)
+    expect(screen.getByText('Filesystem')).toBeInTheDocument()
+    expect(screen.getByText('Git')).toBeInTheDocument()
+    expect(screen.getByText('Playwright')).toBeInTheDocument()
+    expect(screen.getByText(/3 recommended tools — enable them in Settings/)).toBeInTheDocument()
+    // Chips are informational spans, not toggles (decision 4-B holds).
+    for (const chip of chips) {
+      expect(chip.tagName).toBe('SPAN')
+    }
+  })
+
   it('Done step shows chosen task in summary', async () => {
     wrap()
     // Pick Writing task

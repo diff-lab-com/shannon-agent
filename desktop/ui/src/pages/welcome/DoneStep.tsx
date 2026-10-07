@@ -3,7 +3,15 @@
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { WelcomeCard } from './components'
-import { PROVIDERS, SHORTCUT_ROWS, TASKS, type TaskId } from './constants'
+import {
+  PROVIDERS,
+  SHORTCUT_ROWS,
+  TASKS,
+  TOOL_ICONS,
+  TOOL_LABEL_KEYS,
+  TOOL_REASON_KEYS,
+  type TaskId,
+} from './constants'
 import { DocumentsSkillsList } from './DocumentsSkillsList'
 
 interface DoneStepProps {
@@ -38,6 +46,14 @@ export function DoneStep({
 }: DoneStepProps) {
   const intl = useIntl()
   const currentTask = TASKS.find(t => t.id === task)!
+  // Per-tool chip data (01b): display name falls back to the raw id when a
+  // tool id has no `welcome.tool.*` label yet; the reason key mirrors the id.
+  const recommendedTools = currentTask.tools.map(id => ({
+    id,
+    label: TOOL_LABEL_KEYS[id] ? intl.formatMessage({ id: TOOL_LABEL_KEYS[id] }) : id,
+    reasonKey: TOOL_REASON_KEYS[id] ?? `welcome.done.reason.${id}`,
+    icon: TOOL_ICONS[id] ?? 'extension',
+  }))
   return (
     <WelcomeCard
       title={intl.formatMessage({ id: 'welcome.done.title' })}
@@ -73,6 +89,29 @@ export function DoneStep({
             <span>{intl.formatMessage({ id: 'welcome.done.setup.tools' }, { count: recommendedToolCount })}</span>
           </li>
         </ul>
+        {/* 01b — the recommended tools, itemized. Each chip is the tool's
+            display name plus its template-driven one-line reason; chips are
+            inert (recommendation only, decision 4-B — enabling stays in
+            Settings, which the count line above already points at). */}
+        {recommendedTools.length > 0 && (
+          <div className="flex flex-wrap gap-xs mt-sm" data-testid="welcome-done-tools">
+            {recommendedTools.map(tool => (
+              <span
+                key={tool.id}
+                data-testid="welcome-done-tool-chip"
+                className="inline-flex items-center gap-xs px-sm py-xs rounded-full border border-outline-variant/30 bg-surface-container-lowest font-label-xs text-on-surface"
+              >
+                <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">
+                  {tool.icon}
+                </span>
+                <span className="font-medium">{tool.label}</span>
+                <span className="text-on-surface-variant">
+                  {intl.formatMessage({ id: tool.reasonKey })}
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Optional workspace picker */}

@@ -14,7 +14,7 @@
 // of the others) → `adopt_batch_branch`. Conflicts → the conflicting file
 // list plus guidance that the worktrees were kept for manual handling.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { Modal, ModalBody } from '@/components/ui/modal'
@@ -163,6 +163,17 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
   const [confirmIndex, setConfirmIndex] = useState<number | null>(null)
   const [adopting, setAdopting] = useState(false)
   const [conflicts, setConflicts] = useState<{ index: number; files: string[] } | null>(null)
+  // 2b — worktree-path copy feedback, same delayed-callback hygiene as
+  // WebhookTriggerCard: a re-copy restarts the window instead of stacking
+  // timers, and a pending timer never fires into an unmounted component.
+  const [worktreeCopied, setWorktreeCopied] = useState(false)
+  const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current)
+    },
+    [],
+  )
 
   // Reset the selection whenever a different batch opens: default to every
   // completed branch (all of them for N≤3 anyway).
@@ -178,6 +189,10 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
   if (!run) return null
 
   const terminal = run.status !== 'running'
+  // 2b — the conflicting branch's worktree (contract field `worktreePath`)
+  // is what the user must open to resolve conflicts manually.
+  const conflictBranch =
+    conflicts ? run.branches.find(b => b.index === conflicts.index) ?? null : null
   const toggle = (index: number) => {
     setSelected(prev => {
       const next = new Set(prev)
@@ -185,6 +200,18 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
       else next.add(index)
       return next
     })
+  }
+
+  const copyConflictWorktree = async () => {
+    if (!conflictBranch) return
+    try {
+      await navigator.clipboard.writeText(conflictBranch.worktreePath)
+      setWorktreeCopied(true)
+      if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current)
+      copiedResetTimer.current = setTimeout(() => setWorktreeCopied(false), 1500)
+    } catch {
+      // Clipboard may be denied in the webview — the path stays visible text.
+    }
   }
 
   const doAdopt = async () => {
@@ -201,6 +228,7 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
       // Conflicts: keep the dialog open and show the file list + guidance;
       // the backend left every worktree in place for manual handling.
       setConflicts({ index, files: result.conflicts ?? [] })
+      setWorktreeCopied(false)
     }
   }
 
@@ -208,25 +236,54 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
     <>
       <Modal open={open} onClose={onClose} title={t('batch.compare.title', { title: run.title })} size="full">
         <ModalBody className="pt-0">
-          {/* Branch selection chips (defaults: all completed branches). */}
+          {/* Branch selection chips (defaults: all completed branches).
+              2a — each chip also surfaces the branch's diff summary and
+              spend, both already on the `BatchBranch` contract: the summary
+              is truncated in the chip (narrow branch names get max-w) and
+              the full text rides on the `title`; spentUsd uses the same
+              currency formatting as the card's branch chips. */}
           <div className="flex flex-wrap items-center gap-xs mb-sm">
-            {run.branches.map(branch => (
-              <button
-                key={branch.index}
-                type="button"
-                role="checkbox"
-                aria-checked={selected.has(branch.index)}
-                onClick={() => toggle(branch.index)}
-                className={cn(
-                  'px-sm py-xs rounded-lg border font-label-xs cursor-pointer transition-colors',
-                  selected.has(branch.index)
-                    ? 'bg-primary-container text-on-primary-container border-primary/30'
-                    : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30',
-                )}
-              >
-                #{branch.index} · {branch.branchName}
-              </button>
-            ))}
+            {run.branches.map(branch => {
+              const summary = branch.summary
+                ? t('batch.compare.branchStat', {
+                    files: branch.summary.filesChanged,
+                    additions: branch.summary.additions,
+                    deletions: branch.summary.deletions,
+                  })
+                : null
+              const spent = intl.formatNumber(branch.spentUsd, {
+                style: 'currency',
+                currency: 'USD',
+              })
+              return (
+                <button
+                  key={branch.index}
+                  type="button"
+                  role="checkbox"
+                  aria-checked={selected.has(branch.index)}
+                  onClick={() => toggle(branch.index)}
+                  data-testid={`batch-compare-chip-${branch.index}`}
+                  title={[`#${branch.index}`, branch.branchName, summary, spent]
+                    .filter(Boolean)
+                    .join(' · ')}
+                  className={cn(
+                    'flex items-center gap-xs whitespace-nowrap min-w-0 px-sm py-xs rounded-lg border font-label-xs cursor-pointer transition-colors',
+                    selected.has(branch.index)
+                      ? 'bg-primary-container text-on-primary-container border-primary/30'
+                      : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30',
+                  )}
+                >
+                  <span className="font-bold shrink-0">#{branch.index}</span>
+                  <span className="truncate max-w-[16ch]">{branch.branchName}</span>
+                  {summary && (
+                    <span className="tabular-nums truncate max-w-[20ch] text-on-surface-variant">
+                      {summary}
+                    </span>
+                  )}
+                  <span className="tabular-nums shrink-0">{spent}</span>
+                </button>
+              )
+            })}
           </div>
 
           {/* Conflict guidance banner. */}
@@ -243,6 +300,37 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
                 {t('batch.compare.conflictTitle', { index: conflicts.index })}
               </p>
               <p className="font-label-sm mt-xs">{t('batch.compare.conflictGuidance')}</p>
+              {/* 2b — where "manual handling" actually happens: the kept
+                  worktree, mono + copyable (same copy affordance as the
+                  webhook trigger card; a denied clipboard just leaves the
+                  path as visible text). */}
+              {conflictBranch && (
+                <div className="mt-xs flex items-center gap-xs flex-wrap">
+                  <span className="font-label-sm text-on-surface-variant shrink-0">
+                    {t('batch.compare.worktreeLabel')}
+                  </span>
+                  <code
+                    data-testid="batch-conflict-worktree"
+                    className="font-mono text-label-xs text-on-surface px-sm py-xs rounded-sm bg-surface-container-lowest border border-outline-variant/20 break-all min-w-0"
+                  >
+                    {conflictBranch.worktreePath}
+                  </code>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-label={t('batch.compare.worktreeCopyAria', { index: conflicts.index })}
+                    className="cursor-pointer shrink-0"
+                    onClick={() => void copyConflictWorktree()}
+                  >
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                      {worktreeCopied ? 'check' : 'content_copy'}
+                    </span>
+                    {worktreeCopied
+                      ? t('batch.compare.worktreeCopied')
+                      : t('batch.compare.worktreeCopy')}
+                  </Button>
+                </div>
+              )}
               <ul className="font-label-sm font-mono mt-xs list-disc list-inside">
                 {conflicts.files.map(f => (
                   <li key={f}>{f}</li>
