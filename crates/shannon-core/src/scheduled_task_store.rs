@@ -628,7 +628,12 @@ mod tests {
         budgeted.pause_reason = Some("budget".into());
         store.save(&budgeted).unwrap();
         assert_eq!(
-            store.load(&budgeted.id).unwrap().unwrap().pause_reason.as_deref(),
+            store
+                .load(&budgeted.id)
+                .unwrap()
+                .unwrap()
+                .pause_reason
+                .as_deref(),
             Some("budget")
         );
     }
