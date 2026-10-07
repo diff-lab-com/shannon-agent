@@ -153,11 +153,15 @@ export interface AgentDetailParams {
 /**
  * `shannon/task.dispatch` (cross-repo spec §K1) — send a prompt through the
  * IM-style inbound pipeline (per-device lane → approval loop → structured
- * task stream). `agent_id` is accepted on the wire but the engine has NO
- * per-agent routing face (`shannon/agent.list` is a read-only roster view,
- * not a dispatch target list), so ANY non-empty value is rejected with
- * INVALID_PARAMS rather than silently routed elsewhere — accepting it would
- * be a lie.
+ * task stream). B0: `agent_id` names a CONFIGURED agent — validated against
+ * the host roster (`shannon/agent.list`, `~/.shannon/agents/*.toml`); a hit
+ * is accepted and recorded as the task's attribution, anything else is
+ * rejected with INVALID_PARAMS rather than silently routed elsewhere.
+ *
+ * Boundary: the engine has NO per-agent routing face — the recorded agent_id
+ * never changes what executes (the turn still runs as the default engine);
+ * it only says "this configured agent owns the task" (wire task object +
+ * `shannon/session.list` enrichment).
  */
 export interface TaskDispatchParams {
   prompt: string;
@@ -402,8 +406,10 @@ export interface OkResult {
 /**
  * One dispatched task on the wire (spec §K1/K2). `id` is the primary key AND
  * the task thread's conversation key (§K3: the `session_id` the task's
- * `task.progress` / `task.message` events carry). `agent_id` is always null
- * on this host (no per-agent routing face; see `shannon/agent.list`);
+ * `task.progress` / `task.message` events carry). B0: `agent_id` is the
+ * roster agent the task was dispatched under (validated against
+ * `shannon/agent.list` at accept time), or null when the dispatch carried
+ * none — attribution only, not engine routing (see `TaskDispatchParams`);
  * `created_at` is ISO-8601 UTC.
  *
  * B1a (v2.3 additive): three optional keys return — `title` rides whenever

@@ -238,6 +238,16 @@ export interface EngineBridgeOptions {
    * the real home paths; tests inject a tmp pair.
    */
   usageBudgetPaths?: Partial<UsageBudgetPaths>;
+  /**
+   * B0: task-session attribution — which roster agent a dispatched task was
+   * dispatched under, keyed by the task id (the §K3 conversation key IS the
+   * engine session id). Wired to `MobileDispatchHub.agentForSession` by the
+   * composer. `shannon/session.list` fills the reserved `agent_id` of task
+   * sessions from here (engine-supplied values win; unknown ids stay
+   * unattributed — nothing is invented). Absent → no enrichment (legacy
+   * shape: agentId only when the engine itself supplies one).
+   */
+  taskAgentLookup?: (sessionId: string) => string | null;
 }
 
 /** Sentinel key for queries without a session_id (P1.2 replaces it with a device id). */
@@ -769,6 +779,20 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         // reserve-then-enable pattern; `cursor` lands later).
         const snapshot = await fetchEngineSessions(call);
         const sessions = snapshot.sessions
+          .map((summary) => {
+            // B0 attribution: a dispatched task's engine session IS the task
+            // id, so the hub journal knows its roster agent. Fill the
+            // reserved `agent_id` only when the engine didn't supply one
+            // (engine truth wins) and the journal actually knows the id —
+            // sessions without an owner stay unattributed (the phone falls
+            // back to the host), never invented. The pass-through below
+            // (mapSessionSummary) carries it onto the wire as `agentId`.
+            if (summary.agent_id == null && opts.taskAgentLookup) {
+              const owner = opts.taskAgentLookup(summary.session_id);
+              if (owner != null) return { ...summary, agent_id: owner };
+            }
+            return summary;
+          })
           .map(mapSessionSummary)
           .filter((s): s is NonNullable<ReturnType<typeof mapSessionSummary>> => s !== null);
         return { kind: "result", result: { sessions } satisfies SessionListResult };

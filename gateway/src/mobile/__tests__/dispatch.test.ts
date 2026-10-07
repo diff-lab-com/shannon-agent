@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,7 @@ import {
   signMessage,
 } from "../crypto.js";
 import { MobileDispatchHub } from "../hub.js";
+import { createEngineHandlers } from "../engineBridge.js";
 import { ApprovalRegistry } from "../approvalRegistry.js";
 import { createTaskHandlers } from "../taskHandlers.js";
 import { createMobileTaskTurnHandler } from "../taskTurnHandler.js";
@@ -127,13 +128,14 @@ describe("mobile dispatch — hub & handlers", () => {
     }
   });
 
-  it("rejects any non-empty agent_id with INVALID_PARAMS — no roster, no silent re-route (§K1)", async () => {
+  it("rejects an agent_id outside the roster with INVALID_PARAMS — no silent re-route (§K1, B0)", async () => {
     const hub = new MobileDispatchHub({ logger });
     const seen: NormalizedInbound[] = [];
     hub.setSubmit(async (inbound) => {
       seen.push(inbound);
     });
-    const handlers = createTaskHandlers({ hub });
+    // Deterministically empty roster (the default would scan the real home).
+    const handlers = createTaskHandlers({ hub, agentRosterDirs: [] });
     const ctx = fakeCtx("dev-1");
 
     for (const agentId of ["agent-0001", "me"]) {
@@ -152,6 +154,68 @@ describe("mobile dispatch — hub & handlers", () => {
     const blank = await handlers["shannon/task.dispatch"]!({ prompt: "hi", agent_id: "  " }, ctx);
     expect(blank).toMatchObject({ kind: "result" });
     await vi.waitFor(() => expect(seen).toHaveLength(2)); // deferred submission
+  });
+
+  it("B0: an agent_id in the roster is accepted — wire agent_id + journal attribution (§K1)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gw-dispatch-roster-"));
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "backend.toml"),
+        ['name = "backend-dev"', 'description = "Backend development specialist"'].join("\n"),
+        "utf8",
+      );
+      const hub = new MobileDispatchHub({ logger });
+      const seen: NormalizedInbound[] = [];
+      hub.setSubmit(async (inbound) => {
+        seen.push(inbound);
+      });
+      const handlers = createTaskHandlers({ hub, agentRosterDirs: [dir] });
+      const ctx = fakeCtx("dev-1");
+      hub.registerConnection(ctx);
+
+      // Exact id — accepted; surrounding whitespace is trimmed before the
+      // roster compare, so it lands on the same entry.
+      for (const agentId of ["backend-dev", "  backend-dev  "]) {
+        const res: any = await handlers["shannon/task.dispatch"]!(
+          { prompt: "ship it", agent_id: agentId },
+          ctx,
+        );
+        expect(res.kind).toBe("result");
+        expect(res.result.task).toMatchObject({
+          prompt: "ship it",
+          status: "running",
+          agent_id: "backend-dev",
+        });
+      }
+      await vi.waitFor(() => expect(hub.listTasks("dev-1")).toHaveLength(2));
+      await vi.waitFor(() =>
+        expect(hub.listTasks("dev-1")[0]).toMatchObject({ status: "completed" }),
+      );
+      // The journal carries the attribution, and task.list projects it.
+      for (const record of hub.listTasks("dev-1")) {
+        expect(record.agent_id).toBe("backend-dev");
+      }
+      const list = (await handlers["shannon/task.list"]!({}, ctx)) as any;
+      expect(list.result.tasks.map((t: any) => t.agent_id)).toEqual([
+        "backend-dev",
+        "backend-dev",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("B0: dispatch without agent_id keeps agent_id null (backward compatible)", async () => {
+    const hub = new MobileDispatchHub({ logger });
+    hub.setSubmit(async () => {});
+    const handlers = createTaskHandlers({ hub, agentRosterDirs: [] });
+    const ctx = fakeCtx("dev-1");
+
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "plain" }, ctx);
+    expect(res.kind).toBe("result");
+    expect(res.result.task.agent_id).toBeNull();
+    await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]!.agent_id).toBeNull());
   });
 
   it("dispatch answers the §K task object synchronously and journals the task", async () => {
@@ -509,6 +573,93 @@ describe("mobile dispatch — approval registry integration", () => {
   });
 });
 
+// ── B0: session.list attribution (hub journal → engineBridge) ────────────────
+
+describe("mobile dispatch — B0 session.list agent attribution", () => {
+  function tmpRosterDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "gw-dispatch-sess-"));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "backend.toml"), 'name = "backend-dev"', "utf8");
+    return dir;
+  }
+
+  /** A call-capable fake engine answering `sessions.list` with a fixed snapshot. */
+  function sessionsListEngine(sessions: unknown[]): any {
+    return {
+      connect: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      cancel: vi.fn(() => {}),
+      async *runQuery(): AsyncGenerator<EngineEvent> {},
+      call: vi.fn(async (_message: unknown, match: (frame: unknown) => unknown) => {
+        const matched = match({ type: "sessions.snapshot", sessions });
+        if (matched == null) throw new Error("fake engine produced an unmatched frame");
+        return matched;
+      }),
+    };
+  }
+
+  it("session.list fills agent_id on task sessions from the hub journal; unknown/foreign sessions stay unattributed", async () => {
+    const dir = tmpRosterDir();
+    try {
+      const hub = new MobileDispatchHub({ logger });
+      hub.setSubmit(async () => {});
+      const handlers = createTaskHandlers({ hub, agentRosterDirs: [dir] });
+      const ctx = fakeCtx("dev-1");
+      hub.registerConnection(ctx);
+
+      // One attributed dispatch (roster agent) + one un-attributed dispatch.
+      const owned: any = await handlers["shannon/task.dispatch"]!(
+        { prompt: "thread", agent_id: "backend-dev" },
+        ctx,
+      );
+      const plain: any = await handlers["shannon/task.dispatch"]!({ prompt: "plain" }, ctx);
+      const taskId = owned.result.task.id as string;
+
+      const bridge = createEngineHandlers({
+        engineWsUrl: "ws://127.0.0.1:9",
+        engineHttpBaseUrl: "http://engine",
+        version: "test",
+        logger,
+        engineClientFactory: () =>
+          sessionsListEngine([
+            // The task thread (engine session = task id) — journal knows its agent.
+            { session_id: taskId, title: "ship it" },
+            // A session the journal has no attribution for → no agentId.
+            { session_id: plain.result.task.id as string },
+            { session_id: "desktop-only" },
+            // Engine-supplied agent_id wins over the journal.
+            { session_id: "engine-owned", agent_id: "engine-agent" },
+          ]),
+        taskAgentLookup: (sessionId) => hub.agentForSession(sessionId),
+      });
+
+      const list: any = await bridge["shannon/session.list"]!({}, ctx);
+      expect(list.kind).toBe("result");
+      expect(list.result.sessions).toEqual([
+        { id: taskId, agentId: "backend-dev", title: "ship it" },
+        { id: plain.result.task.id },
+        { id: "desktop-only" },
+        { id: "engine-owned", agentId: "engine-agent" },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("without taskAgentLookup the enrichment is absent (legacy shape unchanged)", async () => {
+    const bridge = createEngineHandlers({
+      engineWsUrl: "ws://127.0.0.1:9",
+      engineHttpBaseUrl: "http://engine",
+      version: "test",
+      logger,
+      engineClientFactory: () =>
+        sessionsListEngine([{ session_id: "sess-1", title: "t" }]),
+    });
+    const list: any = await bridge["shannon/session.list"]!({}, fakeCtx("dev-1"));
+    expect(list.result.sessions).toEqual([{ id: "sess-1", title: "t" }]);
+  });
+});
+
 // ── pipeline: dispatch → lane → §K3 task stream → phone pushes ────────────────
 
 describe("mobile dispatch — §K3 structured task stream", () => {
@@ -740,6 +891,26 @@ describe("mobile dispatch — §K3 structured task stream", () => {
     await vi.waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]!.body).toEqual({ request_id: "req-3", choice: "deny" });
     expect(hub.hasPendingApproval("dev-1")).toBe(false);
+  });
+
+  it("B0: the task turn's engine session IS the task's UUID (engine rejects non-UUID session ids)", async () => {
+    const client = mockEngineClient([textEvent("done"), { type: "completed", model: "m" } as EngineEvent]);
+    const { hub } = buildPipeline({ client });
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+    const handlers = createTaskHandlers({ hub });
+
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "hi" }, ctx);
+    const taskId = res.result.task.id as string;
+    await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]?.status).toBe("completed"));
+    // The turn's runQuery carried the task UUID as the engine session_id —
+    // NOT the lane default (`mobile:<deviceId>`), which the engine's WS gate
+    // (Uuid::parse_str) would reject with an error frame.
+    expect(client.runQuery).toHaveBeenCalledWith(
+      "hi",
+      expect.objectContaining({ sessionId: taskId }),
+    );
+    expect(taskId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("an engine failure closes the stream with query.failed(session_id) and flips the journal — no ❌ bubble", async () => {

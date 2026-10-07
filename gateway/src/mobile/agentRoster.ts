@@ -18,9 +18,11 @@
  *    per-agent process face the gateway could watch yet), so those keys are
  *    forward-compat placeholders with fixed values.
  *
- * `shannon/agent.detail` stays NOT_IMPLEMENTED, and `task.dispatch` keeps
- * rejecting every non-empty `agent_id`: there is no engine-side per-agent
- * routing face — accepting an agent_id would be a lie.
+ * `shannon/agent.detail` stays NOT_IMPLEMENTED. B0 follow-up: a
+ * `task.dispatch` agent_id is now validated against this same roster — a hit
+ * is recorded as the task's ATTRIBUTION (the engine still executes as the
+ * default engine; there is no per-agent routing face to hand it to), a miss
+ * keeps the §K1 INVALID_PARAMS.
  */
 
 import { readdirSync, readFileSync } from "node:fs";

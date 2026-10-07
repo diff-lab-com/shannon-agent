@@ -5,10 +5,16 @@
  * Both REQUIRE a bound device session (pairing gate) — dispatching tasks and
  * reading the journal from an unpaired connection is rejected with
  * PAIRING_REQUIRED before anything is touched:
- *  - dispatch takes `{prompt, agent_id?}` (§K1). The engine has NO per-agent
- *    routing face (`shannon/agent.list` is a read-only roster view, not a
- *    dispatch target list), so ANY non-empty `agent_id` is rejected with
- *    INVALID_PARAMS instead of being silently routed to some other agent.
+ *  - dispatch takes `{prompt, agent_id?}` (§K1). B0: a non-empty `agent_id` is
+ *    validated against the host roster (`loadAgentRoster`, the same
+ *    `~/.shannon/agents/*.toml` set `shannon/agent.list` serves) — a roster
+ *    hit is accepted and recorded as the task's ATTRIBUTION (the wire task
+ *    object's `agent_id`, plus `shannon/session.list` enrichment through the
+ *    hub journal); anything else stays INVALID_PARAMS instead of being
+ *    silently routed elsewhere. The boundary stands: the engine has NO
+ *    per-agent routing face, so the recorded agent_id never changes what
+ *    executes — the turn still runs as the default engine; the key only says
+ *    "this configured agent owns the task".
  *    The response is the full §K task object
  *    (`{task: {id, prompt, status, agent_id, created_at, …}}`), synchronously,
  *    before the §K3 event stream starts; the streamed content reaches the
@@ -30,6 +36,7 @@ import {
   type TaskListParams,
   type TaskListResult,
 } from "./protocol.js";
+import { loadAgentRoster } from "./agentRoster.js";
 import { type MobileDispatchHub, wireTask } from "./hub.js";
 import type { MethodHandlers } from "./server.js";
 
@@ -42,6 +49,13 @@ export interface TaskHandlersOptions {
    * reconnects. Injected by bootstrap alongside the engineBridge check.
    */
   isDeviceTrusted?: (sessionId: string) => boolean;
+  /**
+   * B0: `agent_id` validation scan targets (see `loadAgentRoster`) — the SAME
+   * seam `createEngineHandlers` exposes for `shannon/agent.list`, so both
+   * faces agree on one roster. Absent → the default `~/.shannon/agents` dir;
+   * tests inject a tmp dir (or `[]` for a deterministically empty roster).
+   */
+  agentRosterDirs?: string[];
 }
 
 const PAIRING_REQUIRED = {
@@ -73,18 +87,29 @@ export function createTaskHandlers(opts: TaskHandlersOptions): MethodHandlers {
           message: "params.prompt (non-empty string) is required",
         };
       }
-      // §K1: unknown agent_id → INVALID_PARAMS, never a silent re-route. The
-      // engine has no per-agent routing face, so every non-empty value is
-      // "unknown" — the B0 roster is a read view, not a dispatch target list.
-      if (params.agent_id != null && String(params.agent_id).trim().length > 0) {
-        return {
-          kind: "error",
-          code: ShannonError.BAD_PARAMS,
-          message: "unknown agent_id — this host dispatches without an agent roster",
-          data: { agent_id: params.agent_id },
-        };
+      // §K1 / B0: a non-empty agent_id must name a CONFIGURED agent — the
+      // same roster `shannon/agent.list` serves (one injected dirs seam, one
+      // truth). A roster hit is recorded as the task's attribution (the turn
+      // still executes as the default engine — no per-agent routing face);
+      // an unknown name keeps the §K1 INVALID_PARAMS, never a silent re-route.
+      // Read per dispatch so a roster edit takes effect without a restart
+      // (the loader never throws — broken files are skipped inside it).
+      let agentId: string | null = null;
+      const requestedAgent = String(params.agent_id ?? "").trim();
+      if (requestedAgent.length > 0) {
+        const roster = loadAgentRoster(opts.agentRosterDirs);
+        if (!roster.some((a) => a.id === requestedAgent)) {
+          return {
+            kind: "error",
+            code: ShannonError.BAD_PARAMS,
+            message:
+              "unknown agent_id — not in this host's agent roster (shannon/agent.list)",
+            data: { agent_id: params.agent_id },
+          };
+        }
+        agentId = requestedAgent;
       }
-      const outcome = hub.dispatch(ctx.sessionId, params.prompt.trim());
+      const outcome = hub.dispatch(ctx.sessionId, params.prompt.trim(), agentId);
       const result: TaskDispatchResult = { task: wireTask(outcome.record) };
       return { kind: "result", result };
     },

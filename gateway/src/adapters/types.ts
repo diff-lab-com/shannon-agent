@@ -109,6 +109,16 @@ export interface NormalizedInbound {
   timestamp: number;
   /** True for a 1:1 direct message (eligible for DM pairing); false/absent for group channels. */
   isDirect?: boolean;
+  /**
+   * Mobile §K only: the engine session id this turn must run under — the
+   * dispatched task's own UUID (the §K3 conversation key). The engine's WS
+   * gate rejects every non-UUID session_id query frame, and the per-device
+   * lane default (`mobile:<deviceId>`) is exactly that, so the dispatch hub
+   * pins the task id here and the §K3 task turn handler passes it to
+   * `runQuery`. Absent on every other platform — IM turns keep the lane's
+   * stable session key (behavior unchanged).
+   */
+  engineSessionId?: string;
   /** The platform-native event, for adapter-specific fallback. */
   raw?: unknown;
 }

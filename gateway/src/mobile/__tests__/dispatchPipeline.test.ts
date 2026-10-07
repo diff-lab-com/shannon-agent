@@ -162,6 +162,28 @@ describe("mobile dispatch pipeline (the dev-standalone §K assembly)", () => {
     expect(clients[0]!.close).toHaveBeenCalledTimes(1);
   });
 
+  it("B0: the turn's runQuery pins the task UUID as the engine session (the lane default is not a UUID)", async () => {
+    const { hub, handlers, clients } = buildHarness([
+      textEvent("done"),
+      { type: "completed", model: "m" } as EngineEvent,
+    ]);
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "hi" }, ctx);
+    const taskId = res.result.task.id as string;
+    await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]?.status).toBe("completed"));
+    // The engine WS gate rejects every non-UUID session_id query frame, and
+    // the lane's construction default (`mobile:dev-1`) is exactly that — so
+    // the §K3 turn handler must override per query with the task's own UUID
+    // (the §K3 conversation key / session.list attribution key).
+    expect(clients[0]!.runQuery).toHaveBeenCalledWith(
+      "hi",
+      expect.objectContaining({ sessionId: taskId }),
+    );
+    expect(taskId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
   it("usage frames ride task.progress with the task id (C8 spend keyed by task thread)", async () => {
     const { hub, handlers } = buildHarness([
       textEvent("result"),
