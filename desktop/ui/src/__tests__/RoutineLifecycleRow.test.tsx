@@ -47,6 +47,51 @@ describe('RoutineLifecycleRow', () => {
     expect(screen.getByText('Enabled')).toBeInTheDocument()
   })
 
+  it('shows the manual-pause label for a hand-paused routine (no pause reason)', () => {
+    render(<RoutineLifecycleRow routine={makeRoutine({ enabled: false })} />)
+    const toggle = screen.getByTestId('routine-lifecycle-toggle') as HTMLInputElement
+    expect(toggle.checked).toBe(false)
+    expect(screen.getByText('Paused')).toBeInTheDocument()
+    expect(screen.queryByTestId('routine-auto-paused-badge')).not.toBeInTheDocument()
+  })
+
+  it('shows the auto-paused badge with the budget reason (R2-P2-D)', () => {
+    // 已自动暂停 · 预算已触顶 — design 04/05's auto-paused state.
+    render(
+      <RoutineLifecycleRow routine={makeRoutine({ enabled: false, pause_reason: 'budget' })} />,
+    )
+    const badge = screen.getByTestId('routine-auto-paused-badge')
+    expect(badge).toBeInTheDocument()
+    expect(badge.textContent).toContain('Auto-paused')
+    expect(badge.textContent).toContain('Monthly budget reached')
+    expect(screen.queryByText('Paused')).not.toBeInTheDocument()
+  })
+
+  it('shows the auto-paused badge with the consecutive-failures reason (R2-P2-C)', () => {
+    render(
+      <RoutineLifecycleRow
+        routine={makeRoutine({ enabled: false, pause_reason: 'consecutive_failures' })}
+      />,
+    )
+    const badge = screen.getByTestId('routine-auto-paused-badge')
+    expect(badge.textContent).toContain('Consecutive failures')
+  })
+
+  it('keeps the toggle as the continue action on an auto-paused routine', async () => {
+    // 继续处理 = re-enable: the switch still sends the explicit target state.
+    toggleScheduledTask.mockResolvedValue(true)
+    const onUpdated = vi.fn()
+    render(
+      <RoutineLifecycleRow
+        routine={makeRoutine({ enabled: false, pause_reason: 'consecutive_failures' })}
+        onUpdated={onUpdated}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('routine-lifecycle-toggle'))
+    await waitFor(() => expect(toggleScheduledTask).toHaveBeenCalledWith('r1', true))
+    await waitFor(() => expect(onUpdated).toHaveBeenCalled())
+  })
+
   it('sends the EXPLICIT target state to toggle and fires onUpdated', async () => {
     toggleScheduledTask.mockResolvedValue(false)
     const onUpdated = vi.fn()

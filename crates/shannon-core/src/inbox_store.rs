@@ -62,10 +62,11 @@ pub const SOURCE_TRIGGER: &str = "trigger";
 /// Inbox source: desktop best-of-N batch run lifecycle (P1-2).
 pub const SOURCE_BATCH: &str = "batch";
 /// Inbox source: a desktop background task (`start_background_task`, the
-/// ad-hoc prompt run surfaced on the Runs panel) finished **failed**. Only
-/// failures write an item — successes and user cancels are panel-only so the
-/// triage stream stays noise-free. Dedup entity: the task id (one-shot;
-/// each failure is a distinct task).
+/// ad-hoc prompt run surfaced on the Runs panel) finished **completed** or
+/// **failed** — both terminal outcomes write an item so the result survives
+/// past the panel's `running`-only slice; user cancels stay panel-only.
+/// Dedup entity: the task id (one-shot; each run is a distinct task, and
+/// `upsert_pending` keeps re-delivery from doubling the card).
 pub const SOURCE_BACKGROUND_TASK: &str = "background_task";
 /// Inbox source: a session permission-approval request is awaiting the user
 /// (T5 unified needs-attention stream). Dedup entity: the session.

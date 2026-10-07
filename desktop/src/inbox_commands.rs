@@ -477,12 +477,22 @@ const BUDGET_ABORT_POLL: Duration = Duration::from_secs(2);
 // ── W3-2: consecutive-failure auto pause + failure notifications ──────────
 
 /// Consecutive scheduled-fire failures after which a routine pauses itself
-/// (W3-2, R2-P2-C). A constant by design — no new configuration surface.
-pub(crate) const AUTO_PAUSE_FAILURE_THRESHOLD: u32 = 3;
+/// (W3-2, R2-P2-C: two failures in a row mean the routine needs a human, so
+/// it stops burning money until re-enabled). A constant by design — no new
+/// configuration surface.
+pub(crate) const AUTO_PAUSE_FAILURE_THRESHOLD: u32 = 2;
 
 /// Machine-readable run-record reason prefix for the pausing failure, in the
 /// [`BUDGET_ABORT_MARKER`] style (prefix survives summary truncation).
-pub(crate) const AUTO_PAUSE_MARKER: &str = "auto_paused_after_3_failures";
+pub(crate) const AUTO_PAUSE_MARKER: &str = "auto_paused_consecutive_failures";
+
+/// `routine.pause_reason` value for a routine the budget gate paused
+/// (R2-P2-D). `None` on the record = running / manually paused.
+pub(crate) const PAUSE_REASON_BUDGET: &str = "budget";
+
+/// `routine.pause_reason` value for a routine the consecutive-failure
+/// streak paused (R2-P2-C).
+pub(crate) const PAUSE_REASON_CONSECUTIVE_FAILURES: &str = "consecutive_failures";
 
 /// Scan cap when re-deriving the failure streak from SQLite at finalize
 /// time. Only the newest few terminal runs matter; the cap bounds the query
@@ -734,8 +744,11 @@ pub(crate) fn budget_live_exceeded(
 
 /// The P1-2 budget gate: `Some(reason)` when the routine has a monthly
 /// budget configured and the attributed spend has reached it — the caller
-/// skips execution and records the reason on the run. A missing policy, a
-/// zero cap (treated as "no budget"), or spend below the cap yields `None`.
+/// skips execution, records the reason on the run, and (R2-P2-D) pauses the
+/// routine. A missing policy, a zero cap (treated as "no budget"), or spend
+/// below the cap yields `None`. The reason carries the machine-readable
+/// [`BUDGET_ABORT_MARKER`] prefix (same vocabulary as a mid-run budget
+/// abort) so run records and triage cards can key on `budget_exceeded`.
 pub(crate) fn budget_skip_reason(
     deps: &RoutineRunDeps,
     routine: &ScheduledRoutine,
@@ -753,7 +766,8 @@ pub(crate) fn budget_skip_reason(
     );
     if spent >= cap {
         Some(format!(
-            "skipped: monthly budget ${spent:.2} of ${cap:.2} exceeded"
+            "{BUDGET_ABORT_MARKER}: monthly budget ${cap:.2} reached — run skipped \
+             (${spent:.2} spent this month); routine paused, re-enable it from the task card"
         ))
     } else {
         None
@@ -1029,6 +1043,12 @@ pub(crate) struct RunFinishContext {
     /// fires can complete the consecutive-failure auto pause; `run_now`
     /// and `rerun` runs are user-initiated and never advance the streak.
     pub(crate) trigger: RunTrigger,
+    /// P2-D: this run was skipped at spawn because the routine's monthly
+    /// budget was already exhausted, and the routine must be auto-paused
+    /// (`enabled=false`, `pause_reason="budget"`) as part of the finish
+    /// aftermath — the inbox card the finalize writes doubles as the
+    /// needs-attention item naming the self-heal path.
+    pub(crate) budget_pause: bool,
 }
 
 /// A run's observed spend, as persisted on the run records (SQLite
@@ -1269,7 +1289,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         scheduled_tasks: deps.scheduled_tasks.clone(),
         sessions_dir: deps.sessions_dir.clone(),
     };
-    let ctx = RunFinishContext {
+    let mut ctx = RunFinishContext {
         run_id: run_id.clone(),
         task_id: routine.id.clone(),
         task_name: routine.name.clone(),
@@ -1286,19 +1306,27 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
             .unwrap_or(true),
         // R7-①: carried into finalize so only scheduler fires can pause.
         trigger,
+        // P2-D: set by the budget gate below when the cap is already spent.
+        budget_pause: false,
     };
 
     // P1-2 budget gate: a routine past its configured monthly budget is
-    // skipped entirely — the run finalizes as failed carrying the reason, so
-    // History and the inbox show why nothing executed (instead of silently
-    // not firing or burning more money).
+    // skipped entirely — the run finalizes as failed carrying the
+    // machine-readable `budget_exceeded` reason, and (R2-P2-D) the routine
+    // pauses itself: `enabled=false` + `pause_reason="budget"`, so the
+    // scheduler stops re-firing a routine that cannot run anyway. The
+    // finalize's inbox card is the needs-attention item; it names the
+    // self-heal path (re-enable from the task card). History and the inbox
+    // show why nothing executed (instead of silently not firing or burning
+    // more money).
     if let Some(reason) = budget_skip_reason(deps, &routine) {
         tracing::info!(
             run_id = %run_id,
             task_id = %routine.id,
             reason = %reason,
-            "routine run skipped: monthly budget exhausted"
+            "routine run skipped: monthly budget exhausted — auto-pausing the routine"
         );
+        ctx.budget_pause = true;
         finalize_run(
             &finish_deps,
             &app,
@@ -1872,6 +1900,18 @@ fn finalize_run<R: tauri::Runtime>(
             SUMMARY_MAX_CHARS,
         );
     }
+    // R2-P2-D: the budget-skipped run's card is the needs-attention item —
+    // it must name the pause AND the self-heal path, or the routine looks
+    // merely broken instead of automatically paused.
+    if ctx.budget_pause {
+        summary = truncate_chars(
+            &format!(
+                "{summary} · auto-paused: monthly budget reached — re-enable it from the \
+                 task card"
+            ),
+            SUMMARY_MAX_CHARS,
+        );
+    }
     let item = deps
         .inbox
         .append_item(InboxItemNew {
@@ -1905,11 +1945,15 @@ fn finalize_run<R: tauri::Runtime>(
     // reports the actual transition — notifications fire once), then the
     // failure notification, then the auto-pause alert (the shared Notifier
     // fans it out to desktop + webhook). The failure alert is gated by the
-    // routine's `policy.notify_on_failure`; the auto-pause alert is
+    // routine's `policy.notify_on_failure`; the auto-pause alerts are
     // deliberately NOT (R7-③): a routine the system just switched off must
     // be announced even to opt-out users — exactly once per transition.
+    // R2-P2-D: the budget gate's pause rides the same aftermath (its run
+    // was skipped, so `auto_pause` is false — `ctx.budget_pause` decides).
     let paused_now = if auto_pause {
-        pause_routine_after_consecutive_failures(deps, &task_id)
+        pause_routine_auto(deps, &task_id, PAUSE_REASON_CONSECUTIVE_FAILURES)
+    } else if ctx.budget_pause {
+        pause_routine_auto(deps, &task_id, PAUSE_REASON_BUDGET)
     } else {
         false
     };
@@ -1917,7 +1961,11 @@ fn finalize_run<R: tauri::Runtime>(
         notify_run_failed(deps.notify.as_ref(), &task_name, run_error.as_deref());
     }
     if paused_now {
-        notify_auto_paused(deps.notify.as_ref(), &task_name);
+        if ctx.budget_pause {
+            notify_budget_paused(deps.notify.as_ref(), &task_name);
+        } else {
+            notify_auto_paused(deps.notify.as_ref(), &task_name);
+        }
     }
 
     // 6. Refresh signal.
@@ -1991,12 +2039,14 @@ fn scheduled_failure_streak(deps: &RoutineRunDeps, task_id: &str, threshold: u32
     streak
 }
 
-/// Disable a routine whose scheduled failures reached the threshold (W3-2).
-/// Fresh load + `enabled` check keeps the write idempotent: only the call
-/// that actually flips the flag returns true, so re-entrant or racing
+/// Disable a routine the system paused itself (W3-2 / R2-P2-D). The
+/// `pause_reason` lands on the routine record so the UI can tell an
+/// automatic pause (badge naming the reason, design 04/05) from a manual
+/// one. Fresh load + `enabled` check keeps the write idempotent: only the
+/// call that actually flips the flag returns true, so re-entrant or racing
 /// finalizes cannot duplicate the pause or its notification. The scheduler
 /// tick naturally respects `enabled == false` (`should_fire_at`).
-fn pause_routine_after_consecutive_failures(deps: &RoutineRunDeps, task_id: &str) -> bool {
+fn pause_routine_auto(deps: &RoutineRunDeps, task_id: &str, pause_reason: &str) -> bool {
     let routine = match deps.scheduled_tasks.load(task_id) {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -2016,11 +2066,13 @@ fn pause_routine_after_consecutive_failures(deps: &RoutineRunDeps, task_id: &str
         }
     };
     if !routine.enabled {
-        // Already paused (manual toggle, budget stop, or a racing finalize).
+        // Already paused (manual toggle, an earlier auto pause, or a racing
+        // finalize).
         return false;
     }
     let mut paused = routine;
     paused.enabled = false;
+    paused.pause_reason = Some(pause_reason.to_string());
     if let Err(e) = deps.scheduled_tasks.save(&paused) {
         tracing::warn!(
             task_id = %task_id,
@@ -2031,9 +2083,8 @@ fn pause_routine_after_consecutive_failures(deps: &RoutineRunDeps, task_id: &str
     }
     tracing::info!(
         task_id = %task_id,
-        threshold = AUTO_PAUSE_FAILURE_THRESHOLD,
-        marker = AUTO_PAUSE_MARKER,
-        "routine auto-paused after consecutive scheduled failures"
+        pause_reason,
+        "routine auto-paused ({pause_reason})"
     );
     true
 }
@@ -2082,6 +2133,27 @@ fn notify_auto_paused(notify: &dyn RunNotifyPort, task_name: &str) {
     };
     notify.notify(&notification);
     tracing::info!(task_name, "routine auto-pause notification dispatched");
+}
+
+/// Budget-pause alert (R2-P2-D) — the skip-path sibling of
+/// [`notify_auto_paused`]: the routine was paused at trigger time because the
+/// monthly budget was already spent. Same channels, same once-per-transition
+/// contract (the finalize only calls this on the actual flip).
+fn notify_budget_paused(notify: &dyn RunNotifyPort, task_name: &str) {
+    let notification = shannon_core::notifier::Notification {
+        title: format!("Shannon — {task_name}: paused (budget reached)"),
+        body: "The monthly budget is exhausted, so the routine was paused automatically. \
+               To resume, raise the budget and re-enable it from its task card."
+            .to_string(),
+        level: shannon_core::notifier::NotificationLevel::Error,
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now(),
+        source: Some("routine_budget_pause".to_string()),
+        action_id: None,
+        kind: shannon_core::notifier::NotificationKind::NeedsAttention,
+    };
+    notify.notify(&notification);
+    tracing::info!(task_name, "routine budget-pause notification dispatched");
 }
 
 /// Cap on the run-output summary forwarded in the webhook body. The handler
@@ -2477,6 +2549,7 @@ mod tests {
             notify_webhook: false,
             notify_on_failure: true,
             trigger: RunTrigger::Scheduled,
+            budget_pause: false,
         }
     }
 
@@ -4051,7 +4124,7 @@ mod tests {
     }
 
     #[test]
-    fn three_consecutive_scheduled_failures_auto_pause_and_annotate() {
+    fn two_consecutive_scheduled_failures_auto_pause_and_annotate() {
         let app = tauri::test::mock_app();
         let tmp = tempfile::tempdir().unwrap();
         let webhook = RecordingWebhookPort::with_configured(true);
@@ -4059,23 +4132,29 @@ mod tests {
         stored_routine(&deps);
         let app_handle = app.handle().clone();
 
-        for n in 1..=3 {
+        for n in 1..=2 {
             finalize_scheduled_failure(&deps, &app_handle, n, true);
         }
 
         // The routine is paused…
         let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
-        assert!(!routine.enabled, "3 consecutive failures must disable");
+        assert!(!routine.enabled, "2 consecutive failures must disable");
+        // …carrying the machine-readable pause reason (R2-P2-C)…
+        assert_eq!(
+            routine.pause_reason.as_deref(),
+            Some(PAUSE_REASON_CONSECUTIVE_FAILURES),
+            "the record names why the system paused it"
+        );
         // …the pausing run record carries the machine-readable reason…
         let runs = deps.inbox.list_runs_by_task("task-1", 10).unwrap();
-        assert_eq!(runs.len(), 3);
+        assert_eq!(runs.len(), 2);
         assert!(
             runs[0]
                 .error
                 .as_deref()
                 .unwrap()
                 .starts_with(AUTO_PAUSE_MARKER),
-            "pause reason prefix on the newest (3rd) record: {:?}",
+            "pause reason prefix on the newest (2nd) record: {:?}",
             runs[0].error
         );
         assert!(
@@ -4094,7 +4173,7 @@ mod tests {
         // to desktop + webhook, so there is no separate webhook delivery
         // (review round 1: the explicit second post double-delivered).
         let dispatched = notify.dispatches();
-        assert_eq!(dispatched.len(), 4, "3 failure alerts + 1 pause alert");
+        assert_eq!(dispatched.len(), 3, "2 failure alerts + 1 pause alert");
         assert_eq!(
             dispatched
                 .iter()
@@ -4104,7 +4183,7 @@ mod tests {
             "exactly one desktop pause alert"
         );
         assert!(
-            dispatched[3]
+            dispatched[2]
                 .body
                 .contains("re-enable it from its task card"),
             "pause alert names the self-heal path"
@@ -4115,13 +4194,14 @@ mod tests {
             "no direct webhook delivery — the Notifier owns the webhook fan-out"
         );
 
-        // A 4th failure after the pause: still one pause alert total
-        // (idempotent transition), the failure alert still fires.
-        finalize_scheduled_failure(&deps, &app_handle, 4, true);
+        // A 3rd failure after the pause: still one pause alert total
+        // (idempotent transition), the failure alert still fires, and the
+        // reason stays the consecutive-failures one.
+        finalize_scheduled_failure(&deps, &app_handle, 3, true);
         let dispatched = notify.dispatches();
         assert_eq!(
             dispatched.len(),
-            5,
+            4,
             "one more failure alert, no second pause"
         );
         assert_eq!(
@@ -4131,6 +4211,7 @@ mod tests {
         );
         let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
         assert!(!routine.enabled);
+        assert_eq!(routine.pause_reason.as_deref(), Some(PAUSE_REASON_CONSECUTIVE_FAILURES));
     }
 
     #[test]
@@ -4144,9 +4225,7 @@ mod tests {
         stored_routine(&deps);
         let app_handle = app.handle().clone();
 
-        for n in 1..=2 {
-            finalize_scheduled_failure(&deps, &app_handle, n, true);
-        }
+        finalize_scheduled_failure(&deps, &app_handle, 1, true);
         // A successful scheduled run resets the streak.
         let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
         finalize_run(
@@ -4163,10 +4242,14 @@ mod tests {
             },
             RunSpend::default(),
         );
-        finalize_scheduled_failure(&deps, &app_handle, 3, true);
+        finalize_scheduled_failure(&deps, &app_handle, 2, true);
 
         let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
         assert!(routine.enabled, "the success in between clears the streak");
+        assert!(
+            routine.pause_reason.is_none(),
+            "never paused, so no pause reason either"
+        );
         let runs = deps.inbox.list_runs_by_task("task-1", 10).unwrap();
         assert!(
             !runs[0]
@@ -4188,11 +4271,9 @@ mod tests {
         stored_routine(&deps);
         let app_handle = app.handle().clone();
 
-        // Two scheduled failures, then THREE run-now failures — the manual
+        // One scheduled failure, then THREE run-now failures — the manual
         // ones must neither pause nor advance the streak.
-        for n in 1..=2 {
-            finalize_scheduled_failure(&deps, &app_handle, n, true);
-        }
+        finalize_scheduled_failure(&deps, &app_handle, 1, true);
         for n in 1..=3 {
             finalize_triggered_failure(&deps, &app_handle, RunTrigger::RunNow, n, true);
         }
@@ -4231,20 +4312,18 @@ mod tests {
             "3 rerun failures must not pause (the W3-A source check alone would)"
         );
 
-        // The streak starts fresh: exactly 3 SCHEDULED failures pause.
-        for n in 1..=2 {
-            finalize_scheduled_failure(&deps, &app_handle, n, true);
-        }
+        // The streak starts fresh: exactly 2 SCHEDULED failures pause.
+        finalize_scheduled_failure(&deps, &app_handle, 1, true);
         let routine = deps.scheduled_tasks.load("task-1").unwrap();
         assert!(
             routine.is_some_and(|r| r.enabled),
-            "2 scheduled failures stay under the threshold"
+            "1 scheduled failure stays under the threshold"
         );
-        finalize_scheduled_failure(&deps, &app_handle, 3, true);
+        finalize_scheduled_failure(&deps, &app_handle, 2, true);
         let routine = deps.scheduled_tasks.load("task-1").unwrap();
         assert!(
             routine.is_some_and(|r| !r.enabled),
-            "3rd scheduled failure pauses"
+            "2nd scheduled failure pauses"
         );
     }
 
@@ -4270,28 +4349,26 @@ mod tests {
 
         // Legacy history: failed rows with no trigger column value (imported
         // whole — no `running` placeholder, they were born terminal).
-        for n in 1..=2 {
-            let now = chrono::Utc::now().timestamp_millis();
-            let record = RunRecord {
-                id: format!("legacy-{n}"),
-                task_id: "task-1".into(),
-                task_name: Some("Task One".into()),
-                status: "failed".into(),
-                error: Some(format!("legacy {n}")),
-                started_at_ms: Some(now - 2_000),
-                finished_at_ms: Some(now - 1_000),
-                duration_ms: Some(1_000),
-                inbox_item_id: None,
-                cost_usd: None,
-                token_usage: None,
-                trigger: None,
-            };
-            deps.inbox.import_run(&record).unwrap();
-        }
+        let now = chrono::Utc::now().timestamp_millis();
+        let record = RunRecord {
+            id: "legacy-1".into(),
+            task_id: "task-1".into(),
+            task_name: Some("Task One".into()),
+            status: "failed".into(),
+            error: Some("legacy 1".into()),
+            started_at_ms: Some(now - 2_000),
+            finished_at_ms: Some(now - 1_000),
+            duration_ms: Some(1_000),
+            inbox_item_id: None,
+            cost_usd: None,
+            token_usage: None,
+            trigger: None,
+        };
+        deps.inbox.import_run(&record).unwrap();
 
-        // The FIRST new scheduled failure alone must not pause (streak 3 of
-        // the threshold means the two legacy rows DID count)…
-        finalize_scheduled_failure(&deps, &app_handle, 3, true);
+        // The FIRST new scheduled failure alone pauses (streak 2 of the
+        // threshold means the legacy row DID count)…
+        finalize_scheduled_failure(&deps, &app_handle, 2, true);
         let routine = deps.scheduled_tasks.load("task-1").unwrap();
         assert!(
             routine.is_some_and(|r| !r.enabled),
@@ -4306,14 +4383,14 @@ mod tests {
         fresh.enabled = true;
         fresh.enabled_at = None;
         deps.scheduled_tasks.save(&fresh).unwrap();
-        finalize_triggered_failure(&deps, &app_handle, RunTrigger::Rerun, 4, true);
+        finalize_triggered_failure(&deps, &app_handle, RunTrigger::Rerun, 3, true);
         let routine = deps.scheduled_tasks.load("task-1").unwrap();
         assert!(
             routine.is_some_and(|r| r.enabled),
             "a rerun failure must not complete the legacy streak"
         );
-        // …but the next scheduled fire is the 3rd counted failure → pause.
-        finalize_scheduled_failure(&deps, &app_handle, 5, true);
+        // …but the next scheduled fire is the 2nd counted failure → pause.
+        finalize_scheduled_failure(&deps, &app_handle, 4, true);
         let routine = deps.scheduled_tasks.load("task-1").unwrap();
         assert!(routine.is_some_and(|r| !r.enabled));
     }
@@ -4333,39 +4410,47 @@ mod tests {
         stored_routine(&deps);
         let app_handle = app.handle().clone();
 
-        // Three failures → auto-paused (W3-A behavior).
-        for n in 1..=3 {
+        // Two failures → auto-paused (W3-A behavior, R2-P2-C threshold).
+        for n in 1..=2 {
             finalize_scheduled_failure(&deps, &app_handle, n, true);
         }
-        let routine = deps.scheduled_tasks.load("task-1").unwrap();
-        assert!(routine.is_some_and(|r| !r.enabled), "setup: paused");
+        let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
+        assert!(!routine.enabled, "setup: paused");
+        assert_eq!(
+            routine.pause_reason.as_deref(),
+            Some(PAUSE_REASON_CONSECUTIVE_FAILURES),
+            "setup: the record carries the auto-pause reason"
+        );
 
-        // The user fixes the cause and re-enables (toggle-to-enabled).
+        // The user fixes the cause and re-enables (toggle-to-enabled). The
+        // manual transition clears the auto-pause reason (R2-P2-C) and
+        // stamps enabled_at.
         let mut routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
         routine.set_enabled(true);
         assert!(
             routine.enabled_at.is_some(),
             "the toggle stamped enabled_at"
         );
+        assert!(
+            routine.pause_reason.is_none(),
+            "a manual re-enable clears the auto-pause reason"
+        );
         deps.scheduled_tasks.save(&routine).unwrap();
 
         // The FIRST failure after re-enabling must not re-pause.
-        finalize_scheduled_failure(&deps, &app_handle, 4, true);
+        finalize_scheduled_failure(&deps, &app_handle, 3, true);
         let routine = deps.scheduled_tasks.load("task-1").unwrap();
         assert!(
             routine.is_some_and(|r| r.enabled),
             "1 failure after re-enable must not re-pause (A2)"
         );
 
-        // Post-enable failures count from zero: the 3rd post-enable one pauses.
-        finalize_scheduled_failure(&deps, &app_handle, 5, true);
-        let routine = deps.scheduled_tasks.load("task-1").unwrap();
-        assert!(routine.is_some_and(|r| r.enabled));
-        finalize_scheduled_failure(&deps, &app_handle, 6, true);
+        // Post-enable failures count from zero: the 2nd post-enable one pauses.
+        finalize_scheduled_failure(&deps, &app_handle, 4, true);
         let routine = deps.scheduled_tasks.load("task-1").unwrap();
         assert!(
             routine.is_some_and(|r| !r.enabled),
-            "3rd post-enable failure pauses"
+            "2nd post-enable failure pauses"
         );
     }
 
@@ -4386,7 +4471,7 @@ mod tests {
         deps.scheduled_tasks.save(&routine).unwrap();
         let app_handle = app.handle().clone();
 
-        for n in 1..=3 {
+        for n in 1..=2 {
             finalize_scheduled_failure(&deps, &app_handle, n, true);
         }
         let routine = deps.scheduled_tasks.load("task-1").unwrap();
@@ -4405,7 +4490,7 @@ mod tests {
         stored_routine(&deps);
         let app_handle = app.handle().clone();
 
-        for n in 1..=3 {
+        for n in 1..=2 {
             finalize_scheduled_failure(&deps, &app_handle, n, false);
         }
 
@@ -4437,6 +4522,173 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .starts_with(AUTO_PAUSE_MARKER)
+        );
+    }
+
+    // ── R2-P2-D: the budget gate pauses the routine (skip path) ──────────
+
+    /// End-to-end through the real `spawn_routine_run` spawn entry: a
+    /// routine whose month spend has reached `policy.budget_usd` is skipped
+    /// (no engine work — the gate fires before any engine is built), the run
+    /// record lands `failed` carrying the machine-readable
+    /// `budget_exceeded` prefix, the routine auto-pauses
+    /// (`enabled=false`, `pause_reason="budget"`), the inbox card names the
+    /// self-heal path, and exactly one budget-pause notification goes out.
+    /// Re-triggering while paused skips again WITHOUT a second pause
+    /// notification (the pause is transition-only).
+    #[tokio::test]
+    async fn budget_exhausted_trigger_skips_pauses_and_delivers_one_inbox_item() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut deps, _inbox) = webhook_deps(
+            tmp.path(),
+            std::sync::Arc::new(RecordingWebhookPort::default()),
+        );
+        let notify = std::sync::Arc::new(RecordingNotifyPort::default());
+        deps.notify = notify.clone();
+
+        // The routine: $1.00 monthly cap, and $1.50 already attributed to
+        // its sessions this month (the `budget_fixture` wiring — runs
+        // back-linked to inbox items carrying session ids).
+        let (inbox, usage) = budget_fixture(tmp.path());
+        let _ = usage.append(&usage_record(
+            Some("s-routine"),
+            1.5,
+            chrono::Utc::now().timestamp_millis(),
+        ));
+        deps.inbox = std::sync::Arc::new(inbox);
+        deps.usage_store = std::sync::Arc::new(usage);
+
+        let mut routine = ScheduledRoutine::new("Budgeted".into(), "p".into(), 60);
+        routine.id = "task-budget".into();
+        routine.enabled = true;
+        routine.policy = Some(shannon_core::scheduled_routines::ExecutionPolicy {
+            budget_usd: Some(1.0),
+            ..Default::default()
+        });
+        deps.scheduled_tasks.save(&routine).unwrap();
+
+        // First scheduled fire over budget: skipped + paused, one card.
+        let run_id = spawn_routine_run(
+            &deps,
+            app.handle().clone(),
+            routine.clone(),
+            shannon_core::inbox_store::SOURCE_ROUTINE,
+            None,
+            RunTrigger::Scheduled,
+        )
+        .await
+        .expect("the skip path still returns the run id");
+
+        let routine = deps.scheduled_tasks.load("task-budget").unwrap().unwrap();
+        assert!(!routine.enabled, "the budget gate paused the routine");
+        assert_eq!(routine.pause_reason.as_deref(), Some(PAUSE_REASON_BUDGET));
+
+        // The run: the fixture already recorded one (succeeded) run for
+        // task-budget, so the store holds two — the newest is the skip.
+        let runs = deps.inbox.list_runs_by_task("task-budget", 10).unwrap();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].status, "failed");
+        assert_eq!(runs[0].id, run_id);
+        let error = runs[0].error.as_deref().expect("the skip carries a reason");
+        assert!(error.starts_with(BUDGET_ABORT_MARKER), "{error}");
+        assert!(error.contains("$1.00") && error.contains("$1.50"), "{error}");
+
+        // The card: the fixture seeds one back-linked item, so the store
+        // holds exactly two rows — the newest (list is newest-first) is the
+        // skip's needs-attention card.
+        let items = deps.inbox.list(None, None, 10).unwrap();
+        assert_eq!(items.len(), 2, "fixture item + one skip card");
+        assert!(
+            items[0].summary.contains("auto-paused: monthly budget reached"),
+            "{}",
+            items[0].summary
+        );
+        assert!(
+            items[0].summary.contains("re-enable it from the task card"),
+            "{}",
+            items[0].summary
+        );
+        assert_eq!(
+            notify
+                .dispatches()
+                .iter()
+                .filter(|n| n.source.as_deref() == Some("routine_budget_pause"))
+                .count(),
+            1,
+            "exactly one budget-pause alert on the transition"
+        );
+
+        // A second fire while over budget: still skipped (another failed
+        // run + card), but NO second pause alert — already paused.
+        let second = spawn_routine_run(
+            &deps,
+            app.handle().clone(),
+            routine,
+            shannon_core::inbox_store::SOURCE_ROUTINE,
+            None,
+            RunTrigger::Scheduled,
+        )
+        .await
+        .expect("second skip also returns a run id");
+        assert_ne!(run_id, second);
+        assert_eq!(
+            notify
+                .dispatches()
+                .iter()
+                .filter(|n| n.source.as_deref() == Some("routine_budget_pause"))
+                .count(),
+            1,
+            "the pause alert is transition-only"
+        );
+    }
+
+    /// The budget gate must only skip+pause when the cap is actually
+    /// reached — a routine under its cap still spawns normally (the run is
+    /// left running for the engine task; this test only pins the SKIPPED
+    /// half, so it drives the gate helper itself).
+    #[test]
+    fn budget_skip_reason_carries_the_machine_readable_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (inbox, usage) = budget_fixture(tmp.path());
+        let _ = usage.append(&usage_record(
+            Some("s-routine"),
+            1.5,
+            chrono::Utc::now().timestamp_millis(),
+        ));
+        let deps = RoutineRunDeps {
+            inbox: std::sync::Arc::new(inbox),
+            runs_store: std::sync::Arc::new(ScheduledRunsStore::with_base(
+                tmp.path().join("runs"),
+            )),
+            webhook: std::sync::Arc::new(RecordingWebhookPort::default()),
+            notify: std::sync::Arc::new(RecordingNotifyPort::default()),
+            usage_store: std::sync::Arc::new(usage),
+            client_config: std::sync::Arc::new(RwLock::new(
+                shannon_engine::api::types::LlmClientConfig::default(),
+            )),
+            desktop_config: std::sync::Arc::new(RwLock::new(DesktopConfig::default())),
+            tools: std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+            memory_store: std::sync::Arc::new(std::sync::RwLock::new(
+                shannon_core::MemoryStore::new(tmp.path().join("memories")),
+            )),
+            scheduled_tasks: std::sync::Arc::new(
+                shannon_core::scheduled_task_store::ScheduledTaskStore::with_base(
+                    tmp.path().join("tasks"),
+                ),
+            ),
+            sessions_dir: tmp.path().join("sessions"),
+        };
+        let mut routine = ScheduledRoutine::new("Budgeted".into(), "p".into(), 60);
+        routine.id = "task-budget".into();
+        routine.policy = Some(shannon_core::scheduled_routines::ExecutionPolicy {
+            budget_usd: Some(1.0),
+            ..Default::default()
+        });
+        let reason = budget_skip_reason(&deps, &routine).expect("over budget");
+        assert!(
+            reason.starts_with(BUDGET_ABORT_MARKER),
+            "the run record must key on budget_exceeded: {reason}"
         );
     }
 

@@ -5,6 +5,10 @@
 //   and keys its toast off the persisted bool the backend returns (read-back
 //   fool-proofing) — a flip-only contract would race a stale list and
 //   silently invert the user's click.
+// - R2-P2-C/P2-D: a routine the SYSTEM paused (enabled=false with a
+//   `pause_reason`) renders the auto-paused badge naming the reason
+//   (design 04/05 「已自动暂停 · …」) instead of the plain manual-pause
+//   label. Re-enabling stays the same switch — the "继续处理" action.
 // - Delete is guarded by a destructive ConfirmDialog; the confirm button is
 //   busy-locked while the delete is in flight and a failure keeps the
 //   drawer (and the routine) untouched.
@@ -20,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import * as api from '@/lib/tauri-api'
 import type { ScheduledRoutine } from '@/types'
+import { cn } from '@/lib/utils'
 
 interface RoutineLifecycleRowProps {
   routine: ScheduledRoutine
@@ -39,6 +44,9 @@ export default function RoutineLifecycleRow({ routine, onUpdated, onDeleted }: R
   const [deleting, setDeleting] = useState(false)
 
   const nextEnabled = !routine.enabled
+  // R2-P2-C/P2-D: an automatic pause carries its machine-readable reason on
+  // the routine record; a manual one leaves it null. The badge says which.
+  const autoPaused = !routine.enabled && routine.pause_reason != null
 
   const handleToggle = async () => {
     if (toggling) return
@@ -84,18 +92,36 @@ export default function RoutineLifecycleRow({ routine, onUpdated, onDeleted }: R
           data-testid="routine-lifecycle-toggle"
           aria-label={t('tasks.routineControls.toggleAria')}
         />
-        <span
-          className={`font-label-md font-semibold flex items-center gap-xs ${
-            routine.enabled ? 'text-on-surface' : 'text-on-surface-variant'
-          }`}
-        >
-          <span className="material-symbols-outlined icon-sm" aria-hidden="true">
-            {routine.enabled ? 'play_circle' : 'pause_circle'}
+        {autoPaused ? (
+          // R2-P2-C/P2-D 「已自动暂停 · <原因>」: badge (never colour alone —
+          // icon + words), with the reason the system paused it. The switch
+          // next to it is the 继续处理 action.
+          <span
+            data-testid="routine-auto-paused-badge"
+            className={cn(
+              'inline-flex items-center gap-xs px-sm py-0.5 rounded-full font-label-sm text-label-xs font-bold uppercase tracking-wider',
+              'bg-tertiary-container text-on-tertiary-container',
+            )}
+          >
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">autopause</span>
+            {t('tasks.routineControls.autoPausedLabel')}
+            {t('tasks.routineControls.autoPausedReasonSeparator')}
+            {t(`tasks.routineControls.autoPausedReason.${routine.pause_reason}`)}
           </span>
-          {routine.enabled
-            ? t('tasks.routineControls.enabledLabel')
-            : t('tasks.routineControls.pausedLabel')}
-        </span>
+        ) : (
+          <span
+            className={`font-label-md font-semibold flex items-center gap-xs ${
+              routine.enabled ? 'text-on-surface' : 'text-on-surface-variant'
+            }`}
+          >
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+              {routine.enabled ? 'play_circle' : 'pause_circle'}
+            </span>
+            {routine.enabled
+              ? t('tasks.routineControls.enabledLabel')
+              : t('tasks.routineControls.pausedLabel')}
+          </span>
+        )}
       </label>
 
       <Button
