@@ -1019,8 +1019,19 @@ impl ComputerUseTool {
 
         Ok(ToolOutput {
             content: format!(
-                "Zoomed to region ({}, {})+{}x{} → {}x{} image",
-                coord[0], coord[1], size[0], size[1], fw, fh
+                "Zoomed to region ({}, {})+{}x{} → {}x{} image. Coordinates measured on this crop are NOT screen coordinates: map a crop point (cx, cy) back via screen_in_screenshot_space = ({}, {}) + (cx * {} / {}, cy * {} / {}) — or take a fresh full screenshot before clicking.",
+                coord[0],
+                coord[1],
+                size[0],
+                size[1],
+                fw,
+                fh,
+                coord[0],
+                coord[1],
+                size[0],
+                fw,
+                size[1],
+                fh
             ),
             is_error: false,
             metadata,
@@ -1328,16 +1339,33 @@ impl ComputerUseTool {
                 .key(enigo_keys[0], Direction::Click)
                 .map_err(|e| ToolError::ExecutionFailed(format!("Key press failed: {e}")))?;
         } else {
-            // Press modifiers first, then the main key, then release in reverse
+            // Press modifiers first, then the main key, then release in
+            // reverse. If a press fails mid-combo, release everything
+            // already held before returning — keys left logically down at
+            // the OS level would corrupt every subsequent input action.
+            let mut held: Vec<enigo::Key> = Vec::with_capacity(enigo_keys.len());
             for k in &enigo_keys {
-                enigo
-                    .key(*k, Direction::Press)
-                    .map_err(|e| ToolError::ExecutionFailed(format!("Key press failed: {e}")))?;
+                match enigo.key(*k, Direction::Press) {
+                    Ok(()) => held.push(*k),
+                    Err(e) => {
+                        for h in held.iter().rev() {
+                            let _ = enigo.key(*h, Direction::Release);
+                        }
+                        return Err(ToolError::ExecutionFailed(format!("Key press failed: {e}")));
+                    }
+                }
             }
+            let mut release_error: Option<String> = None;
             for k in enigo_keys.iter().rev() {
-                enigo
-                    .key(*k, Direction::Release)
-                    .map_err(|e| ToolError::ExecutionFailed(format!("Key release failed: {e}")))?;
+                if let Err(e) = enigo.key(*k, Direction::Release) {
+                    release_error = Some(format!(
+                        "Key release failed ({e}) — modifier keys may be stuck; \
+                         send a plain key_press to reset"
+                    ));
+                }
+            }
+            if let Some(msg) = release_error {
+                return Err(ToolError::ExecutionFailed(msg));
             }
         }
 
@@ -1500,7 +1528,8 @@ impl ComputerUseTool {
 
         let dx = scaled_end[0] - scaled_start[0];
         let dy = scaled_end[1] - scaled_start[1];
-        let dist = ((dx * dx + dy * dy) as f64).sqrt();
+        // f64 math: dx*dx overflows i32 on enormous multi-monitor desktops.
+        let dist = (f64::from(dx) * f64::from(dx) + f64::from(dy) * f64::from(dy)).sqrt();
         // ~12px per step, 30 steps max, always at least one move.
         let steps = ((dist / 12.0).ceil() as usize).clamp(1, 30);
         for i in 1..=steps {

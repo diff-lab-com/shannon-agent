@@ -615,7 +615,18 @@ impl Tool for BrowserUploadTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
         let mut files = Vec::with_capacity(paths.len());
+        // Size-check BEFORE reading: a model-supplied path to a huge file
+        // must not OOM the host just to reach the limit error.
+        const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
         for path in &paths {
+            let len = std::fs::metadata(path)
+                .map_err(|e| ToolError::ExecutionFailed(format!("stat {path}: {e}")))?
+                .len();
+            if len as usize > MAX_UPLOAD_BYTES {
+                return Err(ToolError::InvalidInput(format!(
+                    "{path} is {len} bytes; uploads are capped at {MAX_UPLOAD_BYTES}"
+                )));
+            }
             let bytes = std::fs::read(path)
                 .map_err(|e| ToolError::ExecutionFailed(format!("read {path}: {e}")))?;
             let name = std::path::Path::new(path)
@@ -686,9 +697,11 @@ impl Tool for BrowserPdfTool {
         let path = match input.get("path").and_then(|v| v.as_str()) {
             Some(p) => std::path::PathBuf::from(p),
             None => {
+                // Millis: seconds-resolution timestamps collide when two PDFs
+                // are saved within the same second.
                 let ts = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
+                    .map(|d| d.as_millis())
                     .unwrap_or(0);
                 std::env::temp_dir().join(format!("shannon-page-{ts}.pdf"))
             }

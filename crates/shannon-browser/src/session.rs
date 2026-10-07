@@ -516,45 +516,56 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
         // are populated — a zero virtual key code makes most sites (and
         // every IME-dependent surface) ignore the press.
         //
-        // Combinations ("ctrl+a", "shift+Enter") dispatch the modifiers
-        // first, the main key with the accumulated modifier bitmask, then
-        // release in reverse — the same shape real keyboard input takes.
+        // Combinations ("ctrl+a", "shift+Enter") dispatch each modifier's
+        // RawKeyDown (with the accumulated modifier bitmask), then the main
+        // key with the full bitmask, then release the modifiers in reverse —
+        // the same shape real keyboard input takes. The bitmask rides on
+        // every event because sites read `e.ctrlKey` rather than the event
+        // sequence.
         let parts = parse_key_parts(key);
-        let (mods, main_raw) = if parts.len() == 1 {
-            (0, parts.into_iter().next().unwrap())
+        let (modifier_names, main_raw) = if parts.len() == 1 {
+            (Vec::new(), parts.into_iter().next().unwrap())
         } else {
-            let mut mask = 0i64;
+            let mut names = Vec::new();
             for p in &parts[..parts.len() - 1] {
-                mask |= modifier_bit(p)
-                    .ok_or_else(|| format!("unknown modifier key {p:?} in {key:?}"))?;
+                if modifier_bit(p).is_none() {
+                    return Err(format!("unknown modifier key {p:?} in {key:?}"));
+                }
+                names.push(p.clone());
             }
-            (mask, parts.into_iter().last().unwrap())
+            (names, parts.into_iter().last().unwrap())
         };
         let (name, code, vk, text) = normalize_key(&main_raw)?;
         // Ctrl/alt/meta combinations never produce text (ctrl+a must not
         // insert an "a"), so drop the text payload when modifiers are held.
+        let mods: i64 = modifier_names.iter().filter_map(|n| modifier_bit(n)).sum();
         let text = if mods == 0 { text } else { None };
 
-        let dispatch = |t: DispatchKeyEventType| {
+        let key_event = |t: DispatchKeyEventType,
+                         key_name: &str,
+                         key_code: &str,
+                         key_vk: i64,
+                         key_text: Option<&str>,
+                         held: i64| {
             let mut params = DispatchKeyEventParams {
                 r#type: t,
-                key: Some(name.clone()),
-                code: Some(code.clone()),
-                text: text.clone(),
+                key: Some(key_name.to_string()),
+                code: Some(key_code.to_string()),
+                text: key_text.map(String::from),
                 unmodified_text: None,
                 auto_repeat: None,
                 location: None,
                 is_keypad: None,
                 is_system_key: None,
-                windows_virtual_key_code: Some(vk),
-                native_virtual_key_code: Some(vk),
+                windows_virtual_key_code: Some(key_vk),
+                native_virtual_key_code: Some(key_vk),
                 modifiers: None,
                 timestamp: None,
                 key_identifier: None,
                 commands: None,
             };
-            if mods != 0 {
-                params.modifiers = Some(mods);
+            if held != 0 {
+                params.modifiers = Some(held);
             }
             params
         };
@@ -568,12 +579,57 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
                 DispatchKeyEventType::KeyUp,
             )
         };
-        page.execute(dispatch(down))
+
+        // Modifier name → (key, code, vk) for the synthesized down/up.
+        let modifier_key = |n: &str| match modifier_bit(n) {
+            Some(1) => ("Alt", "AltLeft", 0xA4),
+            Some(2) => ("Control", "ControlLeft", 0xA2),
+            Some(4) => ("Meta", "MetaLeft", 0x5B),
+            _ => ("Shift", "ShiftLeft", 0xA1),
+        };
+        // (bit, key, code, vk) of each modifier currently pressed, in order.
+        let mut pressed: Vec<(i64, &'static str, &'static str, i64)> =
+            Vec::with_capacity(modifier_names.len());
+        let mut held = 0i64;
+        for n in &modifier_names {
+            let bit = modifier_bit(n).unwrap_or(0);
+            let (kn, kc, kvk) = modifier_key(n);
+            held |= bit;
+            page.execute(key_event(
+                DispatchKeyEventType::RawKeyDown,
+                kn,
+                kc,
+                kvk,
+                None,
+                held,
+            ))
+            .await
+            .map_err(|e| format!("modifier down ({n}): {e}"))?;
+            pressed.push((bit, kn, kc, kvk));
+        }
+
+        page.execute(key_event(down, &name, &code, vk, text.as_deref(), held))
             .await
             .map_err(|e| format!("key down: {e}"))?;
-        page.execute(dispatch(up))
+        page.execute(key_event(up, &name, &code, vk, None, held))
             .await
             .map_err(|e| format!("key up: {e}"))?;
+
+        // Release in reverse; each release carries the bitmask of the
+        // modifiers still held at that moment.
+        for (bit, kn, kc, kvk) in pressed.iter().rev() {
+            held &= !bit;
+            page.execute(key_event(
+                DispatchKeyEventType::KeyUp,
+                kn,
+                kc,
+                *kvk,
+                None,
+                held,
+            ))
+            .await
+            .map_err(|e| format!("modifier up ({kn}): {e}"))?;
+        }
         Ok(())
     }
 
@@ -754,7 +810,9 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
                 const sel = {sel};
                 const nodes = Array.from(document.querySelectorAll(sel)).filter(el => {{
                     const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
+                    if (r.width <= 0 || r.height <= 0) return false;
+                    const st = getComputedStyle(el);
+                    return st.visibility !== 'hidden' && st.display !== 'none';
                 }});
                 const el = nodes[{idx}];
                 if (!el) return 'missing';
@@ -824,7 +882,12 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
                     const sel = {sel};
                     const nodes = Array.from(document.querySelectorAll(sel)).filter(el => {{
                         const r = el.getBoundingClientRect();
-                        return r.width > 0 && r.height > 0;
+                        if (r.width <= 0 || r.height <= 0) return false;
+                        // Same visibility filter as ELEMENT_INDEX_JS: a
+                        // visibility:hidden element keeps a nonzero rect, so
+                        // skipping this filter would shift every later ref.
+                        const st = getComputedStyle(el);
+                        return st.visibility !== 'hidden' && st.display !== 'none';
                     }});
                     const el = nodes[{idx}];
                     if (!el) return null;
@@ -877,7 +940,10 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
     /// Poll the page until `text` appears in `document.body.innerText` or
     /// `timeout` elapses. The remote/mobile loop's substitute for
     /// Playwright's actionability waits: navigation spinners and lazy
-    /// content otherwise burn screenshot round-trips.
+    /// content otherwise burn screenshot round-trips. Transient evaluate
+    /// failures ("execution context was destroyed" mid-navigation) count as
+    /// not-found-yet — only the deadline produces an error, because the
+    /// whole point is to wait *through* a navigation.
     pub async fn wait_for_text(
         page: &Page,
         text: &str,
@@ -886,20 +952,23 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
         let escaped = text
             .replace('\\', "\\\\")
             .replace('\'', "\\'")
-            .replace('\n', "\\n");
+            .replace('\n', "\\n")
+            .replace('\r', "");
         let js = format!(
             "(function(){{ var b = document.body ? document.body.innerText : ''; \
              return b.indexOf('{escaped}') !== -1; }})()"
         );
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            let found = page
-                .evaluate(js.clone())
-                .await
-                .map_err(|e| format!("wait_for evaluate: {e}"))?
-                .value()
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let found = match page.evaluate(js.clone()).await {
+                Ok(result) => result.value().and_then(|v| v.as_bool()).unwrap_or(false),
+                // Navigation tore down the context we polled — keep polling
+                // against whatever page loads next.
+                Err(e) => {
+                    tracing::debug!(error = %e, "wait_for poll failed mid-navigation");
+                    false
+                }
+            };
             if found {
                 return Ok(());
             }
@@ -1171,7 +1240,9 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
                 const sel = {sel};
                 const nodes = Array.from(document.querySelectorAll(sel)).filter(el => {{
                     const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
+                    if (r.width <= 0 || r.height <= 0) return false;
+                    const st = getComputedStyle(el);
+                    return st.visibility !== 'hidden' && st.display !== 'none';
                 }});
                 const el = nodes[{idx}];
                 if (!el) return 'missing';
