@@ -373,6 +373,343 @@ impl Tool for BrowserFillTool {
     }
 }
 
+// ── browser_select_option ────────────────────────────────────────────────
+pub struct BrowserSelectOptionTool;
+
+#[async_trait]
+impl Tool for BrowserSelectOptionTool {
+    fn name(&self) -> &str {
+        "browser_select_option"
+    }
+    fn description(&self) -> &str {
+        "Choose an option in a <select> dropdown by ref (from browser_snapshot). Matches the option by value first, then by visible label (case-insensitive); fires input+change events. Dropdowns cannot be operated with browser_click/browser_fill."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "tab_id": {"type": "string"},
+                "ref": {"type": "string", "description": "Element ref of the <select> from browser_snapshot, e.g. \"e4\""},
+                "value": {"type": "string", "description": "Option value or visible label to select"}
+            },
+            "required": ["tab_id", "ref", "value"]
+        })
+    }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    fn is_destructive(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self) -> bool {
+        false
+    }
+
+    async fn execute(&self, input: Value) -> crate::ToolResult<crate::ToolOutput> {
+        let tab = TabId(
+            input["tab_id"]
+                .as_str()
+                .ok_or_else(|| ToolError::InvalidInput("missing field \"tab_id\"".into()))?
+                .to_string(),
+        );
+        let reference = input["ref"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidInput("missing field \"ref\"".into()))?
+            .to_string();
+        let value = input["value"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidInput("missing field \"value\"".into()))?
+            .to_string();
+        let session = ChromeSession::global().await?;
+        let p = session.get_page(&tab).await?;
+        chrome_session::select_option(&p, &reference, &value).await?;
+        let mut m = HashMap::new();
+        m.insert("tab_id".into(), json!(tab.0));
+        m.insert("ref".into(), json!(reference));
+        Ok(crate::ToolOutput {
+            content: format!("selected {value:?} in {reference}"),
+            is_error: false,
+            metadata: m,
+        })
+    }
+}
+
+// ── browser_hover ────────────────────────────────────────────────────────
+pub struct BrowserHoverTool;
+
+#[async_trait]
+impl Tool for BrowserHoverTool {
+    fn name(&self) -> &str {
+        "browser_hover"
+    }
+    fn description(&self) -> &str {
+        "Move the mouse over an element by ref (from browser_snapshot) — a real mouse move that triggers CSS :hover states, mouseover menus, and tooltips. Run browser_snapshot afterwards if the hover reveals new controls."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "tab_id": {"type": "string"},
+                "ref": {"type": "string", "description": "Element ref from browser_snapshot, e.g. \"e2\""}
+            },
+            "required": ["tab_id", "ref"]
+        })
+    }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    fn is_destructive(&self) -> bool {
+        false
+    }
+    fn is_concurrency_safe(&self) -> bool {
+        false
+    }
+
+    async fn execute(&self, input: Value) -> crate::ToolResult<crate::ToolOutput> {
+        let tab = TabId(
+            input["tab_id"]
+                .as_str()
+                .ok_or_else(|| ToolError::InvalidInput("missing field \"tab_id\"".into()))?
+                .to_string(),
+        );
+        let reference = input["ref"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidInput("missing field \"ref\"".into()))?
+            .to_string();
+        let session = ChromeSession::global().await?;
+        let p = session.get_page(&tab).await?;
+        chrome_session::hover_element(&p, &reference).await?;
+        let mut m = HashMap::new();
+        m.insert("tab_id".into(), json!(tab.0));
+        m.insert("ref".into(), json!(reference));
+        Ok(crate::ToolOutput {
+            content: format!("hovered {reference}"),
+            is_error: false,
+            metadata: m,
+        })
+    }
+}
+
+// ── browser_wait_for ─────────────────────────────────────────────────────
+pub struct BrowserWaitForTool;
+
+#[async_trait]
+impl Tool for BrowserWaitForTool {
+    fn name(&self) -> &str {
+        "browser_wait_for"
+    }
+    fn description(&self) -> &str {
+        "Wait until the given text appears anywhere on the page (polls every 250ms) or the timeout elapses. Use after actions that trigger async loading (form submits, search, navigation) instead of repeatedly taking screenshots."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "tab_id": {"type": "string"},
+                "text": {"type": "string", "description": "Text to wait for (exact substring of the page text)"},
+                "timeout_ms": {"type": "integer", "default": 10000, "maximum": 60000, "description": "Give up after this many milliseconds"}
+            },
+            "required": ["tab_id", "text"]
+        })
+    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self) -> bool {
+        // Purely observational (polls innerText); the repo invariant
+        // read-only ⇒ concurrency-safe applies even though a poll can span
+        // tens of seconds.
+        true
+    }
+
+    async fn execute(&self, input: Value) -> crate::ToolResult<crate::ToolOutput> {
+        let tab = TabId(
+            input["tab_id"]
+                .as_str()
+                .ok_or_else(|| ToolError::InvalidInput("missing field \"tab_id\"".into()))?
+                .to_string(),
+        );
+        let text = input["text"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidInput("missing field \"text\"".into()))?
+            .to_string();
+        let timeout_ms = input
+            .get("timeout_ms")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(10_000)
+            .clamp(100, 60_000) as u64;
+        let session = ChromeSession::global().await?;
+        let p = session.get_page(&tab).await?;
+        match chrome_session::wait_for_text(&p, &text, std::time::Duration::from_millis(timeout_ms))
+            .await
+        {
+            Ok(()) => Ok(crate::ToolOutput {
+                content: format!("text {text:?} appeared"),
+                is_error: false,
+                metadata: HashMap::new(),
+            }),
+            Err(e) => Ok(crate::ToolOutput {
+                content: e,
+                is_error: true,
+                metadata: HashMap::new(),
+            }),
+        }
+    }
+}
+
+// ── browser_upload ───────────────────────────────────────────────────────
+pub struct BrowserUploadTool;
+
+#[async_trait]
+impl Tool for BrowserUploadTool {
+    fn name(&self) -> &str {
+        "browser_upload"
+    }
+    fn description(&self) -> &str {
+        "Attach one or more local files to the page's file input (the input_index-th <input type=file>; hidden inputs count). Fires input+change so the site's upload handler runs. Max 20MB total."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "tab_id": {"type": "string"},
+                "paths": {"type": "array", "items": {"type": "string"}, "description": "Absolute paths of files to upload (read from the machine running the browser)"},
+                "input_index": {"type": "integer", "default": 0, "description": "0-based index among the page's file inputs (default: the first)"}
+            },
+            "required": ["tab_id", "paths"]
+        })
+    }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    fn is_destructive(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self) -> bool {
+        false
+    }
+
+    async fn execute(&self, input: Value) -> crate::ToolResult<crate::ToolOutput> {
+        let tab = TabId(
+            input["tab_id"]
+                .as_str()
+                .ok_or_else(|| ToolError::InvalidInput("missing field \"tab_id\"".into()))?
+                .to_string(),
+        );
+        let paths: Vec<String> = input
+            .get("paths")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|p| p.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if paths.is_empty() {
+            return Err(ToolError::InvalidInput(
+                "browser_upload requires a non-empty \"paths\" array".into(),
+            ));
+        }
+        let input_index = input
+            .get("input_index")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        let mut files = Vec::with_capacity(paths.len());
+        for path in &paths {
+            let bytes = std::fs::read(path)
+                .map_err(|e| ToolError::ExecutionFailed(format!("read {}: {e}", path)))?;
+            let name = std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("upload.bin")
+                .to_string();
+            files.push((name, bytes));
+        }
+        let total: usize = files.iter().map(|(_, b)| b.len()).sum();
+        let names: Vec<String> = files.iter().map(|(n, _)| n.clone()).collect();
+        let session = ChromeSession::global().await?;
+        let p = session.get_page(&tab).await?;
+        chrome_session::upload_files(&p, input_index, &files).await?;
+        let mut m = HashMap::new();
+        m.insert("tab_id".into(), json!(tab.0));
+        m.insert("uploaded".into(), json!(names));
+        Ok(crate::ToolOutput {
+            content: format!(
+                "attached {} file(s) ({} bytes) to file input #{input_index}",
+                files.len(),
+                total
+            ),
+            is_error: false,
+            metadata: m,
+        })
+    }
+}
+
+// ── browser_pdf ──────────────────────────────────────────────────────────
+pub struct BrowserPdfTool;
+
+#[async_trait]
+impl Tool for BrowserPdfTool {
+    fn name(&self) -> &str {
+        "browser_pdf"
+    }
+    fn description(&self) -> &str {
+        "Save the current page as a PDF to `path` (default: a timestamped file in the temp dir). The delivery format for receipts, confirmations, tickets, and reports."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "tab_id": {"type": "string"},
+                "path": {"type": "string", "description": "Absolute path of the PDF file to write"}
+            },
+            "required": ["tab_id"]
+        })
+    }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    fn is_destructive(&self) -> bool {
+        false
+    }
+    fn is_concurrency_safe(&self) -> bool {
+        false
+    }
+
+    async fn execute(&self, input: Value) -> crate::ToolResult<crate::ToolOutput> {
+        let tab = TabId(
+            input["tab_id"]
+                .as_str()
+                .ok_or_else(|| ToolError::InvalidInput("missing field \"tab_id\"".into()))?
+                .to_string(),
+        );
+        let path = match input.get("path").and_then(|v| v.as_str()) {
+            Some(p) => std::path::PathBuf::from(p),
+            None => {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                std::env::temp_dir().join(format!("shannon-page-{ts}.pdf"))
+            }
+        };
+        let session = ChromeSession::global().await?;
+        let p = session.get_page(&tab).await?;
+        let bytes = chrome_session::pdf_bytes(&p).await?;
+        std::fs::write(&path, &bytes)
+            .map_err(|e| ToolError::ExecutionFailed(format!("write {}: {e}", path.display())))?;
+        let mut m = HashMap::new();
+        m.insert("tab_id".into(), json!(tab.0));
+        m.insert("path".into(), json!(path.display().to_string()));
+        m.insert("bytes".into(), json!(bytes.len()));
+        Ok(crate::ToolOutput {
+            content: format!("saved {} ({} bytes)", path.display(), bytes.len()),
+            is_error: false,
+            metadata: m,
+        })
+    }
+}
+
 // ── browser_press_key ────────────────────────────────────────────────────
 pub struct BrowserPressKeyTool;
 
@@ -382,14 +719,14 @@ impl Tool for BrowserPressKeyTool {
         "browser_press_key"
     }
     fn description(&self) -> &str {
-        "Press a key on the given tab (e.g. \"Enter\", \"Escape\", \"Tab\", \"ArrowDown\", \"a\", \"F5\"). Goes to the focused element."
+        "Press a key or key combination on the given tab — goes to the focused element. Single keys: \"Enter\", \"Escape\", \"Tab\", \"ArrowDown\", \"a\", \"F5\". Combinations: \"Control+a\", \"Shift+Enter\", \"Meta+v\" (alt/option, ctrl/control, meta/cmd, shift)."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
                 "tab_id": {"type": "string"},
-                "key": {"type": "string", "description": "Key name, e.g. Enter/Escape/Tab/ArrowDown/F5 or a single character"}
+                "key": {"type": "string", "description": "Key or combination, e.g. Enter/Escape/Tab/ArrowDown/F5, a single character, or \"Control+Shift+Tab\""}
             },
             "required": ["tab_id", "key"]
         })
@@ -554,14 +891,16 @@ impl Tool for BrowserScreenshotTool {
         "browser_screenshot"
     }
     fn description(&self) -> &str {
-        "Capture a PNG screenshot of the given tab (viewport or full page). PNG bytes are returned in tool-result metadata under `image/png`."
+        "Capture a screenshot of the given tab (viewport or full page). PNG is lossless; jpeg at quality 0-100 is ~10x smaller — prefer it when the image only needs to be reviewed (e.g. streaming progress to a phone). Bytes are returned in tool-result metadata under `image/png` or `image/jpeg`."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
                 "tab_id": {"type": "string"},
-                "full_page": {"type": "boolean", "default": false}
+                "full_page": {"type": "boolean", "default": false},
+                "format": {"type": "string", "enum": ["png", "jpeg"], "default": "png", "description": "Image format; jpeg needs 'quality'"},
+                "quality": {"type": "integer", "minimum": 0, "maximum": 100, "default": 60, "description": "JPEG quality (ignored for png)"}
             },
             "required": ["tab_id"]
         })
@@ -584,22 +923,34 @@ impl Tool for BrowserScreenshotTool {
             .get("full_page")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let format = input
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("png")
+            .to_string();
+        let quality = input.get("quality").and_then(|v| v.as_i64()).unwrap_or(60);
         let session = ChromeSession::global().await?;
         let p = session.get_page(&tab).await?;
-        let png = chrome_session::screenshot_png(&p, full_page).await?;
+        let bytes = chrome_session::screenshot_with_format(&p, full_page, &format, quality).await?;
+        let media_type =
+            if format.eq_ignore_ascii_case("jpeg") || format.eq_ignore_ascii_case("jpg") {
+                "image/jpeg"
+            } else {
+                "image/png"
+            };
         // The model consumes screenshots through the engine's image pipeline
         // (metadata["type"] == "image" + base64 `data`) — the same contract
         // as the `computer` and `preview_screenshot` tools. Without `data`
         // the pixels are dropped and the model only sees a byte count.
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
         let mut m = HashMap::new();
         m.insert("type".into(), json!("image"));
-        m.insert("media_type".into(), json!("image/png"));
+        m.insert("media_type".into(), json!(media_type));
         m.insert("data".into(), json!(b64));
-        m.insert("bytes".into(), json!(png.len()));
+        m.insert("bytes".into(), json!(bytes.len()));
         m.insert("tab_id".into(), json!(tab.0));
         Ok(crate::ToolOutput {
-            content: format!("screenshot captured ({} bytes)", png.len()),
+            content: format!("screenshot captured ({media_type}, {} bytes)", bytes.len()),
             is_error: false,
             metadata: m,
         })
@@ -820,9 +1171,14 @@ mod tests {
             (&BrowserSnapshotTool, "browser_snapshot"),
             (&BrowserTextTool, "browser_text"),
             (&BrowserFillTool, "browser_fill"),
+            (&BrowserSelectOptionTool, "browser_select_option"),
+            (&BrowserHoverTool, "browser_hover"),
             (&BrowserPressKeyTool, "browser_press_key"),
             (&BrowserScrollTool, "browser_scroll"),
+            (&BrowserWaitForTool, "browser_wait_for"),
             (&BrowserEvaluateTool, "browser_evaluate"),
+            (&BrowserUploadTool, "browser_upload"),
+            (&BrowserPdfTool, "browser_pdf"),
             (&BrowserScreenshotTool, "browser_screenshot"),
             (&BrowserTabsTool, "browser_tabs"),
             (&BrowserCloseTool, "browser_close"),
@@ -842,8 +1198,10 @@ mod tests {
             &BrowserTypeTool,
             &BrowserCloseTool,
             &BrowserFillTool,
+            &BrowserSelectOptionTool,
             &BrowserPressKeyTool,
             &BrowserEvaluateTool,
+            &BrowserUploadTool,
         ];
         for tool in &destructive {
             assert!(
@@ -860,19 +1218,35 @@ mod tests {
         // Navigate flips page state but is flagged neither destructive
         // nor read-only (a navigation discards form state yet is routinely
         // reversible); it still serializes because concurrent navigations
-        // race the same tab. Scroll mutates scroll position only — also
-        // serialized but not destructive.
+        // race the same tab. Scroll/hover mutate transient state only —
+        // also serialized but not destructive. PDF writes a file (not a
+        // page mutation); wait_for is read-only ⇒ concurrency-safe.
         assert!(!BrowserNavigateTool.is_destructive());
         assert!(!BrowserNavigateTool.is_read_only());
         assert!(
             !BrowserNavigateTool.is_concurrency_safe(),
             "navigate mutates the shared ChromeSession and must serialize"
         );
+        assert!(!BrowserScrollTool.is_destructive());
+        assert!(!BrowserScrollTool.is_read_only());
+        assert!(!BrowserHoverTool.is_destructive());
+        assert!(!BrowserPdfTool.is_destructive());
+        assert!(BrowserWaitForTool.is_read_only());
+        assert!(BrowserWaitForTool.is_concurrency_safe());
+        for tool in [
+            &BrowserHoverTool as &dyn Tool,
+            &BrowserScrollTool,
+            &BrowserPdfTool,
+        ] {
+            assert!(
+                !tool.is_concurrency_safe(),
+                "{} must serialize",
+                tool.name()
+            );
+        }
         // Read-only tools observe the shared session without mutating it, so
         // they stay concurrency-safe (read-only ⇒ concurrency-safe is a
         // repo-wide invariant enforced by tool_trait_compliance).
-        assert!(!BrowserScrollTool.is_destructive());
-        assert!(!BrowserScrollTool.is_read_only());
         let readonly: Vec<&dyn Tool> = vec![
             &BrowserSnapshotTool,
             &BrowserTextTool,
@@ -884,5 +1258,29 @@ mod tests {
             assert!(tool.is_read_only(), "{} should be read-only", tool.name());
             assert!(tool.is_concurrency_safe());
         }
+    }
+
+    #[test]
+    fn test_new_tool_schemas_shape() {
+        assert_eq!(
+            BrowserSelectOptionTool.input_schema()["required"],
+            json!(["tab_id", "ref", "value"])
+        );
+        assert_eq!(
+            BrowserHoverTool.input_schema()["required"],
+            json!(["tab_id", "ref"])
+        );
+        assert_eq!(
+            BrowserWaitForTool.input_schema()["required"],
+            json!(["tab_id", "text"])
+        );
+        assert_eq!(
+            BrowserUploadTool.input_schema()["required"],
+            json!(["tab_id", "paths"])
+        );
+        // Screenshot gained format/quality knobs.
+        let shot = BrowserScreenshotTool.input_schema();
+        assert_eq!(shot["properties"]["format"]["enum"], json!(["png", "jpeg"]));
+        assert!(shot["properties"]["quality"]["maximum"].is_number());
     }
 }

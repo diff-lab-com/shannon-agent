@@ -1,5 +1,6 @@
 ---
 source: crates/shannon-tools/tests/tool_schema_snapshots.rs
+assertion_line: 38
 expression: output
 ---
 ## Agent
@@ -1622,6 +1623,24 @@ expression: output
   "type": "object"
 }
 
+## browser_hover
+{
+  "properties": {
+    "ref": {
+      "description": "Element ref from browser_snapshot, e.g. \"e2\"",
+      "type": "string"
+    },
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id",
+    "ref"
+  ],
+  "type": "object"
+}
+
 ## browser_navigate
 {
   "properties": {
@@ -1640,11 +1659,28 @@ expression: output
   "type": "object"
 }
 
+## browser_pdf
+{
+  "properties": {
+    "path": {
+      "description": "Absolute path of the PDF file to write",
+      "type": "string"
+    },
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id"
+  ],
+  "type": "object"
+}
+
 ## browser_press_key
 {
   "properties": {
     "key": {
-      "description": "Key name, e.g. Enter/Escape/Tab/ArrowDown/F5 or a single character",
+      "description": "Key or combination, e.g. Enter/Escape/Tab/ArrowDown/F5, a single character, or \"Control+Shift+Tab\"",
       "type": "string"
     },
     "tab_id": {
@@ -1661,9 +1697,25 @@ expression: output
 ## browser_screenshot
 {
   "properties": {
+    "format": {
+      "default": "png",
+      "description": "Image format; jpeg needs 'quality'",
+      "enum": [
+        "png",
+        "jpeg"
+      ],
+      "type": "string"
+    },
     "full_page": {
       "default": false,
       "type": "boolean"
+    },
+    "quality": {
+      "default": 60,
+      "description": "JPEG quality (ignored for png)",
+      "maximum": 100,
+      "minimum": 0,
+      "type": "integer"
     },
     "tab_id": {
       "type": "string"
@@ -1696,6 +1748,29 @@ expression: output
   },
   "required": [
     "tab_id"
+  ],
+  "type": "object"
+}
+
+## browser_select_option
+{
+  "properties": {
+    "ref": {
+      "description": "Element ref of the <select> from browser_snapshot, e.g. \"e4\"",
+      "type": "string"
+    },
+    "tab_id": {
+      "type": "string"
+    },
+    "value": {
+      "description": "Option value or visible label to select",
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id",
+    "ref",
+    "value"
   ],
   "type": "object"
 }
@@ -1740,6 +1815,56 @@ expression: output
     },
     "text": {
       "type": "string"
+    }
+  },
+  "required": [
+    "tab_id",
+    "text"
+  ],
+  "type": "object"
+}
+
+## browser_upload
+{
+  "properties": {
+    "input_index": {
+      "default": 0,
+      "description": "0-based index among the page's file inputs (default: the first)",
+      "type": "integer"
+    },
+    "paths": {
+      "description": "Absolute paths of files to upload (read from the machine running the browser)",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id",
+    "paths"
+  ],
+  "type": "object"
+}
+
+## browser_wait_for
+{
+  "properties": {
+    "tab_id": {
+      "type": "string"
+    },
+    "text": {
+      "description": "Text to wait for (exact substring of the page text)",
+      "type": "string"
+    },
+    "timeout_ms": {
+      "default": 10000,
+      "description": "Give up after this many milliseconds",
+      "maximum": 60000,
+      "type": "integer"
     }
   },
   "required": [
@@ -1809,6 +1934,7 @@ expression: output
       "description": "The action to perform",
       "enum": [
         "screenshot",
+        "zoom",
         "click",
         "right_click",
         "middle_click",
@@ -1819,6 +1945,7 @@ expression: output
         "key_press",
         "wait",
         "mouse_move",
+        "cursor_position",
         "left_click_drag",
         "ui_tree",
         "ui_click"
@@ -1826,7 +1953,7 @@ expression: output
       "type": "string"
     },
     "coordinate": {
-      "description": "[x, y] coordinates in reference space (0-1024, 0-768)",
+      "description": "[x, y] coordinates: pixel coordinates in the most recent screenshot image (dimensions reported with each capture), or reference space (0-1024, 0-768) before the first screenshot",
       "items": {
         "type": "integer"
       },
@@ -1835,7 +1962,7 @@ expression: output
       "type": "array"
     },
     "duration": {
-      "description": "Seconds to wait (for 'wait' action, default 1.0)",
+      "description": "Seconds to wait (for 'wait' action, default 1.0, capped at 60)",
       "type": "number"
     },
     "element": {
@@ -1847,7 +1974,7 @@ expression: output
       "type": "integer"
     },
     "key": {
-      "description": "Key or key combination, e.g. 'Return', 'ctrl+a', 'alt+F4'",
+      "description": "Key or key combination, e.g. 'Return', 'ctrl+a', 'alt+F4' ('+' key itself written 'ctrl++')",
       "type": "string"
     },
     "monitor": {
@@ -1867,6 +1994,15 @@ expression: output
         "right"
       ],
       "type": "string"
+    },
+    "size": {
+      "description": "Region [width, height] for the 'zoom' action, in the same coordinate space as 'coordinate' (default 384x288)",
+      "items": {
+        "type": "integer"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
     },
     "start_coordinate": {
       "description": "Start [x, y] for drag operations",
