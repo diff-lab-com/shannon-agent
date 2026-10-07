@@ -1542,7 +1542,7 @@ impl ComputerUseTool {
         // sequence runs on a blocking thread — which is also where the
         // inter-step delays belong (std::thread::sleep must not block a
         // tokio worker). Only plain data crosses the .await.
-        let drag = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
                 .map_err(|e| format!("Input init failed: {e}"))?;
             enigo
