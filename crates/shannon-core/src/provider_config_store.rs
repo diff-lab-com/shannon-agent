@@ -115,12 +115,29 @@ pub fn acquire_exclusive_lock(path: &Path) -> io::Result<File> {
         // the parent is already there (this is the steady-state case).
         let _ = fs::create_dir_all(parent);
     }
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)?;
+    let open_lock = || {
+        OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+    };
+    let file = match open_lock() {
+        Ok(file) => file,
+        // The parent can vanish between create_dir_all and open when a
+        // concurrent cleanup deletes it (a redirected-HOME tempdir dropped
+        // by a parallel test, for instance). Recreate and retry once; a
+        // second NotFound is a real error.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            let parent = lock_path
+                .parent()
+                .ok_or_else(|| io::Error::other("lockfile has no parent directory to recreate"))?;
+            fs::create_dir_all(parent)?;
+            open_lock()?
+        }
+        Err(e) => return Err(e),
+    };
     // Blocking acquire. Matches the in-process `tokio::sync::Mutex` semantic:
     // when two shannon processes (desktop + CLI) race, the loser waits
     // rather than failing fast. Saves only take milliseconds, so contention
