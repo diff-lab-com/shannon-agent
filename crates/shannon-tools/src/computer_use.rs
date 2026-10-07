@@ -1519,39 +1519,52 @@ impl ComputerUseTool {
             .resolve_point(end, monitor)
             .map_err(ToolError::ExecutionFailed)?;
 
-        let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
-            .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
-
-        // Move to start, press, interpolate mouse moves to the end (many
-        // surfaces — HTML5 drag & drop, canvas apps, sliders — ignore a
-        // teleported press→release and need intermediate move events while
-        // the button is held), then release.
-        enigo
-            .move_mouse(scaled_start[0], scaled_start[1], enigo::Coordinate::Abs)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
-
-        enigo
-            .button(enigo::Button::Left, Direction::Press)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Mouse press failed: {e}")))?;
-
+        // Interpolated waypoints: move to start, press, intermediate moves
+        // (many surfaces — HTML5 drag & drop, canvas apps, sliders — ignore
+        // a teleported press→release and need intermediate move events while
+        // the button is held), then release. ~12px per step, 30 steps max,
+        // always at least one move.
         let dx = scaled_end[0] - scaled_start[0];
         let dy = scaled_end[1] - scaled_start[1];
         // f64 math: dx*dx overflows i32 on enormous multi-monitor desktops.
         let dist = (f64::from(dx) * f64::from(dx) + f64::from(dy) * f64::from(dy)).sqrt();
-        // ~12px per step, 30 steps max, always at least one move.
         let steps = ((dist / 12.0).ceil() as usize).clamp(1, 30);
-        for i in 1..=steps {
-            let ix = scaled_start[0] + dx * i as i32 / steps as i32;
-            let iy = scaled_start[1] + dy * i as i32 / steps as i32;
-            enigo
-                .move_mouse(ix, iy, enigo::Coordinate::Abs)
-                .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
-            tokio::time::sleep(std::time::Duration::from_millis(DRAG_STEP_DELAY_MS)).await;
-        }
+        let waypoints: Vec<[i32; 2]> = (1..=steps)
+            .map(|i| {
+                [
+                    scaled_start[0] + dx * i as i32 / steps as i32,
+                    scaled_start[1] + dy * i as i32 / steps as i32,
+                ]
+            })
+            .collect();
 
-        enigo
-            .button(enigo::Button::Left, Direction::Release)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Mouse release failed: {e}")))?;
+        // Enigo is !Send on macOS (CGEventSource), so the whole input
+        // sequence runs on a blocking thread — which is also where the
+        // inter-step delays belong (std::thread::sleep must not block a
+        // tokio worker). Only plain data crosses the .await.
+        let drag = tokio::task::spawn_blocking(move || {
+            let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
+                .map_err(|e| format!("Input init failed: {e}"))?;
+            enigo
+                .move_mouse(scaled_start[0], scaled_start[1], enigo::Coordinate::Abs)
+                .map_err(|e| format!("Mouse move failed: {e}"))?;
+            enigo
+                .button(enigo::Button::Left, Direction::Press)
+                .map_err(|e| format!("Mouse press failed: {e}"))?;
+            for [ix, iy] in &waypoints {
+                enigo
+                    .move_mouse(*ix, *iy, enigo::Coordinate::Abs)
+                    .map_err(|e| format!("Mouse move failed: {e}"))?;
+                std::thread::sleep(std::time::Duration::from_millis(DRAG_STEP_DELAY_MS));
+            }
+            enigo
+                .button(enigo::Button::Left, Direction::Release)
+                .map_err(|e| format!("Mouse release failed: {e}"))?;
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("drag task failed: {e}")))?
+        .map_err(ToolError::ExecutionFailed)?;
 
         let mut metadata = HashMap::new();
         crate::windows_platform::attach_window_context(&mut metadata);
