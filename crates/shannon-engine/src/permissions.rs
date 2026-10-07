@@ -1255,6 +1255,9 @@ impl PermissionManager {
 
         // Browser tools - high risk (drives a real browser, fills forms,
         // navigates, can read sensitive data on any visited page).
+        // browser_upload additionally ships local files to whatever page is
+        // open — a disclosure channel — and browser_pdf writes to disk;
+        // both stay in the same High bucket.
         for name in [
             "browser_navigate",
             "browser_click",
@@ -1263,9 +1266,14 @@ impl PermissionManager {
             "browser_snapshot",
             "browser_text",
             "browser_fill",
+            "browser_select_option",
+            "browser_hover",
             "browser_press_key",
             "browser_scroll",
+            "browser_wait_for",
             "browser_evaluate",
+            "browser_upload",
+            "browser_pdf",
             "browser_tabs",
             "browser_close",
             "browser_console",
