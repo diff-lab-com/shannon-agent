@@ -130,6 +130,18 @@ export function CompanionPromptBridge() {
   return null;
 }
 
+/**
+ * W10 audit §6-F — the `/` redirect must carry the query string along.
+ * A session window boots on `/?windowSession=<uuid>`; this redirect used to
+ * drop the query (`to="/chat"` resolves with an empty search), so a reload
+ * (F5/Ctrl+R) parsed a null `windowSession` and the same window degraded
+ * into full main-window form (sidebar back, pin lost). Exported for tests.
+ */
+export function RootRedirect() {
+  const location = useLocation();
+  return <Navigate to={{ pathname: '/chat', search: location.search }} replace />;
+}
+
 export default function App() {
   return (
     <I18nProvider>
@@ -160,7 +172,8 @@ export default function App() {
                   navigates itself away mid-capture. */}
               <Route path="/companion" element={<CompanionPage />} />
               <Route element={<Layout />}>
-                <Route path="/" element={<Navigate to="/chat" replace />} />
+                {/* §6-F: RootRedirect keeps the query (windowSession) alive. */}
+                <Route path="/" element={<RootRedirect />} />
                 {/* Legacy route redirects — keep old bookmarks/links working. */}
                 <Route path="/strategic-focus" element={<Navigate to="/opc" replace />} />
                 <Route path="/agent-swarm" element={<Navigate to="/opc" replace />} />

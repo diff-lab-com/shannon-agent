@@ -358,6 +358,16 @@ pub struct ScheduledRoutine {
     pub last_fired: Option<DateTime<Utc>>,
     /// Whether the routine is enabled.
     pub enabled: bool,
+    /// Why the routine was paused AUTOMATICALLY (R2-P2-C / P2-D). `None` =
+    /// running, or paused by hand; `Some("budget")` = the monthly budget cap
+    /// was reached at trigger time; `Some("consecutive_failures")` = the
+    /// consecutive scheduled-failure threshold fired. Written only by the
+    /// executor's auto-pause paths, cleared by [`Self::set_enabled`] when the
+    /// user re-enables. `serde(default)` keeps task.json files written before
+    /// the field existed loading (the routine-record migration pattern, same
+    /// as `enabled_at` / `notify_webhook`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_reason: Option<String>,
     /// How many times this routine has fired.
     #[serde(default)]
     pub fire_count: u32,
@@ -453,6 +463,7 @@ impl ScheduledRoutine {
             enabled_at: Some(Utc::now()),
             last_fired: None,
             enabled: true,
+            pause_reason: None,
             fire_count: 0,
             max_fires: None,
             trigger_type: TriggerType::Interval,
@@ -490,6 +501,7 @@ impl ScheduledRoutine {
             enabled_at: Some(Utc::now()),
             last_fired: None,
             enabled: true,
+            pause_reason: None,
             fire_count: 0,
             max_fires: None,
             trigger_type: TriggerType::Cron,
@@ -512,14 +524,18 @@ impl ScheduledRoutine {
     }
 
     /// Flip `enabled`, stamping [`Self::enabled_at`] on the disabled→enabled
-    /// transition (R7-②). Re-enabling restarts the consecutive-failure
+    /// transition (R7-②) and clearing [`Self::pause_reason`] on the same
+    /// transition (R2-P2-C: a MANUAL re-enable always clears the auto-pause
+    /// reason — the badge reflects the last pause, and after the user opts
+    /// back in there is none). Re-enabling restarts the consecutive-failure
     /// streak from zero; a redundant `true` on an already-enabled routine
-    /// does NOT re-stamp (a no-op toggle must not reset the streak), and
-    /// disabling leaves the stamp untouched (it records the *enabled* zero
-    /// point, not the pause).
+    /// does NOT re-stamp or re-clear (a no-op toggle must not reset the
+    /// streak), and disabling leaves the stamp and reason untouched (they
+    /// record the *enabled* zero point / the last *automatic* pause).
     pub fn set_enabled(&mut self, enabled: bool) {
         if enabled && !self.enabled {
             self.enabled_at = Some(Utc::now());
+            self.pause_reason = None;
         }
         self.enabled = enabled;
     }

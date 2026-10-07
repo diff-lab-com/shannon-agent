@@ -1,6 +1,7 @@
 // Step 3 — final summary + workspace picker + shortcuts + dev mode opt-in
 // + documents-capabilities card. Extracted from Welcome.tsx (T3.1).
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { WelcomeCard } from './components'
 import {
@@ -45,6 +46,7 @@ export function DoneStep({
   onOpenMigration,
 }: DoneStepProps) {
   const intl = useIntl()
+  const navigate = useNavigate()
   const currentTask = TASKS.find(t => t.id === task)!
   // Per-tool chip data (01b): display name falls back to the raw id when a
   // tool id has no `welcome.tool.*` label yet; the reason key mirrors the id.
@@ -90,16 +92,20 @@ export function DoneStep({
           </li>
         </ul>
         {/* 01b — the recommended tools, itemized. Each chip is the tool's
-            display name plus its template-driven one-line reason; chips are
-            inert (recommendation only, decision 4-B — enabling stays in
-            Settings, which the count line above already points at). */}
+            display name plus its template-driven one-line reason, and doubles
+            as a deep link into Settings → Connections. Navigation only —
+            Welcome still never mutates tool config (decision 4-B: enabling
+            happens in Settings, which is exactly where the chip lands). */}
         {recommendedTools.length > 0 && (
           <div className="flex flex-wrap gap-xs mt-sm" data-testid="welcome-done-tools">
             {recommendedTools.map(tool => (
-              <span
+              <button
                 key={tool.id}
+                type="button"
                 data-testid="welcome-done-tool-chip"
-                className="inline-flex items-center gap-xs px-sm py-xs rounded-full border border-outline-variant/30 bg-surface-container-lowest font-label-xs text-on-surface"
+                onClick={() => navigate('/settings/connections')}
+                title={intl.formatMessage({ id: 'welcome.done.viewInSettings' })}
+                className="inline-flex items-center gap-xs px-sm py-xs rounded-full border border-outline-variant/30 bg-surface-container-lowest font-label-xs text-on-surface cursor-pointer transition-colors hover:border-primary/60 hover:bg-surface-container-high focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
               >
                 <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">
                   {tool.icon}
@@ -108,7 +114,10 @@ export function DoneStep({
                 <span className="text-on-surface-variant">
                   {intl.formatMessage({ id: tool.reasonKey })}
                 </span>
-              </span>
+                <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">
+                  chevron_right
+                </span>
+              </button>
             ))}
           </div>
         )}

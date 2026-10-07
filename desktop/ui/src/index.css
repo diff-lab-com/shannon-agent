@@ -377,6 +377,18 @@
   }
 }
 
+/* W9 theme-audit (2026-10-07): the dark-tuned alphas above wash out on light
+   themes — measured peak contrast of the violet stop was ~1.3–1.8:1 against
+   white glass fills (vs 2.45:1 on tokyo-night), i.e. the signature vanished
+   on all six light themes. Unlayered + attribute-scoped so it beats the
+   layered utility everywhere, one definition for all light themes; the hues
+   stay the fixed brand pair, only the fill opacity rises to give the SAME
+   perceived weight as dark (violet ≈ 2.7:1 on white; cyan is capped ≈ 1.6:1
+   by its intrinsic lightness — the violet anchor carries the line). */
+[data-theme-mode="light"] .aurora-line::before {
+  background: linear-gradient(90deg, transparent, rgba(139, 124, 247, 0.85), rgba(86, 200, 221, 0.7), transparent);
+}
+
 /* Elevation utilities for solid (non-glass) cards — replaces ad-hoc
    shadow-sm/md/lg/xl mixes (06-26 audit: no elevation rule).
    UI review 2026-09-29 T2: the @theme --shadow-e1..e5 tokens are the single

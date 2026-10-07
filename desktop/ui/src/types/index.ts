@@ -1414,6 +1414,11 @@ export interface ScheduledRoutine {
   created_at: number
   last_fired?: number | null
   enabled: boolean
+  /// Why the routine was paused AUTOMATICALLY (R2-P2-C/P2-D). null/undefined
+  /// = running, or paused by hand; `"budget"` = the monthly budget was
+  /// reached at trigger time; `"consecutive_failures"` = 2 scheduled fires
+  /// failed in a row. Cleared server-side when the user re-enables.
+  pause_reason?: 'budget' | 'consecutive_failures' | null
   fire_count: number
   max_fires?: number | null
   policy?: ExecutionPolicy | null
@@ -1528,8 +1533,8 @@ export interface TriageStats {
 /// `session_failed` (the session's last turn failed), and `skill_candidate`
 /// (a detected skill pattern awaits review). `dream_report` is the daily
 /// dream-distillation summary card (at most one per day, deduped by the
-/// backend writer). `background_task` is a failed desktop background task
-/// (R2-P1-5) — successes/cancels never write an item.
+/// backend writer). `background_task` is a desktop background task that
+/// finished completed or failed (R2-P1-5) — user cancels never write an item.
 export type InboxSource =
   | 'routine'
   | 'scheduled_task'
@@ -1743,6 +1748,17 @@ export interface BatchDiffSummary {
   deletions: number
 }
 
+/// Per-branch verification facts (backend adds the field incrementally):
+/// `exitOk` = the branch's verification command exited 0; the test counts
+/// are best-effort extras parsed from its output. Missing field = data
+/// written before the field shipped — every consumer must conditionally
+/// render (no verification UI at all when no branch carries it).
+export interface BatchVerification {
+  exitOk: boolean
+  testsPassed?: number
+  testsTotal?: number
+}
+
 /// One parallel candidate branch (frozen backend contract).
 export interface BatchBranch {
   index: number
@@ -1752,6 +1768,7 @@ export interface BatchBranch {
   error: string | null
   summary: BatchDiffSummary | null
   spentUsd: number
+  verification?: BatchVerification
 }
 
 /// One best-of-N batch run (payload of `batch:updated`). `adoptedIndex` is
