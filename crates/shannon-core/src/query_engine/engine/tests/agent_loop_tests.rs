@@ -8,6 +8,29 @@
 
 use super::*;
 
+/// Pins `$SHANNON_SECRET_GUARD=off` for the duration of a test that installs
+/// its own transform manually. The engine's documented precedence is that an
+/// explicit env var or config `[secret_guard] mode` "always decides —
+/// install/replace as decided", so with the host opted into redact (or any
+/// mode) `init_from_env_or_config` would REPLACE the test's transform with
+/// the built-in guard — which cannot know this file's private SECRET. The
+/// pin restores on drop.
+struct PinGuardOff;
+impl PinGuardOff {
+    fn new() -> Self {
+        // SAFETY: test-scoped unique env key; nextest runs one test per
+        // process, and the value is restored on drop.
+        unsafe { std::env::set_var("SHANNON_SECRET_GUARD", "off") };
+        Self
+    }
+}
+impl Drop for PinGuardOff {
+    fn drop(&mut self) {
+        // SAFETY: see PinGuardOff::new.
+        unsafe { std::env::remove_var("SHANNON_SECRET_GUARD") };
+    }
+}
+
 #[tokio::test]
 async fn secret_guard_client_boundary_sends_surrogates_not_secrets() {
     use std::io::Read as _;
@@ -95,6 +118,7 @@ async fn secret_guard_client_boundary_sends_surrogates_not_secrets() {
     });
 
     let _g = crate::secret_guard::test_support::acquire();
+    let _guard_off = PinGuardOff::new();
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let messages = vec![Message {
         role: "user".to_string(),
@@ -248,6 +272,7 @@ async fn secret_guard_query_loop_completes_with_redacted_wire() {
     });
 
     let _g = crate::secret_guard::test_support::acquire();
+    let _guard_off = PinGuardOff::new();
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let config = LlmClientConfig {
         alternate_api_keys: Vec::new(),
@@ -1893,6 +1918,7 @@ fn compaction_summarizer_wire_carries_surrogates_not_secrets() {
         shannon_engine::compact::summarizer::LlmSummarizer::new(LlmClient::new(config));
 
     let _g = crate::secret_guard::test_support::acquire();
+    let _guard_off = PinGuardOff::new();
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let messages = vec![Message {
         role: "user".to_string(),
@@ -2031,6 +2057,7 @@ async fn secret_guard_system_prompt_redacted_on_wire() {
     });
 
     let _g = crate::secret_guard::test_support::acquire();
+    let _guard_off = PinGuardOff::new();
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let config = LlmClientConfig {
         alternate_api_keys: Vec::new(),

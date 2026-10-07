@@ -10,6 +10,18 @@ Waves queued for the next release, newest first:
 - Approval transparency + mobile approval scope (2026-10-05 follow-up)
 - Permission-mode convergence (2026-10-05)
 - Hardening pass (2026-10-07 full-repo review)
+- Hardening follow-up (2026-10-07, same day)
+
+### Hardening follow-up (2026-10-07, same day)
+
+- **Git tools off the runtime**: the five git tools ran blocking child spawns directly inside async `execute` — a slow `git log -p` or a wedged credential prompt held a tokio worker; `run_blocking` also left child stdin inherited, so a passphrase prompt could wait on the host TTY forever. All five now run on the blocking pool, and the provider closes child stdin (mirroring `run_async`).
+- **Bounded captures**: `run_async` `read_to_end`'d output without limit before the caller's 2 MiB truncate, and the PTY reader buffer was unbounded — both retain at most 8 MiB per stream now, while still draining to EOF.
+- **Mouse capture is real**: the REPL never issued `EnableMouseCapture`, so wheel scrolling — and F8's toggle — operated on a path that could never fire. Capture is enabled at startup and restored at every exit path; F8 flips the terminal mode (not just the flag); the streaming input loop routes wheel events instead of dropping them; Ctrl+E's external editor runs under a suspend/restore pair (`tui::restore_terminal_for_external`, adopted from the dead `Tui` wrapper) so clicks inside the editor no longer leak escape sequences.
+- **providers.toml lock retry**: `acquire_exclusive_lock` could hit ENOENT when the lockfile's parent vanished between create and open (e.g. a redirected-HOME tempdir deleted by a parallel test) — recreate and retry once.
+- **Credentials never land in /tmp**: `CredentialManager::default()` had three fallback hops ending at `/tmp/.shannon/credentials`; all production callers use the hard-erroring `new()`, and the zero-caller `default()` now degrades to a non-persisting in-memory store.
+- **Small fixes**: the background-process registry prunes entries finished over an hour (was unbounded growth); `kill_agent` actually fires the exit watcher's signal channel (previously only the sender's drop woke it); MCP batch responses match numeric-string ids instead of piling them onto id 0; the webhook receiver reports its own death (`is_alive()` + a synthetic event that wakes blocked `recv()`).
+- **Desktop/ui**: the dead `@assistant-ui/react` adapter layer (chat-model adapter in `src/lib/runtime` + its tests) is removed along with the dependency; `terminalEvents` stays (live).
+- **Wire-type drift gate**: CI and `ci-local.sh` regenerate `gateway/src/engine/types.gen.ts` from the Rust protocol crate and require byte-identity — protocol edits without regeneration now fail loudly.
 
 ### Hardening pass (2026-10-07 full-repo review)
 
