@@ -95,6 +95,32 @@ if [ "$WITH_DOC" -eq 1 ]; then
         run "doc" "${doc_cmd[@]}"
 fi
 
+# Wire-type freshness (matches the `wire-types` job in ci.yml): regenerate
+# the gateway TS types from the Rust protocol crate and require
+# byte-identity with the committed file — protocol edits without a
+# regeneration used to surface only as gateway typecheck noise (or silent
+# wire drift).
+wiretypes_gate() {
+    local label
+    label="$(printf '%-22s' "wire-types")"
+    echo "${YELLOW}>>> ${label}${NC}"
+    if ! cargo run -p shannon-api-protocol --bin gen-ts >/tmp/ci-local.out 2>&1; then
+        echo "${RED}    FAIL${NC}  wire-types"
+        tail -30 /tmp/ci-local.out | sed 's/^/      | /'
+        fail=$((fail + 1))
+        return
+    fi
+    if ! git diff --exit-code --quiet -- gateway/src/engine/types.gen.ts; then
+        echo "${RED}    FAIL${NC}  wire-types  (gateway/src/engine/types.gen.ts is stale — run 'just gen-protocol' and commit the regenerated file)"
+        git --no-pager diff --stat -- gateway/src/engine/types.gen.ts | sed 's/^/      | /'
+        fail=$((fail + 1))
+        return
+    fi
+    echo "${GREEN}    PASS${NC}  wire-types"
+    pass=$((pass + 1))
+}
+wiretypes_gate
+
 if [ "$WITH_AUDIT" -eq 1 ]; then
     # `cargo-audit` is not a transitive dep; gate its invocation on the
     # binary existing so `scripts/ci-local.sh` is still runnable in a

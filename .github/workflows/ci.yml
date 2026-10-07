@@ -759,6 +759,33 @@ jobs:
         working-directory: gateway
         run: pnpm test
 
+  # Wire-type drift gate: the gateway's engine types are GENERATED from the
+  # Rust protocol crate (crates/shannon-api-protocol → `just gen-protocol`).
+  # Editing the Rust side without regenerating used to surface only as a
+  # gateway typecheck failure — or, worse, as silent wire/runtime drift.
+  # Regenerate and require byte-identity with the committed file.
+  wire-types:
+    name: Wire types are fresh
+    runs-on: ubuntu-latest
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.gateway == 'true' || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          shared-key: ci-v4
+      - name: Regenerate and diff
+        run: |
+          cargo run -p shannon-api-protocol --bin gen-ts
+          if ! git diff --exit-code -- gateway/src/engine/types.gen.ts; then
+            echo "::error::gateway/src/engine/types.gen.ts is stale — run 'just gen-protocol' and commit the regenerated file"
+            exit 1
+          fi
+
   # PR gate for the marketing site. Previously website/ was only built AFTER
   # merging to main (deploy-website.yml), so a broken Astro build shipped
   # straight to GitHub Pages with zero pre-merge signal. Same frozen install
