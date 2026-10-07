@@ -962,8 +962,7 @@ impl ComputerUseTool {
         }
         if size[0] <= 0 || size[1] <= 0 {
             return Err(ToolError::InvalidInput(format!(
-                "zoom 'size' must be positive, got {:?}",
-                size
+                "zoom 'size' must be positive, got {size:?}"
             )));
         }
 
@@ -1053,7 +1052,7 @@ impl ComputerUseTool {
     async fn execute_cursor_position(&self) -> ToolResult<ToolOutput> {
         crate::windows_platform::ensure_dpi_awareness();
 
-        let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
+        let enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
         let (x, y) = enigo
             .location()

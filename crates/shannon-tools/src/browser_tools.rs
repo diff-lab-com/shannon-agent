@@ -617,7 +617,7 @@ impl Tool for BrowserUploadTool {
         let mut files = Vec::with_capacity(paths.len());
         for path in &paths {
             let bytes = std::fs::read(path)
-                .map_err(|e| ToolError::ExecutionFailed(format!("read {}: {e}", path)))?;
+                .map_err(|e| ToolError::ExecutionFailed(format!("read {path}: {e}")))?;
             let name = std::path::Path::new(path)
                 .file_name()
                 .and_then(|n| n.to_str())
