@@ -31,8 +31,6 @@ use tracing::{debug, info, warn};
 pub struct SkillToolAdapter {
     /// The wrapped skill definition.
     skill: Skill,
-    /// Executor used to render / run the skill.
-    executor: SkillExecutor,
     /// Prefixed tool name (e.g. "skill_commit").
     tool_name: String,
 }
@@ -41,11 +39,7 @@ impl SkillToolAdapter {
     /// Create a new adapter for the given skill.
     pub fn new(skill: Skill) -> Self {
         let tool_name = format!("skill_{}", skill.id);
-        Self {
-            tool_name,
-            executor: SkillExecutor::new(),
-            skill,
-        }
+        Self { tool_name, skill }
     }
 }
 
@@ -95,8 +89,13 @@ impl Tool for SkillToolAdapter {
             permissions: SkillPermissions::for_source(&self.skill.source),
         };
 
-        match self.executor.execute(&self.skill, &context) {
-            Ok(result) => {
+        // The executor blocks on the child process — run it on the blocking
+        // pool so even the worst case cannot stall a runtime worker. The
+        // executor itself bounds each command by a hard timeout.
+        let skill = self.skill.clone();
+        let executor = SkillExecutor::new();
+        match tokio::task::spawn_blocking(move || executor.execute(&skill, &context)).await {
+            Ok(Ok(result)) => {
                 if result.skip_model_invocation {
                     // Pure command skill -- return output directly.
                     Ok(ToolOutput::success(result.prompt_content))
@@ -106,8 +105,12 @@ impl Tool for SkillToolAdapter {
                     Ok(ToolOutput::success(result.prompt_content))
                 }
             }
-            Err(e) => Ok(ToolOutput::error(format!(
+            Ok(Err(e)) => Ok(ToolOutput::error(format!(
                 "Skill '{}' execution failed: {}",
+                self.skill.name, e
+            ))),
+            Err(e) => Ok(ToolOutput::error(format!(
+                "Skill '{}' task failed: {}",
                 self.skill.name, e
             ))),
         }
