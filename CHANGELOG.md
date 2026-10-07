@@ -2,8 +2,49 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
-## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
-## [Unreleased] — Approval transparency + mobile approval scope (2026-10-05 follow-up)
+## [Unreleased]
+
+Waves queued for the next release, newest first:
+
+- §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
+- Approval transparency + mobile approval scope (2026-10-05 follow-up)
+- Permission-mode convergence (2026-10-05)
+- Hardening pass (2026-10-07 full-repo review)
+- Hardening follow-up (2026-10-07, same day)
+
+### Hardening follow-up (2026-10-07, same day)
+
+- **Git tools off the runtime**: the five git tools ran blocking child spawns directly inside async `execute` — a slow `git log -p` or a wedged credential prompt held a tokio worker; `run_blocking` also left child stdin inherited, so a passphrase prompt could wait on the host TTY forever. All five now run on the blocking pool, and the provider closes child stdin (mirroring `run_async`).
+- **Bounded captures**: `run_async` `read_to_end`'d output without limit before the caller's 2 MiB truncate, and the PTY reader buffer was unbounded — both retain at most 8 MiB per stream now, while still draining to EOF.
+- **Mouse capture is real**: the REPL never issued `EnableMouseCapture`, so wheel scrolling — and F8's toggle — operated on a path that could never fire. Capture is enabled at startup and restored at every exit path; F8 flips the terminal mode (not just the flag); the streaming input loop routes wheel events instead of dropping them; Ctrl+E's external editor runs under a suspend/restore pair (`tui::restore_terminal_for_external`, adopted from the dead `Tui` wrapper) so clicks inside the editor no longer leak escape sequences.
+- **providers.toml lock retry**: `acquire_exclusive_lock` could hit ENOENT when the lockfile's parent vanished between create and open (e.g. a redirected-HOME tempdir deleted by a parallel test) — recreate and retry once.
+- **Credentials never land in /tmp**: `CredentialManager::default()` had three fallback hops ending at `/tmp/.shannon/credentials`; all production callers use the hard-erroring `new()`, and the zero-caller `default()` now degrades to a non-persisting in-memory store.
+- **Small fixes**: the background-process registry prunes entries finished over an hour (was unbounded growth); `kill_agent` actually fires the exit watcher's signal channel (previously only the sender's drop woke it); MCP batch responses match numeric-string ids instead of piling them onto id 0; the webhook receiver reports its own death (`is_alive()` + a synthetic event that wakes blocked `recv()`).
+- **Desktop/ui**: the dead `@assistant-ui/react` adapter layer (chat-model adapter in `src/lib/runtime` + its tests) is removed along with the dependency; `terminalEvents` stays (live).
+- **Wire-type drift gate**: CI and `ci-local.sh` regenerate `gateway/src/engine/types.gen.ts` from the Rust protocol crate and require byte-identity — protocol edits without regeneration now fail loudly.
+
+### Hardening pass (2026-10-07 full-repo review)
+
+Six-dimension review (core correctness, security, tools/MCP, UI/CLI, TS, build/docs) with the fixes landed:
+
+- **REPL crash (P0)**: command hot-reload and `/mcp` prompt registration used `block_in_place` + `Handle::current()` on the runtime-less event-loop thread and panicked the TUI on any `.claude/commands`/`.shannon/commands` file change. The `CommandRegistry` maps are plain `std::sync::RwLock` now — sync registration is safe on any thread.
+- **Config mojibake**: the `{env:}`/`{file:}` substitution byte-scanner re-encoded every non-ASCII config string as Latin-1 on load (`配置` → `é…ç½®`). Char-safe scan + regression tests.
+- **Session/key file permissions**: `events.jsonl` transcripts and the `secret_guard.key` master key are created `0600` from the first write (session dirs `0700`); the credentials dir is tightened to `0700` and `validate_file_permissions` now auto-fixes loose credential files instead of warn-only.
+- **Timeout/leak sweep**: fire-and-forget HTTP hooks honor their timeout; the PTY path gets the resolved Bash timeout (a hung PTY command no longer leaks a blocking thread + live child); a failed MCP `initialize` tears down the spawned server process; the updater never falls back to a no-timeout client; webhook receiver crashes are logged instead of swallowed.
+- **MCP stdio routing**: server→client requests (spec `ping` and others) no longer consume the client's pending request with the same small integer id — answered `-32601`/empty-result like the WebSocket handle; progress tokens mint via `fetch_add` (no collision between concurrent calls).
+- **Agent process manager**: stdin writes happen outside the agents map lock — one stalled agent can no longer deadlock `kill_agent`/`spawn_agent` for every other agent.
+- **Security gates**: RunBackground refuses outbound-network one-liners (`curl`/`wget`/`nc`/…); the command analyzer flags credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.shannon/credentials`) as critical; `is_loopback_host` parses IP literals (a `127.evil.com` DNS name can no longer get a token-less bind).
+- **Pairing-RPC TLS pinning**: the desktop's `shannon/pairing.*` calls now pin the gateway certificate by its published SHA-256 fingerprint (`~/.shannon/mobile-tls/tls-info.json` — the same value the QR carries) via a custom rustls verifier instead of accepting any cert; a mismatch fails loudly with remediation guidance, and the accept-any fallback (no pin file present) warns once. Closes the machine-in-the-middle path on the approve channel.
+- **Skill `!`cmd`` hard bounds**: a hanging command (`!`sleep 3600``) parked the calling thread forever. Commands now get BashTool's 120s wall-clock budget (killed on expiry), stdout/stderr are drained on dedicated readers so a full pipe can never block the child, output is capped at 1 MiB with a truncation marker naming the true byte count, and both the REPL and desktop bridges run the executor on the blocking pool instead of a runtime worker.
+- **Secret-guard audit posture**: the opt-in suggestion no longer claims audit mode writes secrets to the session log — the L0 tee masks under the same policy the guard detects with, so the message now names the real residual exposure (the provider side); a regression test locks the composition end-to-end (audit guard + secret in user message and wire body → on-disk log clean).
+- **Sandbox parity for the sibling process tools (architecture)**: Bash carried the legacy argv-level wrapper (bubblewrap/Seatbelt/Docker) in its dedicated slot while PowerShell / Repl / RunBackground spawned through the RAW provider — a prompt-injected command that Bash would sandbox ran unsandboxed one tool over. `register_all_tools` now decorates the siblings with the new `LocalArgvSandbox` wrapper, which applies the same rewrite **only while the world is local** (it consults `capabilities()` per spawn, so a `/remote use` swap bypasses it automatically) and never stacks on §4.12-assembled worlds (`ToolProviders::sandbox_assembled`).
+- **CLI/agent**: `--yes` is honored in `--prompt` headless mode (bypass with the root/`SHANNON_DISABLE_BYPASS` guardrails) instead of being silently ignored; `shannon-agent --workdir` is applied; `shannon "x" --prompt "y"` is now a clap conflict instead of silently dropping the positional; auto-commit git failures are logged.
+- **TUI streaming**: the streaming input loop drains all pending events (typing no longer capped at ~20 keys/sec; bracketed pastes no longer dropped); the `<think>` fallback matches real tags; `/goal pause` renders its `%{max}` placeholder.
+- **Gateway/desktop**: oversized mobile POST bodies get a real 413 (the socket is paused, not destroyed); pair-token comparison is timing-safe; `listen()` rejections are caught (`useBudgetGuard`, `Layout`).
+- **Worktree tooling**: `ExitWorktree remove` honors `discard_changes: true` (`--force`) and deletes the `worktree/*` branch instead of leaking it.
+- **Build/docs**: the three clippy gates (justfile, ci-local.sh, local-check.sh pre-push) now share CI's exact flag list; `update-readme-metrics.mjs --check` understands the README floor claims and is green again; CHANGELOG has one `[Unreleased]` block; README crate trees include `shannon-browser`; `desktop/ui/index.html.bak` untracked; `.cargo/audit.toml` gitignore whitelisted; stale `Generate Metrics`/`facade-facts` CI job references corrected.
+
+### Approval transparency + mobile approval scope (2026-10-05 follow-up)
 
 Follow-up to the permission-mode convergence (#278), implementing plan items P3-1 and P3-3.
 
@@ -12,7 +53,7 @@ Follow-up to the permission-mode convergence (#278), implementing plan items P3-
 - **P3-1 approval transparency**: the deciding rule / classifier verdict now shows on every approval surface — TUI permission dialog and the `tool_approval` overlay render `DecisionReason::explain()` ("matched rule \`Bash(git *)\`" / "LLM safety classifier (87% confidence)"), the desktop `PERMISSION_REQUEST` payload carries the engine's free-text `riskReason` (additive field) under the rule line, and a new `/permissions history` subcommand lists the session's permission-decision audit rows (tool — decision — mode — reason) read from the session log.
 - **P3-3 mobile approval scope**: `shannon/approval/decide` accepts `scope: "session"` — the engine maps it to a new `always_allow_session` wire choice that is remembered in the per-session memory and **never persisted**; a session scope is bound into the decision signature (`...:session` suffix in v1/v2 messages) so a captured once-decision cannot be replayed as a session grant. New RPCs `shannon/approval.state` (read the session's current approval token) and `shannon/approval.set` (tighten-only — the gateway forwards nothing but `readonly`; the engine route rejects escalation and upserts the clamp so it survives to the session's next turn). Protocol schema regenerated.
 
-## [Unreleased] — Permission-mode convergence (2026-10-05)
+### Permission-mode convergence (2026-10-05)
 
 Permission modes converge to a 4+3 model ([design](docs/plans/2026-10-04-permission-mode-naming-design.md), [plan](docs/plans/2026-10-04-permission-modes-improvement-plan.md)). **Read the breaking notes before upgrading.**
 

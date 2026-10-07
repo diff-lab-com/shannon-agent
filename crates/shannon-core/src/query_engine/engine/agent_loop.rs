@@ -3665,46 +3665,72 @@ impl QueryEngine {
                                                             .args(["add", "-A"])
                                                             .output()
                                                             .await;
-                                                        if let Ok(out) = add_output {
-                                                            if out.status.success() {
-                                                                // Generate commit message from diff stat
-                                                                let stat_output = tokio::process::Command::new("git")
-                                                                    .args(["diff", "--stat", "--cached"])
-                                                                    .output()
-                                                                    .await;
-                                                                let msg = match stat_output {
-                                                                    Ok(s) if s.status.success() => {
-                                                                        let stat = String::from_utf8_lossy(&s.stdout);
-                                                                        let file_count = stat.lines().filter(|l| !l.trim().is_empty()).count().saturating_sub(1);
-                                                                        if file_count == 0 {
-                                                                            "chore: update files".to_string()
-                                                                        } else {
-                                                                            format!("chore: auto-commit ({file_count} files)")
-                                                                        }
-                                                                    }
-                                                                    _ => "chore: auto-commit".to_string(),
-                                                                };
-                                                                let commit_output = tokio::process::Command::new("git")
-                                                                    .args(["commit", "-m", &msg])
-                                                                    .output()
-                                                                    .await;
-                                                                if let Ok(co) = commit_output {
-                                                                    if co.status.success() {
-                                                                        let hash = String::from_utf8_lossy(&co.stdout)
-                                                                            .lines()
-                                                                            .find(|l| l.starts_with('['))
-                                                                            .unwrap_or("committed")
-                                                                            .to_string();
-                                                                        send_event!(tx, QueryEvent::ToolUseResult {
-                                                                            query_id,
-                                                                            tool_use_id: String::new(),
-                                                                            tool_name: "auto_commit".to_string(),
-                                                                            result: format!("Auto-committed: {hash}"),
-                                                                            is_error: false,
-                                                                            meta: Box::new(serde_json::Value::Null),
-                                                                            });
-                                                                    }
+                                                        let add_ok = match add_output {
+                                                            Ok(out) if out.status.success() => true,
+                                                            Ok(out) => {
+                                                                tracing::warn!(
+                                                                    "auto_commit: `git add -A` failed ({}): {}",
+                                                                    out.status,
+                                                                    String::from_utf8_lossy(&out.stderr).trim()
+                                                                );
+                                                                false
+                                                            }
+                                                            Err(e) => {
+                                                                tracing::warn!("auto_commit: cannot spawn git: {e}");
+                                                                false
+                                                            }
+                                                        };
+                                                        if !add_ok {
+                                                            return;
+                                                        }
+                                                        // Generate commit message from diff stat
+                                                        let stat_output = tokio::process::Command::new("git")
+                                                            .args(["diff", "--stat", "--cached"])
+                                                            .output()
+                                                            .await;
+                                                        let msg = match stat_output {
+                                                            Ok(s) if s.status.success() => {
+                                                                let stat = String::from_utf8_lossy(&s.stdout);
+                                                                let file_count = stat.lines().filter(|l| !l.trim().is_empty()).count().saturating_sub(1);
+                                                                if file_count == 0 {
+                                                                    "chore: update files".to_string()
+                                                                } else {
+                                                                    format!("chore: auto-commit ({file_count} files)")
                                                                 }
+                                                            }
+                                                            _ => "chore: auto-commit".to_string(),
+                                                        };
+                                                        let commit_output = tokio::process::Command::new("git")
+                                                            .args(["commit", "-m", &msg])
+                                                            .output()
+                                                            .await;
+                                                        match commit_output {
+                                                            Ok(co) if co.status.success() => {
+                                                                let hash = String::from_utf8_lossy(&co.stdout)
+                                                                    .lines()
+                                                                    .find(|l| l.starts_with('['))
+                                                                    .unwrap_or("committed")
+                                                                    .to_string();
+                                                                send_event!(tx, QueryEvent::ToolUseResult {
+                                                                    query_id,
+                                                                    tool_use_id: String::new(),
+                                                                    tool_name: "auto_commit".to_string(),
+                                                                    result: format!("Auto-committed: {hash}"),
+                                                                    is_error: false,
+                                                                    meta: Box::new(serde_json::Value::Null),
+                                                                    });
+                                                            }
+                                                            Ok(co) => {
+                                                                // Most common cause: no user.email
+                                                                // configured in the repo.
+                                                                tracing::warn!(
+                                                                    "auto_commit: `git commit` failed ({}): {}",
+                                                                    co.status,
+                                                                    String::from_utf8_lossy(&co.stderr).trim()
+                                                                );
+                                                            }
+                                                            Err(e) => {
+                                                                tracing::warn!("auto_commit: cannot spawn git: {e}");
                                                             }
                                                         }
                                                     }.await;

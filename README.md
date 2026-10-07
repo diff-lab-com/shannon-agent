@@ -477,6 +477,7 @@ shannon-agent/
 │   ├── shannon-mcp-saas/      # SaaS MCP servers (GitHub, Slack, Jira, Notion, Linear)
 │   ├── shannon-commands/      # Slash commands: built-in command registry
 │   ├── shannon-skills/        # Skills framework: discovery, loading, execution
+│   ├── shannon-browser/       # System-browser detection/launch, shared chromiumoxide session
 │   ├── shannon-plugin-api/    # Plugin content-transform contract (secret-guard)
 │   ├── shannon-server/        # HTTP API server (shannon serve)
 │   ├── shannon-remote/        # Remote execution worlds (SSH hosts, Docker)

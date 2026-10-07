@@ -411,6 +411,7 @@ shannon-agent/
 │   ├── shannon-mcp-saas/      # SaaS MCP 服务器（GitHub、Slack、Jira、Notion、Linear）
 │   ├── shannon-commands/      # 斜杠命令：内置命令注册表
 │   ├── shannon-skills/        # 技能框架：发现、加载、执行
+│   ├── shannon-browser/       # 系统浏览器检测/启动，共享 chromiumoxide 会话
 │   ├── shannon-plugin-api/    # 插件内容变换契约（secret-guard）
 │   ├── shannon-server/        # HTTP API 服务器（shannon serve）
 │   ├── shannon-remote/        # 远程执行环境（SSH 主机、Docker）

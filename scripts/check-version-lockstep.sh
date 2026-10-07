@@ -12,7 +12,7 @@
 #
 # Consumers:
 #   - `just version-check`, wired into `just dev` (the pre-commit fast path)
-#   - ci.yml's `facade-facts` hygiene job (plain shell step)
+#   - ci.yml's `fast-checks` job (plain shell step)
 #
 # `::error::` prefixes are GitHub Actions error annotations; they render as
 # plain text locally and as inline PR annotations in CI.

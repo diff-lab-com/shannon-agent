@@ -598,6 +598,32 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
         }
     }
 
+    // Home-relative credential stores: the agent's own key material.
+    // Reading these is exactly how a prompt-injected session exfiltrates
+    // provider keys or SSH identities, and they classify as read-only/Low
+    // today. Same substring posture as SENSITIVE_PATHS, with `~` and the
+    // resolved `$HOME` form both covered.
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        let home_str = home.to_string_lossy().to_lowercase();
+        for dir in [
+            "~/.ssh",
+            "~/.aws",
+            "~/.gnupg",
+            "~/.config/gcloud",
+            "~/.shannon/credentials",
+        ] {
+            let absolute = format!("{home_str}{}", &dir[1..]);
+            if lower_command.contains(dir) || lower_command.contains(&absolute) {
+                risk_level = SecurityLevel::Critical;
+                warnings.push(format!(
+                    "Credential store access detected: {dir} — confirm before running"
+                ));
+                is_destructive = true;
+                break;
+            }
+        }
+    }
+
     // Check for IFS (Internal Field Separator) manipulation
     // Used to bypass word splitting detection
     if lower_command.contains("${ifs}") || lower_command.contains("ifs=") {
@@ -1325,6 +1351,37 @@ impl SandboxPosture {
 /// Posture resolution from the detected backend type plus the
 /// `SHANNON_SANDBOX` env value (the explicit opt-out). Pure so tests can
 /// pin every combination without touching the host.
+/// The [`SandboxConfig`] shared by `BashTool::with_process_sandbox` and
+/// [`detect_argv_sandbox_rewrite`]: project dir plus the
+/// `SHANNON_SANDBOX_EXTRA_RO_MOUNTS` read-only mounts.
+fn argv_sandbox_config(project_dir: &std::path::Path) -> SandboxConfig {
+    let mut config = SandboxConfig::new(project_dir);
+    if let Ok(extra) = std::env::var("SHANNON_SANDBOX_EXTRA_RO_MOUNTS") {
+        for dir in extra.split(':').filter(|s| !s.is_empty()) {
+            config = config.readonly_mount(dir);
+        }
+    }
+    config
+}
+
+/// Build the legacy argv-level sandbox rewrite for `project_dir` — the same
+/// executor + posture detection `BashTool::with_process_sandbox` applies.
+/// `None` when no backend is available or `SHANNON_SANDBOX=off` (the caller
+/// must then run undecorated, exactly like BashTool's degraded posture).
+/// Used by `register_all_tools` to give the sibling process tools
+/// (PowerShell / Repl / RunBackground family) the sandbox Bash already had.
+pub(crate) fn detect_argv_sandbox_rewrite(
+    project_dir: &std::path::Path,
+) -> Option<std::sync::Arc<dyn shannon_tool_interface::SpawnRewrite>> {
+    let executor = std::sync::Arc::new(SandboxExecutor::new(argv_sandbox_config(project_dir)));
+    let env_override = std::env::var("SHANNON_SANDBOX").ok();
+    let posture = resolve_sandbox_posture(executor.sandbox_type(), env_override.as_deref());
+    match posture {
+        SandboxPosture::Active => Some(std::sync::Arc::new(SandboxExecutorRewrite::new(executor))),
+        _ => None,
+    }
+}
+
 pub(crate) fn resolve_sandbox_posture(
     sandbox_type: SandboxType,
     shannon_sandbox_env: Option<&str>,
@@ -1422,14 +1479,11 @@ impl BashTool {
     /// hatch for making host toolchains (e.g. `/usr/local`, a nvm checkout)
     /// visible inside the sandbox without changing code.
     pub fn with_process_sandbox(project_dir: impl Into<std::path::PathBuf>) -> Self {
-        let mut config = SandboxConfig::new(project_dir);
-        if let Ok(extra) = std::env::var("SHANNON_SANDBOX_EXTRA_RO_MOUNTS") {
-            for dir in extra.split(':').filter(|s| !s.is_empty()) {
-                config = config.readonly_mount(dir);
-            }
-        }
         let env_override = std::env::var("SHANNON_SANDBOX").ok();
-        Self::with_detected_sandbox(SandboxExecutor::new(config), env_override.as_deref())
+        Self::with_detected_sandbox(
+            SandboxExecutor::new(argv_sandbox_config(project_dir.into().as_path())),
+            env_override.as_deref(),
+        )
     }
 
     /// Assemble the tool from an already-constructed executor plus the
@@ -1654,7 +1708,12 @@ impl Tool for BashTool {
             let cmd = bash_input.command.clone();
             let cwd = bash_input.cwd.clone();
             let env = bash_input.env.clone();
-            let timeout = bash_input.timeout;
+            // Always pass a resolved timeout: `execute_in_pty(None)` waits
+            // unbounded in `child.wait()`, and cancelling this spawned
+            // blocking task (registry timeout) neither stops the wait nor
+            // kills the child — a hung PTY command leaked a blocking-pool
+            // thread + live process per call.
+            let timeout = Some(resolve_timeout_ms(bash_input.timeout));
             tokio::task::spawn_blocking(move || {
                 match crate::pty::execute_in_pty(&cmd, cwd.as_deref(), env.as_ref(), timeout) {
                     Ok(pty_out) => Ok(CommandOutput {
@@ -2577,6 +2636,24 @@ mod tests {
             .await
             .unwrap();
         assert!(!output.metadata.contains_key("sandbox"));
+    }
+
+    #[test]
+    fn detect_argv_sandbox_rewrite_honors_shannon_sandbox_off() {
+        // The sibling-tool decoration must respect the same opt-out as Bash:
+        // `SHANNON_SANDBOX=off` leaves the process world undecorated. (The
+        // Active path is environment-dependent — bwrap/Seatbelt presence —
+        // and covered end-to-end by BashTool's own detected-sandbox tests.)
+        let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY: unique env key pinned for the duration of the test.
+        unsafe { std::env::set_var("SHANNON_SANDBOX", "off") };
+        let rewrite = super::detect_argv_sandbox_rewrite(tmp.path());
+        // SAFETY: see above.
+        unsafe { std::env::remove_var("SHANNON_SANDBOX") };
+        assert!(
+            rewrite.is_none(),
+            "SHANNON_SANDBOX=off must leave sibling tools undecorated"
+        );
     }
 
     #[test]

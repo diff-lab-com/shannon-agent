@@ -26,18 +26,13 @@ use tracing::{debug, info, warn};
 /// identically in the desktop chat and the TUI REPL.
 pub struct DesktopSkillToolAdapter {
     skill: Skill,
-    executor: SkillExecutor,
     tool_name: String,
 }
 
 impl DesktopSkillToolAdapter {
     pub fn new(skill: Skill) -> Self {
         let tool_name = format!("skill_{}", skill.id);
-        Self {
-            tool_name,
-            executor: SkillExecutor::new(),
-            skill,
-        }
+        Self { tool_name, skill }
     }
 }
 
@@ -82,10 +77,18 @@ impl Tool for DesktopSkillToolAdapter {
             permissions: SkillPermissions::for_source(&self.skill.source),
         };
 
-        match self.executor.execute(&self.skill, &context) {
-            Ok(result) => Ok(ToolOutput::success(result.prompt_content)),
-            Err(e) => Ok(ToolOutput::error(format!(
+        // Blocking child process — run on the blocking pool; the executor
+        // itself bounds each command by a hard timeout.
+        let skill = self.skill.clone();
+        let executor = SkillExecutor::new();
+        match tokio::task::spawn_blocking(move || executor.execute(&skill, &context)).await {
+            Ok(Ok(result)) => Ok(ToolOutput::success(result.prompt_content)),
+            Ok(Err(e)) => Ok(ToolOutput::error(format!(
                 "Skill '{}' execution failed: {}",
+                self.skill.name, e
+            ))),
+            Err(e) => Ok(ToolOutput::error(format!(
+                "Skill '{}' task failed: {}",
                 self.skill.name, e
             ))),
         }

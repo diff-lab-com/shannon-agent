@@ -95,12 +95,16 @@ fn substitute_string(s: &str, warnings: &mut Vec<String>) -> String {
                 continue;
             }
         } else {
-            // ASCII-only branch is safe here because we only push the literal
-            // byte and advance one position; the only branch that touches
-            // multi-byte UTF-8 is the `out.push_str(&s[i..])` above, which
-            // copies a valid slice.
-            out.push(bytes[i] as char);
-            i += 1;
+            // Copy one full char. Tokens only start at `{` (ASCII 0x7B, never
+            // a UTF-8 continuation byte), so `i` is always on a char boundary
+            // here; pushing byte-by-byte as `char` would re-encode multi-byte
+            // UTF-8 (e.g. CJK) as Latin-1 mojibake.
+            let ch = s[i..]
+                .chars()
+                .next()
+                .expect("byte index into a &str is at a char boundary");
+            out.push(ch);
+            i += ch.len_utf8();
         }
     }
     out
@@ -346,6 +350,33 @@ mod tests {
         assert_eq!(v["max_tokens"], 4096);
         assert_eq!(v["debug"], true);
         assert_eq!(v["name"], "literal");
+    }
+
+    #[test]
+    fn non_ascii_passes_through_unmangled() {
+        // Regression: the byte-scanner used to re-encode multi-byte UTF-8 as
+        // Latin-1 mojibake (`配置` → `é…ç½®`) on every config load.
+        let mut w = Vec::new();
+        assert_eq!(
+            substitute_string("显示名称：智能助手", &mut w),
+            "显示名称：智能助手"
+        );
+        assert_eq!(substitute_string("emoji 🦀 test", &mut w), "emoji 🦀 test");
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn non_ascii_mixed_with_tokens() {
+        // SAFETY: unique key; removed at the end of the test.
+        unsafe { std::env::set_var("SHANNON_SUB_TEST_CJK", "键值") };
+        let mut w = Vec::new();
+        assert_eq!(
+            substitute_string("模型{name}配置 {env:SHANNON_SUB_TEST_CJK} 尾", &mut w),
+            "模型{name}配置 键值 尾"
+        );
+        assert!(w.is_empty());
+        // SAFETY: see above.
+        unsafe { std::env::remove_var("SHANNON_SUB_TEST_CJK") };
     }
 
     #[test]

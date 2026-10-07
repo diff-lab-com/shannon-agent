@@ -124,10 +124,13 @@ pub fn take_redaction_suggestion() -> bool {
         tracing::warn!(
             target: "shannon::secret_guard",
             "secrets were detected in outbound requests while secret-guard \
-             is in audit-only mode: values were forwarded to the provider \
-             and written to the session log. Enable redaction with \
-             [secret_guard] mode = \"redact\" in .shannon.toml (or \
-             ~/.shannon/config.toml), or SHANNON_SECRET_GUARD=redact"
+             is in audit-only mode: raw values were forwarded to the \
+             provider. The local session log does NOT hold them — the tee \
+             masks secret-shaped values under the redaction policy — so the \
+             residual exposure is the provider side, not this machine. Stop \
+             the forwarding with [secret_guard] mode = \"redact\" in \
+             .shannon.toml (or ~/.shannon/config.toml), or \
+             SHANNON_SECRET_GUARD=redact"
         );
         true
     } else {
@@ -708,20 +711,38 @@ fn load_or_create_key(home: &std::path::Path) -> Option<Vec<u8>> {
     let key: [u8; 32] = sha2::Sha256::digest(raw.as_bytes()).into();
     let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
     std::fs::create_dir_all(home).ok();
-    if let Err(e) = std::fs::write(&path, &hex) {
+    // Create with 0600 from the first write (no world-readable window between
+    // create and chmod, matching credential_manager::atomic_write_secure), and
+    // tighten a pre-existing file that was created loose. A chmod failure
+    // disables the guard rather than leaving an unsecurable key on disk.
+    let persisted = (|| -> std::io::Result<()> {
+        use std::io::Write as _;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&path)?;
+        f.write_all(hex.as_bytes())?;
+        f.flush()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = persisted {
         tracing::warn!(
             target: "shannon::secret_guard",
             path = %path.display(),
             error = %e,
-            "cannot persist secret_guard.key — secret guard stays disabled \
+            "cannot persist secret_guard.key (0600) — secret guard stays disabled \
              (surrogates would not survive a restart)"
         );
         return None;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
     }
     Some(key.to_vec())
 }
@@ -1645,6 +1666,58 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(audit_hits(), 1);
         assert!(!take_redaction_suggestion());
+    }
+
+    // ---- Audit-mode durable guarantee: the session log stays secret-free ---
+    //
+    // The T5 suggestion (and this module's docs) promise that audit mode's
+    // raw forward to the provider never lands on disk: the L0 tee masks with
+    // the same policy the guard detects with. Lock that composition end to
+    // end — guard installed in audit posture, user message + wire body both
+    // carrying a secret, exactly the surfaces audit mode ships verbatim.
+
+    #[test]
+    fn audit_mode_durable_log_stays_secret_free() {
+        let _g = global_lock();
+        const SECRET: &str = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij";
+
+        // Audit posture: detection only, nothing rewritten on the send face
+        // (the default `init_from_env_or_config` outcome).
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], false);
+        set_context_transform(Some(Arc::new(guard)));
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut tee = crate::session_log::SessionTee::open_in_dir(
+            dir.path(),
+            "sess-audit-tee",
+            "test-model",
+            None,
+        );
+        tee.record_user_message(&format!("deploy key = {SECRET}"));
+        let wire = json!({
+            "model": "test-model",
+            "system": "you are a harness",
+            "messages": [
+                { "role": "user", "content": format!("token: {SECRET}") }
+            ]
+        });
+        tee.record_request_header(&wire, "test-model", None, json!({}));
+        tee.close();
+        set_context_transform(None);
+
+        let log = std::fs::read_to_string(crate::session_log::session_events_path(
+            dir.path(),
+            "sess-audit-tee",
+        ))
+        .expect("events.jsonl readable");
+        assert!(
+            !log.contains(SECRET),
+            "raw secret must never reach the durable log in audit mode"
+        );
+        assert!(
+            log.contains(crate::session_log::REDACTED),
+            "secret-shaped values masked under the policy"
+        );
     }
 
     // ---- T3: registry rebuild from restored raw history --------------------

@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 // ── Error type ──────────────────────────────────────────────────────────
 
@@ -188,6 +188,10 @@ pub struct WebhookReceiver {
     tx: mpsc::Sender<WebhookEvent>,
     rx: mpsc::Receiver<WebhookEvent>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Flipped false when the serve loop exits for any reason. Without it a
+    /// dead receiver was indistinguishable from a quiet one — `recv()` just
+    /// blocked forever.
+    alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl WebhookReceiver {
@@ -203,7 +207,15 @@ impl WebhookReceiver {
             tx,
             rx,
             shutdown_tx: None,
+            alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    /// Whether the HTTP listener is (still) serving. False before `start`,
+    /// and false again once the serve loop exits — by graceful shutdown OR
+    /// unexpected termination.
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Start the HTTP server in the background.
@@ -234,14 +246,41 @@ impl WebhookReceiver {
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
+        self.alive.store(true, std::sync::atomic::Ordering::Relaxed);
 
+        // On ANY serve-loop exit the receiver goes visibly dead: flip the
+        // flag and push a synthetic event so a consumer blocked in `recv()`
+        // learns the channel will stay silent instead of waiting forever.
+        let alive = self.alive.clone();
+        let dead_tx = self.tx.clone();
         tokio::spawn(async move {
-            axum::serve(listener, app)
+            let outcome = axum::serve(listener, app)
                 .with_graceful_shutdown(async {
                     let _ = shutdown_rx.await;
                 })
-                .await
-                .ok();
+                .await;
+            alive.store(false, std::sync::atomic::Ordering::Relaxed);
+            match outcome {
+                Ok(()) => tracing::info!("webhook receiver shut down"),
+                Err(e) => {
+                    error!("webhook receiver terminated unexpectedly: {e}");
+                    let _ = dead_tx
+                        .send(WebhookEvent {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            source: WebhookSource::Custom("webhook-receiver".to_string()),
+                            title: "webhook receiver stopped".to_string(),
+                            body: format!(
+                                "The webhook listener terminated unexpectedly: {e}. \
+                                 Incoming webhook deliveries will not arrive until \
+                                 the receiver is restarted."
+                            ),
+                            timestamp: chrono::Utc::now(),
+                            url: None,
+                            raw_payload: None,
+                        })
+                        .await;
+                }
+            }
         });
 
         Ok(())
@@ -261,6 +300,9 @@ impl WebhookReceiver {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
+        self.alive.store(true, std::sync::atomic::Ordering::Relaxed);
+        let self_alive = self.alive.clone();
+        let dead_tx = self.tx.clone();
 
         std::thread::Builder::new()
             .name("shannon-webhook".to_string())
@@ -300,12 +342,38 @@ impl WebhookReceiver {
                     };
                     let _ = ready_tx.send(Ok(()));
                     info!("Webhook receiver listening on {addr}");
-                    axum::serve(listener, app)
+                    // Same visible-deadness contract as the async `start`:
+                    // flip the flag and wake a blocked `recv()` with a
+                    // synthetic event on unexpected termination. The sync
+                    // thread owns its own runtime, so the shared `alive`
+                    // flag is the only cross-thread signal.
+                    let alive = self_alive.clone();
+                    let dead_tx = dead_tx.clone();
+                    let outcome = axum::serve(listener, app)
                         .with_graceful_shutdown(async {
                             let _ = shutdown_rx.await;
                         })
-                        .await
-                        .ok();
+                        .await;
+                    alive.store(false, std::sync::atomic::Ordering::Relaxed);
+                    match outcome {
+                        Ok(()) => tracing::info!("webhook receiver shut down"),
+                        Err(e) => {
+                            error!("webhook receiver terminated unexpectedly: {e}");
+                            let _ = dead_tx.blocking_send(WebhookEvent {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                source: WebhookSource::Custom("webhook-receiver".to_string()),
+                                title: "webhook receiver stopped".to_string(),
+                                body: format!(
+                                    "The webhook listener terminated unexpectedly: {e}. \
+                                     Incoming webhook deliveries will not arrive until \
+                                     the receiver is restarted."
+                                ),
+                                timestamp: chrono::Utc::now(),
+                                url: None,
+                                raw_payload: None,
+                            });
+                        }
+                    }
                 });
             })
             .map_err(|e| WebhookError::Server(e.to_string()))?;
