@@ -399,11 +399,14 @@ impl ProcessProvider for LocalProcess {
             #[cfg(unix)]
             self.install_fork_init_std(&mut cmd);
             // Spawn manually instead of `cmd.output()` so the Windows job
-            // confinement can attach to the child handle (same semantics:
-            // inherited stdin, piped stdout/stderr).
+            // confinement can attach to the child handle — mirroring
+            // `run_async`'s stdin semantics: closed stdin, piped
+            // stdout/stderr. A child that tries to read stdin (a credential
+            // or GPG passphrase prompt) sees EOF immediately instead of
+            // waiting on the host TTY forever.
             use std::process::Stdio;
             let child = cmd
-                .stdin(Stdio::inherit())
+                .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()?;
@@ -422,7 +425,7 @@ impl ProcessProvider for LocalProcess {
     }
 
     async fn run_async(&self, request: &ProcessRequest) -> io::Result<CapturedOutput> {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::AsyncWriteExt;
         use tokio::process::Command;
 
         let prepared = self
@@ -470,7 +473,11 @@ impl ProcessProvider for LocalProcess {
         }
 
         // Drain both pipes concurrently, mirroring `Command::output()` but
-        // with the stdin feed folded in.
+        // with the stdin feed folded in. Retention is capped per stream —
+        // callers truncate to 2 MiB for the model, and without a cap here a
+        // chatty child balloons the process before that truncation runs.
+        // The drain itself continues past the cap (the child must never
+        // block on a full pipe); only retention stops.
         let mut stdout_pipe = child
             .stdout
             .take()
@@ -481,8 +488,8 @@ impl ProcessProvider for LocalProcess {
             .ok_or_else(|| io::Error::other("stderr not captured"))?;
         let (mut stdout_buf, mut stderr_buf) = (Vec::new(), Vec::new());
         let (r1, r2) = tokio::join!(
-            stdout_pipe.read_to_end(&mut stdout_buf),
-            stderr_pipe.read_to_end(&mut stderr_buf)
+            read_capped(&mut stdout_pipe, &mut stdout_buf),
+            read_capped(&mut stderr_pipe, &mut stderr_buf)
         );
         r1?;
         r2?;
@@ -563,6 +570,33 @@ impl ForkInitHost for LocalProcess {
                 rewrite: self.rewrite.clone(),
                 fork_init: Some(fork_init),
             }))
+        }
+    }
+}
+
+/// Per-stream retained-output cap for `LocalProcess::run_async`. Callers
+/// truncate to 2 MiB for the model; the cap bounds the transient allocation
+/// at 4× that so a chatty child cannot balloon the process first. The drain
+/// always runs to EOF — only retention stops past the cap.
+const MAX_ASYNC_CAPTURED_BYTES: usize = 8 * 1024 * 1024;
+
+/// Drain `pipe` into `buf`, retaining at most [`MAX_ASYNC_CAPTURED_BYTES`]
+/// while reading everything (draining prevents child-side pipe deadlock).
+async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
+    pipe: &mut R,
+    buf: &mut Vec<u8>,
+) -> io::Result<()> {
+    use tokio::io::AsyncReadExt as _;
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        let n = pipe.read(&mut chunk).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        let room = MAX_ASYNC_CAPTURED_BYTES.saturating_sub(buf.len());
+        let take = room.min(n);
+        if take > 0 {
+            buf.extend_from_slice(&chunk[..take]);
         }
     }
 }
@@ -759,6 +793,37 @@ mod tests {
         };
         let out = LocalProcess::new().run_async(&req).await.expect("run");
         assert_eq!(out.stdout, b"PAYLOAD");
+    }
+
+    /// Without stdin data the child's stdin is closed, not inherited: a
+    /// stdin-reading command sees EOF and finishes instead of parking on the
+    /// host TTY (a git credential/GPG prompt under `run_blocking` used to be
+    /// able to wait forever).
+    #[test]
+    fn local_process_run_blocking_closes_stdin_without_data() {
+        let req = ProcessRequest::new("/bin/sh", &["-c", "read -r line && echo got:$line"]);
+        let out = LocalProcess::new()
+            .run_blocking(&req)
+            .expect("read on closed stdin returns");
+        assert_eq!(out.stdout, b"");
+        // `read` hit EOF → non-zero exit, but the call RETURNED (the point:
+        // no hang).
+        assert!(!out.exit.success);
+    }
+
+    /// run_async retains at most `MAX_ASYNC_CAPTURED_BYTES` per stream while
+    /// still draining to EOF — a chatty child must be able to finish writing
+    /// without ballooning the process.
+    #[tokio::test]
+    async fn local_process_run_async_caps_retained_output() {
+        // 20 MiB on stdout — well past the 8 MiB retention cap.
+        let req = ProcessRequest::new(
+            "/bin/sh",
+            &["-c", "dd if=/dev/zero bs=1024 count=20480 2>/dev/null"],
+        );
+        let out = LocalProcess::new().run_async(&req).await.expect("run");
+        assert_eq!(out.stdout.len(), 8 * 1024 * 1024);
+        assert!(out.exit.success, "child drained to completion");
     }
 
     // ── Piped spawn ────────────────────────────────────────────────────
