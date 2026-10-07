@@ -12,6 +12,10 @@ Waves queued for the next release, newest first:
 - Hardening pass (2026-10-07 full-repo review)
 - Hardening follow-up (2026-10-07, same day)
 
+### Breaking / behavior changes
+
+- **`secret-guard` defaults to `redact` (was `audit`)**: with no `$SHANNON_SECRET_GUARD` and no `[secret_guard] mode` configured, secret-shaped content in outbound requests is now replaced with deterministic surrogates before it reaches the provider (restored locally for tool execution and display; byte-stable, so prompt caching is unaffected). Opt out with `SHANNON_SECRET_GUARD=audit` (observe-only), `SHANNON_SECRET_GUARD=off`, or `[secret_guard] mode` in config — env beats config, and an explicit `off` always wins. A one-time notice after the first hit explains what happened and names these switches.
+
 ### Hardening follow-up (2026-10-07, same day)
 
 - **Git tools off the runtime**: the five git tools ran blocking child spawns directly inside async `execute` — a slow `git log -p` or a wedged credential prompt held a tokio worker; `run_blocking` also left child stdin inherited, so a passphrase prompt could wait on the host TTY forever. All five now run on the blocking pool, and the provider closes child stdin (mirroring `run_async`).

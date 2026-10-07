@@ -36,7 +36,7 @@ Two commitments shape every design decision:
 ### 2. Keys never leave your machine
 
 - **Your API keys talk directly to the provider you choose** — no middleman server, no cloud-side credential pool. LLM credentials stay in `0600` files under `~/.shannon/credentials/` on your machine; IM channel credentials live in the OS keyring.
-- **Outbound secret scanning** — the built-in `secret-guard` (audit mode by default, `redact` opt-in; on the `shannon-plugin-api` content-transform contract) scans outgoing messages for secret-shaped content and logs or rewrites them before they reach the model. Rewrites are byte-stable, so your prompt cache keeps hitting.
+- **Outbound secret scanning** — the built-in `secret-guard` (redact by default since v0.13.0; `audit` to observe-only, `off` to disable; on the `shannon-plugin-api` content-transform contract) scans outgoing messages for secret-shaped content and replaces it with deterministic surrogates before it reaches the model, restoring real values locally for tool execution and display. Rewrites are byte-stable, so your prompt cache keeps hitting.
 - **OS-level sandboxing** — Landlock (Linux), macOS Seatbelt, and bubblewrap providers, plus a rule-based + LLM-assisted permission system with strict/balanced/permissive/custom profiles and per-action confirmation for high-risk tools.
 - **Prompt-injection scanning and signature verification** for skills and MCP servers; webhook events are HMAC-SHA256 signed.
 - **No telemetry by default** — there is no telemetry pipeline at all. The one automatic outbound call besides your provider is a release-availability check (at most once per 24h; disable with `SHANNON_FEATURE_UPDATE_CHECK=0`). Local voice input (whisper.rs) never sends audio anywhere.
