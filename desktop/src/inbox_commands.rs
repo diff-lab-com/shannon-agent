@@ -4211,7 +4211,10 @@ mod tests {
         );
         let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
         assert!(!routine.enabled);
-        assert_eq!(routine.pause_reason.as_deref(), Some(PAUSE_REASON_CONSECUTIVE_FAILURES));
+        assert_eq!(
+            routine.pause_reason.as_deref(),
+            Some(PAUSE_REASON_CONSECUTIVE_FAILURES)
+        );
     }
 
     #[test]
@@ -4592,7 +4595,10 @@ mod tests {
         assert_eq!(runs[0].id, run_id);
         let error = runs[0].error.as_deref().expect("the skip carries a reason");
         assert!(error.starts_with(BUDGET_ABORT_MARKER), "{error}");
-        assert!(error.contains("$1.00") && error.contains("$1.50"), "{error}");
+        assert!(
+            error.contains("$1.00") && error.contains("$1.50"),
+            "{error}"
+        );
 
         // The card: the fixture seeds one back-linked item, so the store
         // holds exactly two rows — the newest (list is newest-first) is the
@@ -4600,7 +4606,9 @@ mod tests {
         let items = deps.inbox.list(None, None, 10).unwrap();
         assert_eq!(items.len(), 2, "fixture item + one skip card");
         assert!(
-            items[0].summary.contains("auto-paused: monthly budget reached"),
+            items[0]
+                .summary
+                .contains("auto-paused: monthly budget reached"),
             "{}",
             items[0].summary
         );
@@ -4658,9 +4666,7 @@ mod tests {
         ));
         let deps = RoutineRunDeps {
             inbox: std::sync::Arc::new(inbox),
-            runs_store: std::sync::Arc::new(ScheduledRunsStore::with_base(
-                tmp.path().join("runs"),
-            )),
+            runs_store: std::sync::Arc::new(ScheduledRunsStore::with_base(tmp.path().join("runs"))),
             webhook: std::sync::Arc::new(RecordingWebhookPort::default()),
             notify: std::sync::Arc::new(RecordingNotifyPort::default()),
             usage_store: std::sync::Arc::new(usage),

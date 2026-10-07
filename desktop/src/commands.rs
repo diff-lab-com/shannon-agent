@@ -5435,11 +5435,7 @@ mod budget_enforcement_tests {
         assert_eq!(items.len(), 1);
         let item = &items[0];
         assert_eq!(item.source_id.as_deref(), Some("bt-done"));
-        assert!(
-            item.summary.contains("completed"),
-            "{}",
-            item.summary
-        );
+        assert!(item.summary.contains("completed"), "{}", item.summary);
         assert!(item.summary.contains("took 60s"), "{}", item.summary);
         assert!(
             item.summary.contains("Here is the summary you asked for."),
@@ -5461,9 +5457,11 @@ mod budget_enforcement_tests {
     fn cancelled_background_task_never_writes_inbox() {
         // A user cancel IS the user seeing the task stop — panel-only.
         let inbox = bg_inbox();
-        let wrote =
-            record_background_task_terminal(&inbox, bg_terminal("bt-cancel", "p", "cancelled", None, "partial"))
-                .unwrap();
+        let wrote = record_background_task_terminal(
+            &inbox,
+            bg_terminal("bt-cancel", "p", "cancelled", None, "partial"),
+        )
+        .unwrap();
         assert!(!wrote, "cancelled must not write an inbox item");
         assert_eq!(
             inbox
@@ -5485,8 +5483,11 @@ mod budget_enforcement_tests {
         // second card (R2-P1-5 去重).
         let inbox = bg_inbox();
         for _ in 0..2 {
-            record_background_task_terminal(&inbox, bg_terminal("bt-dup", "same prompt", "completed", None, "result"))
-                .unwrap();
+            record_background_task_terminal(
+                &inbox,
+                bg_terminal("bt-dup", "same prompt", "completed", None, "result"),
+            )
+            .unwrap();
         }
         let items = inbox
             .list(

@@ -82,7 +82,7 @@ pub struct BranchDiffSummary {
 }
 
 /// Decidable verification facts for one branch (04b best-of-N comparison
-/// card). ADDITIVE contract surface: recorded at [`finalize_branch`]; batches
+/// card). ADDITIVE contract surface: recorded at `finalize_branch`; batches
 /// finalized before this field existed carry `None` (serde default on read,
 /// skipped on write) and the frontend treats that as "no verification data".
 ///
@@ -2258,9 +2258,8 @@ mod tests {
 
         // The facts survive the disk roundtrip (persisted record shape —
         // pretty-printed, hence the space after the colon).
-        let raw =
-            std::fs::read_to_string(env.store_dir.join(format!("{}.json", started.batch_id)))
-                .unwrap();
+        let raw = std::fs::read_to_string(env.store_dir.join(format!("{}.json", started.batch_id)))
+            .unwrap();
         assert!(raw.contains("\"exitOk\": true"), "{raw}");
         assert!(raw.contains("\"exitOk\": false"), "{raw}");
         assert!(!raw.contains("testsPassed"), "no fabricated counts: {raw}");
