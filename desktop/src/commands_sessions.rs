@@ -13,6 +13,7 @@
 use crate::commands::{AppState, ChatMessage, SessionMeta, chrono_timestamp};
 use crate::scheduled_commands::TaskWorktreeDto;
 use crate::session_registry::{SessionKey, SessionRegistry};
+use crate::session_window_commands;
 use crate::{config, events, events::event_names};
 use serde::Serialize;
 use shannon_core::session_log::SessionCuration;
@@ -1692,6 +1693,18 @@ pub async fn delete_session(
         // deletion leaves the live session's state untouched. `destroy`
         // also clears the active pointer if this was the focused session.
         state.registry.destroy(SessionKey(session_uuid));
+
+        // W10 audit §6-A: a live `session-<id>` window must not outlive its
+        // session — close it so the user is never left with a window pinned
+        // to a dead session. Best-effort, after the store delete (same
+        // ordering as the registry recycle above): a failed deletion keeps
+        // the window (and its session) untouched.
+        session_window_commands::close_window_for_deleted_session(
+            &state,
+            &app_handle,
+            &session_uuid.to_string(),
+        )
+        .await;
 
         // Best-effort worktree cleanup: if working_dir lives under the
         // default worktree base dir, remove the worktree. Failures are

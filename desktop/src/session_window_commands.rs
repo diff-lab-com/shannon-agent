@@ -277,6 +277,30 @@ pub async fn close_session_window(
     Ok(())
 }
 
+/// W10 audit §6-A — close a deleted session's live `session-<uuid>` window
+/// (best-effort) so deleting a session never leaves a window pinned to a
+/// dead session. Cleanup mirrors [`close_session_window`] / the Destroyed
+/// hook: the window is closed when present, and the registry entry +
+/// persisted list are cleared here as well so the state stays correct even
+/// when the window was already gone. Errors are logged, never propagated —
+/// the session itself is already deleted at this point.
+pub(crate) async fn close_window_for_deleted_session<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    session_id: &str,
+) {
+    let Ok(label) = session_window_label(session_id) else {
+        return;
+    };
+    if let Some(window) = app.get_webview_window(&label) {
+        if let Err(e) = window.close() {
+            tracing::warn!(%label, error = %e, "failed to close session window during session delete");
+        }
+    }
+    state.session_windows.unregister(&label);
+    persist_session_windows(state).await;
+}
+
 /// Supporting command for the window-mode header: focus the main window and
 /// ask it to switch to `sessionId` via [`SESSION_WINDOW_REVEAL`].
 #[tauri::command]
@@ -552,5 +576,139 @@ mod tests {
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains(r#""sessionId":"abc""#), "{json}");
         assert!(json.contains(r#""label":"session-abc""#), "{json}");
+    }
+
+    // === W10 audit §6-A — delete closes the session's live window ==========
+
+    /// Serialize every `$HOME`-swapping test in this module (same per-module
+    /// env lock as commands_notifications): `persist_session_windows` writes
+    /// the real `~/.shannon/desktop/config.json` and a test must never touch
+    /// the developer's.
+    fn home_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Redirect `$HOME` at a tempdir until the guard drops (async test
+    /// bodies `await` while it is held, so the restore rides `Drop`).
+    struct TempHomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        _tmp: tempfile::TempDir,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for TempHomeGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(prev) => unsafe { std::env::set_var("HOME", prev) },
+                None => unsafe { std::env::remove_var("HOME") },
+            }
+        }
+    }
+
+    fn temp_home() -> TempHomeGuard {
+        let lock = home_test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+        TempHomeGuard {
+            _lock: lock,
+            _tmp: tmp,
+            prev,
+        }
+    }
+
+    /// The delete-success tail: a live session window (mock-runtime window +
+    /// registry entry + persisted id) is closed, unregistered, and dropped
+    /// from the persisted list — no window state may outlive its session.
+    #[tokio::test]
+    async fn deleted_session_close_unregisters_and_unpersists_the_window() {
+        let _home = temp_home();
+        let app = tauri::test::mock_app().handle().clone();
+        app.manage(crate::commands::AppState::new());
+        let state = app.state::<crate::commands::AppState>();
+
+        let id = "7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1";
+        let label = session_window_label(id).unwrap();
+
+        // A live window (MockRuntime builds one without a real webview —
+        // enough for the close call) + its registry entry + persisted id.
+        tauri::WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("".into()))
+            .build()
+            .unwrap();
+        state.session_windows.register(&label, id);
+        persist_session_windows(&state).await;
+        assert_eq!(
+            state.desktop_config.read().await.open_session_windows,
+            vec![id.to_string()],
+            "seeded: the window is live and persisted"
+        );
+
+        close_window_for_deleted_session(&state, &app, id).await;
+
+        assert!(
+            state.session_windows.unregister(&label).is_none(),
+            "the registry entry is gone"
+        );
+        assert!(
+            state
+                .desktop_config
+                .read()
+                .await
+                .open_session_windows
+                .is_empty(),
+            "the persisted list no longer names the deleted session"
+        );
+    }
+
+    /// Windowless path: closing a session that has no live window still
+    /// cleans the registry + persisted list (the id may linger from a window
+    /// the user closed without the hook running yet).
+    #[tokio::test]
+    async fn deleted_session_close_without_a_window_still_cleans_state() {
+        let _home = temp_home();
+        let app = tauri::test::mock_app().handle().clone();
+        app.manage(crate::commands::AppState::new());
+        let state = app.state::<crate::commands::AppState>();
+
+        let id = "7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1";
+        let label = session_window_label(id).unwrap();
+        state.session_windows.register(&label, id);
+        persist_session_windows(&state).await;
+
+        close_window_for_deleted_session(&state, &app, id).await;
+
+        assert!(state.session_windows.unregister(&label).is_none());
+        assert!(
+            state
+                .desktop_config
+                .read()
+                .await
+                .open_session_windows
+                .is_empty()
+        );
+    }
+
+    /// A non-UUID id (cannot name a session window) is a no-op — no panic,
+    /// no state touched.
+    #[tokio::test]
+    async fn deleted_session_close_ignores_non_uuid_ids() {
+        let _home = temp_home();
+        let app = tauri::test::mock_app().handle().clone();
+        app.manage(crate::commands::AppState::new());
+        let state = app.state::<crate::commands::AppState>();
+
+        close_window_for_deleted_session(&state, &app, "not-a-uuid").await;
+        assert!(state.session_windows.list().is_empty());
+        assert!(
+            state
+                .desktop_config
+                .read()
+                .await
+                .open_session_windows
+                .is_empty()
+        );
     }
 }

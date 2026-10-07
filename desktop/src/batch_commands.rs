@@ -88,9 +88,10 @@ pub struct BranchDiffSummary {
 ///
 /// Honesty rules: `exit_ok` is derived only from the branch's own terminal
 /// state (normal completion, no error); `tests_passed`/`tests_total` are
-/// filled ONLY from a structured source. Today no branch run produces one
-/// (the engine stream's `ToolUseResult` is unstructured text), so they stay
-/// `None` — never parsed out of session text, never guessed.
+/// filled ONLY from a structured source — the branch's last tool result,
+/// and only when it parses as a test runner's final summary line
+/// (`crate::test_verdict`). Anything else keeps them `None` — never parsed
+/// out of session text, never guessed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchVerification {
@@ -578,6 +579,11 @@ pub(crate) struct BranchSpawn {
 pub(crate) struct BranchObservation {
     pub(crate) completed: bool,
     pub(crate) error: Option<String>,
+    /// The **last** `ToolUseResult.result` text the branch produced (tool
+    /// output only — never assistant/conversation text). The raw material
+    /// for `crate::test_verdict::parse_test_summary` at finalize; `None`
+    /// when the branch ran no tool (or failed before producing a result).
+    pub(crate) last_tool_output: Option<String>,
 }
 
 /// Single-branch execution, abstracted so the orchestration is testable
@@ -725,6 +731,12 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
         };
 
         let mut failure: Option<String> = None;
+        // 04b: keep only the LAST tool result — the closest thing to the
+        // branch's terminal action (typically the final test run). Captured
+        // from the same event stream we are already draining: no
+        // events.jsonl re-read (which could race the L0 writer's flush) and
+        // no extra I/O at finalize.
+        let mut last_tool_output: Option<String> = None;
 
         let stream = engine.process_query(context, None).await;
         use futures::StreamExt;
@@ -733,6 +745,13 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
             match event_result {
                 Ok(event) => match event {
                     QueryEvent::Text { .. } => {}
+                    // 04b: structured test counts are extracted from this
+                    // text at finalize — strictly, never guessed. Error
+                    // results count too (a failing test run still prints
+                    // its summary).
+                    QueryEvent::ToolUseResult { result, .. } => {
+                        last_tool_output = Some(result);
+                    }
                     QueryEvent::Usage {
                         input_tokens,
                         output_tokens,
@@ -775,6 +794,7 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
         BranchObservation {
             completed: failure.is_none(),
             error: failure,
+            last_tool_output,
         }
     }
 }
@@ -1054,6 +1074,7 @@ async fn spawn_branch_tasks<R: tauri::Runtime, F: BranchRunnerFactory>(
                     let observation = BranchObservation {
                         completed: false,
                         error: Some(format!("batch branch queue unavailable: {e}")),
+                        last_tool_output: None,
                     };
                     finalize_branch(&deps, &app, &handle, index as u32, observation).await;
                     return;
@@ -1077,6 +1098,7 @@ async fn spawn_branch_tasks<R: tauri::Runtime, F: BranchRunnerFactory>(
                 Err(join_error) => BranchObservation {
                     completed: false,
                     error: Some(format!("batch branch task panicked: {join_error}")),
+                    last_tool_output: None,
                 },
             };
             // The engine phase is over — release the slot before the
@@ -1120,30 +1142,40 @@ async fn finalize_branch<R: tauri::Runtime>(
         None => None,
     };
     // Phase 3: single locked write of the terminal state.
+    let BranchObservation {
+        completed,
+        error,
+        last_tool_output,
+    } = observation;
+    // 04b verification: structured test counts come ONLY from the branch's
+    // last tool result, and only when it parses as a test runner's final
+    // summary line (`test_verdict`'s anchored, no-guess contract). Anything
+    // else — shell output, prose, truncation — keeps the counts `None`,
+    // which the card renders as "no data".
+    let test_counts = last_tool_output
+        .as_deref()
+        .and_then(crate::test_verdict::parse_test_summary);
     let (dto, wrote_inbox) = {
         let mut record = handle.record.lock().await;
         let branch = record.branches.iter_mut().find(|b| b.index == index);
         if let Some(branch) = branch {
-            branch.status = if observation.completed {
+            branch.status = if completed {
                 "completed".into()
             } else {
                 "failed".into()
             };
-            branch.error = observation
-                .error
-                .as_deref()
-                .map(|e| truncate_chars(e, ERROR_MAX_CHARS));
+            branch.error = error.as_deref().map(|e| truncate_chars(e, ERROR_MAX_CHARS));
             branch.summary = summary;
             // 04b verification facts — recorded only here, at the single
             // terminal-state choke point. `exit_ok` = normal terminal state
             // AND no error (the same two facts the status/error fields above
-            // carry). `tests_passed`/`tests_total` need a structured source
-            // no branch run produces today, so they stay `None` — never
-            // guessed from session text.
+            // carry). `tests_passed`/`tests_total` are filled only when the
+            // last tool result carries a structured runner summary; they are
+            // never parsed out of session text, never guessed.
             branch.verification = Some(BatchVerification {
-                exit_ok: observation.completed && observation.error.is_none(),
-                tests_passed: None,
-                tests_total: None,
+                exit_ok: completed && error.is_none(),
+                tests_passed: test_counts.map(|(passed, _)| passed),
+                tests_total: test_counts.map(|(_, total)| total),
             });
         }
 
@@ -1916,6 +1948,9 @@ mod tests {
     struct StubSpec {
         completed: bool,
         error: Option<String>,
+        /// Scripted last-tool-result text (04b: feeds the verification
+        /// test-count extraction the engine runner captures live).
+        last_tool_output: Option<String>,
         /// Write a file into the branch worktree before "running" (agent edit).
         edit: bool,
         delay_ms: u64,
@@ -1926,6 +1961,7 @@ mod tests {
             Self {
                 completed: true,
                 error: None,
+                last_tool_output: None,
                 edit: false,
                 delay_ms: 0,
             }
@@ -2005,6 +2041,7 @@ mod tests {
                 BranchObservation {
                     completed: self.spec.completed,
                     error: self.spec.error.clone(),
+                    last_tool_output: self.spec.last_tool_output.clone(),
                 }
             })
         }
@@ -2247,7 +2284,10 @@ mod tests {
             .verification
             .expect("finalize always records verification");
         assert!(ok.exit_ok);
-        assert_eq!(ok.tests_passed, None, "no structured test source yet");
+        assert_eq!(
+            ok.tests_passed, None,
+            "stub scripted no tool output → counts stay None (no data, not zero)"
+        );
         assert_eq!(ok.tests_total, None);
 
         // Failed branch: error present → exit_ok false.
@@ -2263,6 +2303,74 @@ mod tests {
         assert!(raw.contains("\"exitOk\": true"), "{raw}");
         assert!(raw.contains("\"exitOk\": false"), "{raw}");
         assert!(!raw.contains("testsPassed"), "no fabricated counts: {raw}");
+    }
+
+    #[tokio::test]
+    async fn finalize_extracts_test_counts_from_last_tool_result() {
+        let env = env();
+        let cargo_summary = "running 12 tests\n\
+             test result: ok. 12 passed; 0 failed; 0 ignored; finished in 0.01s\n";
+        let mut specs = HashMap::new();
+        // Branch 0: a completed branch whose last tool run printed a cargo
+        // summary → counts must land on the card AND the persisted record.
+        specs.insert(
+            0,
+            StubSpec {
+                last_tool_output: Some(cargo_summary.into()),
+                ..StubSpec::default()
+            },
+        );
+        // Branch 1: non-test final output (git commit) → honestly None.
+        specs.insert(
+            1,
+            StubSpec {
+                last_tool_output: Some("[main d34db33f] fix: things\n".into()),
+                ..StubSpec::default()
+            },
+        );
+        let factory = Arc::new(StubFactory::new(specs));
+
+        let started = start_batch_run_inner(
+            &env.deps,
+            &env.registry,
+            &env.app,
+            BatchStartRequest::new(
+                "Verify me".into(),
+                "do it".into(),
+                2,
+                Some(env.repo_root.clone()),
+            ),
+            factory,
+        )
+        .await
+        .unwrap();
+        let handle = env.registry.get_or_load(&started.batch_id).await.unwrap();
+        let dto = wait_terminal(&handle).await;
+
+        let parsed = dto.branches[0]
+            .verification
+            .as_ref()
+            .expect("finalize records verification");
+        assert!(parsed.exit_ok);
+        assert_eq!(parsed.tests_passed, Some(12), "cargo passed count");
+        assert_eq!(parsed.tests_total, Some(12), "0 failed → total = passed");
+
+        let unparsed = dto.branches[1]
+            .verification
+            .as_ref()
+            .expect("finalize records verification");
+        assert_eq!(
+            unparsed.tests_passed, None,
+            "non-test tool output must stay None"
+        );
+        assert_eq!(unparsed.tests_total, None);
+
+        // Persisted shape: counts serialize camelCase only for the branch
+        // that has them (skip_serializing_if keeps None off the wire).
+        let raw = std::fs::read_to_string(env.store_dir.join(format!("{}.json", started.batch_id)))
+            .unwrap();
+        assert!(raw.contains("\"testsPassed\": 12"), "{raw}");
+        assert!(raw.contains("\"testsTotal\": 12"), "{raw}");
     }
 
     #[test]

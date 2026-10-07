@@ -15,6 +15,9 @@ import { describeBackendError } from '@/lib/backendError'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import { chimeKey, invalidateNotificationPrefsCache, maybePlayTaskChime } from '@/lib/notificationChime'
+// W10 audit §6-C — cross-window toast dedup (the chime F3 pattern ported to
+// toasts; keys reuse the same chimeKey derivation).
+import { maybeShowToast } from '@/lib/toastDedupe'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
 import { clearDraft, tombstoneDraft } from '@/lib/composerDraft'
 import { basenameOf, isVisionImagePath } from '@/lib/fileRefs'
@@ -1603,12 +1606,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
           streamNoticesBucketsRef.current.set(key, bucket)
           if (key === visibleKey) setStreamNotices(bucket)
         }),
+        // W10 audit §6-D: the payload now carries the spawning run's session
+        // id (`sessionId` — camelCase wire, same struct as agentId/team), so
+        // a session window only shows ITS OWN session's subagent banner.
+        // Payloads without it (older backend, or an ambiguous multi-run
+        // stamp) pass through — the filter degrades to the pre-fix
+        // every-window banner instead of dropping the event.
         listen(EVENT_NAMES.SUBAGENT_START, (e) => {
-          const p = e.payload as SubAgentLive
+          const p = e.payload as SubAgentLive & { sessionId?: string | null }
+          if (!isEventForCurrentWindow(p.sessionId, windowSessionId)) return
           setSubagentLive({ agentId: p.agentId, agentName: p.agentName, team: p.team ?? null })
         }),
         listen(EVENT_NAMES.SUBAGENT_STOP, (e) => {
-          const p = e.payload as { agentId: string }
+          const p = e.payload as { agentId: string; sessionId?: string | null }
+          if (!isEventForCurrentWindow(p.sessionId, windowSessionId)) return
           setSubagentLive(prev => (prev && prev.agentId === p.agentId ? null : prev))
         }),
         listen(EVENT_NAMES.QUERY_THINKING, (e) => {
@@ -1827,13 +1838,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // 卡A resume-unarchive: opening an archived session silently
         // unarchives it — toast so the user knows why it left the 已归档
         // section (messageFor works outside IntlProvider).
+        // §6-C: the key lets whichever window receives the broadcast event
+        // first show the toast — the others stay quiet (multi-window dedup).
         listen(EVENT_NAMES.SESSION_AUTO_UNARCHIVED, (e) => {
           const p = e.payload as { session_id: string; title?: string }
           const title = p.title?.trim()
-          toast.success(
-            title
-              ? messageFor('sidebar.sessions.archived.autoUnarchived', { title })
-              : messageFor('sidebar.sessions.archived.autoUnarchived.untitled'),
+          maybeShowToast(chimeKey('toast:auto-unarchived', p.session_id), () =>
+            toast.success(
+              title
+                ? messageFor('sidebar.sessions.archived.autoUnarchived', { title })
+                : messageFor('sidebar.sessions.archived.autoUnarchived.untitled'),
+            ),
           )
         }),
         // Settings R3 T7: a pin flip (this or another window) — the curation
@@ -1843,10 +1858,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // Settings R3 T7: the auto-archive scan archived a session — toast
         // so the conversation leaving the active rail is never a surprise
         // (messageFor works outside IntlProvider, same as the resume toast).
+        // §6-C: cross-window dedup — one toast, not one per window.
         listen(EVENT_NAMES.SESSION_AUTO_ARCHIVED, (e) => {
           const p = e.payload as { session_id: string; title?: string }
           const title = p.title?.trim() || p.session_id.split('-')[0]
-          toast.success(messageFor('sessions.autoArchivedToast', { title }))
+          maybeShowToast(chimeKey('toast:auto-archived', p.session_id), () =>
+            toast.success(messageFor('sessions.autoArchivedToast', { title })),
+          )
         }),
         listen(EVENT_NAMES.CONFIG_UPDATED, (e) => {
           refreshConfig()
@@ -1872,6 +1890,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // warn). One toast per distinct (session, provider, model) — the
         // user learns why the answer didn't come from the pinned model
         // without being re-notified on every turn of the same staleness.
+        // §6-C: `overrideFallbackAnnounced` is per-window only (the event
+        // re-fires per query while the pin is stale, well beyond the dedup
+        // TTL); the cross-window claim below covers the same-event fan-out
+        // so the triple still toasts exactly once across ALL windows.
         listen(EVENT_NAMES.MODEL_OVERRIDE_FALLBACK, (e) => {
           const p = e.payload as { session_id?: string; provider?: string; model?: string }
           const provider = typeof p.provider === 'string' ? p.provider : ''
@@ -1880,7 +1902,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const key = `${typeof p.session_id === 'string' ? p.session_id : ''}:${provider}:${model}`
           if (overrideFallbackAnnounced.has(key)) return
           overrideFallbackAnnounced.add(key)
-          toast.warning(messageFor('chat.input.overrideFallback.toast', { provider, model }))
+          maybeShowToast(
+            chimeKey('toast:override-fallback', p.session_id, provider, model),
+            () => toast.warning(messageFor('chat.input.overrideFallback.toast', { provider, model })),
+          )
         }),
         // B3 P1-25: a background-task change can also mean a new/finished
         // agent run — refresh the agents inventory alongside the tasks so
