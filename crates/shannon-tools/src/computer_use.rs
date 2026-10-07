@@ -89,11 +89,28 @@ pub fn session_compatibility_hint() -> Option<&'static str> {
     }
 }
 
+/// Maximum `wait` duration accepted in one call (seconds). Longer requests
+/// are capped — an unbounded sleep would hang the screenshot-action loop
+/// with no way for the model (or a remote user watching on mobile) to tell
+/// a stalled task from a working one.
+pub const MAX_WAIT_SECONDS: f64 = 60.0;
+
+/// Delay between interpolated mouse moves while dragging (millis). Long
+/// enough for window servers/HTML5 dnd to register movement, short enough
+/// that a 30-step drag stays well under a second.
+#[cfg(feature = "computer-use")]
+const DRAG_STEP_DELAY_MS: u64 = 10;
+
 /// Actions supported by the computer use tool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComputerAction {
     Screenshot,
+    /// Capture a region of the screen at native resolution — reads small
+    /// text, verification codes, dense toolbars the full screenshot
+    /// downscales past legibility. Region is given in the coordinate space
+    /// of the last screenshot (or the reference space before one).
+    Zoom,
     Click,
     RightClick,
     MiddleClick,
@@ -104,6 +121,10 @@ pub enum ComputerAction {
     KeyPress,
     Wait,
     MouseMove,
+    /// Report the current pointer position (global, per-monitor local, and
+    /// in screenshot coordinate space) so the model can re-anchor after
+    /// scrolling or window moves without burning another full screenshot.
+    CursorPosition,
     LeftClickDrag,
     /// Structured UIA (UI Automation) tree of a window — Windows only.
     /// Semantic alternative to screenshot reading: roles, names, refs.
@@ -181,6 +202,11 @@ pub struct ComputerUseInput {
     /// (for `ui_click`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
+
+    /// Region size `[width, height]` for the `zoom` action, in the same
+    /// coordinate space as `coordinate` (default 384x288).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<[i32; 2]>,
 }
 
 /// Configuration for the computer use tool.
@@ -216,6 +242,16 @@ impl Default for ComputerUseConfig {
 pub struct ComputerUseTool {
     description: String,
     config: ComputerUseConfig,
+    /// Pixel dimensions of the most recent downscaled screenshot, per
+    /// monitor index. Screenshots are downscaled preserving aspect ratio,
+    /// so on anything that is not exactly 4:3 the image the model saw is
+    /// NOT 1024x768 (a 1920x1080 screen yields 1024x576). The model
+    /// reports coordinates measured on that image — scaling them through
+    /// the stored dims instead of the fixed reference space is what keeps
+    /// clicks on target. Falls back to reference-space scaling before the
+    /// first screenshot.
+    #[cfg_attr(not(feature = "computer-use"), allow(dead_code))]
+    last_screenshot: std::sync::Mutex<HashMap<u32, (u32, u32)>>,
 }
 
 impl Default for ComputerUseTool {
@@ -227,15 +263,17 @@ impl Default for ComputerUseTool {
 impl ComputerUseTool {
     pub fn new() -> Self {
         Self {
-            description: "Interact with the computer desktop: take screenshots, click, type, scroll, and press keys. Coordinates are in [0-1024, 0-768] range and scaled to actual screen resolution.".to_string(),
+            description: "Interact with the computer desktop: take screenshots, zoom into regions, click, type, scroll, and press keys. After a screenshot, coordinates are pixel coordinates in that screenshot image (its dimensions are reported in every capture result); before the first screenshot they use the 1024x768 reference space. Coordinates are scaled to the actual screen automatically.".to_string(),
             config: ComputerUseConfig::default(),
+            last_screenshot: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
     pub fn with_config(config: ComputerUseConfig) -> Self {
         Self {
-            description: "Interact with the computer desktop: take screenshots, click, type, scroll, and press keys. Coordinates are in [0-1024, 0-768] range and scaled to actual screen resolution.".to_string(),
+            description: "Interact with the computer desktop: take screenshots, zoom into regions, click, type, scroll, and press keys. After a screenshot, coordinates are pixel coordinates in that screenshot image (its dimensions are reported in every capture result); before the first screenshot they use the 1024x768 reference space. Coordinates are scaled to the actual screen automatically.".to_string(),
             config,
+            last_screenshot: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -249,12 +287,110 @@ impl ComputerUseTool {
 
     /// Scale a coordinate from reference resolution to actual screen resolution.
     pub fn scale_coordinate(coord: [i32; 2], actual_width: u32, actual_height: u32) -> [i32; 2] {
-        let x = (coord[0] as f64 * actual_width as f64 / REFERENCE_WIDTH as f64).round() as i32;
-        let y = (coord[1] as f64 * actual_height as f64 / REFERENCE_HEIGHT as f64).round() as i32;
+        Self::scale_coordinate_from(
+            coord,
+            REFERENCE_WIDTH,
+            REFERENCE_HEIGHT,
+            actual_width,
+            actual_height,
+        )
+    }
+
+    /// Scale `coord` from the pixel space of a source image (`src_w` x
+    /// `src_h`, e.g. the screenshot the model measured on) into `dst` space
+    /// (e.g. the physical monitor). Coordinates are clamped to the
+    /// destination bounds. A degenerate source (0) falls back to
+    /// reference-space scaling.
+    pub fn scale_coordinate_from(
+        coord: [i32; 2],
+        src_w: u32,
+        src_h: u32,
+        dst_w: u32,
+        dst_h: u32,
+    ) -> [i32; 2] {
+        if src_w == 0 || src_h == 0 {
+            return Self::scale_coordinate(coord, dst_w, dst_h);
+        }
+        let x = (f64::from(coord[0]) * f64::from(dst_w) / f64::from(src_w)).round() as i32;
+        let y = (f64::from(coord[1]) * f64::from(dst_h) / f64::from(src_h)).round() as i32;
+        [x.clamp(0, dst_w as i32 - 1), y.clamp(0, dst_h as i32 - 1)]
+    }
+
+    /// Inverse of [`Self::scale_coordinate_from`]: map a point from screen
+    /// space back into the source image space (used by `cursor_position` to
+    /// report where the pointer sits in coordinates the model understands).
+    pub fn unscale_coordinate(
+        coord: [i32; 2],
+        src_w: u32,
+        src_h: u32,
+        dst_w: u32,
+        dst_h: u32,
+    ) -> [i32; 2] {
+        if src_w == 0 || src_h == 0 {
+            return coord;
+        }
         [
-            x.clamp(0, actual_width as i32 - 1),
-            y.clamp(0, actual_height as i32 - 1),
+            (f64::from(coord[0]) * f64::from(dst_w) / f64::from(src_w)).round() as i32,
+            (f64::from(coord[1]) * f64::from(dst_h) / f64::from(src_h)).round() as i32,
         ]
+    }
+
+    /// Index of the monitor whose virtual-desktop rect contains the global
+    /// point (`rects` entries are `(width, height, origin_x, origin_y)`).
+    /// A point in the gap between displays resolves to the nearest monitor
+    /// center. Returns 0 for an empty slice.
+    pub fn monitor_index_for_point(x: i32, y: i32, rects: &[(u32, u32, i32, i32)]) -> usize {
+        if rects.is_empty() {
+            return 0;
+        }
+        if let Some(i) = rects.iter().position(|(w, h, ox, oy)| {
+            x >= *ox
+                && x < ox.saturating_add(*w as i32)
+                && y >= *oy
+                && y < oy.saturating_add(*h as i32)
+        }) {
+            return i;
+        }
+        let mut best = 0;
+        let mut best_dist = i64::MAX;
+        for (i, (w, h, ox, oy)) in rects.iter().enumerate() {
+            let cx = i64::from(*ox) + i64::from(*w) / 2;
+            let cy = i64::from(*oy) + i64::from(*h) / 2;
+            let dist = (i64::from(x) - cx).pow(2) + (i64::from(y) - cy).pow(2);
+            if dist < best_dist {
+                best_dist = dist;
+                best = i;
+            }
+        }
+        best
+    }
+
+    /// Map a `zoom` region — top-left `coord` and `size`, both in the
+    /// screenshot (or reference) space of `src_w` x `src_h` — onto the
+    /// full-resolution capture of `cap_w` x `cap_h`. The rect is clamped to
+    /// the capture bounds with a minimum 1x1 size; returns
+    /// `(x, y, width, height)` in capture pixels.
+    #[cfg_attr(not(feature = "computer-use"), allow(dead_code))]
+    fn zoom_crop_rect(
+        coord: [i32; 2],
+        size: [i32; 2],
+        src_w: u32,
+        src_h: u32,
+        cap_w: u32,
+        cap_h: u32,
+    ) -> (u32, u32, u32, u32) {
+        let (ref_w, ref_h) = if src_w == 0 || src_h == 0 {
+            (REFERENCE_WIDTH, REFERENCE_HEIGHT)
+        } else {
+            (src_w, src_h)
+        };
+        let scale_x = f64::from(cap_w) / f64::from(ref_w);
+        let scale_y = f64::from(cap_h) / f64::from(ref_h);
+        let x = ((f64::from(coord[0]) * scale_x).floor() as i64).clamp(0, i64::from(cap_w) - 1);
+        let y = ((f64::from(coord[1]) * scale_y).floor() as i64).clamp(0, i64::from(cap_h) - 1);
+        let w = ((f64::from(size[0]) * scale_x).round() as i64).clamp(1, i64::from(cap_w) - x);
+        let h = ((f64::from(size[1]) * scale_y).round() as i64).clamp(1, i64::from(cap_h) - y);
+        (x as u32, y as u32, w as u32, h as u32)
     }
 
     /// Compute the downscaled dimensions that fit within the configured
@@ -276,22 +412,51 @@ impl ComputerUseTool {
     }
 
     /// Parse a key combination string into individual keys.
-    /// "ctrl+a" → ["ctrl", "a"], "alt+F4" → ["alt", "F4"]
+    /// "ctrl+a" → ["ctrl", "a"], "alt+F4" → ["alt", "F4"]. The plus key
+    /// itself is written with a repeated plus ("ctrl++" → ["ctrl", "+"]):
+    /// splitting on '+' yields empty segments there, which collapse back
+    /// into a single "+".
     pub fn parse_key_combination(key: &str) -> Vec<String> {
-        key.split('+').map(|s| s.trim().to_string()).collect()
+        let trimmed = key.trim();
+        if trimmed.is_empty() {
+            return vec![String::new()];
+        }
+        let mut out: Vec<String> = Vec::new();
+        let mut pending_plus = false;
+        for part in trimmed.split('+') {
+            let part = part.trim();
+            if part.is_empty() {
+                pending_plus = true;
+                continue;
+            }
+            if pending_plus {
+                out.push("+".to_string());
+                pending_plus = false;
+            }
+            out.push(part.to_string());
+        }
+        if pending_plus {
+            out.push("+".to_string());
+        }
+        out
     }
 
-    /// Convert a key name string to an enigo Key enum value.
+    /// Convert a key name string to an enigo Key enum value. Returns `None`
+    /// for unrecognized names — callers must surface an error rather than
+    /// guess, because a wrong guess types a random character (the old
+    /// first-char fallback turned a request for "F13" into a literal "f").
     #[cfg(feature = "computer-use")]
-    fn str_to_key(name: &str) -> enigo::Key {
-        match name.to_lowercase().as_str() {
+    fn str_to_key(name: &str) -> Option<enigo::Key> {
+        let lower = name.to_lowercase();
+        let key = match lower.as_str() {
             "ctrl" | "control" => enigo::Key::Control,
-            "alt" => enigo::Key::Alt,
+            "alt" | "option" => enigo::Key::Alt,
             "shift" => enigo::Key::Shift,
             "meta" | "cmd" | "command" | "super" | "win" => enigo::Key::Meta,
             "return" | "enter" => enigo::Key::Return,
             "tab" => enigo::Key::Tab,
-            "space" => enigo::Key::Space,
+            "space" | "spacebar" => enigo::Key::Space,
+            "+" | "plus" => enigo::Key::Unicode('+'),
             "backspace" | "back" => enigo::Key::Backspace,
             "delete" | "del" => enigo::Key::Delete,
             "escape" | "esc" => enigo::Key::Escape,
@@ -301,8 +466,9 @@ impl ComputerUseTool {
             "right" => enigo::Key::RightArrow,
             "home" => enigo::Key::Home,
             "end" => enigo::Key::End,
-            "pageup" | "page_up" => enigo::Key::PageUp,
-            "pagedown" | "page_down" => enigo::Key::PageDown,
+            "pageup" | "page_up" | "pgup" => enigo::Key::PageUp,
+            "pagedown" | "page_down" | "pgdn" => enigo::Key::PageDown,
+            "insert" => enigo::Key::Insert,
             "capslock" | "caps_lock" => enigo::Key::CapsLock,
             "f1" => enigo::Key::F1,
             "f2" => enigo::Key::F2,
@@ -316,9 +482,27 @@ impl ComputerUseTool {
             "f10" => enigo::Key::F10,
             "f11" => enigo::Key::F11,
             "f12" => enigo::Key::F12,
-            c if c.len() == 1 => enigo::Key::Unicode(c.chars().next().unwrap()),
-            _ => enigo::Key::Unicode(name.chars().next().unwrap_or('\0')),
-        }
+            "f13" => enigo::Key::F13,
+            "f14" => enigo::Key::F14,
+            "f15" => enigo::Key::F15,
+            "f16" => enigo::Key::F16,
+            "f17" => enigo::Key::F17,
+            "f18" => enigo::Key::F18,
+            "f19" => enigo::Key::F19,
+            "f20" => enigo::Key::F20,
+            "f21" => enigo::Key::F21,
+            "f22" => enigo::Key::F22,
+            "f23" => enigo::Key::F23,
+            "f24" => enigo::Key::F24,
+            f if f.len() >= 2 && f.starts_with('f') => {
+                // f21..f24 and any other f-prefixed name are not mapped;
+                // fall through to the single-char check so "f" itself works.
+                return None;
+            }
+            c if c.chars().count() == 1 => enigo::Key::Unicode(lower.chars().next().unwrap()),
+            _ => return None,
+        };
+        Some(key)
     }
 
     fn build_input_schema() -> serde_json::Value {
@@ -327,7 +511,7 @@ impl ComputerUseTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["screenshot", "click", "right_click", "middle_click", "double_click", "triple_click", "type", "scroll", "key_press", "wait", "mouse_move", "left_click_drag", "ui_tree", "ui_click"],
+                    "enum": ["screenshot", "zoom", "click", "right_click", "middle_click", "double_click", "triple_click", "type", "scroll", "key_press", "wait", "mouse_move", "cursor_position", "left_click_drag", "ui_tree", "ui_click"],
                     "description": "The action to perform"
                 },
                 "monitor": {
@@ -351,7 +535,14 @@ impl ComputerUseTool {
                     "items": { "type": "integer" },
                     "maxItems": 2,
                     "minItems": 2,
-                    "description": "[x, y] coordinates in reference space (0-1024, 0-768)"
+                    "description": "[x, y] coordinates: pixel coordinates in the most recent screenshot image (dimensions reported with each capture), or reference space (0-1024, 0-768) before the first screenshot"
+                },
+                "size": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "description": "Region [width, height] for the 'zoom' action, in the same coordinate space as 'coordinate' (default 384x288)"
                 },
                 "text": {
                     "type": "string",
@@ -368,11 +559,11 @@ impl ComputerUseTool {
                 },
                 "key": {
                     "type": "string",
-                    "description": "Key or key combination, e.g. 'Return', 'ctrl+a', 'alt+F4'"
+                    "description": "Key or key combination, e.g. 'Return', 'ctrl+a', 'alt+F4' ('+' key itself written 'ctrl++')"
                 },
                 "duration": {
                     "type": "number",
-                    "description": "Seconds to wait (for 'wait' action, default 1.0)"
+                    "description": "Seconds to wait (for 'wait' action, default 1.0, capped at 60)"
                 },
                 "start_coordinate": {
                     "type": "array",
@@ -436,6 +627,15 @@ impl Tool for ComputerUseTool {
         #[cfg_attr(not(feature = "computer-use"), allow(unused_mut))]
         let mut result = match computer_input.action {
             ComputerAction::Screenshot => self.execute_screenshot(&computer_input).await,
+            ComputerAction::Zoom => {
+                let coord = computer_input.coordinate.ok_or_else(|| {
+                    ToolError::InvalidInput(
+                        "zoom action requires 'coordinate' (region top-left)".to_string(),
+                    )
+                })?;
+                let size = computer_input.size.unwrap_or([384, 288]);
+                self.execute_zoom(&computer_input, coord, size).await
+            }
             ComputerAction::Click
             | ComputerAction::RightClick
             | ComputerAction::MiddleClick
@@ -478,6 +678,7 @@ impl Tool for ComputerUseTool {
                 })?;
                 self.execute_mouse_move(coord, computer_input.monitor).await
             }
+            ComputerAction::CursorPosition => self.execute_cursor_position().await,
             ComputerAction::LeftClickDrag => {
                 let start = computer_input.start_coordinate.ok_or_else(|| {
                     ToolError::InvalidInput(
@@ -556,6 +757,12 @@ impl ComputerUseTool {
         };
         let width = image.width();
         let height = image.height();
+        // Remember the space the model will measure coordinates in — every
+        // coordinate-taking action scales from these dims (not the fixed
+        // reference) so clicks stay on target on non-4:3 displays.
+        if let Ok(mut dims) = self.last_screenshot.lock() {
+            dims.insert(input.monitor.unwrap_or(0), (width, height));
+        }
 
         // Encode as PNG
         let mut png_data = Vec::new();
@@ -618,14 +825,42 @@ impl ComputerUseTool {
             .nth(idx)
             .unwrap()
             .capture_image()
-            .map_err(|e| format!("Screenshot failed: {e}"))
+            .map_err(|e| {
+                let msg = format!("Screenshot failed: {e}");
+                #[cfg(target_os = "macos")]
+                let msg = {
+                    let mut m = msg;
+                    m.push_str(
+                        "\nHint: on macOS, screen capture requires the Screen Recording \
+                         permission (System Settings → Privacy & Security → Screen \
+                         Recording) for the app hosting Shannon; macOS 15+ re-asks for it \
+                         periodically, which silently breaks captures until re-granted.",
+                    );
+                    m
+                };
+                msg
+            })
+    }
+
+    /// Pixel dimensions coordinates are currently expressed in for `monitor`:
+    /// the most recent downscaled screenshot's dims when one exists,
+    /// otherwise the reference space.
+    #[cfg(feature = "computer-use")]
+    fn screenshot_dims(&self, monitor: Option<u32>) -> (u32, u32) {
+        self.last_screenshot
+            .lock()
+            .ok()
+            .and_then(|dims| dims.get(&monitor.unwrap_or(0)).copied())
+            .unwrap_or((REFERENCE_WIDTH, REFERENCE_HEIGHT))
     }
 
     /// Geometry of the selected monitor: `(width, height, origin_x,
     /// origin_y)`. Origins are virtual-desktop coordinates (the primary
     /// monitor sits at 0,0; monitors left of/above it go negative) — enigo's
     /// absolute moves and xcap captures both live in that space once
-    /// per-monitor DPI awareness is declared.
+    /// per-monitor DPI awareness is declared. On macOS these are logical
+    /// points, the same space CGEvent input uses; on Windows/Linux they are
+    /// physical pixels.
     #[cfg(feature = "computer-use")]
     fn monitor_geometry(monitor: Option<u32>) -> Result<(u32, u32, i32, i32), String> {
         let monitors = xcap::Monitor::all().map_err(|e| {
@@ -658,12 +893,40 @@ impl ComputerUseTool {
         Ok((width, height, x, y))
     }
 
-    /// Scale a reference-space coordinate into physical pixels on the
-    /// selected monitor, including that monitor's virtual-desktop origin.
+    /// All monitor rects as `(width, height, origin_x, origin_y)`, for
+    /// point-to-monitor resolution.
     #[cfg(feature = "computer-use")]
-    fn resolve_point(coord: [i32; 2], monitor: Option<u32>) -> Result<[i32; 2], String> {
+    fn monitor_rects() -> Result<Vec<(u32, u32, i32, i32)>, String> {
+        let monitors =
+            xcap::Monitor::all().map_err(|e| format!("monitor enumeration failed: {e}"))?;
+        monitors
+            .iter()
+            .map(|m| {
+                Ok((
+                    m.width()
+                        .map_err(|e| format!("monitor width unavailable: {e}"))?,
+                    m.height()
+                        .map_err(|e| format!("monitor height unavailable: {e}"))?,
+                    m.x()
+                        .map_err(|e| format!("monitor origin unavailable: {e}"))?,
+                    m.y()
+                        .map_err(|e| format!("monitor origin unavailable: {e}"))?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Scale a reference-space or screenshot-space coordinate into physical
+    /// pixels on the selected monitor, including that monitor's
+    /// virtual-desktop origin. Source space is the most recent screenshot's
+    /// pixel dimensions when one has been taken (the model measures on that
+    /// image), falling back to the 1024x768 reference space before the
+    /// first capture.
+    #[cfg(feature = "computer-use")]
+    fn resolve_point(&self, coord: [i32; 2], monitor: Option<u32>) -> Result<[i32; 2], String> {
         let (w, h, ox, oy) = Self::monitor_geometry(monitor)?;
-        let local = Self::scale_coordinate(coord, w, h);
+        let (src_w, src_h) = self.screenshot_dims(monitor);
+        let local = Self::scale_coordinate_from(coord, src_w, src_h, w, h);
         Ok([local[0] + ox, local[1] + oy])
     }
 
@@ -672,6 +935,167 @@ impl ComputerUseTool {
         Ok(ToolOutput {
             content: format!(
                 "Screenshot capture unavailable: the `computer-use` feature is not enabled in this build.{FEATURE_DISABLED_HINT}"
+            ),
+            is_error: true,
+            metadata: HashMap::new(),
+        })
+    }
+
+    /// `zoom`: capture the monitor at native resolution and return only the
+    /// requested region, still at (near) native fidelity. Small text,
+    /// verification codes, and dense toolbars that the full-screen downscale
+    /// renders illegible become readable — the same re-inspection affordance
+    /// Anthropic's `computer_20251124` schema added for capable models.
+    #[cfg(feature = "computer-use")]
+    async fn execute_zoom(
+        &self,
+        input: &ComputerUseInput,
+        coord: [i32; 2],
+        size: [i32; 2],
+    ) -> ToolResult<ToolOutput> {
+        if !self.config.screenshot_enabled {
+            return Ok(ToolOutput {
+                content: "Screenshot capture is disabled.".to_string(),
+                is_error: true,
+                metadata: HashMap::new(),
+            });
+        }
+        if size[0] <= 0 || size[1] <= 0 {
+            return Err(ToolError::InvalidInput(format!(
+                "zoom 'size' must be positive, got {:?}",
+                size
+            )));
+        }
+
+        crate::windows_platform::ensure_dpi_awareness();
+        let mut capture = self
+            .capture_screen(input.monitor)
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
+        let (cap_w, cap_h) = (capture.width(), capture.height());
+        let (src_w, src_h) = self.screenshot_dims(input.monitor);
+        let (x, y, w, h) = Self::zoom_crop_rect(coord, size, src_w, src_h, cap_w, cap_h);
+        let cropped = image::imageops::crop(&mut capture, x, y, w, h).to_image();
+
+        // Fit the crop into the configured maximum (never upscale past the
+        // native crop — zoom only ever trades region size for fidelity).
+        let (out_w, out_h) = self.downscale_dims(w, h).unwrap_or((w, h));
+        let out = if (out_w, out_h) == (w, h) {
+            cropped
+        } else {
+            image::imageops::resize(
+                &cropped,
+                out_w,
+                out_h,
+                image::imageops::FilterType::Lanczos3,
+            )
+        };
+        let (fw, fh) = (out.width(), out.height());
+
+        let mut png_data = Vec::new();
+        out.write_to(
+            &mut std::io::Cursor::new(&mut png_data),
+            image::ImageFormat::Png,
+        )
+        .map_err(|e| ToolError::ExecutionFailed(format!("PNG encoding failed: {e}")))?;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png_data);
+
+        let mut metadata = HashMap::new();
+        metadata.insert("type".to_string(), json!("image"));
+        metadata.insert("media_type".to_string(), json!("image/png"));
+        metadata.insert("data".to_string(), json!(b64));
+        metadata.insert("width".to_string(), json!(fw));
+        metadata.insert("height".to_string(), json!(fh));
+        metadata.insert(
+            "zoom_region".to_string(),
+            json!({
+                "capture_px": [x, y, w, h],
+                "source_space": [coord[0], coord[1], size[0], size[1]],
+            }),
+        );
+        if let Some(m) = input.monitor {
+            metadata.insert("monitor".to_string(), json!(m));
+        }
+        crate::windows_platform::attach_window_context(&mut metadata);
+
+        Ok(ToolOutput {
+            content: format!(
+                "Zoomed to region ({}, {})+{}x{} → {}x{} image",
+                coord[0], coord[1], size[0], size[1], fw, fh
+            ),
+            is_error: false,
+            metadata,
+        })
+    }
+
+    #[cfg(not(feature = "computer-use"))]
+    async fn execute_zoom(
+        &self,
+        _input: &ComputerUseInput,
+        coord: [i32; 2],
+        size: [i32; 2],
+    ) -> ToolResult<ToolOutput> {
+        Ok(ToolOutput {
+            content: format!(
+                "zoom is unavailable: the `computer-use` feature is not enabled in this build. Would zoom to ({}, {})+{}x{}.{FEATURE_DISABLED_HINT}",
+                coord[0], coord[1], size[0], size[1]
+            ),
+            is_error: true,
+            metadata: HashMap::new(),
+        })
+    }
+
+    /// `cursor_position`: report the pointer's global position, its
+    /// per-monitor local position, and its coordinates in the space the
+    /// model measures in (last screenshot or reference). Cheap re-anchoring
+    /// after scrolls or window moves — no full screenshot needed.
+    #[cfg(feature = "computer-use")]
+    async fn execute_cursor_position(&self) -> ToolResult<ToolOutput> {
+        crate::windows_platform::ensure_dpi_awareness();
+
+        let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
+            .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
+        let (x, y) = enigo
+            .location()
+            .map_err(|e| ToolError::ExecutionFailed(format!("cursor location failed: {e}")))?;
+
+        let rects = Self::monitor_rects().map_err(ToolError::ExecutionFailed)?;
+        let idx = Self::monitor_index_for_point(x, y, &rects);
+        let (w, h, ox, oy) =
+            rects
+                .get(idx)
+                .copied()
+                .unwrap_or((REFERENCE_WIDTH, REFERENCE_HEIGHT, 0, 0));
+        let local = [x - ox, y - oy];
+        let (src_w, src_h) = self.screenshot_dims(Some(idx as u32));
+        let in_source_space = Self::unscale_coordinate(local, w, h, src_w, src_h);
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "cursor".to_string(),
+            json!({
+                "global": [x, y],
+                "monitor": idx,
+                "monitor_local": local,
+                "screenshot_space": in_source_space,
+                "screenshot_dims": [src_w, src_h],
+            }),
+        );
+        Ok(ToolOutput {
+            content: format!(
+                "cursor at ({x}, {y}) — monitor {idx}, local ({}, {}), screenshot-space ({}, {}) of {}x{}",
+                local[0], local[1], in_source_space[0], in_source_space[1], src_w, src_h
+            ),
+            is_error: false,
+            metadata,
+        })
+    }
+
+    #[cfg(not(feature = "computer-use"))]
+    async fn execute_cursor_position(&self) -> ToolResult<ToolOutput> {
+        Ok(ToolOutput {
+            content: format!(
+                "cursor_position is unavailable: the `computer-use` feature is not enabled in this build.{FEATURE_DISABLED_HINT}"
             ),
             is_error: true,
             metadata: HashMap::new(),
@@ -697,7 +1121,9 @@ impl ComputerUseTool {
 
         let (button, clicks, label) = Self::click_spec(action);
 
-        let scaled = Self::resolve_point(coord, monitor).map_err(ToolError::ExecutionFailed)?;
+        let scaled = self
+            .resolve_point(coord, monitor)
+            .map_err(ToolError::ExecutionFailed)?;
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
@@ -784,7 +1210,7 @@ impl ComputerUseTool {
         let mut metadata = HashMap::new();
         crate::windows_platform::attach_window_context(&mut metadata);
         Ok(ToolOutput {
-            content: format!("Typed {} characters", text.len()),
+            content: format!("Typed {} characters", text.chars().count()),
             is_error: false,
             metadata,
         })
@@ -826,7 +1252,9 @@ impl ComputerUseTool {
 
         // Move to coordinate if provided
         if let Some(c) = coord {
-            let scaled = Self::resolve_point(c, monitor).map_err(ToolError::ExecutionFailed)?;
+            let scaled = self
+                .resolve_point(c, monitor)
+                .map_err(ToolError::ExecutionFailed)?;
             enigo
                 .move_mouse(scaled[0], scaled[1], enigo::Coordinate::Abs)
                 .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
@@ -879,12 +1307,22 @@ impl ComputerUseTool {
             });
         }
         Self::ensure_input_permitted()?;
+        crate::windows_platform::ensure_dpi_awareness();
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
 
         let keys = Self::parse_key_combination(key);
-        let enigo_keys: Vec<enigo::Key> = keys.iter().map(|k| Self::str_to_key(k)).collect();
+        let mut enigo_keys = Vec::with_capacity(keys.len());
+        for k in &keys {
+            enigo_keys.push(Self::str_to_key(k).ok_or_else(|| {
+                ToolError::InvalidInput(format!(
+                    "unknown key {k:?} in combination {key:?} — use key names like \
+                     Return/Tab/Escape/ArrowDown/F5, modifiers ctrl/alt/shift/meta, \
+                     a single character, or '+' (written 'ctrl++')"
+                ))
+            })?);
+        }
         // For simple single keys, click directly
         if enigo_keys.len() == 1 {
             enigo
@@ -924,12 +1362,31 @@ impl ComputerUseTool {
         })
     }
 
+    /// Shared wait validation + capping. Rejects negative/non-finite
+    /// durations; caps runaway sleeps at [`MAX_WAIT_SECONDS`] so a confused
+    /// model cannot hang the automation loop (important for remote/mobile
+    /// sessions where the user only sees progress through screenshots).
+    fn validate_wait(duration: f64) -> Result<f64, ToolError> {
+        if !duration.is_finite() || duration < 0.0 {
+            return Err(ToolError::InvalidInput(format!(
+                "wait duration must be a finite number of seconds >= 0, got {duration}"
+            )));
+        }
+        Ok(duration.min(MAX_WAIT_SECONDS))
+    }
+
     #[cfg(feature = "computer-use")]
     async fn execute_wait(&self, duration: f64) -> ToolResult<ToolOutput> {
-        let millis = (duration * 1000.0) as u64;
+        let capped = Self::validate_wait(duration)?;
+        let millis = (capped * 1000.0) as u64;
         tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
+        let content = if capped < duration {
+            format!("Waited {capped:.1}s (requested {duration:.1}s, capped at {MAX_WAIT_SECONDS}s)")
+        } else {
+            format!("Waited {capped:.1}s")
+        };
         Ok(ToolOutput {
-            content: format!("Waited {duration:.1}s"),
+            content,
             is_error: false,
             metadata: HashMap::new(),
         })
@@ -938,10 +1395,11 @@ impl ComputerUseTool {
     #[cfg(not(feature = "computer-use"))]
     async fn execute_wait(&self, duration: f64) -> ToolResult<ToolOutput> {
         // Even without the feature, wait is safe to execute
-        let millis = (duration * 1000.0) as u64;
+        let capped = Self::validate_wait(duration)?;
+        let millis = (capped * 1000.0) as u64;
         tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
         Ok(ToolOutput {
-            content: format!("Waited {duration:.1}s"),
+            content: format!("Waited {capped:.1}s"),
             is_error: false,
             metadata: HashMap::new(),
         })
@@ -963,7 +1421,9 @@ impl ComputerUseTool {
         Self::ensure_input_permitted()?;
         crate::windows_platform::ensure_dpi_awareness();
 
-        let scaled = Self::resolve_point(coord, monitor).map_err(ToolError::ExecutionFailed)?;
+        let scaled = self
+            .resolve_point(coord, monitor)
+            .map_err(ToolError::ExecutionFailed)?;
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
@@ -1017,14 +1477,20 @@ impl ComputerUseTool {
         Self::ensure_input_permitted()?;
         crate::windows_platform::ensure_dpi_awareness();
 
-        let scaled_start =
-            Self::resolve_point(start, monitor).map_err(ToolError::ExecutionFailed)?;
-        let scaled_end = Self::resolve_point(end, monitor).map_err(ToolError::ExecutionFailed)?;
+        let scaled_start = self
+            .resolve_point(start, monitor)
+            .map_err(ToolError::ExecutionFailed)?;
+        let scaled_end = self
+            .resolve_point(end, monitor)
+            .map_err(ToolError::ExecutionFailed)?;
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
 
-        // Move to start, press, drag to end, release
+        // Move to start, press, interpolate mouse moves to the end (many
+        // surfaces — HTML5 drag & drop, canvas apps, sliders — ignore a
+        // teleported press→release and need intermediate move events while
+        // the button is held), then release.
         enigo
             .move_mouse(scaled_start[0], scaled_start[1], enigo::Coordinate::Abs)
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
@@ -1033,9 +1499,19 @@ impl ComputerUseTool {
             .button(enigo::Button::Left, Direction::Press)
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse press failed: {e}")))?;
 
-        enigo
-            .move_mouse(scaled_end[0], scaled_end[1], enigo::Coordinate::Abs)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
+        let dx = scaled_end[0] - scaled_start[0];
+        let dy = scaled_end[1] - scaled_start[1];
+        let dist = ((dx * dx + dy * dy) as f64).sqrt();
+        // ~12px per step, 30 steps max, always at least one move.
+        let steps = ((dist / 12.0).ceil() as usize).clamp(1, 30);
+        for i in 1..=steps {
+            let ix = scaled_start[0] + dx * i as i32 / steps as i32;
+            let iy = scaled_start[1] + dy * i as i32 / steps as i32;
+            enigo
+                .move_mouse(ix, iy, enigo::Coordinate::Abs)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
+            tokio::time::sleep(std::time::Duration::from_millis(DRAG_STEP_DELAY_MS)).await;
+        }
 
         enigo
             .button(enigo::Button::Left, Direction::Release)
@@ -1663,5 +2139,294 @@ mod tests {
         let tool1 = ComputerUseTool::new();
         let tool2 = ComputerUseTool::default();
         assert_eq!(tool1.name(), tool2.name());
+    }
+
+    // ── Screenshot-space coordinate scaling (non-4:3 fix) ───────────────
+
+    #[test]
+    fn test_scale_coordinate_from_screenshot_space_16_9() {
+        // A 1920x1080 screen downscales to 1024x576; a point measured at the
+        // center of that image must land at the screen center — the old
+        // fixed 1024x768 path put it at y=405 of 540 (25% off vertically).
+        let scaled = ComputerUseTool::scale_coordinate_from([512, 288], 1024, 576, 1920, 1080);
+        assert_eq!(scaled, [960, 540]);
+    }
+
+    #[test]
+    fn test_scale_coordinate_from_differs_from_reference_path() {
+        // Same model coordinate, two source spaces — the results must
+        // differ, which is exactly why tracking screenshot dims matters.
+        let from_screenshot =
+            ComputerUseTool::scale_coordinate_from([512, 500], 1024, 576, 1920, 1080);
+        let from_reference = ComputerUseTool::scale_coordinate([512, 500], 1920, 1080);
+        assert_ne!(from_screenshot, from_reference);
+    }
+
+    #[test]
+    fn test_scale_coordinate_from_degenerate_source_falls_back_to_reference() {
+        let scaled = ComputerUseTool::scale_coordinate_from([512, 384], 0, 0, 2048, 1536);
+        assert_eq!(scaled, [1024, 768]);
+    }
+
+    #[test]
+    fn test_scale_coordinate_from_clamps() {
+        let scaled = ComputerUseTool::scale_coordinate_from([10_000, -50], 1024, 576, 1920, 1080);
+        assert_eq!(scaled, [1919, 0]);
+    }
+
+    #[test]
+    fn test_unscale_coordinate_round_trips() {
+        // screen → screenshot space → screen stays within a pixel (both
+        // directions round independently, so exact equality is not guaranteed).
+        let on_screen = [1471, 801];
+        let in_shot = ComputerUseTool::unscale_coordinate(on_screen, 1920, 1080, 1024, 576);
+        let back = ComputerUseTool::scale_coordinate_from(in_shot, 1024, 576, 1920, 1080);
+        assert!((back[0] - on_screen[0]).abs() <= 1 && (back[1] - on_screen[1]).abs() <= 1);
+    }
+
+    // ── Multi-monitor point resolution ──────────────────────────────────
+
+    #[test]
+    fn test_monitor_index_for_point_containment() {
+        let rects = [(1920u32, 1080u32, 0, 0), (2560, 1440, -2560, 0)];
+        assert_eq!(
+            ComputerUseTool::monitor_index_for_point(100, 100, &rects),
+            0
+        );
+        assert_eq!(
+            ComputerUseTool::monitor_index_for_point(-100, 500, &rects),
+            1
+        );
+    }
+
+    #[test]
+    fn test_monitor_index_for_point_gap_snaps_to_nearest() {
+        // Point in the void between/beside displays → nearest center.
+        let rects = [(1920u32, 1080u32, 0, 0), (1920, 1080, 1920, 0)];
+        assert_eq!(
+            ComputerUseTool::monitor_index_for_point(1919, 100, &rects),
+            0
+        );
+        // x=5000 is right of both; monitor 1's center is closer.
+        assert_eq!(
+            ComputerUseTool::monitor_index_for_point(5000, 100, &rects),
+            1
+        );
+    }
+
+    #[test]
+    fn test_monitor_index_for_point_empty() {
+        assert_eq!(ComputerUseTool::monitor_index_for_point(5, 5, &[]), 0);
+    }
+
+    // ── Zoom crop rect math ─────────────────────────────────────────────
+
+    #[test]
+    fn test_zoom_crop_rect_maps_screenshot_space_to_capture() {
+        // 2x capture of a 1024x576 screenshot: region at (512,288) size
+        // (256,144) → capture px (1024,576) size (512,288).
+        let rect = ComputerUseTool::zoom_crop_rect([512, 288], [256, 144], 1024, 576, 2048, 1152);
+        assert_eq!(rect, (1024, 576, 512, 288));
+    }
+
+    #[test]
+    fn test_zoom_crop_rect_falls_back_to_reference_space() {
+        // Before any screenshot, regions are in 1024x768 reference space.
+        let rect = ComputerUseTool::zoom_crop_rect([0, 0], [1024, 768], 0, 0, 1920, 1080);
+        assert_eq!(rect, (0, 0, 1920, 1080));
+    }
+
+    #[test]
+    fn test_zoom_crop_rect_clamps_out_of_bounds_region() {
+        let rect = ComputerUseTool::zoom_crop_rect([1000, 700], [500, 500], 1024, 768, 1024, 768);
+        // Top-left clamps to (999, 767)? No: x clamps into the image, then
+        // width clamps to what remains — the rect always stays in bounds
+        // with a minimum 1x1 size.
+        let (x, y, w, h) = rect;
+        assert!(
+            x + w <= 1024 && y + h <= 768,
+            "rect out of bounds: {rect:?}"
+        );
+        assert!(w >= 1 && h >= 1);
+    }
+
+    // ── Key parsing: the '+' key and strictness ─────────────────────────
+
+    #[test]
+    fn test_parse_key_combination_plus_key() {
+        assert_eq!(
+            ComputerUseTool::parse_key_combination("ctrl++"),
+            vec!["ctrl".to_string(), "+".to_string()]
+        );
+        assert_eq!(
+            ComputerUseTool::parse_key_combination("++"),
+            vec!["+".to_string()]
+        );
+        assert_eq!(
+            ComputerUseTool::parse_key_combination("+"),
+            vec!["+".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_key_combination_regular_unchanged() {
+        assert_eq!(
+            ComputerUseTool::parse_key_combination("ctrl+shift+s"),
+            vec!["ctrl".to_string(), "shift".to_string(), "s".to_string()]
+        );
+        assert_eq!(
+            ComputerUseTool::parse_key_combination("Return"),
+            vec!["Return".to_string()]
+        );
+        assert_eq!(
+            ComputerUseTool::parse_key_combination(""),
+            vec![String::new()]
+        );
+    }
+
+    #[cfg(feature = "computer-use")]
+    #[test]
+    fn test_str_to_key_extended_names() {
+        assert_eq!(ComputerUseTool::str_to_key("F13"), Some(enigo::Key::F13));
+        assert_eq!(ComputerUseTool::str_to_key("f24"), Some(enigo::Key::F24));
+        assert_eq!(
+            ComputerUseTool::str_to_key("insert"),
+            Some(enigo::Key::Insert)
+        );
+        assert_eq!(
+            ComputerUseTool::str_to_key("pgdn"),
+            Some(enigo::Key::PageDown)
+        );
+        assert_eq!(ComputerUseTool::str_to_key("option"), Some(enigo::Key::Alt));
+        assert_eq!(
+            ComputerUseTool::str_to_key("+"),
+            Some(enigo::Key::Unicode('+'))
+        );
+        assert_eq!(
+            ComputerUseTool::str_to_key("7"),
+            Some(enigo::Key::Unicode('7'))
+        );
+    }
+
+    #[cfg(feature = "computer-use")]
+    #[test]
+    fn test_str_to_key_rejects_unknown_names() {
+        // The old first-char fallback turned these into wrong keystrokes
+        // ("F13" → 'f', "printscreen" → 'p'); they must be rejected.
+        assert_eq!(ComputerUseTool::str_to_key("F13x"), None);
+        assert_eq!(ComputerUseTool::str_to_key("printscreen"), None);
+        assert_eq!(ComputerUseTool::str_to_key(" volumemute"), None);
+        assert_eq!(ComputerUseTool::str_to_key("f25"), None);
+        assert_eq!(ComputerUseTool::str_to_key(""), None);
+    }
+
+    // ── Wait clamping ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_wait_rejects_negative_and_non_finite() {
+        assert!(ComputerUseTool::validate_wait(-1.0).is_err());
+        assert!(ComputerUseTool::validate_wait(f64::NAN).is_err());
+        assert!(ComputerUseTool::validate_wait(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn test_validate_wait_caps_runaway_requests() {
+        assert_eq!(
+            ComputerUseTool::validate_wait(500.0).unwrap(),
+            MAX_WAIT_SECONDS
+        );
+        assert_eq!(ComputerUseTool::validate_wait(1.5).unwrap(), 1.5);
+        assert_eq!(ComputerUseTool::validate_wait(0.0).unwrap(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_wait_accepts_small_durations() {
+        // A capped request is accepted (not an error) — the cap value itself
+        // is verified via `validate_wait` above without sleeping through it.
+        let tool = ComputerUseTool::new();
+        let result = tool
+            .execute(json!({ "action": "wait", "duration": 0.05 }))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.starts_with("Waited"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_wait_negative_duration_errors() {
+        let tool = ComputerUseTool::new();
+        let result = tool
+            .execute(json!({ "action": "wait", "duration": -3.0 }))
+            .await;
+        assert!(matches!(result, Err(ToolError::InvalidInput(_))));
+    }
+
+    // ── Schema covers the new actions ───────────────────────────────────
+
+    #[test]
+    fn test_input_schema_includes_new_actions() {
+        let tool = ComputerUseTool::new();
+        let schema = tool.input_schema();
+        let actions = schema
+            .pointer("/properties/action/enum")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert!(actions.contains(&json!("zoom")));
+        assert!(actions.contains(&json!("cursor_position")));
+        assert!(actions.contains(&json!("ui_tree")));
+        assert!(actions.contains(&json!("ui_click")));
+        assert!(
+            schema.pointer("/properties/size").is_some(),
+            "zoom needs a 'size' property"
+        );
+    }
+
+    #[test]
+    fn test_deserialize_zoom_action() {
+        let input: ComputerUseInput = serde_json::from_value(json!({
+            "action": "zoom",
+            "coordinate": [100, 100],
+            "size": [200, 150]
+        }))
+        .unwrap();
+        assert_eq!(input.action, ComputerAction::Zoom);
+        assert_eq!(input.size, Some([200, 150]));
+    }
+
+    #[test]
+    fn test_deserialize_cursor_position_action() {
+        let input: ComputerUseInput =
+            serde_json::from_value(json!({ "action": "cursor_position" })).unwrap();
+        assert_eq!(input.action, ComputerAction::CursorPosition);
+    }
+
+    #[cfg(not(feature = "computer-use"))]
+    #[tokio::test]
+    async fn test_zoom_and_cursor_position_stub_errors_without_feature() {
+        let tool = ComputerUseTool::new();
+        let zoom = tool
+            .execute(json!({ "action": "zoom", "coordinate": [10, 10] }))
+            .await
+            .unwrap();
+        assert!(zoom.is_error);
+        assert!(zoom.content.contains("computer-use"));
+
+        let cursor = tool
+            .execute(json!({ "action": "cursor_position" }))
+            .await
+            .unwrap();
+        assert!(cursor.is_error);
+        assert!(cursor.content.contains("computer-use"));
+    }
+
+    #[test]
+    fn test_description_mentions_screenshot_space_coords() {
+        let tool = ComputerUseTool::new();
+        assert!(
+            tool.description().contains("screenshot image"),
+            "description must teach the model the coordinate contract: {}",
+            tool.description()
+        );
     }
 }
