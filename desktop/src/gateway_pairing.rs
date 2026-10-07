@@ -34,16 +34,26 @@
 //! ## TLS
 //!
 //! When `mobile.tls` is on (the desktop-written default) the gateway serves a
-//! SELF-SIGNED certificate with the fingerprint published in
-//! `~/.shannon/mobile-tls/tls-info.json` for phones to pin. This client
-//! accepts any cert (`danger_accept_invalid_certs`) — chain validation is
-//! impossible against a self-signed CA, and the request is already
-//! authenticated by the single-use pair token carried in the body. That
-//! matches the QR threat model: a network observer who can see the token is
-//! out of the established trust boundary (the same token also rides the QR
-//! and the plaintext-fallback `ws://` flow).
+//! SELF-SIGNED certificate whose SHA-256 fingerprint is published in
+//! `~/.shannon/mobile-tls/tls-info.json` — the same file the QR flow reads,
+//! so the desktop and the phone pin one value. Chain validation is
+//! impossible against a self-signed CA, so this client PINS the fingerprint
+//! instead: the presented end-entity cert must hash to the published value
+//! or the request fails with a loud error. A machine in the middle can no
+//! longer terminate the session (and relaying a sniffed approve call to the
+//! real gateway dies with the interception). Handshake signatures are still
+//! verified against the presented key, so a stolen fingerprint alone is
+//! useless without the gateway's private key.
+//!
+//! When the fingerprint file is absent (a manually configured gateway, or a
+//! deleted/regenerating file) the client falls back to the pre-pinning
+//! behavior — accept any cert — with a one-time warning. Auth remains the
+//! single-use pair token carried in the body.
 
+use std::sync::OnceLock;
 use std::time::Duration;
+
+use sha2::Digest as _;
 
 use serde::{Deserialize, Serialize};
 
@@ -108,6 +118,166 @@ struct PairingRpcError {
     message: String,
 }
 
+// ── TLS fingerprint pinning ────────────────────────────────────────────────
+
+/// The client for one pairing call: pinned TLS when the URL is https and the
+/// gateway's published fingerprint is readable; the legacy accept-any-cert
+/// client (with a one-time warning) otherwise. See the module TLS docs.
+fn pairing_client_for(base_url: &str) -> Result<reqwest::Client, String> {
+    if !base_url.starts_with("https://") {
+        return legacy_client();
+    }
+    match pinned_mobile_fingerprint() {
+        Some(pin) => pinned_https_client(&pin),
+        None => {
+            static WARNED: OnceLock<()> = OnceLock::new();
+            if WARNED.set(()).is_ok() {
+                tracing::warn!(
+                    "pairing RPC: gateway serves https but \
+                     ~/.shannon/mobile-tls/tls-info.json carries no usable \
+                     fingerprint — accepting any certificate until the file \
+                     exists (restart the gateway with mobile.tls on to mint it)"
+                );
+            }
+            legacy_client()
+        }
+    }
+}
+
+fn legacy_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        // No pin on file: nothing to compare, so chain checking is skipped
+        // (the gateway intentionally serves a self-signed cert).
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| format!("pairing RPC: client build failed: {e}"))
+}
+
+/// Normalized (lowercase, colon-less) pinned fingerprint from the gateway's
+/// `tls-info.json`, or `None` when the file is absent/unreadable/malformed —
+/// the same source the QR flow reads, so desktop and phones pin one value.
+fn pinned_mobile_fingerprint() -> Option<String> {
+    let info = crate::commands_mobile_pairing::read_tls_info()?;
+    let normalized = normalize_fingerprint(&info.fingerprint);
+    parse_pinned_fingerprint(&normalized)?;
+    Some(normalized)
+}
+
+/// Lowercase hex without separators — the tls-info.json/QR form. Tolerates
+/// the colon-separated OpenSSL form for hand-edited files.
+fn normalize_fingerprint(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase().replace(':', "")
+}
+
+/// Decode a normalized fingerprint into its 32 raw bytes; `None` when it is
+/// not exactly 64 hex chars.
+fn parse_pinned_fingerprint(normalized: &str) -> Option<[u8; 32]> {
+    if normalized.len() != 64 {
+        return None;
+    }
+    let hex_digit = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+    let mut out = [0u8; 32];
+    for (i, pair) in normalized.as_bytes().chunks(2).enumerate() {
+        out[i] = (hex_digit(pair[0])? << 4) | hex_digit(pair[1])?;
+    }
+    Some(out)
+}
+
+/// HTTPS client whose TLS layer pins the gateway cert by fingerprint.
+fn pinned_https_client(pinned_hex: &str) -> Result<reqwest::Client, String> {
+    let pinned = parse_pinned_fingerprint(pinned_hex)
+        .ok_or_else(|| format!("pairing RPC: pinned fingerprint is not 64 hex chars: {pinned_hex}"))?;
+    let provider = rustls::crypto::ring::default_provider();
+    let mut config = rustls::ClientConfig::builder_with_provider(provider.clone().into())
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("pairing RPC: TLS config error: {e}"))?
+        .dangerous()
+        .with_custom_certificate_verifier(std::sync::Arc::new(FingerprintVerifier {
+            pinned,
+            provider,
+        }))
+        .with_no_client_auth();
+    // The gateway's axum skin is plain HTTP/1.1; advertise it so ALPN cannot
+    // negotiate anything else.
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .use_preconfigured_tls(Some(config))
+        .build()
+        .map_err(|e| format!("pairing RPC: client build failed: {e}"))
+}
+
+/// rustls server-cert verifier that replaces chain validation with the
+/// published fingerprint: the end-entity cert's SHA-256 must equal the pin.
+/// Handshake signatures are still checked against the presented key (proof
+/// of possession), so a peer without the gateway's private key cannot pass
+/// even a fingerprint it observed.
+#[derive(Debug)]
+struct FingerprintVerifier {
+    pinned: [u8; 32],
+    provider: rustls::crypto::CryptoProvider,
+}
+
+impl rustls::client::danger::ServerCertVerifier for FingerprintVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let digest = sha2::Sha256::digest(end_entity.as_ref());
+        if digest.as_slice() == self.pinned {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General(
+                "gateway TLS certificate does not match the pinned fingerprint \
+                 (~/.shannon/mobile-tls/tls-info.json). If the gateway cert was \
+                 regenerated, restart the gateway so the file refreshes; \
+                 otherwise this may be a machine in the middle."
+                    .to_string(),
+            ))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+
 #[derive(Debug, Deserialize)]
 struct PairingRpcErrorBody {
     error: PairingRpcError,
@@ -147,13 +317,7 @@ pub(crate) async fn pairing_rpc_post(
     path: &str,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        // See module docs: the gateway intentionally serves a self-signed
-        // cert; auth is the single-use pair token, not the TLS chain.
-        .danger_accept_invalid_certs(true)
-        .build()
-        .map_err(|e| format!("pairing RPC: client build failed: {e}"))?;
+    let client = pairing_client_for(base_url)?;
     let url = format!("{}{}", base_url.trim_end_matches('/'), path);
     let response = client
         .post(&url)
@@ -439,5 +603,62 @@ mod tests {
         assert!(down.contains("cannot reach the gateway"), "got: {down}");
 
         server.abort();
+    }
+
+    // ── TLS fingerprint pinning ────────────────────────────────────────
+
+    #[test]
+    fn fingerprint_normalization_and_parse() {
+        // The gateway publishes lowercase colon-less hex (mobileTls.ts);
+        // the colon-separated OpenSSL form is tolerated too.
+        assert_eq!(
+            normalize_fingerprint("AA:BB:0C:0D:0E:0F"),
+            "aabb0c0d0e0f"
+        );
+        let normalized = normalize_fingerprint(
+            "3A:F9:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:01:23:45:67:89:AB:CD:EF:FE:DC:BA:98:76:54:32",
+        );
+        let parsed = parse_pinned_fingerprint(&normalized).expect("64 hex chars parse");
+        assert_eq!(parsed.len(), 32);
+        assert_eq!(parsed[0], 0x3a);
+        assert_eq!(parsed[31], 0x32);
+
+        assert!(parse_pinned_fingerprint("aabb").is_none(), "too short");
+        assert!(
+            parse_pinned_fingerprint(&"a".repeat(63)).is_none(),
+            "odd/short length rejected"
+        );
+        assert!(
+            parse_pinned_fingerprint(&format!("{}zz", "a".repeat(62))).is_none(),
+            "non-hex rejected"
+        );
+    }
+
+    /// The verifier's whole contract: hash the presented end-entity DER,
+    /// compare to the pin. Synthetic bytes suffice — it never parses the
+    /// cert. Signature checks delegate to the stock provider (not re-tested).
+    #[test]
+    fn fingerprint_verifier_accepts_pinned_and_rejects_other() {
+        use rustls::client::danger::ServerCertVerifier as _;
+
+        let presented = vec![0xABu8; 512];
+        let pinned: [u8; 32] = sha2::Sha256::digest(&presented).into();
+        let provider = rustls::crypto::ring::default_provider();
+        let verifier = FingerprintVerifier { pinned, provider };
+        let cert = rustls::pki_types::CertificateDer::from(presented);
+        let name = rustls::pki_types::ServerName::try_from("127.0.0.1".to_string())
+            .expect("ip server name");
+
+        assert!(verifier.verify_server_cert(&cert, &[], &name, &[], rustls::pki_types::UnixTime::now()).is_ok());
+
+        let other = rustls::pki_types::CertificateDer::from(vec![0xCDu8; 512]);
+        let err = verifier
+            .verify_server_cert(&other, &[], &name, &[], rustls::pki_types::UnixTime::now())
+            .expect_err("mismatching cert must fail");
+        let text = match err {
+            rustls::Error::General(text) => text,
+            other => panic!("unexpected error shape: {other:?}"),
+        };
+        assert!(text.contains("pinned fingerprint"), "got: {text}");
     }
 }

@@ -82,6 +82,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 axum = { workspace = true }
 dashmap = "6.1"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+# Pairing-RPC TLS fingerprint pinning (gateway_pairing): the custom
+# ServerCertVerifier needs rustls named directly. Same 0.23/ring the
+# workspace already locks via tokio-tungstenite / rustls-connector — no new
+# package, only features unioned.
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 sha2 = "0.10"
 rand = "0.8"
 qrcode = "0.14"
