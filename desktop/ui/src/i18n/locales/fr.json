@@ -4015,6 +4015,7 @@
   "tasks.scheduleTemplates.nightlyTests.name": "Suite de tests nocturne",
   "tasks.scheduleTemplates.nightlyTests.description": "Exécuter la suite de tests complète dans un worktree propre.",
   "tasks.taskCard.teamTitle": "Équipe : {team}",
+  "tasks.taskCard.costTitle": "Dépense de la session de cette tâche dans le registre d’utilisation (conservée selon la rotation du registre)",
   "tasks.taskDetailDrawer.backgroundTask": "Tâche d'arrière-plan",
   "diff.viewer.untitled": "sans titre",
   "diff.viewer.lines": "{count, plural, =1 {1 ligne} other {{count} lignes}}",

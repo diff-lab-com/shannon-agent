@@ -4015,6 +4015,7 @@
   "tasks.scheduleTemplates.nightlyTests.name": "Ночной набор тестов",
   "tasks.scheduleTemplates.nightlyTests.description": "Запускает полный набор тестов в чистом worktree.",
   "tasks.taskCard.teamTitle": "Команда: {team}",
+  "tasks.taskCard.costTitle": "Расход сессии этой задачи из журнала использования (хранится с учётом ротации журнала)",
   "tasks.taskDetailDrawer.backgroundTask": "Фоновая задача",
   "diff.viewer.untitled": "без названия",
   "diff.viewer.lines": "{count, plural, one {# строка} few {# строки} many {# строк} other {# строки}}",

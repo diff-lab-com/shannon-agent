@@ -1157,6 +1157,11 @@ export interface TaskItem {
   execution_mode?: 'serial' | 'parallel' | null
   /** Team / session subdir name the task file lives in. */
   team?: string | null
+  /** 看板金额: ledger-attributed spend (USD) of the producing agent session,
+   *  joined at `list_tasks` time when `team` is a real session uuid the
+   *  usage ledger has records for (possibly 0). Absent — never an estimate
+   *  — for hand-built/adhoc tasks; the card renders nothing when absent. */
+  cost_usd?: number
 }
 
 /// Payload for `update_task`. All fields optional except `id`.

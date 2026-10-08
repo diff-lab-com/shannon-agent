@@ -4015,6 +4015,7 @@
   "tasks.scheduleTemplates.nightlyTests.name": "Suíte de testes noturna",
   "tasks.scheduleTemplates.nightlyTests.description": "Executa a suíte completa de testes em um worktree limpo.",
   "tasks.taskCard.teamTitle": "Equipe: {team}",
+  "tasks.taskCard.costTitle": "Gasto atribuído à sessão desta tarefa no registro de uso (mantido conforme a rotação do registro)",
   "tasks.taskDetailDrawer.backgroundTask": "Tarefa em segundo plano",
   "diff.viewer.untitled": "sem título",
   "diff.viewer.lines": "{count, plural, =1 {1 linha} other {{count} linhas}}",

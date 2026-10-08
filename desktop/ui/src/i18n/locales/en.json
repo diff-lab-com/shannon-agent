@@ -4053,6 +4053,7 @@
   "tasks.scheduleTemplates.nightlyTests.name": "Nightly Test Suite",
   "tasks.scheduleTemplates.nightlyTests.description": "Run the full test suite in a clean worktree.",
   "tasks.taskCard.teamTitle": "Team: {team}",
+  "tasks.taskCard.costTitle": "Spend attributed to this task’s session in the usage ledger (kept per ledger rotation)",
   "tasks.taskDetailDrawer.backgroundTask": "Background task",
   "diff.viewer.untitled": "untitled",
   "diff.viewer.lines": "{count, plural, =1 {1 line} other {{count} lines}}",

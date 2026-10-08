@@ -39,6 +39,15 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
   const isActive = task.status === 'running' || task.status === 'in_progress'
   const pauseReason = autoPausedReasons?.get(task.id) ?? null
   const autoPaused = pauseReason !== null
+  // 看板金额 (批 1): ledger-attributed spend of the producing agent session.
+  // Rendered only when the backend actually joined a cost — `None` (hand-
+  // built / adhoc tasks, unseen sessions) renders NOTHING, never a "$–"
+  // placeholder (honesty contract: never an estimate). Two-decimal USD,
+  // matching the status bar's money formatting.
+  const cost = task.cost_usd
+  const costLabel = cost != null
+    ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(cost)
+    : null
   return (
     // B6-37 (§5 任务): the card is clickable via its title button. The card
     // container itself must NOT carry role="button" — it contains real action
@@ -99,6 +108,20 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
                   {task.team}
                 </span>
               ) : null}
+              {costLabel != null && (
+                // 看板金额: icon + amount, muted like the sibling meta chips.
+                // The tooltip carries the 口径注记: the number is the usage-
+                // ledger spend of the producing session, kept per ledger
+                // rotation — not a lifetime total.
+                <span
+                  data-testid="task-card-cost"
+                  title={t('tasks.taskCard.costTitle')}
+                  className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs tabular-nums"
+                >
+                  <span className="material-symbols-outlined icon-sm">payments</span>
+                  {costLabel}
+                </span>
+              )}
             </div>
           </div>
         </div>

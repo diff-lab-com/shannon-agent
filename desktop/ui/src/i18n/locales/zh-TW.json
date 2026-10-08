@@ -4015,6 +4015,7 @@
   "tasks.scheduleTemplates.nightlyTests.name": "夜間測試套件",
   "tasks.scheduleTemplates.nightlyTests.description": "在乾淨工作樹中執行完整測試套件。",
   "tasks.taskCard.teamTitle": "團隊：{team}",
+  "tasks.taskCard.costTitle": "來自用量帳本的該任務會話花費（隨帳本輪轉保留）",
   "tasks.taskDetailDrawer.backgroundTask": "背景任務",
   "diff.viewer.untitled": "未命名",
   "diff.viewer.lines": "{count} 行",

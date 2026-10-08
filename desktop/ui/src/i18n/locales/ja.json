@@ -4014,6 +4014,7 @@
   "tasks.scheduleTemplates.nightlyTests.name": "夜間テストスイート",
   "tasks.scheduleTemplates.nightlyTests.description": "クリーンなワークツリーでテストスイート全体を実行します。",
   "tasks.taskCard.teamTitle": "チーム: {team}",
+  "tasks.taskCard.costTitle": "使用量台帳に計上されたこのタスクのセッションの費用（台帳はローテーションで保持されます）",
   "tasks.taskDetailDrawer.backgroundTask": "バックグラウンドタスク",
   "diff.viewer.untitled": "無題",
   "diff.viewer.lines": "{count} 行",

@@ -4014,6 +4014,7 @@
   "tasks.scheduleTemplates.nightlyTests.name": "Nächtliche Testsuite",
   "tasks.scheduleTemplates.nightlyTests.description": "Die vollständige Testsuite in einem sauberen Worktree ausführen.",
   "tasks.taskCard.teamTitle": "Team: {team}",
+  "tasks.taskCard.costTitle": "Ausgabe dieser Aufgaben-Sitzung laut Nutzungsledger (bleibt gemäß Ledger-Rotation erhalten)",
   "tasks.taskDetailDrawer.backgroundTask": "Hintergrundaufgabe",
   "diff.viewer.untitled": "unbenannt",
   "diff.viewer.lines": "{count, plural, =1 {1 Zeile} other {{count} Zeilen}}",
