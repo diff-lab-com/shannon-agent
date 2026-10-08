@@ -128,6 +128,23 @@ pub struct DesktopConfig {
     /// older config files loadable.
     #[serde(default)]
     pub open_session_windows: Vec<String>,
+    /// 启动恢复会话 — master switch for the launch-time session-window
+    /// restore (`session_window_commands::restore_session_windows`). When
+    /// false the persisted [`DesktopConfig::open_session_windows`] list is
+    /// left untouched but NOT replayed at launch — no window the user
+    /// closed comes back on its own. Default: enabled (existing users keep
+    /// the restore-on-upgrade behavior).
+    #[serde(default = "default_true")]
+    pub restore_session_windows_on_launch: bool,
+    /// 启动时检查更新 — when true (default), the UI runs ONE check-only
+    /// GitHub Releases check after launch and, when a newer release exists,
+    /// surfaces the existing「发现新版本」toast (the About pane's copy).
+    /// Notification only: nothing is ever downloaded or installed
+    /// automatically — the semi-automatic flow (C1①) ends at the release
+    /// page. The check itself lives frontend-side reusing the existing
+    /// `check_app_update` command, so this field is a plain read.
+    #[serde(default = "default_true")]
+    pub update_check_at_launch: bool,
     /// Provider allowlist — restricts the model catalog to the listed kinds
     /// (`anthropic` / `openai` / `ollama` / `gemini` / `deepseek` /
     /// `openai-compatible`). Drives the desktop Settings' "Provider
@@ -933,6 +950,8 @@ impl Default for DesktopConfig {
             voice_local: VoiceLocalConfig::default(),
             gateway: GatewayDesktopConfig::default(),
             open_session_windows: Vec::new(),
+            restore_session_windows_on_launch: default_true(),
+            update_check_at_launch: default_true(),
             enabled_providers: None,
             active_permission_profile: None,
             sandbox: None,
@@ -1883,6 +1902,32 @@ mod tests {
             back.open_session_windows,
             vec!["7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1".to_string()]
         );
+    }
+
+    /// 批 1 launch toggles: a pre-batch `config.json` (no such keys) loads
+    /// with BOTH launch behaviors ON — the honest default is "no behavior
+    /// change for existing users" — and each round-trips once written
+    /// (including an explicit `false`, which must not snap back to true).
+    #[test]
+    fn test_launch_toggles_default_on_and_round_trip() {
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(legacy.restore_session_windows_on_launch);
+        assert!(legacy.update_check_at_launch);
+
+        let config = DesktopConfig {
+            restore_session_windows_on_launch: false,
+            update_check_at_launch: false,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"restore_session_windows_on_launch\":false"), "{json}");
+        assert!(json.contains("\"update_check_at_launch\":false"), "{json}");
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert!(!back.restore_session_windows_on_launch);
+        assert!(!back.update_check_at_launch);
     }
 
     /// Settings R3 T3: the three power/hardware keys must default correctly

@@ -475,6 +475,14 @@ fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Resu
         // gates anything on it — the UI reads it live for the completion
         // chips + welcome-card refresh/filter, so a flip is immediate.
         "suggestions.enabled" => cfg.suggestions_enabled = enabled,
+        // 批 1: launch-behavior switches. Both are read ONCE at app start —
+        // `restore_session_windows_on_launch` gates the setup-hook session
+        // restore, `update_check_at_launch` gates the UI's one-shot
+        // check-only GitHub Releases probe — so a flip lands on the NEXT
+        // launch (the UI badges the card restart-app). Persist-only here,
+        // like `hardware_acceleration`.
+        "restore_session_windows_on_launch" => cfg.restore_session_windows_on_launch = enabled,
+        "update_check_at_launch" => cfg.update_check_at_launch = enabled,
         other => return Err(format!("Unrecognized boolean key: {other}")),
     }
     Ok(())
@@ -2820,11 +2828,14 @@ mod tests {
             "chat.ask_user_auto_continue" => Some(cfg.chat_ask_user_auto_continue),
             // D5 方案① — 主动任务推荐 (presentation toggle).
             "suggestions.enabled" => Some(cfg.suggestions_enabled),
+            // 批 1 — launch-behavior switches (persist-only; read at launch).
+            "restore_session_windows_on_launch" => Some(cfg.restore_session_windows_on_launch),
+            "update_check_at_launch" => Some(cfg.update_check_at_launch),
             _ => None,
         }
     }
 
-    const TOGGLE_KEYS: [&str; 15] = [
+    const TOGGLE_KEYS: [&str; 17] = [
         "memory_enabled",
         "telemetry",
         "encryption",
@@ -2840,6 +2851,8 @@ mod tests {
         "session.auto_archive_enabled",
         "chat.ask_user_auto_continue",
         "suggestions.enabled",
+        "restore_session_windows_on_launch",
+        "update_check_at_launch",
     ];
 
     #[test]
