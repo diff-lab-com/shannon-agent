@@ -12,10 +12,9 @@ import { test, expect } from '@playwright/test'
  * It's reachable purely from mock-mode routes (no Tauri command beyond
  * configure('clear_cache')).
  *
- * Requires dev sidebar mode: /settings/advanced sits behind the
- * RequireDevMode route guard (Settings R3, T1), which bounces simple-mode
- * sessions to /settings/general. Each test seeds
- * `localStorage['shannon-sidebar-mode'] = 'dev'` before navigation.
+ * 2026-10-08: the clear-chat-cache dialog moved to /settings/general
+ * (settings R1 data card) — reachable in simple mode, no dev-mode seeding
+ * required anymore; the localStorage seed is kept for parity.
  *
  * Backdrop-click close was initially omitted: it was flaky in headless
  * Chromium against the pre-R1b hand-rolled overlay's
@@ -27,7 +26,7 @@ import { test, expect } from '@playwright/test'
 test.describe('Modal interactions (R5 regression net)', () => {
   test('Escape closes a Modal opened from AdvancedSettings', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('shannon-sidebar-mode', 'dev'))
-    await page.goto('/settings/advanced')
+    await page.goto('/settings/general')
     await page.waitForLoadState('networkidle')
 
     const trigger = page.getByRole('button', { name: /Clear Chat Cache/i })
@@ -44,7 +43,7 @@ test.describe('Modal interactions (R5 regression net)', () => {
 
   test('triggering button regains focus after Modal closes', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('shannon-sidebar-mode', 'dev'))
-    await page.goto('/settings/advanced')
+    await page.goto('/settings/general')
     await page.waitForLoadState('networkidle')
 
     const trigger = page.getByRole('button', { name: /Clear Chat Cache/i })
@@ -65,7 +64,7 @@ test.describe('Modal interactions (R5 regression net)', () => {
 
   test('clicking the backdrop closes the Modal', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('shannon-sidebar-mode', 'dev'))
-    await page.goto('/settings/advanced')
+    await page.goto('/settings/general')
     await page.waitForLoadState('networkidle')
 
     const trigger = page.getByRole('button', { name: /Clear Chat Cache/i })

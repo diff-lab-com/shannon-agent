@@ -361,6 +361,12 @@ export default function MessageArea({
       data-testid="chat-scroll-container"
       className="relative flex-1 overflow-y-auto px-xl pt-lg pb-md"
     >
+      {/* ui-redesign-2026-10 (02-chat): the message flow is a single 792px
+          reading column, centered; the composer below shares the measure
+          (--container-reading) so input and output never diverge in width.
+          The session-switch veil near the end of this container stays a
+          DIRECT child — it must cover the full pane, not just the column. */}
+      <div className="mx-auto w-full max-w-reading">
       <StreamStatusRegion active={streamActive} />
       <VisionConfirmBar />
       {/* S2-4b: the tools gate's bar. At most one capability bar is ever
@@ -583,6 +589,7 @@ export default function MessageArea({
           <span className="material-symbols-outlined icon-md" aria-hidden="true">arrow_downward</span>
         </Button>
       )}
+      </div>
 
       {/* B1 P2-3: session-swap skeleton — shown only while a switch IPC is in
           flight (AppContext never sets the flag for same-session remounts),

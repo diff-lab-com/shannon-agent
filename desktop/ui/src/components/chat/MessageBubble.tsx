@@ -241,7 +241,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
         showCloseButton={false}
         title={attachment.name}
         closeLabel={t('chat.message.attachment.close')}
-        className="!bg-black/70 backdrop-blur-sm p-lg"
+        className="bg-scrim-strong! backdrop-blur-sm p-lg"
       >
         <img
           src={convertFileSrc(attachment.path)}
@@ -499,7 +499,12 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
             <p className="whitespace-pre-wrap">{message.thinking}</p>
           </Reasoning>
         )}
-        <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-e1 min-w-0 overflow-x-auto">
+        {/* Aurora redesign 2026-10 (02 页 P1 去卡片化): the assistant body is
+            avatar + BARE text flow (shannon-ui.css `.msg-ai .body`) — no
+            border/bg/shadow card. Visual hierarchy belongs to the content
+            blocks themselves (tool cards, diff cards, code blocks), which
+            keep their own chrome below. */}
+        <div className="min-w-0">
           <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-xs prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
             <Markdown>{message.content}</Markdown>
           </ResponseStream>
@@ -755,9 +760,12 @@ function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
 
   const hasCounts = stats != null && (stats.additions > 0 || stats.deletions > 0)
   return (
-    <div className="flex items-center justify-between gap-sm px-md py-xs rounded-lg bg-tertiary/5 border border-tertiary/20" data-testid="file-changes-card">
+    // Aurora 2026-10 语义色归位: additions/acceptance wear the success token
+    // (moss green, shannon-ui.css `.plus`) — tertiary/amber is reserved for
+    // warnings. Deletions stay error.
+    <div className="flex items-center justify-between gap-sm px-md py-xs rounded-lg bg-success/5 border border-success/20" data-testid="file-changes-card">
       <div className="flex items-center gap-sm min-w-0">
-        <span className="material-symbols-outlined icon-sm text-tertiary shrink-0" aria-hidden="true">difference</span>
+        <span className="material-symbols-outlined icon-sm text-success shrink-0" aria-hidden="true">difference</span>
         <span className="font-label-sm text-on-surface truncate">
           {t('chat.message.filesChanged', { count: paths.length })}
         </span>
@@ -769,7 +777,7 @@ function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
             className="font-mono text-label-xs tabular-nums shrink-0"
             aria-label={t('chat.message.diffStats.aria', { additions: stats!.additions, deletions: stats!.deletions })}
           >
-            <span className="text-tertiary">+{stats!.additions}</span>{' '}
+            <span className="text-success">+{stats!.additions}</span>{' '}
             <span className="text-error">−{stats!.deletions}</span>
           </span>
         )}
@@ -778,7 +786,7 @@ function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
         <Button
           variant="ghost"
           size="sm"
-          className="gap-xs px-sm py-xs text-tertiary hover:bg-tertiary/10"
+          className="gap-xs px-sm py-xs text-success hover:bg-success/10"
           onClick={() => (paths.length > 1 && onReviewAll ? onReviewAll() : onReview())}
         >
           <span className="material-symbols-outlined icon-sm" aria-hidden="true">difference</span>

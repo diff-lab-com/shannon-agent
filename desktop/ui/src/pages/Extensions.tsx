@@ -77,7 +77,7 @@ export default function Extensions() {
         <div className="flex items-center justify-between gap-md flex-wrap min-w-0">
           <p className="font-body-sm text-on-surface-variant truncate">{t('extensions.hub.subtitle')}</p>
           <div className="flex items-center bg-surface-container-lowest/50 rounded-full px-md py-xs border border-outline-variant/30 w-full max-w-[360px] focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20 transition-colors shrink-0">
-            <span className="material-symbols-outlined text-outline mr-sm icon-md">search</span>
+            <span className="material-symbols-outlined text-on-surface-variant mr-sm icon-md">search</span>
             <Input
               className="bg-transparent border-none outline-none focus:ring-0 text-label-md font-label-md w-full"
               placeholder={t(searchPlaceholderKey)}

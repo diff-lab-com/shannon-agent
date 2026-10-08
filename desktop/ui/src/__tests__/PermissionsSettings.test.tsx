@@ -127,29 +127,29 @@ function renderWithRoute(search = '') {
 
 async function renderLoaded(search = '') {
   renderWithRoute(search)
-  await waitFor(() => expect(screen.getByText('strict')).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByText('Strict')).toBeInTheDocument())
 }
 
 describe('PermissionsSettings — profiles list', () => {
   it('renders the three builtin profiles and the custom profile', async () => {
     await renderLoaded()
-    expect(screen.getByText('strict')).toBeInTheDocument()
-    expect(screen.getByText('balanced')).toBeInTheDocument()
-    expect(screen.getByText('permissive')).toBeInTheDocument()
+    expect(screen.getByText('Strict')).toBeInTheDocument()
+    expect(screen.getByText('Balanced')).toBeInTheDocument()
+    expect(screen.getByText('Permissive')).toBeInTheDocument()
     expect(screen.getByText('research-mode')).toBeInTheDocument()
   })
 
   it('marks the active builtin profile and disables re-activation', async () => {
     mockCatalog.config = { ...mockCatalog.config, active_permission_profile: 'balanced' }
     await renderLoaded()
-    const balancedSection = screen.getByText('balanced').closest('div') as HTMLElement
+    const balancedSection = screen.getByText('Balanced').closest('div') as HTMLElement
     expect(within(balancedSection.parentElement as HTMLElement).getAllByText('Active').length).toBeGreaterThan(0)
   })
 
   it('activates a builtin profile via activate_permission_profile and refreshes config', async () => {
     await renderLoaded()
     // The strict card's Enable button (not the custom row's).
-    const strictCard = screen.getByText('strict').closest('div.flex-col') as HTMLElement
+    const strictCard = screen.getByText('Strict').closest('div.flex-col') as HTMLElement
     fireEvent.click(within(strictCard).getByRole('button', { name: 'Enable' }))
     await waitFor(() => {
       expect(activatePermissionProfile).toHaveBeenCalledWith('strict')
@@ -263,7 +263,7 @@ describe('PermissionsSettings — custom profile CRUD', () => {
     // Retry re-issues the load and recovers.
     listPermissionProfiles.mockResolvedValue(PROFILES)
     fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
-    await waitFor(() => expect(screen.getByText('strict')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Strict')).toBeInTheDocument())
   })
 })
 

@@ -234,6 +234,17 @@ export function Header() {
   const { budget: sessionBudget, usage: sessionUsage } = useSessionBudget(chatSessionId);
   const isOpcTask = location.pathname.includes('/opc/task');
 
+  // Terminal drawer toggle reflection: the drawer lives on the chat page and
+  // owns its open state (drawer-only, Ctrl+` too); the Header button mirrors
+  // it through the open-changed window event (TerminalPanel broadcasts it).
+  const [terminalPanelOpen, setTerminalPanelOpen] = useState(false);
+  useEffect(() => {
+    const onOpenChanged = (e: Event) =>
+      setTerminalPanelOpen(Boolean((e as CustomEvent<{ open?: boolean }>).detail?.open));
+    window.addEventListener('shannon:terminal-open-changed', onOpenChanged);
+    return () => window.removeEventListener('shannon:terminal-open-changed', onOpenChanged);
+  }, []);
+
   // Decision 1 (review P1-2 / B1-8): the config's `model` key stores the
   // catalog ID. The old "U2 config stores the name" convention is retired —
   // `provider_resolver` passes the stored string through as the API `model`
@@ -348,6 +359,23 @@ export function Header() {
               <span className="material-symbols-outlined icon-md" aria-hidden="true">
                 {contextPanelOpen ? 'right_panel_close' : 'right_panel_open'}
               </span>
+            </Button>
+          )}
+          {/* Terminal drawer toggle (2026-10-08 review: the drawer's only
+              entry points were a bottom-corner pill and Ctrl+`, which read as
+              "no terminal entry point" — the top bar now carries the toggle,
+              mirroring the ContextPanel button). The drawer owns its state;
+              the click rides the same window-event seam as Ctrl+`. */}
+          {isChat && (
+            <Button
+              variant="ghost"
+              aria-label={t('terminal.panel.toggle')}
+              title={`${t('terminal.panel.toggle')} (Ctrl+\`)`}
+              aria-pressed={terminalPanelOpen}
+              className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+              onClick={() => window.dispatchEvent(new CustomEvent('shannon:terminal-toggle'))}
+            >
+              <span className="material-symbols-outlined icon-md" aria-hidden="true">terminal</span>
             </Button>
           )}
           {/* P0-4: spent/budget badge while the session has a budget cap */}
@@ -472,13 +500,15 @@ export function Header() {
                 <p className="text-body-sm text-on-surface-variant">{t('header.permRequest.subtitle')}</p>
               </div>
               {/* U3: four distinguishable risk tiers — critical=error,
-                  high=secondary, medium=tertiary, low=tertiary — with a
+                  high=secondary, medium=warning (Aurora 2026-10 语义色归位:
+                  amber is the high-risk signal), low=tertiary — with a
                   localized, screen-reader-visible label. */}
               <span
                 aria-label={t('header.permRequest.risk.aria', { level: t(`header.permRequest.risk.${permissionRequest.risk}`) })}
                 className={cn('px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider',
                   permissionRequest.risk === 'critical' ? 'bg-error-container text-on-error-container' :
                   permissionRequest.risk === 'high' ? 'bg-secondary-container text-on-secondary-container' :
+                  permissionRequest.risk === 'medium' ? 'bg-warning-container text-on-warning-container' :
                   'bg-tertiary-container text-on-tertiary-container'
                 )}>{t(`header.permRequest.risk.${permissionRequest.risk}`)}</span>
             </div>

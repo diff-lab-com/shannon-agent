@@ -159,21 +159,43 @@ pub async fn rerun_inbox_item(
     .await
 }
 
-/// Return the session id linked to an inbox item so the frontend can resume
-/// the conversation with the existing session-loading commands.
+/// `continue_inbox_item_session` response — the linked session plus the
+/// item's recorded run result. Design 05 (审查 R1 §05): 继续会话要带结果
+/// 上下文, the composer draft is prefilled from `summary` (the `error`
+/// rides along for failure cards); both are `None`-able and skipped on the
+/// wire when absent (older rows / approval entries carry no run result).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinueInboxSession {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Return the session id linked to an inbox item (plus the item's summary /
+/// error for the composer prefill) so the frontend can resume the
+/// conversation with the existing session-loading commands.
 #[tauri::command]
 pub async fn continue_inbox_item_session(
     state: tauri::State<'_, AppState>,
     id: i64,
-) -> Result<String, String> {
+) -> Result<ContinueInboxSession, String> {
     let item = state
         .inbox_store()
         .get_item(id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("inbox item not found: {id}"))?;
-    item.session_id
+    let session_id = item
+        .session_id
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| format!("inbox item {id} has no linked session"))
+        .ok_or_else(|| format!("inbox item {id} has no linked session"))?;
+    Ok(ContinueInboxSession {
+        session_id,
+        summary: Some(item.summary).filter(|s| !s.trim().is_empty()),
+        error: item.error,
+    })
 }
 
 // ── T7: authoritative run-history read path ──────────────────────────────

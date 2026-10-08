@@ -78,7 +78,9 @@ describe('ChatStatusBar — honesty contract', () => {
       refresh: () => {},
     }
     renderBar(baseUsage)
-    expect(screen.getByTestId('chat-status-context')).toHaveTextContent('Context 37%')
+    // Aurora 2026-10: the segment carries the raw token counts too
+    // (设计稿 02: 上下文 38% · 74k/200k) — compact locale formatting.
+    expect(screen.getByTestId('chat-status-context')).toHaveTextContent('Context 37% · 74K/200K')
     expect(screen.getByTestId('chat-status-cost')).toHaveTextContent('$0.0872')
     expect(screen.getByTestId('chat-status-budget-left')).toHaveTextContent('$19.91')
   })

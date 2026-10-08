@@ -55,7 +55,11 @@ function CommandDialog({
           // Explicit width — never rely on the theme's container scale here
           // (see index.css --container-* note): the palette collapsed to 8px
           // when `sm:max-w-sm` silently lost its variable (2026-09-16).
-          "w-[36rem] sm:max-w-[36rem] max-w-[calc(100%-2rem)] top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0",
+          // Aurora-line (裁决 B6): the palette is one of the four sanctioned
+          // "signal leaving" surfaces — the aurora hairline rides its top
+          // edge (index.css @utility; the index.css comment already named
+          // the palette).
+          "w-[36rem] sm:max-w-[36rem] max-w-[calc(100%-2rem)] top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0 aurora-line",
           className
         )}
         showCloseButton={showCloseButton}

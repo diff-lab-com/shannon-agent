@@ -103,8 +103,9 @@ describe('Header component', () => {
     ]
     mockSessionCtx.currentSessionId = 's1'
     render(wrap(<Header />, { route: '/tasks' }))
-    // IA T1: /tasks is titled「自动化」(Automations), never「任务」.
-    expect(screen.getByText('Automations')).toBeInTheDocument()
+    // 2026-10 design parity: /tasks is titled「任务」(Tasks) — one noun
+    // across nav, header and page (audit R1 §1 术语断裂).
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
   })
 
   // U2 — ContextPanel toggle moved here from the retired ChatHeader.
@@ -287,7 +288,8 @@ describe('Header component', () => {
   })
 
   // U3 — four distinguishable risk tiers: critical=error, high=secondary,
-  // medium=tertiary (was wrongly secondary), low=tertiary. Localized text,
+  // medium=warning, low=tertiary. Aurora 2026-10 语义色归位: amber/warning
+  // is the high-risk signal, so medium moved off tertiary. Localized text,
   // announced via aria-label. G7 2026-09-30: tier chips render the MD3
   // container pairs (bg-X-container + text-on-X-container), not accent
   // text on an accent/10 tint.
@@ -296,7 +298,7 @@ describe('Header component', () => {
     const tier = {
       critical: 'text-on-error-container',
       high: 'text-on-secondary-container',
-      medium: 'text-on-tertiary-container',
+      medium: 'text-on-warning-container',
       low: 'text-on-tertiary-container',
     }[risk]
 
@@ -338,9 +340,9 @@ describe('Header component', () => {
     expect(screen.getByText('Chat')).toBeInTheDocument()
   })
 
-  it('renders Automations title on /tasks route (IA T1)', () => {
+  it('renders Tasks title on /tasks route (2026-10 design parity)', () => {
     render(wrap(<Header />, { route: '/tasks' }))
-    expect(screen.getByText('Automations')).toBeInTheDocument()
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
   })
 
   it('renders Settings title on /settings route', () => {

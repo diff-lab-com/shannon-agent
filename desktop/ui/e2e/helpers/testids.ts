@@ -40,7 +40,9 @@ export const testids = {
   modelActionClearOverride: 'model-action-clear-override',
   /** Plan-mode status strip above the input (role=status). */
   planModeBanner: 'plan-mode-banner',
-  /** Approval-mode pill trigger (SelectTrigger, rounded). */
+  /** Approval-mode control — the four-stop segmented group at ≥1200px
+   *  (Aurora 2026-10 裁决 B1), the chip Select below it. Same testid on
+   *  both forms. */
   approvalModePill: 'approval-mode-pill',
   /** Composer "+" menu trigger (attach / slides / quickfix / editor). */
   composerPlusMenu: 'composer-plus-menu',

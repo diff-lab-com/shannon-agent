@@ -75,6 +75,37 @@ type Tab = 'active' | 'history' | 'routines' | 'pipelines' | 'worktrees'
 const SIMPLE_TABS: readonly Tab[] = ['active', 'history']
 const DEV_TABS: readonly Tab[] = ['active', 'history', 'routines', 'pipelines', 'worktrees']
 
+// B4 裁决 (audit R1): the Simple-mode entry card for the Mission Control.
+// Honest-superset copy only — it names what the surface actually does
+// (parallel multi-agent runs, replayable global state) and opens /opc; the
+// card itself is not a control, the button is.
+function OpcEntryCard({ onOpen }: { onOpen: () => void }) {
+  const { formatMessage: fm } = useIntl()
+  return (
+    <section
+      data-testid="tasks-opc-entry"
+      aria-label={fm({ id: 'tasks.opcEntry.title' })}
+      className="mb-lg flex items-center gap-md px-lg py-md rounded-2xl border border-outline-variant/30 bg-surface-container-low"
+    >
+      <div className="w-10 h-10 rounded-xl bg-primary-container text-on-primary-container flex items-center justify-center shrink-0">
+        <span className="material-symbols-outlined icon-lg" aria-hidden="true">auto_awesome</span>
+      </div>
+      <div className="min-w-0 flex-1">
+        <h2 className="font-label-lg font-bold text-on-surface">{fm({ id: 'tasks.opcEntry.title' })}</h2>
+        <p className="font-body-sm text-on-surface-variant">{fm({ id: 'tasks.opcEntry.body' })}</p>
+      </div>
+      <Button
+        variant="outline"
+        className="shrink-0 rounded-xl font-label-md cursor-pointer"
+        onClick={onOpen}
+      >
+        <span className="material-symbols-outlined icon-md" aria-hidden="true">open_in_new</span>
+        {fm({ id: 'tasks.opcEntry.cta' })}
+      </Button>
+    </section>
+  )
+}
+
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useCatalog()
   const { switchSession, currentSessionId } = useSessions()
@@ -171,6 +202,17 @@ export default function Tasks() {
     for (const t of tasks) if (t.team) set.add(t.team)
     return Array.from(set).sort()
   }, [tasks])
+
+  // Design 04 (audit R1): routines the SYSTEM paused surface their pause
+  // reason on the task rows — id → machine reason, joined by the routine id
+  // the catalog card shares. Manual pauses carry no reason and stay absent.
+  const autoPausedReasons = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const r of scheduledTasks) {
+      if (!r.enabled && r.pause_reason) m.set(r.id, r.pause_reason)
+    }
+    return m
+  }, [scheduledTasks])
 
   // P-U3: routines scoped to the deep-linked project (working_dir matches the
   // normalized project key). Routines with no working_dir drop out while the
@@ -371,6 +413,12 @@ export default function Tasks() {
           <ProjectFilterChip label={projectLabel} onRemove={clearProject} />
         )}
 
+        {/* B4 裁决 (audit R1 §09 / R3-V-12): Simple mode has no sidebar entry
+            for the Mission Control (/opc), so the tasks page carries the
+            promised entry card. Dev mode already has the sidebar nav row —
+            the card stays out to avoid a duplicate entry. */}
+        {mode === 'simple' && <OpcEntryCard onOpen={() => navigate('/opc')} />}
+
         {/* P2.2: Active / History / Worktrees tab switcher — Simple mode
             only shows the two universal tabs; the dev-only surfaces move
             behind the sidebar Dev-mode toggle. */}
@@ -535,6 +583,7 @@ export default function Tasks() {
               onPageChange={setTaskPage}
               runningId={running}
               runnableIds={routineIds}
+              autoPausedReasons={autoPausedReasons}
               onSelectTask={setSelectedTaskId}
               onRunNow={handleRunNow}
               onCancelTask={setCancelTarget}

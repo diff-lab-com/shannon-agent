@@ -570,6 +570,12 @@ export const handlers: Record<string, MockHandler> = {
     await delay(30)
     return null
   },
+  // Design 13「Esc 关闭」— demo mode has no window to hide; the Esc path
+  // just acks like the always-on-top toggle above.
+  async hide_companion_window() {
+    await delay(30)
+    return null
+  },
   // --- Chat ---
   // (send_message interception when a script is armed happens in coreMock —
   // the scripted player owns the command and replays the turn's events.)
@@ -2024,7 +2030,13 @@ export const handlers: Record<string, MockHandler> = {
     const item = state.inbox.find(i => i.id === args.id)
     if (!item) throw new Error(`inbox item not found: ${args.id}`)
     if (!item.sessionId) throw new Error(`inbox item ${args.id} has no linked session`)
-    return item.sessionId
+    // Design 05: the resume target carries the run result so the composer
+    // draft can be prefilled — same shape as the Rust ContinueInboxSession.
+    return {
+      sessionId: item.sessionId,
+      summary: item.summary?.trim() ? item.summary : undefined,
+      error: item.error ?? undefined,
+    }
   },
 
   // --- Usage (UI audit C13 — keeps the cost panel non-empty in demo mode) ---

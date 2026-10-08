@@ -16,6 +16,10 @@ export interface TaskOption {
   id: TaskId
   labelKey: string
   blurbKey: string
+  /** Full prompt pushed into the hero composer when the template card is
+   *  clicked (design 01: template cards fill the input, they don't just
+   *  select a category). */
+  promptKey: string
   icon: string
   recommendedProvider: string
   tools: string[]
@@ -26,7 +30,8 @@ export const TASKS: TaskOption[] = [
     id: 'code',
     labelKey: 'welcome.task.code.label',
     blurbKey: 'welcome.task.code.blurb',
-    icon: 'code',
+    promptKey: 'welcome.task.code.prompt',
+    icon: 'bug_report',
     recommendedProvider: 'anthropic',
     tools: ['filesystem', 'git', 'playwright'],
   },
@@ -34,25 +39,28 @@ export const TASKS: TaskOption[] = [
     id: 'writing',
     labelKey: 'welcome.task.writing.label',
     blurbKey: 'welcome.task.writing.blurb',
-    icon: 'edit_note',
+    promptKey: 'welcome.task.writing.prompt',
+    icon: 'account_tree',
     recommendedProvider: 'anthropic',
-    tools: ['web_search'],
+    tools: ['git', 'filesystem'],
   },
   {
     id: 'research',
     labelKey: 'welcome.task.research.label',
     blurbKey: 'welcome.task.research.blurb',
-    icon: 'search',
+    promptKey: 'welcome.task.research.prompt',
+    icon: 'monitoring',
     recommendedProvider: 'openai',
-    tools: ['web_search', 'tavily'],
+    tools: ['filesystem', 'tavily'],
   },
   {
     id: 'general',
     labelKey: 'welcome.task.general.label',
     blurbKey: 'welcome.task.general.blurb',
-    icon: 'auto_awesome',
+    promptKey: 'welcome.task.general.prompt',
+    icon: 'layers',
     recommendedProvider: 'anthropic',
-    tools: ['filesystem', 'web_search'],
+    tools: ['filesystem', 'git'],
   },
 ]
 

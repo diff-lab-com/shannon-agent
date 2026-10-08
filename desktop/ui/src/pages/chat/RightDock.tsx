@@ -44,7 +44,10 @@ import { registerLinkPanelRouter } from '@/lib/openLink'
 import { onPaletteVisibility } from '@/lib/paletteVisibility'
 import { projectOf } from '@/components/SidebarSessions'
 import DiffReviewBody from '@/components/diff/DiffReviewBody'
-import type { ToolCall, UsagePayload } from '@/types'
+import FileDiffList, { type FileFilter } from '@/components/diff/FileDiffList'
+import type { FileDiff, ToolCall, UsagePayload } from '@/types'
+import type { CheckpointInfo } from '@/lib/tauri-api'
+import type { HunkDecision } from '@/lib/diff-merge'
 import { initialRunProcess, type RunProcessState } from '@/lib/runProcess'
 import { ContextPanelContent } from './ContextPanel'
 import PlanPanel from './PlanPanel'
@@ -138,6 +141,17 @@ interface RightDockProps {
   /** Single-file diff review target; null closes the diff tab. */
   diffPath: string | null
   onCloseDiff: () => void
+  /** Aurora 2026-10 diff-review loop (03 页): the session's changed-file
+   *  paths (completed file-mutating tool calls) — when non-empty, the diff
+   *  tab hosts the FileDiffList sidebar beside the review body. */
+  changedPaths?: string[]
+  /** Picks a file from the diff sidebar (Chat owns setDiffPath). */
+  onSelectDiffPath?: (path: string) => void
+  /** Session checkpoints (ChatContext) — rendered as rewind chips atop the
+   *  diff tab; the data was already fetched, only the UI was missing. */
+  checkpoints?: CheckpointInfo[]
+  /** Requests a rewind to a checkpoint's turn (Chat owns the confirm + IPC). */
+  onRewindCheckpoint?: (turnIndex: number) => void
   /** GB P2-3: the visible session's run aggregation — its non-idle status
    *  is what makes the 运行 tab appear; content survives until the next send.
    *  Optional: hosts that don't track runs (tests) get the idle default. */
@@ -154,6 +168,10 @@ export default function RightDock({
   planModeActive,
   diffPath,
   onCloseDiff,
+  changedPaths,
+  onSelectDiffPath,
+  checkpoints,
+  onRewindCheckpoint,
   runProcess = initialRunProcess(),
 }: RightDockProps) {
   const t = useT()
@@ -358,6 +376,24 @@ export default function RightDock({
     }
     prevDiffPath.current = diffPath
   }, [diffPath, onOpen])
+
+  // Aurora 2026-10 diff-review loop: DiffReviewBody owns its per-file hunk
+  // decisions; the dock lifts them into a path→decisions map so the
+  // FileDiffList sidebar's status badges (accepted/partial) stay live. The
+  // ref mirror keeps the callback identity stable — a fresh closure per
+  // render would re-fire DiffReviewBody's publish effect forever.
+  const diffPathRef = useRef(diffPath)
+  diffPathRef.current = diffPath
+  const [dockDecisions, setDockDecisions] = useState<Map<string, Map<string, HunkDecision>>>(new Map())
+  const handleDockDecisionsChange = useCallback((decisions: Map<string, HunkDecision>) => {
+    const path = diffPathRef.current
+    if (!path) return
+    setDockDecisions(prev => {
+      const next = new Map(prev)
+      next.set(path, decisions)
+      return next
+    })
+  }, [])
 
   // Batch F3, reworked in the 2026-09-25 open pipeline (§4 P1-D): the 「+」
   // opens any local file as a dock tab — documents/artifacts inline, images
@@ -598,8 +634,31 @@ export default function RightDock({
             {tab === 'live' && <LivePreview />}
             {tab === 'diff' && (
               diffPath ? (
+                // Aurora 2026-10 diff-review workbench (03 页, 数据全部现成):
+                // checkpoint rewind chips on top, the FileDiffList sidebar
+                // beside the single-file review body — the review surface
+                // stays side-by-side with the conversation instead of
+                // blocking it behind a modal.
                 <div className="-m-lg flex flex-col min-h-0 h-full">
-                  <DiffReviewBody filePath={diffPath} onClose={onCloseDiff} active={open} />
+                  {checkpoints != null && checkpoints.length > 0 && onRewindCheckpoint && (
+                    <CheckpointChips checkpoints={checkpoints} onRewind={onRewindCheckpoint} />
+                  )}
+                  <div className="flex flex-1 min-h-0">
+                    {changedPaths != null && changedPaths.length > 0 && (
+                      <DockDiffSidebar
+                        files={changedPaths}
+                        currentPath={diffPath}
+                        decisionsByPath={dockDecisions}
+                        onSelectPath={onSelectDiffPath}
+                      />
+                    )}
+                    <DiffReviewBody
+                      filePath={diffPath}
+                      onClose={onCloseDiff}
+                      active={open}
+                      onDecisionsChange={handleDockDecisionsChange}
+                    />
+                  </div>
                 </div>
               ) : (
                 <DockEmpty icon="difference" title={t('chat.dock.empty.diff')} />
@@ -849,6 +908,88 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
         {artifact.kind === 'document' && !showCode && <DocumentToc source={artifact.source} />}
       </div>
     </div>
+  )
+}
+
+/** Aurora 2026-10 (03 页 dock 检查点): rewind chips over the diff review —
+ *  the checkpoints data has been on the wire since ChatContext shipped; this
+ *  is the first surface to render it on the chat page. Each chip rewinds the
+ *  session to that turn (the host confirms before the destructive IPC). */
+function CheckpointChips({ checkpoints, onRewind }: {
+  checkpoints: CheckpointInfo[]
+  onRewind: (turnIndex: number) => void
+}) {
+  const t = useT()
+  return (
+    <div className="px-sm py-xs border-b border-outline-variant/20 shrink-0" data-testid="dock-checkpoints">
+      <div className="font-label-xs uppercase tracking-wider text-on-surface-variant mb-[2px]">
+        {t('chat.dock.checkpoints.title')}
+      </div>
+      <div className="flex items-center gap-xs overflow-x-auto">
+        {checkpoints.map(cp => {
+          const label = cp.description || cp.prompt_preview || t('chat.dock.checkpoint.turn', { turn: cp.turn_index })
+          return (
+            <button
+              key={cp.turn_index}
+              type="button"
+              data-testid={`dock-checkpoint-${cp.turn_index}`}
+              title={`${label} · ${t('chat.dock.checkpoint.rewind.aria')}`}
+              aria-label={`${t('chat.dock.checkpoint.rewind.aria')}: ${label}`}
+              onClick={() => onRewind(cp.turn_index)}
+              className="inline-flex items-center gap-[4px] px-sm py-[2px] rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant hover:text-primary hover:border-primary/40 hover:bg-primary/5 text-label-xs whitespace-nowrap cursor-pointer transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            >
+              <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">history</span>
+              <span className="max-w-40 truncate">{label}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/** Aurora 2026-10 (03 页 P1): the dock's embedded review workbench sidebar —
+ *  the session's changed-file list (FileDiffList) beside the review body, so
+ *  multi-file review no longer requires the fullscreen modal. Fetches each
+ *  FileDiff once per path (failures degrade that row to stats-less); the
+ *  per-file decisions lift (decisionsByPath) keeps the status badges live
+ *  with the review body's a/r/u toggles. */
+function DockDiffSidebar({ files, currentPath, decisionsByPath, onSelectPath }: {
+  files: string[]
+  currentPath: string | null
+  decisionsByPath: Map<string, Map<string, HunkDecision>>
+  onSelectPath?: (path: string) => void
+}) {
+  const [diffs, setDiffs] = useState<Map<string, FileDiff>>(new Map())
+  const [filter, setFilter] = useState<FileFilter>('all')
+  const fetchedRef = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    let cancelled = false
+    for (const path of files) {
+      if (fetchedRef.current.has(path)) continue
+      fetchedRef.current.add(path)
+      api.getFileDiff(path)
+        .then(d => { if (!cancelled) setDiffs(prev => new Map(prev).set(path, d)) })
+        .catch(() => {
+          // Diff unavailable (binary / deleted / demo mode): the row still
+          // renders, just without +/− counts.
+        })
+    }
+    return () => { cancelled = true }
+  }, [files])
+
+  return (
+    <FileDiffList
+      files={files}
+      diffs={diffs}
+      decisions={decisionsByPath}
+      currentPath={currentPath}
+      filter={filter}
+      onSelectPath={path => onSelectPath?.(path)}
+      onFilterChange={setFilter}
+      className="w-44"
+    />
   )
 }
 

@@ -129,8 +129,10 @@ describe('ComposerSwitchers — phase-tier write', () => {
     renderPanel(composerValue())
     fireEvent.click(screen.getByTestId('phase-tier-switcher'))
     const menu = await screen.findByTestId('phase-tier-menu')
-    // Second radiogroup = the Act phase (plan renders first).
-    const actGroup = screen.getAllByRole('radiogroup')[1]!
+    // The approval-mode segmented control (Aurora 2026-10 裁决 B1) also
+    // renders a radiogroup in the composer — select the phase groups by
+    // accessible name, not positional index.
+    const actGroup = screen.getByRole('radiogroup', { name: 'Execution tier' })
     const fast = Array.from(actGroup.querySelectorAll('[role="radio"]')).find(r =>
       r.textContent?.includes('Fast'),
     )

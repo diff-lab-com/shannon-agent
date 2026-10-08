@@ -309,6 +309,9 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
   const smallestIndex = smallestDiffBranchIndex(run)
   const verifiedBranches = run.branches.filter(b => b.verification !== undefined)
   const hasVerification = verifiedBranches.length > 0
+  // 设计 04b (审查 R1 §4): the branches' combined spend — the live per-branch
+  // `spentUsd` summed, not an estimate.
+  const totalSpent = run.branches.reduce((sum, b) => sum + b.spentUsd, 0)
   // Recommendation = tests passed AND smallest diff (design 04b); when no
   // branch satisfies both, no branch is marked — never a guessed pick.
   const recommendedIndex =
@@ -389,6 +392,25 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
               smallest-diff recommendation. */}
           <div className="flex items-start justify-between gap-md mb-sm">
             <div className="flex flex-wrap items-center gap-xs flex-1 min-w-0">
+              {/* 设计 04b (审查 R1 §4): the dialog header states the diff's
+                  baseline and the branches' combined spend. The base commit
+                  is contract-optional (older payloads render the total
+                  alone) and shown short (7 chars) like git log. */}
+              {(run.baseCommit || totalSpent > 0) && (
+                <span
+                  data-testid="batch-compare-header-meta"
+                  className="font-label-sm text-label-sm text-on-surface-variant tabular-nums shrink-0 max-w-full"
+                >
+                  {run.baseCommit
+                    ? t('batch.compare.baseAndTotal', {
+                        commit: run.baseCommit.slice(0, 7),
+                        cost: intl.formatNumber(totalSpent, { style: 'currency', currency: 'USD' }),
+                      })
+                    : t('batch.compare.totalOnly', {
+                        cost: intl.formatNumber(totalSpent, { style: 'currency', currency: 'USD' }),
+                      })}
+                </span>
+              )}
               {run.branches.map(branch => {
                 const summary = branch.summary
                   ? t('batch.compare.branchStat', {

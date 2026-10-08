@@ -681,7 +681,7 @@ export const MOCK_TURN_TIMELINE: TurnTimeline = {
     },
   ],
   cumulative: [
-    { ts_ns: (tlStart + 2 * tlMin) * 1e6, output_tokens_total: 1240, cost_total_usd: 0.0214 },
-    { ts_ns: (tlStart + 5.5 * tlMin) * 1e6, output_tokens_total: 2130, cost_total_usd: 0.0341 },
+    { ts_ns: (tlStart + 2 * tlMin) * 1e6, input_tokens_total: 4820, output_tokens_total: 1240, cost_total_usd: 0.0214 },
+    { ts_ns: (tlStart + 5.5 * tlMin) * 1e6, input_tokens_total: 10930, output_tokens_total: 2130, cost_total_usd: 0.0341 },
   ],
 }

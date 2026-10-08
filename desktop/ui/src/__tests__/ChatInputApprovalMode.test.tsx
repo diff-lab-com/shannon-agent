@@ -1,27 +1,20 @@
-// GB P2-4 — composer approval-tier switcher tests (round-1 R3: four tiers).
+// GB P2-4 — composer approval-tier switcher tests; rewritten for the Aurora
+// 2026-10 four-stop segmented control (裁决 B1, design 02:256-261).
 //
-// Pins the composer↔settings sync contract: the pill renders the SHARED
-// table's label for the current `config.approval_mode`, switching commits
-// the same configure('approval_mode') write the General page performs, the
-// High-risk note travels with the menu, and `confirm` reads out as the raw
-// engine value instead of pretending to be a pickable tier.
+// Pins the composer↔settings sync contract: the segmented control renders
+// the SHARED table's four stops (ask / auto-edit / plan / full-auto — `plan`
+// is a legal engine approval_mode), marks the active one from
+// `config.approval_mode` (legacy values normalize), switching commits the
+// same configure('approval_mode') write the General page performs, the
+// High-risk note rides the group title, and out-of-ladder engine values
+// surface through the honest raw badge instead of pretending to be a tier.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import ChatInput from '@/components/chat/ChatInput'
 import * as api from '@/lib/tauri-api'
 import type * as ReactRouterDom from 'react-router-dom'
-
-// 300s, not the 120s this file carried since GB round-1: the commit-chain
-// test below has three bounded waits (openSelectOptions 15s + two waitFor
-// 15s) whose worst case (~45s + render overhead) already forced a 60s → 120s
-// bump when the 2-core CI runners contended (2026-10-01). Under the 4-worker
-// unit gate (#242 follow-up) the same test hit the 120s ceiling once more
-// (run 37117293111, shard 2/2) — heavy vitest fork contention again, healthy
-// path still ~45s. 300s = headroom for the noisy-neighbor regime; a genuinely
-// broken interaction still fails fast at its own 15s bounds.
-vi.setConfig({ testTimeout: 300_000 })
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
@@ -104,45 +97,50 @@ function renderChatInput(props: Partial<React.ComponentProps<typeof ChatInput>> 
   return render(<ChatInput {...defaultProps} {...props} />, { wrapper: I18nProvider })
 }
 
-/** Base UI select popup helpers — same pattern as ChatInput.test.tsx. */
-const currentOptions = (): HTMLElement[] => {
-  const popups = document.querySelectorAll('[data-slot="select-content"]')
-  const last = popups[popups.length - 1]
-  return last ? Array.from(last.querySelectorAll('[role="option"]')) : []
+/** The segmented control's group (jsdom has no matchMedia → the wide form). */
+function modeGroup(): HTMLElement {
+  return screen.getByLabelText('Permission mode')
 }
 
-// Round-3 CI hardening: the popup portal normally mounts synchronously
-// under fireEvent's act (and the pick below deliberately stays synchronous —
-// that timing is what the suite has always exercised). But on a saturated
-// single-thread CI runner the mount can lag; when the sync read finds no
-// popup yet, these bounded retries poll instead of failing. Same
-// determinism, no skip.
-const POPUP_TIMEOUT = 15_000
+// The shared setup stubs matchMedia with `matches` true ONLY for
+// prefers-reduced-motion — the segmented control's breakpoint query would
+// read false and render the <1200px chip fallback. This suite pins the
+// SEGMENTED form, so width queries resolve against the wide (1440px) e2e
+// viewport profile here.
+const realMatchMedia = window.matchMedia
+beforeAll(() => {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches:
+      /min-width:\s*1200px/.test(query) ||
+      /prefers-reduced-motion:\s*reduce/i.test(query),
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia
+})
+afterAll(() => {
+  window.matchMedia = realMatchMedia
+})
 
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+function radio(value: string): HTMLElement {
+  return within(modeGroup()).getByTestId(`approval-mode-segment-${value}`)
+}
 
-/**
- * Sync-first options read: returns the options when the popup is already
- * mounted (the proven timing), otherwise re-clicks the trigger and polls —
- * re-clicks only ever happen while the portal is ABSENT, so a mounted
- * popup is never toggled closed.
- */
-async function openSelectOptions(trigger: HTMLElement, count: number): Promise<HTMLElement[]> {
-  let opts = currentOptions()
-  if (opts.length >= count) return opts
-  const deadline = Date.now() + POPUP_TIMEOUT
-  for (;;) {
-    if (!document.querySelector('[data-slot="select-content"]')) fireEvent.click(trigger)
-    opts = currentOptions()
-    if (opts.length >= count) return opts
-    if (Date.now() + 80 > deadline) {
-      throw new Error(`select popup: expected >=${count} options, saw ${opts.length}`)
+/** The one segment whose aria-checked is true ("" when none). */
+function checkedValue(): string {
+  for (const el of within(modeGroup()).getAllByRole('radio')) {
+    if (el.getAttribute('aria-checked') === 'true') {
+      return el.getAttribute('data-testid')?.replace('approval-mode-segment-', '') ?? ''
     }
-    await sleep(60)
   }
+  return ''
 }
 
-describe('ChatInput approval-mode switcher (4+3 model, 2026-10-05)', () => {
+describe('ChatInput approval-mode segmented control (Aurora 2026-10, 裁决 B1)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     configOverride = makeConfig('ask')
@@ -150,76 +148,80 @@ describe('ChatInput approval-mode switcher (4+3 model, 2026-10-05)', () => {
     vi.mocked(api.configure).mockResolvedValue(undefined)
   })
 
-  afterEach(() => {
-    document.querySelectorAll('[data-slot="select-content"]').forEach(n => n.remove())
+  it('renders the four ladder stops — ask / auto-edit / plan / full-auto', () => {
+    renderChatInput()
+    expect(within(modeGroup()).getAllByRole('radio')).toHaveLength(4)
+    expect(radio('ask')).toBeInTheDocument()
+    expect(radio('auto-edit')).toBeInTheDocument()
+    // Plan takes its design-mandated seat: the engine accepts `plan` as an
+    // approval_mode (ApprovalMode::Plan).
+    expect(radio('plan')).toBeInTheDocument()
+    expect(radio('full-auto')).toBeInTheDocument()
   })
 
-  it('renders the SHARED table label for the current config mode (auto_edit → Auto Edit)', () => {
+  it('renders the SHARED table label for the current config mode (auto_edit → Auto Edit checked)', () => {
     configOverride = makeConfig('auto_edit')
     renderChatInput()
-    const pill = screen.getByLabelText('Permission mode')
-    // Legacy 'auto_edit' normalizes to the auto-edit ladder tier — the pill
-    // shows ITS label, proving the composer reads the same table the
-    // settings page writes.
-    expect(pill).toHaveTextContent(/auto edit/i)
+    // Legacy 'auto_edit' normalizes to the auto-edit ladder tier — its
+    // segment is the checked one, proving the composer reads the same table
+    // the settings page writes.
+    expect(checkedValue()).toBe('auto-edit')
+    expect(radio('auto-edit')).toHaveTextContent(/auto edit/i)
   })
 
   it('suggest renders as the Ask tier (legacy alias of the ladder base)', () => {
     renderChatInput()
-    expect(screen.getByLabelText('Permission mode')).toHaveTextContent(/ask/i)
+    expect(checkedValue()).toBe('ask')
   })
 
-  it('renders unknown engine values honestly via the raw string', () => {
+  it('renders unknown engine values honestly via the raw badge — no segment claims them', () => {
     configOverride = makeConfig('mystery-mode')
     renderChatInput()
-    // A value this UI does not manage shows raw instead of dressing itself
-    // up as a tier the user could meaningfully pick.
-    expect(screen.getByLabelText('Permission mode')).toHaveTextContent('mystery-mode')
+    // A value this UI does not manage shows raw in the badge instead of
+    // dressing itself up as a tier the user could meaningfully pick.
+    expect(within(modeGroup()).getByTestId('approval-mode-offladder-badge')).toHaveTextContent('mystery-mode')
+    expect(checkedValue()).toBe('')
   })
 
   it('legacy confirm normalizes to the Ask tier (no fake raw readout)', () => {
     configOverride = makeConfig('confirm')
     renderChatInput()
-    expect(screen.getByLabelText('Permission mode')).toHaveTextContent(/ask/i)
+    expect(checkedValue()).toBe('ask')
   })
 
-  it('picking a tier commits configure(approval_mode) + refreshConfig — the General-page write', async () => {
+  it('picking a segment commits configure(approval_mode) + refreshConfig — the General-page write', async () => {
     renderChatInput()
-    const trigger = screen.getByLabelText('Permission mode')
-    fireEvent.click(trigger)
-    const opts = await openSelectOptions(trigger, 3)
-    const autoEdit = opts.find(o => /auto edit/i.test(o.textContent ?? ''))
-    expect(autoEdit).toBeTruthy()
-    fireEvent.pointerDown(autoEdit!, { button: 0 })
-    fireEvent.pointerUp(autoEdit!, { button: 0 })
-    fireEvent.click(autoEdit!)
-    // The commit chain is async (Base UI commit → onValueChange → await
-    // configure → await refreshConfig) — generous explicit timeouts replace
-    // waitFor's 1s default that the round-3 CI runner outran. Order-specific:
-    // refreshConfig is only asserted after configure landed.
-    await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'auto-edit' }), { timeout: POPUP_TIMEOUT })
-    await waitFor(() => expect(mockRefreshConfig).toHaveBeenCalled(), { timeout: POPUP_TIMEOUT })
+    fireEvent.click(radio('auto-edit'))
+    // The commit chain is async (click → await configure → await
+    // refreshConfig). Order-specific: refreshConfig is only asserted after
+    // configure landed.
+    await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'auto-edit' }), { timeout: 15_000 })
+    await waitFor(() => expect(mockRefreshConfig).toHaveBeenCalled(), { timeout: 15_000 })
   })
 
-  it('the High-risk note travels with the switcher menu', async () => {
+  it('the plan segment writes the engine-legal plan value (and replaces the old toggle)', async () => {
     renderChatInput()
-    const trigger = screen.getByLabelText('Permission mode')
-    fireEvent.click(trigger)
-    await openSelectOptions(trigger, 3)
-    const popups = document.querySelectorAll('[data-slot="select-content"]')
-    const last = popups[popups.length - 1]
-    expect(last?.textContent).toMatch(/high-risk actions/i)
-    expect(last?.textContent).toMatch(/baseline/i)
+    fireEvent.click(radio('plan'))
+    await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'plan' }), { timeout: 15_000 })
+    // The standalone plan-mode toggle is gone — one surface owns the key.
+    expect(screen.queryByRole('button', { name: 'Toggle plan mode' })).not.toBeInTheDocument()
   })
 
-  it('an out-of-table current value never hides the listed tiers (pill is display-only)', () => {
+  it('the High-risk note travels with the switcher (group title)', () => {
+    renderChatInput()
+    expect(modeGroup()).toHaveAttribute('title', expect.stringContaining('High-risk actions'))
+  })
+
+  it('an out-of-table current value never hides the listed tiers (plan_ro → Strict badge)', () => {
     configOverride = makeConfig('plan_ro')
     renderChatInput()
-    const pill = screen.getByLabelText('Permission mode')
+    const group = modeGroup()
     // Legacy plan_ro normalizes to the readonly EXPERT mode — labeled
-    // honestly (Strict), just not one of the three quick tiers.
-    expect(pill).toHaveTextContent(/strict/i)
-    // The title still carries the honest description + the high-risk note.
-    expect(pill).toHaveAttribute('title', expect.stringContaining('High-risk actions'))
+    // honestly (Strict) via the badge, while all four stops stay pickable.
+    expect(within(group).getByTestId('approval-mode-offladder-badge')).toHaveTextContent(/strict/i)
+    expect(within(group).getAllByRole('radio')).toHaveLength(4)
+    expect(checkedValue()).toBe('')
+    // The honest description + the high-risk note still ride the title.
+    expect(group).toHaveAttribute('title', expect.stringContaining('High-risk actions'))
   })
 })

@@ -1577,6 +1577,17 @@ export interface InboxStats {
   today: number
 }
 
+/// Response of `continue_inbox_item_session`: the linked session plus the
+/// item's recorded run result. Design 05 (审查 R1 §05) — resuming a session
+/// carries the result context, so the composer draft can be prefilled from
+/// `summary`; `error` rides along for failure cards. Both optional and
+/// absent on the wire for rows without run output (e.g. approval entries).
+export interface ContinueInboxSession {
+  sessionId: string
+  summary?: string
+  error?: string
+}
+
 /// Lightweight execution record for the history list.
 export interface TaskExecution {
   run_id: string
@@ -1772,7 +1783,10 @@ export interface BatchBranch {
 }
 
 /// One best-of-N batch run (payload of `batch:updated`). `adoptedIndex` is
-/// additive: set once the batch is adopted.
+/// additive: set once the batch is adopted. `baseCommit` is additive too
+/// (设计 04b / 审查 R1 §4): the commit every branch diffs against, shown as
+/// the compare dialog's 「基线 <short>」 header — optional so payloads from
+/// an older backend keep rendering (total cost only).
 export interface BatchRunDto {
   batchId: string
   title: string
@@ -1782,6 +1796,7 @@ export interface BatchRunDto {
   createdAtMs: number
   branches: BatchBranch[]
   adoptedIndex: number | null
+  baseCommit?: string
 }
 
 // --- Event Names ---
@@ -2003,6 +2018,8 @@ export interface TimelineTurn {
 /** One cumulative sample on the token/cost curve (at each turn/end). */
 export interface TimelineCumulativePoint {
   ts_ns: number
+  /** C6: running input total across closed turns (0 on pre-field exports). */
+  input_tokens_total: number
   output_tokens_total: number
   cost_total_usd?: number | null
 }

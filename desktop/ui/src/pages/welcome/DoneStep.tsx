@@ -50,6 +50,9 @@ export function DoneStep({
   const currentTask = TASKS.find(t => t.id === task)!
   // Per-tool chip data (01b): display name falls back to the raw id when a
   // tool id has no `welcome.tool.*` label yet; the reason key mirrors the id.
+  // Reasons are {task}-templated (01b:156-175) — they anchor to the chosen
+  // template's name instead of generic copy.
+  const taskLabel = intl.formatMessage({ id: currentTask.labelKey })
   const recommendedTools = currentTask.tools.map(id => ({
     id,
     label: TOOL_LABEL_KEYS[id] ? intl.formatMessage({ id: TOOL_LABEL_KEYS[id] }) : id,
@@ -112,7 +115,7 @@ export function DoneStep({
                 </span>
                 <span className="font-medium">{tool.label}</span>
                 <span className="text-on-surface-variant">
-                  {intl.formatMessage({ id: tool.reasonKey })}
+                  {intl.formatMessage({ id: tool.reasonKey }, { task: taskLabel })}
                 </span>
                 <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">
                   chevron_right

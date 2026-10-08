@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { toast } from 'sonner'
 import * as api from '@/lib/tauri-api'
 import Welcome, { shouldShowWelcome, markWelcomeSeen, WELCOME_SEEN_KEY } from '@/pages/Welcome'
+import { COMPOSER_DRAFT_EVENT, resetPendingComposerDraftsForTests } from '@/lib/composerBridge'
 import { I18nProvider } from '@/i18n'
 
 // Mock AppContext to avoid AppProvider's heavy API surface; Welcome only
@@ -15,6 +16,17 @@ const ctx = vi.hoisted(() => ({
 }))
 vi.mock('@/context/CatalogContext', () => ({
   useCatalog: () => ctx,
+}))
+
+// Design 01「开始 →」: the hero-composer submit mirrors
+// Sidebar.startWithPrompt — it needs useSessions to create the first
+// session. Mocked so the page renders without the real AppProvider.
+const sessions = vi.hoisted(() => ({
+  currentSessionId: null as string | null,
+  createSession: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: () => sessions,
 }))
 
 // Mock sonner so toast.success/error/warning calls can be asserted.
@@ -109,6 +121,9 @@ describe('Welcome component — 2-step flow', () => {
   beforeEach(() => {
     window.localStorage.clear()
     vi.mocked(api.detectProviderFromEnv).mockResolvedValue(null)
+    sessions.currentSessionId = null
+    sessions.createSession.mockClear().mockResolvedValue(undefined)
+    resetPendingComposerDraftsForTests()
   })
 
   function wrap() {
@@ -125,25 +140,72 @@ describe('Welcome component — 2-step flow', () => {
   it('renders task picker as step 1', () => {
     wrap()
     expect(screen.getByText('What will you use Shannon for?')).toBeInTheDocument()
-    expect(screen.getByText('Code')).toBeInTheDocument()
-    expect(screen.getByText('Writing')).toBeInTheDocument()
-    expect(screen.getByText('Research')).toBeInTheDocument()
-    expect(screen.getByText('General')).toBeInTheDocument()
+    expect(screen.getByText('Fix the failing tests')).toBeInTheDocument()
+    expect(screen.getByText('Review a pull request')).toBeInTheDocument()
+    expect(screen.getByText('Summarize a data report')).toBeInTheDocument()
+    expect(screen.getByText('Refactor a legacy module')).toBeInTheDocument()
   })
 
-  it('starts with no task selected and the provider anchor disabled', () => {
+  it('starts with an empty hero composer and a disabled Start button (design 01)', () => {
     wrap()
-    expect(screen.getByRole('button', { name: /General/ })).toHaveAttribute('aria-pressed', 'false')
-    // Review 2026-09-16: step-0 button is a scroll anchor to the provider
-    // card ('Pick a provider ↓'), not a second submit.
-    expect(screen.getByText('Pick a provider ↓')).toBeDisabled()
+    const input = screen.getByTestId('welcome-composer-input') as HTMLTextAreaElement
+    expect(input.value).toBe('')
+    expect(screen.getByTestId('welcome-composer-start')).toBeDisabled()
+    // No template picked yet → the model section stays collapsed; the
+    // composer is the hero of the screen.
+    expect(screen.queryByText('Choose your AI provider')).not.toBeInTheDocument()
   })
 
-  it('marks task as pressed when clicked', () => {
+  it('fills the hero composer and marks the template pressed when clicked (design 01:141-160)', () => {
     wrap()
-    const codeCard = screen.getByRole('button', { name: /Build apps, write scripts, debug and refactor\./ })
+    const codeCard = screen.getByRole('button', {
+      name: /Locate the broken assertions and propose a patch\./,
+    })
     fireEvent.click(codeCard)
     expect(codeCard).toHaveAttribute('aria-pressed', 'true')
+    // Click =「填入输入框」: the card's full prompt lands in the composer,
+    // ready to edit before「开始 →」.
+    expect((screen.getByTestId('welcome-composer-input') as HTMLTextAreaElement).value).toBe(
+      'Fix the failing tests in this workspace — locate the broken assertions and propose a patch.',
+    )
+    expect(screen.getByTestId('welcome-composer-start')).toBeEnabled()
+  })
+
+  it('hero-composer submit creates a session, queues the draft, and enters /chat (design 01:122-137)', async () => {
+    wrap()
+    fireEvent.change(screen.getByTestId('welcome-composer-input'), {
+      target: { value: '  fix the flaky checkout test  ' },
+    })
+    // The draft is parked in the composerBridge pending queue (no ChatInput
+    // mounted here) but still dispatches once — same event a subscribed
+    // composer would receive.
+    const seenDrafts: string[] = []
+    const onDraft = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: unknown }>).detail?.text
+      if (typeof text === 'string') seenDrafts.push(text)
+    }
+    window.addEventListener(COMPOSER_DRAFT_EVENT, onDraft)
+    fireEvent.click(screen.getByTestId('welcome-composer-start'))
+    await waitFor(() => {
+      // First session created (Sidebar.startWithPrompt contract), then the
+      // trimmed text handed to the composer as a DRAFT.
+      expect(sessions.createSession).toHaveBeenCalledTimes(1)
+      expect(seenDrafts).toEqual(['fix the flaky checkout test'])
+      expect(api.seedSampleData).toHaveBeenCalled()
+    })
+    expect(window.localStorage.getItem(WELCOME_SEEN_KEY)).toBe('1')
+    window.removeEventListener(COMPOSER_DRAFT_EVENT, onDraft)
+  })
+
+  it('hero-composer submit skips session creation when one is already active', async () => {
+    sessions.currentSessionId = 'existing-session'
+    wrap()
+    fireEvent.change(screen.getByTestId('welcome-composer-input'), {
+      target: { value: 'summarize the CSV' },
+    })
+    fireEvent.click(screen.getByTestId('welcome-composer-start'))
+    await waitFor(() => expect(api.seedSampleData).toHaveBeenCalled())
+    expect(sessions.createSession).not.toHaveBeenCalled()
   })
 
   it('does NOT show API key field on step 1 (task picker)', () => {
@@ -161,7 +223,7 @@ describe('Welcome component — 2-step flow', () => {
   // Step 1 — Model: now a launcher button → AddProviderModal
   it('advances to Model step with Add provider button', () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     expect(screen.getByText('Choose your AI provider')).toBeInTheDocument()
     expect(screen.getByTestId('welcome-add-provider')).toBeInTheDocument()
     // Legacy picker surface is gone.
@@ -172,7 +234,7 @@ describe('Welcome component — 2-step flow', () => {
 
   it('Back button on Model section collapses back to task-only screen', () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     expect(screen.getByText('Choose your AI provider')).toBeInTheDocument()
     fireEvent.click(screen.getByText('← Back'))
     expect(screen.queryByText('Choose your AI provider')).not.toBeInTheDocument()
@@ -182,13 +244,13 @@ describe('Welcome component — 2-step flow', () => {
   it('shows task-aware recommendation in Model subtitle', () => {
     wrap()
     // General picked → recommends Anthropic
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
-    expect(screen.getByText(/For General, we recommend Anthropic\./)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
+    expect(screen.getByText(/For "Refactor a legacy module", we recommend Anthropic\./)).toBeInTheDocument()
   })
 
   it('disables Continue on Model step until provider saved or env key detected', () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     const continueButtons = screen.getAllByRole('button', { name: /Continue/ })
     const modelContinue = continueButtons[continueButtons.length - 1]
     expect(modelContinue).toBeDisabled()
@@ -197,7 +259,7 @@ describe('Welcome component — 2-step flow', () => {
 
   it('opens AddProviderModal when the Add provider button is clicked', () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     expect(screen.queryByTestId('add-provider-modal')).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('welcome-add-provider'))
     expect(screen.getByTestId('add-provider-modal')).toBeInTheDocument()
@@ -205,7 +267,7 @@ describe('Welcome component — 2-step flow', () => {
 
   it('closes AddProviderModal when the modal cancel button is clicked', () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     fireEvent.click(screen.getByTestId('welcome-add-provider'))
     expect(screen.getByTestId('add-provider-modal')).toBeInTheDocument()
     // Cancel button renders inside the modal — pick the last button labelled
@@ -217,7 +279,7 @@ describe('Welcome component — 2-step flow', () => {
 
   it('calls saveProvider + setActiveProvider when modal saves, then advances to Tools step', async () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await saveProviderViaModal()
     await waitFor(() => {
       expect(api.saveProvider).toHaveBeenCalled()
@@ -237,7 +299,7 @@ describe('Welcome component — 2-step flow', () => {
     wrap()
     // env detection fires on mount; let it resolve.
     await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await waitFor(() => {
       const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
       const modelContinue = continueBtns[continueBtns.length - 1]
@@ -250,7 +312,7 @@ describe('Welcome component — 2-step flow', () => {
   // Step 3 — Done
   it('reaches Done step with summary and shortcuts', async () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     expect(screen.getByText('Your setup')).toBeInTheDocument()
@@ -265,7 +327,7 @@ describe('Welcome component — 2-step flow', () => {
       has_api_key: true,
     })
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await waitFor(() => {
       const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
       expect(continueBtns[continueBtns.length - 1]).not.toBeDisabled()
@@ -299,7 +361,7 @@ describe('Welcome component — 2-step flow', () => {
       </I18nProvider>
     )
     // Code task → filesystem, git, playwright.
-    fireEvent.click(screen.getByRole('button', { name: /Build apps, write scripts, debug and refactor\./ }))
+    fireEvent.click(screen.getByRole('button', { name: /Locate the broken assertions and propose a patch\./ }))
     await waitFor(() => {
       const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
       expect(continueBtns[continueBtns.length - 1]).not.toBeDisabled()
@@ -313,6 +375,11 @@ describe('Welcome component — 2-step flow', () => {
     expect(screen.getByText('Git')).toBeInTheDocument()
     expect(screen.getByText('Playwright')).toBeInTheDocument()
     expect(screen.getByText(/3 recommended tools — enable them in Settings/)).toBeInTheDocument()
+    // 01b:156-175 — reasons are template-driven: each one anchors to the
+    // chosen task's name ({task} interpolation), not generic copy.
+    expect(
+      screen.getByText(/"Fix the failing tests" needs to read and write source and test files\./),
+    ).toBeInTheDocument()
     // Link-style buttons: settings hint in the tooltip + a trailing chevron
     // affordance; the accessible name still comes from the visible content.
     for (const chip of chips) {
@@ -330,14 +397,14 @@ describe('Welcome component — 2-step flow', () => {
   it('Done step shows chosen task in summary', async () => {
     wrap()
     // Pick Writing task
-    fireEvent.click(screen.getByRole('button', { name: /Draft docs, articles, posts, and emails\./ }))
+    fireEvent.click(screen.getByRole('button', { name: /Comment on the change risks file by file\./ }))
     await saveProviderViaModal()
-    await waitFor(() => expect(screen.getByText('Writing')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Review a pull request')).toBeInTheDocument())
   })
 
   it('Done step shows Start using Shannon button', async () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByRole('button', { name: /Start using Shannon/ })).toBeInTheDocument())
   })
@@ -350,7 +417,7 @@ describe('Welcome component — 2-step flow', () => {
 
   it('Done step shows advanced mode checkbox unchecked by default', async () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     const cb = screen.getByLabelText('Enable advanced features') as HTMLInputElement
@@ -360,7 +427,7 @@ describe('Welcome component — 2-step flow', () => {
 
   it('toggles advanced mode checkbox on click', async () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     const cb = screen.getByLabelText('Enable advanced features') as HTMLInputElement
@@ -370,7 +437,7 @@ describe('Welcome component — 2-step flow', () => {
 
   it('writes SIDEBAR_MODE_KEY=dev on finish when advanced mode checked', async () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     fireEvent.click(screen.getByLabelText('Enable advanced features'))
@@ -380,7 +447,7 @@ describe('Welcome component — 2-step flow', () => {
 
   it('does NOT write SIDEBAR_MODE_KEY when advanced mode unchecked', async () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /Start using Shannon/ }))
@@ -389,7 +456,7 @@ describe('Welcome component — 2-step flow', () => {
 
   it('calls seedSampleData on finish (onboarding sample data)', async () => {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /Start using Shannon/ }))
@@ -438,6 +505,28 @@ describe('Welcome — env provider detection (T7.A)', () => {
     await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
   })
 
+  it('shows a persistent BYOK badge for env-detected keys plus the privacy footer (design 01:164-170)', async () => {
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+      provider: 'anthropic',
+      has_api_key: true,
+    })
+    wrap()
+    // The badge is persistent footer chrome — it stays after the one-shot
+    // toast would have expired, and lists the detected key(s).
+    const badge = await screen.findByTestId('welcome-env-key-badge')
+    expect(badge).toHaveTextContent('Local keys detected:')
+    expect(badge).toHaveTextContent('ANTHROPIC ✓')
+    // The privacy line is always on screen, detection or not.
+    expect(screen.getByTestId('welcome-footer')).toHaveTextContent('~/.shannon')
+  })
+
+  it('privacy footer renders even when nothing was detected', async () => {
+    wrap()
+    await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
+    expect(screen.getByTestId('welcome-footer')).toHaveTextContent('~/.shannon')
+    expect(screen.queryByTestId('welcome-env-key-badge')).not.toBeInTheDocument()
+  })
+
   it('pre-selects Anthropic when env has ANTHROPIC_API_KEY', async () => {
     vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
       provider: 'anthropic',
@@ -447,7 +536,7 @@ describe('Welcome — env provider detection (T7.A)', () => {
     await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
     // envProviderReady is set; the Step 1 Continue button should be enabled
     // without requiring manual provider setup (task = general, picked above).
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await waitFor(() => {
       const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
       const modelContinue = continueBtns[continueBtns.length - 1]
@@ -467,7 +556,7 @@ describe('Welcome — env provider detection (T7.A)', () => {
   it('shows fallback error toast when setActiveProvider rejects', async () => {
     vi.mocked(api.setActiveProvider).mockRejectedValueOnce(new Error('activate boom'))
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     fireEvent.click(screen.getByTestId('welcome-add-provider'))
     // Switch kind to anthropic + fill label so the modal can submit.
     const kindSelect = screen.getByRole('combobox') as HTMLSelectElement
@@ -493,7 +582,7 @@ describe('Welcome — env provider detection (T7.A)', () => {
 
   async function reachDoneStep() {
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
   }
@@ -559,7 +648,7 @@ describe('Welcome — env provider detection (T7.A)', () => {
       })
 
     wrap()
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
 

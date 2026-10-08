@@ -78,30 +78,31 @@ test.describe('OPC pages', () => {
 
 test.describe('Goals and Scheduled pages', () => {
   // /goals is a legacy route that redirects to /tasks (see App.tsx).
-  // IA T1: the page is titled「自动化」(Automations) — never「任务」.
+  // 2026-10 design parity: the page is titled「任务」(Tasks) — one noun
+  // across nav, header and page.
   test('goals page redirects to the tasks page', async ({ page }) => {
     await page.goto('/goals')
     await expect(page).toHaveURL(/\/tasks$/)
-    await expect(page.getByRole('main').getByRole('heading', { name: 'Automations', exact: true })).toBeVisible()
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible()
   })
 
-  // IA T4: one primary CTA「新建自动化」; the one-off background-task entry
-  // lives in its split-button dropdown.
-  test('redirected goals page shows the New Automation CTA with the background-task entry in its menu', async ({ page }) => {
+  // IA T4 + 2026-10 design parity: one primary CTA「新建」; the one-off
+  // background-task entry lives in its split-button dropdown.
+  test('redirected goals page shows the New CTA with the background-task entry in its menu', async ({ page }) => {
     await page.goto('/goals')
-    await expect(page.getByRole('button', { name: 'New Automation' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'New', exact: true })).toBeVisible()
     await page.getByRole('button', { name: /More ways to create/i }).click()
     await expect(page.getByRole('menuitem', { name: /New Background Task/i })).toBeVisible()
   })
 
   test('tasks page shows scheduled tasks heading', async ({ page }) => {
     await page.goto('/tasks')
-    await expect(page.getByRole('main').getByRole('heading', { name: 'Automations', exact: true })).toBeVisible()
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible()
   })
 
   test('tasks page shows new task button', async ({ page }) => {
     await page.goto('/tasks')
-    await expect(page.getByRole('button', { name: 'New Automation' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'New', exact: true })).toBeVisible()
     await page.getByRole('button', { name: /More ways to create/i }).click()
     await expect(page.getByRole('menuitem', { name: /New Background Task/i })).toBeVisible()
   })

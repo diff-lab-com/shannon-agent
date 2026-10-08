@@ -49,9 +49,11 @@ interface FlatLine {
   hunkId: string | null
 }
 
+// Aurora 2026-10 语义色归位: additions + the accept decision wear the
+// success token (moss green); tertiary/amber stays with warnings.
 const KIND_STYLES: Record<LineKind, { sign: string; signColor: string }> = {
   context: { sign: ' ', signColor: 'text-outline' },
-  add: { sign: '+', signColor: 'text-tertiary' },
+  add: { sign: '+', signColor: 'text-success' },
   del: { sign: '−', signColor: 'text-error' },
 }
 
@@ -103,7 +105,7 @@ function hunkHeaderIndices(lines: FlatLine[]): Map<string, number> {
 
 function decisionBorderStyle(decision: HunkDecision): string {
   switch (decision) {
-    case 'accept': return 'border-l-4 border-l-tertiary'
+    case 'accept': return 'border-l-4 border-l-success'
     case 'reject': return 'border-l-4 border-l-error'
     default: return 'border-l-4 border-l-transparent'
   }
@@ -111,7 +113,7 @@ function decisionBorderStyle(decision: HunkDecision): string {
 
 function decisionHeaderStyle(decision: HunkDecision): string {
   switch (decision) {
-    case 'accept': return 'bg-tertiary-container/40 text-tertiary'
+    case 'accept': return 'bg-success-container/40 text-on-success-container'
     case 'reject': return 'bg-error-container/40 text-error'
     default: return 'bg-surface-container-low text-on-surface-variant'
   }
@@ -196,7 +198,7 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, currentHunkI
           ) : null}
         </div>
         <div className="flex items-center gap-md shrink-0">
-          <span className="font-label-sm text-tertiary">+{counts.add}</span>
+          <span className="font-label-sm text-success">+{counts.add}</span>
           <span className="font-label-sm text-error">−{counts.del}</span>
         </div>
       </header>
@@ -210,7 +212,7 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, currentHunkI
                 const style = KIND_STYLES[line.kind]
                 const decision = line.hunkId !== null ? (decisions.get(line.hunkId) ?? 'pending') : 'pending'
                 const bgClass = line.kind === 'add'
-                  ? (decision === 'reject' ? 'bg-surface-container-lowest' : 'bg-tertiary-container/30')
+                  ? (decision === 'reject' ? 'bg-surface-container-lowest' : 'bg-success-container/30')
                   : line.kind === 'del'
                     ? (decision === 'accept' ? 'bg-surface-container-lowest opacity-40' : 'bg-error-container/30')
                     : 'bg-surface-container-lowest'
@@ -254,10 +256,10 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, currentHunkI
                     )}
                     <tr className={cn(bgClass, line.hunkId !== null && decisionBorderStyle(decision))}>
                       <td className={cn("w-[1ch] px-xs text-center select-none", style.signColor)}>{style.sign}</td>
-                      <td className="px-xs text-right text-outline select-none" style={{ width: `${gutterWidth + 1}ch` }}>
+                      <td className="px-xs text-right text-on-surface-variant/70 select-none" style={{ width: `${gutterWidth + 1}ch` }}>
                         {line.oldNo ?? ''}
                       </td>
-                      <td className="px-xs text-right text-outline select-none border-r border-outline-variant/20" style={{ width: `${gutterWidth + 1}ch` }}>
+                      <td className="px-xs text-right text-on-surface-variant/70 select-none border-r border-outline-variant/20" style={{ width: `${gutterWidth + 1}ch` }}>
                         {line.newNo ?? ''}
                       </td>
                       <td className="px-md whitespace-pre text-on-surface">
