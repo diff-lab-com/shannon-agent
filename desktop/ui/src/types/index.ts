@@ -1570,6 +1570,10 @@ export interface InboxItem {
   /// Risk tier of the gated tool (`critical`/`high`/`medium`/`low`), for the
   /// card's risk badge. `null` when unknown.
   risk: string | null
+  /// Design 05 来源链: the routine run that produced this item — the card
+  /// renders 「来源 › … › #N · 时间」 (mono #N). `null` for non-run sources
+  /// and rows written before the column existed.
+  runId: number | null
 }
 
 /// Optional filters for `list_inbox_items`. All fields optional.

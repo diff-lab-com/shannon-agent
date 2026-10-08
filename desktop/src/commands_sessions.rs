@@ -3115,6 +3115,7 @@ mod pin_and_auto_archive_tests {
                 error: None,
                 request_id: None,
                 risk: None,
+                run_id: None,
             })
             .unwrap();
         // A READ item is no longer 未读: a second session whose only inbox
@@ -3131,6 +3132,7 @@ mod pin_and_auto_archive_tests {
                 error: None,
                 request_id: None,
                 risk: None,
+                run_id: None,
             })
             .unwrap();
         inbox

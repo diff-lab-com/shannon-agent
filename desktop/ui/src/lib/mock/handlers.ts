@@ -2045,7 +2045,7 @@ export const handlers: Record<string, MockHandler> = {
         error: null,
         status: 'pending',
         requestId: null,
-        risk: null,
+        risk: null,        runId: item.runId,
         createdAtMs: Date.now(),
         updatedAtMs: Date.now(),
       })
@@ -2956,7 +2956,11 @@ export const handlers: Record<string, MockHandler> = {
   // unarmed — byte-identical to the previous unconditional null).
   async detect_provider_from_env() {
     await delay();
-    return demoEnvProvider();
+    // armed → the demo entry wrapped in the array contract (2026-10-08
+    // multi-key); unarmed → null, byte-identical to the previous behavior
+    // (the e2e hook keys off that null).
+    const demo = demoEnvProvider();
+    return demo ? [demo] : null;
   },
 }
 

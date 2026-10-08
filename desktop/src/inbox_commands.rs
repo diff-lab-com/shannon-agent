@@ -1945,6 +1945,8 @@ fn finalize_run<R: tauri::Runtime>(
             error: run_error.clone(),
             request_id: None,
             risk: None,
+            // 来源链 #N (设计 05): the card links back to the producing run.
+            run_id: ctx.run_id.parse::<i64>().ok(),
         })
         .map_err(|e| e.to_string());
     let item_id = match item {
@@ -2464,6 +2466,7 @@ mod tests {
             error: None,
             request_id: None,
             risk: None,
+            run_id: None,
         }
     }
 
@@ -3488,6 +3491,7 @@ mod tests {
                 error: None,
                 request_id: None,
                 risk: None,
+                run_id: None,
             })
             .unwrap();
         inbox

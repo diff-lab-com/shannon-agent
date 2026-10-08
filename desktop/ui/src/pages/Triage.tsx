@@ -312,6 +312,13 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
                 {/* B4 #28: format in the app's locale, not the OS default. */}
                 {new Date(item.createdAtMs).toLocaleString(intl.locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </span>
+              {/* Design 05 来源链 「来源 › 名称 › #N · 时间」: the producing
+                  run's number, mono — null on non-run sources (honesty rule). */}
+              {item.runId != null && (
+                <span data-testid="inbox-run-number" className="font-mono font-label-sm text-label-sm text-on-surface-variant tabular-nums">
+                  #{item.runId}
+                </span>
+              )}
             </div>
           </div>
         </div>
