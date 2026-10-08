@@ -90,19 +90,23 @@ export default function Welcome() {
     if (envCheckedRef.current) return
     envCheckedRef.current = true
     api.detectProviderFromEnv()
-      .then(detected => {
-        if (!detected) return
-        setProvider(detected.provider)
-        if (detected.provider === 'ollama') {
-          // Ollama runs locally — detected means usable, no key involved.
-          setEnvProviderReady(true)
-          toast.info(intl.formatMessage({ id: 'welcome.envDetected.ollama' }))
-        } else if (detected.has_api_key) {
-          setEnvProviderReady(true)
-          // Persistent footer badge (design 01:165) — the toast below is the
-          // momentary ack, the badge stays for the whole flow.
-          setDetectedKeys(prev => (prev.includes(detected.provider) ? prev : [...prev, detected.provider]))
-          toast.success(intl.formatMessage({ id: 'welcome.envDetected.toast' }, { provider: detected.provider }))
+      .then(detectedList => {
+        if (!detectedList?.length) return
+        // Recommended ranking order — first stays the pre-selected provider.
+        setProvider(detectedList[0].provider)
+        for (const detected of detectedList) {
+          if (detected.provider === 'ollama') {
+            // Ollama runs locally — detected means usable, no key involved.
+            setEnvProviderReady(true)
+            toast.info(intl.formatMessage({ id: 'welcome.envDetected.ollama' }))
+          } else if (detected.has_api_key) {
+            setEnvProviderReady(true)
+            // Persistent footer badge (design 01:165) — the toast below is the
+            // momentary ack, the badge stays for the whole flow. Multi-key
+            // (2026-10-08 缓期 #10): every detected key lands in the badge.
+            setDetectedKeys(prev => (prev.includes(detected.provider) ? prev : [...prev, detected.provider]))
+            toast.success(intl.formatMessage({ id: 'welcome.envDetected.toast' }, { provider: detected.provider }))
+          }
         }
       })
       .catch(e => console.warn('detectProviderFromEnv failed:', e))

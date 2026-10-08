@@ -12,7 +12,7 @@ vi.mock('@/lib/tauri-api', async importOriginal => {
   const actual = await importOriginal<typeof api>()
   return {
     ...actual,
-    detectProviderFromEnv: vi.fn().mockResolvedValue({ provider: 'anthropic', has_api_key: true }),
+    detectProviderFromEnv: vi.fn().mockResolvedValue([{ provider: 'anthropic', has_api_key: true }]),
     configure: vi.fn().mockResolvedValue(undefined),
     seedSampleData: vi.fn().mockResolvedValue({ tasks_seeded: 3 }),
     listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),

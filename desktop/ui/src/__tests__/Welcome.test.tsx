@@ -292,10 +292,10 @@ describe('Welcome component — 2-step flow', () => {
   // Model step — env-key users go straight through to Done (tools are
   // prefilled from the task's recommendations in the 2-step flow).
   it('advances to Done step when env has key for recommended provider', async () => {
-    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue([{
       provider: 'anthropic',
       has_api_key: true,
-    })
+    }])
     wrap()
     // env detection fires on mount; let it resolve.
     await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
@@ -322,10 +322,10 @@ describe('Welcome component — 2-step flow', () => {
   // B5-33 (decision 4-B): the summary states a recommendation — it must not
   // claim tools were "enabled", since Welcome never persists tool config.
   it('Done step states the tool recommendation honestly (B5-33)', async () => {
-    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue([{
       provider: 'anthropic',
       has_api_key: true,
-    })
+    }])
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     await waitFor(() => {
@@ -344,10 +344,10 @@ describe('Welcome component — 2-step flow', () => {
   // chips deep-link to Settings → Connections — navigation only, Welcome
   // itself still flips no config (decision 4-B holds).
   it('Done step lists each recommended tool as a chip that deep-links to Settings → Connections', async () => {
-    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue([{
       provider: 'anthropic',
       has_api_key: true,
-    })
+    }])
     // Local wrapper with a stub pane so the chip's navigation is observable
     // (the shared wrap() has no Routes to land on).
     render(
@@ -506,10 +506,10 @@ describe('Welcome — env provider detection (T7.A)', () => {
   })
 
   it('shows a persistent BYOK badge for env-detected keys plus the privacy footer (design 01:164-170)', async () => {
-    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue([{
       provider: 'anthropic',
       has_api_key: true,
-    })
+    }])
     wrap()
     // The badge is persistent footer chrome — it stays after the one-shot
     // toast would have expired, and lists the detected key(s).
@@ -528,10 +528,10 @@ describe('Welcome — env provider detection (T7.A)', () => {
   })
 
   it('pre-selects Anthropic when env has ANTHROPIC_API_KEY', async () => {
-    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue([{
       provider: 'anthropic',
       has_api_key: true,
-    })
+    }])
     wrap()
     await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
     // envProviderReady is set; the Step 1 Continue button should be enabled
@@ -545,10 +545,10 @@ describe('Welcome — env provider detection (T7.A)', () => {
   })
 
   it('toasts when Ollama is detected via env', async () => {
-    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue([{
       provider: 'ollama',
       has_api_key: false,
-    })
+    }])
     wrap()
     await waitFor(() => expect(toast.info).toHaveBeenCalled())
   })

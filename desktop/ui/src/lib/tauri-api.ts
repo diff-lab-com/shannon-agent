@@ -454,7 +454,9 @@ export interface DetectedProvider {
   has_api_key: boolean
 }
 
-export async function detectProviderFromEnv(): Promise<DetectedProvider | null> {
+/** ALL env-detected providers in recommended ranking order (2026-10-08:
+ *  multi-key BYOK badge) — empty array when nothing is detected. */
+export async function detectProviderFromEnv(): Promise<DetectedProvider[]> {
   return invoke('detect_provider_from_env')
 }
 

@@ -108,12 +108,15 @@ describe('mock handlers — save_provider backend contracts (P-N21/P2-23 残留)
 })
 
 describe('mock handlers — S4 scenario hooks (P-N20)', () => {
-  it('detect_provider_from_env answers the envProvider hook, null when unarmed', async () => {
+  it('detect_provider_from_env answers the envProvider hook as a 1-entry list, null when unarmed', async () => {
+    // 2026-10-08 multi-key contract: the wire is a ranked array (the real
+    // backend lists EVERY detected key); the demo hook wraps its single
+    // entry, null stays null when unarmed.
     expect(await handlers.detect_provider_from_env()).toBeNull()
     armHook('shannon.demo.envProvider', JSON.stringify({ provider: 'ollama' }))
-    expect(await handlers.detect_provider_from_env()).toEqual({ provider: 'ollama', has_api_key: false })
+    expect(await handlers.detect_provider_from_env()).toEqual([{ provider: 'ollama', has_api_key: false }])
     armHook('shannon.demo.envProvider', JSON.stringify({ provider: 'anthropic', has_api_key: true }))
-    expect(await handlers.detect_provider_from_env()).toEqual({ provider: 'anthropic', has_api_key: true })
+    expect(await handlers.detect_provider_from_env()).toEqual([{ provider: 'anthropic', has_api_key: true }])
     // Malformed payloads degrade to the unarmed default.
     armHook('shannon.demo.envProvider', 'not-json')
     expect(await handlers.detect_provider_from_env()).toBeNull()
