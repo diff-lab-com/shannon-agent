@@ -341,6 +341,78 @@
         }
       }
     },
+    "agentStateNotification": {
+      "type": "object",
+      "description": "P2-9 agent.state push (2026-10-08): a dedicated notification METHOD (not a shannon/event type) the phone's LiveAgentsNotifier consumes by params.agent. The agent map is the FULL shannon/agent.list roster shape — the phone REPLACES the matching roster entry with it (unknown ids are added), so role/model must ride when the definition declares them; currentTask is camelCase per the phone's agentFromMap, the only consumer. Ephemeral: seq-free, outside the shannon/resume replay ring (the Fleet screen re-converges via agent.list on its next bind).",
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "shannon/agent.state"
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "agent"
+          ],
+          "properties": {
+            "agent": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "status",
+                "activity",
+                "currentTask"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "the roster agent id (the ~/.shannon/agents/*.toml name)"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "description": "the definition's description — omitted when absent/empty (agent.list parity)"
+                },
+                "model": {
+                  "type": "string",
+                  "description": "the definition's model — omitted when absent/empty (agent.list parity)"
+                },
+                "status": {
+                  "enum": [
+                    "running",
+                    "idle"
+                  ]
+                },
+                "activity": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "shape parity with agent.list; always empty today"
+                },
+                "currentTask": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "the dispatched task text while running; explicitly null once idle"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "qrV2Payload": {
       "description": "Desktop QR (scan or file) — the out-of-band trust channel. Mobile mirror: methods.dart QrPairingPayload.",
       "type": "object",

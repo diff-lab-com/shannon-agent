@@ -359,6 +359,55 @@ export interface UsageFrame {
   cost_usd: number;
 }
 
+// ── P2-9: agent.state push (gateway → phone, roster live status) ────────────
+
+/**
+ * One agent map inside a `shannon/agent.state` notification (P2-9). This is
+ * NOT a `shannon/event` type — the phone consumes a dedicated notification
+ * METHOD (`shannon/agent.state`, shannon-mobile `Notifications.agentState`)
+ * whose params are `{agent: {...}}`, parsed by `agentFromMap`
+ * (lib/src/live/protocol_mapper.dart). The mock server's broadcast
+ * (`{'agent': {...agent, 'status': ...}}`) is the wire's reference shape.
+ *
+ * Field names follow THAT mapper (the only consumer), not the gateway-wide
+ * snake_case rule: `currentTask` is camelCase on this face, `id`/`name`/
+ * `status`/`activity` carry the same keys `shannon/agent.list` serves. The
+ * map must be the FULL roster shape — the phone's consumer REPLACES the
+ * matching roster entry wholesale (unknown ids are ADDED), so a minimal
+ * `{id, status}` push would visibly degrade `name`/`role`/`model` on the
+ * Fleet screen. `role`/`model` stay optional exactly like `agent.list`
+ * (omitted when the definition doesn't declare them).
+ */
+export interface MobileAgentState {
+  /** The roster agent id (the `~/.shannon/agents/*.toml` `name`). */
+  id: string;
+  /** Same string as `id` (roster convention — `agent.list` serves it so). */
+  name: string;
+  /** The definition's description — omitted when absent/empty. */
+  role?: string;
+  /** The definition's model — omitted when absent/empty. */
+  model?: string;
+  /** Live status: `"running"` from task acceptance, `"idle"` at a terminal. */
+  status: "running" | "idle";
+  /** Kept for shape parity with `agent.list` (always empty today). */
+  activity: string[];
+  /** The task text while running; explicitly `null` once idle. */
+  currentTask: string | null;
+}
+
+/**
+ * The P2-9 notification frame. Deliberately seq-free and outside the §O4
+ * replay ring: the phone's `agent.state` consumer reads no cursor, and
+ * ephemeral roster status must not replay through the `shannon/event`
+ * resume path — the Fleet screen re-converges via `shannon/agent.list` on
+ * its next (re)bind.
+ */
+export interface AgentStateNotification {
+  jsonrpc: typeof JSONRPC_VERSION;
+  method: "shannon/agent.state";
+  params: { agent: MobileAgentState };
+}
+
 // ── Result shapes ──────────────────────────────────────────────────────────
 
 export interface HealthResult {

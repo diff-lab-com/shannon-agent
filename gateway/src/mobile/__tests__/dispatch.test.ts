@@ -26,6 +26,7 @@ import {
 } from "../crypto.js";
 import { MobileDispatchHub } from "../hub.js";
 import { createEngineHandlers } from "../engineBridge.js";
+import { loadAgentRoster } from "../agentRoster.js";
 import { ApprovalRegistry } from "../approvalRegistry.js";
 import { createTaskHandlers } from "../taskHandlers.js";
 import { createMobileTaskTurnHandler } from "../taskTurnHandler.js";
@@ -61,6 +62,18 @@ function eventsOf(ctx: MethodContext): any[] {
   return ((ctx.socket as unknown as FakeDeviceSocket).frames as any[])
     .filter((f) => f.method === "shannon/event")
     .map((f) => f.params);
+}
+
+/** Every raw notification frame a fake device has received, any method. */
+function framesOf(ctx: MethodContext): any[] {
+  return (ctx.socket as unknown as FakeDeviceSocket).frames as any[];
+}
+
+/** P2-9: the agent maps a fake device received as shannon/agent.state pushes. */
+function agentStatesOf(ctx: MethodContext): any[] {
+  return framesOf(ctx)
+    .filter((f) => f.method === "shannon/agent.state")
+    .map((f) => f.params.agent);
 }
 
 export function mockEngineClient(events: EngineEvent[]): EngineWsClient {
@@ -657,6 +670,210 @@ describe("mobile dispatch — B0 session.list agent attribution", () => {
     });
     const list: any = await bridge["shannon/session.list"]!({}, fakeCtx("dev-1"));
     expect(list.result.sessions).toEqual([{ id: "sess-1", title: "t" }]);
+  });
+});
+
+// ── P2-9: shannon/agent.state roster live-status pushes ──────────────────────
+
+describe("mobile dispatch — P2-9 agent.state roster pushes", () => {
+  /** A roster dir with ONE definition: backend-dev (role + model declared). */
+  function tmpRosterDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "gw-agent-state-"));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "backend.toml"),
+      [
+        'name = "backend-dev"',
+        'description = "Backend development specialist"',
+        'model = "claude-haiku-4-5"',
+      ].join("\n"),
+      "utf8",
+    );
+    return dir;
+  }
+
+  /** The per-push roster resolver the bootstrap wires (same read-per-push). */
+  function rosterLookup(dir: string): (agentId: string) => ReturnType<typeof loadAgentRoster>[number] | null {
+    return (agentId) => loadAgentRoster([dir]).find((a) => a.id === agentId) ?? null;
+  }
+
+  it("dispatch WITH agent_id pushes {agent: running, currentTask: prompt} — full roster map, seq-free — then idle at the terminal", async () => {
+    const dir = tmpRosterDir();
+    try {
+      const hub = new MobileDispatchHub({ logger, rosterEntry: rosterLookup(dir) });
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      hub.setSubmit(() => gate); // hold the turn open so the running state sticks
+      const handlers = createTaskHandlers({ hub, agentRosterDirs: [dir] });
+      const ctx = fakeCtx("dev-1");
+      hub.registerConnection(ctx);
+
+      const res: any = await handlers["shannon/task.dispatch"]!(
+        { prompt: "ship it", agent_id: "backend-dev" },
+        ctx,
+      );
+      expect(res.kind).toBe("result");
+
+      await vi.waitFor(() => expect(agentStatesOf(ctx)).toHaveLength(1));
+      // The FULL roster shape — the phone's consumer REPLACES the roster
+      // entry with this map, so name/role/model must ride (camelCase
+      // currentTask per agentFromMap, the only consumer).
+      expect(agentStatesOf(ctx)[0]).toEqual({
+        id: "backend-dev",
+        name: "backend-dev",
+        role: "Backend development specialist",
+        model: "claude-haiku-4-5",
+        status: "running",
+        activity: [],
+        currentTask: "ship it",
+      });
+      // Dedicated notification METHOD (not a shannon/event type), no seq —
+      // the phone's LiveAgentsNotifier filters on the method and reads
+      // params.agent; ephemeral roster state stays out of the replay ring.
+      const frame = framesOf(ctx).find((f) => f.method === "shannon/agent.state")!;
+      expect(Object.keys(frame)).toEqual(["jsonrpc", "method", "params"]);
+      expect(frame.jsonrpc).toBe("2.0");
+      expect(Object.keys(frame.params)).toEqual(["agent"]);
+      // …and it is NOT riding the shannon/event stream.
+      expect(eventsOf(ctx).some((e) => (e as any).agent?.id === "backend-dev")).toBe(false);
+
+      // Terminal (the dispatch resolution's finishTask): idle, currentTask null.
+      release();
+      await vi.waitFor(() => expect(agentStatesOf(ctx)).toHaveLength(2));
+      expect(agentStatesOf(ctx)[1]).toEqual({
+        id: "backend-dev",
+        name: "backend-dev",
+        role: "Backend development specialist",
+        model: "claude-haiku-4-5",
+        status: "idle",
+        activity: [],
+        currentTask: null,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("dispatch WITHOUT agent_id pushes no agent.state — 无归属归 host，roster 无行可动", async () => {
+    const dir = tmpRosterDir();
+    try {
+      const hub = new MobileDispatchHub({ logger, rosterEntry: rosterLookup(dir) });
+      hub.setSubmit(async () => {});
+      const handlers = createTaskHandlers({ hub, agentRosterDirs: [dir] });
+      const ctx = fakeCtx("dev-1");
+      hub.registerConnection(ctx);
+
+      await handlers["shannon/task.dispatch"]!({ prompt: "host's own task" }, ctx);
+      await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]?.status).toBe("completed"));
+      // The push machinery ran (query.started landed) but no roster row moved.
+      expect(eventsOf(ctx).map((e) => e.type)).toContain("query.started");
+      expect(agentStatesOf(ctx)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("turn-handler terminals over the real pipeline: completeActiveTask → running→idle, failActiveTask → running→idle", async () => {
+    const dir = tmpRosterDir();
+    try {
+      const buildPipeline = (client: EngineWsClient) => {
+        const hub = new MobileDispatchHub({ logger, rosterEntry: rosterLookup(dir) });
+        const adapter = createMobileChannelAdapter({ hub });
+        const registry = { get: (p: string) => (p === "mobile" ? adapter : undefined) } as any;
+        const turnHandler: TurnHandler = createMobileTaskTurnHandler({
+          hub,
+          engineBaseUrl: "http://engine",
+        });
+        const router = new SessionRouter({ registry, clientFactory: () => client, turnHandler, logger });
+        hub.setSubmit((inbound) => router.handleInbound(inbound));
+        return hub;
+      };
+
+      const okHub = buildPipeline(mockEngineClient([textEvent("done"), { type: "completed", model: "m" } as EngineEvent]));
+      const okCtx = fakeCtx("dev-ok");
+      okHub.registerConnection(okCtx);
+      const okHandlers = createTaskHandlers({ hub: okHub, agentRosterDirs: [dir] });
+      await okHandlers["shannon/task.dispatch"]!({ prompt: "long task", agent_id: "backend-dev" }, okCtx);
+      await vi.waitFor(() => expect(okHub.listTasks("dev-ok")[0]?.status).toBe("completed"));
+      const okStates = agentStatesOf(okCtx);
+      expect(okStates.map((s) => s.status)).toEqual(["running", "idle"]);
+      expect(okStates[0].currentTask).toBe("long task");
+      expect(okStates[1].currentTask).toBeNull();
+
+      const badHub = buildPipeline(mockEngineClient([textEvent("partial"), { type: "failed", error: "boom" } as EngineEvent]));
+      const badCtx = fakeCtx("dev-bad");
+      badHub.registerConnection(badCtx);
+      const badHandlers = createTaskHandlers({ hub: badHub, agentRosterDirs: [dir] });
+      await badHandlers["shannon/task.dispatch"]!({ prompt: "doomed", agent_id: "backend-dev" }, badCtx);
+      await vi.waitFor(() => expect(badHub.listTasks("dev-bad")[0]?.status).toBe("failed"));
+      const badStates = agentStatesOf(badCtx);
+      expect(badStates.map((s) => s.status)).toEqual(["running", "idle"]);
+      expect(badStates[1].currentTask).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a queued same-agent task keeps the roster running until IT terminates (no idle blink between queue drains)", async () => {
+    const dir = tmpRosterDir();
+    try {
+      const hub = new MobileDispatchHub({ logger, rosterEntry: rosterLookup(dir) });
+      const gates: Array<() => void> = [];
+      hub.setSubmit(() => new Promise<void>((r) => gates.push(r)));
+      const handlers = createTaskHandlers({ hub, agentRosterDirs: [dir] });
+      const ctx = fakeCtx("dev-1");
+      hub.registerConnection(ctx);
+
+      await handlers["shannon/task.dispatch"]!({ prompt: "first", agent_id: "backend-dev" }, ctx);
+      await handlers["shannon/task.dispatch"]!({ prompt: "second", agent_id: "backend-dev" }, ctx);
+      // Both acceptances pushed running — each with its own task text.
+      await vi.waitFor(() => expect(agentStatesOf(ctx)).toHaveLength(2));
+      expect(agentStatesOf(ctx).map((s) => s.currentTask)).toEqual(["first", "second"]);
+
+      // First terminal: the SAME agent still owns the queued second task —
+      // running continues with the new currentTask, no idle blink.
+      gates[0]!();
+      await vi.waitFor(() => expect(agentStatesOf(ctx)).toHaveLength(3));
+      expect(agentStatesOf(ctx)[2]).toMatchObject({ status: "running", currentTask: "second" });
+
+      // Last terminal: nothing left under the agent — idle.
+      gates[1]!();
+      await vi.waitFor(() => expect(agentStatesOf(ctx)).toHaveLength(4));
+      expect(agentStatesOf(ctx)[3]).toMatchObject({ status: "idle", currentTask: null });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("an agent removed from the roster mid-task pushes NO terminal state (never ghost-add an unknown id)", async () => {
+    const dir = tmpRosterDir();
+    try {
+      const hub = new MobileDispatchHub({ logger, rosterEntry: rosterLookup(dir) });
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      hub.setSubmit(() => gate);
+      const handlers = createTaskHandlers({ hub, agentRosterDirs: [dir] });
+      const ctx = fakeCtx("dev-1");
+      hub.registerConnection(ctx);
+
+      await handlers["shannon/task.dispatch"]!({ prompt: "ship it", agent_id: "backend-dev" }, ctx);
+      await vi.waitFor(() => expect(agentStatesOf(ctx)).toHaveLength(1));
+
+      // The definition file disappears mid-task; the resolver re-reads per
+      // push, so the settle lookup misses — the push is skipped instead of
+      // fabricating a roster row the phone would ADD.
+      rmSync(join(dir, "backend.toml"));
+      release();
+      await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]?.status).toBe("completed"));
+      expect(agentStatesOf(ctx)).toHaveLength(1);
+      expect(agentStatesOf(ctx)[0].status).toBe("running");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
