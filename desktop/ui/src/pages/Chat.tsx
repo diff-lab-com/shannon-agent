@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, lazy } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, lazy } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -11,7 +11,7 @@ import { recordInputHistory } from '@/lib/inputHistory'
 import { clearDraft, DRAFT_MAX_KB, readDraft, writeDraft } from '@/lib/composerDraft'
 import { clearDiffStatsCache } from '@/components/chat/diffStats'
 import { toastError } from '@/lib/errorToast'
-import { setActiveWorkingDir } from '@/lib/fileRefs'
+import { setActiveWorkingDir, extractToolInputPath, FILE_MUTATING_TOOLS } from '@/lib/fileRefs'
 import { useDiskArtifacts } from '@/hooks/useDiskArtifacts'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
 import { useBudgetGuard } from '@/hooks/useBudgetGuard'
@@ -706,6 +706,38 @@ export default function Chat() {
     editing, cancelEdit,
   }
 
+  // ── Aurora 2026-10 diff-review loop (03 页, 数据全部现成) ──────────────
+  // The session's changed files (completed file-mutating tool calls) feed
+  // the RightDock's embedded FileDiffList sidebar; checkpoints render as
+  // rewind chips atop the diff tab. Same extraction rules as the in-bubble
+  // FileChangesCard (lib/fileRefs is the single source of truth).
+  const changedPaths = useMemo(() => {
+    const out: string[] = []
+    for (const m of messages) {
+      for (const tc of m.tool_calls ?? []) {
+        if (tc.status !== 'completed' || tc.is_error) continue
+        const p = extractToolInputPath(tc.tool_input)
+        if (p != null && FILE_MUTATING_TOOLS.has(tc.tool_name) && !out.includes(p)) out.push(p)
+      }
+    }
+    return out
+  }, [messages])
+
+  // Checkpoint rewind from the dock's chips — same IPC the message-level
+  // rewind uses; the confirm dialog below guards the destructive step.
+  const [pendingCheckpointRewind, setPendingCheckpointRewind] = useState<number | null>(null)
+  const confirmCheckpointRewind = async () => {
+    const turnIndex = pendingCheckpointRewind
+    setPendingCheckpointRewind(null)
+    if (turnIndex == null) return
+    try {
+      await rewindSession(turnIndex)
+      toast.success(t('chat.message.rewind.success'))
+    } catch (error) {
+      toastError(t('chat.message.rewind.failed'), error)
+    }
+  }
+
   // 2026-09-29 provider review §3-A1 (item 2): the old gate read
   // `config.api_key`/`config.provider` — fields DesktopConfig dropped in
   // ADR-0005 — so the banner showed for EVERY user in production. Gate on
@@ -847,9 +879,25 @@ export default function Chat() {
             planModeActive={config?.approval_mode === 'plan'}
             diffPath={diffPath}
             onCloseDiff={() => setDiffPath(null)}
+            changedPaths={changedPaths}
+            onSelectDiffPath={setDiffPath}
+            checkpoints={checkpoints}
+            onRewindCheckpoint={setPendingCheckpointRewind}
             runProcess={runProcess}
           />
           <DiffDialogMulti open={diffPaths !== null} filePaths={diffPaths ?? []} onClose={() => setDiffPaths(null)} />
+
+          {/* Aurora 2026-10: confirm before the dock's checkpoint chip
+              rewinds — same guard copy as the message-level rewind. */}
+          <ConfirmDialog
+            open={pendingCheckpointRewind != null}
+            title={t('chat.message.rewind.confirm.title')}
+            message={t('chat.message.rewind.confirm.message')}
+            confirmLabel={t('chat.message.rewind.confirm.confirm')}
+            cancelLabel={t('chat.message.rewind.confirm.cancel')}
+            onConfirm={() => void confirmCheckpointRewind()}
+            onCancel={() => setPendingCheckpointRewind(null)}
+          />
 
           {/* B0 P0-5: discard confirmation for unsaved editor edits. */}
           <ConfirmDialog

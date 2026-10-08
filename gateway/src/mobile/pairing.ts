@@ -27,7 +27,9 @@
  */
 
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname } from "node:path";
+import { timingSafeEqual } from "node:crypto";
 
 import type { Logger } from "../adapters/types.js";
 import { sharedPushSeq, GAP_WINDOW, type SeqCounter } from "./seq.js";
@@ -103,6 +105,18 @@ function parseTokenRecord(line: string): PairTokenRecord | null {
     issuedAt: typeof issuedAt === "number" ? issuedAt : 0,
     expiresAt,
   };
+}
+
+/**
+ * Constant-time pair-token comparison. Every webhook HMAC in this repo uses
+ * `timingSafeEqual`; the owner pairing credential was the one string `===`
+ * outlier. Compare SHA-256 digests so length differences don't leak and
+ * `timingSafeEqual`'s equal-length precondition always holds.
+ */
+function tokenMatches(expected: string, provided: string): boolean {
+  const a = createHash("sha256").update(expected, "utf8").digest();
+  const b = createHash("sha256").update(provided, "utf8").digest();
+  return timingSafeEqual(a, b);
 }
 
 export class PairTokenStore {
@@ -200,7 +214,7 @@ export class PairTokenStore {
       if (trimmed.length === 0) continue;
       const rec = parseTokenRecord(trimmed);
       if (!rec) continue;
-      if (rec.token === token && now < rec.expiresAt) return rec;
+      if (tokenMatches(rec.token, token) && now < rec.expiresAt) return rec;
     }
     return null;
   }
@@ -251,7 +265,7 @@ export class PairTokenStore {
       if (trimmed.length === 0) continue;
       const rec = parseTokenRecord(trimmed);
       if (!rec) continue; // tolerate a malformed line rather than failing the pair
-      if (rec.token === token) {
+      if (tokenMatches(rec.token, token)) {
         // Match: consume unconditionally (single-use). Valid only if not expired.
         consumed = now < rec.expiresAt ? rec : null;
         continue; // drop from survivors

@@ -216,14 +216,20 @@ pub struct AutoUpdater {
 impl AutoUpdater {
     /// Create a new updater with the given configuration.
     pub fn new(config: UpdaterConfig) -> Self {
+        // Never degrade to a no-timeout client: a stalled endpoint would hang
+        // every update check. Retry the builder without the user-agent before
+        // giving up on timeouts entirely.
         let client = reqwest::Client::builder()
             .user_agent(format!("shannon/{CURRENT_VERSION}"))
             .timeout(Duration::from_secs(10))
             .build()
-            .unwrap_or_else(|e| {
-                eprintln!("Warning: failed to build HTTP client for updater: {e}");
-                reqwest::Client::new()
-            });
+            .or_else(|e| {
+                warn!("failed to build updater HTTP client with user-agent: {e}");
+                reqwest::Client::builder()
+                    .timeout(Duration::from_secs(10))
+                    .build()
+            })
+            .expect("reqwest client with only a timeout set is always buildable");
 
         Self {
             config,

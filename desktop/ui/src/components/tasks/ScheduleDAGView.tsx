@@ -184,6 +184,11 @@ export default function ScheduleDAGView({ routines, onSelectRoutine, queuedTaskI
             const nodeClass = triggerClasses(n.routine.trigger_type, n.routine.enabled)
             const windowLabel = windowLabelOf(n.routine)
             const isQueued = queuedTaskIds?.has(n.routine.id) ?? false
+            // Design 04 (audit R1): an auto-paused routine fronts its reason
+            // on the node itself — the 「已自动暂停 · <原因>」 badge wording
+            // shared with RoutineLifecycleRow, so a burned routine is visible
+            // in the graph without opening the drawer.
+            const autoPaused = !n.routine.enabled && n.routine.pause_reason != null
             return (
               <g
                 key={n.routine.id}
@@ -227,6 +232,12 @@ export default function ScheduleDAGView({ routines, onSelectRoutine, queuedTaskI
                 {isQueued ? (
                   <text x={12} y={56} fontSize={9} className="fill-secondary">
                     ⏳ {t('tasks.scheduleDAGView.queued', { window: windowLabel ?? '' })}
+                  </text>
+                ) : autoPaused ? (
+                  <text x={12} y={56} fontSize={9} className="fill-warning" data-autopaused="true">
+                    ⏸ {t('tasks.routineControls.autoPausedLabel')}
+                    {t('tasks.routineControls.autoPausedReasonSeparator')}
+                    {t(`tasks.routineControls.autoPausedReason.${n.routine.pause_reason}`)}
                   </text>
                 ) : (
                   <text x={12} y={56} fontSize={9} className={n.routine.enabled ? 'fill-tertiary' : 'fill-outline'}>

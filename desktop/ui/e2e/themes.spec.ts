@@ -23,6 +23,7 @@ test('every theme sets data-theme and the registered scheme on <html>', async ({
   for (const { id, mode } of THEME_CASES) {
     await page.addInitScript(t => {
       window.localStorage.setItem('shannon-theme', t as string)
+      window.localStorage.setItem('shannon.theme.darkDefaultMigrated', '1')
     }, id)
     await page.goto('/')
     await page.getByRole('listitem').first().waitFor({ state: 'visible' })
@@ -35,6 +36,7 @@ test('light and dark themes observably change the surface color', async ({ page 
   const bgFor = async (theme: string) => {
     await page.addInitScript(t => {
       window.localStorage.setItem('shannon-theme', t as string)
+      window.localStorage.setItem('shannon.theme.darkDefaultMigrated', '1')
     }, theme)
     await page.goto('/')
     await page.getByRole('listitem').first().waitFor({ state: 'visible' })
@@ -63,6 +65,7 @@ test('every theme’s registered scheme matches its actual surface luminance', a
   for (const { id, mode } of THEME_CASES) {
     await page.addInitScript(t => {
       window.localStorage.setItem('shannon-theme', t as string)
+      window.localStorage.setItem('shannon.theme.darkDefaultMigrated', '1')
     }, id)
     await page.goto('/')
     await page.getByRole('listitem').first().waitFor({ state: 'visible' })
@@ -85,6 +88,7 @@ test('every theme passes axe color-contrast on the chat page', async ({ page }) 
   for (const { id } of THEME_CASES) {
     await page.addInitScript(t => {
       window.localStorage.setItem('shannon-theme', t as string)
+      window.localStorage.setItem('shannon.theme.darkDefaultMigrated', '1')
     }, id)
     await page.goto('/')
     await page.getByRole('listitem').first().waitFor({ state: 'visible' })

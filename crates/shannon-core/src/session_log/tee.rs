@@ -516,7 +516,9 @@ impl SessionTee {
         }
     }
 
-    /// Sum one step's usage into the turn accumulator.
+    /// Sum one step's usage into the turn accumulator. Token counts and cost
+    /// sum; the context window is a per-step constant, so the fold keeps the
+    /// max (the peak) and never invents one from a step that lacked it.
     fn add_turn_usage(&mut self, usage: TokenUsage) {
         self.turn_usage = Some(match self.turn_usage.take() {
             Some(existing) => TokenUsage {
@@ -526,6 +528,14 @@ impl SessionTee {
                 cache_read_tokens: existing.cache_read_tokens + usage.cache_read_tokens,
                 cost_usd: match (existing.cost_usd, usage.cost_usd) {
                     (Some(a), Some(b)) => Some(a + b),
+                    (Some(a), None) | (None, Some(a)) => Some(a),
+                    (None, None) => None,
+                },
+                context_window_tokens: match (
+                    existing.context_window_tokens,
+                    usage.context_window_tokens,
+                ) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
                     (Some(a), None) | (None, Some(a)) => Some(a),
                     (None, None) => None,
                 },
@@ -589,6 +599,7 @@ impl SessionTee {
                 cache_creation_tokens: 0,
                 cache_read_tokens: 0,
                 cost_usd: None,
+                context_window_tokens: None,
             })
         });
         self.record_body(SessionEventBody::TurnEnd(TurnEndPayload {
@@ -966,6 +977,7 @@ mod tests {
                 cost_usd: 0.5,
                 cache_creation_tokens: 3,
                 cache_read_tokens: 4,
+                context_window_tokens: Some(200_000),
             });
             tee.record_query_event(&QueryEvent::TurnCompleted {
                 query_id: query_id(),
@@ -979,6 +991,7 @@ mod tests {
                 cost_usd: 1.5,
                 cache_creation_tokens: 30,
                 cache_read_tokens: 40,
+                context_window_tokens: Some(128_000),
             });
             tee.record_query_event(&QueryEvent::Completed {
                 query_id: query_id(),
@@ -1007,6 +1020,9 @@ mod tests {
                 assert_eq!(usage.cache_creation_tokens, 33);
                 assert_eq!(usage.cache_read_tokens, 44);
                 assert_eq!(usage.cost_usd, Some(2.0));
+                // Context peak: per-step windows fold to the max, never a sum
+                // (steps 200_000 then 128_000 → peak 200_000).
+                assert_eq!(usage.context_window_tokens, Some(200_000));
             }
             other => panic!("wrong body: {other:?}"),
         }
@@ -1026,6 +1042,7 @@ mod tests {
             cost_usd: 0.5,
             cache_creation_tokens: 3,
             cache_read_tokens: 4,
+            context_window_tokens: None,
         };
         let turn_completed = QueryEvent::TurnCompleted {
             query_id: query_id(),

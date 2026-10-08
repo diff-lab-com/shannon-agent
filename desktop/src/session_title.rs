@@ -319,6 +319,7 @@ mod tests {
     use super::*;
     use crate::commands::SessionMeta;
     use axum::Json;
+    use serial_test::serial;
     use shannon_core::provider_config_store::ProviderConfigStore;
     use shannon_types::provider_config::{
         ActiveTarget, CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderProfile,
@@ -493,6 +494,7 @@ mod tests {
     // ── pure helpers ───────────────────────────────────────────────────
 
     #[test]
+    #[serial]
     fn sanitize_takes_first_line_and_strips_wrapping_quotes() {
         assert_eq!(
             sanitize_generated_title("\"Fix the login bug\""),
@@ -517,6 +519,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn sanitize_caps_at_the_deterministic_rail_cap() {
         let long = "x".repeat(120);
         let title = sanitize_generated_title(&long).unwrap();
@@ -531,6 +534,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn user_prompt_carries_truncated_inputs_and_skips_empty_replies() {
         let prompt =
             title_user_prompt("Help me plan a trip to Tokyo", Some("Sure — here's a plan"));
@@ -551,6 +555,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn first_exchange_extracts_the_first_pair() {
         let buffer = vec![
             msg("user", "first question"),
@@ -581,6 +586,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn attempt_marking_is_once_per_session() {
         let id = uuid::Uuid::new_v4();
         assert!(mark_attempted(id), "first mark goes through");
@@ -590,6 +596,7 @@ mod tests {
     // ── slot-driven integration (mock OpenAI-compatible endpoint) ──────
 
     #[tokio::test]
+    #[serial]
     async fn unconfigured_slot_generates_nothing_and_marks_no_attempt() {
         let (app, _dir) = mock_app();
         install_config(&app, fixture_config("http://127.0.0.1:1", false)).await;
@@ -613,6 +620,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn configured_slot_titles_via_the_slot_target_and_persists() {
         let (base_url, captured) =
             spawn_mock_title_endpoint(axum::http::StatusCode::OK, " \"Plan a Tokyo trip\" ").await;
@@ -682,6 +690,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn llm_failure_keeps_the_deterministic_title() {
         let (base_url, captured) =
             spawn_mock_title_endpoint(axum::http::StatusCode::INTERNAL_SERVER_ERROR, "").await;
@@ -712,6 +721,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn unusable_reply_text_keeps_the_deterministic_title() {
         // Whitespace-only model output sanitizes to None → same fallback.
         let (base_url, _) = spawn_mock_title_endpoint(axum::http::StatusCode::OK, "   ").await;
@@ -732,6 +742,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn apply_compare_and_swap_never_overwrites_a_user_rename() {
         let (app, _dir) = mock_app();
         let state = app.state::<AppState>();

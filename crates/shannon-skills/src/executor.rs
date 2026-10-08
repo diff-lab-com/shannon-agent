@@ -5,8 +5,26 @@ use crate::definition::{Skill, SkillContext};
 use crate::error::{SkillError, SkillResult};
 use regex::Regex;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tracing::debug;
+
+/// Wall-clock budget for one `!`cmd`` command before it is killed. Mirrors
+/// BashTool's default (`DEFAULT_BASH_TIMEOUT_MS`) so a skill snippet cannot
+/// do something the Bash tool would already refuse to sit through. Without
+/// this a `sleep 3600` held a worker thread (or tokio worker) forever.
+const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+/// Poll granularity while waiting for the child.
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// How long the pipe readers get to flush after the child exits. A
+/// grandchild that inherited the pipes and keeps them open must not extend
+/// the call — the reader threads detach and their tail output is dropped.
+const READER_GRACE: Duration = Duration::from_millis(500);
+/// Per-stream stdout/stderr bytes retained. Past the cap the drain continues
+/// (so the child never blocks on a full pipe) but the buffer stops growing
+/// and a truncation marker is appended to the returned output.
+const MAX_STREAM_BYTES: usize = 1024 * 1024;
 
 /// Optional sink for emitting hook events from skill execution.
 ///
@@ -351,6 +369,8 @@ impl SkillExecutor {
 pub struct ShellExecutor {
     /// Environment variables for commands
     env: std::collections::HashMap<String, String>,
+    /// Wall-clock budget per command (killed on expiry).
+    timeout: Duration,
 }
 
 /// Validates a shell command string for dangerous metacharacters to prevent injection.
@@ -425,13 +445,24 @@ impl ShellExecutor {
     pub fn new() -> Self {
         Self {
             env: std::collections::HashMap::new(),
+            timeout: DEFAULT_COMMAND_TIMEOUT,
         }
     }
 
-    /// Execute a shell command and return its output.
+    /// Override the per-command wall-clock budget (tests and future config).
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Execute a shell command and return its (capped) stdout.
     ///
     /// Commands are parsed into executable + args and executed directly
-    /// (no shell invocation) to prevent command injection.
+    /// (no shell invocation) to prevent command injection. The child gets a
+    /// null stdin, both output pipes are drained on dedicated reader threads
+    /// (a full pipe must never be able to block the child), and the whole
+    /// call is bounded by the configured `timeout` — on expiry the child is
+    /// killed and an error returned.
     pub fn execute(&self, command: &str, cwd: &Path) -> SkillResult<String> {
         debug!("Executing shell command: {}", command);
 
@@ -449,32 +480,126 @@ impl ShellExecutor {
             });
         }
 
-        let output = std::process::Command::new(&parts[0])
+        let mut child = Command::new(&parts[0])
             .args(&parts[1..])
             .current_dir(cwd)
             .envs(&self.env)
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: "shell".to_string(),
                 message: format!("Failed to execute command: {e}"),
             })?;
+        let stdout_pipe = child.stdout.take().expect("stdout was piped");
+        let stderr_pipe = child.stderr.take().expect("stderr was piped");
+        let stdout_rx = spawn_pipe_reader(stdout_pipe);
+        let stderr_rx = spawn_pipe_reader(stderr_pipe);
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        let deadline = Instant::now() + self.timeout;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if Instant::now() >= deadline => break None,
+                Ok(None) => std::thread::sleep(WAIT_POLL_INTERVAL),
+                Err(e) => {
+                    return Err(SkillError::ExecutionFailed {
+                        name: "shell".to_string(),
+                        message: format!("Failed to wait for command: {e}"),
+                    });
+                }
+            }
+        };
+
+        let Some(status) = status else {
+            let _ = child.kill();
+            let _ = child.wait();
+            // Let the readers see EOF so their threads exit; a grandchild
+            // still holding a pipe only costs the grace window, not the call.
+            let _ = stdout_rx.recv_timeout(READER_GRACE);
+            let _ = stderr_rx.recv_timeout(READER_GRACE);
             return Err(SkillError::ExecutionFailed {
                 name: "shell".to_string(),
-                message: format!("Command failed: {stderr}"),
+                message: format!(
+                    "Command timed out after {:.1}s and was killed",
+                    self.timeout.as_secs_f64()
+                ),
+            });
+        };
+
+        // The child is gone; give the readers a grace window to flush. If a
+        // grandchild inherited the pipes and keeps them open, proceed without
+        // the held-back tail rather than blocking on it.
+        let stdout = drain_reader(&stdout_rx);
+        let stderr = drain_reader(&stderr_rx);
+
+        if !status.success() {
+            let stderr_text = String::from_utf8_lossy(&stderr.data);
+            return Err(SkillError::ExecutionFailed {
+                name: "shell".to_string(),
+                message: format!("Command failed: {stderr_text}"),
             });
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.into_owned())
+        let mut stdout_text = String::from_utf8_lossy(&stdout.data).into_owned();
+        if stdout.total > stdout.data.len() as u64 {
+            stdout_text.push_str(&format!(
+                "\n[skill command output truncated: showing first {} of {} bytes]",
+                stdout.data.len(),
+                stdout.total
+            ));
+        }
+        Ok(stdout_text)
     }
 
     /// Set an environment variable for commands
     pub fn set_env(&mut self, key: String, value: String) {
         self.env.insert(key, value);
     }
+}
+
+/// Bounded capture of one output pipe.
+#[derive(Default)]
+struct PipeCapture {
+    data: Vec<u8>,
+    /// Total bytes seen — the truncation marker needs the real number.
+    total: u64,
+}
+
+/// Drain one pipe on a dedicated thread into a capped buffer, handing the
+/// result back when the pipe hits EOF. The thread outlives the call only in
+/// the grandchild case (someone else holds the write end); it is then
+/// detached and its buffer dropped.
+fn spawn_pipe_reader(
+    pipe: impl std::io::Read + Send + 'static,
+) -> std::sync::mpsc::Receiver<PipeCapture> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut pipe = pipe;
+        let mut capture = PipeCapture::default();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match pipe.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    capture.total += n as u64;
+                    let room = MAX_STREAM_BYTES.saturating_sub(capture.data.len());
+                    let take = room.min(n);
+                    if take > 0 {
+                        capture.data.extend_from_slice(&chunk[..take]);
+                    }
+                }
+            }
+        }
+        let _ = tx.send(capture);
+    });
+    rx
+}
+
+/// Take a reader's capture, tolerating a timed-out (detached) reader.
+fn drain_reader(rx: &std::sync::mpsc::Receiver<PipeCapture>) -> PipeCapture {
+    rx.recv_timeout(READER_GRACE).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -678,6 +803,55 @@ mod tests {
         let result = executor.execute(&skill, &context).unwrap();
         assert!(result.metadata.had_shell_commands);
         assert!(result.prompt_content.contains("user-shell-ok"));
+    }
+
+    // --- Hard bounds on skill shell commands (timeout / output cap) ---
+
+    /// A hanging command must be killed at the budget and surface as an
+    /// error — not park the calling thread forever (`!`sleep 3600`` used to
+    /// do exactly that via `Command::output`).
+    #[test]
+    fn shell_command_is_killed_at_timeout() {
+        let executor = ShellExecutor::new().with_timeout(Duration::from_millis(300));
+        let start = Instant::now();
+        let err = executor
+            .execute("sleep 30", &std::env::temp_dir())
+            .expect_err("hanging command must time out");
+        let elapsed = start.elapsed();
+        match err {
+            SkillError::ExecutionFailed { message, .. } => {
+                assert!(message.contains("timed out"), "got: {message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "kill must bound the call, took {elapsed:?}"
+        );
+    }
+
+    /// Output past the cap is drained (so the child never blocks on a full
+    /// pipe) but not retained; the returned text carries a truncation marker
+    /// with the true byte count.
+    #[test]
+    fn shell_command_output_is_capped() {
+        // 3 MiB of NUL bytes — comfortably over the 1 MiB cap.
+        let executor = ShellExecutor::new().with_timeout(Duration::from_secs(60));
+        let out = executor
+            .execute("dd if=/dev/zero bs=1024 count=3072", &std::env::temp_dir())
+            .expect("dd must succeed");
+        assert!(
+            out.contains(
+                "[skill command output truncated: showing first 1048576 of 3145728 bytes]"
+            ),
+            "truncation marker with true total expected, got tail: {:?}",
+            &out[out.len().saturating_sub(200)..]
+        );
+        assert!(
+            out.len() < 2 * 1024 * 1024,
+            "retained output must stay near the cap, got {} bytes",
+            out.len()
+        );
     }
 
     // --- Named argument substitution tests ---

@@ -52,6 +52,7 @@ fn one_turn(query_id: Uuid) -> Vec<QueryEvent> {
         cost_usd: 0.042,
         cache_creation_tokens: 1_024,
         cache_read_tokens: 9_000,
+        context_window_tokens: None,
     });
     events.push(QueryEvent::TurnCompleted {
         query_id,

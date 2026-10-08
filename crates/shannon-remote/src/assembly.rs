@@ -35,6 +35,7 @@ pub fn assemble_dynamic() -> DynamicAssembly {
         process: world.clone(),
         denial_classifier: None,
         world_sandbox: Some(world_sandbox.clone()),
+        sandbox_assembled: false,
     };
     DynamicAssembly {
         providers,
@@ -120,6 +121,7 @@ pub async fn assemble_static(target: &RemoteTarget) -> std::io::Result<ToolProvi
                 process,
                 denial_classifier: None,
                 world_sandbox: None,
+                sandbox_assembled: false,
             })
         }
         TargetKind::Docker => {
@@ -134,6 +136,7 @@ pub async fn assemble_static(target: &RemoteTarget) -> std::io::Result<ToolProvi
                 process,
                 denial_classifier: None,
                 world_sandbox: None,
+                sandbox_assembled: false,
             })
         }
     }

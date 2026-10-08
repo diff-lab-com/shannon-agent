@@ -463,6 +463,15 @@
       "id": {
         "type": "string"
       },
+      "max_context_tokens": {
+        "description": "Context peak (上下文峰值): the session's max known context window; `None` when unknown. Additive — must mirror src/events.rs exactly.",
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "message_count": {
         "format": "uint",
         "minimum": 0.0,
@@ -830,6 +839,23 @@
   "UsagePayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {
+      "cache_hit_rate": {
+        "description": "2026-10-08 status bar (设计 02-chat 六段): cache-hit fraction for this frame — cache_read / (cache_read + input); `None` when the frame has no measurable input. Additive — must mirror src/events.rs exactly.",
+        "format": "double",
+        "type": [
+          "number",
+          "null"
+        ]
+      },
+      "context_total": {
+        "description": "Context peak (上下文峰值): the serving model's resolved context window for this frame; `None` when genuinely unknown. Additive — must mirror src/events.rs exactly.",
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "cost_usd": {
         "format": "double",
         "type": "number"

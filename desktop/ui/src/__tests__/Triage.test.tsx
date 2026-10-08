@@ -37,6 +37,20 @@ const testMessages: Record<string, string> = {
   'inbox.source.skill_candidate': 'Skill candidate',
   'inbox.action.viewSession': 'View session',
   'inbox.action.viewSession.aria': 'Open the session this item came from',
+  'inbox.action.handle': 'Handle',
+  'inbox.action.handle.aria': 'Open the session to handle the waiting approval request',
+  'inbox.toast.handleGuidance': 'Session opened — approve or deny the permission request there.',
+  'inbox.approval.approve': 'Approve',
+  'inbox.approval.reject': 'Deny',
+  'inbox.approval.approved': 'Approved — the session will continue.',
+  'inbox.approval.rejected': 'Denied — the session was told no.',
+  'inbox.approval.expired': 'This approval request is no longer active — handle it in the session.',
+  'inbox.approval.risk.aria': 'Risk level: {level}',
+  'inbox.approval.risk.critical': 'Critical',
+  'inbox.approval.risk.high': 'High',
+  'inbox.approval.risk.medium': 'Medium',
+  'inbox.approval.risk.low': 'Low',
+  'inbox.continue.prefill': 'Continue working on: {summary}',
   'inbox.review.label': 'Review',
   'inbox.review.aria': 'Review this skill candidate in Extensions → Pending',
   'inbox.sort.aria': 'Toggle sort order',
@@ -91,7 +105,7 @@ const testMessages: Record<string, string> = {
 }
 
 // Hook spies — useInboxItems returns
-// { items, loading, error, filter, setFilter, refresh, markRead, archive, rerun, getSessionId }
+// { items, loading, error, filter, setFilter, refresh, markRead, archive, rerun, getContinueTarget }
 // useInboxStats returns { stats, loading, error, refresh }
 const itemsSpy = vi.hoisted(() => vi.fn())
 const statsSpy = vi.hoisted(() => vi.fn())
@@ -107,7 +121,7 @@ vi.mock('@/context/SessionContext', () => ({
 }))
 
 vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }))
 
 vi.mock('@/lib/tauri-api', async () => {
@@ -115,6 +129,7 @@ vi.mock('@/lib/tauri-api', async () => {
   return {
     ...actual,
     updateInboxItemStatus: vi.fn().mockResolvedValue(undefined),
+    respondPermission: vi.fn().mockResolvedValue(undefined),
   }
 })
 
@@ -129,6 +144,9 @@ function makeItem(o: Partial<InboxItem> & { id: number }): InboxItem {
     status: 'pending',
     createdAtMs: 1_700_000_000_000,
     updatedAtMs: 1_700_000_000_000,
+    requestId: null,
+    risk: null,
+    runId: null,
     ...o,
   }
   // Store invariant: a freshly appended row has updatedAtMs == createdAtMs
@@ -144,7 +162,11 @@ function setItems(items: InboxItem[], stats: { pending: number; today: number } 
     markRead: vi.fn(async (_id: number) => true),
     archive: vi.fn(async (_id: number) => true),
     rerun: vi.fn(async (_id: number) => 'run-1'),
-    getSessionId: vi.fn(async (_id: number) => 'sess-006'),
+    getContinueTarget: vi.fn(async (_id: number) => ({
+      sessionId: 'sess-006',
+      summary: 'run summary',
+      error: undefined,
+    })),
     setFilter: vi.fn(),
     refresh: vi.fn(),
   }
@@ -180,12 +202,29 @@ function renderPage(initialEntry: string | { pathname: string; state?: unknown }
   )
 }
 
+/** Approval-closure tests: one pending session_approval card, overrides on top. */
+function renderPageWithItem(overrides: Partial<InboxItem> & { id?: number } = {}) {
+  setItems([
+    makeItem({
+      id: 40,
+      source: 'session_approval',
+      sessionId: 'sess-77',
+      title: 'bash',
+      requestId: 'perm-40',
+      ...overrides,
+    }),
+  ])
+  return renderPage()
+}
+
 beforeEach(() => {
   itemsSpy.mockReset()
   statsSpy.mockReset()
   switchSessionSpy.mockReset()
   switchSessionSpy.mockResolvedValue(undefined)
   vi.mocked(api.updateInboxItemStatus).mockClear()
+  vi.mocked(api.respondPermission).mockReset()
+  vi.mocked(api.respondPermission).mockResolvedValue(undefined)
   vi.mocked(toast.success).mockClear()
   vi.mocked(toast.error).mockClear()
   setItems([])
@@ -334,7 +373,7 @@ describe('Triage page (inbox)', () => {
   })
 
   it('continue button appears only when the item has a session and switches to it', async () => {
-    const { getSessionId } = setItems([
+    const { getContinueTarget } = setItems([
       makeItem({ id: 1, sessionId: 'sess-006' }),
       makeItem({ id: 2, sessionId: null }),
     ])
@@ -342,7 +381,7 @@ describe('Triage page (inbox)', () => {
     const continueButtons = screen.getAllByRole('button', { name: 'Continue this item session' })
     expect(continueButtons).toHaveLength(1)
     fireEvent.click(continueButtons[0])
-    await waitFor(() => expect(getSessionId).toHaveBeenCalledWith(1))
+    await waitFor(() => expect(getContinueTarget).toHaveBeenCalledWith(1))
     await waitFor(() => expect(switchSessionSpy).toHaveBeenCalledWith('sess-006'))
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/chat'))
   })
@@ -452,7 +491,7 @@ describe('Triage page (inbox)', () => {
     itemsSpy.mockReturnValue({
       items: [], loading: true, error: null, filter: undefined,
       setFilter: vi.fn(), refresh: vi.fn(), markRead: vi.fn(), archive: vi.fn(),
-      rerun: vi.fn(), getSessionId: vi.fn(),
+      rerun: vi.fn(), getContinueTarget: vi.fn(),
     })
     statsSpy.mockReturnValue({ stats: baseStats, loading: false, error: null, refresh: vi.fn() })
     const { container } = renderPage()
@@ -524,29 +563,36 @@ describe('Triage — cross links (IA T2)', () => {
   })
 })
 
-// IA T6 (收件箱升级): session sources read "View session", skill candidates
+// IA T6 (收件箱升级): session sources target the session, skill candidates
 // link to the Extensions → Pending review queue (互通), pending items pin to
 // the top of the default view, and the three new sources are filterable.
+// 2026-10 design parity (审查 R1 §05): approval cards read「Handle」(去处理)
+// + the in-session guidance toast — the payload carries no permission
+// request id, so inline approve/deny would be a fake button; failure cards
+// keep the read-oriented「View session」.
 describe('Triage — session sources, skill candidates and pending pinning (IA T6/X1)', () => {
-  it('shows「View session」as the primary action for a session_approval item and switches to it', async () => {
-    const { getSessionId } = setItems([
+  it('shows「Handle」as the primary action for a session_approval item, toasts the guidance and switches to it', async () => {
+    const { toast } = await import('sonner')
+    const { getContinueTarget } = setItems([
       makeItem({ id: 11, source: 'session_approval', sessionId: 'sess-77', title: 'Permission requested' }),
     ])
     renderPage()
-    const btn = screen.getByRole('button', { name: 'Open the session this item came from' })
-    expect(btn).toHaveTextContent('View session')
+    const btn = screen.getByRole('button', { name: 'Open the session to handle the waiting approval request' })
+    expect(btn).toHaveTextContent('Handle')
     // The automation-facing「Resume session」wording stays off approval cards.
     expect(screen.queryByRole('button', { name: 'Continue this item session' })).not.toBeInTheDocument()
     fireEvent.click(btn)
-    await waitFor(() => expect(getSessionId).toHaveBeenCalledWith(11))
+    await waitFor(() => expect(getContinueTarget).toHaveBeenCalledWith(11))
     await waitFor(() => expect(switchSessionSpy).toHaveBeenCalledWith('sess-006'))
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Session opened — approve or deny the permission request there.'))
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/chat'))
   })
 
   it('shows「View session」for a session_failed item too', () => {
     setItems([makeItem({ id: 12, source: 'session_failed', sessionId: 'sess-88', title: 'Turn failed' })])
     renderPage()
-    expect(screen.getByRole('button', { name: 'Open the session this item came from' })).toBeInTheDocument()
+    const btn = screen.getByRole('button', { name: 'Open the session this item came from' })
+    expect(btn).toHaveTextContent('View session')
   })
 
   it('keeps「Resume session」as the primary action for automation sources', () => {
@@ -787,7 +833,7 @@ describe('Triage — B4 URL view state and error state (§7-28)', () => {
     itemsSpy.mockReturnValue({
       items: [], loading: false, error: 'db locked', filter: undefined,
       setFilter: vi.fn(), refresh, markRead: vi.fn(), archive: vi.fn(),
-      rerun: vi.fn(), getSessionId: vi.fn(),
+      rerun: vi.fn(), getContinueTarget: vi.fn(),
     })
     statsSpy.mockReturnValue({ stats: baseStats, loading: false, error: null, refresh: vi.fn() })
     renderPage()
@@ -801,7 +847,7 @@ describe('Triage — B4 URL view state and error state (§7-28)', () => {
     itemsSpy.mockReturnValue({
       items: [makeItem({ id: 1 })], loading: false, error: 'db locked', filter: undefined,
       setFilter: vi.fn(), refresh: vi.fn(), markRead: vi.fn(), archive: vi.fn(),
-      rerun: vi.fn(), getSessionId: vi.fn(),
+      rerun: vi.fn(), getContinueTarget: vi.fn(),
     })
     statsSpy.mockReturnValue({ stats: baseStats, loading: false, error: null, refresh: vi.fn() })
     renderPage()
@@ -849,5 +895,162 @@ describe('W3-2 run outcome on triage cards', () => {
     ])
     renderPage()
     expect(screen.queryByTestId('inbox-run-status')).not.toBeInTheDocument()
+  })
+})
+
+// ── Design 05 收件箱审批闭环: pending approval rows carry the live
+// requestId, so the card answers it inline through respondPermission; risk
+// rides along for the Header-consistent four-tier badge. ───────────────────
+describe('Triage — inline approval closure (requestId cards)', () => {
+  beforeEach(() => {
+    vi.mocked(api.respondPermission).mockReset()
+    vi.mocked(api.respondPermission).mockResolvedValue(undefined)
+  })
+
+  it('renders inline Approve/Deny (not 「Handle」) on a pending card with a requestId', () => {
+    setItems([
+      makeItem({
+        id: 30,
+        source: 'session_approval',
+        sessionId: 'sess-77',
+        title: 'bash',
+        requestId: 'perm-30',
+        risk: 'high',
+      }),
+    ])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument()
+    // The blind jump is gone while the live decision is available…
+    expect(screen.queryByRole('button', { name: 'Open the session to handle the waiting approval request' })).not.toBeInTheDocument()
+    // …and so is the automation-facing resume wording.
+    expect(screen.queryByRole('button', { name: 'Continue this item session' })).not.toBeInTheDocument()
+  })
+
+  it('approve calls respondPermission(requestId, true), toasts success and refreshes the list', async () => {
+    const { refresh } = setItems([
+      makeItem({
+        id: 31,
+        source: 'session_approval',
+        sessionId: 'sess-77',
+        title: 'bash',
+        requestId: 'perm-31',
+        risk: 'low',
+      }),
+    ])
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await waitFor(() => expect(api.respondPermission).toHaveBeenCalledWith('perm-31', true))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Approved — the session will continue.'))
+    expect(toast.error).not.toHaveBeenCalled()
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
+  })
+
+  it('deny calls respondPermission(requestId, false) with the rejected toast', async () => {
+    setItems([
+      makeItem({
+        id: 32,
+        source: 'session_approval',
+        sessionId: 'sess-77',
+        title: 'bash',
+        requestId: 'perm-32',
+        risk: 'medium',
+      }),
+    ])
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    await waitFor(() => expect(api.respondPermission).toHaveBeenCalledWith('perm-32', false))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Denied — the session was told no.'))
+  })
+
+  it('falls back to 「Handle」 with the honest expired toast when the request is gone', async () => {
+    vi.mocked(api.respondPermission).mockRejectedValue(new Error('Permission request not found: perm-33'))
+    setItems([
+      makeItem({
+        id: 33,
+        source: 'session_approval',
+        sessionId: 'sess-77',
+        title: 'bash',
+        requestId: 'perm-33',
+        risk: 'high',
+      }),
+    ])
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('This approval request is no longer active — handle it in the session.'))
+    // No fake success: the approval toast must stay silent.
+    expect(toast.success).not.toHaveBeenCalled()
+    // The card reverts to the honest 「去处理」 jump (request answered in the
+    // session / timed out — inline is no longer claimable).
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Open the session to handle the waiting approval request' })).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the 「Handle」 jump on legacy rows without a requestId', () => {
+    setItems([
+      makeItem({ id: 34, source: 'session_approval', sessionId: 'sess-77', title: 'bash', requestId: null }),
+    ])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Open the session to handle the waiting approval request' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Deny' })).not.toBeInTheDocument()
+    expect(api.respondPermission).not.toHaveBeenCalled()
+  })
+
+  it('hides the inline buttons once the entry is settled (read)', () => {
+    setItems([
+      makeItem({
+        id: 35,
+        source: 'session_approval',
+        sessionId: 'sess-77',
+        title: 'bash',
+        status: 'read',
+        requestId: 'perm-35',
+        risk: 'low',
+      }),
+    ])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Open the session to handle the waiting approval request' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+  })
+
+  // Risk badge: the Header permission dialog's four container pairs —
+  // critical=error / high=secondary / medium=warning / low=tertiary.
+  it('maps the risk tier onto the Header-consistent container pairs', () => {
+    const cases: Array<[string, string]> = [
+      ['critical', 'bg-error-container'],
+      ['high', 'bg-secondary-container'],
+      ['medium', 'bg-warning-container'],
+      ['low', 'bg-tertiary-container'],
+    ]
+    for (const [tier, expected] of cases) {
+      const { unmount } = renderPageWithItem({ risk: tier })
+      const badge = screen.getByTestId('inbox-approval-risk')
+      expect(badge.className).toContain(expected)
+      expect(badge).toHaveAttribute('aria-label', `Risk level: ${tier[0].toUpperCase()}${tier.slice(1)}`)
+      unmount()
+    }
+  })
+
+  it('renders no risk badge when the risk column is null or off-vocabulary', () => {
+    const { unmount } = renderPageWithItem({ risk: null })
+    expect(screen.queryByTestId('inbox-approval-risk')).not.toBeInTheDocument()
+    unmount()
+    renderPageWithItem({ risk: 'unknown-tier' })
+    expect(screen.queryByTestId('inbox-approval-risk')).not.toBeInTheDocument()
+  })
+})
+
+describe('Triage — 来源链 #N (design 05)', () => {
+  it('renders the mono run number for run-produced items', () => {
+    renderPageWithItem({ id: 1, source: 'routine', runId: 43, title: 'CI 巡检' })
+    expect(screen.getByTestId('inbox-run-number')).toHaveTextContent('#43')
+  })
+
+  it('hides the run number on non-run sources (honesty rule)', () => {
+    renderPageWithItem({ id: 2, source: 'session_approval', runId: null })
+    expect(screen.queryByTestId('inbox-run-number')).not.toBeInTheDocument()
   })
 })

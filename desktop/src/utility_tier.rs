@@ -444,6 +444,7 @@ pub async fn set_utility_slot(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use shannon_core::provider_config_store::ProviderConfigStore;
     use shannon_types::provider_config::{
         CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderTiers, Scope,
@@ -531,6 +532,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn aux_role_slug_round_trips_strictly() {
         for &role in UTILITY_ROLES.iter() {
             assert_eq!(aux_role_from_str(&aux_role_slug(role)), Some(role));
@@ -546,6 +548,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn unconfigured_slot_reports_not_configured() {
         let cfg = fixture_config();
         assert_eq!(
@@ -562,6 +565,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn configured_slot_resolves_against_the_exact_roster_id() {
         let cfg = config_with_aux(AuxRole::Compression, "zhipu", "glm-5.3-air");
         let AuxLookup::Resolved { target, slot } =
@@ -584,6 +588,7 @@ mod tests {
     /// structurally; this test pins the behavior against the actual
     /// interactive resolution for contrast.
     #[tokio::test]
+    #[serial]
     async fn utility_slot_is_orthogonal_to_the_interactive_precedence_chain() {
         use crate::commands::AppState;
 
@@ -626,6 +631,7 @@ mod tests {
     /// resolves to NONE (the consumer keeps the default behavior) — and the
     /// warn side effect is the resolver's job, not the consumer's.
     #[tokio::test]
+    #[serial]
     async fn dangling_utility_slot_falls_back_to_default() {
         use crate::commands::AppState;
 
@@ -661,6 +667,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn auxiliary_client_config_resolves_credential_headers_and_defaults() {
         // SAFETY: unique var name touched only by this test; nextest runs
         // each test in its own process.
@@ -694,6 +701,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn utility_slots_view_reports_both_slots_and_the_roster() {
         let mut cfg = config_with_aux(AuxRole::Compression, "zhipu", "glm-5.3-air");
         // A dangling title_generation slot for the resolves=false row.
@@ -746,6 +754,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn utility_slots_view_defaults_to_empty_when_no_profile() {
         let view = utility_slots_view(&ProviderModelConfig::default());
         assert_eq!(view.slots.len(), UTILITY_ROLES.len());

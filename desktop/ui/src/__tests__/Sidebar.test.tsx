@@ -55,8 +55,9 @@ describe('Sidebar', () => {
   it('renders primary nav links', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    // IA T1: /tasks 没有「任务」导航行 — 顶部「自动化」按钮是唯一侧栏入口。
-    expect(screen.getByText('Automations')).toBeInTheDocument()
+    // IA 2026-10: /tasks is a first-class nav row
+    // (对话/文件/任务/收件箱/连接/记忆 + 指挥台 dev).
+    expect(screen.getByRole('link', { name: 'Tasks · Ctrl2' })).toBeInTheDocument()
   })
 
   it('renders Settings section', () => {
@@ -88,10 +89,12 @@ describe('Sidebar — Simple mode (default)', () => {
 
   it('shows flat Connectors entry in Simple mode (no dev sub-links)', () => {
     render(wrap(<Sidebar />))
-    // P1-2: Simple mode surfaces a flat Extensions link to the Hub index so
+    // P1-2: Simple mode surfaces a flat Connectors link to the Hub index so
     // general users can reach it without dev mode. The dev-mode collapsible
     // group (with Skills / My Agents / Connections sub-links) stays hidden.
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    // IA 2026-10: the entry is renamed 扩展 → 连接 (Connectors).
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
     expect(screen.queryByText('My Agents')).not.toBeInTheDocument()
   })
@@ -111,14 +114,14 @@ describe('Sidebar — Simple mode (default)', () => {
   it('still shows core nav in Simple mode', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Automations')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Tasks · Ctrl2' })).toBeInTheDocument()
   })
 
   it('toggles to Advanced mode on mode button click', () => {
     render(wrap(<Sidebar />))
     fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
-    // Now in Advanced mode — Extensions visible
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    // Now in Advanced mode — Connectors visible
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -131,7 +134,7 @@ describe('Sidebar — Simple mode (default)', () => {
   it('remembers Advanced mode from localStorage on subsequent mount', () => {
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -152,7 +155,7 @@ describe('Sidebar — Advanced mode', () => {
 
   it('renders Connectors section', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
   })
 
   it('renders Mission Control section', () => {
@@ -181,8 +184,9 @@ describe('Sidebar — Advanced mode', () => {
   it('Connectors is a flat link straight to the marketplace', () => {
     render(wrap(<Sidebar />))
     // 2026-09 review: no collapsible Connectors group — a flat nav link to
-    // /extensions/featured (the marketplace index).
-    const connectors = screen.getByText('Extensions').closest('a')
+    // /extensions/featured (the marketplace index). IA 2026-10 renames the
+    // row 扩展 → 连接 (Connectors).
+    const connectors = screen.getByText('Connectors').closest('a')
     expect(connectors).toHaveAttribute('href', '/extensions/featured')
   })
 
@@ -197,9 +201,9 @@ describe('Sidebar — Advanced mode', () => {
   it('toggles back to Simple mode on click', () => {
     render(wrap(<Sidebar />))
     fireEvent.click(screen.getByRole('button', { name: /Switch to Simple mode/ }))
-    // P1-2: Simple mode still shows the flat Extensions link; what disappears
+    // P1-2: Simple mode still shows the flat Connectors link; what disappears
     // is the dev-mode Extensions group and its sub-links (Skills).
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
@@ -210,9 +214,9 @@ describe('Sidebar — Navigation', () => {
     window.localStorage.clear()
   })
 
-  // IA T1: the top 自动化 button is /tasks's single sidebar entry (the
-  // duplicate「任务」nav row was removed).
-  it('navigates to /tasks from the Automations button', async () => {
+  // IA 2026-10: the Tasks nav row is /tasks's sidebar entry (the 2026-09
+  // top 自动化 button was the duplicate — retired, ⌘2 moved onto the row).
+  it('navigates to /tasks from the Tasks nav row', async () => {
     render(
       wrap(
         <>
@@ -222,7 +226,7 @@ describe('Sidebar — Navigation', () => {
       )
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Automations · Ctrl2' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Tasks · Ctrl2' }))
 
     await waitFor(() => {
       const location = screen.getByTestId('current-location')
@@ -230,11 +234,13 @@ describe('Sidebar — Navigation', () => {
     })
   })
 
-  // IA T1: no「任务」nav row may reappear — the button is the only entry.
-  it('has no Tasks nav row in the main nav', () => {
+  // IA 2026-10: /tasks is a first-class nav row; the old Automations quick
+  // button must not come back as a duplicate entry point.
+  it('has a Tasks nav row and no Automations quick button', () => {
     render(wrap(<Sidebar />))
-    expect(screen.queryByRole('link', { name: /^Tasks/ })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Automations · Ctrl2' })).toBeInTheDocument()
+    const tasks = screen.getByRole('link', { name: 'Tasks · Ctrl2' })
+    expect(tasks).toHaveAttribute('href', '/tasks')
+    expect(screen.queryByRole('button', { name: 'Automations · Ctrl2' })).not.toBeInTheDocument()
   })
 
   it('renders Inbox button with badge when there are unread items', () => {
@@ -638,14 +644,16 @@ describe('Sidebar — flat nav (2026-09 ZCode-style simplification)', () => {
     window.localStorage.clear()
   })
 
-  it('shows the four simple-mode nav rows + Automations button, NO group disclosures', () => {
+  it('shows the flat simple-mode nav rows (Chat/Files/Tasks/Inbox/Connectors/Memory), NO group disclosures', () => {
     render(wrap(<Sidebar />))
-    // Flat rows: Chat / Inbox / Extensions / Memory, plus the top
-    // 自动化 button (IA T1 — /tasks has no nav row of its own).
+    // IA 2026-10 flat rail: 对话/文件/任务/收件箱/连接/记忆 — /tasks is a
+    // first-class row, the retired top 自动化 button is gone.
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Automations')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Tasks · Ctrl2' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Automations · Ctrl2' })).not.toBeInTheDocument()
+    expect(screen.getByText('Files')).toBeInTheDocument()
     expect(screen.getByText('Inbox')).toBeInTheDocument()
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
     expect(screen.getByText('Memory')).toBeInTheDocument()
     // The old Work/Resources/Experiments disclosure buttons are gone.
     expect(screen.queryByRole('button', { name: /^Work/ })).not.toBeInTheDocument()

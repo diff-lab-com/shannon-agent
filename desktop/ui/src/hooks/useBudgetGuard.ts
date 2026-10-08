@@ -49,10 +49,10 @@ export function useBudgetGuard(currentSessionId: string | null): BudgetGuardStat
     const unlisteners: Promise<() => void>[] = [
       listen<BudgetStatusPayload>(EVENT_NAMES.BUDGET_WARNING, e => {
         if (e.payload.sessionId === sessionRef.current) setWarning(e.payload)
-      }),
+      }).catch((): (() => void) => () => {}), // event API unavailable — banner simply never fires
       listen<BudgetStatusPayload>(EVENT_NAMES.BUDGET_EXCEEDED, e => {
         if (e.payload.sessionId === sessionRef.current) setExceeded(e.payload)
-      }),
+      }).catch((): (() => void) => () => {}), // event API unavailable — banner simply never fires
     ]
     return () => { unlisteners.forEach(p => void p.then(fn => fn())) }
   }, [])

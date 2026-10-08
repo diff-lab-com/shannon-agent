@@ -570,6 +570,12 @@ export const handlers: Record<string, MockHandler> = {
     await delay(30)
     return null
   },
+  // Design 13「Esc 关闭」— demo mode has no window to hide; the Esc path
+  // just acks like the always-on-top toggle above.
+  async hide_companion_window() {
+    await delay(30)
+    return null
+  },
   // --- Chat ---
   // (send_message interception when a script is armed happens in coreMock —
   // the scripted player owns the command and replays the turn's events.)
@@ -1499,32 +1505,39 @@ export const handlers: Record<string, MockHandler> = {
   },
   async export_session() { await delay(120); return '# Exported session\n\n(mock content)' },
   // ── Remote targets (SSH hosts / Docker containers) ──
+  // R3-V-01 contract fix: the real `remote_list_targets` answers
+  // `{ targets, defaultTarget }` (RemoteTargetsList, P1-16) — this handler
+  // used to answer a bare array, so the demo pane read `list?.targets ?? []`
+  // into an always-empty list and the two demo rows never rendered.
   async remote_list_targets() {
     await delay()
-    return [
-      {
-        name: 'build-box',
-        kind: 'ssh',
-        host: 'build-box',
-        port: null,
-        user: null,
-        container: null,
-        shell: null,
-        sshTarget: null,
-        workspaceDir: '/home/ed/proj',
-      },
-      {
-        name: 'ci-runner',
-        kind: 'docker',
-        host: null,
-        port: null,
-        user: null,
-        container: 'shannon-ci',
-        shell: 'bash',
-        sshTarget: 'build-box',
-        workspaceDir: '/workspace',
-      },
-    ]
+    return {
+      targets: [
+        {
+          name: 'build-box',
+          kind: 'ssh',
+          host: 'build-box',
+          port: null,
+          user: null,
+          container: null,
+          shell: null,
+          sshTarget: null,
+          workspaceDir: '/home/ed/proj',
+        },
+        {
+          name: 'ci-runner',
+          kind: 'docker',
+          host: null,
+          port: null,
+          user: null,
+          container: 'shannon-ci',
+          shell: 'bash',
+          sshTarget: 'build-box',
+          workspaceDir: '/workspace',
+        },
+      ],
+      defaultTarget: 'build-box',
+    }
   },
   async remote_discover_ssh_hosts() {
     await delay()
@@ -1669,7 +1682,25 @@ export const handlers: Record<string, MockHandler> = {
   async trace_timeline() { await delay(); return clone(MOCK_TURN_TIMELINE) },
 
   // --- Permissions ---
-  async respond_permission() { await delay(20) },
+  // Design 05 收件箱审批闭环: a demo answer resolves the matching
+  // `session_approval` inbox item read — mirroring the real backend, where
+  // prompt_user resolves the entry when the prompt settles.
+  async respond_permission(args: { requestId?: string; allow?: boolean }) {
+    await delay(20)
+    if (args.requestId) {
+      const item = state.inbox.find(i => i.source === 'session_approval' && i.requestId === args.requestId)
+      if (item && item.status === 'pending') {
+        item.status = 'read'
+        item.updatedAtMs = Date.now()
+      }
+    }
+  },
+
+  // --- Workspace info (2026-10-08 status bar) ---
+  // Demo working dirs are not git work trees — the honest answer is null and
+  // the status bar hides the branch segment (nothing is mocked up to fill
+  // the line).
+  async current_git_branch() { await delay(20); return null },
 
   // --- Ask user (Settings R3 T8) — demo ask-user-request events come from
   // the scripted player; answers are accepted and discarded. ---
@@ -2013,6 +2044,8 @@ export const handlers: Record<string, MockHandler> = {
         summary: 'Rerun finished successfully.',
         error: null,
         status: 'pending',
+        requestId: null,
+        risk: null,        runId: item.runId,
         createdAtMs: Date.now(),
         updatedAtMs: Date.now(),
       })
@@ -2024,7 +2057,13 @@ export const handlers: Record<string, MockHandler> = {
     const item = state.inbox.find(i => i.id === args.id)
     if (!item) throw new Error(`inbox item not found: ${args.id}`)
     if (!item.sessionId) throw new Error(`inbox item ${args.id} has no linked session`)
-    return item.sessionId
+    // Design 05: the resume target carries the run result so the composer
+    // draft can be prefilled — same shape as the Rust ContinueInboxSession.
+    return {
+      sessionId: item.sessionId,
+      summary: item.summary?.trim() ? item.summary : undefined,
+      error: item.error ?? undefined,
+    }
   },
 
   // --- Usage (UI audit C13 — keeps the cost panel non-empty in demo mode) ---
@@ -2366,6 +2405,21 @@ export const handlers: Record<string, MockHandler> = {
       category: m.category,
       sourceSessionId: m.source_session_id ?? null,
     }))
+  },
+  // 缓期项 #6: the Memory banner's 「将携带 N 条」 pre-read. Demo answers
+  // from the same seeded demo memories the page already shows (capped at 3,
+  // mirroring get_session_injected_memories) — the count derives from real
+  // demo rows, it is not invented.
+  async memory_injection_preview(args?: { project?: string | null }) {
+    await delay()
+    const scoped = args?.project
+      ? MOCK_MEMORIES.filter((m) => m.project === args.project)
+      : MOCK_MEMORIES
+    const entries = scoped.slice(0, 3).map((m) => ({
+      id: m.id,
+      title: m.content.split('\n')[0].slice(0, 80),
+    }))
+    return { count: entries.length, entries }
   },
   async get_memory_graph(args?: { project?: string | null }) {
     await delay()
@@ -2902,7 +2956,11 @@ export const handlers: Record<string, MockHandler> = {
   // unarmed — byte-identical to the previous unconditional null).
   async detect_provider_from_env() {
     await delay();
-    return demoEnvProvider();
+    // armed → the demo entry wrapped in the array contract (2026-10-08
+    // multi-key); unarmed → null, byte-identical to the previous behavior
+    // (the e2e hook keys off that null).
+    const demo = demoEnvProvider();
+    return demo ? [demo] : null;
   },
 }
 

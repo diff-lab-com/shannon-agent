@@ -56,15 +56,14 @@ export function useSidebarMode(): [SidebarMode, () => void] {
   return [mode, toggle]
 }
 
-/* 2026-09 review — the nav is rebuilt on ZCode's minimal pattern:
- * four flat entries (对话 / 自动化 / 收件箱 / 扩展市场) plus 记忆, with the
- * dev-only extras (用量 / OPC) folded behind the dev toggle. The old
- * Work/Resources/Experiments disclosure groups tripled the chrome per
- * destination and the nested Extensions disclosure hid Skills/Agents behind
- * two folds. Every row is zoom-safe by construction: icon shrink-0, label
- * flex-1 min-w-0 truncate, whitespace-nowrap — page zoom (Ctrl+=) can never
- * wrap or collide the row (the old fixed-px rows broke into two lines and
- * shoved the kbd chips out of the rail). Shortcuts moved into tooltips. */
+/* 2026-10 IA (ui-redesign-2026-10) — the nav is the design's flat rail:
+ * 对话 / 文件 / 任务 / 收件箱 / 连接 / 记忆, plus the dev-only extras
+ * (用量 / 指挥台) folded behind the dev toggle. /tasks is a first-class row
+ * again (the 2026-09 top 自动化 button was the duplicate — retired, its ⌘2
+ * moved onto the row). Every row is zoom-safe by construction: icon shrink-0,
+ * label flex-1 min-w-0 truncate, whitespace-nowrap — page zoom (Ctrl+=) can
+ * never wrap or collide the row (the old fixed-px rows broke into two lines
+ * and shoved the kbd chips out of the rail). Shortcuts live in tooltips. */
 
 const getNavClass = ({ isActive }: { isActive: boolean }) =>
   cn(
@@ -248,10 +247,16 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         <div className="absolute right-0 top-0 bottom-0 w-1 transition-colors group-hover:bg-primary/30 group-focus-visible:bg-primary/30 group-active:bg-primary/50" />
       </div>
       <div className="flex items-center gap-3 mb-xl px-sm min-w-0">
-        {/* U8: brand mark `cognitive` (filled) — a knowledge-graph knot reads as
-            "connected intelligence" and nods to Shannon's information theory. */}
-        <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center text-on-primary shadow-lg shadow-primary/30 shrink-0">
-          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>cognitive</span>
+        {/* U8: brand mark `hub` (filled) — a knowledge-graph knot reads as
+            "connected intelligence" and nods to Shannon's information theory.
+            W9 theme-audit 2026-10-07: was `cognitive`, but the bundled
+            Material Symbols subset has no such ligature, so the raw word
+            rendered at 24px-per-letter and spilled across the sidebar
+            (black/white letters visible on solarized-light, gruvbox-light,
+            solarized; clipped white fragments on every other theme). `hub`
+            is the same connected-nodes metaphor and IS in the font. */}
+        <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center text-on-primary shadow-lg shadow-primary/30 shrink-0 overflow-hidden">
+          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>hub</span>
         </div>
         <div className="min-w-0">
           <h1 className="font-headline-md text-body-lg font-bold text-on-surface leading-tight truncate">Shannon</h1>
@@ -313,9 +318,10 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
       </Button>
       )}
 
-      {/* Batch B4 (ZCode 顶部动作区): 搜索 opens the command palette and
-          自动化 shortcuts to the tasks page — the two highest-frequency
-          detours, one click each, with their shortcuts in the tooltip. */}
+      {/* Batch B4 (ZCode 顶部动作区): 搜索 opens the command palette. The
+          sibling 自动化 button was retired by IA 2026-10 — /tasks is a
+          first-class nav row below, so the shortcut (⌘2) moved there and the
+          duplicate entry point is gone. */}
       <div className="mb-xs w-full flex gap-xs">
         <Button
           variant="ghost"
@@ -326,16 +332,6 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         >
           <span className="material-symbols-outlined icon-sm shrink-0">search</span>
           <span className="truncate">{intl.formatMessage({ id: 'nav.search' })}</span>
-        </Button>
-        <Button
-          variant="ghost"
-          aria-label={`${intl.formatMessage({ id: 'nav.automation' })} · ${mod}2`}
-          title={`${intl.formatMessage({ id: 'nav.automation' })} · ${mod}2`}
-          className="flex-1 min-w-0 py-sm px-sm text-on-surface-variant hover:text-primary rounded-lg font-label-md text-label-sm flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all"
-          onClick={() => { navigate('/tasks'); handleNavClick() }}
-        >
-          <span className="material-symbols-outlined icon-sm shrink-0">event_repeat</span>
-          <span className="truncate">{intl.formatMessage({ id: 'nav.automation' })}</span>
         </Button>
       </div>
 
@@ -387,9 +383,11 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
             {/* office Wave 2 B9' — the reference-style file library (attached
                 + generated files, favorites, missing detection). */}
             <NavRow to="/files" icon="folder_open" labelId="nav.files" titleId="nav.files" onNavigate={handleNavClick} />
-            {/* IA 2026-09 (T1 去重): /tasks no longer has a nav row — the
-                top 自动化 button (Ctrl+2) is its single sidebar entry, so
-                the page is labeled one way ("自动化") everywhere. */}
+            {/* IA 2026-10 (ui-redesign-2026-10): /tasks is a first-class nav
+                row again (对话/文件/任务/收件箱/连接/记忆 + 指挥台). The ⌘2
+                hint migrated here from the retired top 自动化 button; the
+                global binding already lives in useKeyboardShortcuts. */}
+            <NavRow to="/tasks" icon="checklist" labelId="nav.tasks" titleId="nav.tasks" kbd={`${mod}2`} onNavigate={handleNavClick} />
             <NavRow
               to="/triage"
               icon="inbox"

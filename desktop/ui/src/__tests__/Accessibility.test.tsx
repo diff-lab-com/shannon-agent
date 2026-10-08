@@ -34,8 +34,9 @@ describe('Accessibility', () => {
     it('nav links have visible text labels', () => {
       render(wrap(<Sidebar />))
       expect(screen.getByText('Chat')).toBeInTheDocument()
-      // IA T1: the sidebar entry for /tasks is the「自动化」button.
-      expect(screen.getByText('Automations')).toBeInTheDocument()
+      // IA 2026-10: /tasks is a first-class nav row (the old「自动化」quick
+      // button was retired as its duplicate).
+      expect(screen.getByRole('link', { name: 'Tasks · Ctrl2' })).toBeInTheDocument()
     })
 
     it('settings section nav is visible on the Settings page rail', () => {
@@ -51,7 +52,8 @@ describe('Accessibility', () => {
         ),
       )
       expect(screen.getByText('General')).toBeInTheDocument()
-      expect(screen.getByText('Theme')).toBeInTheDocument()
+      // IA 2026-10: nav.theme is displayed as 外观/Appearance on the rail.
+      expect(screen.getByText('Appearance')).toBeInTheDocument()
       expect(screen.getByText('Models')).toBeInTheDocument()
     })
   })

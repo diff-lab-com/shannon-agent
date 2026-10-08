@@ -39,7 +39,7 @@ run_check "cargo fmt --check" cargo fmt --all -- --check
 run_check "cargo build --workspace" cargo build --workspace
 
 if [ "$QUICK" -ne 1 ]; then
-    run_check "cargo clippy" cargo clippy --workspace -- -D warnings -A unknown-lints -A clippy::collapsible_if -A clippy::collapsible_match -A clippy::derivable_impls -A clippy::manual_is_multiple_of -A clippy::manual_checked_div -A clippy::unwrap_used -A clippy::unnecessary_sort_by
+    run_check "cargo clippy" cargo clippy --workspace -- -D warnings -A unknown-lints -A clippy::collapsible_if -A clippy::collapsible_match -A clippy::derivable_impls -A clippy::manual_is_multiple_of -A clippy::manual_checked_div -A clippy::unnecessary_sort_by
 fi
 
 echo ""

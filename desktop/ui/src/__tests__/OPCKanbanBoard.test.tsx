@@ -126,3 +126,34 @@ describe('OPCKanbanBoard quick create (P1-3 created-then-invisible)', () => {
     expect((input as HTMLInputElement).value).toBe('Failing task')
   })
 })
+
+// ─── 裁决 B3: pending_review surfaces as a blocked-column sub-state ───
+
+describe('OPCKanbanBoard pending-review sub-state (audit §09, B3)', () => {
+  const reviewTask: TaskItem = {
+    id: 't-review-1',
+    title: 'Awaiting Review Task',
+    status: 'pending_review',
+  }
+
+  it('lands a pending_review task in the blocked column with a badge and a review button', () => {
+    renderBoard([reviewTask])
+    const card = screen.getByRole('button', { name: /Awaiting Review Task/ })
+    expect(card).toHaveTextContent('Pending review')
+    const reviewBtn = screen.getByTestId('opc-review-t-review-1')
+    expect(reviewBtn).toHaveTextContent('Review')
+  })
+
+  it('the review button navigates to the task detail review surface', () => {
+    renderBoard([reviewTask])
+    fireEvent.click(screen.getByTestId('opc-review-t-review-1'))
+    expect(navigate).toHaveBeenCalledWith('/opc/task/t-review-1')
+  })
+
+  it('plain blocked tasks keep the old look without the review button', () => {
+    renderBoard([{ id: 't-blocked-1', title: 'Hard Blocked', status: 'blocked' }])
+    const card = screen.getByRole('button', { name: /Hard Blocked/ })
+    expect(card).not.toHaveTextContent('Pending review')
+    expect(screen.queryByTestId('opc-review-t-blocked-1')).not.toBeInTheDocument()
+  })
+})

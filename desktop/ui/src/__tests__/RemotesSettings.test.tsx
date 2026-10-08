@@ -24,6 +24,35 @@ describe('RemotesSettings', () => {
     expect(screen.getByTestId('remotes-empty-add')).toBeInTheDocument()
   })
 
+  // R3-V-01: a failed `remote_list_targets` must land in the honest
+  // section-level error state — NOT the "no targets" empty state, and never
+  // a TypeError that takes the whole settings panel down.
+  it('shows the load-error state with retry when listing fails', async () => {
+    const spy = vi
+      .spyOn(api, 'remoteListTargets')
+      .mockRejectedValueOnce(new Error('remotes.toml unreadable'))
+    render(<RemotesSettings />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('remotes-load-error')).toBeInTheDocument(),
+    )
+    expect(screen.getByText('Could not load remote targets')).toBeInTheDocument()
+    expect(screen.queryByTestId('remotes-empty')).not.toBeInTheDocument()
+    // Raw message folded into 技术详情, collapsed by default.
+    const details = screen.getByTestId('remotes-load-error').querySelector('details')
+    expect(details).not.toBeNull()
+    expect(details).not.toHaveAttribute('open')
+    expect(details).toHaveTextContent('remotes.toml unreadable')
+
+    // Retry drives the same reload path; success swaps the error card out.
+    spy.mockResolvedValueOnce({ targets: [], defaultTarget: null })
+    fireEvent_click(screen.getByTestId('remotes-retry'))
+    await waitFor(() =>
+      expect(screen.queryByTestId('remotes-load-error')).not.toBeInTheDocument(),
+    )
+    expect(screen.getByTestId('remotes-empty')).toBeInTheDocument()
+  })
+
   it('shows the persisted default-target badge from the list response (P1-16)', async () => {
     vi.spyOn(api, 'remoteListTargets').mockResolvedValueOnce({
       targets: [

@@ -106,16 +106,33 @@ describe('FilesPage', () => {
     render(<FilesPage />)
     await screen.findAllByTestId('files-row')
 
-    // The lens's Favorites leg is the star OUTSIDE any row (the rows' stars
-    // share the same accessible name).
-    const lensStar = screen.getAllByRole('button', { name: 'Add to favorites' })
-      .find(btn => btn.closest('[data-testid="files-row"]') == null)!
-    fireEvent.click(lensStar)
+    // The lens pills carry live counts ("Favorites 1") — match by prefix.
+    fireEvent.click(screen.getByRole('button', { name: /Favorites/ }))
     await waitFor(() => expect(screen.getAllByTestId('files-row')).toHaveLength(1))
     expect(screen.getAllByTestId('files-row')[0]).toHaveTextContent('q3-review.pptx')
 
-    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    fireEvent.click(screen.getByRole('button', { name: /All/ }))
     await waitFor(() => expect(screen.getAllByTestId('files-row')).toHaveLength(3))
+  })
+
+  it('the source and missing lenses filter by tag and probe result', async () => {
+    render(<FilesPage />)
+    await screen.findAllByTestId('files-row')
+
+    // 附件: one attachment row (notes.md).
+    fireEvent.click(screen.getByRole('button', { name: /Attachments/ }))
+    await waitFor(() => expect(screen.getAllByTestId('files-row')).toHaveLength(1))
+    expect(screen.getAllByTestId('files-row')[0]).toHaveTextContent('notes.md')
+
+    // Agent 产出: the two generated rows.
+    fireEvent.click(screen.getByRole('button', { name: /Agent outputs/ }))
+    await waitFor(() => expect(screen.getAllByTestId('files-row')).toHaveLength(2))
+
+    // 已丢失: only the row whose path probe confirmed the file is gone.
+    fireEvent.click(screen.getByRole('button', { name: /Missing/ }))
+    await waitFor(() => expect(screen.getAllByTestId('files-row')).toHaveLength(1))
+    expect(screen.getAllByTestId('files-row')[0]).toHaveTextContent('gone.md')
+    expect(screen.getByTestId('files-row-missing')).toBeInTheDocument()
   })
 
   it('shows the empty state when the index is empty', async () => {

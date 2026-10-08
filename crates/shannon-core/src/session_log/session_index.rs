@@ -87,6 +87,14 @@ pub struct SessionIndex {
     pub total_input_tokens: u64,
     /// Summed output tokens over `turn/end` usage payloads.
     pub total_output_tokens: u64,
+    /// Context peak (上下文峰值): the max context window any `turn/end`
+    /// usage payload carried, so a reopened session can still render a
+    /// context percentage. `None` when no logged turn knew its window —
+    /// consumers hide the percentage rather than fabricate a window.
+    /// Additive + optional: indexes written before the field load as `None`
+    /// and stay valid (the next incremental update refreshes it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_tokens: Option<u64>,
     /// First `user/message` body (seq + content prefix), for the
     /// first-user preview.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -203,6 +211,7 @@ pub struct SessionIndexAccumulator {
     turn_count: usize,
     total_input_tokens: u64,
     total_output_tokens: u64,
+    max_context_tokens: Option<u64>,
     first_user_message: Option<IndexedUserText>,
     last_user_message: Option<IndexedUserText>,
     first_tool_result_seq: Option<u64>,
@@ -225,6 +234,7 @@ impl SessionIndexAccumulator {
             turn_count: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
+            max_context_tokens: None,
             first_user_message: None,
             last_user_message: None,
             first_tool_result_seq: None,
@@ -244,6 +254,7 @@ impl SessionIndexAccumulator {
             turn_count: previous.turn_count,
             total_input_tokens: previous.total_input_tokens,
             total_output_tokens: previous.total_output_tokens,
+            max_context_tokens: previous.max_context_tokens,
             first_user_message: previous.first_user_message.clone(),
             last_user_message: previous.last_user_message.clone(),
             first_tool_result_seq: previous.first_tool_result_seq,
@@ -284,6 +295,14 @@ impl SessionIndexAccumulator {
                 if let Some(usage) = &p.usage {
                     self.total_input_tokens += usage.input_tokens;
                     self.total_output_tokens += usage.output_tokens;
+                    // Peak, not sum: the window is a per-turn constant, and
+                    // turns that lacked it must not erase a known peak.
+                    self.max_context_tokens =
+                        match (self.max_context_tokens, usage.context_window_tokens) {
+                            (Some(a), Some(b)) => Some(a.max(b)),
+                            (Some(a), None) | (None, Some(a)) => Some(a),
+                            (None, None) => None,
+                        };
                 }
             }
             SessionEventBody::UserMessage(p) => {
@@ -333,6 +352,7 @@ impl SessionIndexAccumulator {
             turn_count: self.turn_count,
             total_input_tokens: self.total_input_tokens,
             total_output_tokens: self.total_output_tokens,
+            max_context_tokens: self.max_context_tokens,
             first_user_message: self.first_user_message,
             last_user_message: self.last_user_message,
             first_tool_result_seq: self.first_tool_result_seq,
@@ -429,6 +449,31 @@ mod tests {
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
                     cost_usd: None,
+                    context_window_tokens: None,
+                }),
+                error: None,
+            }),
+        )
+    }
+
+    fn turn_end_with_window(
+        seq: u64,
+        input: u64,
+        output: u64,
+        window: Option<u64>,
+    ) -> SessionEvent {
+        event(
+            seq,
+            SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
+                reason: TurnEndPayload::REASON_COMPLETED.into(),
+                usage: Some(TokenUsage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                    cost_usd: None,
+                    context_window_tokens: window,
                 }),
                 error: None,
             }),
@@ -448,6 +493,7 @@ mod tests {
         assert_eq!(index.turn_count, proj.turn_count);
         assert_eq!(index.total_input_tokens, proj.total_input_tokens);
         assert_eq!(index.total_output_tokens, proj.total_output_tokens);
+        assert_eq!(index.max_context_tokens, proj.max_context_tokens);
 
         // Replicate session_store::preview() over the projected messages and
         // compare with the index's preview answers.
@@ -612,6 +658,45 @@ mod tests {
         acc.mark_base_partial();
         acc.observe(&user_msg(0, "only this episode"));
         assert!(acc.finish(Some((1, 2))).is_none());
+    }
+
+    #[test]
+    fn accumulator_tracks_context_window_peak() {
+        // Turn 1 reports a 200K window, turn 2 a smaller 128K one, turn 3
+        // none. The index keeps the PEAK (never a sum) and a window-less
+        // turn never erases a known peak.
+        let events = vec![
+            turn_end_with_window(0, 10, 5, Some(200_000)),
+            turn_end_with_window(1, 10, 5, Some(128_000)),
+            turn_end(2, 10, 5),
+        ];
+        let mut acc = SessionIndexAccumulator::fresh();
+        for e in &events {
+            acc.observe(e);
+        }
+        let index = acc.finish(Some((1, 2))).unwrap();
+        assert_eq!(index.max_context_tokens, Some(200_000));
+        assert_eq!(index.total_input_tokens, 30, "token totals still sum");
+
+        // Seeding from the published index carries the peak forward (the
+        // restart path), and a window-less turn leaves it intact.
+        let mut acc2 = SessionIndexAccumulator::from_index(&index);
+        acc2.observe(&turn_end_with_window(3, 1, 1, None));
+        let index2 = acc2.finish(Some((3, 4))).unwrap();
+        assert_eq!(
+            index2.max_context_tokens,
+            Some(200_000),
+            "window-less turn must not erase the peak"
+        );
+
+        // Only window-less turns ⇒ None (no fabricated window).
+        let mut acc3 = SessionIndexAccumulator::fresh();
+        acc3.observe(&turn_end(4, 1, 1));
+        assert_eq!(acc3.finish(Some((5, 6))).unwrap().max_context_tokens, None);
+
+        // The rebuild path's projection fold answers identically.
+        let proj = super::super::projections::project_conversation(&events);
+        assert_eq!(proj.max_context_tokens, Some(200_000));
     }
 
     #[test]

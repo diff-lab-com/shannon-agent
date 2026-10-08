@@ -62,10 +62,11 @@ pub const SOURCE_TRIGGER: &str = "trigger";
 /// Inbox source: desktop best-of-N batch run lifecycle (P1-2).
 pub const SOURCE_BATCH: &str = "batch";
 /// Inbox source: a desktop background task (`start_background_task`, the
-/// ad-hoc prompt run surfaced on the Runs panel) finished **failed**. Only
-/// failures write an item — successes and user cancels are panel-only so the
-/// triage stream stays noise-free. Dedup entity: the task id (one-shot;
-/// each failure is a distinct task).
+/// ad-hoc prompt run surfaced on the Runs panel) finished **completed** or
+/// **failed** — both terminal outcomes write an item so the result survives
+/// past the panel's `running`-only slice; user cancels stay panel-only.
+/// Dedup entity: the task id (one-shot; each run is a distinct task, and
+/// `upsert_pending` keeps re-delivery from doubling the card).
 pub const SOURCE_BACKGROUND_TASK: &str = "background_task";
 /// Inbox source: a session permission-approval request is awaiting the user
 /// (T5 unified needs-attention stream). Dedup entity: the session.
@@ -146,6 +147,19 @@ pub struct InboxItem {
     pub status: String,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    /// Design 05 收件箱审批闭环: for `session_approval` rows, the live
+    /// permission request id the card's inline 批准/拒绝 buttons answer via
+    /// `respond_permission`. `None` on every other source and on rows written
+    /// before the column existed (those keep the honest 「去处理」 jump).
+    #[serde(default)]
+    pub request_id: Option<String>,
+    /// 2026-10-08 来源链 (设计 05): the routine run that produced this item —
+    /// the card renders 「来源 › 名称 › #N · 时间」. Null for non-run sources.
+    pub run_id: Option<i64>,
+    /// Free-text risk tier of the approved-for tool (`critical` / `high` /
+    /// `medium` / `low`), for the card's risk badge. `None` when unknown.
+    #[serde(default)]
+    pub risk: Option<String>,
 }
 
 /// Payload for [`InboxStore::append_item`].
@@ -162,6 +176,13 @@ pub struct InboxItemNew {
     pub summary: String,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    /// 2026-10-08 来源链 (设计 05): the routine run that produced this item —
+    /// the card renders 「来源 › 名称 › #N · 时间」. Null for non-run sources.
+    pub run_id: Option<i64>,
+    #[serde(default)]
+    pub risk: Option<String>,
 }
 
 /// Aggregate counts for the sidebar badge.
@@ -270,7 +291,10 @@ CREATE TABLE IF NOT EXISTS inbox_items (
     error TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL
+    updated_at_ms INTEGER NOT NULL,
+    request_id TEXT,
+    run_id INTEGER,
+    risk TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_items_created ON inbox_items (created_at_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_inbox_items_status ON inbox_items (status);
@@ -348,6 +372,7 @@ impl InboxStore {
         let _ = conn.pragma_update(None, "busy_timeout", "2000");
         conn.execute_batch(SCHEMA_SQL)?;
         Self::migrate_routine_runs_columns(&conn)?;
+        Self::migrate_inbox_items_columns(&conn)?;
         let store = Self {
             conn: Mutex::new(conn),
         };
@@ -385,6 +410,33 @@ impl InboxStore {
         }
         if !existing.contains("trigger") {
             conn.execute("ALTER TABLE routine_runs ADD COLUMN \"trigger\" TEXT", [])?;
+        }
+        Ok(())
+    }
+
+    /// Design 05 收件箱审批闭环 migration: add the `request_id` / `risk`
+    /// columns to an `inbox_items` table created before they existed. Same
+    /// shape as [`Self::migrate_routine_runs_columns`]: `CREATE TABLE IF NOT
+    /// EXISTS` is a no-op on such databases, so the columns are added with
+    /// `ALTER TABLE` when (and only when) `PRAGMA table_info` shows them
+    /// absent. Pre-existing rows read back `NULL` → `None` — those cards keep
+    /// the honest 「去处理」 fallback instead of pretending they can decide.
+    fn migrate_inbox_items_columns(conn: &Connection) -> Result<(), InboxStoreError> {
+        let existing = {
+            let mut stmt = conn.prepare("PRAGMA table_info(inbox_items)")?;
+            let names = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            let mut names: std::collections::HashSet<String> = names.flatten().collect();
+            names.shrink_to_fit();
+            names
+        };
+        if !existing.contains("request_id") {
+            conn.execute("ALTER TABLE inbox_items ADD COLUMN request_id TEXT", [])?;
+        }
+        if !existing.contains("run_id") {
+            conn.execute("ALTER TABLE inbox_items ADD COLUMN run_id INTEGER", [])?;
+        }
+        if !existing.contains("risk") {
+            conn.execute("ALTER TABLE inbox_items ADD COLUMN risk TEXT", [])?;
         }
         Ok(())
     }
@@ -434,8 +486,8 @@ impl InboxStore {
         self.with_busy_retry(|| {
             conn.execute(
                 "INSERT INTO inbox_items
-                    (source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7)",
+                    (source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms, request_id, risk, run_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7, ?8, ?9, ?10)",
                 params![
                     item.source,
                     item.source_id,
@@ -443,7 +495,10 @@ impl InboxStore {
                     item.title,
                     item.summary,
                     item.error,
-                    now
+                    now,
+                    item.request_id,
+                    item.risk,
+                    item.run_id
                 ],
             )?;
             Ok(conn.last_insert_rowid())
@@ -459,6 +514,9 @@ impl InboxStore {
             status: InboxStatus::Pending.as_str().to_string(),
             created_at_ms: now,
             updated_at_ms: now,
+            request_id: item.request_id,
+            risk: item.risk,
+            run_id: item.run_id,
         })
     }
 
@@ -466,8 +524,7 @@ impl InboxStore {
     pub fn get_item(&self, id: i64) -> Result<Option<InboxItem>, InboxStoreError> {
         let conn = self.lock_conn()?;
         conn.query_row(
-            "SELECT id, source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms
-             FROM inbox_items WHERE id = ?1",
+            &format!("SELECT {ITEM_COLUMNS} FROM inbox_items WHERE id = ?1"),
             params![id],
             row_to_item,
         )
@@ -552,11 +609,14 @@ impl InboxStore {
     ///
     /// Keyed on `(source, source_id)` — the dedup entity:
     /// - no matching row → a fresh `pending` item is appended;
-    /// - matching row → its title/summary/error and `updated_at_ms` are
-    ///   refreshed in place (no second row is ever created) **and** the item
-    ///   is reset to `pending`: a new occurrence of a needs-attention event
-    ///   needs attention again even when a previous one was already read or
-    ///   archived. The `id`/`created_at_ms` of the original entry survive.
+    /// - matching row → its title/summary/error, `request_id`/`risk` and
+    ///   `updated_at_ms` are refreshed in place (no second row is ever
+    ///   created) **and** the item is reset to `pending`: a new occurrence of
+    ///   a needs-attention event needs attention again even when a previous
+    ///   one was already read or archived. The `id`/`created_at_ms` of the
+    ///   original entry survive. The `request_id` refresh matters for
+    ///   `session_approval`: each new prompt of the session carries a fresh
+    ///   request id, and the card's inline buttons must answer the live one.
     ///
     /// Errors with [`InboxStoreError::MissingSourceId`] when `item.source_id`
     /// is empty/absent — without a dedup entity the call is a caller bug.
@@ -577,9 +637,18 @@ impl InboxStore {
                         conn.execute(
                             "UPDATE inbox_items
                              SET title = ?1, summary = ?2, error = ?3,
-                                 status = 'pending', updated_at_ms = ?4
-                             WHERE id = ?5",
-                            params![item.title, item.summary, item.error, now_ms(), prev.id],
+                                 request_id = ?4, risk = ?5,
+                                 status = 'pending', updated_at_ms = ?6
+                             WHERE id = ?7",
+                            params![
+                                item.title,
+                                item.summary,
+                                item.error,
+                                item.request_id,
+                                item.risk,
+                                now_ms(),
+                                prev.id
+                            ],
                         )?;
                         Ok(())
                     })?;
@@ -599,9 +668,10 @@ impl InboxStore {
     ) -> Result<Option<InboxItem>, InboxStoreError> {
         let conn = self.lock_conn()?;
         conn.query_row(
-            "SELECT id, source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms
-             FROM inbox_items WHERE source = ?1 AND source_id = ?2
-             ORDER BY id DESC LIMIT 1",
+            &format!(
+                "SELECT {ITEM_COLUMNS} FROM inbox_items WHERE source = ?1 AND source_id = ?2
+                 ORDER BY id DESC LIMIT 1"
+            ),
             params![source, source_id],
             row_to_item,
         )
@@ -917,7 +987,7 @@ impl std::fmt::Debug for InboxStore {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-const ITEM_COLUMNS: &str = "id, source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms";
+const ITEM_COLUMNS: &str = "id, source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms, request_id, risk, run_id";
 const RUN_COLUMNS: &str = "id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id, cost_usd, token_usage, \"trigger\"";
 
 /// Shared list tail for [`InboxStore::list`]: newest first (created_at DESC,
@@ -954,6 +1024,9 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxItem> {
         status: row.get(7)?,
         created_at_ms: row.get(8)?,
         updated_at_ms: row.get(9)?,
+        request_id: row.get(10)?,
+        run_id: row.get(12)?,
+        risk: row.get(11)?,
     })
 }
 
@@ -1022,6 +1095,9 @@ mod tests {
             title: title.to_string(),
             summary: String::new(),
             error: None,
+            request_id: None,
+            risk: None,
+            run_id: None,
         }
     }
 
@@ -1164,6 +1240,9 @@ mod tests {
             title: title.into(),
             summary: "first occurrence".into(),
             error: None,
+            request_id: None,
+            risk: None,
+            run_id: None,
         }
     }
 
@@ -1853,14 +1932,186 @@ mod tests {
             status: "pending".into(),
             created_at_ms: 1,
             updated_at_ms: 2,
+            request_id: Some("perm-1".into()),
+            risk: Some("high".into()),
+            run_id: None,
         };
         let json = serde_json::to_string(&item).unwrap();
-        for key in ["sourceId", "sessionId", "createdAtMs", "updatedAtMs"] {
+        for key in [
+            "sourceId",
+            "sessionId",
+            "createdAtMs",
+            "updatedAtMs",
+            "requestId",
+            "runId",
+            "risk",
+        ] {
             assert!(json.contains(key), "missing {key} in {json}");
         }
         assert!(!json.contains("source_id"));
+        assert!(json.contains("\"requestId\":\"perm-1\""));
         // The TS contract expects every key present (null, not omitted).
         assert!(json.contains("\"sessionId\":null"));
+    }
+
+    // ── request_id / risk (design 05 收件箱审批闭环) ──────────────────────
+
+    /// 2026-10-08 来源链: a run-produced item carries its producing run id
+    /// through insert → get/list round-trips (the card's mono 「#N」).
+    #[test]
+    fn run_row_roundtrips_run_id() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let item = store
+            .append_item(InboxItemNew {
+                source: SOURCE_ROUTINE.to_string(),
+                source_id: Some("task-1".into()),
+                session_id: None,
+                title: "CI 巡检".into(),
+                summary: "run failed".into(),
+                error: Some("boom".into()),
+                request_id: None,
+                risk: None,
+                run_id: Some(43),
+            })
+            .unwrap();
+        assert_eq!(item.run_id, Some(43));
+
+        let got = store.get_item(item.id).unwrap().unwrap();
+        assert_eq!(got.run_id, Some(43));
+        assert!(
+            store
+                .list(None, None, 10)
+                .unwrap()
+                .iter()
+                .any(|i| i.id == item.id && i.run_id == Some(43))
+        );
+    }
+
+    /// A `session_approval` row carries the live permission request id and
+    /// the risk tier through insert → get/list/find round-trips.
+    #[test]
+    fn approval_row_roundtrips_request_id_and_risk() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let item = store
+            .append_item(InboxItemNew {
+                source: SOURCE_SESSION_APPROVAL.to_string(),
+                source_id: Some("sess-1".into()),
+                session_id: Some("sess-1".into()),
+                title: "bash".into(),
+                summary: "asked to run bash".into(),
+                error: None,
+                request_id: Some("perm-abc".into()),
+                risk: Some("critical".into()),
+                run_id: None,
+            })
+            .unwrap();
+        assert_eq!(item.request_id.as_deref(), Some("perm-abc"));
+        assert_eq!(item.risk.as_deref(), Some("critical"));
+
+        let got = store.get_item(item.id).unwrap().unwrap();
+        assert_eq!(got.request_id.as_deref(), Some("perm-abc"));
+        assert_eq!(got.risk.as_deref(), Some("critical"));
+        let listed = store.list(None, None, 10).unwrap();
+        assert_eq!(listed[0].request_id.as_deref(), Some("perm-abc"));
+        let found = store
+            .find_by_source(SOURCE_SESSION_APPROVAL, "sess-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.risk.as_deref(), Some("critical"));
+    }
+
+    /// Non-approval sources (and rows written before the columns existed)
+    /// keep both columns NULL — `None` is what keeps the UI on the honest
+    /// 「去处理」 fallback instead of a fake inline decision.
+    #[test]
+    fn plain_rows_keep_request_id_and_risk_null() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let item = store.append_item(item_new("routine run")).unwrap();
+        assert_eq!(item.request_id, None);
+        assert_eq!(item.risk, None);
+        let back = store.get_item(item.id).unwrap().unwrap();
+        assert_eq!(back, item);
+    }
+
+    /// A second approval prompt for the same session refreshes the entry in
+    /// place — including the request id/risk, so the card always answers the
+    /// LIVE request, never a stale one.
+    #[test]
+    fn upsert_pending_refreshes_request_id_and_risk() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let first = store
+            .upsert_pending(InboxItemNew {
+                request_id: Some("perm-old".into()),
+                risk: Some("low".into()),
+                ..attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "bash")
+            })
+            .unwrap();
+        let second = store
+            .upsert_pending(InboxItemNew {
+                title: "python".into(),
+                summary: "second prompt".into(),
+                request_id: Some("perm-new".into()),
+                risk: Some("high".into()),
+                ..attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "python")
+            })
+            .unwrap();
+        assert_eq!(second.id, first.id, "still one row per session");
+        assert_eq!(second.request_id.as_deref(), Some("perm-new"));
+        assert_eq!(second.risk.as_deref(), Some("high"));
+    }
+
+    /// A database written before the request_id/risk columns existed gains
+    /// them on open — old rows survive and read back `None` (the UI keeps the
+    /// 「去处理」 fallback), and approval-bearing rows are writable after.
+    #[test]
+    fn migration_adds_request_id_and_risk_to_a_pre_approval_database() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("inbox.db");
+        // Simulate a database written by a pre-approval-closure build: the
+        // inbox_items table exists WITHOUT the new columns and already holds
+        // a row.
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE inbox_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    source_id TEXT,
+                    session_id TEXT,
+                    title TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    error TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at_ms INTEGER NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                INSERT INTO inbox_items
+                    (source, source_id, title, summary, status, created_at_ms, updated_at_ms)
+                VALUES ('routine', 'task-9', 'old row', 'm', 'pending', 1, 1);",
+            )
+            .unwrap();
+        }
+
+        let store = InboxStore::open_with_legacy(&db, None).unwrap();
+
+        // The old row survived the migration and reads back column-less.
+        let items = store.list(None, None, 10).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "old row");
+        assert_eq!(items[0].request_id, None);
+        assert_eq!(items[0].risk, None);
+
+        // And the migrated table accepts approval-bearing rows.
+        let saved = store
+            .upsert_pending(InboxItemNew {
+                request_id: Some("perm-migrated".into()),
+                risk: Some("medium".into()),
+                ..attention_item(SOURCE_SESSION_APPROVAL, "sess-mig", "bash")
+            })
+            .unwrap();
+        let back = store.get_item(saved.id).unwrap().unwrap();
+        assert_eq!(back.request_id.as_deref(), Some("perm-migrated"));
+        assert_eq!(back.risk.as_deref(), Some("medium"));
     }
 
     #[test]
@@ -1998,6 +2249,9 @@ mod tests {
                                 title: format!("s-{run_id}"),
                                 summary: "ok".into(),
                                 error: None,
+                                request_id: None,
+                                risk: None,
+                                run_id: None,
                             })
                             .unwrap();
                         // The fix under test: this call must not raise

@@ -39,6 +39,18 @@ describe('OPC page', () => {
     expect(screen.getByText("Today's Mission")).toBeInTheDocument()
   })
 
+  // ui-redesign 09 pagehead: the page contributes a muted subtitle line
+  // above the mission card / view tabs (the H1 stays in the Header).
+  it('renders the page subtitle above the view tabs', () => {
+    resetCtx()
+    renderOPC()
+    expect(
+      screen.getByText(
+        'One mission, a team of agents — tasks run here in parallel, every state replayable',
+      ),
+    ).toBeInTheDocument()
+  })
+
   it('renders active agents heading', () => {
     resetCtx()
     renderOPC()
@@ -297,5 +309,33 @@ describe('OPC page', () => {
     await waitFor(() => {
       expect(screen.queryByRole('heading', { name: /Register agent template/ })).not.toBeInTheDocument()
     })
+  })
+})
+
+describe('OPC mission hero (audit §09 P1)', () => {
+  it('aggregates in-progress/done counts and progress from board tasks', () => {
+    resetCtx()
+    ctx.tasks = [
+      { id: 't1', title: 'A', status: 'in_progress' },
+      { id: 't2', title: 'B', status: 'in_progress' },
+      { id: 't3', title: 'C', status: 'completed' },
+      { id: 't4', title: 'D', status: 'pending' },
+    ]
+    renderOPC()
+    const strip = screen.getByTestId('opc-mission-progress')
+    expect(strip).toHaveTextContent('In progress 2')
+    expect(strip).toHaveTextContent('Completed 1')
+    expect(strip).toHaveTextContent('4 total')
+    // 1 of 4 done → 25%.
+    expect(screen.getByRole('status', { name: 'Mission progress: 25%' })).toBeInTheDocument()
+  })
+
+  it('renders an empty board as 0 counts and 0% progress', () => {
+    resetCtx()
+    renderOPC()
+    const strip = screen.getByTestId('opc-mission-progress')
+    expect(strip).toHaveTextContent('In progress 0')
+    expect(strip).toHaveTextContent('Completed 0')
+    expect(strip).toHaveTextContent('0 total')
   })
 })

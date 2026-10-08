@@ -89,6 +89,29 @@ token instead (`text-on-surface` always means "the text color on a regular
 surface", regardless of theme). Chart colors follow the same rule via
 `var(--chart-series-n)`, which every theme overrides.
 
+## Scrims and veils (2026-10-08 audit B)
+
+Two different overlay jobs — never mix them:
+
+| Kind | Job | Token | Examples |
+| --- | --- | --- | --- |
+| **Scrim** | modal-BLOCKING backdrop (interaction stops until dismissed) | `--color-scrim` (`bg-scrim`), `--color-scrim-strong` (`bg-scrim-strong`, media lightboxes) | dialog/menu backdrops, image lightbox |
+| **Veil** | non-blocking content transition (page still reads; data is loading) | surface tokens at low alpha + light blur (`bg-surface-container-lowest/60`) | session-switch overlay, skeleton scrims |
+
+Scrims are deliberately fixed near-black and NOT per-theme: they must darken
+content identically in all 12 themes. Veils follow the theme surface.
+
+## Terminal ANSI (2026-10-08 audit A)
+
+`scripts/theme-source.json` themes may carry an optional `ansi` block (18
+keys, generated into `src/theme/generated/xterm-palettes.ts`) with the
+theme's official terminal palette — identity themes (tokyo-night,
+catppuccin, nord, dracula, gruvbox, solarized, …) so `ls --color` matches
+the UI family. Neutral themes (material/ember/slate) deliberately have no
+block and keep the AA light/dark floor in
+`components/terminal/xtermTheme.ts`. New ANSI values must pass the
+generator's fg/bg ≥ 4.5:1 gate.
+
 ## Accessibility constraints
 
 All token color combinations are checked at AA contrast by

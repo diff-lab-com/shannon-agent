@@ -72,6 +72,7 @@ import type {
   BatchRunDto,
   InboxItem,
   InboxListFilter,
+  ContinueInboxSession,
   InboxItemStatus,
   InboxStats,
   TaskExecution,
@@ -453,7 +454,9 @@ export interface DetectedProvider {
   has_api_key: boolean
 }
 
-export async function detectProviderFromEnv(): Promise<DetectedProvider | null> {
+/** ALL env-detected providers in recommended ranking order (2026-10-08:
+ *  multi-key BYOK badge) — empty array when nothing is detected. */
+export async function detectProviderFromEnv(): Promise<DetectedProvider[]> {
   return invoke('detect_provider_from_env')
 }
 
@@ -1134,6 +1137,12 @@ export async function revealSessionInMain(sessionId: string): Promise<void> {
   await invoke('reveal_session_in_main', { sessionId })
 }
 
+/** Current git branch of `workingDir` — null when it is not a git work tree
+ *  (the status bar hides the branch segment, honesty rule). */
+export async function currentGitBranch(workingDir: string): Promise<string | null> {
+  return invoke<string | null>('current_git_branch', { workingDir })
+}
+
 // --- Office Wave 3 C3 companion Quick Capture window (frozen backend contract) ---
 
 /** Create (or focus) the always-on-top-capable `companion` window. */
@@ -1144,6 +1153,14 @@ export async function openCompanionWindow(): Promise<CompanionWindowInfo> {
 /** Toggle the companion window's stay-on-top flag (only acts on `companion`). */
 export async function setCompanionAlwaysOnTop(enabled: boolean): Promise<void> {
   await invoke('set_companion_always_on_top', { enabled })
+}
+
+/** Collapse (hide) the companion window — the Esc half of the
+ * 「失焦自动收起 · Esc 关闭」 contract (design 13). Rust-side like every
+ * other companion window operation, so the companion capability stays
+ * event-only. */
+export async function hideCompanionWindow(): Promise<void> {
+  await invoke('hide_companion_window')
 }
 
 export async function setSessionWorkingDir(id: string, path: string): Promise<void> {
@@ -2236,7 +2253,7 @@ export async function rerunInboxItem(id: number): Promise<string> {
   return invoke('rerun_inbox_item', { id })
 }
 
-export async function continueInboxItemSession(id: number): Promise<string> {
+export async function continueInboxItemSession(id: number): Promise<ContinueInboxSession> {
   return invoke('continue_inbox_item_session', { id })
 }
 
@@ -2903,6 +2920,36 @@ export async function getMemorySource(sessionId: string | null, memoryId: string
 /** P2-4 graph payload for the Memory page's graph view. */
 export async function getMemoryGraph(project?: string | null): Promise<MemoryGraph> {
   return invoke('get_memory_graph', { project: project ?? null })
+}
+
+// --- Injection preview (缓期项 #6 — the Memory banner's 「将携带 N 条」) ---
+//
+// Frozen contract with desktop/src/commands_memory.rs (`InjectionPreview`,
+// serde rename_all = camelCase). Shares the backend's injected-entries
+// pipeline, so the banner count cannot drift from what the next turn's
+// prompt actually carries.
+
+/** One preview entry, cropped to id + display title (chips-ready). */
+export interface MemoryInjectionPreviewEntry {
+  id: string
+  title: string
+}
+
+export interface MemoryInjectionPreview {
+  count: number
+  entries: MemoryInjectionPreviewEntry[]
+}
+
+/**
+ * How many memory entries the NEXT message's system prompt would inject for
+ * `project` (null = the engine's default scope: the session working
+ * directory, else the process cwd, else "default"). Rejects when no memory
+ * store is available — callers degrade to the honest placeholder.
+ */
+export async function memoryInjectionPreview(
+  project?: string | null,
+): Promise<MemoryInjectionPreview> {
+  return invoke('memory_injection_preview', { project: project ?? null })
 }
 
 // --- Dream Pass (梦境提炼 — review-gated memory distillation) ---

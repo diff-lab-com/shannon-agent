@@ -59,6 +59,7 @@ mod reconciliation {
             cost_usd: 0.5,
             cache_creation_tokens: 10,
             cache_read_tokens: 20,
+            context_window_tokens: None,
         });
         events.push(QueryEvent::TurnCompleted {
             query_id: q,
@@ -105,6 +106,7 @@ mod reconciliation {
                         cost_usd: 0.01,
                         cache_creation_tokens: 0,
                         cache_read_tokens: 5,
+                        context_window_tokens: None,
                     },
                 ];
                 if turn % 7 == 0 {

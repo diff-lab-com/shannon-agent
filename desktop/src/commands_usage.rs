@@ -119,6 +119,25 @@ impl UsageStore {
             .sum()
     }
 
+    /// Ledger spend for `session_id`, or `None` when no ledger record
+    /// references it. Unlike [`Self::spent_for_session`] (which cannot
+    /// distinguish "no association" from "association summing to zero"),
+    /// this keeps the zero case honest: an existing session always answers
+    /// `Some(_)` — possibly `Some(0.0)` — while a session the ledger never
+    /// saw yields `None`. Task-board costs key off this so a hand-built
+    /// task never gets an estimated number.
+    pub fn session_ledger_cost(&self, session_id: &str) -> Option<f64> {
+        let mut seen = false;
+        let mut total = 0.0;
+        for record in self.load() {
+            if record.session_id.as_deref() == Some(session_id) {
+                seen = true;
+                total += record.cost_usd;
+            }
+        }
+        seen.then_some(total)
+    }
+
     /// Trim the ledger to the most recent `KEEP_RECORDS` entries once it
     /// exceeds `ROTATE_AT_BYTES`. Idempotent and a no-op below the
     /// threshold. Best-effort by contract: callers (append) ignore the
@@ -446,6 +465,33 @@ mod tests {
         let loaded = store.load();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].timestamp_ms, 9);
+    }
+
+    #[test]
+    fn session_ledger_cost_distinguishes_association_from_absence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = UsageStore::with_path(tmp.path().join("usage.jsonl"));
+        let seen = "11111111-1111-1111-1111-111111111111";
+        let zero = "22222222-2222-2222-2222-222222222222";
+
+        let mut with_cost = rec(1, "claude", "anthropic", 0.25);
+        with_cost.session_id = Some(seen.into());
+        let mut zero_cost = rec(2, "claude", "anthropic", 0.0);
+        zero_cost.session_id = Some(zero.into());
+        store.append(&with_cost).unwrap();
+        store.append(&zero_cost).unwrap();
+
+        assert_eq!(store.session_ledger_cost(seen), Some(0.25));
+        // An existing association sums to Some — even when it totals zero —
+        // while a session the ledger never saw is None (no estimate).
+        assert_eq!(store.session_ledger_cost(zero), Some(0.0));
+        assert_eq!(
+            store.session_ledger_cost("33333333-3333-3333-3333-333333333333"),
+            None
+        );
+        // Pre-attribution lines (session_id: None) belong to no session.
+        store.append(&rec(3, "claude", "anthropic", 9.0)).unwrap();
+        assert_eq!(store.session_ledger_cost(seen), Some(0.25));
     }
 
     #[test]

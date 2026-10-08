@@ -126,11 +126,16 @@ test.describe('scripted chat backend — multi-window (journey #21, nightly-only
 
     // Window-mode chrome: the badge and the two window controls exist; the
     // sidebar rail does NOT. Not clicking the controls — see file header.
+    // W10 audit fix: anchor the no-sidebar probe on the Sidebar's own
+    // `data-sidebar` attribute (the unit tests' anchor). A role query also
+    // matches the RightDock's collapsed `<aside aria-label="Right dock">`,
+    // which /chat's lazy chunk mounts a beat later — `toHaveCount(0)` then
+    // passed only by lazy-chunk timing luck, not because no sidebar exists.
     const header = pageB.getByRole('banner')
     await expect(header.getByText('Session window')).toBeVisible({ timeout: 10_000 })
     await expect(header.getByRole('button', { name: 'Open this session in the main window' })).toBeVisible()
     await expect(header.getByRole('button', { name: 'Close this session window' })).toBeVisible()
-    await expect(pageB.getByRole('complementary')).toHaveCount(0)
+    await expect(pageB.locator('[data-sidebar]')).toHaveCount(0)
 
     // Foreign-session stream into the session window: s1 text must not
     // render, must not lock the composer (no stop button — the send slot is

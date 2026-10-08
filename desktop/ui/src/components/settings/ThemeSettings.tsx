@@ -1,12 +1,23 @@
+import { useState } from 'react'
 import { useIntl } from 'react-intl'
+import { NavLink } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/context/ThemeContext'
+import { readReduceGlass, setReduceGlass } from '@/lib/glass'
 
 export default function ThemeSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const { theme, setTheme, themes, fontScale, setFontScale } = useTheme()
+  // 材质 (design-parity R1 2026-10-08): glass strength — Reduced applies the
+  // persistent html.reduce-glass class (lib/glass), sharing the same solid
+  // fill recipe as the OS prefers-reduced-transparency fallback.
+  const [reduceGlass, setReduceGlassState] = useState(readReduceGlass)
+  const handleReduceGlass = (reduced: boolean) => {
+    setReduceGlassState(reduced)
+    setReduceGlass(reduced)
+  }
 
   const fontSizes = [
     { value: 0.85, label: t('settings.theme.fontSize.small') },
@@ -93,6 +104,65 @@ export default function ThemeSettings() {
           {/* Live Preview */}
           <div className="bg-surface-container-low rounded-lg p-md border border-outline-variant/20">
             <p className="font-body-md text-on-surface">{t('settings.theme.fontSize.preview')}</p>
+          </div>
+        </section>
+
+        {/* 材质 (design 12-settings-appearance.html §d, parity R1 2026-10-08):
+            glass strength segmented control + pointers to the terminal
+            knobs. The 代码字体/终端配色 switches live in the advanced page's
+            terminal card — linked, not migrated (shared tests + engine
+            config contract). */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1" data-testid="theme-material-card">
+          <h3 className="font-headline-md text-headline-md mb-md">{t('settings.theme.material.title')}</h3>
+          <p className="font-label-md text-on-surface mb-sm">{t('settings.theme.glass.label')}</p>
+          <div role="radiogroup" aria-label={t('settings.theme.glass.label')} data-testid="theme-glass-group">
+            <div className="flex rounded-xl bg-surface-container-low p-xs gap-xs border border-outline-variant/30 max-w-sm">
+              {([
+                { reduced: false, labelKey: 'settings.theme.glass.standard' },
+                { reduced: true, labelKey: 'settings.theme.glass.reduced' },
+              ]).map(opt => (
+                <button
+                  key={opt.labelKey}
+                  type="button"
+                  role="radio"
+                  aria-checked={reduceGlass === opt.reduced}
+                  data-testid={`theme-glass-${opt.reduced ? 'reduced' : 'standard'}`}
+                  onClick={() => handleReduceGlass(opt.reduced)}
+                  className={cn(
+                    'flex-1 min-w-0 px-md py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
+                    'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
+                    reduceGlass === opt.reduced
+                      ? 'bg-primary text-on-primary font-bold shadow-e1'
+                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-high',
+                  )}
+                >
+                  {t(opt.labelKey)}
+                </button>
+              ))}
+            </div>
+            <p className="font-body-sm text-on-surface-variant mt-sm px-xs">
+              {t('settings.theme.glass.hint')}
+            </p>
+          </div>
+          {/* Pointers to the advanced page's terminal card — honest links,
+              not duplicated controls. */}
+          <div className="mt-md border-t border-outline-variant/20 pt-md space-y-xs">
+            {([
+              { labelKey: 'settings.theme.codeFont.label', icon: 'code' },
+              { labelKey: 'settings.theme.terminalTheme.label', icon: 'terminal' },
+            ]).map(row => (
+              <div key={row.labelKey} className="flex items-center gap-sm px-xs py-xs">
+                <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">{row.icon}</span>
+                <p className="flex-1 font-label-md text-on-surface">{t(row.labelKey)}</p>
+                <NavLink
+                  to="/settings/advanced"
+                  className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer whitespace-nowrap"
+                >
+                  {t('settings.theme.material.editInAdvanced')}
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">arrow_forward</span>
+                </NavLink>
+              </div>
+            ))}
           </div>
         </section>
 

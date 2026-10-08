@@ -43,9 +43,11 @@ describe('AdvancedSettings', () => {
     expect(screen.getByText('Long-term Memory')).toBeInTheDocument()
   })
 
-  it('renders clear session cache button', () => {
+  it('no longer renders the clear-cache button — it moved to the general pane 数据 card', () => {
+    // Design-parity R1 (2026-10-08): the control must be reachable by
+    // normal users, so it left this dev-gated page (GeneralPane owns it).
     render(wrap(<AdvancedSettings />))
-    expect(screen.getByText('Clear Chat Cache')).toBeInTheDocument()
+    expect(screen.queryByText('Clear Chat Cache')).not.toBeInTheDocument()
   })
 
   it('renders data privacy section', () => {

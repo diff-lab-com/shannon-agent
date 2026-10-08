@@ -15,6 +15,10 @@ import {
   useCompanionPromptListener,
 } from './lib/companionBridge';
 import { pushComposerDraft } from './lib/composerBridge';
+// 批 1 启动时检查更新: one-shot, check-only GitHub Releases probe after
+// launch (notify-only — never installs). The module owns the once-per-run
+// guard; StartupUpdateCheckHost below is just its mount point.
+import { runStartupUpdateCheck } from './lib/startupUpdateCheck';
 
 const Welcome = lazy(() => import('./pages/Welcome'));
 const Chat = lazy(() => import('./pages/Chat'));
@@ -43,17 +47,17 @@ const Plugins = lazy(() => import('./components/extensions/Plugins'));
 const Installed = lazy(() => import('./components/extensions/Installed'));
 // IA X1: Extensions → Pending — the single skill-review surface (评审裁决 #2).
 const Pending = lazy(() => import('./components/extensions/Pending'));
-const GeneralSettings = lazy(() => import('./components/settings/GeneralSettings'));
 const ThemeSettings = lazy(() => import('./components/settings/ThemeSettings'));
 const ModelsSettings = lazy(() => import('./components/settings/ModelsSettings'));
 const AdvancedSettings = lazy(() => import('./components/settings/AdvancedSettings'));
 const NotificationsSettings = lazy(() => import('./components/settings/NotificationsSettings'));
-const ConnectionsSettings = lazy(() => import('./components/settings/ConnectionsSettings'));
-const RemotesSettings = lazy(() => import('./components/settings/RemotesSettings'));
-const PermissionsSettings = lazy(() => import('./components/settings/PermissionsSettings'));
-// Settings R3 (T1) — 网络/会话/关于 sections + the advanced dev-mode guard.
-const NetworkSettings = lazy(() => import('./components/settings/NetworkSettings'));
-const SessionSettings = lazy(() => import('./components/settings/SessionSettings'));
+// IA redesign 2026-10 (ADVERSARIAL-REVIEW §2) — 11 sections → 8. The merged
+// panes stack the original components (which stay untouched) behind group
+// headings; 网络/会话/远程 deep links redirect below.
+const GeneralPane = lazy(() => import('./pages/settings/GeneralPane'));
+const ConnectionsPane = lazy(() => import('./pages/settings/ConnectionsPane'));
+const PermissionsPane = lazy(() => import('./pages/settings/PermissionsPane'));
+// Settings R3 (T1) — 关于 section + the advanced dev-mode guard.
 const AboutSettings = lazy(() => import('./components/settings/AboutSettings'));
 const RequireDevMode = lazy(() => import('./components/settings/RequireDevMode'));
 
@@ -130,6 +134,31 @@ export function CompanionPromptBridge() {
   return null;
 }
 
+/**
+ * 批 1 启动时检查更新 — mount-point host for the one-shot launch update
+ * check (see lib/startupUpdateCheck). Non-intrusive by contract: at most
+ * the About pane's「发现新版本」toast, silence otherwise. Exported named
+ * for tests.
+ */
+export function StartupUpdateCheckHost() {
+  useEffect(() => {
+    void runStartupUpdateCheck();
+  }, []);
+  return null;
+}
+
+/**
+ * W10 audit §6-F — the `/` redirect must carry the query string along.
+ * A session window boots on `/?windowSession=<uuid>`; this redirect used to
+ * drop the query (`to="/chat"` resolves with an empty search), so a reload
+ * (F5/Ctrl+R) parsed a null `windowSession` and the same window degraded
+ * into full main-window form (sidebar back, pin lost). Exported for tests.
+ */
+export function RootRedirect() {
+  const location = useLocation();
+  return <Navigate to={{ pathname: '/chat', search: location.search }} replace />;
+}
+
 export default function App() {
   return (
     <I18nProvider>
@@ -146,6 +175,8 @@ export default function App() {
           <ArtifactLinkHost />
           {/* Office Wave 3 C3: companion Quick Capture prompts → composer drafts. */}
           <CompanionPromptBridge />
+          {/* 批 1: 启动时检查更新 (check-only, notify-only, once per run). */}
+          <StartupUpdateCheckHost />
           {/* B1-16: the route-level Suspense lives in Layout (around the
               Outlet) so lazy chunks no longer unmount the whole shell; this
               top-level boundary only exists for /welcome and stays null. */}
@@ -160,7 +191,8 @@ export default function App() {
                   navigates itself away mid-capture. */}
               <Route path="/companion" element={<CompanionPage />} />
               <Route element={<Layout />}>
-                <Route path="/" element={<Navigate to="/chat" replace />} />
+                {/* §6-F: RootRedirect keeps the query (windowSession) alive. */}
+                <Route path="/" element={<RootRedirect />} />
                 {/* Legacy route redirects — keep old bookmarks/links working. */}
                 <Route path="/strategic-focus" element={<Navigate to="/opc" replace />} />
                 <Route path="/agent-swarm" element={<Navigate to="/opc" replace />} />
@@ -203,18 +235,26 @@ export default function App() {
                 <Route path="/memory" element={<Memory />} />
                 <Route path="/timeline/:id" element={<TurnTimeline />} />
                 <Route path="/settings" element={<Settings />}>
-                  <Route index element={<Navigate to="general" replace />} />
-                  <Route path="general" element={<GeneralSettings />} />
+                  {/* Design 12-settings (parity R1 2026-10-08): the index
+                      lands on 模型 — BYOK is the app's core differentiator,
+                      so first visits meet provider keys, not generic prefs. */}
+                  <Route index element={<Navigate to="models" replace />} />
+                  {/* IA 2026-10 (ADVERSARIAL-REVIEW §2): 通用 absorbs 会话,
+                      连接 absorbs 远程执行 + 网络 — the panes stack the
+                      original components under group headings. */}
+                  <Route path="general" element={<GeneralPane />} />
                   <Route path="theme" element={<ThemeSettings />} />
                   <Route path="models" element={<ModelsSettings />} />
-                  <Route path="permissions" element={<PermissionsSettings />} />
-                  {/* Settings R3 (T1) — 网络/会话 skeletons + 关于 (absorbs
-                      the update check from the dev-gated 高级). */}
-                  <Route path="network" element={<NetworkSettings />} />
-                  <Route path="session" element={<SessionSettings />} />
+                  <Route path="permissions" element={<PermissionsPane />} />
+                  {/* Legacy deep links from the 11-section layout — keep
+                      bookmarks working by redirecting to the absorbing
+                      section (session defaults → 通用, remotes + network →
+                      连接). */}
+                  <Route path="network" element={<Navigate to="/settings/connections" replace />} />
+                  <Route path="session" element={<Navigate to="/settings/general" replace />} />
+                  <Route path="remotes" element={<Navigate to="/settings/connections" replace />} />
                   <Route path="notifications" element={<NotificationsSettings />} />
-                  <Route path="connections" element={<ConnectionsSettings />} />
-                  <Route path="remotes" element={<RemotesSettings />} />
+                  <Route path="connections" element={<ConnectionsPane />} />
                   <Route path="about" element={<AboutSettings />} />
                   {/* 高级 stays dev-only — deep links from a simple-mode
                       session redirect to General (RequireDevMode). */}

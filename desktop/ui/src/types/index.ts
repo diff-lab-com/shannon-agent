@@ -49,7 +49,12 @@ export interface UsagePayload {
   output_tokens: number
   cost_usd: number
   cache_hit_rate?: number
-  max_tokens?: number
+  /** 上下文峰值: the serving model's resolved context window for this frame
+   *  (config override > live num_ctx > providers.toml > model registry).
+   *  Absent when genuinely unknown — the UI hides any percentage rather
+   *  than fabricate a window (honesty contract). This replaces the old
+   *  `max_tokens?` field, which no Rust producer ever sent. */
+  context_total?: number
   /** P1-1: owner session for multi-window event filtering. */
   session_id?: string
 }
@@ -297,6 +302,11 @@ export interface SessionInfo {
   /** Settings R3 T7: user-pinned flag, joined from the curation sidecar.
    *  Absent on older engines — treat as false (unpinned). */
   pinned?: boolean
+  /** 上下文峰值: the session's running max known context window (L0
+   *  session-index peak, joined at `list_sessions` time) so the rail can
+   *  show the window a reopened session peaked at. Absent when no logged
+   *  turn knew its window — the UI hides the chip (honesty contract). */
+  max_context_tokens?: number
 }
 
 /** Session archive (卡A): one archived session as the sidebar's 已归档
@@ -809,6 +819,17 @@ export interface DesktopConfig {
    *  the backend never gates anything on it. Default true (missing key /
    *  old backend → shown). Written via `configure('suggestions.enabled')`. */
   suggestions_enabled?: boolean
+  /** 批 1: 启动时恢复会话窗口 — replay the persisted session-window set at
+   *  launch. Default true (missing key / old backend → current behavior);
+   *  read once at launch, so a flip lands on the NEXT launch. Written via
+   *  `configure('restore_session_windows_on_launch')`. */
+  restore_session_windows_on_launch?: boolean
+  /** 批 1: 启动时检查更新 — run ONE check-only GitHub Releases probe after
+   *  launch; an available update surfaces the About pane's「发现新版本」
+   *  toast. Notifies only — nothing is ever downloaded or installed
+   *  automatically. Default true; read once at launch. Written via
+   *  `configure('update_check_at_launch')`. */
+  update_check_at_launch?: boolean
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
@@ -1136,6 +1157,11 @@ export interface TaskItem {
   execution_mode?: 'serial' | 'parallel' | null
   /** Team / session subdir name the task file lives in. */
   team?: string | null
+  /** 看板金额: ledger-attributed spend (USD) of the producing agent session,
+   *  joined at `list_tasks` time when `team` is a real session uuid the
+   *  usage ledger has records for (possibly 0). Absent — never an estimate
+   *  — for hand-built/adhoc tasks; the card renders nothing when absent. */
+  cost_usd?: number
 }
 
 /// Payload for `update_task`. All fields optional except `id`.
@@ -1414,6 +1440,11 @@ export interface ScheduledRoutine {
   created_at: number
   last_fired?: number | null
   enabled: boolean
+  /// Why the routine was paused AUTOMATICALLY (R2-P2-C/P2-D). null/undefined
+  /// = running, or paused by hand; `"budget"` = the monthly budget was
+  /// reached at trigger time; `"consecutive_failures"` = 2 scheduled fires
+  /// failed in a row. Cleared server-side when the user re-enables.
+  pause_reason?: 'budget' | 'consecutive_failures' | null
   fire_count: number
   max_fires?: number | null
   policy?: ExecutionPolicy | null
@@ -1528,8 +1559,8 @@ export interface TriageStats {
 /// `session_failed` (the session's last turn failed), and `skill_candidate`
 /// (a detected skill pattern awaits review). `dream_report` is the daily
 /// dream-distillation summary card (at most one per day, deduped by the
-/// backend writer). `background_task` is a failed desktop background task
-/// (R2-P1-5) — successes/cancels never write an item.
+/// backend writer). `background_task` is a desktop background task that
+/// finished completed or failed (R2-P1-5) — user cancels never write an item.
 export type InboxSource =
   | 'routine'
   | 'scheduled_task'
@@ -1557,6 +1588,18 @@ export interface InboxItem {
   status: InboxItemStatus
   createdAtMs: number
   updatedAtMs: number
+  /// Design 05 收件箱审批闭环: for `session_approval` rows, the live
+  /// permission request id the card's inline 批准/拒绝 buttons answer via
+  /// `respondPermission`. `null` on every other source and on rows written
+  /// before the column existed (those keep the honest 「去处理」 jump).
+  requestId: string | null
+  /// Risk tier of the gated tool (`critical`/`high`/`medium`/`low`), for the
+  /// card's risk badge. `null` when unknown.
+  risk: string | null
+  /// Design 05 来源链: the routine run that produced this item — the card
+  /// renders 「来源 › … › #N · 时间」 (mono #N). `null` for non-run sources
+  /// and rows written before the column existed.
+  runId: number | null
 }
 
 /// Optional filters for `list_inbox_items`. All fields optional.
@@ -1570,6 +1613,17 @@ export interface InboxListFilter {
 export interface InboxStats {
   pending: number
   today: number
+}
+
+/// Response of `continue_inbox_item_session`: the linked session plus the
+/// item's recorded run result. Design 05 (审查 R1 §05) — resuming a session
+/// carries the result context, so the composer draft can be prefilled from
+/// `summary`; `error` rides along for failure cards. Both optional and
+/// absent on the wire for rows without run output (e.g. approval entries).
+export interface ContinueInboxSession {
+  sessionId: string
+  summary?: string
+  error?: string
 }
 
 /// Lightweight execution record for the history list.
@@ -1743,6 +1797,17 @@ export interface BatchDiffSummary {
   deletions: number
 }
 
+/// Per-branch verification facts (backend adds the field incrementally):
+/// `exitOk` = the branch's verification command exited 0; the test counts
+/// are best-effort extras parsed from its output. Missing field = data
+/// written before the field shipped — every consumer must conditionally
+/// render (no verification UI at all when no branch carries it).
+export interface BatchVerification {
+  exitOk: boolean
+  testsPassed?: number
+  testsTotal?: number
+}
+
 /// One parallel candidate branch (frozen backend contract).
 export interface BatchBranch {
   index: number
@@ -1752,10 +1817,14 @@ export interface BatchBranch {
   error: string | null
   summary: BatchDiffSummary | null
   spentUsd: number
+  verification?: BatchVerification
 }
 
 /// One best-of-N batch run (payload of `batch:updated`). `adoptedIndex` is
-/// additive: set once the batch is adopted.
+/// additive: set once the batch is adopted. `baseCommit` is additive too
+/// (设计 04b / 审查 R1 §4): the commit every branch diffs against, shown as
+/// the compare dialog's 「基线 <short>」 header — optional so payloads from
+/// an older backend keep rendering (total cost only).
 export interface BatchRunDto {
   batchId: string
   title: string
@@ -1765,6 +1834,7 @@ export interface BatchRunDto {
   createdAtMs: number
   branches: BatchBranch[]
   adoptedIndex: number | null
+  baseCommit?: string
 }
 
 // --- Event Names ---
@@ -1986,6 +2056,8 @@ export interface TimelineTurn {
 /** One cumulative sample on the token/cost curve (at each turn/end). */
 export interface TimelineCumulativePoint {
   ts_ns: number
+  /** C6: running input total across closed turns (0 on pre-field exports). */
+  input_tokens_total: number
   output_tokens_total: number
   cost_total_usd?: number | null
 }

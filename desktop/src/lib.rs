@@ -309,6 +309,10 @@ pub mod ask_user_handler;
 pub mod commands_rewind;
 pub mod commands_slash;
 
+// 2026-10-08 status bar (设计 02-chat 六段) — workspace facts (branch segment).
+#[cfg(feature = "tauri")]
+pub mod commands_workspace_info;
+
 #[cfg(feature = "tauri")]
 pub mod commands_plugins;
 
@@ -490,6 +494,12 @@ mod tests {
 /// commands (start/list/diff/adopt/discard) + the `batch:updated` source.
 #[cfg(feature = "tauri")]
 pub mod batch_commands;
+
+/// 04b — structured test-count extraction behind the batch verification
+/// card (strict final-summary-line parse; `None` = no data, never a guess).
+/// Gated with its only consumer.
+#[cfg(feature = "tauri")]
+pub(crate) mod test_verdict;
 
 /// P1-5 C-1 — dev-server preview: detect/start/stop/status/capture
 /// commands + the `PreviewManager` lifecycle owner (also backs the

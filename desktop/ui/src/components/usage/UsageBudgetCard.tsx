@@ -63,9 +63,21 @@ export default function UsageBudgetCard({
 
   return (
     <div className="bg-surface-container-low rounded-2xl border border-outline-variant/30 p-lg" data-testid="usage-budget-card">
-      <div className="flex items-center gap-xs mb-md">
+      <div className="flex items-center gap-xs mb-md flex-wrap">
         <span className="material-symbols-outlined icon-sm text-primary">savings</span>
         <h2 className="font-label-md font-bold text-on-surface">{t('usage.governance.cardTitle')}</h2>
+        {/* 设计 06 (审查 R1 §06): the cap behaviour is real — reaching the
+            monthly cap auto-pauses scheduled routines (pause_reason=budget)
+            and the chat asks — the page just never said so. Read-only chip:
+            the wording states the behaviour, it toggles nothing. */}
+        <span
+          data-testid="usage-budget-autopause-chip"
+          title={t('usage.governance.autoPauseChip')}
+          className="ml-auto inline-flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-lowest text-on-surface-variant font-label-xs text-label-xs"
+        >
+          <span className="material-symbols-outlined icon-sm text-warning" aria-hidden="true">pause_circle</span>
+          {t('usage.governance.autoPauseChip')}
+        </span>
       </div>
 
       {budgeted ? (

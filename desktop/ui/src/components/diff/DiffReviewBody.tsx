@@ -24,6 +24,10 @@ interface DiffReviewBodyProps {
   onClose: () => void
   /** Whether the host surface is live (modal open / dock tab active). */
   active: boolean
+  /** Aurora 2026-10 diff-review loop: notified whenever this file's hunk
+   *  decisions mutate — the dock's file-list sidebar subscribes to keep its
+   *  per-file status badges (accepted/partial counts) live. */
+  onDecisionsChange?: (decisions: Map<string, HunkDecision>) => void
 }
 
 function cycleDecision(d: HunkDecision): HunkDecision {
@@ -47,7 +51,7 @@ function asStructuredError(e: unknown): StructuredIpcError | null {
   return null
 }
 
-export default function DiffReviewBody({ filePath, onClose, active }: DiffReviewBodyProps) {
+export default function DiffReviewBody({ filePath, onClose, active, onDecisionsChange }: DiffReviewBodyProps) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, string | number>) =>
     intl.formatMessage({ id }, values)
@@ -188,6 +192,12 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
     }
   }
 
+  // Aurora 2026-10 diff-review loop: publish decisions upward so a hosting
+  // workbench (dock sidebar) can render live per-file statuses.
+  useEffect(() => {
+    onDecisionsChange?.(decisions)
+  }, [decisions, onDecisionsChange])
+
   // B4 P1-33: the keyboard cursor is now visual — DiffViewer rings the
   // current hunk's header and scrolls it into view (previously the id was
   // computed and discarded with `void`).
@@ -200,41 +210,78 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
     onApply: acceptedCount > 0 && !wholeFileDeletion ? handleApply : undefined,
   })
 
+  // Aurora 2026-10 (03 页 P2): review progress = accepted / total hunks —
+  // the primary-filled 5px bar under the header, replacing the bare n/m
+  // readout as the at-a-glance signal (n/m stays beside it).
+  const progressPct = hunks.length > 0
+    ? Math.min(100, Math.round((acceptedCount / hunks.length) * 100))
+    : 0
+
   return (
     <div ref={containerRef} className="flex flex-col flex-1 min-h-0">
       {diff && hasHunks && (
-        <div className="flex flex-wrap items-center gap-md px-lg py-sm border-b border-outline-variant/30 bg-surface-container-low">
-          <div className="flex-1 min-w-0">
-            <div className="font-label-md text-on-surface">{t('diff.review.title')}</div>
-            <div className="font-label-sm text-on-surface-variant">{t('diff.review.subtitle')}</div>
+        <div className="flex flex-col gap-xs px-lg py-sm border-b border-outline-variant/30 bg-surface-container-low">
+          <div className="flex flex-wrap items-center gap-md">
+            <div className="flex-1 min-w-0">
+              <div className="font-label-md text-on-surface">{t('diff.review.title')}</div>
+              <div className="font-label-sm text-on-surface-variant">{t('diff.review.subtitle')}</div>
+            </div>
+            <div className="flex items-center gap-xs shrink-0">
+              <span className="font-label-sm text-on-surface-variant">
+                {decidedCount} / {hunks.length}
+              </span>
+              <Button
+                size="sm"
+                onClick={handleAcceptAll}
+                className="h-auto px-md py-xs rounded-lg font-label-md bg-primary-container/40 text-on-primary-container hover:bg-primary-container/60"
+              >
+                {t('diff.review.acceptAll')}
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleRejectAll}
+                className="h-auto px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error-container/60"
+              >
+                {t('diff.review.rejectAll')}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={handleReset}
+                disabled={decidedCount === 0}
+                className="h-auto px-md py-xs rounded-lg font-label-md"
+              >
+                {t('diff.review.resetAll')}
+              </Button>
+            </div>
           </div>
-          <div className="flex items-center gap-xs shrink-0">
-            <span className="font-label-sm text-on-surface-variant">
-              {decidedCount} / {hunks.length}
+          {/* Aurora 2026-10 (03 页 评审进度): primary-filled 5px progress bar
+              (accepted / total hunks) + the j/k/a/r/u keyboard map — the
+              shortcuts existed in useDiffKeyboard but never surfaced. */}
+          <div className="flex items-center gap-md min-w-0">
+            <div
+              role="progressbar"
+              aria-label={t('diff.review.progress', { accepted: acceptedCount, total: hunks.length })}
+              aria-valuemin={0}
+              aria-valuemax={hunks.length}
+              aria-valuenow={acceptedCount}
+              data-testid="diff-review-progress"
+              className="flex-1 min-w-0 h-[5px] rounded-full bg-surface-container-high overflow-hidden"
+            >
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-(--duration-normal)"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+            <span className="font-label-xs text-on-surface-variant tabular-nums whitespace-nowrap shrink-0">
+              {t('diff.review.progress', { accepted: acceptedCount, total: hunks.length })}
             </span>
-            <Button
-              size="sm"
-              onClick={handleAcceptAll}
-              className="h-auto px-md py-xs rounded-lg font-label-md bg-tertiary-container/40 text-tertiary hover:bg-tertiary-container/60"
-            >
-              {t('diff.review.acceptAll')}
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleRejectAll}
-              className="h-auto px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error-container/60"
-            >
-              {t('diff.review.rejectAll')}
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={handleReset}
-              disabled={decidedCount === 0}
-              className="h-auto px-md py-xs rounded-lg font-label-md"
-            >
-              {t('diff.review.resetAll')}
-            </Button>
+          </div>
+          <div
+            data-testid="diff-review-keys"
+            className="font-label-xs text-on-surface-variant/80 whitespace-nowrap overflow-x-auto"
+          >
+            {t('diff.review.keys')}
           </div>
         </div>
       )}

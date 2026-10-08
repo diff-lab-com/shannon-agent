@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom'
 import Usage from '@/pages/Usage'
 import { AppProvider } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
-import type { UsageStats } from '@/types'
+import type { SessionUsageRow, UsageStats } from '@/types'
 
 const bucket = {
   input_tokens: 1000,
@@ -54,7 +54,9 @@ describe('Usage page', () => {
     })
     // Overview is the default surface — assert the chart titles, not the
     // audit-mode table headers.
-    expect(screen.getByText('Daily tokens')).toBeInTheDocument()
+    // F-4 (ui-redesign 06): the byDay chart title follows the selected
+    // range (default 30) — "Daily tokens · 30 days".
+    expect(screen.getByText('Daily tokens · 30 days')).toBeInTheDocument()
     expect(screen.getByText('Tokens by provider')).toBeInTheDocument()
     // 2024-01-02 still appears in the chart's x-axis labels (MM-DD slice).
     expect(screen.getByText('01-02')).toBeInTheDocument()
@@ -104,5 +106,78 @@ describe('Usage page', () => {
 
     fireEvent.click(screen.getByText('7 days'))
     await waitFor(() => expect(api.getUsageStats).toHaveBeenCalledWith(7))
+  })
+
+  // F-4 (ui-redesign 06): the byDay chart title must match the active
+  // range filter — switching 30 → 7 updates the title text, not just the
+  // data behind it.
+  it('updates the byDay chart title when the range filter changes', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    renderUsage()
+
+    await waitFor(() => {
+      expect(screen.getByText('Daily tokens · 30 days')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByText('7 days'))
+    await waitFor(() => {
+      expect(screen.getByText('Daily tokens · 7 days')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Daily tokens · 30 days')).not.toBeInTheDocument()
+  })
+
+  // 设计 06 (审查 R1 §06): the derived KPI pair — today's spend from the
+  // local-day bucket (fixture has none for today → $0.00 is the honest
+  // reading) and the cache hit rate from the frozen formula
+  // cache_read / (cache_read + input) = 50/1050 ≈ 4.8%.
+  it('renders the derived Today-spend and Cache-hit-rate KPI cards', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    renderUsage()
+
+    await waitFor(() => expect(screen.getByTestId('usage-stat-cache-hit-rate')).toBeInTheDocument())
+    expect(screen.getByTestId('usage-stat-cache-hit-rate')).toHaveTextContent('4.8%')
+    expect(screen.getByTestId('usage-stat-today-cost')).toHaveTextContent('$0.00')
+  })
+
+  // 设计 06: the daily chart carries the Token/成本 metric toggle — the
+  // cost metric renames the card to its own title so title = data.
+  it('switches the daily chart between the Token and cost metric', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    renderUsage()
+
+    await waitFor(() => expect(screen.getByText('Daily tokens · 30 days')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Cost' }))
+    await waitFor(() => expect(screen.getByText('Daily cost · 30 days')).toBeInTheDocument())
+    expect(screen.queryByText('Daily tokens · 30 days')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Tokens' }))
+    await waitFor(() => expect(screen.getByText('Daily tokens · 30 days')).toBeInTheDocument())
+  })
+
+  // 设计 06: 按会话明细回到总览 — the overview previews the top 8 session
+  // rows and honestly truncates with a pointer to the Audit view.
+  it('previews the top 8 sessions in the overview with the audit hint', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    const rows: SessionUsageRow[] = Array.from({ length: 11 }, (_, i) => ({
+      sessionId: `sess-${i}`,
+      title: `Session ${i}`,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      costUsd: 0.1 * i,
+      requests: 1,
+      lastUsedAtMs: 1_700_000_000_000,
+    }))
+    vi.mocked(api.getUsageBySession).mockResolvedValue(rows)
+    renderUsage()
+
+    const preview = await screen.findByTestId('usage-session-preview')
+    for (let i = 0; i < 8; i++) {
+      expect(preview).toHaveTextContent(`Session ${i}`)
+    }
+    expect(preview).not.toHaveTextContent('Session 8')
+    expect(screen.getByTestId('usage-session-preview-hint')).toHaveTextContent(
+      'Showing first 8 sessions',
+    )
   })
 })

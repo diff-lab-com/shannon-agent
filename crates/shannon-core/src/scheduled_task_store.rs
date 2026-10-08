@@ -586,6 +586,90 @@ mod tests {
         assert!(reloaded.enabled_at.is_some(), "stamped field persisted");
     }
 
+    // ── pause_reason (R2-P2-C/P2-D) ──────────────────────────────────────
+
+    /// The auto-pause reason survives a save/load roundtrip, and a MANUAL
+    /// re-enable (`set_enabled(true)`) clears it — the exact transition the
+    /// desktop toggle command performs. A redundant re-enable on an
+    /// already-enabled routine never invents a clear (there is nothing to
+    /// clear).
+    #[test]
+    fn pause_reason_roundtrips_and_manual_reenable_clears_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ScheduledTaskStore::with_base(tmp.path().to_path_buf());
+
+        // The executor's auto-pause path: flip + reason off `set_enabled`.
+        let mut routine = ScheduledRoutine::new("Flaky".into(), "p".into(), 60);
+        routine.enabled = false;
+        routine.pause_reason = Some("consecutive_failures".into());
+        store.save(&routine).unwrap();
+
+        let mut loaded = store.load(&routine.id).unwrap().unwrap();
+        assert_eq!(
+            loaded.pause_reason.as_deref(),
+            Some("consecutive_failures"),
+            "the reason is persisted on the routine record"
+        );
+        assert!(!loaded.enabled);
+
+        // Manual re-enable (toggle_scheduled_task → set_enabled(true)):
+        // clears the reason and stamps the enabled zero point.
+        loaded.set_enabled(true);
+        assert!(loaded.pause_reason.is_none(), "re-enable clears the reason");
+        assert!(loaded.enabled_at.is_some());
+        store.save(&loaded).unwrap();
+        let reloaded = store.load(&routine.id).unwrap().unwrap();
+        assert!(reloaded.enabled);
+        assert!(reloaded.pause_reason.is_none(), "cleared for good");
+
+        // The other auto-pause reason value roundtrips just the same.
+        let mut budgeted = ScheduledRoutine::new("Budgeted".into(), "p".into(), 60);
+        budgeted.enabled = false;
+        budgeted.pause_reason = Some("budget".into());
+        store.save(&budgeted).unwrap();
+        assert_eq!(
+            store
+                .load(&budgeted.id)
+                .unwrap()
+                .unwrap()
+                .pause_reason
+                .as_deref(),
+            Some("budget")
+        );
+    }
+
+    /// A `task.json` written before `pause_reason` existed must keep loading
+    /// (`None` = running / manually paused — the additive-field migration,
+    /// same as `enabled_at` / `notify_webhook`).
+    #[test]
+    fn task_json_without_pause_reason_loads_with_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ScheduledTaskStore::with_base(tmp.path().to_path_buf());
+
+        let legacy_task_json = r#"{
+            "id": "abc12345",
+            "name": "Legacy Task",
+            "prompt": "p",
+            "interval_secs": 60,
+            "trigger_type": "interval",
+            "created_at": "2026-01-01T00:00:00Z",
+            "last_fired": null,
+            "enabled": false,
+            "fire_count": 0
+        }"#;
+        let task_dir = tmp.path().join("legacy-task-abc12345");
+        std::fs::create_dir_all(&task_dir).unwrap();
+        std::fs::write(task_dir.join("SKILL.md"), "p").unwrap();
+        std::fs::write(task_dir.join("task.json"), legacy_task_json).unwrap();
+
+        let routine = store.load("abc12345").unwrap().unwrap();
+        assert!(!routine.enabled);
+        assert_eq!(
+            routine.pause_reason, None,
+            "pre-field record reads as manually paused, never auto-paused"
+        );
+    }
+
     #[test]
     fn test_list_empty_when_no_dir() {
         let tmp = tempfile::tempdir().unwrap();

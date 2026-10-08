@@ -85,9 +85,20 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // Dark-first default (UI audit §2.5: all four competitors ship dark as the
   // default or flagship look). Users who picked a theme keep theirs via
   // localStorage; 'system' still resolves per OS preference.
+  //
+  // One-time migration (2026-10-08 review round): stored 'material' is mostly
+  // a pre-dark-default leftover persisted by earlier builds, not a considered
+  // pick — flip it to 'tokyo-night' once, behind a flag, so an explicit
+  // choice made AFTER this migration still sticks.
   const [theme, setThemeState] = useState<ThemeName>(() => {
     if (typeof window !== 'undefined') {
-      return (localStorage.getItem('shannon-theme') as ThemeName) || 'tokyo-night'
+      const MIGRATION_KEY = 'shannon.theme.darkDefaultMigrated'
+      const stored = localStorage.getItem('shannon-theme') as ThemeName | null
+      if (stored === 'material' && !localStorage.getItem(MIGRATION_KEY)) {
+        localStorage.setItem(MIGRATION_KEY, '1')
+        return 'tokyo-night'
+      }
+      return stored || 'tokyo-night'
     }
     return 'tokyo-night'
   })

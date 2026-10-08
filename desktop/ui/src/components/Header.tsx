@@ -16,8 +16,6 @@ import * as api from '@/lib/tauri-api';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { toastError } from '@/lib/errorToast';
 import { useSessionBudget } from '@/hooks/useSessionBudget';
-import { ExecutionModeSwitcher } from '@/components/chat/ExecutionModeSwitcher';
-import { PhaseTierSwitcher } from '@/components/chat/PhaseTierSwitcher';
 import AskUserCard from '@/components/chat/AskUserCard';
 import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow';
 import { modelWhyFor, type ModelWhyContext } from '@/lib/modelWhy';
@@ -236,6 +234,17 @@ export function Header() {
   const { budget: sessionBudget, usage: sessionUsage } = useSessionBudget(chatSessionId);
   const isOpcTask = location.pathname.includes('/opc/task');
 
+  // Terminal drawer toggle reflection: the drawer lives on the chat page and
+  // owns its open state (drawer-only, Ctrl+` too); the Header button mirrors
+  // it through the open-changed window event (TerminalPanel broadcasts it).
+  const [terminalPanelOpen, setTerminalPanelOpen] = useState(false);
+  useEffect(() => {
+    const onOpenChanged = (e: Event) =>
+      setTerminalPanelOpen(Boolean((e as CustomEvent<{ open?: boolean }>).detail?.open));
+    window.addEventListener('shannon:terminal-open-changed', onOpenChanged);
+    return () => window.removeEventListener('shannon:terminal-open-changed', onOpenChanged);
+  }, []);
+
   // Decision 1 (review P1-2 / B1-8): the config's `model` key stores the
   // catalog ID. The old "U2 config stores the name" convention is retired —
   // `provider_resolver` passes the stored string through as the API `model`
@@ -352,6 +361,23 @@ export function Header() {
               </span>
             </Button>
           )}
+          {/* Terminal drawer toggle (2026-10-08 review: the drawer's only
+              entry points were a bottom-corner pill and Ctrl+`, which read as
+              "no terminal entry point" — the top bar now carries the toggle,
+              mirroring the ContextPanel button). The drawer owns its state;
+              the click rides the same window-event seam as Ctrl+`. */}
+          {isChat && (
+            <Button
+              variant="ghost"
+              aria-label={t('terminal.panel.toggle')}
+              title={`${t('terminal.panel.toggle')} (Ctrl+\`)`}
+              aria-pressed={terminalPanelOpen}
+              className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+              onClick={() => window.dispatchEvent(new CustomEvent('shannon:terminal-toggle'))}
+            >
+              <span className="material-symbols-outlined icon-md" aria-hidden="true">terminal</span>
+            </Button>
+          )}
           {/* P0-4: spent/budget badge while the session has a budget cap */}
           {isChat && sessionBudget != null && sessionBudget > 0 && (
             <span
@@ -378,13 +404,12 @@ export function Header() {
               {(sessionUsage?.cost_usd ?? 0).toFixed(2)} / ${sessionBudget.toFixed(2)}
             </span>
           )}
-          {/* P1-3: execution-mode switcher (严格/平衡/宽松/自定义) — chat
-              header only, kept next to the model selector. */}
-          {isChat && <ExecutionModeSwitcher />}
-          {/* R3-3: plan/act model-tier pair (规划/执行档位) — chat header
-              only. Global preference; per-session overrides (R2-1) always
-              win over it. */}
-          {isChat && <PhaseTierSwitcher />}
+          {/* Aurora redesign 2026-10 (02-chat.html 三要素归位): the execution
+              mode + plan/act tier switchers moved OUT of the chat Header into
+              the composer's compose row (ChatInput) — the header keeps only
+              the ContextPanel toggle and the budget badge on /chat, and the
+              model selector stays the non-chat-only surface. The switchers'
+              testids are unchanged (e2e anchors by testid, not container). */}
           {/* Model selector — non-chat pages only: on /chat the composer
               model chip is the single surface (issue: 三处模型名重复).
               Both write the same config keys, so switching stays in sync.
@@ -475,13 +500,15 @@ export function Header() {
                 <p className="text-body-sm text-on-surface-variant">{t('header.permRequest.subtitle')}</p>
               </div>
               {/* U3: four distinguishable risk tiers — critical=error,
-                  high=secondary, medium=tertiary, low=tertiary — with a
+                  high=secondary, medium=warning (Aurora 2026-10 语义色归位:
+                  amber is the high-risk signal), low=tertiary — with a
                   localized, screen-reader-visible label. */}
               <span
                 aria-label={t('header.permRequest.risk.aria', { level: t(`header.permRequest.risk.${permissionRequest.risk}`) })}
                 className={cn('px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider',
                   permissionRequest.risk === 'critical' ? 'bg-error-container text-on-error-container' :
                   permissionRequest.risk === 'high' ? 'bg-secondary-container text-on-secondary-container' :
+                  permissionRequest.risk === 'medium' ? 'bg-warning-container text-on-warning-container' :
                   'bg-tertiary-container text-on-tertiary-container'
                 )}>{t(`header.permRequest.risk.${permissionRequest.risk}`)}</span>
             </div>

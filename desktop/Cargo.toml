@@ -12,6 +12,12 @@ homepage = "https://github.com/diff-lab-com/shannon-agent"
 [features]
 default = ["tauri", "preview-capture"]
 tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-opener", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
+# Production embed: plain `cargo build --release` must enable this or the
+# binary embeds NO frontend and loads build.devUrl (tauri.conf.json) — a
+# release app run without a dev server on :1420 shows WebKit's "Could not
+# connect to localhost". The tauri CLI passes it automatically for
+# `tauri build`; direct cargo callers opt in here (just build-desktop does).
+custom-protocol = ["tauri/custom-protocol"]
 # P1-5 C-1 — native window/monitor screenshot capture backing
 # `preview_capture` / the `preview_screenshot` engine tool (xcap, the same
 # capture path the computer-use tool uses). Opt-out for CI matrices that
@@ -82,6 +88,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 axum = { workspace = true }
 dashmap = "6.1"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+# Pairing-RPC TLS fingerprint pinning (gateway_pairing): the custom
+# ServerCertVerifier needs rustls named directly. Same 0.23/ring the
+# workspace already locks via tokio-tungstenite / rustls-connector — no new
+# package, only features unioned.
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 sha2 = "0.10"
 rand = "0.8"
 qrcode = "0.14"
@@ -155,6 +166,7 @@ tower = { version = "0.5", features = ["util"] }
 # Enables `tauri::test::mock_app()` for the supervisor E2E test (cfg(test) alone
 # doesn't reach the tauri dependency crate). `test` is an empty gate feature.
 tauri = { version = "2", features = ["test"] }
+serial_test = "3.5.0"
 
 [build-dependencies]
 tauri-build = { version = "2", optional = true, features = [] }

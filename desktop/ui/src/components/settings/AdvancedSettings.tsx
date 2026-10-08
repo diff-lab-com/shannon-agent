@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { useNavigate, NavLink } from 'react-router-dom'
 import { getVersion } from '@tauri-apps/api/app'
 import { homeDir, join } from '@tauri-apps/api/path'
-import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -43,13 +42,14 @@ export default function AdvancedSettings() {
   // start inside their off-peak execution window. Empty input = disabled.
   const [offpeakModel, setOffpeakModel] = useState(config?.offpeak?.model_override ?? '')
   const [savingOffpeak, setSavingOffpeak] = useState(false)
-  const [clearing, setClearing] = useState(false)
   const [resetting, setResetting] = useState(false)
   // P2: the real app version (the old "System Logs" modal hardcoded v0.1.0).
   const [appVersion, setAppVersion] = useState<string | null>(null)
   const [showApiKeys, setShowApiKeys] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
-  const [showClearConfirm, setShowClearConfirm] = useState(false)
+  // Design-parity R1 (2026-10-08): 清除会话缓存 moved to the general pane's
+  // 数据 card (普通用户不可达 here — this page is dev-gated). Flow lives in
+  // GeneralPane now; only the factory-reset confirm remains on this page.
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => { /* jsdom / denied ACL — show no version */ })
@@ -147,12 +147,6 @@ export default function AdvancedSettings() {
       toastError(t('settings.advanced.updateFailed'), e)
       refreshConfig().catch(() => {})
     }
-  }
-
-  const handleClearCache = async () => {
-    setClearing(true)
-    try { await api.configure({ key: 'clear_cache', value: 'true' }); toast.success(t('settings.advanced.cacheCleared')) } catch (e) { toastError(t('settings.advanced.clearCacheFailed'), e) }
-    setClearing(false)
   }
 
   const handleFactoryReset = async () => {
@@ -373,14 +367,6 @@ export default function AdvancedSettings() {
               </div>
               <Switch checked={memoryEnabled} onCheckedChange={v => handleToggle('memory_enabled', v, setMemoryEnabled)} className="shrink-0" aria-label={t('settings.advanced.longTermMemory')} />
             </div>
-            <Button
-              className="w-full py-md border border-outline-variant/50 rounded-xl text-on-surface font-label-md font-bold text-body-sm hover:bg-surface-container-low transition-colors active:scale-[0.99] cursor-pointer"
-              onClick={() => setShowClearConfirm(true)}
-              disabled={clearing}
-            >
-              {clearing ? <Spinner className="mr-sm text-body-lg" /> : null}
-              {clearing ? t('settings.advanced.clearing') : t('settings.advanced.clearSessionCache')}
-            </Button>
           </div>
         </div>
 
@@ -607,19 +593,6 @@ export default function AdvancedSettings() {
           </Button>
         </div>
       </Modal>
-
-      {/* Clear Cache Confirmation */}
-      <ConfirmDialog
-        open={showClearConfirm}
-        title={t('settings.advanced.clearSessionCache')}
-        message={t('settings.advanced.clearDesc')}
-        confirmLabel={t('settings.advanced.clearCache')}
-        busyLabel={t('settings.advanced.clearing')}
-        cancelLabel={t('settings.advanced.cancel')}
-        busy={clearing}
-        onConfirm={handleClearCache}
-        onCancel={() => setShowClearConfirm(false)}
-      />
 
       {/* Factory Reset Confirmation */}
       <ConfirmDialog

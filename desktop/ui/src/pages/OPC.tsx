@@ -56,7 +56,13 @@ export default function OPC() {
   return (
     <div className="flex-1 w-full bg-background overflow-y-auto h-full px-lg py-xl">
       <div className="max-w-wide mx-auto animate-in fade-in duration-(--duration-slower)">
-        <OPCMissionFocus config={config} />
+        {/* ui-redesign 09 pagehead: the H1 lives in the app Header (TITLE_MAP);
+            the page contributes the muted subtitle line above the tabs. */}
+        <p className="font-label-sm text-label-sm text-on-surface-variant mb-md">
+          {intl.formatMessage({ id: 'opc.subtitle' })}
+        </p>
+
+        <OPCMissionFocus config={config} tasks={tasks} />
 
         {/* P2-8 — 看板 / 运行 view tabs. Radiogroup semantics: the two views
             are mutually exclusive page states, not links. */}

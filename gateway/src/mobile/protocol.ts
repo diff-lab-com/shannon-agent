@@ -18,6 +18,8 @@
  * Source of truth: `shannon-desktop/claudedocs/mobile-host-architecture.md` §5.2.
  */
 
+import type { RosterAgent } from "./agentRoster.js";
+
 export const JSONRPC_VERSION = "2.0" as const;
 
 /**
@@ -51,7 +53,8 @@ export type ShannonMethod =
   | "shannon/trust.revoke"
   | "shannon/session.list"
   | "shannon/session.history"
-  | "shannon/push.register";
+  | "shannon/push.register"
+  | "shannon/usage.budget";
 
 /**
  * Runtime mirror of [ShannonMethod] — the SINGLE SOURCE both the type above
@@ -85,6 +88,7 @@ export const SHANNON_METHODS = [
   "shannon/session.list",
   "shannon/session.history",
   "shannon/push.register",
+  "shannon/usage.budget",
 ] as const satisfies readonly ShannonMethod[];
 
 // Compile-time guard: every member of the union is present in the runtime
@@ -162,9 +166,15 @@ export interface AgentDetailParams {
 /**
  * `shannon/task.dispatch` (cross-repo spec §K1) — send a prompt through the
  * IM-style inbound pipeline (per-device lane → approval loop → structured
- * task stream). `agent_id` is accepted on the wire but this host has NO agent
- * roster (`shannon/agent.list` is an empty stub), so ANY non-empty value is
+ * task stream). B0: `agent_id` names a CONFIGURED agent — validated against
+ * the host roster (`shannon/agent.list`, `~/.shannon/agents/*.toml`); a hit
+ * is accepted and recorded as the task's attribution, anything else is
  * rejected with INVALID_PARAMS rather than silently routed elsewhere.
+ *
+ * Boundary: the engine has NO per-agent routing face — the recorded agent_id
+ * never changes what executes (the turn still runs as the default engine);
+ * it only says "this configured agent owns the task" (wire task object +
+ * `shannon/session.list` enrichment).
  */
 export interface TaskDispatchParams {
   prompt: string;
@@ -362,6 +372,55 @@ export interface UsageFrame {
   cost_usd: number;
 }
 
+// ── P2-9: agent.state push (gateway → phone, roster live status) ────────────
+
+/**
+ * One agent map inside a `shannon/agent.state` notification (P2-9). This is
+ * NOT a `shannon/event` type — the phone consumes a dedicated notification
+ * METHOD (`shannon/agent.state`, shannon-mobile `Notifications.agentState`)
+ * whose params are `{agent: {...}}`, parsed by `agentFromMap`
+ * (lib/src/live/protocol_mapper.dart). The mock server's broadcast
+ * (`{'agent': {...agent, 'status': ...}}`) is the wire's reference shape.
+ *
+ * Field names follow THAT mapper (the only consumer), not the gateway-wide
+ * snake_case rule: `currentTask` is camelCase on this face, `id`/`name`/
+ * `status`/`activity` carry the same keys `shannon/agent.list` serves. The
+ * map must be the FULL roster shape — the phone's consumer REPLACES the
+ * matching roster entry wholesale (unknown ids are ADDED), so a minimal
+ * `{id, status}` push would visibly degrade `name`/`role`/`model` on the
+ * Fleet screen. `role`/`model` stay optional exactly like `agent.list`
+ * (omitted when the definition doesn't declare them).
+ */
+export interface MobileAgentState {
+  /** The roster agent id (the `~/.shannon/agents/*.toml` `name`). */
+  id: string;
+  /** Same string as `id` (roster convention — `agent.list` serves it so). */
+  name: string;
+  /** The definition's description — omitted when absent/empty. */
+  role?: string;
+  /** The definition's model — omitted when absent/empty. */
+  model?: string;
+  /** Live status: `"running"` from task acceptance, `"idle"` at a terminal. */
+  status: "running" | "idle";
+  /** Kept for shape parity with `agent.list` (always empty today). */
+  activity: string[];
+  /** The task text while running; explicitly `null` once idle. */
+  currentTask: string | null;
+}
+
+/**
+ * The P2-9 notification frame. Deliberately seq-free and outside the §O4
+ * replay ring: the phone's `agent.state` consumer reads no cursor, and
+ * ephemeral roster status must not replay through the `shannon/event`
+ * resume path — the Fleet screen re-converges via `shannon/agent.list` on
+ * its next (re)bind.
+ */
+export interface AgentStateNotification {
+  jsonrpc: typeof JSONRPC_VERSION;
+  method: "shannon/agent.state";
+  params: { agent: MobileAgentState };
+}
+
 // ── Result shapes ──────────────────────────────────────────────────────────
 
 export interface HealthResult {
@@ -375,8 +434,17 @@ export interface ModelListResult {
   current: string | null;
 }
 
+/**
+ * `shannon/agent.list` — the host's configured agent roster (B0, v2.3). One
+ * entry per parseable `~/.shannon/agents/*.toml` definition; `status` is the
+ * fixed "idle" and `activity` the always-empty placeholder (configured
+ * agents, not live processes). The previous `{session_id, platform, active}`
+ * element shape was a mock-era leftover that no mobile mapper ever consumed —
+ * replaced outright in v2.3 (intentional contract correction, not additive:
+ * the old keys were never produced by the real gateway).
+ */
 export interface AgentListResult {
-  agents: { session_id: string; platform: string; active: boolean }[];
+  agents: RosterAgent[];
 }
 
 /** `shannon/pair` / `shannon/device.resume` success — the connection is now bound. */
@@ -400,8 +468,17 @@ export interface OkResult {
 /**
  * One dispatched task on the wire (spec §K1/K2). `id` is the primary key AND
  * the task thread's conversation key (§K3: the `session_id` the task's
- * `task.progress` / `task.message` events carry). `agent_id` is always null
- * on this host (no agent roster); `created_at` is ISO-8601 UTC.
+ * `task.progress` / `task.message` events carry). B0: `agent_id` is the
+ * roster agent the task was dispatched under (validated against
+ * `shannon/agent.list` at accept time), or null when the dispatch carried
+ * none — attribution only, not engine routing (see `TaskDispatchParams`);
+ * `created_at` is ISO-8601 UTC.
+ *
+ * B1a (v2.3 additive): three optional keys return — `title` rides whenever
+ * the internal task title is non-empty, `finished_at` (ISO-8601 UTC) only
+ * once the record is terminal, `error` only on `status: "failed"` with a
+ * non-null error. All three may be absent; consumers of the legacy five-key
+ * shape keep working.
  */
 export interface MobileTaskRecord {
   id: string;
@@ -409,6 +486,12 @@ export interface MobileTaskRecord {
   status: "running" | "completed" | "failed";
   agent_id: string | null;
   created_at: string;
+  /** B1a (additive): the task title — present whenever non-empty. */
+  title?: string;
+  /** B1a (additive): ISO-8601 UTC terminal instant — only once finished. */
+  finished_at?: string;
+  /** B1a (additive): the failure reason — only on failed tasks with an error. */
+  error?: string;
 }
 
 /** `shannon/task.dispatch` success — the task object, synchronously, before any event. */
@@ -542,6 +625,26 @@ export interface SessionHistoryResult {
   messages: MobileSessionMessage[];
   /** True when older messages exist beyond this page (spec §J2 pagination). */
   hasMore: boolean;
+}
+
+/**
+ * `shannon/usage.budget` (B2, v2.3) — read-only month-to-date budget
+ * snapshot, mirroring the desktop's Usage-governance numbers (camelCase keys,
+ * same `usage_governance.rs` window convention).
+ *
+ * Boundary (deliberate): the ledger only records DESKTOP engine sessions —
+ * gateway/mobile-side task spend is not written there yet, so `monthCostUsd`
+ * is a LOWER bound of real spend, never an overstatement.
+ */
+export interface UsageBudgetResult {
+  /** Local-calendar month key, `"%Y-%m"`. */
+  month: string;
+  /** Month-to-date USD spend summed from `~/.shannon/usage.jsonl` (lower bound — see above). */
+  monthCostUsd: number;
+  /** User-set monthly budget from `~/.shannon/desktop/config.json`; null when unset/not a number. */
+  budgetUsd: number | null;
+  /** v1: always null — per-session caps live in session sidecars (not read). Forward-compat placeholder. */
+  sessionCapUsd: null;
 }
 
 // ── T9: desktop pairing-approval shapes ────────────────────────────────────

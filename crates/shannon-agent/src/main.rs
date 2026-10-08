@@ -244,6 +244,25 @@ async fn main() {
 
     tracing::info!(name = %args.name, "Agent process starting");
 
+    // Honor `--workdir`: the flag was parsed but never applied, so a direct
+    // invocation ran in the caller's cwd with no warning. Matches how
+    // `shannon --team-agent` applies the same flag (canonicalize + chdir).
+    if let Some(ref workdir) = args.workdir {
+        match std::fs::canonicalize(workdir) {
+            Ok(canonical) => {
+                if let Err(e) = std::env::set_current_dir(&canonical) {
+                    eprintln!("shannon-agent: --workdir '{}': {e}", canonical.display());
+                    std::process::exit(1);
+                }
+                tracing::info!(workdir = %canonical.display(), "Agent working directory set");
+            }
+            Err(e) => {
+                eprintln!("shannon-agent: --workdir '{workdir}': {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Send agent_ready notification
     let ready_params = serde_json::to_value(AgentReadyParams {
         agent_name: args.name.clone(),

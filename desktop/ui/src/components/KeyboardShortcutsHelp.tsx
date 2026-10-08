@@ -101,7 +101,7 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
               onChange={e => setQuery(e.target.value)}
               placeholder={t('shortcutsHelp.search')}
               aria-label={t('shortcutsHelp.search')}
-              className="flex-1 bg-transparent border-none outline-none text-body-sm text-on-surface placeholder:text-outline-variant"
+              className="flex-1 bg-transparent border-none outline-none text-body-sm text-on-surface placeholder:text-on-surface-variant/70"
             />
           </div>
         </div>

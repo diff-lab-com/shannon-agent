@@ -73,6 +73,7 @@ pub fn effective_sandbox_providers(
                 )),
                 denial_classifier: None,
                 world_sandbox: base.world_sandbox.clone(),
+                sandbox_assembled: true,
             }))
         }
         SandboxMode::Landlock => {

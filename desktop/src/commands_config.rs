@@ -475,6 +475,14 @@ fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Resu
         // gates anything on it — the UI reads it live for the completion
         // chips + welcome-card refresh/filter, so a flip is immediate.
         "suggestions.enabled" => cfg.suggestions_enabled = enabled,
+        // 批 1: launch-behavior switches. Both are read ONCE at app start —
+        // `restore_session_windows_on_launch` gates the setup-hook session
+        // restore, `update_check_at_launch` gates the UI's one-shot
+        // check-only GitHub Releases probe — so a flip lands on the NEXT
+        // launch (the UI badges the card restart-app). Persist-only here,
+        // like `hardware_acceleration`.
+        "restore_session_windows_on_launch" => cfg.restore_session_windows_on_launch = enabled,
+        "update_check_at_launch" => cfg.update_check_at_launch = enabled,
         other => return Err(format!("Unrecognized boolean key: {other}")),
     }
     Ok(())
@@ -1322,39 +1330,44 @@ const OLLAMA_DEFAULT_ENDPOINT: SocketAddr =
 #[derive(Debug, Clone)]
 struct CachedEnvProvider {
     observed_at: Instant,
-    value: Option<DetectedProvider>,
+    value: Vec<DetectedProvider>,
 }
 
 static ENV_PROVIDER_CACHE: Mutex<Option<CachedEnvProvider>> = Mutex::new(None);
 
-/// Read the provider-relevant env vars only (no socket probing). First API
-/// key match wins — the order mirrors the Welcome wizard's
-/// recommended-provider ranking. An `OLLAMA_HOST` that is set at all (any
-/// value) counts as an Ollama configuration, matching the engine's own
-/// env handling.
-fn scan_env_provider() -> Option<DetectedProvider> {
+/// Read the provider-relevant env vars only (no socket probing). ALL API-key
+/// matches are collected in the Welcome wizard's recommended-provider
+/// ranking order (2026-10-08: the Welcome badge lists every detected key —
+/// 缓期 #10 — instead of the previous first-match-wins). An `OLLAMA_HOST`
+/// that is set at all (any value) counts as an Ollama configuration, matching
+/// the engine's own env handling; it is appended only when no key matched
+/// (the single-provider semantic the gating consumer relies on is preserved
+/// by `detect_env_provider` taking the first entry).
+fn scan_env_provider() -> Vec<DetectedProvider> {
     const CANDIDATES: &[(&str, &str)] = &[
         ("ANTHROPIC_API_KEY", "anthropic"),
         ("OPENAI_API_KEY", "openai"),
         ("DEEPSEEK_API_KEY", "deepseek"),
     ];
-    for (env_var, provider) in CANDIDATES {
-        if let Ok(val) = std::env::var(env_var) {
-            if !val.trim().is_empty() {
-                return Some(DetectedProvider {
+    let mut found: Vec<DetectedProvider> = CANDIDATES
+        .iter()
+        .filter_map(|(env_var, provider)| {
+            std::env::var(env_var)
+                .ok()
+                .filter(|val| !val.trim().is_empty())
+                .map(|_| DetectedProvider {
                     provider: (*provider).into(),
                     has_api_key: true,
-                });
-            }
-        }
-    }
-    if std::env::var("OLLAMA_HOST").is_ok() {
-        return Some(DetectedProvider {
+                })
+        })
+        .collect();
+    if found.is_empty() && std::env::var("OLLAMA_HOST").is_ok() {
+        found.push(DetectedProvider {
             provider: "ollama".into(),
             has_api_key: false,
         });
     }
-    None
+    found
 }
 
 /// Probe an Ollama endpoint with a short TCP connect. `true` = something is
@@ -1373,25 +1386,36 @@ fn probe_ollama_endpoint(addr: SocketAddr) -> bool {
 fn cached_env_provider(
     cache: &mut Option<CachedEnvProvider>,
     now: Instant,
-    scan: impl FnOnce() -> Option<DetectedProvider>,
+    scan: impl FnOnce() -> Vec<DetectedProvider>,
     probe: impl FnOnce() -> bool,
-) -> Option<DetectedProvider> {
+) -> Vec<DetectedProvider> {
     if let Some(hit) = cache {
         if now.duration_since(hit.observed_at) < ENV_PROVIDER_CACHE_TTL {
             return hit.value.clone();
         }
     }
-    let value = scan().or_else(|| {
-        probe().then_some(DetectedProvider {
+    let mut value = scan();
+    if value.is_empty() && probe() {
+        value.push(DetectedProvider {
             provider: "ollama".into(),
             has_api_key: false,
-        })
-    });
+        });
+    }
     *cache = Some(CachedEnvProvider {
         observed_at: now,
         value: value.clone(),
     });
     value
+}
+
+/// ALL env-detected providers, in the Welcome wizard's recommended ranking
+/// order — empty when nothing is detected. Backed by the memoized
+/// `detect_env_providers` core (doc there covers the Ollama probe and the
+/// TTL guardrail). 2026-10-08: multi-key — the wire is now a ranked array
+/// (Welcome's BYOK badge lists every detected key).
+#[tauri::command]
+pub fn detect_provider_from_env() -> Vec<DetectedProvider> {
+    detect_env_providers()
 }
 
 /// Scan the process environment (plus Ollama's default endpoint) for a
@@ -1414,6 +1438,10 @@ fn cached_env_provider(
 /// window. The env path takes priority and never probes; env vars are only
 /// re-read when the cache expires, which is an acceptable staleness window
 /// for a detection hint.
+///
+/// First detected provider — the gating semantic (`get_provider_status`
+/// answers "is anything configured via the environment"). Unchanged by the
+/// multi-key work: rank order means first = the previous first-match.
 fn detect_env_provider() -> Option<DetectedProvider> {
     let now = Instant::now();
     let mut cache = ENV_PROVIDER_CACHE
@@ -1422,11 +1450,21 @@ fn detect_env_provider() -> Option<DetectedProvider> {
     cached_env_provider(&mut cache, now, scan_env_provider, || {
         probe_ollama_endpoint(OLLAMA_DEFAULT_ENDPOINT)
     })
+    .into_iter()
+    .next()
 }
 
-#[tauri::command]
-pub fn detect_provider_from_env() -> Option<DetectedProvider> {
-    detect_env_provider()
+/// ALL providers detected via the environment (rank order) — Welcome's
+/// BYOK badge lists every detected key (2026-10-08 缓期 #10). Empty vec =
+/// nothing detected (the probe fallback path included).
+fn detect_env_providers() -> Vec<DetectedProvider> {
+    let now = Instant::now();
+    let mut cache = ENV_PROVIDER_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    cached_env_provider(&mut cache, now, scan_env_provider, || {
+        probe_ollama_endpoint(OLLAMA_DEFAULT_ENDPOINT)
+    })
 }
 
 /// Reliable provider-activation signal for the frontend (2026-09-29
@@ -2790,11 +2828,14 @@ mod tests {
             "chat.ask_user_auto_continue" => Some(cfg.chat_ask_user_auto_continue),
             // D5 方案① — 主动任务推荐 (presentation toggle).
             "suggestions.enabled" => Some(cfg.suggestions_enabled),
+            // 批 1 — launch-behavior switches (persist-only; read at launch).
+            "restore_session_windows_on_launch" => Some(cfg.restore_session_windows_on_launch),
+            "update_check_at_launch" => Some(cfg.update_check_at_launch),
             _ => None,
         }
     }
 
-    const TOGGLE_KEYS: [&str; 15] = [
+    const TOGGLE_KEYS: [&str; 17] = [
         "memory_enabled",
         "telemetry",
         "encryption",
@@ -2810,6 +2851,8 @@ mod tests {
         "session.auto_archive_enabled",
         "chat.ask_user_auto_continue",
         "suggestions.enabled",
+        "restore_session_windows_on_launch",
+        "update_check_at_launch",
     ];
 
     #[test]
@@ -4195,8 +4238,10 @@ mod tests {
             None => unsafe { std::env::remove_var("OLLAMA_HOST") },
         }
         assert_eq!(
-            detected.map(|d| (d.provider, d.has_api_key)),
-            Some(("ollama".into(), false)),
+            detected
+                .first()
+                .map(|d| (d.provider.as_str(), d.has_api_key)),
+            Some(("ollama", false)),
             "OLLAMA_HOST set → ollama, no API key"
         );
     }
@@ -4224,10 +4269,48 @@ mod tests {
             }
         }
         assert_eq!(
-            detected.map(|d| (d.provider, d.has_api_key)),
-            Some(("anthropic".into(), true)),
+            detected
+                .first()
+                .map(|d| (d.provider.as_str(), d.has_api_key)),
+            Some(("anthropic", true)),
             "an API-key env must outrank the OLLAMA_HOST branch"
         );
+        // 2026-10-08 缓期 #10: OLLAMA_HOST alone no longer shadows a key —
+        // it is not appended when a key matched (single-provider gating
+        // semantics preserved by detect_env_provider taking first).
+        assert_eq!(
+            detected.len(),
+            1,
+            "OLLAMA_HOST must not be appended when a key matched"
+        );
+    }
+
+    #[test]
+    fn env_scan_collects_every_keyed_provider_in_rank_order() {
+        // 缓期 #10: multiple keys → ALL of them, in the documented ranking
+        // order (anthropic → openai → deepseek).
+        let prev = [
+            ("ANTHROPIC_API_KEY", std::env::var("ANTHROPIC_API_KEY").ok()),
+            ("OPENAI_API_KEY", std::env::var("OPENAI_API_KEY").ok()),
+            ("DEEPSEEK_API_KEY", std::env::var("DEEPSEEK_API_KEY").ok()),
+        ];
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "sk-a");
+            std::env::set_var("OPENAI_API_KEY", "sk-o");
+            std::env::set_var("DEEPSEEK_API_KEY", "sk-d");
+        }
+        let detected = scan_env_provider();
+        unsafe {
+            for (k, prev_v) in prev {
+                match prev_v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+        let providers: Vec<&str> = detected.iter().map(|d| d.provider.as_str()).collect();
+        assert_eq!(providers, ["anthropic", "openai", "deepseek"]);
+        assert!(detected.iter().all(|d| d.has_api_key));
     }
 
     #[test]
@@ -4241,10 +4324,10 @@ mod tests {
             &mut cache,
             Instant::now(),
             || {
-                Some(DetectedProvider {
+                vec![DetectedProvider {
                     provider: "anthropic".into(),
                     has_api_key: true,
-                })
+                }]
             },
             || {
                 probes += 1;
@@ -4252,8 +4335,10 @@ mod tests {
             },
         );
         assert_eq!(
-            detected.map(|d| (d.provider, d.has_api_key)),
-            Some(("anthropic".into(), true))
+            detected
+                .first()
+                .map(|d| (d.provider.as_str(), d.has_api_key)),
+            Some(("anthropic", true))
         );
         assert_eq!(probes, 0, "env hit must not probe the socket");
     }
@@ -4267,13 +4352,13 @@ mod tests {
         let mut cache = None;
         let mut probes = 0usize;
         // Non-capturing → Copy, so it can be re-passed by value per call.
-        let scan = || -> Option<DetectedProvider> { None };
+        let scan = || -> Vec<DetectedProvider> { Vec::new() };
 
         let first = cached_env_provider(&mut cache, t0, scan, || {
             probes += 1;
             false
         });
-        assert_eq!(first, None, "nothing set and port closed → None");
+        assert!(first.is_empty(), "nothing set and port closed → empty");
         assert_eq!(probes, 1, "first call probes");
 
         // Just inside the TTL: cached None comes back, zero new probes.
@@ -4286,7 +4371,7 @@ mod tests {
                 false
             },
         );
-        assert_eq!(within, None);
+        assert!(within.is_empty());
         assert_eq!(probes, 1, "cache hit must not re-probe");
 
         // Past the TTL: the probe fires again (value refreshed).
@@ -4300,8 +4385,8 @@ mod tests {
             },
         );
         assert_eq!(
-            after.map(|d| (d.provider, d.has_api_key)),
-            Some(("ollama".into(), false)),
+            after.first().map(|d| (d.provider.as_str(), d.has_api_key)),
+            Some(("ollama", false)),
             "probe hit → ollama detected, no API key"
         );
         assert_eq!(probes, 2, "expired entry re-probes exactly once");

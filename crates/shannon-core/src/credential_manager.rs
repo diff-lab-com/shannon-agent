@@ -242,6 +242,13 @@ impl CredentialManager {
     /// Create a CredentialManager with a custom storage directory.
     pub fn with_dir(dir: PathBuf) -> Result<Self, CredentialError> {
         fs::create_dir_all(&dir)?;
+        #[cfg(unix)]
+        {
+            // The dir lists every service that has a stored credential —
+            // keep it owner-only (matches the pairing-token dir posture).
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+        }
         let manager = Self {
             credentials_dir: dir,
             store: CredentialStore::default(),
@@ -600,14 +607,15 @@ impl CredentialManager {
             const SECURE_MODE: u32 = 0o600;
             let file_mode = meta.permissions().mode() & 0o777;
             if file_mode != SECURE_MODE {
-                // Warn but don't fail in tests or non-strict contexts.
-                // In production, we would auto-fix or fail.
+                // Auto-fix (was warn-only: a 0644 credential file stayed
+                // world-readable forever) and surface what happened.
                 warn!(
                     path = %path.display(),
                     actual = format!("{:#o}", file_mode),
                     expected = format!("{:#o}", SECURE_MODE),
-                    "Credential file has insecure permissions"
+                    "Credential file has insecure permissions — tightening to 0600"
                 );
+                self.set_secure_permissions(path)?;
             }
         }
 
@@ -701,34 +709,44 @@ fn atomic_write_secure(path: &Path, content: &str) -> Result<(), CredentialError
     Ok(())
 }
 
+impl CredentialManager {
+    /// An in-memory-only instance: empty store, no directory touched. The
+    /// degradation mode for environments without a usable home directory —
+    /// reads return nothing, saves fail with the underlying path error, and
+    /// nothing is ever written to a predictable shared location.
+    fn non_persisting() -> Self {
+        Self {
+            credentials_dir: PathBuf::from("."),
+            store: CredentialStore::default(),
+            dirty: false,
+        }
+    }
+}
+
 impl Default for CredentialManager {
+    /// Best-effort constructor: the standard home location, or — only when
+    /// no home directory exists at all — a NON-PERSISTING in-memory store.
+    /// The historical `/tmp` fallbacks are gone: a predictable shared-temp
+    /// credential directory is a worse failure mode than no persistence.
     fn default() -> Self {
-        let credentials_dir = dirs::home_dir()
-            .unwrap_or_else(|| {
-                eprintln!("Warning: Home directory not found, using /tmp");
-                std::path::PathBuf::from("/tmp")
-            })
-            .join(".shannon")
-            .join("credentials");
-        Self::with_dir(credentials_dir).unwrap_or_else(|first_err| {
-            tracing::error!("CredentialManager: home dir failed: {first_err}");
-            let fallback = std::env::temp_dir().join(".shannon").join("credentials");
-            Self::with_dir(fallback.clone()).unwrap_or_else(|second_err| {
-                tracing::error!("CredentialManager: temp dir failed: {second_err}");
-                let last_resort = PathBuf::from("/tmp/.shannon/credentials");
-                match Self::with_dir(last_resort.clone()) {
-                    Ok(s) => s,
-                    Err(third_err) => {
-                        tracing::error!("CredentialManager: all fallbacks failed: {third_err}. Using non-persisting instance.");
-                        Self {
-                            credentials_dir: fallback,
-                            store: CredentialStore::default(),
-                            dirty: false,
-                        }
-                    }
-                }
-            })
-        })
+        match dirs::home_dir() {
+            Some(home) => {
+                let credentials_dir = home.join(".shannon").join("credentials");
+                Self::with_dir(credentials_dir).unwrap_or_else(|err| {
+                    tracing::error!(
+                        "CredentialManager: home credentials dir failed: {err} — \
+                         using non-persisting instance"
+                    );
+                    Self::non_persisting()
+                })
+            }
+            None => {
+                tracing::error!(
+                    "CredentialManager: no home directory — using non-persisting instance"
+                );
+                Self::non_persisting()
+            }
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { MessageBubble } from '@/components/chat/MessageBubble'
 import type { ChatMessage } from '@/types'
@@ -49,7 +49,10 @@ describe('MessageBubble — files-changed summary bar (D5)', () => {
       />
     ))
     expect(screen.getByText('1 file changed')).toBeInTheDocument()
-    expect(screen.getByText('/repo/src/app.ts')).toBeInTheDocument()
+    // Aurora 2026-10: the completed write ALSO renders the per-tool inline
+    // diff card (same path in mono), so the assertion is scoped to the
+    // summary bar rather than the whole bubble.
+    expect(within(screen.getByTestId('file-changes-card')).getByText('/repo/src/app.ts')).toBeInTheDocument()
   })
 
   it('does not show summary bar for non-file-mutating tools', () => {

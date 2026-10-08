@@ -82,6 +82,23 @@ fn run_git(args: &[&str], cwd: Option<&str>) -> Result<(String, String, bool), T
     run_git_with(crate::defaults::process().as_ref(), args, cwd)
 }
 
+/// Run a blocking git-world task on the blocking pool. The git helpers park
+/// on child exit — a slow `git log -p` or a wedged credential helper must
+/// not hold a runtime worker. (The provider closes child stdin, so a
+/// passphrase prompt fails fast; this keeps the wait off the runtime too.)
+async fn spawn_blocking_git<T, F>(
+    process: std::sync::Arc<dyn ProcessProvider>,
+    task: F,
+) -> Result<T, ToolError>
+where
+    F: FnOnce(&dyn ProcessProvider) -> Result<T, ToolError> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(move || task(process.as_ref()))
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("git task failed: {e}")))?
+}
+
 /// Find the git root starting from the current directory (or a given path).
 fn find_git_root(start: Option<&str>) -> Result<String, ToolError> {
     let start_path = match start {
@@ -120,6 +137,17 @@ fn current_branch_with(
 #[allow(dead_code)] // KEEP: exercised by the existing git test fixtures
 fn current_branch(cwd: Option<&str>) -> Result<String, ToolError> {
     current_branch_with(crate::defaults::process().as_ref(), cwd)
+}
+
+/// Current branch of `cwd`'s repository, default world — the desktop
+/// status-bar segment (设计 02-chat 六段: 分支) is the one consumer outside
+/// the tool registry. `None` when `cwd` is not inside a git work tree
+/// (the caller hides the segment — honesty rule) or git is unavailable.
+pub fn current_branch_of(cwd: Option<&str>) -> Option<String> {
+    current_branch_with(crate::defaults::process().as_ref(), cwd)
+        .ok()
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
 }
 
 /// Check whether the working directory has uncommitted changes.
@@ -201,9 +229,12 @@ impl GitBranchTool {
         self
     }
 
-    fn list_branches(&self, cwd: Option<&str>) -> Result<ToolOutput, ToolError> {
+    fn list_branches(
+        process: &dyn ProcessProvider,
+        cwd: Option<&str>,
+    ) -> Result<ToolOutput, ToolError> {
         let (stdout, stderr, success) = run_git_with(
-            self.process.as_ref(),
+            process,
             &["branch", "-a", "--color=never", "-v", "--no-abbrev"],
             cwd,
         )?;
@@ -216,8 +247,7 @@ impl GitBranchTool {
         }
 
         // Also get current branch
-        let current = current_branch_with(self.process.as_ref(), cwd)
-            .unwrap_or_else(|_| "unknown".to_string());
+        let current = current_branch_with(process, cwd).unwrap_or_else(|_| "unknown".to_string());
 
         Ok(ToolOutput {
             content: stdout,
@@ -231,7 +261,7 @@ impl GitBranchTool {
     }
 
     fn create_branch(
-        &self,
+        process: &dyn ProcessProvider,
         input: &GitBranchInput,
         cwd: Option<&str>,
     ) -> Result<ToolOutput, ToolError> {
@@ -249,7 +279,7 @@ impl GitBranchTool {
             vec!["branch", name]
         };
 
-        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), &args, cwd)?;
+        let (stdout, stderr, success) = run_git_with(process, &args, cwd)?;
         if !success {
             return Ok(ToolOutput {
                 content: format!("Failed to create branch '{name}': {stderr}"),
@@ -277,7 +307,7 @@ impl GitBranchTool {
     }
 
     fn switch_branch(
-        &self,
+        process: &dyn ProcessProvider,
         input: &GitBranchInput,
         cwd: Option<&str>,
     ) -> Result<ToolOutput, ToolError> {
@@ -288,15 +318,14 @@ impl GitBranchTool {
         validate_git_arg(name)?;
 
         // Safety check: warn if working directory is dirty
-        if is_working_dir_dirty_with(self.process.as_ref(), cwd)? {
+        if is_working_dir_dirty_with(process, cwd)? {
             tracing::warn!(
                 branch = %name,
                 "Switching branches with uncommitted changes — may cause conflicts"
             );
         }
 
-        let (stdout, stderr, success) =
-            run_git_with(self.process.as_ref(), &["checkout", name], cwd)?;
+        let (stdout, stderr, success) = run_git_with(process, &["checkout", name], cwd)?;
         if !success {
             return Ok(ToolOutput {
                 content: format!("Failed to switch to branch '{}': {}", name, stderr.trim()),
@@ -317,7 +346,7 @@ impl GitBranchTool {
     }
 
     fn delete_branch(
-        &self,
+        process: &dyn ProcessProvider,
         input: &GitBranchInput,
         cwd: Option<&str>,
     ) -> Result<ToolOutput, ToolError> {
@@ -328,7 +357,7 @@ impl GitBranchTool {
         validate_git_arg(name)?;
 
         // Safety: refuse to delete the current branch
-        let current = current_branch_with(self.process.as_ref(), cwd)?;
+        let current = current_branch_with(process, cwd)?;
         if current == name {
             return Err(ToolError::ExecutionFailed(format!(
                 "Cannot delete the current branch '{name}'. Switch to another branch first."
@@ -354,8 +383,7 @@ impl GitBranchTool {
             });
         }
 
-        let (stdout, stderr, success) =
-            run_git_with(self.process.as_ref(), &["branch", "-d", name], cwd)?;
+        let (stdout, stderr, success) = run_git_with(process, &["branch", "-d", name], cwd)?;
         if !success {
             return Ok(ToolOutput {
                 content: format!(
@@ -427,12 +455,16 @@ impl Tool for GitBranchTool {
             return Err(ToolError::ExecutionFailed(e.to_string()));
         }
 
-        match branch_input.action {
-            BranchAction::List => self.list_branches(None),
-            BranchAction::Create => self.create_branch(&branch_input, None),
-            BranchAction::Switch => self.switch_branch(&branch_input, None),
-            BranchAction::Delete => self.delete_branch(&branch_input, None),
-        }
+        // The branch helpers park on child exit — keep the wait off the
+        // runtime worker.
+        let process = std::sync::Arc::clone(&self.process);
+        spawn_blocking_git(process, move |p| match branch_input.action {
+            BranchAction::List => Self::list_branches(p, None),
+            BranchAction::Create => Self::create_branch(p, &branch_input, None),
+            BranchAction::Switch => Self::switch_branch(p, &branch_input, None),
+            BranchAction::Delete => Self::delete_branch(p, &branch_input, None),
+        })
+        .await
     }
 
     fn category(&self) -> &str {
@@ -496,7 +528,7 @@ impl GitDiffTool {
         self
     }
 
-    fn build_diff_args(&self, input: &GitDiffInput) -> Result<Vec<String>, ToolError> {
+    fn build_diff_args(input: &GitDiffInput) -> Result<Vec<String>, ToolError> {
         let mut args = Vec::new();
 
         if input.staged.unwrap_or(false) {
@@ -529,6 +561,59 @@ impl GitDiffTool {
         args.push("--color=never".to_string());
 
         Ok(args)
+    }
+
+    /// The diff world work: parked on child exit, so it runs behind
+    /// [`spawn_blocking_git`] from the async `execute`.
+    fn diff_blocking(
+        process: &dyn ProcessProvider,
+        diff_input: &GitDiffInput,
+    ) -> Result<ToolOutput, ToolError> {
+        let args = Self::build_diff_args(diff_input)?;
+        let mut full_args = vec!["diff"];
+        for arg in &args {
+            full_args.push(arg.as_str());
+        }
+
+        let (stdout, stderr, success) = run_git_with(process, &full_args, None)?;
+
+        if !success && !stderr.is_empty() {
+            return Ok(ToolOutput {
+                content: format!("Diff failed: {}", stderr.trim()),
+                is_error: true,
+                metadata: HashMap::new(),
+            });
+        }
+
+        let has_changes = !stdout.trim().is_empty();
+        let description = if diff_input.staged.unwrap_or(false) {
+            "staged changes"
+        } else if diff_input.commit_range.is_some() {
+            "commit range diff"
+        } else {
+            "unstaged changes"
+        };
+
+        Ok(ToolOutput {
+            content: if has_changes {
+                stdout
+            } else {
+                format!("No {description} found.")
+            },
+            is_error: false,
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("has_changes".to_string(), json!(has_changes));
+                map.insert("diff_type".to_string(), json!(description));
+                if let Some(ref file) = diff_input.file {
+                    map.insert("file".to_string(), json!(file));
+                }
+                if let Some(ref range) = diff_input.commit_range {
+                    map.insert("commit_range".to_string(), json!(range));
+                }
+                map
+            },
+        })
     }
 }
 
@@ -583,51 +668,8 @@ impl Tool for GitDiffTool {
             return Err(ToolError::ExecutionFailed(e.to_string()));
         }
 
-        let args = self.build_diff_args(&diff_input)?;
-        let mut full_args = vec!["diff"];
-        for arg in &args {
-            full_args.push(arg.as_str());
-        }
-
-        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), &full_args, None)?;
-
-        if !success && !stderr.is_empty() {
-            return Ok(ToolOutput {
-                content: format!("Diff failed: {}", stderr.trim()),
-                is_error: true,
-                metadata: HashMap::new(),
-            });
-        }
-
-        let has_changes = !stdout.trim().is_empty();
-        let description = if diff_input.staged.unwrap_or(false) {
-            "staged changes"
-        } else if diff_input.commit_range.is_some() {
-            "commit range diff"
-        } else {
-            "unstaged changes"
-        };
-
-        Ok(ToolOutput {
-            content: if has_changes {
-                stdout
-            } else {
-                format!("No {description} found.")
-            },
-            is_error: false,
-            metadata: {
-                let mut map = HashMap::new();
-                map.insert("has_changes".to_string(), json!(has_changes));
-                map.insert("diff_type".to_string(), json!(description));
-                if let Some(ref file) = diff_input.file {
-                    map.insert("file".to_string(), json!(file));
-                }
-                if let Some(ref range) = diff_input.commit_range {
-                    map.insert("commit_range".to_string(), json!(range));
-                }
-                map
-            },
-        })
+        let process = std::sync::Arc::clone(&self.process);
+        spawn_blocking_git(process, move |p| Self::diff_blocking(p, &diff_input)).await
     }
 
     fn category(&self) -> &str {
@@ -697,7 +739,7 @@ impl GitLogTool {
         self
     }
 
-    fn build_log_args(&self, input: &GitLogInput) -> Result<Vec<String>, ToolError> {
+    fn build_log_args(input: &GitLogInput) -> Result<Vec<String>, ToolError> {
         let mut args = Vec::new();
 
         let count = input.count.unwrap_or(10).min(100);
@@ -737,6 +779,52 @@ impl GitLogTool {
         }
 
         Ok(args)
+    }
+
+    /// The log world work: parked on child exit, so it runs behind
+    /// [`spawn_blocking_git`] from the async `execute`.
+    fn log_blocking(
+        process: &dyn ProcessProvider,
+        log_input: &GitLogInput,
+    ) -> Result<ToolOutput, ToolError> {
+        let args = Self::build_log_args(log_input)?;
+        let mut full_args = vec!["log"];
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        full_args.extend(&arg_refs);
+
+        let (stdout, stderr, success) = run_git_with(process, &full_args, None)?;
+
+        if !success {
+            return Ok(ToolOutput {
+                content: format!("Log failed: {}", stderr.trim()),
+                is_error: true,
+                metadata: HashMap::new(),
+            });
+        }
+
+        let count = log_input.count.unwrap_or(10).min(100);
+        let line_count = stdout.lines().filter(|l| !l.trim().is_empty()).count();
+
+        Ok(ToolOutput {
+            content: if stdout.trim().is_empty() {
+                "No commits found matching the given filters.".to_string()
+            } else {
+                stdout
+            },
+            is_error: false,
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("commit_count".to_string(), json!(line_count));
+                map.insert("requested_count".to_string(), json!(count));
+                if let Some(ref author) = log_input.author {
+                    map.insert("author_filter".to_string(), json!(author));
+                }
+                if let Some(ref file) = log_input.file {
+                    map.insert("file_filter".to_string(), json!(file));
+                }
+                map
+            },
+        })
     }
 }
 
@@ -795,44 +883,8 @@ impl Tool for GitLogTool {
             return Err(ToolError::ExecutionFailed(e.to_string()));
         }
 
-        let args = self.build_log_args(&log_input)?;
-        let mut full_args = vec!["log"];
-        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        full_args.extend(&arg_refs);
-
-        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), &full_args, None)?;
-
-        if !success {
-            return Ok(ToolOutput {
-                content: format!("Log failed: {}", stderr.trim()),
-                is_error: true,
-                metadata: HashMap::new(),
-            });
-        }
-
-        let count = log_input.count.unwrap_or(10).min(100);
-        let line_count = stdout.lines().filter(|l| !l.trim().is_empty()).count();
-
-        Ok(ToolOutput {
-            content: if stdout.trim().is_empty() {
-                "No commits found matching the given filters.".to_string()
-            } else {
-                stdout
-            },
-            is_error: false,
-            metadata: {
-                let mut map = HashMap::new();
-                map.insert("commit_count".to_string(), json!(line_count));
-                map.insert("requested_count".to_string(), json!(count));
-                if let Some(ref author) = log_input.author {
-                    map.insert("author_filter".to_string(), json!(author));
-                }
-                if let Some(ref file) = log_input.file {
-                    map.insert("file_filter".to_string(), json!(file));
-                }
-                map
-            },
-        })
+        let process = std::sync::Arc::clone(&self.process);
+        spawn_blocking_git(process, move |p| Self::log_blocking(p, &log_input)).await
     }
 
     fn category(&self) -> &str {
@@ -904,9 +956,8 @@ impl GitStashTool {
         self
     }
 
-    fn list_stashes(&self) -> Result<ToolOutput, ToolError> {
-        let (stdout, stderr, success) =
-            run_git_with(self.process.as_ref(), &["stash", "list"], None)?;
+    fn list_stashes(process: &dyn ProcessProvider) -> Result<ToolOutput, ToolError> {
+        let (stdout, stderr, success) = run_git_with(process, &["stash", "list"], None)?;
         if !success {
             return Ok(ToolOutput {
                 content: format!("Failed to list stashes: {}", stderr.trim()),
@@ -940,8 +991,11 @@ impl GitStashTool {
         })
     }
 
-    fn push_stash(&self, input: &GitStashInput) -> Result<ToolOutput, ToolError> {
-        if !is_working_dir_dirty_with(self.process.as_ref(), None)? {
+    fn push_stash(
+        process: &dyn ProcessProvider,
+        input: &GitStashInput,
+    ) -> Result<ToolOutput, ToolError> {
+        if !is_working_dir_dirty_with(process, None)? {
             return Ok(ToolOutput {
                 content: "Nothing to stash: working directory is clean.".to_string(),
                 is_error: false,
@@ -959,7 +1013,7 @@ impl GitStashTool {
         }
 
         let arg_refs: Vec<&str> = full_args.iter().map(|s| s.as_str()).collect();
-        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), &arg_refs, None)?;
+        let (stdout, stderr, success) = run_git_with(process, &arg_refs, None)?;
 
         if !success {
             return Ok(ToolOutput {
@@ -987,11 +1041,11 @@ impl GitStashTool {
         })
     }
 
-    fn pop_stash(&self, index: usize) -> Result<ToolOutput, ToolError> {
+    fn pop_stash(process: &dyn ProcessProvider, index: usize) -> Result<ToolOutput, ToolError> {
         let index_str = format!("stash@{{{index}}}");
         let args = &["stash", "pop", &index_str];
 
-        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), args, None)?;
+        let (stdout, stderr, success) = run_git_with(process, args, None)?;
 
         if !success {
             return Ok(ToolOutput {
@@ -1017,11 +1071,11 @@ impl GitStashTool {
         })
     }
 
-    fn drop_stash(&self, index: usize) -> Result<ToolOutput, ToolError> {
+    fn drop_stash(process: &dyn ProcessProvider, index: usize) -> Result<ToolOutput, ToolError> {
         let index_str = format!("stash@{{{index}}}");
         let args = &["stash", "drop", &index_str];
 
-        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), args, None)?;
+        let (stdout, stderr, success) = run_git_with(process, args, None)?;
 
         if !success {
             return Ok(ToolOutput {
@@ -1047,11 +1101,11 @@ impl GitStashTool {
         })
     }
 
-    fn apply_stash(&self, index: usize) -> Result<ToolOutput, ToolError> {
+    fn apply_stash(process: &dyn ProcessProvider, index: usize) -> Result<ToolOutput, ToolError> {
         let index_str = format!("stash@{{{index}}}");
         let args = &["stash", "apply", &index_str];
 
-        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), args, None)?;
+        let (stdout, stderr, success) = run_git_with(process, args, None)?;
 
         if !success {
             return Ok(ToolOutput {
@@ -1120,13 +1174,15 @@ impl Tool for GitStashTool {
 
         let index = stash_input.index.unwrap_or(0);
 
-        match stash_input.action {
-            StashAction::List => self.list_stashes(),
-            StashAction::Push => self.push_stash(&stash_input),
-            StashAction::Pop => self.pop_stash(index),
-            StashAction::Drop => self.drop_stash(index),
-            StashAction::Apply => self.apply_stash(index),
-        }
+        let process = std::sync::Arc::clone(&self.process);
+        spawn_blocking_git(process, move |p| match stash_input.action {
+            StashAction::List => Self::list_stashes(p),
+            StashAction::Push => Self::push_stash(p, &stash_input),
+            StashAction::Pop => Self::pop_stash(p, index),
+            StashAction::Drop => Self::drop_stash(p, index),
+            StashAction::Apply => Self::apply_stash(p, index),
+        })
+        .await
     }
 
     fn category(&self) -> &str {
@@ -1445,13 +1501,15 @@ impl AutoCommitTool {
     }
 
     /// Generate a commit message from the staged diff stats.
-    fn generate_message(&self, cwd: Option<&str>) -> Result<String, ToolError> {
+    fn generate_message(
+        process: &dyn ProcessProvider,
+        cwd: Option<&str>,
+    ) -> Result<String, ToolError> {
         // Get short stat from diff
-        let (stat, _, success) =
-            run_git_with(self.process.as_ref(), &["diff", "--stat", "--cached"], cwd)?;
+        let (stat, _, success) = run_git_with(process, &["diff", "--stat", "--cached"], cwd)?;
         if !success {
             // Fallback to unstaged diff if no cached changes yet
-            let (stat2, _, _) = run_git_with(self.process.as_ref(), &["diff", "--stat"], cwd)?;
+            let (stat2, _, _) = run_git_with(process, &["diff", "--stat"], cwd)?;
             return Ok(Self::message_from_stat(&stat2));
         }
         Ok(Self::message_from_stat(&stat))
@@ -1547,6 +1605,119 @@ impl AutoCommitTool {
 
         "chore"
     }
+
+    /// The auto-commit world work: parked on child exit (status, stage,
+    /// commit, rev-parse), so it runs behind [`spawn_blocking_git`] from the
+    /// async `execute`.
+    fn autocommit_blocking(
+        process: &dyn ProcessProvider,
+        parsed: &AutoCommitInput,
+    ) -> Result<ToolOutput, ToolError> {
+        let cwd: Option<&str> = None;
+
+        // Check if we're in a git repo
+        let _git_root = find_git_root(cwd)?;
+
+        // Gather current status
+        let (status_out, _, status_ok) = run_git_with(process, &["status", "--porcelain"], cwd)?;
+        if !status_ok {
+            return Ok(ToolOutput {
+                content: "Failed to check git status.".to_string(),
+                is_error: true,
+                metadata: HashMap::new(),
+            });
+        }
+        if status_out.trim().is_empty() {
+            return Ok(ToolOutput {
+                content: "Nothing to commit — working directory is clean.".to_string(),
+                is_error: false,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Safety check: get current branch
+        let branch = current_branch_with(process, cwd)?;
+
+        // Stage changes: specific files or all tracked
+        if !parsed.files.is_empty() {
+            // Stage specific files
+            let file_args: Vec<&str> = parsed.files.iter().map(|s| s.as_str()).collect();
+            let mut add_args = vec!["add"];
+            add_args.extend(&file_args);
+            let (_, stderr, success) = run_git_with(process, &add_args, cwd)?;
+            if !success {
+                return Ok(ToolOutput {
+                    content: format!("Failed to stage files: {stderr}"),
+                    is_error: true,
+                    metadata: HashMap::new(),
+                });
+            }
+        } else if parsed.add_all {
+            let (_, stderr, success) = run_git_with(process, &["add", "-u"], cwd)?;
+            if !success {
+                return Ok(ToolOutput {
+                    content: format!("Failed to stage changes: {stderr}"),
+                    is_error: true,
+                    metadata: HashMap::new(),
+                });
+            }
+        }
+
+        // Get staged diff stats for commit context
+        let (stat, _, _) = run_git_with(process, &["diff", "--stat", "--cached"], cwd)?;
+
+        // Dry run: show what would be committed
+        if parsed.dry_run {
+            let message = parsed.message.clone().unwrap_or_else(|| {
+                Self::generate_message(process, cwd)
+                    .unwrap_or_else(|_| "chore: update files".to_string())
+            });
+            let co_author_line = parsed
+                .co_author
+                .as_deref()
+                .map(|c| format!("\nCo-Authored-By: {c}"))
+                .unwrap_or_default();
+            return Ok(ToolOutput {
+                content: format!(
+                    "[dry-run] Would commit on branch '{branch}':\n{stat}\nMessage: {message}{co_author_line}"
+                ),
+                is_error: false,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Generate or use provided commit message
+        let message = match parsed.message.clone() {
+            Some(msg) => msg,
+            None => Self::generate_message(process, cwd)?,
+        };
+
+        // Build commit message with optional co-author trailer
+        let full_message = match &parsed.co_author {
+            Some(co) => format!("{message}\n\nCo-Authored-By: {co}"),
+            None => message.clone(),
+        };
+
+        // Commit
+        let (_, stderr, success) = run_git_with(process, &["commit", "-m", &full_message], cwd)?;
+        if !success {
+            return Ok(ToolOutput {
+                content: format!("Commit failed: {stderr}"),
+                is_error: true,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Get the short hash of the new commit
+        let (hash, _, _) = run_git_with(process, &["rev-parse", "--short", "HEAD"], cwd)?;
+        let hash = hash.trim();
+
+        Ok(ToolOutput {
+            content: format!("Committed on branch '{branch}': {hash} {message}"),
+            is_error: false,
+            metadata: HashMap::new(),
+        })
+    }
 }
 
 #[async_trait]
@@ -1594,117 +1765,8 @@ impl Tool for AutoCommitTool {
         let parsed: AutoCommitInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid auto_commit input: {e}")))?;
 
-        let cwd: Option<&str> = None;
-
-        // Check if we're in a git repo
-        let _git_root = find_git_root(cwd)?;
-
-        // Gather current status
-        let (status_out, _, status_ok) =
-            run_git_with(self.process.as_ref(), &["status", "--porcelain"], cwd)?;
-        if !status_ok {
-            return Ok(ToolOutput {
-                content: "Failed to check git status.".to_string(),
-                is_error: true,
-                metadata: HashMap::new(),
-            });
-        }
-        if status_out.trim().is_empty() {
-            return Ok(ToolOutput {
-                content: "Nothing to commit — working directory is clean.".to_string(),
-                is_error: false,
-                metadata: HashMap::new(),
-            });
-        }
-
-        // Safety check: get current branch
-        let branch = current_branch_with(self.process.as_ref(), cwd)?;
-
-        // Stage changes: specific files or all tracked
-        if !parsed.files.is_empty() {
-            // Stage specific files
-            let file_args: Vec<&str> = parsed.files.iter().map(|s| s.as_str()).collect();
-            let mut add_args = vec!["add"];
-            add_args.extend(&file_args);
-            let (_, stderr, success) = run_git_with(self.process.as_ref(), &add_args, cwd)?;
-            if !success {
-                return Ok(ToolOutput {
-                    content: format!("Failed to stage files: {stderr}"),
-                    is_error: true,
-                    metadata: HashMap::new(),
-                });
-            }
-        } else if parsed.add_all {
-            let (_, stderr, success) = run_git_with(self.process.as_ref(), &["add", "-u"], cwd)?;
-            if !success {
-                return Ok(ToolOutput {
-                    content: format!("Failed to stage changes: {stderr}"),
-                    is_error: true,
-                    metadata: HashMap::new(),
-                });
-            }
-        }
-
-        // Get staged diff stats for commit context
-        let (stat, _, _) =
-            run_git_with(self.process.as_ref(), &["diff", "--stat", "--cached"], cwd)?;
-
-        // Dry run: show what would be committed
-        if parsed.dry_run {
-            let message = parsed.message.clone().unwrap_or_else(|| {
-                self.generate_message(cwd)
-                    .unwrap_or_else(|_| "chore: update files".to_string())
-            });
-            let co_author_line = parsed
-                .co_author
-                .as_deref()
-                .map(|c| format!("\nCo-Authored-By: {c}"))
-                .unwrap_or_default();
-            return Ok(ToolOutput {
-                content: format!(
-                    "[dry-run] Would commit on branch '{branch}':\n{stat}\nMessage: {message}{co_author_line}"
-                ),
-                is_error: false,
-                metadata: HashMap::new(),
-            });
-        }
-
-        // Generate or use provided commit message
-        let message = match parsed.message {
-            Some(msg) => msg,
-            None => self.generate_message(cwd)?,
-        };
-
-        // Build commit message with optional co-author trailer
-        let full_message = match &parsed.co_author {
-            Some(co) => format!("{message}\n\nCo-Authored-By: {co}"),
-            None => message.clone(),
-        };
-
-        // Commit
-        let (_, stderr, success) =
-            run_git_with(self.process.as_ref(), &["commit", "-m", &full_message], cwd)?;
-        if !success {
-            return Ok(ToolOutput {
-                content: format!("Commit failed: {stderr}"),
-                is_error: true,
-                metadata: HashMap::new(),
-            });
-        }
-
-        // Get the short hash of the new commit
-        let (hash, _, _) = run_git_with(
-            self.process.as_ref(),
-            &["rev-parse", "--short", "HEAD"],
-            cwd,
-        )?;
-        let hash = hash.trim();
-
-        Ok(ToolOutput {
-            content: format!("Committed on branch '{branch}': {hash} {message}"),
-            is_error: false,
-            metadata: HashMap::new(),
-        })
+        let process = std::sync::Arc::clone(&self.process);
+        spawn_blocking_git(process, move |p| Self::autocommit_blocking(p, &parsed)).await
     }
 
     fn category(&self) -> &str {
@@ -1830,7 +1892,6 @@ mod tests {
 
     #[test]
     fn test_git_diff_build_args_staged() {
-        let tool = GitDiffTool::new();
         let input = GitDiffInput {
             staged: Some(true),
             commit_range: None,
@@ -1839,13 +1900,12 @@ mod tests {
             ignore_whitespace: None,
             stat: None,
         };
-        let args = tool.build_diff_args(&input).unwrap();
+        let args = GitDiffTool::build_diff_args(&input).unwrap();
         assert!(args.contains(&"--cached".to_string()));
     }
 
     #[test]
     fn test_git_diff_build_args_commit_range() {
-        let tool = GitDiffTool::new();
         let input = GitDiffInput {
             staged: None,
             commit_range: Some("abc123..def456".to_string()),
@@ -1854,13 +1914,12 @@ mod tests {
             ignore_whitespace: None,
             stat: None,
         };
-        let args = tool.build_diff_args(&input).unwrap();
+        let args = GitDiffTool::build_diff_args(&input).unwrap();
         assert!(args.contains(&"abc123..def456".to_string()));
     }
 
     #[test]
     fn test_git_diff_build_args_file() {
-        let tool = GitDiffTool::new();
         let input = GitDiffInput {
             staged: None,
             commit_range: None,
@@ -1869,7 +1928,7 @@ mod tests {
             ignore_whitespace: Some(true),
             stat: None,
         };
-        let args = tool.build_diff_args(&input).unwrap();
+        let args = GitDiffTool::build_diff_args(&input).unwrap();
         assert!(args.contains(&"--".to_string()));
         assert!(args.contains(&"src/lib.rs".to_string()));
         assert!(args.contains(&"-U5".to_string()));
@@ -1916,7 +1975,6 @@ mod tests {
 
     #[test]
     fn test_git_log_build_args_default() {
-        let tool = GitLogTool::new();
         let input = GitLogInput {
             count: None,
             author: None,
@@ -1926,7 +1984,7 @@ mod tests {
             patch: None,
             branch: None,
         };
-        let args = tool.build_log_args(&input).unwrap();
+        let args = GitLogTool::build_log_args(&input).unwrap();
         assert!(args.contains(&"-10".to_string()));
         // Should contain the format string
         assert!(args.iter().any(|a| a.contains("%h %ad")));
@@ -1934,7 +1992,6 @@ mod tests {
 
     #[test]
     fn test_git_log_build_args_oneline() {
-        let tool = GitLogTool::new();
         let input = GitLogInput {
             count: Some(3),
             author: None,
@@ -1944,14 +2001,13 @@ mod tests {
             patch: None,
             branch: None,
         };
-        let args = tool.build_log_args(&input).unwrap();
+        let args = GitLogTool::build_log_args(&input).unwrap();
         assert!(args.contains(&"-3".to_string()));
         assert!(args.contains(&"--oneline".to_string()));
     }
 
     #[test]
     fn test_git_log_build_args_with_filters() {
-        let tool = GitLogTool::new();
         let input = GitLogInput {
             count: Some(20),
             author: Some("bob@example.com".to_string()),
@@ -1961,7 +2017,7 @@ mod tests {
             patch: None,
             branch: Some("feature".to_string()),
         };
-        let args = tool.build_log_args(&input).unwrap();
+        let args = GitLogTool::build_log_args(&input).unwrap();
         assert!(args.contains(&"-20".to_string()));
         assert!(args.iter().any(|a| a.contains("bob@example.com")));
         assert!(args.iter().any(|a| a.contains("2 weeks ago")));
@@ -2979,7 +3035,6 @@ mod tests {
 
     #[test]
     fn test_git_diff_build_args_stat_mode() {
-        let tool = GitDiffTool::new();
         let input = GitDiffInput {
             staged: None,
             commit_range: None,
@@ -2988,13 +3043,12 @@ mod tests {
             ignore_whitespace: None,
             stat: Some(true),
         };
-        let args = tool.build_diff_args(&input).unwrap();
+        let args = GitDiffTool::build_diff_args(&input).unwrap();
         assert!(args.contains(&"--stat".to_string()));
     }
 
     #[test]
     fn test_git_diff_build_args_all_options() {
-        let tool = GitDiffTool::new();
         let input = GitDiffInput {
             staged: Some(true),
             commit_range: Some("abc..def".to_string()),
@@ -3003,7 +3057,7 @@ mod tests {
             ignore_whitespace: Some(true),
             stat: Some(true),
         };
-        let args = tool.build_diff_args(&input).unwrap();
+        let args = GitDiffTool::build_diff_args(&input).unwrap();
         assert!(args.contains(&"--cached".to_string()));
         assert!(args.contains(&"abc..def".to_string()));
         assert!(args.contains(&"--".to_string()));
@@ -3016,7 +3070,6 @@ mod tests {
 
     #[test]
     fn test_git_diff_build_args_empty_input() {
-        let tool = GitDiffTool::new();
         let input = GitDiffInput {
             staged: None,
             commit_range: None,
@@ -3025,13 +3078,12 @@ mod tests {
             ignore_whitespace: None,
             stat: None,
         };
-        let args = tool.build_diff_args(&input).unwrap();
+        let args = GitDiffTool::build_diff_args(&input).unwrap();
         assert!(args.contains(&"--color=never".to_string()));
     }
 
     #[test]
     fn test_git_diff_build_args_rejects_injection_in_commit_range() {
-        let tool = GitDiffTool::new();
         let input = GitDiffInput {
             staged: None,
             commit_range: Some("abc;rm -rf /".to_string()),
@@ -3040,13 +3092,12 @@ mod tests {
             ignore_whitespace: None,
             stat: None,
         };
-        let result = tool.build_diff_args(&input);
+        let result = GitDiffTool::build_diff_args(&input);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_git_diff_build_args_rejects_injection_in_file() {
-        let tool = GitDiffTool::new();
         let input = GitDiffInput {
             staged: None,
             commit_range: None,
@@ -3055,22 +3106,23 @@ mod tests {
             ignore_whitespace: None,
             stat: None,
         };
-        let result = tool.build_diff_args(&input);
+        let result = GitDiffTool::build_diff_args(&input);
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_git_diff_not_in_repo() {
+        let tool = GitDiffTool::new();
         let tmp = tempfile::tempdir().unwrap();
         let _cwd_guard = CwdGuard::acquire(tmp.path());
 
-        let tool = GitDiffTool::new();
         let result = tool.execute(json!({})).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_git_diff_no_changes() {
+        let tool = GitDiffTool::new();
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
@@ -3103,7 +3155,6 @@ mod tests {
 
         let _cwd_guard = CwdGuard::acquire(cwd);
 
-        let tool = GitDiffTool::new();
         let result = tool.execute(json!({})).await.unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("No unstaged changes found"));
@@ -3112,6 +3163,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_git_diff_with_unstaged_changes() {
+        let tool = GitDiffTool::new();
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
@@ -3146,7 +3198,6 @@ mod tests {
 
         let _cwd_guard = CwdGuard::acquire(cwd);
 
-        let tool = GitDiffTool::new();
         let result = tool.execute(json!({})).await.unwrap();
         assert!(!result.is_error);
         assert_eq!(result.metadata["has_changes"], json!(true));
@@ -3157,7 +3208,6 @@ mod tests {
 
     #[test]
     fn test_git_log_build_args_count_capped_at_100() {
-        let tool = GitLogTool::new();
         let input = GitLogInput {
             count: Some(500),
             author: None,
@@ -3167,14 +3217,13 @@ mod tests {
             patch: None,
             branch: None,
         };
-        let args = tool.build_log_args(&input).unwrap();
+        let args = GitLogTool::build_log_args(&input).unwrap();
         assert!(args.contains(&"-100".to_string()));
         assert!(!args.contains(&"-500".to_string()));
     }
 
     #[test]
     fn test_git_log_build_args_with_patch() {
-        let tool = GitLogTool::new();
         let input = GitLogInput {
             count: Some(5),
             author: None,
@@ -3184,13 +3233,12 @@ mod tests {
             patch: Some(true),
             branch: None,
         };
-        let args = tool.build_log_args(&input).unwrap();
+        let args = GitLogTool::build_log_args(&input).unwrap();
         assert!(args.contains(&"-p".to_string()));
     }
 
     #[test]
     fn test_git_log_build_args_rejects_injection_in_author() {
-        let tool = GitLogTool::new();
         let input = GitLogInput {
             count: None,
             author: Some("foo;rm -rf /".to_string()),
@@ -3200,13 +3248,12 @@ mod tests {
             patch: None,
             branch: None,
         };
-        let result = tool.build_log_args(&input);
+        let result = GitLogTool::build_log_args(&input);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_git_log_build_args_rejects_injection_in_branch() {
-        let tool = GitLogTool::new();
         let input = GitLogInput {
             count: None,
             author: None,
@@ -3216,13 +3263,12 @@ mod tests {
             patch: None,
             branch: Some("$(evil)".to_string()),
         };
-        let result = tool.build_log_args(&input);
+        let result = GitLogTool::build_log_args(&input);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_git_log_build_args_rejects_injection_in_file() {
-        let tool = GitLogTool::new();
         let input = GitLogInput {
             count: None,
             author: None,
@@ -3232,22 +3278,23 @@ mod tests {
             patch: None,
             branch: None,
         };
-        let result = tool.build_log_args(&input);
+        let result = GitLogTool::build_log_args(&input);
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_git_log_not_in_repo() {
+        let tool = GitLogTool::new();
         let tmp = tempfile::tempdir().unwrap();
         let _cwd_guard = CwdGuard::acquire(tmp.path());
 
-        let tool = GitLogTool::new();
         let result = tool.execute(json!({"count": 5})).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_git_log_empty_repo() {
+        let tool = GitLogTool::new();
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
@@ -3259,7 +3306,6 @@ mod tests {
 
         let _cwd_guard = CwdGuard::acquire(cwd);
 
-        let tool = GitLogTool::new();
         let result = tool.execute(json!({"count": 5})).await.unwrap();
         // Empty repo: git log fails, so the tool returns is_error=true with "Log failed" message
         assert!(result.is_error || result.content.contains("No commits found"));
@@ -3267,6 +3313,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_git_log_single_commit() {
+        let tool = GitLogTool::new();
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
@@ -3299,7 +3346,6 @@ mod tests {
 
         let _cwd_guard = CwdGuard::acquire(cwd);
 
-        let tool = GitLogTool::new();
         let result = tool
             .execute(json!({"count": 1, "oneline": true}))
             .await
@@ -3310,6 +3356,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_git_log_unicode_commit_message() {
+        let tool = GitLogTool::new();
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
@@ -3342,7 +3389,6 @@ mod tests {
 
         let _cwd_guard = CwdGuard::acquire(cwd);
 
-        let tool = GitLogTool::new();
         let result = tool
             .execute(json!({"count": 1, "oneline": true}))
             .await
@@ -3353,6 +3399,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_git_log_with_author_filter() {
+        let tool = GitLogTool::new();
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
@@ -3385,7 +3432,6 @@ mod tests {
 
         let _cwd_guard = CwdGuard::acquire(cwd);
 
-        let tool = GitLogTool::new();
         let result = tool
             .execute(json!({"count": 10, "author": "unique@author.com"}))
             .await

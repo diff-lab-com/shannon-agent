@@ -7,6 +7,8 @@ import { toastError } from '@/lib/errorToast'
 import { open } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
 import { useCatalog } from '@/context/CatalogContext'
+import { useSessions } from '@/context/SessionContext'
+import { pushComposerDraft } from '@/lib/composerBridge'
 import { SIDEBAR_MODE_KEY } from '@/components/Sidebar'
 import AddProviderModal from '@/components/settings/AddProviderModal'
 import { GradientText } from '@/components/reactbits/GradientText'
@@ -15,7 +17,7 @@ import { TaskStep } from './welcome/TaskStep'
 import { ModelStep } from './welcome/ModelStep'
 import { DoneStep } from './welcome/DoneStep'
 import MigrationWizard from '@/components/migration/MigrationWizard'
-import { TASKS, type TaskId } from './welcome/constants'
+import { PROVIDERS, TASKS, type TaskId } from './welcome/constants'
 import type { ProvidersFile } from '@/types'
 
 export const WELCOME_SEEN_KEY = 'shannon.hasSeenWelcome'
@@ -41,6 +43,9 @@ export default function Welcome() {
   const intl = useIntl()
   const navigate = useNavigate()
   const { refreshConfig, refreshStatus, config } = useCatalog()
+  // Hero-composer submit (design 01「开始 →」) mirrors Sidebar.startWithPrompt:
+  // ensure a session exists, then hand the text to the composer as a DRAFT.
+  const { currentSessionId, createSession } = useSessions()
   const [step, setStep] = useState(0)
   // No default selection — step 0 asks the user to make an explicit
   // choice, so Continue stays disabled until a card is picked.
@@ -49,9 +54,16 @@ export default function Welcome() {
   const [saving, setSaving] = useState(false)
   const [pickedDir, setPickedDir] = useState<string | null>(null)
   const [devMode, setDevMode] = useState(false)
+  // Hero composer text (design 01:122-137) — submitted by「开始 →」.
+  const [draft, setDraft] = useState('')
   // True once a usable provider was detected from the environment (API key
   // present, or a local engine like Ollama that needs no key).
   const [envProviderReady, setEnvProviderReady] = useState(false)
+  // Slugs of the env-detected API keys (design 01:165「已检测到本机密钥」) —
+  // the persistent BYOK badge in the page footer lists them all. Only
+  // key-bearing detections land here; the Ollama path keeps its toast
+  // (a local engine has no key to attest).
+  const [detectedKeys, setDetectedKeys] = useState<string[]>([])
   const envCheckedRef = useRef(false)
   const [providerSaved, setProviderSaved] = useState(false)
   const [showAddProviderModal, setShowAddProviderModal] = useState(false)
@@ -78,16 +90,23 @@ export default function Welcome() {
     if (envCheckedRef.current) return
     envCheckedRef.current = true
     api.detectProviderFromEnv()
-      .then(detected => {
-        if (!detected) return
-        setProvider(detected.provider)
-        if (detected.provider === 'ollama') {
-          // Ollama runs locally — detected means usable, no key involved.
-          setEnvProviderReady(true)
-          toast.info(intl.formatMessage({ id: 'welcome.envDetected.ollama' }))
-        } else if (detected.has_api_key) {
-          setEnvProviderReady(true)
-          toast.success(intl.formatMessage({ id: 'welcome.envDetected.toast' }, { provider: detected.provider }))
+      .then(detectedList => {
+        if (!detectedList?.length) return
+        // Recommended ranking order — first stays the pre-selected provider.
+        setProvider(detectedList[0].provider)
+        for (const detected of detectedList) {
+          if (detected.provider === 'ollama') {
+            // Ollama runs locally — detected means usable, no key involved.
+            setEnvProviderReady(true)
+            toast.info(intl.formatMessage({ id: 'welcome.envDetected.ollama' }))
+          } else if (detected.has_api_key) {
+            setEnvProviderReady(true)
+            // Persistent footer badge (design 01:165) — the toast below is the
+            // momentary ack, the badge stays for the whole flow. Multi-key
+            // (2026-10-08 缓期 #10): every detected key lands in the badge.
+            setDetectedKeys(prev => (prev.includes(detected.provider) ? prev : [...prev, detected.provider]))
+            toast.success(intl.formatMessage({ id: 'welcome.envDetected.toast' }, { provider: detected.provider }))
+          }
         }
       })
       .catch(e => console.warn('detectProviderFromEnv failed:', e))
@@ -117,7 +136,12 @@ export default function Welcome() {
     }
   }
 
-  const finish = async () => {
+  // Shared exit into /chat. With `composerDraft` set (hero-composer「开始 →」,
+  // design 01) the text travels as a composer DRAFT — never auto-sent — after
+  // making sure a session exists to receive it (Sidebar.startWithPrompt's
+  // contract). The draft parks in the composerBridge pending queue and
+  // flushes when ChatInput mounts on /chat.
+  const enterChat = async (composerDraft?: string) => {
     markWelcomeSeen()
     if (devMode) {
       window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
@@ -129,8 +153,23 @@ export default function Welcome() {
     } catch (e) {
       console.warn('seedSampleData failed:', e)
     }
+    const text = composerDraft?.trim()
+    if (text) {
+      if (!currentSessionId) {
+        try {
+          await createSession()
+        } catch (e) {
+          // Non-fatal: /chat boots its own session flow; the draft still
+          // flushes into whichever composer mounts next.
+          console.warn('createSession failed:', e)
+        }
+      }
+      pushComposerDraft(text)
+    }
     navigate('/chat', { replace: true })
   }
+
+  const finish = () => void enterChat()
 
   const pickDirectory = async () => {
     try {
@@ -198,12 +237,12 @@ export default function Welcome() {
               <TaskStep
                 task={task}
                 setTask={setTask}
-                onContinue={() => {
-                  // Task picked: guide the eye down to the model section
-                  // instead of navigating away (single-screen flow).
-                  document.getElementById('welcome-model-section')
-                    ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                }}
+                draft={draft}
+                setDraft={setDraft}
+                providerLabel={PROVIDERS.find(p => p.id === provider)?.label ?? provider}
+                providerReady={canAdvanceFromModel}
+                onStart={() => void enterChat(draft)}
+                onOpenProvider={() => setShowAddProviderModal(true)}
               />
               {task !== null && (
                 <div id="welcome-model-section" className="mt-lg scroll-mt-lg">
@@ -237,6 +276,31 @@ export default function Welcome() {
           )}
         </div>
       </main>
+
+      {/* Persistent footer (design 01:164-170): the BYOK badge lists every
+          env-detected key and the privacy line stays on screen for the whole
+          flow — the old 3-second toast was the only ack (parity audit §01). */}
+      <footer
+        className="mx-auto flex w-full max-w-narrow flex-wrap items-center gap-md px-xl pb-lg"
+        data-testid="welcome-footer"
+      >
+        {detectedKeys.length > 0 && (
+          <span
+            className="inline-flex items-center gap-xs rounded-full border border-outline-variant/40 bg-surface-container-low px-sm py-xs font-label-sm text-on-surface"
+            data-testid="welcome-env-key-badge"
+          >
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">shield</span>
+            {intl.formatMessage(
+              { id: 'welcome.envDetected.badge' },
+              { providers: detectedKeys.map(k => `${k.toUpperCase()} ✓`).join('  ') },
+            )}
+          </span>
+        )}
+        <span className="ml-auto inline-flex items-center gap-xs font-label-sm text-on-surface-variant">
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">lock</span>
+          {intl.formatMessage({ id: 'welcome.privacy.keysLocal' })}
+        </span>
+      </footer>
 
       {migrationOpen && (
         <MigrationWizard open={migrationOpen} onClose={() => setMigrationOpen(false)} />

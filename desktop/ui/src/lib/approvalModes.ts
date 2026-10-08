@@ -1,11 +1,12 @@
 // approvalModes — the single source for the approval tiers (v2, 4+3 model).
 //
 // docs/plans/2026-10-04-permission-mode-naming-design.md: the UI presents
-// THREE autonomy ladder tiers — `ask` → `auto-edit` → `full-auto` — plus a
-// separate composer plan toggle (plan is a workflow tier, never a ladder
-// stop), and three EXPERT modes reachable only from Settings ("advanced"):
-// readonly / dontAsk (CI) / bypassPermissions. This mirrors the TUI, whose
-// Shift+Tab cycles the same three ladder stops.
+// THREE autonomy ladder tiers — `ask` → `auto-edit` → `full-auto` — plus
+// `plan` (Aurora 2026-10, 裁决 B1: a legal engine approval_mode that now
+// rides IN the composer's four-stop segmented control), and three EXPERT
+// modes reachable only from Settings ("advanced"): readonly / dontAsk (CI) /
+// bypassPermissions. The TUI's Shift+Tab still cycles the original three
+// ladder stops.
 //
 // Legacy stored values (suggest/confirm/auto/auto_edit/permissive/
 // full_auto/full/strict/plan_ro/…) are normalized for display by
@@ -116,8 +117,14 @@ export function normalizeApprovalMode(value: string): ApprovalMode {
   return LEGACY_ALIASES[value] ?? (value as ApprovalMode)
 }
 
-/** The composer's plan toggle owns this workflow tier (design §5). */
-const PLAN_OPTION: ApprovalModeOption = {
+/**
+ * The plan workflow tier (design §5). Aurora 2026-10 (裁决 B1): `plan` is a
+ * LEGAL engine approval_mode (ApprovalMode::Plan — desktop parse_approval_mode
+ * maps "plan" → Plan, unit-tested), so it takes its seat in the composer's
+ * four-stop segmented control AND in the <1200px chip Select's option list.
+ * Exported so both surfaces share one definition.
+ */
+export const PLAN_OPTION: ApprovalModeOption = {
   value: 'plan',
   labelKey: 'chat.input.mode.plan',
   descriptionKey: 'chat.input.mode.plan.desc',

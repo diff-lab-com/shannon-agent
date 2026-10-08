@@ -189,8 +189,11 @@ impl Drop for AgentHandle {
 pub struct AgentHandle {
     /// The spawned child process.
     child: Child,
-    /// stdin for sending messages to the agent.
-    stdin: ChildStdin,
+    /// stdin for sending messages to the agent. Behind its own lock so a
+    /// slow/hung write cannot hold the agents-map lock: a pipe-full write
+    /// blocks until the agent reads, and under the map write guard it used
+    /// to deadlock `kill_agent`/`spawn_agent` for every other agent.
+    stdin: Arc<tokio::sync::Mutex<ChildStdin>>,
     /// Agent name.
     name: String,
     /// Current status.
@@ -201,7 +204,7 @@ pub struct AgentHandle {
     #[allow(dead_code)] // KEEP: watcher lifecycle
     event_tx: mpsc::Sender<AgentEvent>,
     /// Kill handle sender — drop the child on shutdown.
-    _kill_tx: oneshot::Sender<()>,
+    kill_tx: Option<oneshot::Sender<()>>,
     /// Original config used to spawn this agent (for restart).
     config: AgentProcessConfig,
     /// Number of times this agent has been restarted.
@@ -486,12 +489,12 @@ impl AgentProcessManager {
 
         let handle = AgentHandle {
             child,
-            stdin,
+            stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
             name: name.clone(),
             status: AgentProcessStatus::Starting,
             pending_rpcs,
             event_tx: self.event_tx.clone(),
-            _kill_tx: kill_tx,
+            kill_tx: Some(kill_tx),
             config,
             restart_count: 0,
             last_seen: Instant::now(),
@@ -540,29 +543,35 @@ impl AgentProcessManager {
         let rpc_id = self.next_id();
         let msg = JsonRpcMessage::request(method, params, rpc_id);
 
-        let mut agents = self.agents.write().await;
-        let handle = agents
-            .get_mut(agent_name)
-            .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
-
-        let (tx, rx) = oneshot::channel();
-        {
-            let mut rpcs = handle
-                .pending_rpcs
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            rpcs.insert(rpc_id, PendingRpc { sender: tx });
-        }
+        // Register the pending RPC and grab the stdin handle under a READ
+        // lock, then write OUTSIDE the map lock — a pipe-full write blocks
+        // until the agent reads, and under the write guard it deadlocked
+        // kill_agent/spawn_agent/get_status for every other agent.
+        let (stdin, rx) = {
+            let agents = self.agents.read().await;
+            let handle = agents
+                .get(agent_name)
+                .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
+            let (tx, rx) = oneshot::channel();
+            {
+                let mut rpcs = handle
+                    .pending_rpcs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                rpcs.insert(rpc_id, PendingRpc { sender: tx });
+            }
+            (Arc::clone(&handle.stdin), rx)
+        };
 
         let line = frame_message(&msg).map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
-        handle
-            .stdin
-            .write_all(line.as_bytes())
-            .await
-            .map_err(AgentProcessError::Io)?;
-        handle.stdin.flush().await.map_err(AgentProcessError::Io)?;
-
-        drop(agents);
+        {
+            let mut stdin = stdin.lock().await;
+            stdin
+                .write_all(line.as_bytes())
+                .await
+                .map_err(AgentProcessError::Io)?;
+            stdin.flush().await.map_err(AgentProcessError::Io)?;
+        }
 
         // Wait for response
         rx.await
@@ -583,18 +592,21 @@ impl AgentProcessManager {
     ) -> Result<(), AgentProcessError> {
         let msg = JsonRpcMessage::notification(method, params);
 
-        let mut agents = self.agents.write().await;
-        let handle = agents
-            .get_mut(agent_name)
-            .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
+        let stdin = {
+            let agents = self.agents.read().await;
+            let handle = agents
+                .get(agent_name)
+                .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
+            Arc::clone(&handle.stdin)
+        };
 
         let line = frame_message(&msg).map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
-        handle
-            .stdin
+        let mut stdin_guard = stdin.lock().await;
+        stdin_guard
             .write_all(line.as_bytes())
             .await
             .map_err(AgentProcessError::Io)?;
-        handle.stdin.flush().await.map_err(AgentProcessError::Io)?;
+        stdin_guard.flush().await.map_err(AgentProcessError::Io)?;
 
         Ok(())
     }
@@ -632,6 +644,12 @@ impl AgentProcessManager {
     pub async fn kill_agent(&self, agent_name: &str) -> Result<(), AgentProcessError> {
         let mut agents = self.agents.write().await;
         if let Some(mut handle) = agents.remove(agent_name) {
+            // Fire the kill signal first so the exit watcher emits
+            // ProcessExited immediately (previously the channel never
+            // carried a signal — the watcher only woke on the sender's drop).
+            if let Some(kill_tx) = handle.kill_tx.take() {
+                kill_tx.send(()).ok();
+            }
             if let Err(e) = handle.child.kill().await {
                 tracing::debug!(agent = %agent_name, error = %e, "Failed to kill agent process");
             }
@@ -905,12 +923,12 @@ impl AgentProcessManager {
 
                                                 let handle = AgentHandle {
                                                     child,
-                                                    stdin,
+                                                    stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
                                                     name: name.clone(),
                                                     status: AgentProcessStatus::Starting,
                                                     pending_rpcs: rpc_map,
                                                     event_tx: event_tx.clone(),
-                                                    _kill_tx: kill_tx,
+                                                    kill_tx: Some(kill_tx),
                                                     config,
                                                     restart_count,
                                                     last_seen: Instant::now(),
@@ -1200,10 +1218,13 @@ impl AgentProcessManager {
         request_id: i64,
         result: serde_json::Value,
     ) -> Result<(), AgentProcessError> {
-        let mut agents = self.agents.write().await;
-        let handle = agents
-            .get_mut(agent_name)
-            .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
+        let stdin = {
+            let agents = self.agents.read().await;
+            let handle = agents
+                .get(agent_name)
+                .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
+            Arc::clone(&handle.stdin)
+        };
 
         let response = JsonRpcMessage::response(protocol::JsonRpcId::Number(request_id), result);
         let line = frame_message(&response).map_err(|e| AgentProcessError::SpawnFailed {
@@ -1211,15 +1232,17 @@ impl AgentProcessManager {
             source: std::io::Error::other(e.to_string()),
         })?;
 
+        // Write outside the agents lock — same deadlock shape as
+        // send_request/send_notification.
         use tokio::io::AsyncWriteExt;
-        handle.stdin.write_all(line.as_bytes()).await.map_err(|e| {
+        let mut stdin_guard = stdin.lock().await;
+        stdin_guard.write_all(line.as_bytes()).await.map_err(|e| {
             AgentProcessError::SpawnFailed {
                 agent: agent_name.to_string(),
                 source: e,
             }
         })?;
-        handle
-            .stdin
+        stdin_guard
             .flush()
             .await
             .map_err(|e| AgentProcessError::SpawnFailed {

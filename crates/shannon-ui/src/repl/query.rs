@@ -841,7 +841,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         repl.state.desktop_notified = false;
         repl.chat.streaming_active = true;
 
-        loop {
+        'streaming: loop {
             let is_done = streaming.lock().map(|s| s.done).unwrap_or(false);
             let query_finished = is_done || query_handle.is_finished();
 
@@ -1108,9 +1108,50 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 }
             }
 
-            // Handle key events during streaming: cancel, scroll, and input
-            if crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
-                if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
+            // Handle key events during streaming: cancel, scroll, and input.
+            // Drain ALL pending events per frame: the old single-read per
+            // 50 ms iteration capped typing at ~20 keys/sec and silently
+            // discarded bracketed pastes and mouse/resize events. Capped at
+            // 256 events per frame so an event storm cannot starve rendering.
+            let mut drained = 0usize;
+            loop {
+                let ev = if crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false)
+                    && drained < 256
+                {
+                    drained += 1;
+                    crossterm::event::read()
+                } else {
+                    break;
+                };
+                let key = match ev {
+                    Ok(crossterm::event::Event::Key(key)) => key,
+                    Ok(crossterm::event::Event::Paste(text)) => {
+                        // Bracketed paste mid-stream: feed the text into the
+                        // prompt the same way the idle input loop does.
+                        for c in text.chars() {
+                            if c == '\n' || c == '\r' {
+                                repl.prompt.insert_newline();
+                            } else {
+                                repl.prompt.add_char(c);
+                            }
+                        }
+                        continue;
+                    }
+                    Ok(crossterm::event::Event::Mouse(mouse)) => {
+                        // Same gate as the idle event loop: the wheel used to
+                        // be dropped here with "next frame redraws" — but a
+                        // redraw alone never scrolls, so streaming output
+                        // could not be wheel-navigated.
+                        if repl.state.mouse_capture_enabled {
+                            repl.mark_frame_dirty();
+                            super::input::handle_mouse(repl, mouse);
+                        }
+                        continue;
+                    }
+                    Ok(_) => continue, // Resize/Focus: next frame redraws
+                    Err(_) => break,
+                };
+                {
                     let is_cancel = matches!(key.code, crossterm::event::KeyCode::Esc)
                         || (key.code == crossterm::event::KeyCode::Char('c')
                             && key
@@ -1143,7 +1184,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             s.buffer.push_str("\n\n⚠️ Cancelled by user.");
                             s.status = t!("status.cancelled_status").to_string();
                         }
-                        break;
+                        break 'streaming;
                     }
 
                     // Allow scrolling and input during streaming
@@ -1373,13 +1414,17 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             steps,
             stats_summary,
         )) => {
-            // Post-process <think/> tags for models that embed thinking in regular text (GLM, etc.)
+            // Post-process <think> tags for models that embed thinking in
+            // regular text (GLM, etc.). The old pattern matched `<think/>` /
+            // `</think/>` (self-closing-style strings no model emits), so
+            // this last-line-of-defense fallback never fired and raw
+            // reasoning markup rendered into chat.
             if thinking.is_empty() {
-                if let Some(pos) = response.find("<think/>") {
-                    let rest = response[pos + 8..].to_string();
-                    if let Some(end) = rest.find("</think/>") {
+                if let Some(pos) = response.find("<think>") {
+                    let rest = response[pos + "<think>".len()..].to_string();
+                    if let Some(end) = rest.find("</think>") {
                         thinking = rest[..end].to_string();
-                        response = rest[end + 9..].to_string();
+                        response = rest[end + "</think>".len()..].to_string();
                     } else {
                         thinking = rest;
                         response.clear();
@@ -1712,23 +1757,14 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         );
     }
 
-    // T5: one-time redaction opt-in notice. The built-in secret-guard runs
-    // audit-only by default, so detected secret values are forwarded to the
-    // provider and logged; when this turn's outbound requests contained
-    // secret-shaped content, tell the user (exactly once, non-blocking chat
-    // note — never a prompt) how to switch redaction on. Headless hosts get
-    // the same hint via the `tracing::warn!` in
-    // `shannon_core::secret_guard::take_redaction_suggestion`.
-    if shannon_core::secret_guard::take_redaction_suggestion() {
-        repl.chat.add_message(
-            ChatRole::System,
-            "\u{26A0} Secret-guard detected secret-shaped content in outbound \
-             requests (audit-only mode: values were forwarded to the provider \
-             and written to the session log). Enable redaction with \
-             `[secret_guard] mode = \"redact\"` in .shannon.toml (or \
-             ~/.shannon/config.toml), or `SHANNON_SECRET_GUARD=redact`."
-                .to_string(),
-        );
+    // T5: one-time mode notice. The copy is owned by the core
+    // (`take_redaction_suggestion` returns it) so the surface cannot drift
+    // from the behavior: audit-mode hits explain what was forwarded and how
+    // to switch redaction on; redact-mode hits (the default) explain the
+    // surrogate replacement and the escape hatches. Surfaced exactly once,
+    // as a non-blocking chat note — never a prompt.
+    if let Some(notice) = shannon_core::secret_guard::take_redaction_suggestion() {
+        repl.chat.add_message(ChatRole::System, notice);
     }
 
     Ok(())
