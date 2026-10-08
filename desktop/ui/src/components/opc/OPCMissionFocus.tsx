@@ -29,10 +29,13 @@ export default function OPCMissionFocus({ config, tasks }: Props) {
 
   // 使命 hero 三要素的纯前端部分 (audit §09 P1): counts + progress bar +
   // aurora line — all derived from the tasks the page already holds.
+  // Catalog may not have hydrated (tests, degraded states) — never assume
+  // the array exists (OPCMissionFocus tests mock useCatalog without tasks).
+  const safeTasks = useMemo(() => tasks ?? [], [tasks])
   const { activeCount, doneCount, progressPct } = useMemo(() => {
     let active = 0
     let done = 0
-    for (const task of tasks) {
+    for (const task of safeTasks) {
       const family = classifyStatus(task.status)
       if (family === 'active') active++
       else if (family === 'done') done++
@@ -40,9 +43,9 @@ export default function OPCMissionFocus({ config, tasks }: Props) {
     return {
       activeCount: active,
       doneCount: done,
-      progressPct: tasks.length > 0 ? Math.round((done / tasks.length) * 100) : 0,
+      progressPct: safeTasks.length > 0 ? Math.round((done / safeTasks.length) * 100) : 0,
     }
-  }, [tasks])
+  }, [safeTasks])
 
   const save = () => {
     api.configure({ key: 'strategic_focus', value: text })
@@ -117,7 +120,7 @@ export default function OPCMissionFocus({ config, tasks }: Props) {
               </span>
               <span aria-hidden="true">·</span>
               <span className="tabular-nums">
-                {intl.formatMessage({ id: 'opc.missionFocus.totalCount' }, { count: tasks.length })}
+                {intl.formatMessage({ id: 'opc.missionFocus.totalCount' }, { count: safeTasks.length })}
               </span>
             </div>
           </div>
