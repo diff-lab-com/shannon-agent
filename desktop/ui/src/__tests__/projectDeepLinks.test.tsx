@@ -83,6 +83,8 @@ function inboxItem(o: Partial<InboxItem> & { id: number; title: string }): Inbox
     summary: 'summary',
     error: null,
     status: 'pending',
+    requestId: null,
+    risk: null,
     createdAtMs: NOW - 60_000,
     updatedAtMs: NOW - 60_000,
     ...o,

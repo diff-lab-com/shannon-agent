@@ -1675,7 +1675,19 @@ export const handlers: Record<string, MockHandler> = {
   async trace_timeline() { await delay(); return clone(MOCK_TURN_TIMELINE) },
 
   // --- Permissions ---
-  async respond_permission() { await delay(20) },
+  // Design 05 收件箱审批闭环: a demo answer resolves the matching
+  // `session_approval` inbox item read — mirroring the real backend, where
+  // prompt_user resolves the entry when the prompt settles.
+  async respond_permission(args: { requestId?: string; allow?: boolean }) {
+    await delay(20)
+    if (args.requestId) {
+      const item = state.inbox.find(i => i.source === 'session_approval' && i.requestId === args.requestId)
+      if (item && item.status === 'pending') {
+        item.status = 'read'
+        item.updatedAtMs = Date.now()
+      }
+    }
+  },
 
   // --- Ask user (Settings R3 T8) — demo ask-user-request events come from
   // the scripted player; answers are accepted and discarded. ---
@@ -2019,6 +2031,8 @@ export const handlers: Record<string, MockHandler> = {
         summary: 'Rerun finished successfully.',
         error: null,
         status: 'pending',
+        requestId: null,
+        risk: null,
         createdAtMs: Date.now(),
         updatedAtMs: Date.now(),
       })

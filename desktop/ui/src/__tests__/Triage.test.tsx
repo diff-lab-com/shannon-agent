@@ -40,6 +40,16 @@ const testMessages: Record<string, string> = {
   'inbox.action.handle': 'Handle',
   'inbox.action.handle.aria': 'Open the session to handle the waiting approval request',
   'inbox.toast.handleGuidance': 'Session opened — approve or deny the permission request there.',
+  'inbox.approval.approve': 'Approve',
+  'inbox.approval.reject': 'Deny',
+  'inbox.approval.approved': 'Approved — the session will continue.',
+  'inbox.approval.rejected': 'Denied — the session was told no.',
+  'inbox.approval.expired': 'This approval request is no longer active — handle it in the session.',
+  'inbox.approval.risk.aria': 'Risk level: {level}',
+  'inbox.approval.risk.critical': 'Critical',
+  'inbox.approval.risk.high': 'High',
+  'inbox.approval.risk.medium': 'Medium',
+  'inbox.approval.risk.low': 'Low',
   'inbox.continue.prefill': 'Continue working on: {summary}',
   'inbox.review.label': 'Review',
   'inbox.review.aria': 'Review this skill candidate in Extensions → Pending',
@@ -119,6 +129,7 @@ vi.mock('@/lib/tauri-api', async () => {
   return {
     ...actual,
     updateInboxItemStatus: vi.fn().mockResolvedValue(undefined),
+    respondPermission: vi.fn().mockResolvedValue(undefined),
   }
 })
 
@@ -133,6 +144,8 @@ function makeItem(o: Partial<InboxItem> & { id: number }): InboxItem {
     status: 'pending',
     createdAtMs: 1_700_000_000_000,
     updatedAtMs: 1_700_000_000_000,
+    requestId: null,
+    risk: null,
     ...o,
   }
   // Store invariant: a freshly appended row has updatedAtMs == createdAtMs
@@ -188,12 +201,29 @@ function renderPage(initialEntry: string | { pathname: string; state?: unknown }
   )
 }
 
+/** Approval-closure tests: one pending session_approval card, overrides on top. */
+function renderPageWithItem(overrides: Partial<InboxItem> & { id?: number } = {}) {
+  setItems([
+    makeItem({
+      id: 40,
+      source: 'session_approval',
+      sessionId: 'sess-77',
+      title: 'bash',
+      requestId: 'perm-40',
+      ...overrides,
+    }),
+  ])
+  return renderPage()
+}
+
 beforeEach(() => {
   itemsSpy.mockReset()
   statsSpy.mockReset()
   switchSessionSpy.mockReset()
   switchSessionSpy.mockResolvedValue(undefined)
   vi.mocked(api.updateInboxItemStatus).mockClear()
+  vi.mocked(api.respondPermission).mockReset()
+  vi.mocked(api.respondPermission).mockResolvedValue(undefined)
   vi.mocked(toast.success).mockClear()
   vi.mocked(toast.error).mockClear()
   setItems([])
@@ -864,5 +894,150 @@ describe('W3-2 run outcome on triage cards', () => {
     ])
     renderPage()
     expect(screen.queryByTestId('inbox-run-status')).not.toBeInTheDocument()
+  })
+})
+
+// ── Design 05 收件箱审批闭环: pending approval rows carry the live
+// requestId, so the card answers it inline through respondPermission; risk
+// rides along for the Header-consistent four-tier badge. ───────────────────
+describe('Triage — inline approval closure (requestId cards)', () => {
+  beforeEach(() => {
+    vi.mocked(api.respondPermission).mockReset()
+    vi.mocked(api.respondPermission).mockResolvedValue(undefined)
+  })
+
+  it('renders inline Approve/Deny (not 「Handle」) on a pending card with a requestId', () => {
+    setItems([
+      makeItem({
+        id: 30,
+        source: 'session_approval',
+        sessionId: 'sess-77',
+        title: 'bash',
+        requestId: 'perm-30',
+        risk: 'high',
+      }),
+    ])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument()
+    // The blind jump is gone while the live decision is available…
+    expect(screen.queryByRole('button', { name: 'Open the session to handle the waiting approval request' })).not.toBeInTheDocument()
+    // …and so is the automation-facing resume wording.
+    expect(screen.queryByRole('button', { name: 'Continue this item session' })).not.toBeInTheDocument()
+  })
+
+  it('approve calls respondPermission(requestId, true), toasts success and refreshes the list', async () => {
+    const { refresh } = setItems([
+      makeItem({
+        id: 31,
+        source: 'session_approval',
+        sessionId: 'sess-77',
+        title: 'bash',
+        requestId: 'perm-31',
+        risk: 'low',
+      }),
+    ])
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await waitFor(() => expect(api.respondPermission).toHaveBeenCalledWith('perm-31', true))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Approved — the session will continue.'))
+    expect(toast.error).not.toHaveBeenCalled()
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
+  })
+
+  it('deny calls respondPermission(requestId, false) with the rejected toast', async () => {
+    setItems([
+      makeItem({
+        id: 32,
+        source: 'session_approval',
+        sessionId: 'sess-77',
+        title: 'bash',
+        requestId: 'perm-32',
+        risk: 'medium',
+      }),
+    ])
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    await waitFor(() => expect(api.respondPermission).toHaveBeenCalledWith('perm-32', false))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Denied — the session was told no.'))
+  })
+
+  it('falls back to 「Handle」 with the honest expired toast when the request is gone', async () => {
+    vi.mocked(api.respondPermission).mockRejectedValue(new Error('Permission request not found: perm-33'))
+    setItems([
+      makeItem({
+        id: 33,
+        source: 'session_approval',
+        sessionId: 'sess-77',
+        title: 'bash',
+        requestId: 'perm-33',
+        risk: 'high',
+      }),
+    ])
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('This approval request is no longer active — handle it in the session.'))
+    // No fake success: the approval toast must stay silent.
+    expect(toast.success).not.toHaveBeenCalled()
+    // The card reverts to the honest 「去处理」 jump (request answered in the
+    // session / timed out — inline is no longer claimable).
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Open the session to handle the waiting approval request' })).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the 「Handle」 jump on legacy rows without a requestId', () => {
+    setItems([
+      makeItem({ id: 34, source: 'session_approval', sessionId: 'sess-77', title: 'bash', requestId: null }),
+    ])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Open the session to handle the waiting approval request' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Deny' })).not.toBeInTheDocument()
+    expect(api.respondPermission).not.toHaveBeenCalled()
+  })
+
+  it('hides the inline buttons once the entry is settled (read)', () => {
+    setItems([
+      makeItem({
+        id: 35,
+        source: 'session_approval',
+        sessionId: 'sess-77',
+        title: 'bash',
+        status: 'read',
+        requestId: 'perm-35',
+        risk: 'low',
+      }),
+    ])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Open the session to handle the waiting approval request' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+  })
+
+  // Risk badge: the Header permission dialog's four container pairs —
+  // critical=error / high=secondary / medium=warning / low=tertiary.
+  it('maps the risk tier onto the Header-consistent container pairs', () => {
+    const cases: Array<[string, string]> = [
+      ['critical', 'bg-error-container'],
+      ['high', 'bg-secondary-container'],
+      ['medium', 'bg-warning-container'],
+      ['low', 'bg-tertiary-container'],
+    ]
+    for (const [tier, expected] of cases) {
+      const { unmount } = renderPageWithItem({ risk: tier })
+      const badge = screen.getByTestId('inbox-approval-risk')
+      expect(badge.className).toContain(expected)
+      expect(badge).toHaveAttribute('aria-label', `Risk level: ${tier[0].toUpperCase()}${tier.slice(1)}`)
+      unmount()
+    }
+  })
+
+  it('renders no risk badge when the risk column is null or off-vocabulary', () => {
+    const { unmount } = renderPageWithItem({ risk: null })
+    expect(screen.queryByTestId('inbox-approval-risk')).not.toBeInTheDocument()
+    unmount()
+    renderPageWithItem({ risk: 'unknown-tier' })
+    expect(screen.queryByTestId('inbox-approval-risk')).not.toBeInTheDocument()
   })
 })

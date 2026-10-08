@@ -46,16 +46,35 @@ type SortOrder = 'newest' | 'oldest'
 const RERUNNABLE_SOURCES: readonly InboxSource[] = ['routine', 'scheduled_task']
 
 /// IA T6: session-scoped sources (permission prompt / failed turn). Their
-/// card's primary action targets the session — for approvals it reads
-/// 「去处理」 (design 05: the approval happens in the session's prompt card;
-/// the item payload carries no permission request id, so inline approve /
-/// deny on the card would be a fake button — see handleContinue), and for
-/// failures it stays the read-oriented 「查看会话」.
+/// card's primary action targets the session — for approvals with a live
+/// `requestId` the card upgrades to inline 批准/拒绝 (design 05 收件箱审批
+/// 闭环), and for failures it stays the read-oriented 「查看会话」.
 const SESSION_SOURCES: readonly InboxSource[] = ['session_approval', 'session_failed']
 
 /// The approval subset of SESSION_SOURCES — the only cards whose primary
 /// reads 「去处理」 and toasts the in-session guidance after the jump.
 const APPROVAL_SOURCES: readonly InboxSource[] = ['session_approval']
+
+/// Risk tiers the backend's free-text `risk` column may carry on approval
+/// rows. Anything else renders no badge rather than an invented label.
+const RISK_TIERS: readonly string[] = ['critical', 'high', 'medium', 'low']
+
+/// Risk badge container pair — mirrors the Header permission dialog's four
+/// distinguishable tiers (Header.tsx): critical=error / high=secondary /
+/// medium=warning (amber is the high-risk signal) / low=tertiary.
+/// Exported for tests (the container-pair mapping is a contract).
+export function riskBadgeClass(risk: string): string {
+  switch (risk) {
+    case 'critical':
+      return 'bg-error-container text-on-error-container'
+    case 'high':
+      return 'bg-secondary-container text-on-secondary-container'
+    case 'medium':
+      return 'bg-warning-container text-on-warning-container'
+    default:
+      return 'bg-tertiary-container text-on-tertiary-container'
+  }
+}
 
 function canRerun(item: InboxItem): boolean {
   return RERUNNABLE_SOURCES.includes(item.source) && item.status !== 'archived'
@@ -147,7 +166,7 @@ function parseSourceParam(v: string | null): SourceFilter {
   return v !== null && v !== 'all' && SOURCE_OPTIONS.includes(v as InboxSource) ? (v as InboxSource) : undefined
 }
 
-function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun, onOpenSource, onReview, onViewReport }: {
+function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun, onOpenSource, onReview, onViewReport, onApprovalDecision }: {
   item: InboxItem
   selected: boolean
   focused?: boolean
@@ -164,10 +183,24 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
   /** Dream report: open the Memory page's distillation section (report +
       proposal review live there — there is no per-item detail view). */
   onViewReport: (item: InboxItem) => void
+  /** Design 05 收件箱审批闭环: answer the LIVE permission request from the
+      card. Resolves `true` on success (backend marks the entry read), `false`
+      when the request is gone — the card then falls back to 「去处理」. */
+  onApprovalDecision: (item: InboxItem, allow: boolean) => Promise<boolean>
 }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const [showError, setShowError] = useState(false)
+  // Inline-decision lifecycle: `idle` (buttons live) → `deciding` (in flight,
+  // both disabled) → back to `idle` on success, or `expired` when
+  // respondPermission rejected (stale request) — the honest 「去处理」
+  // fallback button returns.
+  const [decision, setDecision] = useState<'idle' | 'deciding' | 'expired'>('idle')
+  const decide = useCallback(async (allow: boolean) => {
+    setDecision('deciding')
+    const ok = await onApprovalDecision(item, allow)
+    setDecision(ok ? 'idle' : 'expired')
+  }, [onApprovalDecision, item])
   const meta = sourceMeta(item.source)
   const rerunnable = canRerun(item)
   const openSource = canOpenSource(item)
@@ -178,7 +211,13 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
   // Design 05 (审查 R1): approval cards read 「去处理」 — the payload carries
   // no permission request id, so the card cannot approve/deny inline without
   // faking it; the jump + toast guidance is the honest loop.
+  // 2026-10 收件箱审批闭环 upgrade: pending approval rows now DO carry the
+  // live `requestId` — inline 批准/拒绝 replaces the jump for them; rows
+  // without an id (old entries, already-settled cards) keep the jump.
   const isApprovalSource = APPROVAL_SOURCES.includes(item.source)
+  const riskTier = item.risk != null && RISK_TIERS.includes(item.risk) ? item.risk : null
+  const inlineApproval = isApprovalSource && isPending && item.requestId != null && decision !== 'expired'
+  const deciding = decision === 'deciding'
   // IA X1: skill candidates are assets, not run results — the card links to
   // the rich review queue (Extensions → Pending) instead of approving inline
   // (评审裁决 #2: 收件箱只放发现条目，不做卡内审批).
@@ -230,6 +269,18 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
                 </span>
               )}
               <span className={cn("font-label-sm text-label-xs font-bold uppercase tracking-wider", meta.color)}>{t(meta.labelKey)}</span>
+              {/* 收件箱审批闭环: the prompt's risk tier, in the Header
+                  permission dialog's four-tier container-pair language.
+                  Colour never rides alone — the tier word is the content. */}
+              {isApprovalSource && riskTier != null && (
+                <span
+                  data-testid="inbox-approval-risk"
+                  aria-label={t('inbox.approval.risk.aria', { level: t(`inbox.approval.risk.${riskTier}`) })}
+                  className={cn('px-xs py-0.5 rounded-full font-label-xs font-bold uppercase tracking-wider', riskBadgeClass(riskTier))}
+                >
+                  {t(`inbox.approval.risk.${riskTier}`)}
+                </span>
+              )}
               {isPending && <span className="w-2 h-2 rounded-full bg-primary shrink-0" title={t('inbox.pending.title')} />}
               {item.status === 'archived' && <span className="font-label-sm text-label-xs text-on-surface-variant">{t('inbox.status.archived')}</span>}
             </div>
@@ -272,7 +323,39 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
               2026-10 redesign (05-inbox.html): the primary leads the ops
               cluster — solid primary button first, secondary jumps/icons
               trail it. */}
-          {item.sessionId && (
+          {/* Design 05 收件箱审批闭环: a pending approval row carrying the
+              live requestId upgrades to inline 批准/拒绝 — the buttons answer
+              the actual permission request via respond_permission, and the
+              backend marks the entry read when the prompt settles. On failure
+              (request answered elsewhere / timed out) the card falls back to
+              the honest 「去处理」 jump below. */}
+          {inlineApproval ? (
+            <>
+              <Button
+                size="sm"
+                disabled={deciding}
+                aria-label={t('inbox.approval.approve')}
+                title={t('inbox.approval.approve')}
+                className="cursor-pointer inline-flex items-center gap-xs"
+                onClick={() => void decide(true)}
+              >
+                <span className="material-symbols-outlined icon-sm">check</span>
+                {t('inbox.approval.approve')}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={deciding}
+                aria-label={t('inbox.approval.reject')}
+                title={t('inbox.approval.reject')}
+                className="cursor-pointer inline-flex items-center gap-xs border border-outline-variant/40 text-on-surface-variant hover:text-error hover:border-error/40 hover:bg-error/10"
+                onClick={() => void decide(false)}
+              >
+                <span className="material-symbols-outlined icon-sm">close</span>
+                {t('inbox.approval.reject')}
+              </Button>
+            </>
+          ) : item.sessionId && (
             <Button
               size="sm"
               aria-label={t(
@@ -622,10 +705,9 @@ export default function Triage() {
   // context — the backend returns the item's summary/error and the page
   // prefills the composer draft (pushComposerDraft never sends; the user
   // reviews and hits send, per the composerBridge trust contract).
-  // Approval cards additionally toast the in-session guidance: the inbox
-  // payload carries no permission request id (the live request lives in the
-  // session's prompt card), so inline approve/deny here would be a fake
-  // button — the honest loop is the jump + a pointer to the card.
+  // 收件箱审批闭环 upgrade: cards WITH a live requestId now decide inline
+  // (handleApprovalDecision); this jump stays for rows without one (old
+  // entries / already-settled cards) and toasts the in-session guidance.
   const handleContinue = useCallback(async (item: InboxItem) => {
     const target = await getContinueTarget(item.id)
     if (!target) return
@@ -644,6 +726,30 @@ export default function Triage() {
   const handleRerun = useCallback(async (item: InboxItem) => {
     await rerun(item.id)
   }, [rerun])
+
+  // 收件箱审批闭环: answer the card's LIVE permission request through the
+  // existing `respond_permission` command (the same seam the Header approval
+  // dialog uses). On success the backend's prompt_user resolves the inbox
+  // entry read when the prompt settles (resolve_session_approval) and emits
+  // inbox-updated — refresh makes the transition immediate even if the event
+  // raced this await. On failure the request is gone (already answered in the
+  // session, auto-denied by timeout, or its window closed): the honest toast
+  // says so and the card falls back to 「去处理」 instead of pretending the
+  // decision landed. Never markRead here — a user-archived entry must not be
+  // demoted back to read by an unrelated resolve.
+  const handleApprovalDecision = useCallback(async (item: InboxItem, allow: boolean): Promise<boolean> => {
+    if (!item.requestId) return false
+    try {
+      await api.respondPermission(item.requestId, allow)
+      toast.success(intl.formatMessage({ id: allow ? 'inbox.approval.approved' : 'inbox.approval.rejected' }))
+      await refresh()
+      return true
+    } catch {
+      toast.error(intl.formatMessage({ id: 'inbox.approval.expired' }))
+      await refresh()
+      return false
+    }
+  }, [refresh, intl])
 
   // IA T2: back-link to the automation that produced the item — /tasks
   // consumes `openRoutineId` from router state to open RoutineDetailDrawer.
@@ -946,6 +1052,7 @@ export default function Triage() {
                             onOpenSource={handleOpenSource}
                             onReview={handleReview}
                             onViewReport={handleViewReport}
+                            onApprovalDecision={handleApprovalDecision}
                           />
                         ))}
                       </div>
@@ -966,6 +1073,7 @@ export default function Triage() {
                     onOpenSource={handleOpenSource}
                     onReview={handleReview}
                     onViewReport={handleViewReport}
+                    onApprovalDecision={handleApprovalDecision}
                   />
                 ))}
             </div>

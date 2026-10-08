@@ -1562,6 +1562,14 @@ export interface InboxItem {
   status: InboxItemStatus
   createdAtMs: number
   updatedAtMs: number
+  /// Design 05 收件箱审批闭环: for `session_approval` rows, the live
+  /// permission request id the card's inline 批准/拒绝 buttons answer via
+  /// `respondPermission`. `null` on every other source and on rows written
+  /// before the column existed (those keep the honest 「去处理」 jump).
+  requestId: string | null
+  /// Risk tier of the gated tool (`critical`/`high`/`medium`/`low`), for the
+  /// card's risk badge. `null` when unknown.
+  risk: string | null
 }
 
 /// Optional filters for `list_inbox_items`. All fields optional.

@@ -39,6 +39,8 @@ function makeItem(o: Partial<InboxItem> & { id: number }): InboxItem {
     summary: 'summary',
     error: null,
     status: 'pending',
+    requestId: null,
+    risk: null,
     createdAtMs: 1_700_000_000_000,
     updatedAtMs: 1_700_000_000_000,
     ...o,
