@@ -284,6 +284,10 @@ pub struct StoredSessionMeta {
     pub total_input_tokens: u64,
     /// Total output tokens summed over completed turns.
     pub total_output_tokens: u64,
+    /// Context peak (上下文峰值): max context window over completed turns;
+    /// `None` when no logged turn knew its window. Additive + optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_tokens: Option<u64>,
     /// Number of started turns.
     pub turn_count: usize,
     /// Curated title (sidecar), else `None`.
@@ -335,6 +339,10 @@ pub struct StoredSessionInfo {
     pub turn_count: usize,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
+    /// Context peak (上下文峰值): max context window over completed turns;
+    /// `None` when no logged turn knew its window. Additive + optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_tokens: Option<u64>,
     pub parent_session_id: Option<Uuid>,
     pub branch_point_message_index: Option<usize>,
     pub project_path: Option<String>,
@@ -470,6 +478,7 @@ impl SessionStore {
                 updated_at: ns_to_datetime(last_ts),
                 total_input_tokens: proj.total_input_tokens,
                 total_output_tokens: proj.total_output_tokens,
+                max_context_tokens: proj.max_context_tokens,
                 turn_count: proj.turn_count,
                 title: sidecar.title,
                 parent_session_id: sidecar.parent_session_id,
@@ -537,6 +546,7 @@ impl SessionStore {
             turn_count: index.turn_count,
             total_input_tokens: index.total_input_tokens,
             total_output_tokens: index.total_output_tokens,
+            max_context_tokens: index.max_context_tokens,
             parent_session_id: sidecar.parent_session_id,
             branch_point_message_index: sidecar.branch_point_message_index,
             project_path: index.project_path,
@@ -582,6 +592,7 @@ impl SessionStore {
             turn_count: stored.metadata.turn_count,
             total_input_tokens: stored.metadata.total_input_tokens,
             total_output_tokens: stored.metadata.total_output_tokens,
+            max_context_tokens: stored.metadata.max_context_tokens,
             parent_session_id: stored.metadata.parent_session_id,
             branch_point_message_index: stored.metadata.branch_point_message_index,
             project_path: stored.metadata.project_path,
@@ -1288,6 +1299,7 @@ mod tests {
                 cache_creation_tokens: 0,
                 cache_read_tokens: 0,
                 cost_usd: None,
+                context_window_tokens: None,
             }),
             error: None,
         }));
@@ -2281,6 +2293,7 @@ mod tests {
                 cache_creation_tokens: 0,
                 cache_read_tokens: 0,
                 cost_usd: None,
+                context_window_tokens: None,
             }),
             error: None,
         }));
@@ -2499,6 +2512,7 @@ mod tests {
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
                     cost_usd: None,
+                    context_window_tokens: None,
                 }),
                 error: None,
             }));

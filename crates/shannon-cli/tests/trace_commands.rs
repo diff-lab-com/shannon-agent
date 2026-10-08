@@ -108,6 +108,7 @@ fn seed(container: &std::path::Path) {
             cache_creation_tokens: 2,
             cache_read_tokens: 5,
             cost_usd: Some(0.02),
+            context_window_tokens: None,
         }),
         error: None,
         llm_steps: None,

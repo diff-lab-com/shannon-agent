@@ -148,6 +148,7 @@ pub fn representative_events() -> Vec<QueryEvent> {
             cost_usd: 0.001,
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
+            context_window_tokens: None,
         },
         QueryEvent::Cost {
             query_id: qid,

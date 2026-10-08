@@ -562,6 +562,7 @@ mod tests {
             cost_usd: 0.015,
             cache_creation_tokens: 200,
             cache_read_tokens: 500,
+            context_window_tokens: Some(200_000),
         };
         match event {
             QueryEvent::Usage {
