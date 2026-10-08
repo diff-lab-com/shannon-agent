@@ -1,0 +1,211 @@
+# Rust 编译产物
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo 锁定文件（可选，根据团队习惯决定是否提交）
+# Cargo.lock
+# desktop/ is a workspace MEMBER (no [workspace] of its own); the root
+# Cargo.lock is authoritative. A stale desktop/Cargo.lock (pre-unification,
+# last at shannon-core 0.5.5) was tracked by accident — ignore it so it
+# stays gone.
+/desktop/Cargo.lock
+
+# IDE 和编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.directory
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# 测试覆盖率
+*.profraw
+*.profdata
+llvm-profdata/
+llvm-cov/
+
+# 调试和日志
+*.log
+logs/
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# 配置文件（包含敏感信息）
+config/local.toml
+config/production.toml
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+
+# 构建脚本输出
+Cargo.toml.deps
+Cargo.toml.orig
+
+# 文档生成
+doc/
+
+# 备份文件
+*.bak
+*.backup
+*.old
+
+# 性能分析
+perf.data*
+flamegraph.svg
+
+# 依赖缓存
+.cargo/*
+!.cargo/config.toml
+.cached/
+
+# 构建输出
+dist/
+build/
+out/
+
+# 测试
+tests/integration/tmp/
+
+# 录制 fixtures (按需生成，不提交) —— 非确定性 session 不入库
+tests/fixtures/real_tasks/*.jsonl
+# 例外: 确定性 replay fixtures 入库供 CI 无 key 回放 (ADR 0003 Phase 1)
+# 用 `git add -f` 强制跟踪；已跟踪文件不受上面的 ignore 影响。
+!tests/fixtures/real_tasks/minimax_MiniMax-M3_create_file.jsonl
+!tests/fixtures/real_tasks/minimax_MiniMax-M3_bash_command.jsonl
+!tests/fixtures/real_tasks/minimax_MiniMax-M3_read_and_edit.jsonl
+!tests/fixtures/real_tasks/minimax_MiniMax-M3_overwrite_existing_file.jsonl
+
+# Claude/Anthropic 相关
+.claude/
+.shannon/
+
+# oh-my-claudecode 运行时状态
+.omc/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 二进制文件（意外提交）
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# 覆盖率报告
+tarpaulin-report.html
+cobertura.xml
+lcov.info
+
+# 其他
+.cache/
+vendor/
+.serena/
+# 本地 rustup 工具链配置/下载缓存（非项目产物）
+.rustup/
+claudedocs/
+# Legacy archives from the consolidation of shannon-code, shannon-desktop,
+# shannon-gateway (2026-07). Two paired directories (see INDEX.md in each):
+#   docs/archive/legacy-archives/   — markdown documentation (.md only)
+#   legacy-archives/                — non-markdown code + config
+# Neither is part of any commit.
+/docs/archive/legacy-archives/
+/legacy-archives/
+docs-mdbook/book/
+
+.astro/
+node_modules/
+
+# Staged Tauri externalBin CLI binaries (release.yml downloads the matching
+# shannon-<target-triple> here right before `tauri build`; never committed).
+desktop/binaries/
+
+# Dogfood loop artifacts + fixer worktrees (docs/plans/autonomous-improvement-loop.md)
+artifacts/
+.dogfood-worktrees/
+
+# Python bytecode (dogfood supervisor)
+__pycache__/
+.eval-bin/
+.eval-bin/
+
+test-results/
+
+# ZCode 会话级计划文件（不属仓库内容）
+.zcode/
+
+# review §P3: AI session artefacts that must not enter the repo. Several
+# ZCode / Claude-Code sessions have previously committed hello.txt,
+# findings.md, screenshot-test tools, and similar — these are not repo
+# content and pollute the diff. Block future adds here; existing tracked
+# copies are left in place to avoid rewriting history.
+hello.txt
+notes.txt
+findings.md
+.playwright-mcp/
+.serena/
+.reference/
+.claudedocs/
+
+# review §P3: gateway package manager is pnpm. The npm package-lock.json
+# was previously committed by mistake and now produces a second, unverified
+# resolution tree (CI uses pnpm install --frozen-lockfile). Block future
+# npm lockfile commits.
+gateway/package-lock.json
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
