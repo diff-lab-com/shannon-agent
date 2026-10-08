@@ -45,12 +45,27 @@ export function ChatStatusBar({ workingDir, usage, sessionId, onChangeWorkingDir
 
   // Context occupancy — same math as the Context tab's window bar: sent+
   // received tokens over the reported window, clamped, integer percent.
+  // Aurora 2026-10 (02 状态条): the segment also spells out the raw
+  // "used/total" token counts (设计稿: 上下文 38% · 74k/200k) — both numbers
+  // come from the same UsagePayload, so the detail is always real when the
+  // percent renders.
   const contextPct = (() => {
     const total = (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0)
     const max = usage?.max_tokens
     if (!max || total <= 0) return null
     return Math.min(100, Math.round((total / max) * 100))
   })()
+  const fmtCompact = (n: number) => {
+    try {
+      return new Intl.NumberFormat(intl.locale, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
+    } catch {
+      return n.toLocaleString(intl.locale)
+    }
+  }
+  const contextUsed = contextPct != null
+    ? fmtCompact((usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0))
+    : ''
+  const contextTotal = contextPct != null && usage?.max_tokens ? fmtCompact(usage.max_tokens) : ''
 
   // Session spend — only once the session ledger has observed something.
   const sessionCost = sessionUsage?.cost_usd
@@ -99,10 +114,10 @@ export function ChatStatusBar({ workingDir, usage, sessionId, onChangeWorkingDir
         <span
           data-testid="chat-status-context"
           className="flex items-center gap-xs shrink-0 tabular-nums"
-          title={t('chat.statusbar.context.title', { percent: contextPct })}
+          title={t('chat.statusbar.context.tokens.title', { percent: contextPct, used: contextUsed, total: contextTotal })}
         >
           <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">data_usage</span>
-          {t('chat.statusbar.context', { percent: contextPct })}
+          {t('chat.statusbar.context.tokens', { percent: contextPct, used: contextUsed, total: contextTotal })}
         </span>
       )}
 

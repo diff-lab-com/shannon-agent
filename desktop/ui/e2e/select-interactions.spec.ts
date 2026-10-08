@@ -12,28 +12,30 @@
 //  - reasoning effort is the SELECTED model row's expanded sub-tier inside
 //    the model chip's dropdown (S3-5, 裁定⑪) — no separate Reasoning
 //    combobox, no bottom section;
-//  - the permission dropdown offers the FOUR shared tiers
-//    (Ask/Auto Edit/Full) — `plan` is owned by the composer's
-//    plan toggle and `confirm` is an out-of-table engine value, so neither
-//    is a dropdown option;
+//  - the permission control is a FOUR-stop segmented control
+//    (Ask/Auto Edit/Plan/Full — Aurora 2026-10, 裁决 B1); below the 1200px
+//    breakpoint it folds back into the current-mode chip dropdown;
 //  - the Header model selector is hidden on /chat (the composer chip is the
 //    single surface there), so chip→header sync is verified cross-page.
 import { test, expect } from '@playwright/test'
 
 test.describe('Select interactions', () => {
-  test('permission mode commits from the composer dropdown', async ({ page }) => {
+  test('permission mode commits from the composer segmented control', async ({ page }) => {
     await page.goto('/chat')
     await page.getByRole('textbox', { name: 'Message' }).waitFor({ timeout: 15000 })
     await page.waitForTimeout(800)
 
-    const trigger = page.getByRole('combobox', { name: 'Permission mode' })
-    await trigger.click()
-    // 4+3 model: the shared three-ladder table (the demo mock's legacy
-    // 'standard' value shows as the raw readout with nothing selected).
-    // Auto Edit writes `auto-edit` — a REAL state change the demo
-    // configure persists.
-    await page.getByRole('option', { name: 'Auto Edit' }).click()
-    await expect(trigger).toContainText(/auto edit/i, { timeout: 10000 })
+    // Aurora 2026-10 (裁决 B1): the approval ladder is a four-stop segmented
+    // control at ≥1200px (ask / auto-edit / plan / full-auto). Clicking Auto
+    // Edit writes `auto-edit` — a REAL state change the demo configure
+    // persists, so the controlled aria-checked flips. A seeded out-of-ladder
+    // value (e.g. 'standard') renders through the raw badge with nothing
+    // selected — covered by chat-script.model-mode.
+    const group = page.getByTestId('approval-mode-pill')
+    await expect(group).toBeVisible()
+    await expect(group.getByRole('radio')).toHaveCount(4)
+    await group.getByTestId('approval-mode-segment-auto-edit').click()
+    await expect(group.getByTestId('approval-mode-segment-auto-edit')).toHaveAttribute('aria-checked', 'true', { timeout: 10000 })
   })
 
   test('reasoning effort commits from the model chip dropdown', async ({ page }) => {
