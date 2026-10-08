@@ -62,6 +62,7 @@ import { ApprovalRegistry } from "./approvalRegistry.js";
 import { PushReplayBuffer } from "./pushReplay.js";
 import { createMobileDispatchPipeline } from "./dispatchPipeline.js";
 import { MobileDispatchHub } from "./hub.js";
+import { loadAgentRoster } from "./agentRoster.js";
 import { createTaskHandlers } from "./taskHandlers.js";
 import { fakeHistoryPage, type FakeHistoryMessage } from "./fakeEngineHistory.js";
 
@@ -385,7 +386,15 @@ const approvals = new ApprovalRegistry();
 // §O4: one replay ring shared by hub / server / handlers (bootstrap parity —
 // the dev host exercises the same resume-replay surface the real gateway has).
 const pushReplay = new PushReplayBuffer();
-const hub = new MobileDispatchHub({ logger, approvals, replay: pushReplay });
+// P2-9: the dev hub pushes shannon/agent.state too — same roster the
+// task.dispatch validation reads (default ~/.shannon/agents), so the phone
+// Fleet screen shows real running/idle against the standalone host as well.
+const hub = new MobileDispatchHub({
+  logger,
+  approvals,
+  replay: pushReplay,
+  rosterEntry: (agentId) => loadAgentRoster().find((a) => a.id === agentId) ?? null,
+});
 // Shared in-flight query registry: the engine bridge (shannon/query/cancel)
 // and the dispatch pipeline's lane clients register against ONE instance, so
 // shannon/cancel can interrupt a dispatched task's engine turn (same
