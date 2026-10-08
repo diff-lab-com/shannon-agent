@@ -391,6 +391,8 @@ pub(crate) fn record_background_task_terminal(
         title: inbox_single_line_truncated(t.prompt, 120),
         summary,
         error: error_field,
+        request_id: None,
+        risk: None,
     })?;
     Ok(true)
 }

@@ -1943,6 +1943,8 @@ fn finalize_run<R: tauri::Runtime>(
             title: ctx.task_name,
             summary,
             error: run_error.clone(),
+            request_id: None,
+            risk: None,
         })
         .map_err(|e| e.to_string());
     let item_id = match item {
@@ -2460,6 +2462,8 @@ mod tests {
             title: title.into(),
             summary: String::new(),
             error: None,
+            request_id: None,
+            risk: None,
         }
     }
 
@@ -3482,6 +3486,8 @@ mod tests {
                 title: "Budgeted".into(),
                 summary: String::new(),
                 error: None,
+                request_id: None,
+                risk: None,
             })
             .unwrap();
         inbox
