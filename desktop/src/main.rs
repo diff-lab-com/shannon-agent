@@ -542,6 +542,9 @@ fn main() {
             // Office Wave 3 C3 — companion Quick Capture window (frozen contract)
             companion_window_commands::open_companion_window,
             companion_window_commands::set_companion_always_on_top,
+            // Design 13「Esc 关闭」— the Esc path hides through this command
+            // (keeps the companion capability event-only, like the toggle).
+            companion_window_commands::hide_companion_window,
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,
@@ -632,6 +635,19 @@ fn main() {
         // (titlebar close, close_session_window, OS teardown) drops its
         // registry entry and refreshes the persisted restore list.
         .on_window_event(|window, event| {
+            // Design 13「失焦自动收起」— the companion is a transient
+            // scratchpad: losing focus collapses it (hide, not close, so the
+            // next ⌘⇧Space / tray summon is instant). Disarmed within the
+            // open grace window (spurious Focused(false) on fresh creation,
+            // see companion_window_commands::BLUR_HIDE_GRACE).
+            if let tauri::WindowEvent::Focused(false) = event {
+                if window.label() == companion_window_commands::COMPANION_WINDOW_LABEL
+                    && companion_window_commands::should_hide_on_blur()
+                {
+                    let _ = window.hide();
+                }
+                return;
+            }
             if !matches!(event, tauri::WindowEvent::Destroyed) {
                 return;
             }
@@ -982,6 +998,20 @@ fn main() {
                     let _ = app.emit("focus-input", ());
                 });
 
+            // Design 13:102-105 — global Quick Capture summon (⌘⇧Space /
+            // Ctrl+Shift+Space, registered in tauri.conf.json). Goes through
+            // `open_companion_window_inner`, which dedupes by the fixed
+            // label — a second press just re-focuses the existing window.
+            // Accelerator check: collides with none of the three shortcuts
+            // above (S / N / K).
+            let _ = app
+                .global_shortcut()
+                .on_shortcut("open-companion", |app, _shortcut_id, _| {
+                    if let Err(e) = companion_window_commands::open_companion_window_inner(app) {
+                        tracing::warn!(error = %e, "global shortcut failed to open companion window");
+                    }
+                });
+
             // B1-15 (review decision 6): the updater plugin and its
             // check-updates wiring are removed — the placeholder pubkey +
             // third-party endpoint were a half-enabled state that could
@@ -1005,11 +1035,9 @@ fn main() {
             let show_item = MenuItemBuilder::with_id("show", tray_strs.show).build(app)?;
             let new_session_item =
                 MenuItemBuilder::with_id("new-session", tray_strs.new_session).build(app)?;
-            // Office Wave 3 C3 — companion Quick Capture entry. The frontend
-            // has no main-window chrome surface for it this wave (the global
-            // shortcut belongs to useKeyboardShortcuts, another owner), so
-            // the tray is the summon path; `open_companion_window` stays
-            // invocable for the future shortcut/UI wiring.
+            // Office Wave 3 C3 — companion Quick Capture entry. Summon paths:
+            // the `open-companion` global shortcut (design 13:⌘⇧Space) and
+            // this tray item; both funnel into the deduping inner helper.
             let companion_item =
                 MenuItemBuilder::with_id("companion", tray_strs.companion).build(app)?;
             let status_item = MenuItemBuilder::with_id("status", initial_label.clone())

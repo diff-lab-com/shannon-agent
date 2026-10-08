@@ -570,6 +570,12 @@ export const handlers: Record<string, MockHandler> = {
     await delay(30)
     return null
   },
+  // Design 13「Esc 关闭」— demo mode has no window to hide; the Esc path
+  // just acks like the always-on-top toggle above.
+  async hide_companion_window() {
+    await delay(30)
+    return null
+  },
   // --- Chat ---
   // (send_message interception when a script is armed happens in coreMock —
   // the scripted player owns the command and replays the turn's events.)
