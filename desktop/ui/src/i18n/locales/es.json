@@ -2854,6 +2854,7 @@
   "memory.injection.desc": "Las memorias relevantes se emparejan y se adjuntan al siguiente mensaje.",
   "memory.injection.enabled": "Inyección activada",
   "memory.injection.previewPending": "Vista previa del recuento · pronto en el escritorio",
+  "memory.preview.count": "{count, plural, =0 {El próximo mensaje no llevará memorias} =1 {El próximo mensaje llevará 1 memoria} other {El próximo mensaje llevará # memorias}}",
   "memory.injection.bypassLabel": "Omisión de sesión",
   "memory.injection.bypassAria": "Omitir la memoria en la sesión actual",
   "memory.injection.bypassHint": "Las sesiones omitidas no inyectan ni extraen memorias.",

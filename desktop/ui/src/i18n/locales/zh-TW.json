@@ -2854,6 +2854,7 @@
   "memory.injection.desc": "相關記憶會自動比對,並隨下一則訊息攜帶。",
   "memory.injection.enabled": "注入已啟用",
   "memory.injection.previewPending": "預覽條數 · 桌面端即將支援",
+  "memory.preview.count": "{count, plural, =0 {下一則訊息不攜帶記憶} other {下一則訊息將攜帶 # 則記憶}}",
   "memory.injection.bypassLabel": "此會話旁路",
   "memory.injection.bypassAria": "此會話旁路記憶",
   "memory.injection.bypassHint": "旁路會話不寫入、不提取記憶",

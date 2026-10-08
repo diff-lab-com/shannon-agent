@@ -2853,6 +2853,7 @@
   "memory.injection.desc": "関連するメモリが自動的に照合され、次のメッセージに添われます。",
   "memory.injection.enabled": "注入は有効",
   "memory.injection.previewPending": "件数プレビュー · デスクトップ版で近日対応",
+  "memory.preview.count": "{count, plural, =0 {次のメッセージに記憶は含まれません} other {次のメッセージに # 件の記憶が含まれます}}",
   "memory.injection.bypassLabel": "このセッションをバイパス",
   "memory.injection.bypassAria": "このセッションのメモリをバイパス",
   "memory.injection.bypassHint": "バイパス中のセッションは注入も抽出もしません。",

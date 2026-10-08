@@ -589,6 +589,8 @@ fn main() {
             commands_memory::get_memory_source,
             // P2-5 — "which memories did this turn use" (ContextBreakdownCard).
             commands_memory::get_session_injected_memories,
+            // 缓期项 #6 — the Memory banner's 「将携带 N 条」 pre-read.
+            commands_memory::memory_injection_preview,
             commands_memory::get_memory_graph,
             commands_memory::promote_memory_to_instruction,
             // P1-5 C-1 — dev-server preview (frozen contract) + log ring.

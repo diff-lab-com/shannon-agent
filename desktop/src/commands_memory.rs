@@ -487,6 +487,79 @@ fn injected_memory_title(content: &str) -> String {
     format!("{}…", &first_line[..end])
 }
 
+// ─── Injection preview (缓期项 #6: the Memory banner's 「将携带 N 条」) ──────
+
+/// One preview entry, cropped to id + display title — the full content stays
+/// in the Memory page. The title reuses [`injected_memory_title`] (first
+/// line, 80-char CJK-safe cap), so chips and the P2-5 citation surface can
+/// never disagree about naming.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InjectionPreviewEntry {
+    pub id: String,
+    pub title: String,
+}
+
+/// Payload of `memory_injection_preview`: the entries the next message's
+/// system prompt would inject for the requested project scope.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InjectionPreview {
+    pub count: u32,
+    pub entries: Vec<InjectionPreviewEntry>,
+}
+
+/// Pure helper (unit-tested): the preview payload for one resolved project
+/// key. Shares [`MemoryStore::injected_entries`] — the same pipeline the
+/// per-turn prompt builds from — so the banner count can never drift from
+/// what injection actually carries.
+pub(crate) fn injection_preview(store: &MemoryStore, project: &str) -> InjectionPreview {
+    let entries = store.injected_entries(project, None);
+    InjectionPreview {
+        count: u32::try_from(entries.len()).unwrap_or(u32::MAX),
+        entries: entries
+            .into_iter()
+            .map(|selected| InjectionPreviewEntry {
+                id: selected.entry.id,
+                title: injected_memory_title(&selected.entry.content),
+            })
+            .collect(),
+    }
+}
+
+/// The 「将携带 N 条」 pre-read behind the Memory page's injection banner
+/// (缓期项 #6): the entries the NEXT message's system prompt would carry for
+/// `project`, cropped to id + title (chips-ready; the banner renders `count`
+/// only today).
+///
+/// Project semantics mirror the real injection path: the engine keys its
+/// store read on `memory_project_key()` — the session's pinned working
+/// directory (`config.effective_working_directory()`), falling back to the
+/// construction-time process-cwd freeze and finally `"default"`. `project:
+/// None` resolves that same chain here, so a fresh desktop session without a
+/// session directory previews its own scope; pass the Memory page's selected
+/// project explicitly otherwise. The query is `None` — the banner previews
+/// the no-message baseline, the same estimate `context_breakdown` renders
+/// (a real turn additionally ranks against the current user message).
+/// Global-scope entries are folded in by [`MemoryStore::injected_entries`];
+/// the per-session bypass is not re-checked here because the banner hides
+/// the count entirely while bypassed.
+#[tauri::command]
+pub async fn memory_injection_preview(
+    state: tauri::State<'_, AppState>,
+    project: Option<String>,
+) -> Result<InjectionPreview, String> {
+    let store = &state.memory_store;
+    refresh_shared_store(store);
+    let guard = store.read().map_err(|e| e.to_string())?;
+    let project_key = project.unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "default".to_string())
+    });
+    Ok(injection_preview(&guard, &project_key))
+}
+
 /// Aggregate counts per category and per project. Used by the UI to render
 /// a memory dashboard without pulling every entry.
 #[derive(Debug, serde::Serialize)]
@@ -896,6 +969,75 @@ mod tests {
         assert_eq!(injected_memory_title(&"é".repeat(90)).chars().count(), 41);
         // Short multi-byte content is never truncated at all.
         assert_eq!(injected_memory_title(&"记".repeat(10)), "记".repeat(10));
+    }
+
+    // --- memory_injection_preview (缓期项 #6) ---
+
+    #[test]
+    fn injection_preview_counts_scoped_and_global_but_not_other_projects() {
+        use shannon_core::memory::GLOBAL_SCOPE;
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add(entry(
+                "proj",
+                MemoryCategory::Preference,
+                "use pnpm\nnot npm",
+            ))
+            .unwrap();
+        store
+            .add(entry("proj", MemoryCategory::Decision, "rust first"))
+            .unwrap();
+        // Cross-project scope folds into the preview (injection carries it).
+        store
+            .add(entry(
+                GLOBAL_SCOPE,
+                MemoryCategory::Preference,
+                "be concise",
+            ))
+            .unwrap();
+        // Another project's entry must NOT leak into proj's preview.
+        store
+            .add(entry("other", MemoryCategory::Context, "unrelated"))
+            .unwrap();
+
+        let preview = injection_preview(&store, "proj");
+        assert_eq!(preview.count, 3, "2 project + 1 global");
+        let titles: Vec<&str> = preview.entries.iter().map(|e| e.title.as_str()).collect();
+        assert!(titles.contains(&"use pnpm"), "title is the first line");
+        assert!(titles.contains(&"rust first"));
+        assert!(titles.contains(&"be concise"));
+        assert!(!titles.contains(&"unrelated"));
+        // Entries are cropped to id + title — no content payload rides along.
+        assert!(
+            preview
+                .entries
+                .iter()
+                .all(|e| !e.title.contains('\n') && !e.id.is_empty()),
+            "titles are single-line, ids present"
+        );
+    }
+
+    #[test]
+    fn injection_preview_empty_store_is_zero() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = MemoryStore::new(dir.path().to_path_buf());
+        let preview = injection_preview(&store, "proj");
+        assert_eq!(preview.count, 0);
+        assert!(preview.entries.is_empty());
+    }
+
+    #[test]
+    fn injection_preview_title_capped_like_the_citation_surface() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add(entry("proj", MemoryCategory::Context, &"记".repeat(100)))
+            .unwrap();
+        let preview = injection_preview(&store, "proj");
+        assert_eq!(preview.count, 1);
+        assert_eq!(preview.entries[0].title.chars().count(), 27);
+        assert!(preview.entries[0].title.ends_with('…'));
     }
 
     #[test]

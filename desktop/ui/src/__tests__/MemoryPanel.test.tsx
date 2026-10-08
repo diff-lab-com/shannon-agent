@@ -296,17 +296,63 @@ describe('MemoryPanel — memory injection banner (audit §08 P1)', () => {
     vi.mocked(api.listMemoryProjects).mockResolvedValue([])
   })
 
-  it('renders the enabled state with the honest preview placeholder', async () => {
+  // 缓期项 #6 — the 「将携带 N 条」 count is the real pre-read
+  // (memory_injection_preview); the amber placeholder is the degraded path.
+  it('shows the real carry count when the preview command answers', async () => {
     vi.mocked(api.getSessionMemoryBypass).mockResolvedValue(false)
+    vi.mocked(api.memoryInjectionPreview).mockResolvedValue({
+      count: 3,
+      entries: [
+        { id: 'mem-001', title: 'Prefers concise responses' },
+        { id: 'mem-002', title: 'Deploys via GitHub Actions' },
+        { id: 'mem-003', title: 'Rust first for new services' },
+      ],
+    })
     render(<MemoryPanel />)
 
     const banner = await screen.findByTestId('memory-injection-banner')
     expect(banner).toHaveTextContent('Memory injection')
     expect(screen.getByTestId('memory-injection-state')).toHaveTextContent('Injection enabled')
-    // C9 诚实降级: no retrieval pre-read command → "coming soon" placeholder,
-    // never an invented "N memories" count.
+    // The real count replaces the "coming soon" placeholder.
+    expect(screen.getByTestId('memory-injection-preview-count')).toHaveTextContent(
+      /3 memories/,
+    )
+    expect(banner.textContent).not.toMatch(/coming soon/)
+    // The banner view has no project scope → the backend default is asked for.
+    await waitFor(() => {
+      expect(api.memoryInjectionPreview).toHaveBeenCalledWith(null)
+    })
+  })
+
+  it('degrades to the amber placeholder when the preview command fails', async () => {
+    vi.mocked(api.getSessionMemoryBypass).mockResolvedValue(false)
+    vi.mocked(api.memoryInjectionPreview).mockRejectedValue(new Error('no memory store'))
+    render(<MemoryPanel />)
+
+    const banner = await screen.findByTestId('memory-injection-banner')
+    // C9 诚实降级: unavailable pre-read → "coming soon" placeholder, never
+    // an invented count.
+    expect(screen.getByTestId('memory-injection-preview-pending')).toHaveTextContent(
+      /coming soon/,
+    )
     expect(banner.textContent).toMatch(/coming soon/)
     expect(banner.textContent).not.toMatch(/\d+ memories?/)
+    expect(screen.queryByTestId('memory-injection-preview-count')).not.toBeInTheDocument()
+  })
+
+  it('scopes the preview to the selected project filter', async () => {
+    vi.mocked(api.getSessionMemoryBypass).mockResolvedValue(false)
+    vi.mocked(api.listMemoryProjects).mockResolvedValue(['web-app'])
+    vi.mocked(api.memoryInjectionPreview).mockResolvedValue({ count: 2, entries: [] })
+    render(<MemoryPanel />)
+    await screen.findByTestId('memory-injection-banner')
+
+    fireEvent.change(screen.getByLabelText('Filter by project'), {
+      target: { value: 'web-app' },
+    })
+    await waitFor(() => {
+      expect(api.memoryInjectionPreview).toHaveBeenCalledWith('web-app')
+    })
   })
 
   it('toggles the per-session bypass through the shared commands', async () => {
@@ -328,5 +374,8 @@ describe('MemoryPanel — memory injection banner (audit §08 P1)', () => {
     expect(screen.getByTestId('memory-injection-state')).toHaveTextContent('Session bypass on')
     // The enabled-state placeholder disappears with the injection.
     expect(screen.queryByText('Injection enabled')).not.toBeInTheDocument()
+    // Bypassed → neither the count nor the placeholder renders.
+    expect(screen.queryByTestId('memory-injection-preview-count')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('memory-injection-preview-pending')).not.toBeInTheDocument()
   })
 })

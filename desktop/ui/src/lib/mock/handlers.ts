@@ -2406,6 +2406,21 @@ export const handlers: Record<string, MockHandler> = {
       sourceSessionId: m.source_session_id ?? null,
     }))
   },
+  // 缓期项 #6: the Memory banner's 「将携带 N 条」 pre-read. Demo answers
+  // from the same seeded demo memories the page already shows (capped at 3,
+  // mirroring get_session_injected_memories) — the count derives from real
+  // demo rows, it is not invented.
+  async memory_injection_preview(args?: { project?: string | null }) {
+    await delay()
+    const scoped = args?.project
+      ? MOCK_MEMORIES.filter((m) => m.project === args.project)
+      : MOCK_MEMORIES
+    const entries = scoped.slice(0, 3).map((m) => ({
+      id: m.id,
+      title: m.content.split('\n')[0].slice(0, 80),
+    }))
+    return { count: entries.length, entries }
+  },
   async get_memory_graph(args?: { project?: string | null }) {
     await delay()
     const scoped = MOCK_MEMORIES.filter(

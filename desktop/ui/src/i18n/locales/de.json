@@ -2853,6 +2853,7 @@
   "memory.injection.desc": "Passende Memories werden automatisch der nächsten Nachricht beigefügt.",
   "memory.injection.enabled": "Einspeisung aktiv",
   "memory.injection.previewPending": "Vorschau-Anzahl · Desktop-Unterstützung folgt in Kürze",
+  "memory.preview.count": "{count, plural, =0 {Die nächste Nachricht enthält keine Erinnerungen} =1 {Die nächste Nachricht enthält 1 Erinnerung} other {Die nächste Nachricht enthält # Erinnerungen}}",
   "memory.injection.bypassLabel": "Sitzungs-Bypass",
   "memory.injection.bypassAria": "Memory für die aktuelle Sitzung umgehen",
   "memory.injection.bypassHint": "Bypass-Sitzungen speisen weder ein noch extrahieren sie.",

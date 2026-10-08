@@ -2854,6 +2854,7 @@
   "memory.injection.desc": "Memórias relevantes são emparelhadas e levadas na próxima mensagem.",
   "memory.injection.enabled": "Injeção ativada",
   "memory.injection.previewPending": "Prévia da contagem · suporte no desktop em breve",
+  "memory.preview.count": "{count, plural, =0 {A próxima mensagem não levará memórias} =1 {A próxima mensagem levará 1 memória} other {A próxima mensagem levará # memórias}}",
   "memory.injection.bypassLabel": "Desvio de sessão",
   "memory.injection.bypassAria": "Contornar a memória na sessão atual",
   "memory.injection.bypassHint": "Sessões desviadas não injetam nem extraem memórias.",

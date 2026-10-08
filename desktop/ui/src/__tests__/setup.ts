@@ -604,6 +604,10 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   // banner's enabled state renders without per-test mocking.
   getSessionMemoryBypass: vi.fn().mockResolvedValue(false),
   setSessionMemoryBypass: vi.fn().mockResolvedValue(undefined),
+  // 缓期项 #6 — the banner's 「将携带 N 条」 pre-read: default 0 so healthy
+  // renders show the real-count chip; the honest-placeholder tests override
+  // with a rejection.
+  memoryInjectionPreview: vi.fn().mockResolvedValue({ count: 0, entries: [] }),
   // audit §10 P1 — timeline rewind chip probe: no checkpoints by default
   // (rewind chips stay hidden in tests that don't opt in).
   listCheckpoints: vi.fn().mockResolvedValue([]),

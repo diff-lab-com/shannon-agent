@@ -1667,6 +1667,15 @@
       }
     },
     {
+      "identifier": "allow-memory-injection-preview",
+      "description": "Enables the memory_injection_preview command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "memory_injection_preview"
+        ]
+      }
+    },
+    {
       "identifier": "allow-migration-apply",
       "description": "Enables the migration_apply command without any pre-configured scope.",
       "commands": {
@@ -3464,6 +3473,7 @@
         "allow-list-dream-proposals",
         "allow-list-memories",
         "allow-list-memory-projects",
+        "allow-memory-injection-preview",
         "allow-promote-memory-to-instruction",
         "allow-read-dream-report",
         "allow-read-dream-state",

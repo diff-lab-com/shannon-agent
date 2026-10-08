@@ -2920,6 +2920,36 @@ export async function getMemoryGraph(project?: string | null): Promise<MemoryGra
   return invoke('get_memory_graph', { project: project ?? null })
 }
 
+// --- Injection preview (缓期项 #6 — the Memory banner's 「将携带 N 条」) ---
+//
+// Frozen contract with desktop/src/commands_memory.rs (`InjectionPreview`,
+// serde rename_all = camelCase). Shares the backend's injected-entries
+// pipeline, so the banner count cannot drift from what the next turn's
+// prompt actually carries.
+
+/** One preview entry, cropped to id + display title (chips-ready). */
+export interface MemoryInjectionPreviewEntry {
+  id: string
+  title: string
+}
+
+export interface MemoryInjectionPreview {
+  count: number
+  entries: MemoryInjectionPreviewEntry[]
+}
+
+/**
+ * How many memory entries the NEXT message's system prompt would inject for
+ * `project` (null = the engine's default scope: the session working
+ * directory, else the process cwd, else "default"). Rejects when no memory
+ * store is available — callers degrade to the honest placeholder.
+ */
+export async function memoryInjectionPreview(
+  project?: string | null,
+): Promise<MemoryInjectionPreview> {
+  return invoke('memory_injection_preview', { project: project ?? null })
+}
+
 // --- Dream Pass (梦境提炼 — review-gated memory distillation) ---
 //
 // Frozen contract with desktop/src/commands_dream.rs. The Rust DTOs do NOT
