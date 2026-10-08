@@ -65,7 +65,7 @@ import {
   type UsageFrame,
 } from "./protocol.js";
 import type { MethodContext } from "./server.js";
-import type { ApprovalRegistry } from "./approvalRegistry.js";
+import { engineAgent, engineRisk, type ApprovalRegistry } from "./approvalRegistry.js";
 
 /** How long a pushed approval waits for the device's Y/N before denying. */
 const APPROVAL_TIMEOUT_MS = 300_000;
@@ -86,23 +86,50 @@ export interface TaskRecord {
   started_at: number;
   finished_at: number | null;
   error: string | null;
+  /**
+   * B0: the roster agent this task was dispatched under — the `id` of a
+   * `~/.shannon/agents/*.toml` definition, validated by `shannon/task.dispatch`
+   * at accept time. Gateway-side ATTRIBUTION only (the engine has no per-agent
+   * routing face and still executes the turn as the default engine); null when
+   * the dispatch carried no usable agent_id.
+   */
+  agent_id: string | null;
 }
 
 /**
  * §K wire projection of one journal record: `id` = task id (also the task
  * thread's session key), `prompt` = the dispatched text, `created_at` =
- * ISO-8601 UTC of `started_at`. `agent_id` is always null — this host has no
- * agent roster. The legacy P2-1 keys (device_id/title/text/started_at/…)
- * deliberately do NOT appear (spec §K2).
+ * ISO-8601 UTC of `started_at`. B0: `agent_id` is the roster agent the task
+ * was dispatched under (validated against `shannon/agent.list` at accept
+ * time), or null when the dispatch carried none — attribution, not engine
+ * routing (the engine still executes as the default engine).
+ *
+ * §K2 revision (B1a, v2.3 additive): the legacy P2-1 keys (device_id/text/
+ * started_at/…) stay off the wire, but three additive keys return — `title`
+ * (the internal task title, whenever non-empty), `finished_at` (ISO-8601 UTC,
+ * only once the record reached a terminal state) and `error` (only on
+ * status=failed with a non-null error). All three are optional on the wire:
+ * mobile mappers tolerate their absence, and a consumer of the old five-key
+ * shape keeps working untouched.
  */
 export function wireTask(record: TaskRecord): MobileTaskRecord {
-  return {
+  const wire: MobileTaskRecord = {
     id: record.task_id,
     prompt: record.text,
     status: record.status,
-    agent_id: null,
+    agent_id: record.agent_id,
     created_at: new Date(record.started_at).toISOString(),
+    // B1a: the internal title rides when non-empty (titleFromText guarantees
+    // one today; an empty string stays omitted rather than shipped as "").
+    ...(record.title.trim().length > 0 ? { title: record.title } : {}),
   };
+  if (record.finished_at !== null) {
+    wire.finished_at = new Date(record.finished_at).toISOString();
+  }
+  if (record.status === "failed" && record.error !== null) {
+    wire.error = record.error;
+  }
+  return wire;
 }
 
 interface PendingApproval {
@@ -350,8 +377,21 @@ export class MobileDispatchHub {
    * timeout → deny). Called by the "mobile" adapter from inside the turn, so
    * the approval turn handler forwards the decision to the engine exactly as
    * it does for the IM adapters.
+   *
+   * B1b: when the engine event carried the §L1 rich fields, the pushed event
+   * AND the registry record carry them too — `agent`/`risk` are normalized
+   * through the same `engineAgent`/`engineRisk` helpers the direct-query path
+   * uses. The push carries `ts` only when the engine supplied it (the phone
+   * stamps arrival time itself — no invention), while the record's `ts`
+   * (required by the restore face) prefers `req.ts` and falls back to the hub
+   * clock. Unusable values omit the key, so the push stays byte-identical to
+   * the legacy shape on old engines.
    */
   requestApproval(deviceId: string, req: ApprovalReq): Promise<"allow" | "deny"> {
+    const engineTs =
+      typeof req.ts === "number" && Number.isFinite(req.ts) ? req.ts : null;
+    const agent = engineAgent(req.agent);
+    const risk = engineRisk(req.risk);
     this.pushEvent(deviceId, {
       type: "approval.request",
       request_id: req.requestId,
@@ -360,6 +400,9 @@ export class MobileDispatchHub {
       description: req.description,
       is_destructive: req.isDestructive,
       diff_preview: req.diffPreview,
+      ...(engineTs !== null ? { ts: engineTs } : {}),
+      ...(agent ? { agent } : {}),
+      ...(risk ? { risk } : {}),
     });
     // §L2: the ask is now visible to the restore face until a settle resolves it.
     this.approvals?.record({
@@ -369,7 +412,9 @@ export class MobileDispatchHub {
       description: req.description,
       isDestructive: req.isDestructive,
       diffPreview: req.diffPreview,
-      ts: this.now(),
+      ts: engineTs ?? this.now(),
+      agent,
+      risk,
     });
     return new Promise<"allow" | "deny">((resolve) => {
       let timer: NodeJS.Timeout | undefined;
@@ -568,12 +613,29 @@ export class MobileDispatchHub {
   // ── dispatch (phone → gateway → engine) ────────────────────────────────────
 
   /**
+   * B0: the roster agent a task session belongs to — journal-derived
+   * (`session_id` IS the task id on the §K3 stream and the engine session).
+   * Feeds `shannon/session.list` attribution: task threads carry the agent
+   * they were dispatched under. Null when the id is unknown (not dispatched
+   * here / journal rolled over / gateway restarted) — the caller omits the
+   * enrichment rather than inventing an owner.
+   */
+  agentForSession(sessionId: string): string | null {
+    return this.journal.find((t) => t.task_id === sessionId)?.agent_id ?? null;
+  }
+
+  /**
    * Handle one prompt from a paired device: journal a task, announce
    * `query.started` (session_id = the task id — the phone builds its thread
    * from the dispatch response's id, §K3), and run the turn in the device's
    * lane through the same inbound pipeline the IM adapters use. The returned
    * record resolves immediately; the structured task stream and the journal
    * transition land asynchronously.
+   *
+   * B0 `agentId` (already roster-validated by the dispatch handler) is
+   * recorded as ATTRIBUTION on the journal record — it rides the wire task
+   * object and `agentForSession`; it is not engine routing (the turn still
+   * executes as the default engine).
    *
    * §K1 ordering: the RPC response (the task object the phone keys its thread
    * by) must reach the wire BEFORE the event stream — the phone creates the
@@ -584,11 +646,17 @@ export class MobileDispatchHub {
    * the turn starts, and every engine delta is written after it (the turn
    * handler's pushes run inside the submission's call tree).
    *
+   * B0 engine-session fix: the turn's inbound carries `engineSessionId` =
+   * the task's own UUID. The lane's default session key (`mobile:<deviceId>`)
+   * is not a UUID and the engine's WS gate rejects every non-UUID session_id
+   * query frame — pinning the task id keeps the dispatched turn's transcript
+   * addressable (and `shannon/session.list` consistent with `agentForSession`).
+   *
    * §K: there is deliberately no Y/N-text approval branch here anymore — the
    * dispatch action ALWAYS creates a task; approvals are answered via the
    * signed `shannon/approval/decide` (see `settleApproval`).
    */
-  dispatch(deviceId: string, text: string): DispatchOutcome {
+  dispatch(deviceId: string, text: string, agentId: string | null = null): DispatchOutcome {
     const record: TaskRecord = {
       task_id: this.newTaskId(),
       device_id: deviceId,
@@ -598,6 +666,7 @@ export class MobileDispatchHub {
       started_at: this.now(),
       finished_at: null,
       error: null,
+      agent_id: agentId,
     };
     this.journal.unshift(record);
     if (this.journal.length > JOURNAL_CAP) this.journal.length = JOURNAL_CAP;
@@ -632,6 +701,8 @@ export class MobileDispatchHub {
         timestamp: this.now(),
         // The dispatch action is the trigger — no IM mention/prefix gating.
         isDirect: true,
+        // B0: the turn's engine session IS the task (UUID) — see the doc above.
+        engineSessionId: record.task_id,
       };
       this.submit(inbound).then(
         () => this.finishTask(record.task_id, "completed"),
