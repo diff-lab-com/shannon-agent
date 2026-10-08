@@ -1,12 +1,12 @@
 // ChatStatusBar — Aurora redesign 2026-10 (02-chat.html 状态条).
 //
 // Pins the HONESTY CONTRACT: each segment renders only when its data source
-// actually reports something — context % requires `max_tokens` on the usage
-// payload, the cost segment requires a non-zero session ledger entry, the
-// budget segment only exists while a positive cap is configured. The
-// working-directory segment doubles as the WD-picker entry (the old
-// ComposerPanel footer row moved into the bar: same aria label, breadcrumb
-// and disabled-without-session behavior).
+// actually reports something — context % requires the engine-resolved
+// `context_total` on the usage payload, the cost segment requires a
+// non-zero session ledger entry, the budget segment only exists while a
+// positive cap is configured. The working-directory segment doubles as the
+// WD-picker entry (the old ComposerPanel footer row moved into the bar:
+// same aria label, breadcrumb and disabled-without-session behavior).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
@@ -52,7 +52,7 @@ const baseUsage: UsagePayload = {
   input_tokens: 38_000,
   output_tokens: 36_000,
   cost_usd: 0.0872,
-  max_tokens: 200_000,
+  context_total: 200_000,
 }
 
 beforeEach(() => {
@@ -91,16 +91,30 @@ describe('ChatStatusBar — honesty contract', () => {
     expect(screen.getByTestId('chat-status-budget-left')).toHaveTextContent('$19.91')
   })
 
-  it('hides the context segment when the usage payload has no max_tokens', () => {
+  it('hides the context segment when the usage payload has no resolved window', () => {
     budgetState.current = {
       budget: null,
       usage: { input_tokens: 1, output_tokens: 1, cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0.5, events: 1 },
       refresh: () => {},
     }
-    renderBar({ ...baseUsage, max_tokens: undefined })
+    // 批 1: the denominator is the engine-resolved `context_total` — absent
+    // (unknown window) → no percentage, never a fabricated one.
+    renderBar({ ...baseUsage, context_total: undefined })
     expect(screen.queryByTestId('chat-status-context')).toBeNull()
     // The cost segment still renders.
     expect(screen.getByTestId('chat-status-cost')).toBeInTheDocument()
+  })
+
+  it('hides the context segment when the frame reports no tokens yet', () => {
+    // A resolved window alone is not enough: 0/0 tokens → nothing to show.
+    renderBar({ ...baseUsage, input_tokens: 0, output_tokens: 0 })
+    expect(screen.queryByTestId('chat-status-context')).toBeNull()
+  })
+
+  it('clamps the context percentage at 100 when tokens exceed the window', () => {
+    renderBar({ ...baseUsage, input_tokens: 190_000, output_tokens: 190_000 })
+    const seg = screen.getByTestId('chat-status-context')
+    expect(seg.textContent).toContain('100%')
   })
 
   it('hides the cost segment while the session ledger has not observed spend', () => {

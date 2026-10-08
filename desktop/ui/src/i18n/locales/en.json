@@ -3834,6 +3834,7 @@
   "sidebar.sessions.error.badge": "Last run failed",
   "sidebar.sessions.queue.label": "Queue {n}",
   "sidebar.sessions.queue.title": "{n} messages will send when you return to this session",
+  "sidebar.sessions.contextPeak.title": "Context-window peak for this session: {tokens}",
   "nav.search": "Search",
   "nav.automation": "Automations",
   "sidebar.model.badge.aria": "Current model {model} ({provider}) — click to manage",

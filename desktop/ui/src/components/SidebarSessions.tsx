@@ -1292,6 +1292,24 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     const agoBadge = !isRunning
       ? formatRelativeTime(session.updated_at ?? session.created_at, nowTick, t)
       : ''
+    // 批 1 上下文峰值: the session's persisted context-window peak (L0
+    // session-index max, joined at list time) — lets a reopened session
+    // still show how much window it runs in. Compact badge language, same
+    // as the queue chip: icon + count, no click target, hidden when the
+    // backend reports nothing (honesty contract — never a guessed window).
+    const contextPeak = session.max_context_tokens
+    const contextPeakLabel = contextPeak != null
+      ? (() => {
+          // Locale-undefined = the runtime default, same as
+          // ContextBreakdownCard's compact formatter (no useIntl here —
+          // the rail reads through useT only).
+          try {
+            return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(contextPeak)
+          } catch {
+            return contextPeak.toLocaleString()
+          }
+        })()
+      : null
     return (
       <div
         key={session.id}
@@ -1430,6 +1448,27 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                 >
                   <span className="material-symbols-outlined icon-xs" aria-hidden="true">low_priority</span>
                   <span className="font-label-xs tabular-nums">{t('sidebar.sessions.queue.label', { n: queueDepth })}</span>
+                </span>
+              )}
+              {/* 批 1 上下文峰值: the session's context-window peak — same
+                  compact-badge language as the queue chip (icon + count, no
+                  click target). The tooltip states the 口径: this is the
+                  session's PEAK window, not a live usage figure. Contrast
+                  pairs mirror the elapsed badge (on-primary-container on the
+                  active row, text-secondary elsewhere). */}
+              {contextPeakLabel != null && (
+                <span
+                  role="img"
+                  aria-label={t('sidebar.sessions.contextPeak.title', { tokens: contextPeakLabel })}
+                  title={t('sidebar.sessions.contextPeak.title', { tokens: contextPeakLabel })}
+                  data-testid={`session-context-peak-${session.id}`}
+                  className={cn(
+                    'flex items-center gap-[2px] shrink-0 rounded-sm px-[3px] whitespace-nowrap',
+                    isActive ? 'text-on-primary-container' : 'text-secondary',
+                  )}
+                >
+                  <span className="material-symbols-outlined icon-xs" aria-hidden="true">data_usage</span>
+                  <span className="font-label-xs tabular-nums">{contextPeakLabel}</span>
                 </span>
               )}
               {/* P0-②: live elapsed badge while running; Batch B1: relative

@@ -3796,6 +3796,7 @@
   "sidebar.sessions.error.badge": "上次运行失败",
   "sidebar.sessions.queue.label": "队列 {n}",
   "sidebar.sessions.queue.title": "{n} 条消息将在回到该会话后发送",
+  "sidebar.sessions.contextPeak.title": "会话上下文窗口峰值:{tokens}",
   "nav.search": "搜索",
   "nav.automation": "自动化",
   "sidebar.model.badge.aria": "当前模型 {model}（{provider}），点击管理",

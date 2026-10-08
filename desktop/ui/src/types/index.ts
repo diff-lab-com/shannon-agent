@@ -49,7 +49,12 @@ export interface UsagePayload {
   output_tokens: number
   cost_usd: number
   cache_hit_rate?: number
-  max_tokens?: number
+  /** 上下文峰值: the serving model's resolved context window for this frame
+   *  (config override > live num_ctx > providers.toml > model registry).
+   *  Absent when genuinely unknown — the UI hides any percentage rather
+   *  than fabricate a window (honesty contract). This replaces the old
+   *  `max_tokens?` field, which no Rust producer ever sent. */
+  context_total?: number
   /** P1-1: owner session for multi-window event filtering. */
   session_id?: string
 }
@@ -297,6 +302,11 @@ export interface SessionInfo {
   /** Settings R3 T7: user-pinned flag, joined from the curation sidecar.
    *  Absent on older engines — treat as false (unpinned). */
   pinned?: boolean
+  /** 上下文峰值: the session's running max known context window (L0
+   *  session-index peak, joined at `list_sessions` time) so the rail can
+   *  show the window a reopened session peaked at. Absent when no logged
+   *  turn knew its window — the UI hides the chip (honesty contract). */
+  max_context_tokens?: number
 }
 
 /** Session archive (卡A): one archived session as the sidebar's 已归档
