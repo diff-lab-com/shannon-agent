@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 缓期批 1 · secret-guard unset 默认收口（R-0）+ 启动行为双开关 + 上下文峰值 + 看板金额（2026-10-09）
 - mobile batch B · task 富化 + 真实 agent roster + 只读预算面（2026-10-07）
 - §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 - Approval transparency + mobile approval scope (2026-10-05 follow-up)
@@ -16,6 +17,15 @@ Waves queued for the next release, newest first:
 ### Breaking / behavior changes
 
 - **`secret-guard` defaults to `redact` (was `audit`)**: with no `$SHANNON_SECRET_GUARD` and no `[secret_guard] mode` configured, secret-shaped content in outbound requests is now replaced with deterministic surrogates before it reaches the provider (restored locally for tool execution and display; byte-stable, so prompt caching is unaffected). Opt out with `SHANNON_SECRET_GUARD=audit` (observe-only), `SHANNON_SECRET_GUARD=off`, or `[secret_guard] mode` in config — env beats config, and an explicit `off` always wins. A one-time notice after the first hit explains what happened and names these switches.
+
+### 缓期批 1（2026-10-09）
+
+缓期清单第一批落地（调研与圈选见 `docs/reviews/2026-10-09-cleanup-plan-and-deferred-research.md`）：
+
+- **secret-guard unset 默认收口（R-0 修复）**：上方 Breaking 条目宣告的「unset → redact」在安装点存在半翻转——`init_from_env_or_config` 的真空臂仍把 (env, config) 全缺的决策安装成 `audit`，实际生效模式与文档相悖。现已在安装位对齐 redact 默认（决策提炼为 `resolve_install_mode`），钉住测试翻转为 redact（`Audit` 保留为文档化回滚值），新增 unset ⇒ redact 的行为级回归测试；显式 `audit`/`off` 与 env 优先级行为零改动。
+- **启动行为双开关（设置 → 通用 → 启动）**：新 `DesktopConfig` 键 `restore_session_windows_on_launch`（默认开 = 现行为）gate 启动时的会话窗口恢复——关闭时持久化列表不动，重新打开即恢复同一组窗口；`update_check_at_launch`（默认开）在启动后非阻塞地跑一次**仅检查**的更新比对（复用现有 `check_app_update`），有新版本才弹既有的「有可用更新」提示——仅提示，绝不自动安装。
+- **上下文峰值（wire additive）**：`QUERY_USAGE` 载荷新增 `context_total`——该轮解析出的上下文窗口（config 覆盖 > 在线 `num_ctx` > providers.toml 声明 > 模型注册表，与 `/context` 同源；未知端到端保持缺省，不发明），逐 turn 在 L0 `turn/end` 按最大值合并，`SessionIndex.max_context_tokens` 持久化为会话峰值（旧 `index.json` 经 serde default 兼容）。UI：状态栏/Context 面的百分比原先除以从未有生产者的 `max_tokens`（死代码）改为 `context_total`，会话侧栏新增峰值 chip（仅在有值时出现）；TS 死字段 `max_tokens` 移除。
+- **任务看板金额**：`list_tasks` 投影新增 `cost_usd`——由用量台账按「产生该任务的 agent 会话」免费 join（`spent_for_session` 口径）：有台账关联即 `Some`（零花费会话 = `Some(0.0)`），手建/`<adhoc>`/无关联任务为 `None`，绝不估算。卡片金额 chip 仅在有值时渲染，tooltip 注明口径（台账归属花费，随台账轮转保留）。
 
 ### mobile batch B（v2.3 additive，2026-10-07）
 
