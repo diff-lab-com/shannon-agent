@@ -1204,6 +1204,8 @@ async fn finalize_branch<R: tauri::Runtime>(
                 title: record.title.clone(),
                 summary: truncate_chars(&summary_text, 500),
                 error: None,
+                request_id: None,
+                risk: None,
             }) {
                 Ok(item) => record.inbox_item_id = Some(item.id),
                 Err(e) => {
@@ -2797,6 +2799,8 @@ mod tests {
                 title: "Test batch".into(),
                 summary: "2 branch(es) finished".into(),
                 error: None,
+                request_id: None,
+                risk: None,
             })
             .unwrap();
         set_inbox_item_id(&handle, item.id).await;
@@ -3021,6 +3025,8 @@ mod tests {
                 title: "Test batch".into(),
                 summary: "2 branch(es) finished".into(),
                 error: None,
+                request_id: None,
+                risk: None,
             })
             .unwrap();
         set_inbox_item_id(&handle, item.id).await;

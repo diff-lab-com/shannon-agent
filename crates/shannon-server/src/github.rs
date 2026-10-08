@@ -458,6 +458,8 @@ fn finalize_run(
         title: title.to_string(),
         summary,
         error: failure.clone(),
+        request_id: None,
+        risk: None,
     });
     let inbox_item_id = match appended {
         Ok(item) => Some(item.id),

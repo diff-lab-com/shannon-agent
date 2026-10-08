@@ -9,7 +9,7 @@
 // and disabled-without-session behavior).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 
 import ChatStatusBar from '@/components/chat/ChatStatusBar'
@@ -28,6 +28,11 @@ const budgetState = vi.hoisted(() => ({
 vi.mock('@/hooks/useSessionBudget', () => ({
   useSessionBudget: () => budgetState.current,
 }))
+
+// Branch segment IPC — defaults to "not a git repo" (null → hidden); the
+// branch tests below override the resolved value per case.
+const tauriApi = vi.hoisted(() => ({ currentGitBranch: vi.fn() }))
+vi.mock('@/lib/tauri-api', () => ({ currentGitBranch: tauriApi.currentGitBranch }))
 
 function renderBar(usage: UsagePayload | null, workingDir = '/home/alice/code/myproject', sessionId: string | null = 'session-1') {
   return render(
@@ -53,6 +58,7 @@ const baseUsage: UsagePayload = {
 beforeEach(() => {
   clearDiffStatsCache()
   budgetState.current = { budget: null, usage: null, refresh: () => {} }
+  tauriApi.currentGitBranch.mockResolvedValue(null)
 })
 
 describe('ChatStatusBar — working directory segment', () => {
@@ -125,5 +131,32 @@ describe('ChatStatusBar — honesty contract', () => {
     const left = screen.getByTestId('chat-status-budget-left')
     expect(left).toHaveTextContent('$0.00')
     expect(left.className).toContain('text-error')
+  })
+})
+
+describe('ChatStatusBar — branch + cache segments (2026-10-08 round)', () => {
+  it('renders the working dir branch once the IPC resolves', async () => {
+    tauriApi.currentGitBranch.mockResolvedValue('fix/billing-webhook')
+    renderBar(null)
+    const seg = await screen.findByTestId('chat-status-branch')
+    expect(seg).toHaveTextContent('fix/billing-webhook')
+    expect(tauriApi.currentGitBranch).toHaveBeenCalledWith('/home/alice/code/myproject')
+  })
+
+  it('hides the branch segment when the dir is not a git repo', async () => {
+    renderBar(null)
+    await waitFor(() => expect(tauriApi.currentGitBranch).toHaveBeenCalled())
+    expect(screen.queryByTestId('chat-status-branch')).not.toBeInTheDocument()
+  })
+
+  it('renders the cache-hit segment from the usage frame', () => {
+    renderBar({ ...baseUsage, cache_hit_rate: 0.92 })
+    const seg = screen.getByTestId('chat-status-cache')
+    expect(seg).toHaveTextContent('92%')
+  })
+
+  it('hides the cache segment while the frame carries no rate', () => {
+    renderBar(baseUsage)
+    expect(screen.queryByTestId('chat-status-cache')).not.toBeInTheDocument()
   })
 })

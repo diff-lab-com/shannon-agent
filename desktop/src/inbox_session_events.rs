@@ -88,6 +88,11 @@ fn first_error_line(error: &str) -> String {
 
 /// Record (or refresh) the session's pending-approval entry. Called right
 /// after the `PERMISSION_REQUEST` emit for session-scoped prompts.
+///
+/// Design 05 收件箱审批闭环: the prompt's `request_id` and risk tier ride on
+/// the row, so the Triage card's inline 批准/拒绝 buttons can answer the
+/// LIVE request through `respond_permission` (instead of the pre-closure
+/// honest-but-blind 「去处理」 jump).
 pub(crate) fn record_session_approval<R: tauri::Runtime>(
     inbox: &InboxStore,
     app: &tauri::AppHandle<R>,
@@ -95,6 +100,7 @@ pub(crate) fn record_session_approval<R: tauri::Runtime>(
     session_title: &str,
     tool: &str,
     risk: &str,
+    request_id: &str,
 ) -> Option<InboxItem> {
     let item = inbox
         .upsert_pending(InboxItemNew {
@@ -107,6 +113,8 @@ pub(crate) fn record_session_approval<R: tauri::Runtime>(
                 "Session \u{201c}{session_title}\u{201d} asked to run \u{201c}{tool}\u{201d} ({risk} risk)"
             ),
             error: None,
+            request_id: Some(request_id.to_string()),
+            risk: Some(risk.to_string()),
         })
         .map_err(|e| e.to_string());
     match item {
@@ -161,6 +169,8 @@ pub(crate) fn record_session_failure<R: tauri::Runtime>(
             title: truncate_chars(session_title, 120),
             summary: first_error_line(error_trimmed),
             error: Some(truncate_chars(error_trimmed, SUMMARY_MAX_CHARS)),
+            request_id: None,
+            risk: None,
         })
         .map_err(|e| e.to_string());
     match item {
@@ -214,6 +224,8 @@ pub(crate) fn record_skill_candidate<R: tauri::Runtime>(
                 candidate.proposed_trigger, candidate.occurrence_count
             ),
             error: None,
+            request_id: None,
+            risk: None,
         })
         .map_err(|e| e.to_string());
     match item {
@@ -281,6 +293,8 @@ pub(crate) fn record_dream_report<R: tauri::Runtime>(
                 result.scanned_sessions
             ),
             error: None,
+            request_id: None,
+            risk: None,
         })
         .map_err(|e| e.to_string());
     match item {
@@ -347,6 +361,7 @@ mod tests {
             "Refactor the parser",
             "bash",
             "high",
+            "perm-approve-1",
         )
         .unwrap();
         assert_eq!(item.source, SOURCE_SESSION_APPROVAL);
@@ -356,8 +371,14 @@ mod tests {
         assert_eq!(item.title, "bash");
         assert!(item.summary.contains("Refactor the parser"));
         assert!(item.summary.contains("bash"));
+        // Design 05 收件箱审批闭环: the live permission request id and the
+        // risk tier are persisted, so the card's inline 批准/拒绝 can answer
+        // the real request via respond_permission.
+        assert_eq!(item.request_id.as_deref(), Some("perm-approve-1"));
+        assert_eq!(item.risk.as_deref(), Some("high"));
         let stored = by_source(&inbox, SOURCE_SESSION_APPROVAL, "sess-approve-1");
         assert_eq!(stored.id, item.id);
+        assert_eq!(stored.request_id.as_deref(), Some("perm-approve-1"));
     }
 
     #[test]
@@ -456,6 +477,7 @@ mod tests {
             "Session both",
             "bash",
             "high",
+            "perm-both",
         )
         .unwrap();
         assert_eq!(inbox.list(None, None, 10).unwrap().len(), 2);
@@ -474,6 +496,7 @@ mod tests {
             "Session res",
             "bash",
             "low",
+            "perm-res",
         )
         .unwrap();
         let resolved = resolve_session_approval(&inbox, app.handle(), "sess-res").unwrap();

@@ -16,15 +16,20 @@
 //     `max_tokens` exactly like the Context tab's window bar (ContextPanel).
 //     No `max_tokens` on the wire → no percentage (never a guessed window).
 //
-// Design shows a git-branch segment and a cache-hit segment; neither has a
-// data source on this surface today, so neither renders (no decoration).
+// Design shows a git-branch segment and a cache-hit segment — both wired
+// now (2026-10-08 status-bar round): branch = `current_git_branch` IPC on
+// workingDir change (per-dir memo), cache = UsagePayload.cache_hit_rate
+// (the wire field existed but was first populated in the same round). Each
+// still hides independently when its source is absent.
 
+import { useEffect, useRef, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useT } from '@/i18n'
 import { useSessionBudget } from '@/hooks/useSessionBudget'
 import { formatDirBreadcrumb } from '@/pages/chat/utils'
+import * as api from '@/lib/tauri-api'
 import type { UsagePayload } from '@/types'
 
 export interface ChatStatusBarProps {
@@ -73,9 +78,41 @@ export function ChatStatusBar({ workingDir, usage, sessionId, onChangeWorkingDir
   // Budget remaining — only while a positive cap is configured.
   const budgetLeft = budget != null && budget > 0 ? budget - (sessionUsage?.cost_usd ?? 0) : null
 
+  // Branch segment — one IPC per distinct working dir (memoized for the
+  // session-switch back-and-forth); the segment hides for non-git dirs and
+  // while the lookup is in flight (a stale branch never renders).
+  const [branch, setBranch] = useState<string | null>(null)
+  const branchCacheRef = useRef<Map<string, string | null>>(new Map())
+  useEffect(() => {
+    if (!workingDir) {
+      setBranch(null)
+      return
+    }
+    const cached = branchCacheRef.current.get(workingDir)
+    if (cached !== undefined) {
+      setBranch(cached)
+      return
+    }
+    let cancelled = false
+    void api.currentGitBranch(workingDir).then((b) => {
+      branchCacheRef.current.set(workingDir, b)
+      if (!cancelled) setBranch(b)
+    }).catch(() => {
+      branchCacheRef.current.set(workingDir, null)
+      if (!cancelled) setBranch(null)
+    })
+    return () => { cancelled = true }
+  }, [workingDir])
+
+  // Cache-hit segment — per-frame fraction straight off the UsagePayload
+  // (populated backend-side since 2026-10-08; absent → hidden).
+  const cachePct = usage?.cache_hit_rate != null
+    ? Math.round(usage.cache_hit_rate * 100)
+    : null
+
   // The working-dir segment always renders (set or "not set" — both real);
   // the spacer only matters when a right-hand segment joins it.
-  const hasRightSegments = contextPct != null || hasCost || budgetLeft != null
+  const hasRightSegments = branch != null || contextPct != null || cachePct != null || hasCost || budgetLeft != null
 
   const fmtUsd = (n: number) =>
     new Intl.NumberFormat(intl.locale, {
@@ -108,6 +145,17 @@ export function ChatStatusBar({ workingDir, usage, sessionId, onChangeWorkingDir
         </span>
       </Button>
 
+      {branch != null && (
+        <span
+          data-testid="chat-status-branch"
+          className="flex items-center gap-xs shrink-0 font-mono min-w-0"
+          title={t('chat.statusbar.branch.title')}
+        >
+          <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">account_tree</span>
+          <span className="truncate">{branch}</span>
+        </span>
+      )}
+
       {hasRightSegments && <span className="flex-1 min-w-0" aria-hidden="true" />}
 
       {contextPct != null && (
@@ -118,6 +166,17 @@ export function ChatStatusBar({ workingDir, usage, sessionId, onChangeWorkingDir
         >
           <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">data_usage</span>
           {t('chat.statusbar.context.tokens', { percent: contextPct, used: contextUsed, total: contextTotal })}
+        </span>
+      )}
+
+      {cachePct != null && (
+        <span
+          data-testid="chat-status-cache"
+          className="flex items-center gap-xs shrink-0 tabular-nums"
+          title={t('chat.statusbar.cache.title')}
+        >
+          <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">bolt</span>
+          {t('chat.statusbar.cache', { percent: cachePct })}
         </span>
       )}
 

@@ -151,6 +151,13 @@ pub struct UsagePayload {
     pub cost_usd: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// 2026-10-08 status bar (设计 02-chat 六段): cache-hit fraction for this
+    /// frame — cache_read / (cache_read + input); `None` when the frame has
+    /// no measurable input (the frontend hides the segment, honesty rule).
+    /// The TS contract field (`UsagePayload.cache_hit_rate?`) predates this
+    /// but was never populated until now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_rate: Option<f64>,
 }
 
 /// Query completed successfully.

@@ -1405,6 +1405,10 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                                 output_tokens,
                                 cost_usd: event_cost,
                                 session_id: Some(self.session_id.to_string()),
+                                cache_hit_rate: (input_tokens + cache_read_tokens > 0).then(|| {
+                                    cache_read_tokens as f64
+                                        / (input_tokens + cache_read_tokens) as f64
+                                }),
                             },
                         );
                     }
@@ -1904,6 +1908,8 @@ async fn finalize_goal_run<R: tauri::Runtime>(
             title: dto.title.clone(),
             summary: truncate_chars(&summary, 500),
             error: reason.clone().map(|r| truncate_chars(&r, 500)),
+            request_id: None,
+            risk: None,
         });
         if let Err(e) = item {
             tracing::warn!(session = %dto.session_id, error = %e, "goal: failed to append inbox item");

@@ -46,6 +46,11 @@ just ci
 - Run `just ci` before pushing.
 - Add `#[serial]` to any new Rust test that mutates shared state (env vars, ~/.shannon, /tmp).
 - For TS, tests live next to source as `*.test.ts`. Use `pnpm test` per package.
+- Vitest path filters miss nested suites: `vitest run src/__tests__` does NOT
+  run `src/components/**/__tests__/` and friends (2026-10-08 lesson — an
+  8-test regression shipped to CI that way). Filter for local iteration only;
+  `pnpm test:ci` (the full tree, what CI runs) is the only authoritative
+  pre-push run.
 
 ### Chat page (desktop/ui) — ChatScript test discipline
 

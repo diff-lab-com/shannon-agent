@@ -156,6 +156,8 @@ test-contract:
     @cargo nextest run -p shannon-server --test chat_contract_smoke
 
 test-ui:
+    # Full tree, NO path filter: path-filtered runs miss nested __tests__ dirs
+    # (CONTRIBUTING → Testing). CI's Desktop Unit Tests run the same script.
     cd desktop/ui && pnpm test:ci
 
 test-gateway:

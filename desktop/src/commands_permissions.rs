@@ -101,6 +101,9 @@ pub(crate) async fn prompt_user<R: tauri::Runtime>(
             title,
             &tool,
             &risk,
+            // Design 05 收件箱审批闭环: the card's inline 批准/拒绝 answers
+            // THIS request id through respond_permission.
+            &request_id,
         );
     }
 

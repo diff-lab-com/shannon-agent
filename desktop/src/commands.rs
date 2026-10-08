@@ -391,6 +391,8 @@ pub(crate) fn record_background_task_terminal(
         title: inbox_single_line_truncated(t.prompt, 120),
         summary,
         error: error_field,
+        request_id: None,
+        risk: None,
     })?;
     Ok(true)
 }
@@ -2380,6 +2382,11 @@ pub async fn send_message(
                             output_tokens,
                             cost_usd,
                             session_id: Some(session_id_str.clone()),
+                            // 02-chat 状态条缓存段: read/(read+input),无输入
+                            // 时 None(前端按诚实规则隐藏该段)。
+                            cache_hit_rate: (input_tokens + cache_read_tokens > 0)
+                                .then(|| cache_read_tokens as f64
+                                    / (input_tokens + cache_read_tokens) as f64),
                         };
                         let _ = app.emit(event_names::QUERY_USAGE, payload);
 

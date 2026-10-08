@@ -309,6 +309,10 @@ pub mod ask_user_handler;
 pub mod commands_rewind;
 pub mod commands_slash;
 
+// 2026-10-08 status bar (设计 02-chat 六段) — workspace facts (branch segment).
+#[cfg(feature = "tauri")]
+pub mod commands_workspace_info;
+
 #[cfg(feature = "tauri")]
 pub mod commands_plugins;
 

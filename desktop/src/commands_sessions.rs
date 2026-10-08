@@ -3113,6 +3113,8 @@ mod pin_and_auto_archive_tests {
                 title: "Approval requested".into(),
                 summary: String::new(),
                 error: None,
+                request_id: None,
+                risk: None,
             })
             .unwrap();
         // A READ item is no longer 未读: a second session whose only inbox
@@ -3127,6 +3129,8 @@ mod pin_and_auto_archive_tests {
                 title: "Old approval".into(),
                 summary: String::new(),
                 error: None,
+                request_id: None,
+                risk: None,
             })
             .unwrap();
         inbox
