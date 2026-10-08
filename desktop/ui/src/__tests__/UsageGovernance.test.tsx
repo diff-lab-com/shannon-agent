@@ -62,6 +62,12 @@ describe('Usage governance (P2-1)', () => {
     expect(screen.getByTestId('usage-budget-percent')).toHaveTextContent('40%')
     // The budget input carries the persisted value.
     expect(screen.getByTestId('usage-budget-input')).toHaveValue(10)
+    // 设计 06 (审查 R1 §06): the read-only cap-behaviour chip — the auto
+    // pause + ask behaviour is real (BudgetBanner / pause_reason=budget),
+    // the page just never said so. The chip is text, it toggles nothing.
+    const chip = screen.getByTestId('usage-budget-autopause-chip')
+    expect(chip).toHaveTextContent('Auto-pauses and asks when the cap is reached')
+    expect(chip).not.toHaveAttribute('aria-pressed')
   })
 
   it('shows the 80% warning banner (amber) at the warn threshold', async () => {

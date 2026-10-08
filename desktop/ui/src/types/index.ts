@@ -1783,7 +1783,10 @@ export interface BatchBranch {
 }
 
 /// One best-of-N batch run (payload of `batch:updated`). `adoptedIndex` is
-/// additive: set once the batch is adopted.
+/// additive: set once the batch is adopted. `baseCommit` is additive too
+/// (设计 04b / 审查 R1 §4): the commit every branch diffs against, shown as
+/// the compare dialog's 「基线 <short>」 header — optional so payloads from
+/// an older backend keep rendering (total cost only).
 export interface BatchRunDto {
   batchId: string
   title: string
@@ -1793,6 +1796,7 @@ export interface BatchRunDto {
   createdAtMs: number
   branches: BatchBranch[]
   adoptedIndex: number | null
+  baseCommit?: string
 }
 
 // --- Event Names ---
