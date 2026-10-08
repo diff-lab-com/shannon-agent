@@ -55,6 +55,17 @@ describe('startupUpdateCheck (批 1)', () => {
     expect(defaulted.checkAppUpdate).toHaveBeenCalledTimes(1)
   })
 
+  // check_app_update is an allowlisted OS surface in the mock backend
+  // (browser demos cannot perform it) — probing there would console.error
+  // on every app boot and fail the E2E console watchdogs.
+  it('never probes in mock/demo mode', async () => {
+    const api = stubApi({}, { updateAvailable: true, latestVersion: 'v9' })
+    await runStartupUpdateCheck(api, () => true)
+    expect(api.getConfig).not.toHaveBeenCalled()
+    expect(api.checkAppUpdate).not.toHaveBeenCalled()
+    expect(toastMock).not.toHaveBeenCalled()
+  })
+
   it('runs at most once per app run, even across repeated calls', async () => {
     const api = stubApi({}, { updateAvailable: false, latestVersion: 'v1' })
     await runStartupUpdateCheck(api)

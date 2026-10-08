@@ -23,8 +23,24 @@ import * as api from '@/lib/tauri-api'
  *  reads, at most one toast per window). */
 let ranThisRun = false
 
-export async function runStartupUpdateCheck(apiImpl: Pick<typeof api, 'getConfig' | 'checkAppUpdate'> = api): Promise<void> {
-  if (ranThisRun) return
+/** Mock/demo builds never probe for updates: `check_app_update` is an
+ *  allowlisted OS surface in the mock backend (browser demos cannot perform
+ *  it — see src/__tests__/mock-handlers-coverage.test.ts), so every probe
+ *  would console.error and fail the E2E console watchdogs. The demo is not
+ *  the shipped desktop app; there is nothing to update. */
+function isMockMode(): boolean {
+  if (typeof import.meta !== 'undefined' && (import.meta as { env?: Record<string, string> }).env) {
+    const env = (import.meta as { env: Record<string, string> }).env;
+    if (env.VITE_MOCK_MODE === '1' || env.MODE === 'demo') return true;
+  }
+  return false;
+}
+
+export async function runStartupUpdateCheck(
+  apiImpl: Pick<typeof api, 'getConfig' | 'checkAppUpdate'> = api,
+  modeImpl: () => boolean = isMockMode,
+): Promise<void> {
+  if (ranThisRun || modeImpl()) return
   ranThisRun = true
   try {
     const config = await apiImpl.getConfig()
