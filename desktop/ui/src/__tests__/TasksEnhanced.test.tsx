@@ -83,14 +83,22 @@ describe('Tasks Enhanced', () => {
     expect(screen.getByText('Month View')).toBeInTheDocument()
   })
 
-  // IA T4: New Background Task is a dropdown entry of the「新建自动化」
-  // split button, not a flat sibling CTA.
-  it('has New Background Task in the New Automation split menu', () => {
+  // IA T4 + 2026-10 design parity: New Background Task is a dropdown
+  // entry of the「新建」split button, not a flat sibling CTA.
+  it('has New Background Task in the New split menu', () => {
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
     renderTasks()
-    expect(screen.getByRole('button', { name: 'New Automation' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'More ways to create' }))
     expect(screen.getByRole('menuitem', { name: 'New Background Task' })).toBeInTheDocument()
+  })
+
+  // B4 裁决 (audit R1 §09): dev mode reaches the Mission Control through the
+  // sidebar nav row — the entry card would be a duplicate, so it stays out.
+  it('has no Mission Control entry card in dev mode', () => {
+    setContext({ tasks: [], backgroundTasks: [], agents: [] })
+    renderTasks('dev')
+    expect(screen.queryByTestId('tasks-opc-entry')).not.toBeInTheDocument()
   })
 
   it('toggles filters on click', () => {

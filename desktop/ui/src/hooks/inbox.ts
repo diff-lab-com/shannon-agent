@@ -12,7 +12,7 @@ import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import { EVENT_NAMES } from '@/types'
-import type { InboxItem, InboxItemStatus, InboxListFilter, InboxStats } from '@/types'
+import type { ContinueInboxSession, InboxItem, InboxItemStatus, InboxListFilter, InboxStats } from '@/types'
 import { useTauriEvent } from '@/hooks/useTauriEvent'
 
 // ─── Inbox items ───────────────────────────────────────────────────────────
@@ -91,9 +91,11 @@ export function useInboxItems(initialFilter?: InboxListFilter) {
     }
   }, [t])
 
-  // Resolve the session linked to an item so the page can switch to it.
-  // Navigation stays in the page — the hook only does data + error toast.
-  const getSessionId = useCallback(async (id: number): Promise<string | null> => {
+  // Resolve the continue target for an item: the linked session plus the
+  // run result (summary/error) the page prefills into the composer (design
+  // 05 继续会话带结果上下文). Navigation stays in the page — the hook only
+  // does data + error toast.
+  const getContinueTarget = useCallback(async (id: number): Promise<ContinueInboxSession | null> => {
     try {
       return await api.continueInboxItemSession(id)
     } catch (e) {
@@ -110,7 +112,7 @@ export function useInboxItems(initialFilter?: InboxListFilter) {
   // run appends an item — refresh so a mounted inbox never goes stale.
   useTauriEvent(EVENT_NAMES.INBOX_UPDATED, () => { void refresh() })
 
-  return { items, loading, error, filter, setFilter, refresh, markRead, archive, rerun, getSessionId }
+  return { items, loading, error, filter, setFilter, refresh, markRead, archive, rerun, getContinueTarget }
 }
 
 // ─── Inbox stats (sidebar badge / header chips) ────────────────────────────

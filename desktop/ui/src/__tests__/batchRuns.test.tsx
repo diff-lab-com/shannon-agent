@@ -255,6 +255,28 @@ describe('BatchDiffCompare', () => {
     expect(screen.queryByTestId('batch-diff-columns')).toBeNull()
   })
 
+  // 设计 04b (审查 R1 §4): the header states the baseline commit (short) and
+  // the branches' combined spend; older payloads without `baseCommit` still
+  // get the total.
+  it('shows the base commit and total spend in the header meta', async () => {
+    render(<BatchDiffCompare run={makeBatch({ baseCommit: 'c0ffee1deadbeef' })} onClose={() => {}} onAdopt={async () => null} />, {
+      wrapper,
+    })
+    const meta = await screen.findByTestId('batch-compare-header-meta')
+    // makeBranch(0)=0.25 + makeBranch(1)=0.50
+    expect(meta).toHaveTextContent('c0ffee1')
+    expect(meta).toHaveTextContent('$0.75')
+  })
+
+  it('shows only the total spend when the payload has no base commit', async () => {
+    render(<BatchDiffCompare run={makeBatch({})} onClose={() => {}} onAdopt={async () => null} />, {
+      wrapper,
+    })
+    const meta = await screen.findByTestId('batch-compare-header-meta')
+    expect(meta).toHaveTextContent('$0.75')
+    expect(meta.textContent).not.toMatch(/base|基线/i)
+  })
+
   it('defaults the selection to completed branches and renders their diffs', async () => {
     vi.mocked(api.getBatchBranchDiff).mockImplementation(async (_id, index) => ({
       diff: `patch for branch ${index}`,

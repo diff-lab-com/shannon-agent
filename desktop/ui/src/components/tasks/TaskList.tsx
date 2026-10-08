@@ -26,6 +26,9 @@ interface TaskListProps {
    *  catalog tasks and hide the RunNow entry (running one used to feed the
    *  card title to the engine as a fake "Execute task: X" prompt). */
   runnableIds?: Set<string>
+  /** Design 04 (audit R1): auto-paused routine rows lead with the pause
+   *  badge and a「继续处理」primary — id → machine pause reason. */
+  autoPausedReasons?: Map<string, string>
 }
 
 export default function TaskList({
@@ -40,6 +43,7 @@ export default function TaskList({
   onCancelTask,
   onCreateTask,
   runnableIds,
+  autoPausedReasons,
 }: TaskListProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -63,6 +67,7 @@ export default function TaskList({
           task={task}
           isRunning={runningId === task.id}
           showRunNow={runnableIds ? runnableIds.has(task.id) : true}
+          autoPausedReasons={autoPausedReasons}
           onSelect={() => onSelectTask(task.id)}
           onRunNow={() => onRunNow(task.id)}
           onCancel={() => onCancelTask(task.id)}

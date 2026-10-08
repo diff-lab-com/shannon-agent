@@ -136,6 +136,13 @@ pub struct BatchRunDto {
     /// ADDITIVE contract surface (brief shape is the fields above): the
     /// index of the adopted branch once the batch is `adopted`, else `null`.
     pub adopted_index: Option<u32>,
+    /// ADDITIVE contract surface (设计 04b / 审查 R1 §4): the commit the
+    /// branches diff against — the compare dialog's 「基线 <short>」 header.
+    /// Always present for freshly recorded batches (`BatchRunRecord` has
+    /// carried it on disk since the first schema); `None` keeps the door
+    /// open for hand-built DTOs in tests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
 }
 
 /// `start_batch_run` response — `{ batchId }` (frozen).
@@ -234,6 +241,7 @@ impl BatchRunRecord {
                 })
                 .collect(),
             adopted_index: self.adopted_index,
+            base_commit: Some(self.base_commit.clone()),
         }
     }
 

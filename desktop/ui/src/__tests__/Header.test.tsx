@@ -103,8 +103,9 @@ describe('Header component', () => {
     ]
     mockSessionCtx.currentSessionId = 's1'
     render(wrap(<Header />, { route: '/tasks' }))
-    // IA T1: /tasks is titled「自动化」(Automations), never「任务」.
-    expect(screen.getByText('Automations')).toBeInTheDocument()
+    // 2026-10 design parity: /tasks is titled「任务」(Tasks) — one noun
+    // across nav, header and page (audit R1 §1 术语断裂).
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
   })
 
   // U2 — ContextPanel toggle moved here from the retired ChatHeader.
@@ -339,9 +340,9 @@ describe('Header component', () => {
     expect(screen.getByText('Chat')).toBeInTheDocument()
   })
 
-  it('renders Automations title on /tasks route (IA T1)', () => {
+  it('renders Tasks title on /tasks route (2026-10 design parity)', () => {
     render(wrap(<Header />, { route: '/tasks' }))
-    expect(screen.getByText('Automations')).toBeInTheDocument()
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
   })
 
   it('renders Settings title on /settings route', () => {

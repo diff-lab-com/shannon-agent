@@ -9,12 +9,17 @@ interface StatCardProps {
   /** Short context line pinned to the card's right edge (truncated, full
    *  text on title hover) — e.g. the Usage page's cache hint. */
   hint?: string
+  /** design-06 (审查 R1): testids etc. land on the outer card div. */
+  'data-testid'?: string
 }
 
-export default function StatCard({ label, value, icon, hint }: StatCardProps) {
+export default function StatCard({ label, value, icon, hint, ...rest }: StatCardProps) {
   return (
     // h-full so grid rows with mixed hint/no-hint cards stay equal height.
-    <div className="flex items-center gap-sm px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 h-full">
+    <div
+      {...rest}
+      className="flex items-center gap-sm px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 h-full"
+    >
       <span className="material-symbols-outlined text-primary icon-lg">{icon}</span>
       <div className="min-w-0">
         <div className="font-headline-md text-headline-sm font-bold text-on-surface leading-none">{value}</div>

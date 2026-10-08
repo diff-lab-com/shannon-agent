@@ -2030,7 +2030,13 @@ export const handlers: Record<string, MockHandler> = {
     const item = state.inbox.find(i => i.id === args.id)
     if (!item) throw new Error(`inbox item not found: ${args.id}`)
     if (!item.sessionId) throw new Error(`inbox item ${args.id} has no linked session`)
-    return item.sessionId
+    // Design 05: the resume target carries the run result so the composer
+    // draft can be prefilled — same shape as the Rust ContinueInboxSession.
+    return {
+      sessionId: item.sessionId,
+      summary: item.summary?.trim() ? item.summary : undefined,
+      error: item.error ?? undefined,
+    }
   },
 
   // --- Usage (UI audit C13 — keeps the cost panel non-empty in demo mode) ---
