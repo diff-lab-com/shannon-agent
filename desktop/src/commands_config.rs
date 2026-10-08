@@ -1400,6 +1400,16 @@ fn cached_env_provider(
     value
 }
 
+/// ALL env-detected providers, in the Welcome wizard's recommended ranking
+/// order — empty when nothing is detected. Backed by the memoized
+/// `detect_env_providers` core (doc there covers the Ollama probe and the
+/// TTL guardrail). 2026-10-08: multi-key — the wire is now a ranked array
+/// (Welcome's BYOK badge lists every detected key).
+#[tauri::command]
+pub fn detect_provider_from_env() -> Vec<DetectedProvider> {
+    detect_env_providers()
+}
+
 /// Scan the process environment (plus Ollama's default endpoint) for a
 /// pre-configured provider.
 ///
@@ -1420,11 +1430,7 @@ fn cached_env_provider(
 /// window. The env path takes priority and never probes; env vars are only
 /// re-read when the cache expires, which is an acceptable staleness window
 /// for a detection hint.
-#[tauri::command]
-pub fn detect_provider_from_env() -> Vec<DetectedProvider> {
-    detect_env_providers()
-}
-
+///
 /// First detected provider — the gating semantic (`get_provider_status`
 /// answers "is anything configured via the environment"). Unchanged by the
 /// multi-key work: rank order means first = the previous first-match.

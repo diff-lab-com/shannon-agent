@@ -490,7 +490,7 @@ fn injected_memory_title(content: &str) -> String {
 // ─── Injection preview (缓期项 #6: the Memory banner's 「将携带 N 条」) ──────
 
 /// One preview entry, cropped to id + display title — the full content stays
-/// in the Memory page. The title reuses [`injected_memory_title`] (first
+/// in the Memory page. The title reuses `injected_memory_title` (first
 /// line, 80-char CJK-safe cap), so chips and the P2-5 citation surface can
 /// never disagree about naming.
 #[derive(Debug, Clone, serde::Serialize)]
