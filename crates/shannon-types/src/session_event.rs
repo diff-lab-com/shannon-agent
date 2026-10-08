@@ -194,6 +194,15 @@ pub struct TokenUsage {
     /// Cost of the step in USD, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Context peak (上下文峰值): the serving model's resolved context
+    /// window for the step, when the engine knows it (`None` — never a
+    /// fabricated value). The session-index accumulator folds the per-turn
+    /// max of this into the running `max_context_tokens` peak. Additive:
+    /// serde-defaulted so logs written before the field keep parsing, and
+    /// skipped on serialize when absent so the historical line shape is
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<u64>,
 }
 
 /// One entry of the tool manifest embedded in a [`RequestHeaderPayload`].
@@ -737,6 +746,7 @@ mod tests {
                         cache_creation_tokens: 5,
                         cache_read_tokens: 6,
                         cost_usd: Some(0.001),
+                        context_window_tokens: None,
                     }),
                     interrupted: false,
                     reason: None,
@@ -802,6 +812,7 @@ mod tests {
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
                     cost_usd: None,
+                    context_window_tokens: Some(200_000),
                 }),
                 error: None,
                 llm_steps: Some(1),

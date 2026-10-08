@@ -463,6 +463,15 @@
       "id": {
         "type": "string"
       },
+      "max_context_tokens": {
+        "description": "Context peak (上下文峰值): the session's max known context window; `None` when unknown. Additive — must mirror src/events.rs exactly.",
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "message_count": {
         "format": "uint",
         "minimum": 0.0,
@@ -835,6 +844,15 @@
         "format": "double",
         "type": [
           "number",
+          "null"
+        ]
+      },
+      "context_total": {
+        "description": "Context peak (上下文峰值): the serving model's resolved context window for this frame; `None` when genuinely unknown. Additive — must mirror src/events.rs exactly.",
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": [
+          "integer",
           "null"
         ]
       },
