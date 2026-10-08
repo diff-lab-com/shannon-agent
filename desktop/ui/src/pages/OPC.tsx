@@ -62,7 +62,7 @@ export default function OPC() {
           {intl.formatMessage({ id: 'opc.subtitle' })}
         </p>
 
-        <OPCMissionFocus config={config} />
+        <OPCMissionFocus config={config} tasks={tasks} />
 
         {/* P2-8 — 看板 / 运行 view tabs. Radiogroup semantics: the two views
             are mutually exclusive page states, not links. */}
