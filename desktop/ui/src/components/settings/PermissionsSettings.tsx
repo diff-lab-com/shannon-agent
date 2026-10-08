@@ -612,7 +612,7 @@ function BuiltinCard({
         <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">
           {profile.id === 'strict' ? 'shield_lock' : profile.id === 'permissive' ? 'speed' : 'balance'}
         </span>
-        <span className="font-title-sm text-on-surface font-semibold capitalize">{profile.id}</span>
+        <span className="font-title-sm text-on-surface font-semibold">{profileName(t, profile.id)}</span>
         {active && (
           <span className="ml-auto px-sm py-xs rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold uppercase tracking-wider">
             {t('settings.permissions.activeBadge')}
@@ -668,6 +668,22 @@ function profileDescription(
   if (!key) return engineDescription
   const translated = t(key)
   return translated === key ? engineDescription : translated
+}
+
+// Design-parity R1 (2026-10-08 §1): card titles used to render the raw
+// profile.id ("strict") — the same residues the composer's exec-mode tiers
+// already localize as 严格 / 平衡 / 宽松. Same term table, new name keys.
+// Unknown future profile ids fall back to the engine id.
+function profileName(t: (id: string) => string, id: string): string {
+  const known: Record<string, string> = {
+    strict: 'settings.permissions.builtin.name.strict',
+    balanced: 'settings.permissions.builtin.name.balanced',
+    permissive: 'settings.permissions.builtin.name.permissive',
+  }
+  const key = known[id]
+  if (!key) return id
+  const translated = t(key)
+  return translated === key ? id : translated
 }
 
 function ProfileEditorModal({

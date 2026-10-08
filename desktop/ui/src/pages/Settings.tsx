@@ -20,6 +20,12 @@ import { useSidebarMode } from '@/components/Sidebar';
 // no bookmark breaks. Labels still reuse existing `nav.*` keys: nav.theme
 // is now displayed as 外观/Appearance and nav.connections as 连接/Connections
 // (its only consumers are this rail + the command palette, both updated).
+//
+// Design-parity R1 (2026-10-08 §1): the rail gains the design's「设置」
+// sec-title (12-settings.html:149; reuses nav.settings so the wording can't
+// drift), and the content column narrows max-w-medium → max-w-narrow — the
+// design pane is ~720px, and every pane component (General/Theme/Models)
+// already assumed the 48rem reading width internally.
 
 const SECTIONS: Array<{ to: string; labelId: string; icon: string }> = [
   { to: '/settings/general', labelId: 'nav.general', icon: 'tune' },
@@ -46,6 +52,13 @@ export default function Settings() {
         aria-label={intl.formatMessage({ id: 'settings.section.aria' })}
         className="shrink-0 md:w-56 border-b md:border-b-0 md:border-r border-outline-variant/20 px-md md:px-md py-sm md:py-xl flex md:flex-col gap-xs overflow-x-auto md:overflow-y-auto"
       >
+        {/* The design's rail sec-title (12-settings.html:149). A plain div,
+            not a heading — the Header banner already carries the page h2 and
+            each pane owns its own group headings. Desktop-only: the mobile
+            rail is a horizontal tab strip where the label is noise. */}
+        <div className="hidden md:block px-md pb-sm font-title-md text-on-surface font-bold tracking-wide">
+          {intl.formatMessage({ id: 'nav.settings' })}
+        </div>
         {sections.map((s) => (
           <NavLink
             key={s.to}
@@ -65,7 +78,7 @@ export default function Settings() {
         ))}
       </nav>
       <div className="flex-1 overflow-y-auto min-h-0 min-w-0">
-        <div className="max-w-medium mx-auto px-lg py-xl animate-in fade-in duration-(--duration-slower) pb-xl">
+        <div className="max-w-narrow mx-auto px-lg py-xl animate-in fade-in duration-(--duration-slower) pb-xl">
           <Outlet />
         </div>
       </div>
