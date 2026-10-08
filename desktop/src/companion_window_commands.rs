@@ -93,7 +93,7 @@ fn note_companion_opened() {
 }
 
 /// Whether a `Focused(false)` on the companion window right now should hide
-/// it. Disarmed within [`BLUR_HIDE_GRACE`] of the last open/summon (see the
+/// it. Disarmed within `BLUR_HIDE_GRACE` of the last open/summon (see the
 /// const's doc) and when the window was never opened through this module.
 pub fn should_hide_on_blur() -> bool {
     let opened = OPENED_AT

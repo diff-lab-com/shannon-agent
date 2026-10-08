@@ -137,7 +137,7 @@ pub struct BatchRunDto {
     /// index of the adopted branch once the batch is `adopted`, else `null`.
     pub adopted_index: Option<u32>,
     /// ADDITIVE contract surface (设计 04b / 审查 R1 §4): the commit the
-    /// branches diff against — the compare dialog's 「基线 <short>」 header.
+    /// branches diff against — the compare dialog's 「基线 \<short\>」 header.
     /// Always present for freshly recorded batches (`BatchRunRecord` has
     /// carried it on disk since the first schema); `None` keeps the door
     /// open for hand-built DTOs in tests.

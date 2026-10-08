@@ -399,7 +399,7 @@ describe('toolKind (B7 coarse frontend binning)', () => {
 
   it('renders a failed read as the error red, not the kind tint', async () => {
     getTraceTimeline.mockResolvedValue(FIXTURE)
-    const { container } = renderAt()
+    renderAt()
     await screen.findByText('Turn 1')
     const bashBar = screen.getByTitle('Bash · 3.0s')
     expect(bashBar.className).toContain('bg-error/15')
