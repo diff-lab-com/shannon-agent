@@ -72,6 +72,7 @@ import type {
   BatchRunDto,
   InboxItem,
   InboxListFilter,
+  ContinueInboxSession,
   InboxItemStatus,
   InboxStats,
   TaskExecution,
@@ -2236,7 +2237,7 @@ export async function rerunInboxItem(id: number): Promise<string> {
   return invoke('rerun_inbox_item', { id })
 }
 
-export async function continueInboxItemSession(id: number): Promise<string> {
+export async function continueInboxItemSession(id: number): Promise<ContinueInboxSession> {
   return invoke('continue_inbox_item_session', { id })
 }
 

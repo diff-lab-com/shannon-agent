@@ -27,6 +27,7 @@ import { CardSkeleton } from '@/components/SkeletonLoader'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { useInboxItems, useInboxStats } from '@/hooks/inbox'
+import { pushComposerDraft } from '@/lib/composerBridge'
 import { useProjectDeepLink } from '@/hooks/projectDeepLink'
 import ProjectFilterChip from '@/components/ProjectFilterChip'
 import { useSessions } from '@/context/SessionContext'
@@ -45,9 +46,16 @@ type SortOrder = 'newest' | 'oldest'
 const RERUNNABLE_SOURCES: readonly InboxSource[] = ['routine', 'scheduled_task']
 
 /// IA T6: session-scoped sources (permission prompt / failed turn). Their
-/// card's primary action is "View session" — the session *is* the thing to
-/// resolve — instead of the automation-facing "Continue session" wording.
+/// card's primary action targets the session — for approvals it reads
+/// 「去处理」 (design 05: the approval happens in the session's prompt card;
+/// the item payload carries no permission request id, so inline approve /
+/// deny on the card would be a fake button — see handleContinue), and for
+/// failures it stays the read-oriented 「查看会话」.
 const SESSION_SOURCES: readonly InboxSource[] = ['session_approval', 'session_failed']
+
+/// The approval subset of SESSION_SOURCES — the only cards whose primary
+/// reads 「去处理」 and toasts the in-session guidance after the jump.
+const APPROVAL_SOURCES: readonly InboxSource[] = ['session_approval']
 
 function canRerun(item: InboxItem): boolean {
   return RERUNNABLE_SOURCES.includes(item.source) && item.status !== 'archived'
@@ -167,6 +175,10 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
   // IA T6: approval/failed items reframe "resume" as "view" — the user is
   // going to the session to answer a permission prompt or read the failure.
   const isSessionSource = SESSION_SOURCES.includes(item.source)
+  // Design 05 (审查 R1): approval cards read 「去处理」 — the payload carries
+  // no permission request id, so the card cannot approve/deny inline without
+  // faking it; the jump + toast guidance is the honest loop.
+  const isApprovalSource = APPROVAL_SOURCES.includes(item.source)
   // IA X1: skill candidates are assets, not run results — the card links to
   // the rich review queue (Extensions → Pending) instead of approving inline
   // (评审裁决 #2: 收件箱只放发现条目，不做卡内审批).
@@ -263,13 +275,33 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
           {item.sessionId && (
             <Button
               size="sm"
-              aria-label={t(isSessionSource ? 'inbox.action.viewSession.aria' : 'inbox.continue.aria')}
-              title={t(isSessionSource ? 'inbox.action.viewSession.aria' : 'inbox.continue.aria')}
+              aria-label={t(
+                isApprovalSource
+                  ? 'inbox.action.handle.aria'
+                  : isSessionSource
+                    ? 'inbox.action.viewSession.aria'
+                    : 'inbox.continue.aria',
+              )}
+              title={t(
+                isApprovalSource
+                  ? 'inbox.action.handle.aria'
+                  : isSessionSource
+                    ? 'inbox.action.viewSession.aria'
+                    : 'inbox.continue.aria',
+              )}
               className="cursor-pointer inline-flex items-center gap-xs"
               onClick={() => onContinue(item)}
             >
-              <span className="material-symbols-outlined icon-sm">{isSessionSource ? 'visibility' : 'forum'}</span>
-              {t(isSessionSource ? 'inbox.action.viewSession' : 'inbox.action.resume')}
+              <span className="material-symbols-outlined icon-sm">
+                {isApprovalSource ? 'arrow_outward' : isSessionSource ? 'visibility' : 'forum'}
+              </span>
+              {t(
+                isApprovalSource
+                  ? 'inbox.action.handle'
+                  : isSessionSource
+                    ? 'inbox.action.viewSession'
+                    : 'inbox.action.resume',
+              )}
             </Button>
           )}
           {/* IA T2: routine/scheduled_task results link back to the
@@ -418,7 +450,7 @@ export default function Triage() {
   const { stats } = useInboxStats()
   // B4 #28: `error` is consumed below — an IPC failure used to render as an
   // empty inbox, indistinguishable from "all clear".
-  const { items, loading, error, markRead, archive, rerun, getSessionId, setFilter, refresh } = useInboxItems()
+  const { items, loading, error, markRead, archive, rerun, getContinueTarget, setFilter, refresh } = useInboxItems()
 
   // Server-side filtering: status + source chips map 1:1 onto the
   // `list_inbox_items` filter args; sort stays client-side. Both hooks
@@ -586,12 +618,28 @@ export default function Triage() {
     [bulkSetStatus],
   )
 
+  // Design 05 (审查 R1 §05): continuing a session carries the result
+  // context — the backend returns the item's summary/error and the page
+  // prefills the composer draft (pushComposerDraft never sends; the user
+  // reviews and hits send, per the composerBridge trust contract).
+  // Approval cards additionally toast the in-session guidance: the inbox
+  // payload carries no permission request id (the live request lives in the
+  // session's prompt card), so inline approve/deny here would be a fake
+  // button — the honest loop is the jump + a pointer to the card.
   const handleContinue = useCallback(async (item: InboxItem) => {
-    const sessionId = await getSessionId(item.id)
-    if (!sessionId) return
-    await switchSession(sessionId)
+    const target = await getContinueTarget(item.id)
+    if (!target) return
+    await switchSession(target.sessionId)
+    if (target.summary && target.summary.trim() !== '') {
+      pushComposerDraft(
+        intl.formatMessage({ id: 'inbox.continue.prefill' }, { summary: target.summary }),
+      )
+    }
+    if (APPROVAL_SOURCES.includes(item.source)) {
+      toast.info(intl.formatMessage({ id: 'inbox.toast.handleGuidance' }))
+    }
     navigate('/chat')
-  }, [getSessionId, switchSession, navigate])
+  }, [getContinueTarget, switchSession, navigate, intl])
 
   const handleRerun = useCallback(async (item: InboxItem) => {
     await rerun(item.id)

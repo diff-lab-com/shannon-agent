@@ -1577,6 +1577,17 @@ export interface InboxStats {
   today: number
 }
 
+/// Response of `continue_inbox_item_session`: the linked session plus the
+/// item's recorded run result. Design 05 (审查 R1 §05) — resuming a session
+/// carries the result context, so the composer draft can be prefilled from
+/// `summary`; `error` rides along for failure cards. Both optional and
+/// absent on the wire for rows without run output (e.g. approval entries).
+export interface ContinueInboxSession {
+  sessionId: string
+  summary?: string
+  error?: string
+}
+
 /// Lightweight execution record for the history list.
 export interface TaskExecution {
   run_id: string

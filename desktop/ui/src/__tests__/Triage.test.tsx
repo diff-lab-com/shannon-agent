@@ -37,6 +37,10 @@ const testMessages: Record<string, string> = {
   'inbox.source.skill_candidate': 'Skill candidate',
   'inbox.action.viewSession': 'View session',
   'inbox.action.viewSession.aria': 'Open the session this item came from',
+  'inbox.action.handle': 'Handle',
+  'inbox.action.handle.aria': 'Open the session to handle the waiting approval request',
+  'inbox.toast.handleGuidance': 'Session opened — approve or deny the permission request there.',
+  'inbox.continue.prefill': 'Continue working on: {summary}',
   'inbox.review.label': 'Review',
   'inbox.review.aria': 'Review this skill candidate in Extensions → Pending',
   'inbox.sort.aria': 'Toggle sort order',
@@ -91,7 +95,7 @@ const testMessages: Record<string, string> = {
 }
 
 // Hook spies — useInboxItems returns
-// { items, loading, error, filter, setFilter, refresh, markRead, archive, rerun, getSessionId }
+// { items, loading, error, filter, setFilter, refresh, markRead, archive, rerun, getContinueTarget }
 // useInboxStats returns { stats, loading, error, refresh }
 const itemsSpy = vi.hoisted(() => vi.fn())
 const statsSpy = vi.hoisted(() => vi.fn())
@@ -107,7 +111,7 @@ vi.mock('@/context/SessionContext', () => ({
 }))
 
 vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }))
 
 vi.mock('@/lib/tauri-api', async () => {
@@ -144,7 +148,11 @@ function setItems(items: InboxItem[], stats: { pending: number; today: number } 
     markRead: vi.fn(async (_id: number) => true),
     archive: vi.fn(async (_id: number) => true),
     rerun: vi.fn(async (_id: number) => 'run-1'),
-    getSessionId: vi.fn(async (_id: number) => 'sess-006'),
+    getContinueTarget: vi.fn(async (_id: number) => ({
+      sessionId: 'sess-006',
+      summary: 'run summary',
+      error: undefined,
+    })),
     setFilter: vi.fn(),
     refresh: vi.fn(),
   }
@@ -334,7 +342,7 @@ describe('Triage page (inbox)', () => {
   })
 
   it('continue button appears only when the item has a session and switches to it', async () => {
-    const { getSessionId } = setItems([
+    const { getContinueTarget } = setItems([
       makeItem({ id: 1, sessionId: 'sess-006' }),
       makeItem({ id: 2, sessionId: null }),
     ])
@@ -342,7 +350,7 @@ describe('Triage page (inbox)', () => {
     const continueButtons = screen.getAllByRole('button', { name: 'Continue this item session' })
     expect(continueButtons).toHaveLength(1)
     fireEvent.click(continueButtons[0])
-    await waitFor(() => expect(getSessionId).toHaveBeenCalledWith(1))
+    await waitFor(() => expect(getContinueTarget).toHaveBeenCalledWith(1))
     await waitFor(() => expect(switchSessionSpy).toHaveBeenCalledWith('sess-006'))
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/chat'))
   })
@@ -452,7 +460,7 @@ describe('Triage page (inbox)', () => {
     itemsSpy.mockReturnValue({
       items: [], loading: true, error: null, filter: undefined,
       setFilter: vi.fn(), refresh: vi.fn(), markRead: vi.fn(), archive: vi.fn(),
-      rerun: vi.fn(), getSessionId: vi.fn(),
+      rerun: vi.fn(), getContinueTarget: vi.fn(),
     })
     statsSpy.mockReturnValue({ stats: baseStats, loading: false, error: null, refresh: vi.fn() })
     const { container } = renderPage()
@@ -524,29 +532,36 @@ describe('Triage — cross links (IA T2)', () => {
   })
 })
 
-// IA T6 (收件箱升级): session sources read "View session", skill candidates
+// IA T6 (收件箱升级): session sources target the session, skill candidates
 // link to the Extensions → Pending review queue (互通), pending items pin to
 // the top of the default view, and the three new sources are filterable.
+// 2026-10 design parity (审查 R1 §05): approval cards read「Handle」(去处理)
+// + the in-session guidance toast — the payload carries no permission
+// request id, so inline approve/deny would be a fake button; failure cards
+// keep the read-oriented「View session」.
 describe('Triage — session sources, skill candidates and pending pinning (IA T6/X1)', () => {
-  it('shows「View session」as the primary action for a session_approval item and switches to it', async () => {
-    const { getSessionId } = setItems([
+  it('shows「Handle」as the primary action for a session_approval item, toasts the guidance and switches to it', async () => {
+    const { toast } = await import('sonner')
+    const { getContinueTarget } = setItems([
       makeItem({ id: 11, source: 'session_approval', sessionId: 'sess-77', title: 'Permission requested' }),
     ])
     renderPage()
-    const btn = screen.getByRole('button', { name: 'Open the session this item came from' })
-    expect(btn).toHaveTextContent('View session')
+    const btn = screen.getByRole('button', { name: 'Open the session to handle the waiting approval request' })
+    expect(btn).toHaveTextContent('Handle')
     // The automation-facing「Resume session」wording stays off approval cards.
     expect(screen.queryByRole('button', { name: 'Continue this item session' })).not.toBeInTheDocument()
     fireEvent.click(btn)
-    await waitFor(() => expect(getSessionId).toHaveBeenCalledWith(11))
+    await waitFor(() => expect(getContinueTarget).toHaveBeenCalledWith(11))
     await waitFor(() => expect(switchSessionSpy).toHaveBeenCalledWith('sess-006'))
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Session opened — approve or deny the permission request there.'))
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/chat'))
   })
 
   it('shows「View session」for a session_failed item too', () => {
     setItems([makeItem({ id: 12, source: 'session_failed', sessionId: 'sess-88', title: 'Turn failed' })])
     renderPage()
-    expect(screen.getByRole('button', { name: 'Open the session this item came from' })).toBeInTheDocument()
+    const btn = screen.getByRole('button', { name: 'Open the session this item came from' })
+    expect(btn).toHaveTextContent('View session')
   })
 
   it('keeps「Resume session」as the primary action for automation sources', () => {
@@ -787,7 +802,7 @@ describe('Triage — B4 URL view state and error state (§7-28)', () => {
     itemsSpy.mockReturnValue({
       items: [], loading: false, error: 'db locked', filter: undefined,
       setFilter: vi.fn(), refresh, markRead: vi.fn(), archive: vi.fn(),
-      rerun: vi.fn(), getSessionId: vi.fn(),
+      rerun: vi.fn(), getContinueTarget: vi.fn(),
     })
     statsSpy.mockReturnValue({ stats: baseStats, loading: false, error: null, refresh: vi.fn() })
     renderPage()
@@ -801,7 +816,7 @@ describe('Triage — B4 URL view state and error state (§7-28)', () => {
     itemsSpy.mockReturnValue({
       items: [makeItem({ id: 1 })], loading: false, error: 'db locked', filter: undefined,
       setFilter: vi.fn(), refresh: vi.fn(), markRead: vi.fn(), archive: vi.fn(),
-      rerun: vi.fn(), getSessionId: vi.fn(),
+      rerun: vi.fn(), getContinueTarget: vi.fn(),
     })
     statsSpy.mockReturnValue({ stats: baseStats, loading: false, error: null, refresh: vi.fn() })
     renderPage()

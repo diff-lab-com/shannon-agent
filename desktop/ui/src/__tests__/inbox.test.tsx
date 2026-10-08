@@ -159,19 +159,27 @@ describe('useInboxItems', () => {
     expect(runId).toBeNull()
   })
 
-  it('getSessionId resolves the linked session', async () => {
-    vi.mocked(api.continueInboxItemSession).mockResolvedValue('sess-006')
+  it('getContinueTarget resolves the linked session with the run result', async () => {
+    vi.mocked(api.continueInboxItemSession).mockResolvedValue({
+      sessionId: 'sess-006',
+      summary: 'Digest finished: 3 items merged.',
+      error: undefined,
+    })
     const { result } = renderHook(() => useInboxItems(), { wrapper })
     await waitFor(() => expect(result.current.loading).toBe(false))
-    await expect(result.current.getSessionId(2)).resolves.toBe('sess-006')
+    await expect(result.current.getContinueTarget(2)).resolves.toEqual({
+      sessionId: 'sess-006',
+      summary: 'Digest finished: 3 items merged.',
+      error: undefined,
+    })
     expect(api.continueInboxItemSession).toHaveBeenCalledWith(2)
   })
 
-  it('getSessionId returns null when no session is linked', async () => {
+  it('getContinueTarget returns null when no session is linked', async () => {
     vi.mocked(api.continueInboxItemSession).mockRejectedValue('inbox item 2 has no linked session')
     const { result } = renderHook(() => useInboxItems(), { wrapper })
     await waitFor(() => expect(result.current.loading).toBe(false))
-    await expect(result.current.getSessionId(2)).resolves.toBeNull()
+    await expect(result.current.getContinueTarget(2)).resolves.toBeNull()
   })
 
   it('refreshes when the backend emits inbox-updated', async () => {
