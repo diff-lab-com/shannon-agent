@@ -562,13 +562,16 @@ describe("createEngineHandlers (P1.1b)", () => {
     socket.close();
   });
 
-  it("pair / agent.detail return NOT_IMPLEMENTED", async () => {
+  it("pair / agent.detail return NOT_IMPLEMENTED; agent.list is a real (empty) roster result", async () => {
     const handlers = createEngineHandlers({
       engineWsUrl: "ws://127.0.0.1:9",
       engineHttpBaseUrl: "http://engine:33420",
       version: "test",
       logger,
       engineClientFactory: fakeFactory({ current: null }, { script: [] }),
+      // B0: agent.list reads the host roster — pin an empty scan dir here
+      // (the NOT_IMPLEMENTED faces below must stay the only two).
+      agentRosterDirs: [],
     });
     const { port } = await start(handlers);
     const socket = await connect(port);
@@ -576,6 +579,8 @@ describe("createEngineHandlers (P1.1b)", () => {
     expect(pair.error?.code).toBe(ShannonError.NOT_IMPLEMENTED);
     const detail = await rpc(socket, "shannon/agent.detail", { session_id: "s1" });
     expect(detail.error?.code).toBe(ShannonError.NOT_IMPLEMENTED);
+    const list = await rpc(socket, "shannon/agent.list");
+    expect(list.result).toEqual({ agents: [] });
     socket.close();
   });
 });

@@ -417,6 +417,9 @@ const handlers = createMobileHandlers({
     cancelPendingApprovals: (deviceId: string) => hub.cancelPendingApprovals(deviceId),
     // Shared with the pipeline above — cancel reaches dispatched tasks.
     activeQueries,
+    // B0: shannon/session.list fills a task session's agent_id from the same
+    // hub journal the task handlers write (bootstrap parity).
+    taskAgentLookup: (sessionId: string) => hub.agentForSession(sessionId),
   },
   tokens,
   registry,

@@ -503,6 +503,10 @@ async function startMobileServer(
       fetchImpl: opts.mobileFetchImpl,
       engineAuthToken,
       approvalRegistry: approvals,
+      // B0: shannon/session.list fills a task session's agent_id from the
+      // dispatch hub's journal (task id → roster agent) — the same hub the
+      // task handlers journal into.
+      taskAgentLookup: (sessionId: string) => dispatchHub.agentForSession(sessionId),
       // §O2/§O3 + 修正1: forward push bindings to the relay over its control
       // side channel (late-bound — the relay host leg connects below), with
       // the expected-state store recording every intent for the link-reconnect
