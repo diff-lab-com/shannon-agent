@@ -290,6 +290,15 @@
       }
     },
     {
+      "identifier": "allow-current-git-branch",
+      "description": "Enables the current_git_branch command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "current_git_branch"
+        ]
+      }
+    },
+    {
       "identifier": "allow-delete-agent-definition",
       "description": "Enables the delete_agent_definition command without any pre-configured scope.",
       "commands": {
@@ -1001,6 +1010,15 @@
       }
     },
     {
+      "identifier": "allow-hide-companion-window",
+      "description": "Enables the hide_companion_window command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "hide_companion_window"
+        ]
+      }
+    },
+    {
       "identifier": "allow-detect-workspace-markers",
       "description": "Enables the detect_workspace_markers command without any pre-configured scope.",
       "commands": {
@@ -1645,6 +1663,15 @@
       "commands": {
         "allow": [
           "mark_triage_read"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-memory-injection-preview",
+      "description": "Enables the memory_injection_preview command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "memory_injection_preview"
         ]
       }
     },
@@ -3037,6 +3064,7 @@
         "allow-check-vision-send",
         "allow-clear-session-model",
         "allow-count-session-model-overrides",
+        "allow-current-git-branch",
         "allow-estimate-send-cost",
         "allow-get-active-session-id",
         "allow-get-background-tasks",
@@ -3381,6 +3409,7 @@
       "description": "Session multi-window lifecycle commands.",
       "permissions": [
         "allow-close-session-window",
+        "allow-hide-companion-window",
         "allow-list-session-windows",
         "allow-open-companion-window",
         "allow-open-session-window",
@@ -3444,6 +3473,7 @@
         "allow-list-dream-proposals",
         "allow-list-memories",
         "allow-list-memory-projects",
+        "allow-memory-injection-preview",
         "allow-promote-memory-to-instruction",
         "allow-read-dream-report",
         "allow-read-dream-state",

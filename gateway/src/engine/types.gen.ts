@@ -75,6 +75,15 @@ export type ApprovalDecision =
   | "deny"
   | { always_allow_kind: { kind: string; } };
 
+export interface ApprovalModeState {
+  mode: string;
+}
+
+export interface ApprovalModeRequest {
+  mode: string;
+  session_id: string;
+}
+
 export type SseEventName =
   | "completed"
   | "conversation_update"

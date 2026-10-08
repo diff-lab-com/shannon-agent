@@ -20,6 +20,10 @@ futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# In-page file materialization for upload_files (bytes ride into the page
+# as base64 data URLs)
+base64 = { workspace = true }
+
 tracing = { workspace = true }
 
 # Reachability probe for http CDP endpoints

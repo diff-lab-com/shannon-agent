@@ -57,8 +57,8 @@ env:
 jobs:
   update-metrics:
     runs-on: ubuntu-latest
-    # 60, not the in-CI metrics job's 30: this run compiles the workspace
-    # test binaries on a cold Swatinem cache (no shared `ci-v3` key).
+    # 60, not the per-PR CI jobs' 30: this run compiles the workspace
+    # test binaries on a cold Swatinem cache (no shared `ci-v4` key).
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -126,8 +126,9 @@ jobs:
               tried to push directly to `dev` and was rejected by branch
               protection (GH006) on every run.
             - Opens a PR (this one) instead — no PAT required.
-            - `ci.yml`'s `Generate Metrics` job remains the per-PR source of
-              truth; this PR just refreshes the *committed* snapshot.
+            - This weekly workflow is the source of truth for the committed
+              snapshot (there is no per-PR metrics job in ci.yml); this PR
+              just refreshes it.
 
             ## Review
             The diff should be limited to `docs/metrics.md` count cells

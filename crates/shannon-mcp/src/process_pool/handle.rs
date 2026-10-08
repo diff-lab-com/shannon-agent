@@ -472,6 +472,49 @@ impl McpServerHandle {
                     }
                 }
             }
+            // Any OTHER server→client request (carries both `method` and
+            // `id`) must NOT reach the pending-response routing below: its
+            // small integer id would consume the client's pending entry with
+            // the same id — the spec-mandated `ping` is the common case — and
+            // `call_tool` would return the request JSON as the tool's output
+            // while the real response is dropped. Reply instead (empty result
+            // for `ping`; -32601 otherwise), mirroring the WebSocket remote
+            // handle's contract.
+            else if value.get("method").is_some() && value.get("id").is_some() {
+                let req_id = value.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let method = value
+                    .get("method")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("<unknown>");
+                let response_value = if method == "ping" {
+                    serde_json::json!({ "jsonrpc": "2.0", "id": req_id, "result": {} })
+                } else {
+                    debug!(
+                        server = %server_name,
+                        method = %method,
+                        "unsupported server→client request; replying -32601"
+                    );
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {
+                            "code": -32601,
+                            "message": format!("Method not supported by client: {method}"),
+                        },
+                    })
+                };
+                let mut stdin_guard = stdin.lock().await;
+                if let Some(ref mut writer) = *stdin_guard {
+                    let mut msg = serde_json::to_string(&response_value).unwrap_or_default();
+                    msg.push('\n');
+                    if let Err(e) = writer.write_all(msg.as_bytes()).await {
+                        warn!("Failed to write response to MCP server: {e}");
+                    }
+                    if let Err(e) = writer.flush().await {
+                        warn!("Failed to flush MCP server stdin: {e}");
+                    }
+                }
+            }
             // Extract the id to route responses to pending requests.
             else if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
                 if let Some((_, pending_req)) = pending.remove(&id) {
@@ -747,11 +790,11 @@ impl McpServerHandle {
         // Generate a progress token if a callback was provided.
         let (progress_token, progress_cb) = match on_progress {
             Some(cb) => {
-                let token = serde_json::json!(format!(
-                    "pg-{}-{}",
-                    self.name,
-                    self.next_id.load(Ordering::Relaxed)
-                ));
+                // fetch_add, not load: two concurrent calls must not mint the
+                // same token — the progress router delivers to the first
+                // match, so a collision misroutes events between requests.
+                let n = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let token = serde_json::json!(format!("pg-{}-{n}", self.name));
                 (Some(token), Some(cb))
             }
             None => (None, None),

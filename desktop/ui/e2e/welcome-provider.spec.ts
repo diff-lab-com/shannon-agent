@@ -26,7 +26,10 @@ test.describe('Welcome — provider step (P-N20 / S1-C)', () => {
     await page.goto('/welcome')
 
     // Step 0 demands an explicit task choice before the model step shows.
-    await page.getByRole('button', { name: /Code/ }).first().click()
+    // 2026-10-08 redesign: templates are concrete tasks now (the hero
+    // composer fills from the card), the ModelStep section below still
+    // carries the Continue gate.
+    await page.getByRole('button', { name: /Review a pull request/ }).first().click()
     const continueBtn = page.getByRole('button', { name: 'Continue →' })
     await expect(continueBtn).toBeVisible({ timeout: 10000 })
 

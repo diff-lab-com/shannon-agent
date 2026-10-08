@@ -1039,6 +1039,7 @@ mod tests {
             cache_creation_tokens: cache_create,
             cache_read_tokens: cache_read,
             cost_usd: Some(cost),
+            context_window_tokens: None,
         }
     }
 

@@ -19,6 +19,7 @@
  */
 
 import { ENGINE_HTTP_TIMEOUT_MS } from "../lib/netTimeouts.js";
+import type { ApprovalModeRequest, ApprovalModeState } from "./types.gen.js";
 
 // Re-exported for callers/tests that pin the approval POST budget.
 export { ENGINE_HTTP_TIMEOUT_MS };
@@ -88,7 +89,7 @@ export interface ApprovalModeOptions {
 /** P3-3: `GET /api/approval/mode` — the token currently in effect. */
 export async function getApprovalMode(
   opts: ApprovalModeOptions,
-): Promise<{ mode: string }> {
+): Promise<ApprovalModeState> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const url = `${opts.engineBaseUrl.replace(/\/+$/, "")}/api/approval/mode?session_id=${encodeURIComponent(opts.sessionId)}`;
   const headers: Record<string, string> = {};
@@ -102,29 +103,31 @@ export async function getApprovalMode(
     const body = await res.text().catch(() => "<no body>");
     throw new Error(`approval mode read failed: HTTP ${res.status} from ${url}: ${body}`);
   }
-  return (await res.json()) as { mode: string };
+  return (await res.json()) as ApprovalModeState;
 }
 
 /** P3-3: `POST /api/approval/mode` — the mobile TIGHTEN route; the engine
  *  rejects everything except `readonly`. */
 export async function setApprovalMode(
   opts: ApprovalModeOptions & { mode: "readonly" },
-): Promise<{ mode: string }> {
+): Promise<ApprovalModeState> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const url = `${opts.engineBaseUrl.replace(/\/+$/, "")}/api/approval/mode`;
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (opts.authToken) headers.authorization = `Bearer ${opts.authToken}`;
+  // Wire-conformance: the body is the generated ApprovalModeRequest shape.
+  const body: ApprovalModeRequest = { session_id: opts.sessionId, mode: opts.mode };
   const res = await fetchImpl(url, {
     method: "POST",
     headers,
-    body: JSON.stringify({ session_id: opts.sessionId, mode: opts.mode }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(opts.timeoutMs ?? ENGINE_HTTP_TIMEOUT_MS),
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => "<no body>");
-    throw new Error(`approval mode set failed: HTTP ${res.status} from ${url}: ${body}`);
+    const resBody = await res.text().catch(() => "<no body>");
+    throw new Error(`approval mode set failed: HTTP ${res.status} from ${url}: ${resBody}`);
   }
-  return (await res.json()) as { mode: string };
+  return (await res.json()) as ApprovalModeState;
 }
 
 // ── N3 per-kind trust face ────────────────────────────────────────────────

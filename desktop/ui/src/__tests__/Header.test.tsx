@@ -103,8 +103,9 @@ describe('Header component', () => {
     ]
     mockSessionCtx.currentSessionId = 's1'
     render(wrap(<Header />, { route: '/tasks' }))
-    // IA T1: /tasks is titled「自动化」(Automations), never「任务」.
-    expect(screen.getByText('Automations')).toBeInTheDocument()
+    // 2026-10 design parity: /tasks is titled「任务」(Tasks) — one noun
+    // across nav, header and page (audit R1 §1 术语断裂).
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
   })
 
   // U2 — ContextPanel toggle moved here from the retired ChatHeader.
@@ -287,7 +288,8 @@ describe('Header component', () => {
   })
 
   // U3 — four distinguishable risk tiers: critical=error, high=secondary,
-  // medium=tertiary (was wrongly secondary), low=tertiary. Localized text,
+  // medium=warning, low=tertiary. Aurora 2026-10 语义色归位: amber/warning
+  // is the high-risk signal, so medium moved off tertiary. Localized text,
   // announced via aria-label. G7 2026-09-30: tier chips render the MD3
   // container pairs (bg-X-container + text-on-X-container), not accent
   // text on an accent/10 tint.
@@ -296,7 +298,7 @@ describe('Header component', () => {
     const tier = {
       critical: 'text-on-error-container',
       high: 'text-on-secondary-container',
-      medium: 'text-on-tertiary-container',
+      medium: 'text-on-warning-container',
       low: 'text-on-tertiary-container',
     }[risk]
 
@@ -338,9 +340,9 @@ describe('Header component', () => {
     expect(screen.getByText('Chat')).toBeInTheDocument()
   })
 
-  it('renders Automations title on /tasks route (IA T1)', () => {
+  it('renders Tasks title on /tasks route (2026-10 design parity)', () => {
     render(wrap(<Header />, { route: '/tasks' }))
-    expect(screen.getByText('Automations')).toBeInTheDocument()
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
   })
 
   it('renders Settings title on /settings route', () => {
@@ -348,9 +350,9 @@ describe('Header component', () => {
     expect(screen.getByText('Settings')).toBeInTheDocument()
   })
 
-  it('renders Extensions title on /extensions route', () => {
+  it('renders Connectors title on /extensions route (IA 2026-10 扩展 → 连接)', () => {
     render(wrap(<Header />, { route: '/extensions/skills' }))
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
   })
 
   it('renders notifications and help buttons', () => {
@@ -444,6 +446,9 @@ describe('Header — skill candidate badge', () => {
 })
 
 // ── P1-3: execution-mode switcher + approval-dialog decision reason ──
+// Aurora redesign 2026-10 (02-chat.html 三要素归位): the switchers moved
+// into the composer's compose row (see ComposerSwitchers.test.tsx for the
+// relocated activation/aria coverage). The Header half pins the ABSENCE.
 describe('Header — P1-3 execution mode + decision reason', () => {
   beforeEach(() => {
     // Top-level describe — the outer beforeEach does not run here, so
@@ -454,39 +459,17 @@ describe('Header — P1-3 execution mode + decision reason', () => {
     vi.mocked(api.listSkillCandidates).mockResolvedValue([])
   })
 
-  it('renders the execution-mode switcher on /chat with the current tier', () => {
+  it('no longer renders the execution-mode switcher on /chat (moved into the composer)', () => {
     render(wrap(<Header />, { route: '/chat' }))
-    expect(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' })).toBeInTheDocument()
+    expect(screen.queryByTestId('execution-mode-switcher')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Execution mode:/ })).not.toBeInTheDocument()
+    // Same for the plan/act tier pair.
+    expect(screen.queryByTestId('phase-tier-switcher')).not.toBeInTheDocument()
   })
 
   it('does not render the execution-mode switcher on other pages', () => {
     render(wrap(<Header />, { route: '/tasks' }))
     expect(screen.queryByRole('button', { name: /Execution mode:/ })).not.toBeInTheDocument()
-  })
-
-  it('shows a custom profile name on the custom tier', () => {
-    mockCtx.config = { ...mockCtx.config, active_permission_profile: 'research-mode' }
-    render(wrap(<Header />, { route: '/chat' }))
-    expect(screen.getByRole('button', { name: 'Execution mode: Custom: research-mode. Press to change.' })).toBeInTheDocument()
-  })
-
-  it('dispatches activate_permission_profile and refreshes config on tier switch', async () => {
-    vi.mocked(api.activatePermissionProfile).mockResolvedValue({ active: 'strict', approval_mode: 'suggest' })
-    render(wrap(<Header />, { route: '/chat' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' }))
-    fireEvent.click(await screen.findByRole('option', { name: 'Strict' }))
-    await waitFor(() => {
-      expect(api.activatePermissionProfile).toHaveBeenCalledWith('strict')
-      expect(mockCtx.refreshConfig).toHaveBeenCalled()
-    })
-  })
-
-  it('marks the active tier aria-selected in the menu', async () => {
-    render(wrap(<Header />, { route: '/chat' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' }))
-    const balanced = await screen.findByRole('option', { name: 'Balanced' })
-    expect(balanced).toHaveAttribute('aria-selected', 'true')
-    expect(await screen.findByRole('option', { name: 'Strict' })).toHaveAttribute('aria-selected', 'false')
   })
 
   // ── P1-3: approval-dialog decision reason ────────────────────────────

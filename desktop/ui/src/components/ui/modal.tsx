@@ -86,7 +86,7 @@ export function Modal({
     <DialogPrimitive.Root open={open} onOpenChange={handleOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Backdrop
-          className="fixed inset-0 isolate z-flash bg-black/40 [backdrop-filter:var(--glass-blur-overlay)] duration-(--duration-fast) data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+          className="fixed inset-0 isolate z-flash bg-scrim [backdrop-filter:var(--glass-blur-overlay)] duration-(--duration-fast) data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
         />
         <DialogPrimitive.Popup
           role={role}

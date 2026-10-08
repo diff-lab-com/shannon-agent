@@ -30,6 +30,7 @@ import type { EngineClientFactory as MobileEngineClientFactory } from "./mobile/
 import { ApprovalRegistry } from "./mobile/approvalRegistry.js";
 import { PushReplayBuffer } from "./mobile/pushReplay.js";
 import { MobileDispatchHub } from "./mobile/hub.js";
+import { loadAgentRoster } from "./mobile/agentRoster.js";
 import { createMobileChannelAdapter } from "./mobile/channel.js";
 import { createTaskHandlers } from "./mobile/taskHandlers.js";
 import { createMobileTaskTurnHandler } from "./mobile/taskTurnHandler.js";
@@ -194,7 +195,16 @@ export async function bootstrap(
   // instance-injection pattern as the approval registry above).
   const pushReplay = mobileEnabled ? new PushReplayBuffer() : null;
   const dispatchHub = mobileEnabled
-    ? new MobileDispatchHub({ logger, approvals: approvalRegistry ?? undefined, replay: pushReplay ?? undefined })
+    ? new MobileDispatchHub({
+        logger,
+        approvals: approvalRegistry ?? undefined,
+        replay: pushReplay ?? undefined,
+        // P2-9: the agent.state push resolves the dispatched task's agent_id
+        // against the SAME roster `shannon/agent.list` serves (default
+        // `~/.shannon/agents`; read per push so a roster edit takes effect
+        // without a restart — the taskHandlers validation's philosophy).
+        rosterEntry: (agentId) => loadAgentRoster().find((a) => a.id === agentId) ?? null,
+      })
     : null;
   // Shared in-flight query registry: the engine bridge (shannon/query +
   // shannon/cancel) and the router's per-lane clients register against ONE
@@ -503,6 +513,10 @@ async function startMobileServer(
       fetchImpl: opts.mobileFetchImpl,
       engineAuthToken,
       approvalRegistry: approvals,
+      // B0: shannon/session.list fills a task session's agent_id from the
+      // dispatch hub's journal (task id → roster agent) — the same hub the
+      // task handlers journal into.
+      taskAgentLookup: (sessionId: string) => dispatchHub.agentForSession(sessionId),
       // §O2/§O3 + 修正1: forward push bindings to the relay over its control
       // side channel (late-bound — the relay host leg connects below), with
       // the expected-state store recording every intent for the link-reconnect

@@ -11,12 +11,14 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import type * as TauriApi from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
-import TurnTimeline from '@/pages/TurnTimeline'
+import TurnTimeline, { toolKind } from '@/pages/TurnTimeline'
 import { timelineToHtml } from '@/lib/timelineExport'
 import type { TurnTimeline } from '@/types'
 
 const getTraceTimeline = vi.hoisted(() => vi.fn())
 const saveTextFileViaDialog = vi.hoisted(() => vi.fn())
+const listCheckpoints = vi.hoisted(() => vi.fn())
+const rewindSessionApi = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', async () => {
   const actual = await vi.importActual<typeof TauriApi>('@/lib/tauri-api')
@@ -24,8 +26,25 @@ vi.mock('@/lib/tauri-api', async () => {
     ...actual,
     getTraceTimeline: (...args: unknown[]) => getTraceTimeline(...args),
     saveTextFileViaDialog: (...args: unknown[]) => saveTextFileViaDialog(...args),
+    listCheckpoints: (...args: unknown[]) => listCheckpoints(...args),
+    rewindSession: (...args: unknown[]) => rewindSessionApi(...args),
   }
 })
+
+// ChatContext/AppContext consumers: rewind routes through the chat slice
+// when the timeline session IS the current one. Full module mocks — the
+// page only consumes these two hooks.
+const mockRewindCurrent = vi.hoisted(() => vi.fn())
+const mockSwitchSession = vi.hoisted(() => vi.fn())
+vi.mock('@/context/ChatContext', () => ({
+  useChat: () => ({ rewindSession: mockRewindCurrent }),
+}))
+vi.mock('@/context/AppContext', () => ({
+  useApp: () => ({
+    currentSessionId: 'sess-001',
+    switchSession: mockSwitchSession,
+  }),
+}))
 
 const BASE_NS = 1_756_200_000_000_000_000
 const ns = (seconds: number) => BASE_NS + seconds * 1_000_000_000
@@ -68,8 +87,8 @@ const FIXTURE: TurnTimeline = {
     },
   ],
   cumulative: [
-    { ts_ns: ns(120), output_tokens_total: 1240, cost_total_usd: 0.0214 },
-    { ts_ns: ns(330), output_tokens_total: 2130, cost_total_usd: 0.0341 },
+    { ts_ns: ns(120), input_tokens_total: 4820, output_tokens_total: 1240, cost_total_usd: 0.0214 },
+    { ts_ns: ns(330), input_tokens_total: 10930, output_tokens_total: 2130, cost_total_usd: 0.0341 },
   ],
 }
 
@@ -89,6 +108,12 @@ function renderAt(path = '/timeline/sess-001') {
 beforeEach(() => {
   getTraceTimeline.mockReset()
   saveTextFileViaDialog.mockReset()
+  listCheckpoints.mockReset()
+  rewindSessionApi.mockReset()
+  mockRewindCurrent.mockReset()
+  mockSwitchSession.mockReset()
+  // Default: no checkpoints — rewind chips stay hidden (honest affordance).
+  listCheckpoints.mockResolvedValue([])
   // Default: the backend dialog "wrote" the file and reports the path.
   saveTextFileViaDialog.mockResolvedValue('/tmp/export/timeline-sess-001.html')
 })
@@ -106,15 +131,17 @@ describe('TurnTimeline', () => {
     expect(screen.getByText('claude-sonnet-4-20250514')).toBeInTheDocument()
     expect(screen.getByText('Turn 2')).toBeInTheDocument()
 
-    // Tool names across the waterfall rows.
-    expect(screen.getByText('Read')).toBeInTheDocument()
+    // Tool names across the waterfall rows ('Read' also matches the
+    // four-color legend's Read item, so it asserts on "any occurrence").
+    expect(screen.getAllByText('Read').length).toBeGreaterThan(0)
     expect(screen.getByText('Bash')).toBeInTheDocument()
     expect(screen.getByText('Grep')).toBeInTheDocument()
 
     // Summary chip labels resolve through ICU plurals. The chips live in a
     // role="list" container (office wave 3 moved the section title into the
-    // persistent Header, removing the old "Session summary" label).
-    expect(screen.getByRole('list')).toHaveTextContent(/2 turns/)
+    // persistent Header, removing the old "Session summary" label); the
+    // four-color legend is a separate list below.
+    expect(screen.getByRole('list', { name: 'Session summary' })).toHaveTextContent(/2 turns/)
     expect(getTraceTimeline).toHaveBeenCalledWith('sess-001')
   })
 
@@ -292,5 +319,140 @@ describe('TurnTimeline — Export as HTML (office Wave 3 C6)', () => {
     })
     expect(html).toContain('&lt;script&gt;')
     expect(html).not.toContain('<script>')
+  })
+})
+
+// ─── audit §10 P1: checkpoint rewind chips ───
+
+describe('TurnTimeline — rewind chips (audit §10 P1)', () => {
+  it('hides the rewind chips when no checkpoint covers any turn', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    listCheckpoints.mockResolvedValue([])
+    renderAt()
+    await screen.findByText('Turn 1')
+    expect(screen.queryByTestId('timeline-rewind-1')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('timeline-rewind-2')).not.toBeInTheDocument()
+  })
+
+  it('shows the chip for every turn a checkpoint at-or-after covers', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    // One checkpoint at turn 2 covers turns 1 AND 2 (rewinding to before
+    // turn 1 is legitimate while any later checkpoint exists).
+    listCheckpoints.mockResolvedValue([{ turn_index: 2 }])
+    renderAt()
+    await screen.findByText('Turn 1')
+    expect(screen.getByTestId('timeline-rewind-1')).toBeInTheDocument()
+    expect(screen.getByTestId('timeline-rewind-2')).toBeInTheDocument()
+  })
+
+  it('rewinds the CURRENT session through the chat slice and navigates to chat', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    listCheckpoints.mockResolvedValue([
+      { turn_index: 1 },
+      { turn_index: 2 },
+    ])
+    mockRewindCurrent.mockResolvedValue([])
+    renderAt()
+    await screen.findByText('Turn 1')
+    fireEvent.click(screen.getByTestId('timeline-rewind-1'))
+    // Confirm dialog gates the destructive action.
+    fireEvent.click(await screen.findByRole('button', { name: 'Rewind' }))
+    await waitFor(() => expect(mockRewindCurrent).toHaveBeenCalledWith(1))
+    expect(rewindSessionApi).not.toHaveBeenCalled()
+    expect(mockSwitchSession).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByText('chat-home')).toBeInTheDocument())
+  })
+
+  it('rewinds a NON-current session through the raw command, then adopts it', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    listCheckpoints.mockResolvedValue([{ turn_index: 1 }])
+    rewindSessionApi.mockResolvedValue([])
+    renderAt('/timeline/sess-other')
+    await screen.findByText('Turn 1')
+    fireEvent.click(screen.getByTestId('timeline-rewind-1'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Rewind' }))
+    await waitFor(() => expect(rewindSessionApi).toHaveBeenCalledWith('sess-other', 1))
+    expect(mockRewindCurrent).not.toHaveBeenCalled()
+    await waitFor(() => expect(mockSwitchSession).toHaveBeenCalledWith('sess-other'))
+    await waitFor(() => expect(screen.getByText('chat-home')).toBeInTheDocument())
+  })
+})
+
+// ─── 裁决 B7: coarse four-color waterfall ───
+
+describe('toolKind (B7 coarse frontend binning)', () => {
+  it('bins tool names into read/write/net/risk', () => {
+    expect(toolKind('Grep')).toBe('read')
+    expect(toolKind('Read')).toBe('read')
+    expect(toolKind('Glob')).toBe('read')
+    expect(toolKind('LS')).toBe('read')
+    expect(toolKind('Edit')).toBe('write')
+    expect(toolKind('Write')).toBe('write')
+    expect(toolKind('MultiEdit')).toBe('write')
+    expect(toolKind('WebFetch')).toBe('net')
+    expect(toolKind('mcp__tools__browser_navigate')).toBe('net')
+    expect(toolKind('Bash')).toBe('risk')
+    expect(toolKind('mcp__term__terminal_run')).toBe('risk')
+    expect(toolKind('TodoWrite')).toBe('write')
+    expect(toolKind('Task')).toBe('other')
+  })
+
+  it('renders a failed read as the error red, not the kind tint', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    renderAt()
+    await screen.findByText('Turn 1')
+    const bashBar = screen.getByTitle('Bash · 3.0s')
+    expect(bashBar.className).toContain('bg-error/15')
+    const readBar = screen.getByTitle('Read · 6.0s')
+    expect(readBar.className).toContain('bg-info/15')
+    expect(readBar.className).not.toContain('bg-error')
+  })
+
+  it('renders the four-kind legend', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    renderAt()
+    const legend = await screen.findByRole('list', { name: 'Waterfall color legend' })
+    expect(legend.textContent).toMatch(/Read/)
+    expect(legend.textContent).toMatch(/Write/)
+    expect(legend.textContent).toMatch(/Network/)
+    expect(legend.textContent).toMatch(/High risk/)
+  })
+})
+
+// ─── audit §10 P2/C6: KPI chips + input leg on the cumulative curve ───
+
+describe('TurnTimeline — KPI chips and input curve (§10 P2, C6)', () => {
+  it('shows the wall-clock duration chip and in+out token chip', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    renderAt()
+    const list = await screen.findByRole('list', { name: 'Session summary' })
+    // 330s span → "5m30s"; tokens: 4820+6110=10930 in / 2130 out.
+    expect(list).toHaveTextContent('5m30s')
+    expect(list.textContent).toMatch(/10\.9K/)
+    expect(list.textContent).toMatch(/2\.1K/)
+  })
+
+  it('draws the input leg plus in/out legend when input data exists', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    renderAt()
+    await screen.findByText('Accumulated tokens & cost')
+    const svg = screen.getByRole('img', { name: 'Token accumulation curve' })
+    // Output + input + cost polylines (the fixture carries costs).
+    expect(svg.querySelectorAll('polyline').length).toBe(3)
+    expect(screen.getByText('Output')).toBeInTheDocument()
+    expect(screen.getByText('Input')).toBeInTheDocument()
+  })
+
+  it('hides the input leg when the projection predates the field', async () => {
+    getTraceTimeline.mockResolvedValue({
+      ...FIXTURE,
+      cumulative: FIXTURE.cumulative.map(p => ({ ...p, input_tokens_total: 0 })),
+    })
+    renderAt()
+    await screen.findByText('Accumulated tokens & cost')
+    const svg = screen.getByRole('img', { name: 'Token accumulation curve' })
+    // Output + cost only.
+    expect(svg.querySelectorAll('polyline').length).toBe(2)
+    expect(screen.queryByText('Input')).not.toBeInTheDocument()
   })
 })

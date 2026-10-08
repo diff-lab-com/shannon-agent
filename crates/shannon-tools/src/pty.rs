@@ -95,6 +95,12 @@ pub fn execute_in_pty(
     // Drop the slave side so EOF propagates when the child exits
     drop(pair.slave);
 
+    // Retained PTY output cap. The reader must keep draining (an unread pty
+    // blocks the child on write) but retention stops at the cap — the
+    // caller-facing PTY path truncates for the model anyway, so an
+    // unbounded `Vec` here only buys a memory balloon.
+    const MAX_PTY_CAPTURED_BYTES: usize = 8 * 1024 * 1024;
+
     let output_buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> =
         std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let reader_buf = output_buf.clone();
@@ -114,7 +120,11 @@ pub fn execute_in_pty(
                 Ok(0) => break,
                 Ok(n) => {
                     if let Ok(mut locked) = reader_buf.lock() {
-                        locked.extend_from_slice(&buf[..n]);
+                        let room = MAX_PTY_CAPTURED_BYTES.saturating_sub(locked.len());
+                        let take = room.min(n);
+                        if take > 0 {
+                            locked.extend_from_slice(&buf[..take]);
+                        }
                     }
                 }
                 Err(_) => break,
@@ -187,6 +197,16 @@ mod tests {
         assert!(result.is_ok());
         let output = result.unwrap();
         assert_eq!(output.exit_code, 42);
+    }
+
+    /// The reader keeps draining past the retention cap (the child must be
+    /// able to finish writing 20 MiB) but retains at most 8 MiB.
+    #[test]
+    fn test_pty_output_retention_is_capped() {
+        let result = execute_in_pty("head -c 20971520 /dev/zero", None, None, Some(30000));
+        let output = result.expect("pty run");
+        assert_eq!(output.exit_code, 0, "child must drain to completion");
+        assert_eq!(output.stdout.len(), 8 * 1024 * 1024);
     }
 
     #[test]

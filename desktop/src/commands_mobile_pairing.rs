@@ -197,15 +197,16 @@ pub(crate) struct PairTokenRecord {
 
 /// `~/.shannon/mobile-tls/tls-info.json` — written by the gateway when
 /// `mobile.tls` is on (mobileTls.ts). Its fingerprint rides the QR so phones
-/// pin the self-signed cert instead of chain-validating it.
+/// pin the self-signed cert instead of chain-validating it. The pairing-RPC
+/// client (gateway_pairing) reads the same file to pin the same value.
 #[derive(Debug, Clone, Deserialize)]
-struct MobileTlsInfo {
-    fingerprint: String,
+pub(crate) struct MobileTlsInfo {
+    pub(crate) fingerprint: String,
 }
 
 /// Read the gateway's TLS info file; `None` when TLS is off (or the file is
 /// unreadable → plaintext ws QR, matching the gateway's actual listener).
-fn read_tls_info() -> Option<MobileTlsInfo> {
+pub(crate) fn read_tls_info() -> Option<MobileTlsInfo> {
     let path = home_dir()
         .ok()?
         .join(".shannon")

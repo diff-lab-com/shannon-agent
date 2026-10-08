@@ -522,6 +522,7 @@ impl HookManager {
         let url = hook_def.url.clone();
         let headers = hook_def.headers.clone();
         let event_json = event_json.to_vec();
+        let timeout = hook_def.timeout_duration();
 
         tokio::spawn(async move {
             if let Some(url) = url {
@@ -529,11 +530,22 @@ impl HookManager {
                 for (key, value) in &headers {
                     builder = builder.header(key.as_str(), value.as_str());
                 }
-                let _ = builder
+                // Bound the request: `reqwest::Client::new()` has no default
+                // timeout, so a stalled endpoint used to leak one spawned
+                // task + connection per hook fire, forever (command hooks got
+                // the same bound in the F22 fix).
+                let send = builder
                     .header("Content-Type", "application/json")
                     .body(event_json)
-                    .send()
-                    .await;
+                    .send();
+                match tokio::time::timeout(timeout, send).await {
+                    Ok(Ok(resp)) if !resp.status().is_success() => {
+                        tracing::warn!(url = %url, status = %resp.status(), "HTTP hook returned non-success")
+                    }
+                    Ok(Err(e)) => tracing::warn!(url = %url, error = %e, "HTTP hook failed"),
+                    Err(_) => tracing::warn!(url = %url, timeout = ?timeout, "HTTP hook timed out"),
+                    Ok(Ok(_)) => {}
+                }
             }
         });
 

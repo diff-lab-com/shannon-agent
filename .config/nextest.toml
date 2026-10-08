@@ -24,6 +24,12 @@ test-group = 'serial'
 filter = 'package(shannon-commands)'
 test-group = 'serial'
 
+# Real-browser e2e: each test launches the system Chrome — run them one at
+# a time so 8 parallel headed browsers don't starve the machine.
+[[profile.default.overrides]]
+filter = 'test(browser_e2e)'
+test-group = 'serial'
+
 # CI profile: stricter timeouts, retries for flaky tests, JUnit output.
 [profile.ci]
 test-threads = 4
@@ -38,4 +44,8 @@ test-group = 'serial'
 
 [[profile.ci.overrides]]
 filter = 'package(shannon-commands)'
+test-group = 'serial'
+
+[[profile.ci.overrides]]
+filter = 'test(browser_e2e)'
 test-group = 'serial'

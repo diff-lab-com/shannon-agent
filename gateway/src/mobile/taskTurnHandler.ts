@@ -66,10 +66,22 @@ export function createMobileTaskTurnHandler(
       // the task stream's terminals are task.message / query.failed below.
       const acc = newAccumulator();
 
+      // B0 engine-session fix: a task turn runs under the TASK's own UUID
+      // (the §K3 conversation key, pinned by the hub on `inbound`). The
+      // engine's WS gate rejects every non-UUID session_id query frame
+      // (api_server `Uuid::parse_str`), and the lane default
+      // (`mobile:<deviceId>`) is exactly that — so without this the turn
+      // would fail (or, pre-gate, scatter one disk session per device). The
+      // task UUID keeps the transcript addressable and aligned with the
+      // session.list attribution the hub journal serves. Null (never set on
+      // IM inbounds) → the client's lane default, i.e. IM behavior unchanged.
       const query = client.runQuery(
         inbound.text,
         // Parity with the IM handlers — inbound media rides as attachments.
-        { attachments: await toEngineAttachments(inbound.media, { logger }) },
+        {
+          attachments: await toEngineAttachments(inbound.media, { logger }),
+          sessionId: inbound.engineSessionId ?? null,
+        },
       ) as AsyncIterable<EngineEvent>;
       for await (const ev of query) {
         switch (ev.type) {

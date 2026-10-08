@@ -417,7 +417,12 @@ impl McpProcessPool {
             // could only show a bare Offline). Keep the handle in the pool
             // carrying the failure reason — W1-7's `last_error` contract —
             // so consumers can diagnose (and stop/restart) it, while the
-            // error still propagates to the caller.
+            // error still propagates to the caller. But DO tear down the
+            // already-spawned child: `start()` returning an initialize
+            // timeout/error leaves the OS process alive, and keeping it in
+            // an Unhealthy slot (kill_on_drop only fires on pool drop) used
+            // to leak it indefinitely.
+            handle.shutdown().await;
             *handle.state.write().await = ServerState::Unhealthy(e.clone());
             self.handles.insert(name.to_string(), handle);
             return Err(e);

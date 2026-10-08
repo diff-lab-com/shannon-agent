@@ -80,6 +80,19 @@ const TERMINAL_RUN_EVENT = 'shannon:terminal-run';
  */
 const COMPOSER_PREFILL_EVENT = 'shannon:composer-prefill';
 
+/**
+ * Window CustomEvent from the global Header (components/Header.tsx) — the
+ * top-bar terminal toggle. The drawer owns its open state (drawer-only since
+ * Task 3), so the event is the seam, same as `shannon:terminal-run` above.
+ */
+const TERMINAL_TOGGLE_EVENT = 'shannon:terminal-toggle';
+
+/**
+ * Window CustomEvent TO the global Header — broadcast on every open/close
+ * so the Header toggle's aria-pressed state tracks the drawer.
+ */
+const TERMINAL_OPEN_EVENT = 'shannon:terminal-open-changed';
+
 /** xterm defaults matching the backend's `[terminal]` fallbacks. */
 const DEFAULT_FONT_SIZE = 12;
 const DEFAULT_SCROLLBACK = 5000;
@@ -595,6 +608,17 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     return () => window.removeEventListener('keydown', handler, true);
   }, [togglePanel]);
 
+  // Header toggle rides the same seam as Ctrl+` (see TERMINAL_TOGGLE_EVENT).
+  useEffect(() => {
+    window.addEventListener(TERMINAL_TOGGLE_EVENT, togglePanel);
+    return () => window.removeEventListener(TERMINAL_TOGGLE_EVENT, togglePanel);
+  }, [togglePanel]);
+
+  // Reflect the drawer state onto the Header toggle (aria-pressed tracking).
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent(TERMINAL_OPEN_EVENT, { detail: { open } }));
+  }, [open]);
+
   // ── Chat integration: "run in terminal" (US4, direction A) ──────────
   // Chat fenced code blocks dispatch the `shannon:terminal-run` window
   // CustomEvent with `{ code }` (components/chat/Markdown). The panel owns
@@ -804,7 +828,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
                     {tab.exited ? 'sleep' : 'terminal'}
                   </span>
                   {dirLabel(tab.info.projectDir || tab.info.shell || tab.info.terminalId.slice(0, 8))}
-                  {tab.exited && <span className="text-outline">· {t('terminal.exited')}</span>}
+                  {tab.exited && <span className="text-on-surface-variant">· {t('terminal.exited')}</span>}
                 </button>
                 <button
                   type="button"

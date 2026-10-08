@@ -19,9 +19,32 @@ function wrap(ui: React.ReactElement) {
 }
 
 describe('ModelsSettings', () => {
-  it('renders model configuration subtitle', () => {
+  // The old「Manage your active AI providers」weak-subtitle assertion was
+  // superseded by the BYOK header test below (design-parity R1 2026-10-08).
+
+  // Design 12-settings.html:167-168, 258-274 (parity R1 2026-10-08): the
+  // pane opens with the 模型与服务商 sec-title + BYOK pitch, carries an
+  // execution-mode jump card (the control itself lives in 权限与安全), and
+  // closes with the standing 0600/keyring security line.
+  it('renders the BYOK page header above the cards', () => {
     render(wrap(<ModelsSettings />))
-    expect(screen.getByText(/Manage your active AI providers/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Models & providers' })).toBeInTheDocument()
+    expect(screen.getByText(/BYOK direct connection/)).toBeInTheDocument()
+  })
+
+  it('renders the execution-mode guidance card that jumps to Permissions & safety', () => {
+    render(wrap(<ModelsSettings />))
+    expect(screen.getByTestId('models-exec-mode-card')).toHaveTextContent(
+      'Execution mode (Strict / Balanced / Permissive)',
+    )
+    expect(screen.getByTestId('models-to-permissions-link')).toHaveTextContent(
+      'Open Permissions & safety',
+    )
+  })
+
+  it('renders the standing key-storage security line', () => {
+    render(wrap(<ModelsSettings />))
+    expect(screen.getByText(/never uploaded/)).toBeInTheDocument()
   })
 
   it('renders the managed providers section with an add button', () => {

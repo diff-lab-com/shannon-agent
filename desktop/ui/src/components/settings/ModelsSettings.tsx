@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { useCatalog } from '@/context/CatalogContext'
@@ -32,6 +33,7 @@ import { ComboboxSelect } from '@/components/ui/combobox-select'
 export default function ModelsSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+  const navigate = useNavigate()
   const { models, status, config, refreshConfig, refreshModels, refreshStatus } = useCatalog()
   const [switching, setSwitching] = useState<string | null>(null)
   const [strategy, setStrategyState] = useState<'speed' | 'balanced' | 'high-quality'>(
@@ -209,8 +211,16 @@ export default function ModelsSettings() {
   }
 
   return (
-    <div className="max-w-medium pr-xl pb-10">
-      <p className="font-body-md text-on-surface-variant mb-md">{t('settings.models.subtitle')}</p>
+    <div className="max-w-narrow pr-xl pb-10">
+      {/* Design 12-settings.html:167-168 (parity R1 2026-10-08): the pane
+          opens with the sec-title + BYOK pitch — the app's core
+          differentiator, not a generic "manage providers" line. */}
+      <h2 className="font-headline-md text-headline-md text-on-surface font-bold">
+        {t('settings.models.pageTitle')}
+      </h2>
+      <p className="font-body-md text-on-surface-variant mt-xs mb-md">
+        {t('settings.models.byokSubtitle')}
+      </p>
 
       <div className="space-y-lg">
         {/* Performance Strategy */}
@@ -539,6 +549,44 @@ export default function ModelsSettings() {
             <ParameterSlider label={t('settings.models.maxTokens')} value={config?.max_tokens ?? 4096} min={256} max={128000} step={256} formatValue={v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} lowLabel={t('settings.models.short')} highLabel={t('settings.models.longContext')} configKey="max_tokens" />
           </div>
         </section>
+
+        {/* Design 12-settings.html:258-268 (parity R1 2026-10-08): the models
+            page carries an 执行模式 entry point. The control itself stays in
+            权限与安全 — moving it would break the shared approval_mode test
+            group — so this is a guidance card, same pattern as
+            PermissionsPane's default-tier card pointing the other way. */}
+        <section
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1"
+          data-testid="models-exec-mode-card"
+        >
+          <div className="flex items-start gap-md">
+            <span className="material-symbols-outlined text-primary" aria-hidden="true">shield</span>
+            <div className="flex-1 space-y-sm">
+              <h3 className="font-headline-sm text-headline-sm text-on-surface">
+                {t('settings.models.execModeCard.title')}
+              </h3>
+              <p className="text-body-sm text-on-surface-variant max-w-prose">
+                {t('settings.models.execModeCard.body')}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate('/settings/permissions')}
+                data-testid="models-to-permissions-link"
+              >
+                {t('settings.models.execModeCard.action')}
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">arrow_forward</span>
+              </Button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {/* Design 12-settings.html:270-274 (parity R1 2026-10-08): the standing
+          security line under the whole pane. */}
+      <div className="flex items-center gap-sm mt-lg">
+        <span className="material-symbols-outlined icon-md text-success shrink-0" aria-hidden="true">verified_user</span>
+        <p className="text-body-sm text-on-surface-variant">{t('settings.models.keyStorageNote')}</p>
       </div>
     </div>
   )

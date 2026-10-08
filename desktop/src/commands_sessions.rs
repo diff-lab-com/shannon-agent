@@ -13,6 +13,7 @@
 use crate::commands::{AppState, ChatMessage, SessionMeta, chrono_timestamp};
 use crate::scheduled_commands::TaskWorktreeDto;
 use crate::session_registry::{SessionKey, SessionRegistry};
+use crate::session_window_commands;
 use crate::{config, events, events::event_names};
 use serde::Serialize;
 use shannon_core::session_log::SessionCuration;
@@ -229,7 +230,27 @@ async fn session_wire_info(state: &AppState, s: &SessionMeta) -> events::Session
         running,
         updated_at: session_log_mtime(state, &s.id),
         pinned,
+        max_context_tokens: session_context_peak(state, &s.id),
     }
+}
+
+/// Context peak (上下文峰值) for the rail row: the L0 session index's
+/// running max over logged turns (the same number `UsagePayload
+/// .context_total` streams live), so a reopened session still renders a
+/// context percentage. Per-row `index.json` read, the same shape the pinned
+/// join already pays. `None` when no logged turn knew its window (the UI
+/// hides the percentage — honesty rule) or the index is missing/stale (the
+/// next `SessionStore::list` pass rebuilds it).
+fn session_context_peak(state: &AppState, id: &str) -> Option<u64> {
+    let uuid = uuid::Uuid::parse_str(id).ok()?;
+    let events_path = state
+        .l0_store()
+        .container()
+        .join(uuid.to_string())
+        .join("events.jsonl");
+    let index_path = shannon_core::session_log::session_index::index_path_for(&events_path);
+    shannon_core::session_log::SessionIndex::load_if_valid(&events_path, &index_path)
+        .and_then(|index| index.max_context_tokens)
 }
 
 /// Last-activity epoch ms for a session, taken from its L0 log's mtime.
@@ -1693,6 +1714,18 @@ pub async fn delete_session(
         // also clears the active pointer if this was the focused session.
         state.registry.destroy(SessionKey(session_uuid));
 
+        // W10 audit §6-A: a live `session-<id>` window must not outlive its
+        // session — close it so the user is never left with a window pinned
+        // to a dead session. Best-effort, after the store delete (same
+        // ordering as the registry recycle above): a failed deletion keeps
+        // the window (and its session) untouched.
+        session_window_commands::close_window_for_deleted_session(
+            &state,
+            &app_handle,
+            &session_uuid.to_string(),
+        )
+        .await;
+
         // Best-effort worktree cleanup: if working_dir lives under the
         // default worktree base dir, remove the worktree. Failures are
         // logged but do not block session deletion — orphan worktrees can
@@ -1864,6 +1897,7 @@ pub async fn duplicate_session(
         updated_at: None,
         // A fresh duplicate starts unpinned — the pin belongs to the
         // original conversation, not its copy.
+        max_context_tokens: None,
         pinned: false,
     })
 }
@@ -1954,6 +1988,7 @@ pub(crate) async fn branch_session_internal(
         updated_at: None,
         // Same contract as duplicate: a brand-new branch starts unpinned.
         pinned: false,
+        max_context_tokens: None,
     })
 }
 
@@ -3100,6 +3135,9 @@ mod pin_and_auto_archive_tests {
                 title: "Approval requested".into(),
                 summary: String::new(),
                 error: None,
+                request_id: None,
+                risk: None,
+                run_id: None,
             })
             .unwrap();
         // A READ item is no longer 未读: a second session whose only inbox
@@ -3114,6 +3152,9 @@ mod pin_and_auto_archive_tests {
                 title: "Old approval".into(),
                 summary: String::new(),
                 error: None,
+                request_id: None,
+                risk: None,
+                run_id: None,
             })
             .unwrap();
         inbox

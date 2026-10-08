@@ -140,4 +140,31 @@ describe("createApprovalTurnHandler", () => {
     expect(warnings.some((w) => w.includes("approval respond failed"))).toBe(true);
     expect(adapter.sends[0]?.text).toBe("after");
   });
+
+  it("B1b: engine rich fields (ts/agent/risk) pass through to the adapter's ApprovalReq", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("{}", { status: 200 }));
+    const adapter = adapterReturning({ requestId: "req-rich", choice: "allow" });
+    const handler = createApprovalTurnHandler({ engineBaseUrl: "http://e", fetchImpl });
+    const richEvent: EngineEvent = {
+      type: "approval_request",
+      request_id: "req-rich",
+      tool_name: "shell",
+      tool_input: { cmd: "rm" },
+      description: "remove",
+      is_destructive: true,
+      diff_preview: null,
+      ts: 1_700_000_123_456,
+      agent: { id: "agent-1", name: "Scout" },
+      risk: { scope: "system", reversible: false },
+    } as EngineEvent;
+
+    await handler.handle(
+      ctxFor(adapter, mockClient([richEvent, { type: "completed", model: "gpt" }])),
+    );
+
+    const passedReq = adapter.requestApproval.mock.calls[0]![1] as ApprovalReq;
+    expect(passedReq.ts).toBe(1_700_000_123_456);
+    expect(passedReq.agent).toEqual({ id: "agent-1", name: "Scout" });
+    expect(passedReq.risk).toEqual({ scope: "system", reversible: false });
+  });
 });

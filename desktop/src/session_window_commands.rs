@@ -143,6 +143,17 @@ pub(crate) fn sanitize_persisted_session_windows(list: &[String]) -> Vec<String>
         .collect()
 }
 
+/// Drop persisted ids whose session no longer exists on disk (W10 audit).
+/// `live_ids` is one `SessionStore::list()` pass over the sessions dir.
+/// Compare as UUIDs so formatting/case differences between the persisted
+/// strings and the store listing can never drop a live id.
+fn drop_dead_session_ids(persisted: Vec<String>, live_ids: &[Uuid]) -> Vec<String> {
+    persisted
+        .into_iter()
+        .filter(|id| Uuid::parse_str(id).is_ok_and(|u| live_ids.contains(&u)))
+        .collect()
+}
+
 /// Mirror the registry's session ids into the persisted desktop config.
 async fn persist_session_windows(state: &AppState) {
     let mut config = state.desktop_config.write().await;
@@ -266,6 +277,30 @@ pub async fn close_session_window(
     Ok(())
 }
 
+/// W10 audit §6-A — close a deleted session's live `session-<uuid>` window
+/// (best-effort) so deleting a session never leaves a window pinned to a
+/// dead session. Cleanup mirrors [`close_session_window`] / the Destroyed
+/// hook: the window is closed when present, and the registry entry +
+/// persisted list are cleared here as well so the state stays correct even
+/// when the window was already gone. Errors are logged, never propagated —
+/// the session itself is already deleted at this point.
+pub(crate) async fn close_window_for_deleted_session<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    session_id: &str,
+) {
+    let Ok(label) = session_window_label(session_id) else {
+        return;
+    };
+    if let Some(window) = app.get_webview_window(&label) {
+        if let Err(e) = window.close() {
+            tracing::warn!(%label, error = %e, "failed to close session window during session delete");
+        }
+    }
+    state.session_windows.unregister(&label);
+    persist_session_windows(state).await;
+}
+
 /// Supporting command for the window-mode header: focus the main window and
 /// ask it to switch to `sessionId` via [`SESSION_WINDOW_REVEAL`].
 #[tauri::command]
@@ -339,14 +374,52 @@ pub fn handle_main_window_destroyed(app: &tauri::AppHandle) {
 /// on disk elsewhere, hand-edited config) must not block app start. The
 /// persisted list is rewritten with the successfully restored ids so it
 /// self-heals.
+///
+/// 批 1: honors the「启动时恢复会话窗口」switch
+/// (`DesktopConfig::restore_session_windows_on_launch`, default on). When
+/// the user opted out, the persisted list stays on disk untouched (flipping
+/// the switch back on restores the same set next launch) — only the
+/// replay is skipped.
 pub fn restore_session_windows(app: &tauri::AppHandle) {
-    let persisted = sanitize_persisted_session_windows(&config::load_config().open_session_windows);
+    let config = config::load_config();
+    if !config.restore_session_windows_on_launch {
+        tracing::info!(
+            count = config.open_session_windows.len(),
+            "session-window restore disabled by config (restore_session_windows_on_launch = false)"
+        );
+        return;
+    }
+    let persisted = sanitize_persisted_session_windows(&config.open_session_windows);
+    if persisted.is_empty() {
+        return;
+    }
+
+    let state = app.state::<AppState>();
+    // W10 audit fix: prune ids whose L0 log no longer exists (the session
+    // was deleted while the app was closed) BEFORE opening — a ghost window
+    // is not just an empty chat: its boot `switch_session` promotes the dead
+    // id to the GLOBAL active-session pointer (the `None => Vec::new()` arm
+    // never errors), so the main window could cold-start on a deleted
+    // session. One listing pass; a listing failure keeps the list unchanged
+    // (degrades to the pre-fix behavior — per-id restore failures below
+    // still self-heal the persisted list).
+    let persisted = match state.l0_store().list() {
+        Ok(infos) => {
+            let live_ids: Vec<Uuid> = infos.into_iter().map(|i| i.session_id).collect();
+            drop_dead_session_ids(persisted, &live_ids)
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "session-window restore: listing failed; skipping the dead-id prune"
+            );
+            persisted
+        }
+    };
     if persisted.is_empty() {
         return;
     }
     tracing::info!(count = persisted.len(), "restoring session windows");
-
-    let state = app.state::<AppState>();
     let mut restored = Vec::new();
     for session_id in persisted {
         match tauri::async_runtime::block_on(open_session_window_inner(
@@ -443,6 +516,36 @@ mod tests {
     }
 
     #[test]
+    fn restore_prune_keeps_live_ids_and_drops_deleted_ones() {
+        let live = "7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1";
+        let dead = "deadbeef-0000-0000-0000-000000000000";
+        let pruned = drop_dead_session_ids(
+            vec![live.to_string(), dead.to_string(), "garbage".into()],
+            &[Uuid::parse_str(live).unwrap()],
+        );
+        assert_eq!(pruned, vec![live.to_string()]);
+    }
+
+    #[test]
+    fn restore_prune_matches_ids_regardless_of_case() {
+        // sanitize_persisted_session_windows lowercases, but the prune must
+        // not depend on that upstream normalization.
+        let live = "7E6C3F18-4A2E-4F6A-9A52-6D1C1A0F83F1";
+        let pruned =
+            drop_dead_session_ids(vec![live.to_string()], &[Uuid::parse_str(live).unwrap()]);
+        assert_eq!(pruned.len(), 1);
+    }
+
+    #[test]
+    fn restore_prune_with_empty_listing_prunes_everything() {
+        // A successful listing that names NO sessions means every session
+        // was deleted — nothing may be restored as a ghost window.
+        let pruned =
+            drop_dead_session_ids(vec!["7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1".into()], &[]);
+        assert!(pruned.is_empty());
+    }
+
+    #[test]
     fn session_title_falls_back_to_shannon() {
         let sessions = vec![SessionMeta {
             id: "7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1".into(),
@@ -487,5 +590,139 @@ mod tests {
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains(r#""sessionId":"abc""#), "{json}");
         assert!(json.contains(r#""label":"session-abc""#), "{json}");
+    }
+
+    // === W10 audit §6-A — delete closes the session's live window ==========
+
+    /// Serialize every `$HOME`-swapping test in this module (same per-module
+    /// env lock as commands_notifications): `persist_session_windows` writes
+    /// the real `~/.shannon/desktop/config.json` and a test must never touch
+    /// the developer's.
+    fn home_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Redirect `$HOME` at a tempdir until the guard drops (async test
+    /// bodies `await` while it is held, so the restore rides `Drop`).
+    struct TempHomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        _tmp: tempfile::TempDir,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for TempHomeGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(prev) => unsafe { std::env::set_var("HOME", prev) },
+                None => unsafe { std::env::remove_var("HOME") },
+            }
+        }
+    }
+
+    fn temp_home() -> TempHomeGuard {
+        let lock = home_test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+        TempHomeGuard {
+            _lock: lock,
+            _tmp: tmp,
+            prev,
+        }
+    }
+
+    /// The delete-success tail: a live session window (mock-runtime window +
+    /// registry entry + persisted id) is closed, unregistered, and dropped
+    /// from the persisted list — no window state may outlive its session.
+    #[tokio::test]
+    async fn deleted_session_close_unregisters_and_unpersists_the_window() {
+        let _home = temp_home();
+        let app = tauri::test::mock_app().handle().clone();
+        app.manage(crate::commands::AppState::new());
+        let state = app.state::<crate::commands::AppState>();
+
+        let id = "7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1";
+        let label = session_window_label(id).unwrap();
+
+        // A live window (MockRuntime builds one without a real webview —
+        // enough for the close call) + its registry entry + persisted id.
+        tauri::WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("".into()))
+            .build()
+            .unwrap();
+        state.session_windows.register(&label, id);
+        persist_session_windows(&state).await;
+        assert_eq!(
+            state.desktop_config.read().await.open_session_windows,
+            vec![id.to_string()],
+            "seeded: the window is live and persisted"
+        );
+
+        close_window_for_deleted_session(&state, &app, id).await;
+
+        assert!(
+            state.session_windows.unregister(&label).is_none(),
+            "the registry entry is gone"
+        );
+        assert!(
+            state
+                .desktop_config
+                .read()
+                .await
+                .open_session_windows
+                .is_empty(),
+            "the persisted list no longer names the deleted session"
+        );
+    }
+
+    /// Windowless path: closing a session that has no live window still
+    /// cleans the registry + persisted list (the id may linger from a window
+    /// the user closed without the hook running yet).
+    #[tokio::test]
+    async fn deleted_session_close_without_a_window_still_cleans_state() {
+        let _home = temp_home();
+        let app = tauri::test::mock_app().handle().clone();
+        app.manage(crate::commands::AppState::new());
+        let state = app.state::<crate::commands::AppState>();
+
+        let id = "7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1";
+        let label = session_window_label(id).unwrap();
+        state.session_windows.register(&label, id);
+        persist_session_windows(&state).await;
+
+        close_window_for_deleted_session(&state, &app, id).await;
+
+        assert!(state.session_windows.unregister(&label).is_none());
+        assert!(
+            state
+                .desktop_config
+                .read()
+                .await
+                .open_session_windows
+                .is_empty()
+        );
+    }
+
+    /// A non-UUID id (cannot name a session window) is a no-op — no panic,
+    /// no state touched.
+    #[tokio::test]
+    async fn deleted_session_close_ignores_non_uuid_ids() {
+        let _home = temp_home();
+        let app = tauri::test::mock_app().handle().clone();
+        app.manage(crate::commands::AppState::new());
+        let state = app.state::<crate::commands::AppState>();
+
+        close_window_for_deleted_session(&state, &app, "not-a-uuid").await;
+        assert!(state.session_windows.list().is_empty());
+        assert!(
+            state
+                .desktop_config
+                .read()
+                .await
+                .open_session_windows
+                .is_empty()
+        );
     }
 }

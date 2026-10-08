@@ -5,6 +5,7 @@ import { canStream, StreamingReply } from "./streaming.js";
 import { toEngineAttachments } from "./media.js";
 import { type TurnContext, type TurnHandler } from "./types.js";
 import {
+  type ApprovalReq,
   type ChannelAdapter,
   type Logger,
   type ReplyTarget,
@@ -64,16 +65,23 @@ export async function resolveApprovalInChannel(
   ev: EngineApprovalRequestEvent,
 ): Promise<void> {
   // Engine event fields are snake_case (wire); map to the gateway's camelCase
-  // ApprovalReq that the adapter understands.
+  // ApprovalReq that the adapter understands. B1b: the §L1 rich fields
+  // (ts/agent/risk) ride through verbatim when the engine supplies them —
+  // absent keys stay absent (never invented), so legacy engines keep the
+  // byte-identical six-key shape all the way through.
+  const req: ApprovalReq = {
+    requestId: ev.request_id,
+    toolName: ev.tool_name,
+    toolInput: ev.tool_input,
+    description: ev.description,
+    isDestructive: ev.is_destructive,
+    diffPreview: ev.diff_preview ?? null,
+    ...(typeof ev.ts === "number" && ev.ts !== null ? { ts: ev.ts } : {}),
+    ...(ev.agent ? { agent: ev.agent } : {}),
+    ...(ev.risk ? { risk: ev.risk } : {}),
+  };
   const decision = await Promise.race([
-    adapter.requestApproval(replyTarget, {
-      requestId: ev.request_id,
-      toolName: ev.tool_name,
-      toolInput: ev.tool_input,
-      description: ev.description,
-      isDestructive: ev.is_destructive,
-      diffPreview: ev.diff_preview ?? null,
-    }),
+    adapter.requestApproval(replyTarget, req),
     new Promise<{ requestId: string; choice: "deny"; timedOut: true }>((resolve) => {
       setTimeout(() => {
         logger.warn(

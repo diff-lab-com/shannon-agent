@@ -92,6 +92,11 @@
                     "id": "focus-input",
                     "description": "Focus message input",
                     "accelerator": "Ctrl+Shift+K"
+                },
+                {
+                    "id": "open-companion",
+                    "description": "Open the companion Quick Capture window",
+                    "accelerator": "CmdOrCtrl+Shift+Space"
                 }
             ]
         }

@@ -25,6 +25,8 @@ describe('ThemeSettings', () => {
     if (document.documentElement.style.fontSize) {
       document.documentElement.style.fontSize = ''
     }
+    // Reset the 材质 glass preference's DOM side effect.
+    document.documentElement.classList.remove('reduce-glass')
   })
 
   it('renders theme subtitle', () => {
@@ -77,5 +79,41 @@ describe('ThemeSettings', () => {
     const smallButton = screen.getByText('Small')
     fireEvent.click(smallButton)
     expect(localStorage.getItem('shannon.fontScale')).toBe('0.85')
+  })
+
+  // 材质 (design-parity R1 2026-10-08): the glass-strength segmented control.
+  it('renders the material card with the glass segmented control', () => {
+    render(wrap(<ThemeSettings />))
+    expect(screen.getByRole('heading', { name: 'Material' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Standard' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('radio', { name: 'Reduced' })).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('Reduced applies the persistent reduce-glass class and localStorage key', () => {
+    render(wrap(<ThemeSettings />))
+    fireEvent.click(screen.getByRole('radio', { name: 'Reduced' }))
+    expect(document.documentElement.classList.contains('reduce-glass')).toBe(true)
+    expect(localStorage.getItem('shannon.reduceGlass')).toBe('1')
+    expect(screen.getByRole('radio', { name: 'Reduced' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('Standard removes the reduce-glass class and clears the localStorage key', () => {
+    localStorage.setItem('shannon.reduceGlass', '1')
+    document.documentElement.classList.add('reduce-glass')
+    render(wrap(<ThemeSettings />))
+    // Boots from the persisted preference, not the default.
+    expect(screen.getByRole('radio', { name: 'Reduced' })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(screen.getByRole('radio', { name: 'Standard' }))
+    expect(document.documentElement.classList.contains('reduce-glass')).toBe(false)
+    expect(localStorage.getItem('shannon.reduceGlass')).toBeNull()
+  })
+
+  it('links 代码字体/终端配色 to the advanced terminal card instead of duplicating the controls', () => {
+    render(wrap(<ThemeSettings />))
+    const links = screen.getAllByRole('link', { name: /Adjust in Advanced/ })
+    expect(links).toHaveLength(2)
+    for (const link of links) expect(link).toHaveAttribute('href', '/settings/advanced')
+    expect(screen.getByText('Code font')).toBeInTheDocument()
+    expect(screen.getByText('Terminal colors follow theme')).toBeInTheDocument()
   })
 })

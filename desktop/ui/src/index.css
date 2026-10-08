@@ -16,6 +16,19 @@
  * need an entry in a hardcoded selector list here. */
 @custom-variant dark (&:where([data-theme-mode="dark"]));
 
+/* ── Aurora v2 responsive contract (docs/design/ui-redesign-2026-10,
+   adjudication F-9) — COMMENT ONLY; no breakpoints ship in this file.
+   Component media queries must converge on these canonical widths:
+     < 1360px — the right dock (Diff/Preview/Context/Plan tabs) collapses
+       from the full panel to its collapsed rail/trigger form.
+     < 1200px — the composer's execution-mode 4-segment control collapses
+       to a single "current mode" chip (the full segment stays reachable
+       through the chip's menu).
+   All three composer elements (mode / model / reasoning) remain reachable
+   at every width — only their form changes. The JS/layout side of this
+   contract lands in components (separate workstreams); if breakpoint
+   tokens are ever promoted into @theme, keep them in sync with this block. */
+
 @theme {
   /* Theme COLOR tokens are GENERATED below from scripts/theme-source.json —
    * edit the source, then run `pnpm generate:themes`. The region must stay
@@ -44,11 +57,23 @@
   --container-narrow: 48rem;
   --container-medium: 75rem;
   --container-wide: 100rem;
+  /* Reading column (ui-redesign-2026-10 02-chat): the chat message flow and
+     its composer share one 792px measure, so long replies never detach from
+     the input that produced them. */
+  --container-reading: 792px;
   /* v4 resolves `max-w-sm` through --max-width → --spacing → --container, in
      that order. Our MD3 scale defines `--spacing-sm: 8px`, which hijacked
      `max-w-sm` and collapsed every default dialog to 8px wide. Pin the
      first-priority variable so `max-w-sm` keeps its shadcn meaning. */
   --max-width-sm: 24rem;
+  /* Scrims (audit 2026-10-08 B): fixed near-black overlays for the two
+     modal-blocking layers — bg-scrim = dialog/menu backdrops, bg-scrim-strong
+     = media lightboxes. Deliberately NOT per-theme: a scrim must darken
+     content identically in all 12 themes. Content VEILS (non-blocking
+     loading states, e.g. the session-switch overlay) are a different thing
+     and stay on surface tokens — see styles/README.md "Scrims and veils". */
+  --color-scrim: rgb(0 0 0 / 0.5);
+  --color-scrim-strong: rgb(0 0 0 / 0.72);
   /* GENERATED:THEME_BASE:START */
   --color-primary: #6b38d4;
   --color-link: #6b38d4;
@@ -308,6 +333,14 @@
   --glass-overlay-alpha: 0.6;
 }
 
+/* Aurora v2 contrast guardrail (AA 4.5:1) — audited 2026-10-07 against the
+   default dark theme (tokyo-night): --color-on-surface-variant #a9b1d6 over
+   --color-surface-container #1f2335 = 7.37:1, and muted-foreground #8d95b8
+   over the same surface = 5.28:1 (still 4.56:1 on container-highest
+   #292e42). All pass, so NO override layer is needed here. Re-audit (and
+   add the override in THIS unlayered region, never in the generated block)
+   only if theme-source.json ever lifts those text token values. */
+
 @utility glass-surface {
   background: color-mix(in srgb, var(--color-surface-container-lowest) calc(var(--glass-tint-alpha) * 100%), transparent);
   backdrop-filter: var(--glass-blur-surface);
@@ -330,6 +363,42 @@
   /* No `contain: paint` (unlike glass-surface): overlays host focusable
      controls near their edges (dialog close buttons, first/last menu items)
      and the containment would clip their focus rings. */
+}
+
+/* ── Aurora signature: hairline gradient light (docs/design/ui-redesign-2026-10
+   §1 签名) ── The app's ONLY decorative element: a 1px violet→cyan light on
+   the TOP EDGE of a glass panel — "the signal leaving this machine for the
+   model". RESTRICTED to four surfaces: the composer, the command palette,
+   the activated card, the mission hero. Do not spread it to ordinary
+   cards/rows. Purely static paint — no animation, so prefers-reduced-motion
+   needs no (and has no) fallback path. */
+@utility aurora-line {
+  position: relative;
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 12%;
+    right: 12%;
+    height: 1px;
+    /* Literal rgba is deliberate: the aurora is a fixed brand signature
+       (design --vio #8b7cf7 @ .55 / --aur #56c8dd @ .45), NOT a per-theme
+       token — it must read identically across all 12 themes. */
+    background: linear-gradient(90deg, transparent, rgba(139, 124, 247, 0.55), rgba(86, 200, 221, 0.45), transparent);
+    pointer-events: none;
+  }
+}
+
+/* W9 theme-audit (2026-10-07): the dark-tuned alphas above wash out on light
+   themes — measured peak contrast of the violet stop was ~1.3–1.8:1 against
+   white glass fills (vs 2.45:1 on tokyo-night), i.e. the signature vanished
+   on all six light themes. Unlayered + attribute-scoped so it beats the
+   layered utility everywhere, one definition for all light themes; the hues
+   stay the fixed brand pair, only the fill opacity rises to give the SAME
+   perceived weight as dark (violet ≈ 2.7:1 on white; cyan is capped ≈ 1.6:1
+   by its intrinsic lightness — the violet anchor carries the line). */
+[data-theme-mode="light"] .aurora-line::before {
+  background: linear-gradient(90deg, transparent, rgba(139, 124, 247, 0.85), rgba(86, 200, 221, 0.7), transparent);
 }
 
 /* Elevation utilities for solid (non-glass) cards — replaces ad-hoc
@@ -384,13 +453,38 @@
   }
 }
 
-/* Users who disable transparency (or low-power windows) get solid fills. */
-@media (prefers-reduced-transparency: reduce) {
-  .glass-surface, .glass-overlay {
+/* Solid fills for glass surfaces — ONE recipe, TWO triggers (parity R1
+   2026-10-08, 材质卡): the OS-level prefers-reduced-transparency signal, and
+   the in-app 材质「减弱」opt-in (html.reduce-glass, persisted at localStorage
+   'shannon.reduceGlass', Settings → 外观 → 材质). Native nesting keeps the
+   declarations single-sourced; the rule stays UNLAYERED so it still beats
+   the @layer utilities glass-surface/glass-overlay emit. */
+.glass-surface, .glass-overlay {
+  @media (prefers-reduced-transparency: reduce) {
     background: var(--color-surface-container-lowest);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
+
+  html.reduce-glass & {
+    background: var(--color-surface-container-lowest);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* Dock solid degradation (Aurora redesign, adjudication F-9): applied to the
+   right dock while a floating layer (dialog / menu / palette / popover) is
+   open — swaps the dock's glass fill for the solid surface-container color
+   and kills its blur, so a new backdrop-filter never stacks on top of the
+   dock's and the on-screen budget (≤ 4) holds. Deliberately a plain
+   UNLAYERED class, same as the fallbacks above: unlayered declarations beat
+   the @layer utilities that glass-surface emits, so it wins deterministically
+   regardless of class order or Tailwind's utility sort. */
+.dock-solid {
+  background: var(--color-surface-container);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* Thin themed scrollbar for overflow surfaces (KanbanBoard column strips

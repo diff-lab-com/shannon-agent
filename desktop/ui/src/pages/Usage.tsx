@@ -31,6 +31,10 @@ import type { ColumnDef } from '@tanstack/react-table'
 const RANGES = [7, 30, 90] as const
 type DisplayMode = 'overview' | 'audit'
 
+// 设计 06: how many per-session rows the OVERVIEW preview shows before the
+// 「审计模式查看全部」 hint kicks in (the audit view keeps the full table).
+const SESSION_PREVIEW_ROWS = 8
+
 function fmtTokens(locale: string, n: number): string {
   // Audit §P2-6 (round 6): explicit compactThreshold prevents zh-CN edge
   // cases where values just below the 万 boundary get rendered with a
@@ -65,12 +69,15 @@ function ChartCard({
   title,
   subtitle,
   icon,
+  headerExtra,
   children,
   empty,
 }: {
   title: string
   subtitle?: string
   icon: string
+  /** 设计 06 (审查 R1): the metric toggle rides the card header row. */
+  headerExtra?: React.ReactNode
   children: React.ReactNode
   empty?: boolean
 }) {
@@ -79,6 +86,7 @@ function ChartCard({
       <div className="flex items-center gap-xs px-lg py-md border-b border-outline-variant/20">
         <span className="material-symbols-outlined icon-sm text-primary">{icon}</span>
         <h2 className="font-label-md font-bold text-on-surface">{title}</h2>
+        {headerExtra && <div className="ml-auto shrink-0">{headerExtra}</div>}
       </div>
       <div className="p-lg">
         {empty ? (
@@ -278,6 +286,12 @@ export default function Usage() {
   // (precise tables). The mode toggle sits next to the time-range picker
   // so the action stays close to the primary surface.
   const [mode, setMode] = useState<DisplayMode>('overview')
+  // 设计 06 (审查 R1 §06): the daily bar chart carries a Token / 成本 metric
+  // toggle — cost_usd is already on every by_day bucket.
+  const [chartMetric, setChartMetric] = useState<'tokens' | 'cost'>('tokens')
+  // Per-session rows: audit mode shows them all; overview mode now surfaces
+  // the top 8 as a preview (设计 06: 按会话明细回到一等公民). Loaded on days
+  // change regardless of mode — cheap IPC, no polling.
   const [sessionRows, setSessionRows] = useState<SessionUsageRow[] | null>(null)
   // P2-1 — usage governance: budget % + threshold state (the sidebar's data
   // source; here it drives the banner and the budget card).
@@ -301,23 +315,21 @@ export default function Usage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days])
 
-  // 2026-09: in Audit mode we additionally pull per-session rows so the
-  // per-conversation breakdown is available for precise reconciliation.
-  // Loaded on demand to keep the default Overview mode responsive.
+  // Per-session rows load on their own effect (not gated on mode, not tied
+  // to the page-level `loading` — the overview must stay responsive). The
+  // audit tables and the overview's top-8 preview read the same rows.
   useEffect(() => {
-    if (mode !== 'audit') return
     let cancelled = false
-    setLoading(true)
     api
       .getUsageBySession(days)
       .then(rows => { if (!cancelled) setSessionRows(rows) })
       .catch(e => toastError(t('usage.load.failed'), e))
-      .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, days])
+  }, [days])
 
-  // Build the per-day bar series (input + output stacked) once.
+  // Build the per-day bar series once per metric: tokens stack input/output,
+  // cost is a single series (by_day carries only the day's total cost_usd).
   const dailyBars = useMemo(() => {
     if (!stats) return []
     return stats.by_day.map(b => ({
@@ -327,6 +339,35 @@ export default function Usage() {
         { key: 'output', value: b.output_tokens },
       ],
     }))
+  }, [stats])
+
+  const dailyCostBars = useMemo(() => {
+    if (!stats) return []
+    return stats.by_day.map(b => ({
+      label: b.label.slice(5), // strip year
+      series: [{ key: 'cost', value: b.cost_usd }],
+    }))
+  }, [stats])
+
+  // 设计 06 KPI: today's spend — the by_day bucket labelled with the LOCAL
+  // calendar date (the backend buckets on local days, commands_usage.rs
+  // day_label). A day with no ledger records has no bucket → $0.00 is the
+  // honest reading, not a placeholder.
+  const todayCostUsd = useMemo(() => {
+    if (!stats) return null
+    const now = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const key = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+    return stats.by_day.find(b => b.label === key)?.cost_usd ?? 0
+  }, [stats])
+
+  // 设计 06 KPI: cache hit rate — the same frozen formula the chat context
+  // card uses (cache_read / (cache_read + input)); no denominator → null,
+  // rendered honestly as "no input tokens yet".
+  const cacheHitRate = useMemo(() => {
+    if (!stats) return null
+    const denom = stats.totals.cache_read_tokens + stats.totals.input_tokens
+    return denom > 0 ? (stats.totals.cache_read_tokens / denom) * 100 : null
   }, [stats])
 
   // Model-level donut: who got the tokens?
@@ -347,6 +388,11 @@ export default function Usage() {
   const tokenSeries: BarSeriesDef[] = useMemo(() => [
     { key: 'input', label: intl.formatMessage({ id: 'usage.chart.series.input' }), colorClass: 'text-primary' },
     { key: 'output', label: intl.formatMessage({ id: 'usage.chart.series.output' }), colorClass: 'text-secondary' },
+  ], [intl])
+
+  // 设计 06: cost metric — a single series, so the legend reads one entry.
+  const costSeries: BarSeriesDef[] = useMemo(() => [
+    { key: 'cost', label: intl.formatMessage({ id: 'usage.chart.series.cost' }), colorClass: 'text-tertiary' },
   ], [intl])
 
   const totalTokens = stats
@@ -515,8 +561,10 @@ export default function Usage() {
         </div>
       ) : (
         <div className="space-y-lg">
-          {/* Totals */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
+          {/* Totals — 设计 06 KPI row: the four ledger totals plus the two
+              derived cards the design names (今日消耗 from the local-day
+              bucket, 缓存命中率 from the frozen cache formula). 2×3 grid. */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-md">
             <StatCard
               icon="token"
               label={t('usage.stat.tokens')}
@@ -538,19 +586,68 @@ export default function Usage() {
               label={t('usage.stat.requests')}
               value={String(stats!.totals.requests)}
             />
+            <StatCard
+              icon="today"
+              label={t('usage.stat.todayCost')}
+              value={fmtCost(intl.locale, todayCostUsd ?? 0)}
+              data-testid="usage-stat-today-cost"
+            />
+            <StatCard
+              icon="speed"
+              label={t('usage.stat.cacheHitRate')}
+              value={cacheHitRate != null ? `${cacheHitRate.toFixed(1)}%` : '—'}
+              hint={cacheHitRate != null ? undefined : t('usage.stat.cacheHitRate.none')}
+              data-testid="usage-stat-cache-hit-rate"
+            />
           </div>
 
-          {/* Charts — primary read. Hover a bar for the exact segment split. */}
+          {/* Charts — primary read. Hover a bar for the exact segment split.
+              F-4 (ui-redesign 06): the chart title must match the active
+              filter — compose the static label with the selected range
+              (reusing the range-button key), e.g. "Daily tokens · 30 days"
+              / "每日 token · 近 30 天". 设计 06: the card also carries the
+              Token/成本 metric toggle, and the cost metric renames the card
+              「每日成本」 to keep title = data. */}
           <ChartCard
-            title={t('usage.chart.byDay.title')}
-            subtitle={t('usage.chart.byDay.subtitle')}
+            title={`${t(chartMetric === 'cost' ? 'usage.chart.byDay.costTitle' : 'usage.chart.byDay.title')} · ${intl.formatMessage({ id: 'usage.range' }, { days })}`}
+            subtitle={
+              chartMetric === 'tokens'
+                ? t('usage.chart.byDay.subtitle')
+                : dailyBars.length === 0
+                  ? t('usage.empty')
+                  : undefined
+            }
             icon="calendar_month"
             empty={dailyBars.length === 0}
+            headerExtra={
+              <div
+                role="group"
+                aria-label={t('usage.chart.mode.aria')}
+                className="flex items-center rounded-full border border-outline-variant/30 overflow-hidden"
+              >
+                {(['tokens', 'cost'] as const).map(metric => (
+                  <button
+                    key={metric}
+                    type="button"
+                    aria-pressed={chartMetric === metric}
+                    onClick={() => setChartMetric(metric)}
+                    className={cn(
+                      'px-sm py-xs font-label-sm text-label-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer',
+                      chartMetric === metric
+                        ? 'bg-primary text-on-primary font-bold'
+                        : 'bg-surface-container-lowest/60 text-on-surface-variant hover:text-primary',
+                    )}
+                  >
+                    {t(`usage.chart.mode.${metric}`)}
+                  </button>
+                ))}
+              </div>
+            }
           >
             <BarChart
-              data={dailyBars}
-              series={tokenSeries}
-              formatValue={(n) => fmtTokens(intl.locale, n)}
+              data={chartMetric === 'cost' ? dailyCostBars : dailyBars}
+              series={chartMetric === 'cost' ? costSeries : tokenSeries}
+              formatValue={(n) => (chartMetric === 'cost' ? fmtCost(intl.locale, n) : fmtTokens(intl.locale, n))}
             />
           </ChartCard>
 
@@ -594,6 +691,28 @@ export default function Usage() {
               />
             </div>
           </div>
+
+          {/* 设计 06 (审查 R1 §06): 按会话明细回到总览一等公民 — the top 8
+              sessions render right under the charts; the full table stays in
+              the Audit view (the hint names where, honestly truncating). */}
+          {sessionRows !== null && (
+            <div data-testid="usage-session-preview">
+              <SessionTable
+                rows={sessionRows.slice(0, SESSION_PREVIEW_ROWS)}
+                locale={intl.locale}
+                emptyTitle={t('usage.empty.title')}
+                emptyLabel={t('usage.empty')}
+              />
+              {sessionRows.length > SESSION_PREVIEW_ROWS && (
+                <p
+                  data-testid="usage-session-preview-hint"
+                  className="font-label-sm text-label-sm text-on-surface-variant text-center mt-sm"
+                >
+                  {intl.formatMessage({ id: 'usage.session.previewHint' }, { count: SESSION_PREVIEW_ROWS })}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

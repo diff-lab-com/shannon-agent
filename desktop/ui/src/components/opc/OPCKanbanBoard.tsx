@@ -227,7 +227,13 @@ function DefaultDraggableCard({ task, intl, openTask }: { task: TaskItem; intl: 
   )
 }
 
+/** 裁决 B3: the five-family taxonomy stays; `pending_review` remains in the
+ *  blocked column but surfaces as a SUB-STATE — a 待评审 badge plus a primary
+ *  评审 button jumping to the task's review surface (/opc/task/:id). */
+const PENDING_REVIEW_STATUSES = new Set(['pending_review', 'review'])
+
 function BlockedCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnType<typeof useIntl>; openTask: (id: string) => void }) {
+  const isPendingReview = PENDING_REVIEW_STATUSES.has(task.status.toLowerCase())
   return (
     <div
       draggable
@@ -242,17 +248,36 @@ function BlockedCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnTyp
       <div className="absolute left-0 top-0 bottom-0 w-1 bg-error rounded-l-xl" />
       <div className="flex justify-between items-start mb-sm ml-xs">
         <span className="font-label-sm text-label-2xs font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
-        {(normalizePriority(task.priority) === 'high' || normalizePriority(task.priority) === 'critical') ? (
+        {/* 待评审 badge — the blocked family's review sub-state (design 09
+            的「待评审」列以子态呈现, taxonomy 不加列). */}
+        {isPendingReview && (
+          <span className="bg-warning-container text-on-warning-container text-label-2xs font-bold px-sm py-0.5 rounded-sm uppercase tracking-wider">
+            {intl.formatMessage({ id: 'opc.kanban.pendingReview' })}
+          </span>
+        )}
+        {!isPendingReview && (normalizePriority(task.priority) === 'high' || normalizePriority(task.priority) === 'critical') ? (
           <span className="bg-error-container text-on-error-container text-label-2xs font-bold px-sm py-0.5 rounded-sm uppercase tracking-wider">{intl.formatMessage({ id: 'opc.kanban.critical' })}</span>
         ) : null}
       </div>
       <h4 className="font-label-md text-body-md font-bold mb-sm leading-tight ml-xs">{task.title}</h4>
-      {task.assignee ? (
-        <div className="flex justify-between items-center ml-xs">
+      <div className="flex justify-between items-center ml-xs gap-sm">
+        {task.assignee ? (
           <span className="font-label-sm text-label-xs text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.assignedTo' }, { name: task.assignee })}</span>
-          <span className="font-label-sm text-label-sm text-primary font-bold">{intl.formatMessage({ id: 'opc.kanban.review' })}</span>
-        </div>
-      ) : null}
+        ) : <span />}
+        {/* 评审 primary button replaces the old plain-text 审查 label —
+            same destination the card click uses, kept separate so the
+            action reads as an action. */}
+        {isPendingReview && (
+          <Button
+            size="sm"
+            data-testid={`opc-review-${task.id}`}
+            onClick={e => { e.stopPropagation(); openTask(task.id) }}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation() }}
+          >
+            {intl.formatMessage({ id: 'opc.kanban.review' })}
+          </Button>
+        )}
+      </div>
     </div>
   )
 }

@@ -14,6 +14,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
 import { summarizeDiffLineStats, type DiffLineStats } from '@/components/chat/diffStats'
+import { InlineDiffCard } from '@/components/chat/InlineDiffCard'
 import {
   Message,
   MessageAvatar,
@@ -240,7 +241,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
         showCloseButton={false}
         title={attachment.name}
         closeLabel={t('chat.message.attachment.close')}
-        className="!bg-black/70 backdrop-blur-sm p-lg"
+        className="bg-scrim-strong! backdrop-blur-sm p-lg"
       >
         <img
           src={convertFileSrc(attachment.path)}
@@ -498,7 +499,12 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
             <p className="whitespace-pre-wrap">{message.thinking}</p>
           </Reasoning>
         )}
-        <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-e1 min-w-0 overflow-x-auto">
+        {/* Aurora redesign 2026-10 (02 页 P1 去卡片化): the assistant body is
+            avatar + BARE text flow (shannon-ui.css `.msg-ai .body`) — no
+            border/bg/shadow card. Visual hierarchy belongs to the content
+            blocks themselves (tool cards, diff cards, code blocks), which
+            keep their own chrome below. */}
+        <div className="min-w-0">
           <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-xs prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
             <Markdown>{message.content}</Markdown>
           </ResponseStream>
@@ -754,9 +760,12 @@ function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
 
   const hasCounts = stats != null && (stats.additions > 0 || stats.deletions > 0)
   return (
-    <div className="flex items-center justify-between gap-sm px-md py-xs rounded-lg bg-tertiary/5 border border-tertiary/20" data-testid="file-changes-card">
+    // Aurora 2026-10 语义色归位: additions/acceptance wear the success token
+    // (moss green, shannon-ui.css `.plus`) — tertiary/amber is reserved for
+    // warnings. Deletions stay error.
+    <div className="flex items-center justify-between gap-sm px-md py-xs rounded-lg bg-success/5 border border-success/20" data-testid="file-changes-card">
       <div className="flex items-center gap-sm min-w-0">
-        <span className="material-symbols-outlined icon-sm text-tertiary shrink-0" aria-hidden="true">difference</span>
+        <span className="material-symbols-outlined icon-sm text-success shrink-0" aria-hidden="true">difference</span>
         <span className="font-label-sm text-on-surface truncate">
           {t('chat.message.filesChanged', { count: paths.length })}
         </span>
@@ -768,7 +777,7 @@ function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
             className="font-mono text-label-xs tabular-nums shrink-0"
             aria-label={t('chat.message.diffStats.aria', { additions: stats!.additions, deletions: stats!.deletions })}
           >
-            <span className="text-tertiary">+{stats!.additions}</span>{' '}
+            <span className="text-success">+{stats!.additions}</span>{' '}
             <span className="text-error">−{stats!.deletions}</span>
           </span>
         )}
@@ -777,7 +786,7 @@ function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
         <Button
           variant="ghost"
           size="sm"
-          className="gap-xs px-sm py-xs text-tertiary hover:bg-tertiary/10"
+          className="gap-xs px-sm py-xs text-success hover:bg-success/10"
           onClick={() => (paths.length > 1 && onReviewAll ? onReviewAll() : onReview())}
         >
           <span className="material-symbols-outlined icon-sm" aria-hidden="true">difference</span>
@@ -917,18 +926,10 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
             {toolCall.tokens_used!.toLocaleString()} tok
           </span>
         )}
-        {canDiff && (
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={intl.formatMessage({ id: 'chat.message.diff.aria' }, { path: filePath })}
-            className="gap-xs px-xs py-[2px] text-tertiary hover:bg-tertiary-container/40"
-            onClick={(e) => { e.stopPropagation(); onViewDiff(filePath!) }}
-          >
-            <span className="material-symbols-outlined icon-sm">difference</span>
-            {t('chat.message.diff')}
-          </Button>
-        )}
+        {/* Aurora redesign 2026-10: the header's inline "Diff" chip moved
+            into the InlineDiffCard strip below the tool row (02-chat.html
+            内联 diff 卡) — same action, same aria contract
+            (chat.message.diff.aria), one row instead of a cramped chip. */}
         <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">{expanded ? 'expand_less' : 'expand_more'}</span>
       </ToolHeader>
       {expanded && (
@@ -948,20 +949,30 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
         </ToolContent>
       )}
       </Tool>
-      {/* office Wave 1 (A5): a COMPLETED file-mutating tool with a path input
-          is the same reliable write signal the Diff button gates on
-          (FILE_MUTATING_TOOLS × extractToolInputPath × status) — surface the
-          produced file as a FileCard directly under the tool block. No
+      {/* Aurora redesign 2026-10 (02-chat.html 内联 diff 卡): a COMPLETED
+          file-mutating call with a path input renders the compact diff card
+          at the tool card's position — mono path + "+N −N" (only when the
+          getFileDiff computation actually yields counts) + 「打开 Diff」,
+          which reuses this bubble's onViewDiff (Chat.tsx setDiffPath →
+          RightDock diff tab). The card carries the aria label the old
+          header Diff chip had (chat.message.diff.aria), so e2e/AT anchors
+          survive the move. */}
+      {canDiff && (
+        <InlineDiffCard path={filePath!} onOpenDiff={() => onViewDiff(filePath!)} />
+      )}
+      {/* office Wave 1 (A5): the artifact FileCard stays directly under the
+          diff card — the OS actions (open / reveal / save as / preview /
+          batch run) and the Files-page index registration live there. No
           heuristic path scraping of results; failed / running writes never
-          render a card. */}
+          render either card. */}
       {canDiff && (
         <FileCard
           name={basenameOf(filePath!)}
           path={filePath!}
           source="generated"
           // B7' — engine-written file: the "Review changes" button docks the
-          // single-file diff in the RightDock (same diffPath path the tool
-          // header's Diff button drives).
+          // single-file diff in the RightDock (same diffPath path the
+          // InlineDiffCard's action drives).
           onReviewDiff={() => onViewDiff(filePath!)}
         />
       )}

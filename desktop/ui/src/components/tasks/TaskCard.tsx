@@ -2,6 +2,11 @@
 //
 // MD3 tokens. Glass-panel styling. Shows status badge, assignee, priority, and
 // action buttons (Cancel for running, Run Now for all).
+//
+// Design 04 parity (audit R1 §04): a routine the SYSTEM paused leads its row
+// with the「已自动暂停 · <原因>」badge (the same shape the detail drawer's
+// RoutineLifecycleRow renders) and its primary button reads「继续处理」 —
+// the failure is surfaced where the user looks first, not only in the drawer.
 
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
@@ -19,14 +24,30 @@ interface TaskCardProps {
    *  catalog task used to feed the card title to the engine as a fake
    *  "Execute task: X" prompt. Only routine-backed cards can run now. */
   showRunNow?: boolean
+  /** Design 04 (audit R1): auto-paused routine → primary action reads
+   *  「继续处理」 and the row leads with the pause-reason badge. Keyed by
+   *  task id → the machine pause reason (budget / consecutive_failures);
+   *  a manual pause (no reason) is absent from the map. */
+  autoPausedReasons?: Map<string, string>
 }
 
-export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel, showRunNow = true }: TaskCardProps) {
+export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel, showRunNow = true, autoPausedReasons }: TaskCardProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
   const badge = statusBadge(task.status)
   const isActive = task.status === 'running' || task.status === 'in_progress'
+  const pauseReason = autoPausedReasons?.get(task.id) ?? null
+  const autoPaused = pauseReason !== null
+  // 看板金额 (批 1): ledger-attributed spend of the producing agent session.
+  // Rendered only when the backend actually joined a cost — `None` (hand-
+  // built / adhoc tasks, unseen sessions) renders NOTHING, never a "$–"
+  // placeholder (honesty contract: never an estimate). Two-decimal USD,
+  // matching the status bar's money formatting.
+  const cost = task.cost_usd
+  const costLabel = cost != null
+    ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(cost)
+    : null
   return (
     // B6-37 (§5 任务): the card is clickable via its title button. The card
     // container itself must NOT carry role="button" — it contains real action
@@ -50,7 +71,21 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
                 {task.title}
               </button>
             </h3>
-            <div className="flex items-center gap-md mt-xs">
+            <div className="flex items-center gap-md mt-xs flex-wrap">
+              {autoPaused && (
+                // 「已自动暂停 · <原因>」— icon + words (never colour alone),
+                // same badge shape as RoutineLifecycleRow in the drawer.
+                <span
+                  data-testid="task-card-auto-paused-badge"
+                  title={t(`tasks.routineControls.autoPausedReason.${pauseReason}`)}
+                  className="inline-flex items-center gap-xs px-sm py-0.5 rounded-full bg-tertiary-container text-on-tertiary-container font-label-sm text-label-xs font-bold uppercase tracking-wider"
+                >
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">autopause</span>
+                  {t('tasks.routineControls.autoPausedLabel')}
+                  {t('tasks.routineControls.autoPausedReasonSeparator')}
+                  {t(`tasks.routineControls.autoPausedReason.${pauseReason}`)}
+                </span>
+              )}
               {task.assignee ? (
                 <span className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs">
                   <span className="material-symbols-outlined icon-sm">smart_toy</span>
@@ -73,6 +108,20 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
                   {task.team}
                 </span>
               ) : null}
+              {costLabel != null && (
+                // 看板金额: icon + amount, muted like the sibling meta chips.
+                // The tooltip carries the 口径注记: the number is the usage-
+                // ledger spend of the producing session, kept per ledger
+                // rotation — not a lifetime total.
+                <span
+                  data-testid="task-card-cost"
+                  title={t('tasks.taskCard.costTitle')}
+                  className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs tabular-nums"
+                >
+                  <span className="material-symbols-outlined icon-sm">payments</span>
+                  {costLabel}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -94,6 +143,7 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
             ) : null}
             {showRunNow ? (
               <Button
+                aria-label={autoPaused ? t('tasks.routineControls.resume') : undefined}
                 className={cn('text-on-primary px-md py-sm rounded-lg font-label-md flex items-center gap-xs hover:brightness-110 active:scale-95 transition-all cursor-pointer', isRunning ? 'bg-tertiary' : 'bg-primary')}
                 onClick={e => { e.stopPropagation(); onRunNow() }}
                 disabled={isRunning}
@@ -102,6 +152,14 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
                   <>
                     <span className="material-symbols-outlined icon-md">check_circle</span>
                     {t('tasks.taskCard.success')}
+                  </>
+                ) : autoPaused ? (
+                  // Design 04: a paused routine's primary action is the
+                  // resume verb — the click still routes through the
+                  // paused-run confirm dialog in Tasks.tsx.
+                  <>
+                    <span className="material-symbols-outlined icon-md">autopause</span>
+                    {t('tasks.routineControls.resume')}
                   </>
                 ) : (
                   <>

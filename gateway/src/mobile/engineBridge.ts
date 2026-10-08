@@ -8,8 +8,11 @@
  *   shannon/health          → probe engine HTTP liveness
  *   shannon/model.list      → configured/switched default (minimal; real discovery later)
  *   shannon/model.switch    → override default model for subsequent queries
- *   shannon/agent.list      → [] stub (P1.x wires real session enumeration)
+ *   shannon/agent.list      → the host's ~/.shannon/agents/*.toml roster (B0; configured
+ *                             agents only — status is always "idle", no live watch)
  *   shannon/agent.detail    → NOT_IMPLEMENTED (session-watch is a later phase)
+ *   shannon/usage.budget    → read-only month-to-date spend + budget (B2; desktop
+ *                             ledger/config, fail-open zeros — never errors)
  *   shannon/pair            → NOT_IMPLEMENTED (P1.2: Ed25519 pairing + OS keyring)
  *   shannon/device.resume   → NOT_IMPLEMENTED (P1.2)
  *
@@ -37,6 +40,8 @@ import { type Logger } from "../adapters/types.js";
 import { deviceLaneKey, ActiveQueryRegistry } from "../router/activeQueries.js";
 import { approvalMessage, approvalMessageV2, approvalDecideTimestampWindowMs } from "./crypto.js";
 import { approvalWireItem, engineAgent, engineRisk, type ApprovalRegistry } from "./approvalRegistry.js";
+import { loadAgentRoster } from "./agentRoster.js";
+import { loadUsageBudget, type UsageBudgetPaths } from "./usageBudget.js";
 import {
   fetchEngineSessionHistory,
   fetchEngineSessions,
@@ -62,6 +67,7 @@ import {
   type TrustListResult,
   type TrustRevokeParams,
   type TrustRevokeResult,
+  type UsageBudgetResult,
 } from "./protocol.js";
 import type { HandlerOutcome, MethodContext, MethodHandlers } from "./server.js";
 
@@ -225,6 +231,26 @@ export interface EngineBridgeOptions {
    * behavior (unwired test setups).
    */
   pushUnbindSink?: PushUnbindSink;
+  /**
+   * B0: `shannon/agent.list` scan targets (see `loadAgentRoster`). Absent →
+   * the default `~/.shannon/agents` dir; tests inject a tmp dir.
+   */
+  agentRosterDirs?: string[];
+  /**
+   * B2: `shannon/usage.budget` source files (see `loadUsageBudget`). Absent →
+   * the real home paths; tests inject a tmp pair.
+   */
+  usageBudgetPaths?: Partial<UsageBudgetPaths>;
+  /**
+   * B0: task-session attribution — which roster agent a dispatched task was
+   * dispatched under, keyed by the task id (the §K3 conversation key IS the
+   * engine session id). Wired to `MobileDispatchHub.agentForSession` by the
+   * composer. `shannon/session.list` fills the reserved `agent_id` of task
+   * sessions from here (engine-supplied values win; unknown ids stay
+   * unattributed — nothing is invented). Absent → no enrichment (legacy
+   * shape: agentId only when the engine itself supplies one).
+   */
+  taskAgentLookup?: (sessionId: string) => string | null;
 }
 
 /** Sentinel key for queries without a session_id (P1.2 replaces it with a device id). */
@@ -809,13 +835,28 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       return { kind: "result", result: { ok: true } satisfies OkResult };
     },
 
-    // ── agents (stub surface; P1.x wires enumeration) ─────────────────────
+    // ── B2: read-only budget snapshot (desktop ledger + config) ───────────
+    // Gated like every session-scoped read; takes no params and never
+    // errors — missing files degrade to the honest zero/null snapshot (see
+    // `loadUsageBudget`; monthCostUsd is a LOWER bound: the ledger holds
+    // desktop sessions only, gateway/mobile task spend is not recorded yet).
+    "shannon/usage.budget": async (_raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
+      return {
+        kind: "result",
+        result: loadUsageBudget(opts.usageBudgetPaths) satisfies UsageBudgetResult,
+      };
+    },
+
+    // ── agents (B0: the configured roster; no live watch, no routing) ─────
     "shannon/agent.list": async (_raw, ctx) => {
       const gate = sessionGate(ctx);
       if (gate) return gate;
-      // P1.x: enumerate the host's active sessions from the engine. P1.1b returns
-      // an empty roster so the phone UI can ship against a stable shape.
-      return { kind: "result", result: { agents: [] } satisfies AgentListResult };
+      // Read-only view of ~/.shannon/agents/*.toml (injected dirs in tests).
+      // Never throws: broken definitions are skipped inside the loader.
+      const agents = loadAgentRoster(opts.agentRosterDirs);
+      return { kind: "result", result: { agents } satisfies AgentListResult };
     },
 
     "shannon/agent.detail": async (_raw, ctx) => {
@@ -837,6 +878,20 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         // reserve-then-enable pattern; `cursor` lands later).
         const snapshot = await fetchEngineSessions(call);
         const sessions = snapshot.sessions
+          .map((summary) => {
+            // B0 attribution: a dispatched task's engine session IS the task
+            // id, so the hub journal knows its roster agent. Fill the
+            // reserved `agent_id` only when the engine didn't supply one
+            // (engine truth wins) and the journal actually knows the id —
+            // sessions without an owner stay unattributed (the phone falls
+            // back to the host), never invented. The pass-through below
+            // (mapSessionSummary) carries it onto the wire as `agentId`.
+            if (summary.agent_id == null && opts.taskAgentLookup) {
+              const owner = opts.taskAgentLookup(summary.session_id);
+              if (owner != null) return { ...summary, agent_id: owner };
+            }
+            return summary;
+          })
           .map(mapSessionSummary)
           .filter((s): s is NonNullable<ReturnType<typeof mapSessionSummary>> => s !== null);
         return { kind: "result", result: { sessions } satisfies SessionListResult };

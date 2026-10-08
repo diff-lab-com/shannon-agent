@@ -1,10 +1,13 @@
 // Tests for the P1-2 best-of-N batch UI: form count dispatch, batch card
-// rendering + actions, the compare dialog's column selection, and the adopt
-// confirm flow (including the conflict path).
+// rendering + actions, the compare dialog's column selection, the adopt
+// confirm flow (including the conflict path), and the W4 decidable-facts
+// layer (smallest-diff chip, verification chips + verdict card, Markdown
+// export through the backend save dialog).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { I18nProvider } from '@/i18n'
+import { toast } from 'sonner'
 import BatchForm, { BATCH_COUNT_CHOICES } from '@/components/tasks/BatchForm'
 import BatchRunPanel, { BatchRunCard } from '@/components/tasks/BatchRunPanel'
 import BatchDiffCompare from '@/components/tasks/BatchDiffCompare'
@@ -18,6 +21,7 @@ vi.mock('@/lib/tauri-api', () => ({
   getBatchBranchDiff: vi.fn(),
   adoptBatchBranch: vi.fn(),
   discardBatchRun: vi.fn(),
+  saveTextFileViaDialog: vi.fn(),
 }))
 
 vi.mock('@/hooks/batchRuns', () => ({
@@ -74,8 +78,17 @@ function makeBatch(o: Partial<BatchRunDto>): BatchRunDto {
 }
 
 beforeEach(() => {
+  // sonner's mocked spies keep call history across tests — clear it so the
+  // per-test "no toast" assertions see only their own run's calls.
+  vi.mocked(toast.success).mockClear()
+  vi.mocked(toast.error).mockClear()
+  vi.mocked(toast.warning).mockClear()
   vi.mocked(api.listBatchRuns).mockResolvedValue([])
   vi.mocked(api.getBatchBranchDiff).mockResolvedValue({ diff: '' })
+  // Reset + reseed: the W4 export tests assert exact call counts, and the
+  // module-level spy would otherwise keep the previous test's calls.
+  vi.mocked(api.saveTextFileViaDialog).mockReset()
+  vi.mocked(api.saveTextFileViaDialog).mockResolvedValue('/tmp/export/batch-1-compare.md')
   mockHook([])
 })
 
@@ -242,6 +255,28 @@ describe('BatchDiffCompare', () => {
     expect(screen.queryByTestId('batch-diff-columns')).toBeNull()
   })
 
+  // 设计 04b (审查 R1 §4): the header states the baseline commit (short) and
+  // the branches' combined spend; older payloads without `baseCommit` still
+  // get the total.
+  it('shows the base commit and total spend in the header meta', async () => {
+    render(<BatchDiffCompare run={makeBatch({ baseCommit: 'c0ffee1deadbeef' })} onClose={() => {}} onAdopt={async () => null} />, {
+      wrapper,
+    })
+    const meta = await screen.findByTestId('batch-compare-header-meta')
+    // makeBranch(0)=0.25 + makeBranch(1)=0.50
+    expect(meta).toHaveTextContent('c0ffee1')
+    expect(meta).toHaveTextContent('$0.75')
+  })
+
+  it('shows only the total spend when the payload has no base commit', async () => {
+    render(<BatchDiffCompare run={makeBatch({})} onClose={() => {}} onAdopt={async () => null} />, {
+      wrapper,
+    })
+    const meta = await screen.findByTestId('batch-compare-header-meta')
+    expect(meta).toHaveTextContent('$0.75')
+    expect(meta.textContent).not.toMatch(/base|基线/i)
+  })
+
   it('defaults the selection to completed branches and renders their diffs', async () => {
     vi.mocked(api.getBatchBranchDiff).mockImplementation(async (_id, index) => ({
       diff: `patch for branch ${index}`,
@@ -302,6 +337,58 @@ describe('BatchDiffCompare', () => {
     expect(screen.getByTestId('batch-diff-columns')).toBeTruthy()
   })
 
+  // 2a — selection chips surface the branch's diff summary + spend (both
+  // already on the BatchBranch contract): truncated inside the chip, full
+  // text on `title`, spend formatted like the card's branch chips.
+  it('surfaces each branch summary and spend on its selection chip', () => {
+    render(<BatchDiffCompare run={makeBatch({})} onClose={() => {}} onAdopt={async () => null} />, {
+      wrapper,
+    })
+
+    const chip0 = screen.getByTestId('batch-compare-chip-0')
+    // en branchStat: "3 files · +10 −2"; spend in USD.
+    expect(chip0.textContent).toContain('+10')
+    expect(chip0.textContent).toContain('$0.25')
+    expect(chip0.getAttribute('title')).toContain('batch-abcd1234-0')
+    expect(chip0.getAttribute('title')).toContain('$0.25')
+
+    const chip1 = screen.getByTestId('batch-compare-chip-1')
+    expect(chip1.textContent).toContain('4 files')
+    expect(chip1.textContent).toContain('$0.50')
+    // Chips remain interactive selection toggles.
+    expect(chip1.getAttribute('aria-checked')).toBe('true')
+  })
+
+  // 2b — the conflict guidance names the kept worktree (mono path) and can
+  // copy it, so "manual handling" starts one click closer.
+  it('shows the conflicting branch worktree path and copies it on click', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const onAdopt = vi.fn().mockResolvedValue({ merged: false, conflicts: ['src/search.ts'] })
+    render(<BatchDiffCompare run={makeBatch({})} onClose={() => {}} onAdopt={onAdopt} />, {
+      wrapper,
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: /adopt branch #1|采纳分支 #1/i }))
+    fireEvent.click(screen.getByRole('button', { name: /merge & clean up|合并并清理/i }))
+
+    await screen.findByTestId('batch-conflict-banner')
+    const path = screen.getByTestId('batch-conflict-worktree')
+    expect(path.textContent).toBe('/repo/.shannon/scheduled-worktrees/batch-abcd1234-1')
+
+    const copyBtn = screen.getByRole('button', { name: /copy the worktree path of branch #1/i })
+    fireEvent.click(copyBtn)
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith('/repo/.shannon/scheduled-worktrees/batch-abcd1234-1'),
+    )
+    // Button flips to "Copied" feedback after the write resolves.
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /copy the worktree path of branch #1/i }).textContent,
+      ).toContain('Copied'),
+    )
+  })
+
   it('marks the adopted column and hides adopt buttons once adopted', async () => {
     render(
       <BatchDiffCompare
@@ -314,5 +401,199 @@ describe('BatchDiffCompare', () => {
     await waitFor(() => screen.getByTestId('batch-diff-column-0'))
     expect(screen.getByText(/adopted|已采纳/i)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /adopt branch #/i })).toBeNull()
+  })
+})
+
+// ── BatchDiffCompare W4 — decidable facts (smallest diff / verification /
+//    verdict card) + Markdown export ──────────────────────────────────────
+
+describe('BatchDiffCompare W4 facts', () => {
+  // Smallest-diff fact: derived from the branch summaries the contract
+  // already carries (+additions −deletions); needs ≥2 candidates.
+  it('marks the completed branch with the fewest changed lines as smallest', () => {
+    render(
+      <BatchDiffCompare
+        run={makeBatch({
+          branches: [
+            makeBranch(0), // +10 −2 → 12 changed lines
+            { ...makeBranch(1), summary: { filesChanged: 1, additions: 5, deletions: 1 } }, // 6
+            { ...makeBranch(2), summary: { filesChanged: 9, additions: 40, deletions: 10 } }, // 50
+          ],
+        })}
+        onClose={() => {}}
+        onAdopt={async () => null}
+      />,
+      { wrapper },
+    )
+
+    const badge = screen.getByTestId('batch-compare-smallest-1')
+    expect(badge.textContent).toMatch(/smallest diff|改动最小/i)
+    expect(screen.queryByTestId('batch-compare-smallest-0')).toBeNull()
+    expect(screen.queryByTestId('batch-compare-smallest-2')).toBeNull()
+  })
+
+  it('claims "smallest" only when ≥2 completed branches have stats', () => {
+    render(
+      <BatchDiffCompare
+        run={makeBatch({ branches: [makeBranch(0), makeBranch(1, 'failed')] })}
+        onClose={() => {}}
+        onAdopt={async () => null}
+      />,
+      { wrapper },
+    )
+
+    expect(screen.queryByTestId(/batch-compare-smallest-/)).toBeNull()
+  })
+
+  it('renders verification chips (counts / failed) and skips branches without data', () => {
+    render(
+      <BatchDiffCompare
+        run={makeBatch({
+          branches: [
+            { ...makeBranch(0), verification: { exitOk: true, testsPassed: 14, testsTotal: 14 } },
+            { ...makeBranch(1), verification: { exitOk: false } },
+            makeBranch(2),
+          ],
+        })}
+        onClose={() => {}}
+        onAdopt={async () => null}
+      />,
+      { wrapper },
+    )
+
+    expect(screen.getByTestId('batch-compare-verification-0').textContent).toContain('14/14')
+    expect(screen.getByTestId('batch-compare-verification-1').textContent).toMatch(
+      /verification failed|验证失败/i,
+    )
+    // Branch 2 carries no verification data (old payload) — no chip at all.
+    expect(screen.queryByTestId('batch-compare-verification-2')).toBeNull()
+
+    // The verdict card lists only the verified branches, facts only.
+    expect(screen.getByTestId('batch-compare-verdict')).toBeTruthy()
+    expect(screen.getByTestId('batch-compare-verdict-row-0').textContent).toMatch(
+      /14\/14 tests passed/i,
+    )
+    expect(screen.getByTestId('batch-compare-verdict-row-1').textContent).toMatch(
+      /verification failed|验证失败/i,
+    )
+    expect(screen.queryByTestId('batch-compare-verdict-row-2')).toBeNull()
+  })
+
+  it('renders no verdict card at all when no branch carries verification data', () => {
+    render(<BatchDiffCompare run={makeBatch({})} onClose={() => {}} onAdopt={async () => null} />, {
+      wrapper,
+    })
+
+    expect(screen.queryByTestId('batch-compare-verdict')).toBeNull()
+  })
+
+  it('recommends only a branch that both passed verification and is smallest', () => {
+    render(
+      <BatchDiffCompare
+        run={makeBatch({
+          branches: [
+            { ...makeBranch(0), verification: { exitOk: true } },
+            {
+              ...makeBranch(1),
+              summary: { filesChanged: 1, additions: 5, deletions: 1 }, // smallest
+              verification: { exitOk: true, testsPassed: 12, testsTotal: 12 },
+            },
+          ],
+        })}
+        onClose={() => {}}
+        onAdopt={async () => null}
+      />,
+      { wrapper },
+    )
+
+    expect(screen.getByTestId('batch-compare-recommended-1').textContent).toMatch(
+      /recommended|推荐/i,
+    )
+    expect(screen.queryByTestId('batch-compare-recommended-0')).toBeNull()
+  })
+
+  it('marks no branch as recommended when the smallest diff did not pass', () => {
+    render(
+      <BatchDiffCompare
+        run={makeBatch({
+          branches: [
+            { ...makeBranch(0), verification: { exitOk: true } },
+            {
+              ...makeBranch(1),
+              summary: { filesChanged: 1, additions: 5, deletions: 1 }, // smallest but failed
+              verification: { exitOk: false },
+            },
+          ],
+        })}
+        onClose={() => {}}
+        onAdopt={async () => null}
+      />,
+      { wrapper },
+    )
+
+    expect(screen.queryByTestId(/batch-compare-recommended-/)).toBeNull()
+  })
+})
+
+describe('BatchDiffCompare W4 export', () => {
+  it('exports the comparison as Markdown through the backend save dialog', async () => {
+    vi.mocked(api.saveTextFileViaDialog).mockResolvedValueOnce('/tmp/batch-1-compare.md')
+    render(
+      <BatchDiffCompare
+        run={makeBatch({
+          branches: [
+            { ...makeBranch(0), verification: { exitOk: true, testsPassed: 14, testsTotal: 14 } },
+            makeBranch(1),
+          ],
+        })}
+        onClose={() => {}}
+        onAdopt={async () => null}
+      />,
+      { wrapper },
+    )
+
+    fireEvent.click(screen.getByTestId('batch-compare-export'))
+    await waitFor(() => expect(api.saveTextFileViaDialog).toHaveBeenCalledTimes(1))
+
+    const [markdown, defaultName] = vi.mocked(api.saveTextFileViaDialog).mock
+      .calls[0] as [string, string]
+    expect(defaultName).toBe('batch-batch-1-compare.md')
+    expect(markdown).toContain('# Compare: Speed up the search box')
+    expect(markdown).toContain('## Branch #0 — batch-abcd1234-0')
+    expect(markdown).toContain('- Status: Completed')
+    expect(markdown).toContain('- Changes: 3 files · +10 −2')
+    expect(markdown).toContain('- Spent: $0.25')
+    expect(markdown).toContain('- Verification: 14/14 tests passed')
+    expect(markdown).toContain('`/repo/.shannon/scheduled-worktrees/batch-abcd1234-0`')
+    // Branch 1 carries no verification data — the export invents nothing.
+    expect(markdown.match(/- Verification:/g)).toHaveLength(1)
+    // Decidable conclusions section (tie on 12 changed lines keeps #0).
+    expect(markdown).toContain('## Compare verdict')
+    expect(markdown).toContain('- #0: 14/14 tests passed')
+    expect(markdown).toContain('- #0: Smallest diff')
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Comparison exported'))
+  })
+
+  it('backs out silently when the save dialog is cancelled', async () => {
+    vi.mocked(api.saveTextFileViaDialog).mockResolvedValueOnce(null)
+    render(<BatchDiffCompare run={makeBatch({})} onClose={() => {}} onAdopt={async () => null} />, {
+      wrapper,
+    })
+
+    fireEvent.click(screen.getByTestId('batch-compare-export'))
+    await waitFor(() => expect(api.saveTextFileViaDialog).toHaveBeenCalledTimes(1))
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('toasts the cause when the export write fails', async () => {
+    vi.mocked(api.saveTextFileViaDialog).mockRejectedValueOnce(new Error('disk full'))
+    render(<BatchDiffCompare run={makeBatch({})} onClose={() => {}} onAdopt={async () => null} />, {
+      wrapper,
+    })
+
+    fireEvent.click(screen.getByTestId('batch-compare-export'))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(toast.success).not.toHaveBeenCalled()
   })
 })

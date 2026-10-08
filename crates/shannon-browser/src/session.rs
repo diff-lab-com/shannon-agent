@@ -37,9 +37,11 @@
 //! The stub keeps the public surface — `ChromeSession::global`,
 //! `open_page`, `list_tabs`, `close_tab`, `get_page`, plus the `navigate` /
 //! `click_at` / `type_text` / `press_key` / `scroll_at` / `page_text` /
-//! `screenshot_png` / `console_messages` free functions — so consumers
-//! compile under both `cargo check` and `cargo check --features
-//! local-browser` without their own cfg.
+//! `screenshot_png` / `screenshot_with_format` / `pdf_bytes` / `hover_at` /
+//! `hover_element` / `select_option` / `wait_for_text` / `upload_files` /
+//! `console_messages` free functions — so consumers compile under both
+//! `cargo check` and `cargo check --features local-browser` without their
+//! own cfg.
 
 /// Endpoint normalization shared by live and stub: trim whitespace, treat
 /// empty/whitespace-only as unset.
@@ -513,23 +515,59 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
         // Chromium only synthesizes real key events when the platform fields
         // are populated — a zero virtual key code makes most sites (and
         // every IME-dependent surface) ignore the press.
-        let (name, code, vk, text) = normalize_key(key);
-        let dispatch = |t: DispatchKeyEventType| DispatchKeyEventParams {
-            r#type: t,
-            key: Some(name.clone()),
-            code: Some(code.clone()),
-            text: text.clone(),
-            unmodified_text: None,
-            auto_repeat: None,
-            location: None,
-            is_keypad: None,
-            is_system_key: None,
-            windows_virtual_key_code: Some(vk),
-            native_virtual_key_code: Some(vk),
-            modifiers: None,
-            timestamp: None,
-            key_identifier: None,
-            commands: None,
+        //
+        // Combinations ("ctrl+a", "shift+Enter") dispatch each modifier's
+        // RawKeyDown (with the accumulated modifier bitmask), then the main
+        // key with the full bitmask, then release the modifiers in reverse —
+        // the same shape real keyboard input takes. The bitmask rides on
+        // every event because sites read `e.ctrlKey` rather than the event
+        // sequence.
+        let parts = parse_key_parts(key);
+        let (modifier_names, main_raw) = if parts.len() == 1 {
+            (Vec::new(), parts.into_iter().next().unwrap())
+        } else {
+            let mut names = Vec::new();
+            for p in &parts[..parts.len() - 1] {
+                if modifier_bit(p).is_none() {
+                    return Err(format!("unknown modifier key {p:?} in {key:?}"));
+                }
+                names.push(p.clone());
+            }
+            (names, parts.into_iter().last().unwrap())
+        };
+        let (name, code, vk, text) = normalize_key(&main_raw)?;
+        // Ctrl/alt/meta combinations never produce text (ctrl+a must not
+        // insert an "a"), so drop the text payload when modifiers are held.
+        let mods: i64 = modifier_names.iter().filter_map(|n| modifier_bit(n)).sum();
+        let text = if mods == 0 { text } else { None };
+
+        let key_event = |t: DispatchKeyEventType,
+                         key_name: &str,
+                         key_code: &str,
+                         key_vk: i64,
+                         key_text: Option<&str>,
+                         held: i64| {
+            let mut params = DispatchKeyEventParams {
+                r#type: t,
+                key: Some(key_name.to_string()),
+                code: Some(key_code.to_string()),
+                text: key_text.map(String::from),
+                unmodified_text: None,
+                auto_repeat: None,
+                location: None,
+                is_keypad: None,
+                is_system_key: None,
+                windows_virtual_key_code: Some(key_vk),
+                native_virtual_key_code: Some(key_vk),
+                modifiers: None,
+                timestamp: None,
+                key_identifier: None,
+                commands: None,
+            };
+            if held != 0 {
+                params.modifiers = Some(held);
+            }
+            params
         };
         // Keys that produce text use KeyDown with `text` set (Chromium
         // inserts the character); the rest use RawKeyDown/KeyUp.
@@ -541,19 +579,106 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
                 DispatchKeyEventType::KeyUp,
             )
         };
-        page.execute(dispatch(down))
+
+        // Modifier name → (key, code, vk) for the synthesized down/up.
+        let modifier_key = |n: &str| match modifier_bit(n) {
+            Some(1) => ("Alt", "AltLeft", 0xA4),
+            Some(2) => ("Control", "ControlLeft", 0xA2),
+            Some(4) => ("Meta", "MetaLeft", 0x5B),
+            _ => ("Shift", "ShiftLeft", 0xA1),
+        };
+        // (bit, key, code, vk) of each modifier currently pressed, in order.
+        let mut pressed: Vec<(i64, &'static str, &'static str, i64)> =
+            Vec::with_capacity(modifier_names.len());
+        let mut held = 0i64;
+        for n in &modifier_names {
+            let bit = modifier_bit(n).unwrap_or(0);
+            let (kn, kc, kvk) = modifier_key(n);
+            held |= bit;
+            page.execute(key_event(
+                DispatchKeyEventType::RawKeyDown,
+                kn,
+                kc,
+                kvk,
+                None,
+                held,
+            ))
+            .await
+            .map_err(|e| format!("modifier down ({n}): {e}"))?;
+            pressed.push((bit, kn, kc, kvk));
+        }
+
+        page.execute(key_event(down, &name, &code, vk, text.as_deref(), held))
             .await
             .map_err(|e| format!("key down: {e}"))?;
-        page.execute(dispatch(up))
+        page.execute(key_event(up, &name, &code, vk, None, held))
             .await
             .map_err(|e| format!("key up: {e}"))?;
+
+        // Release in reverse; each release carries the bitmask of the
+        // modifiers still held at that moment.
+        for (bit, kn, kc, kvk) in pressed.iter().rev() {
+            held &= !bit;
+            page.execute(key_event(
+                DispatchKeyEventType::KeyUp,
+                kn,
+                kc,
+                *kvk,
+                None,
+                held,
+            ))
+            .await
+            .map_err(|e| format!("modifier up ({kn}): {e}"))?;
+        }
         Ok(())
+    }
+
+    /// Split a key expression on `+` into parts; a lone plus key is written
+    /// with a repeated plus ("ctrl++" → ["ctrl", "+"]).
+    pub(super) fn parse_key_parts(key: &str) -> Vec<String> {
+        let trimmed = key.trim();
+        if trimmed.is_empty() {
+            return vec![String::new()];
+        }
+        let mut out: Vec<String> = Vec::new();
+        let mut pending_plus = false;
+        for part in trimmed.split('+') {
+            let part = part.trim();
+            if part.is_empty() {
+                pending_plus = true;
+                continue;
+            }
+            if pending_plus {
+                out.push("+".to_string());
+                pending_plus = false;
+            }
+            out.push(part.to_string());
+        }
+        if pending_plus {
+            out.push("+".to_string());
+        }
+        out
+    }
+
+    /// CDP `Input.dispatchKeyEvent` modifier bit for a modifier name.
+    pub(super) fn modifier_bit(name: &str) -> Option<i64> {
+        match name.to_lowercase().as_str() {
+            "alt" | "option" => Some(1),
+            "ctrl" | "control" => Some(2),
+            "meta" | "cmd" | "command" | "super" | "win" => Some(4),
+            "shift" => Some(8),
+            _ => None,
+        }
     }
 
     /// Normalize a key name to `(key, code, virtual-key-code, text)`.
     /// Accepts CDP-style names ("Enter", "ArrowDown", "a", "F5") plus the
-    /// friendly aliases "down"/"up"/"left"/"right"/"esc".
-    fn normalize_key(key: &str) -> (String, String, i64, Option<String>) {
+    /// friendly aliases "down"/"up"/"left"/"right"/"esc". Returns an error
+    /// for unrecognized multi-character names — guessing would dispatch a
+    /// wrong keystroke that the page silently misinterprets.
+    pub(super) fn normalize_key(
+        key: &str,
+    ) -> Result<(String, String, i64, Option<String>), String> {
         let (name, code, vkey, printable) = match key {
             "Enter" | "Return" | "enter" | "return" => ("Enter", "Enter", 0x0D, "\r"),
             "Tab" | "tab" => ("Tab", "Tab", 0x09, "\t"),
@@ -561,14 +686,15 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
             "Backspace" | "backspace" => ("Backspace", "Backspace", 0x08, ""),
             "Delete" | "del" | "Del" | "delete" => ("Delete", "Delete", 0x2E, ""),
             " " | "Space" | "space" => (" ", "Space", 0x20, " "),
+            "+" | "plus" | "Plus" => ("+", "Equal", 0xBB, "+"),
             "ArrowLeft" | "Left" | "left" => ("ArrowLeft", "ArrowLeft", 0x25, ""),
             "ArrowUp" | "Up" | "up" => ("ArrowUp", "ArrowUp", 0x26, ""),
             "ArrowRight" | "Right" | "right" => ("ArrowRight", "ArrowRight", 0x27, ""),
             "ArrowDown" | "Down" | "down" => ("ArrowDown", "ArrowDown", 0x28, ""),
             "Home" | "home" => ("Home", "Home", 0x24, ""),
             "End" | "end" => ("End", "End", 0x23, ""),
-            "PageUp" | "pageup" => ("PageUp", "PageUp", 0x21, ""),
-            "PageDown" | "pagedown" => ("PageDown", "PageDown", 0x22, ""),
+            "PageUp" | "pageup" | "pgup" => ("PageUp", "PageUp", 0x21, ""),
+            "PageDown" | "pagedown" | "pgdn" => ("PageDown", "PageDown", 0x22, ""),
             k @ ("F1" | "F2" | "F3" | "F4" | "F5" | "F6" | "F7" | "F8" | "F9" | "F10" | "F11"
             | "F12") => {
                 let n: u32 = k[1..].parse().unwrap_or(1);
@@ -576,8 +702,20 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
             }
             _ => {
                 // Printable single character: VK == uppercase ASCII for
-                // letters/digits, else the best-effort char code.
-                let ch = key.chars().next().unwrap_or('\0');
+                // letters/digits, else the best-effort char code. Anything
+                // longer is a name we don't know — reject rather than
+                // silently dispatch its first character.
+                let mut chars = key.chars();
+                let ch = match chars.next() {
+                    None => return Err("empty key name".to_string()),
+                    Some(c) => c,
+                };
+                if chars.next().is_some() {
+                    return Err(format!(
+                        "unknown key {key:?} — use names like Enter/Tab/Escape/ArrowDown/F5, \
+                         a single character, or modifier combos like \"ctrl+a\""
+                    ));
+                }
                 let upper = ch.to_ascii_uppercase() as i64;
                 (key, key, upper, key)
             }
@@ -587,15 +725,373 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
         } else {
             Some(printable.to_string())
         };
-        (name.to_string(), code.to_string(), vkey, text)
+        Ok((name.to_string(), code.to_string(), vkey, text))
     }
 
     pub async fn scroll_at(page: &Page, delta_y: f64) -> Result<(), String> {
+        use chromiumoxide_cdp::cdp::browser_protocol::input::{
+            DispatchMouseEventParams, DispatchMouseEventType,
+        };
+        // Real wheel events at the viewport center (CDP MouseWheel): this is
+        // what a user's scroll wheel does, so hover-revealed toolbars,
+        // inner scrollable panes, and wheel-triggered lazy loading all
+        // react. The old `window.scrollBy` only moved the main document.
+        let (cx, cy) = viewport_center(page).await.unwrap_or((400.0, 300.0));
+        let wheel = DispatchMouseEventParams::builder()
+            .r#type(DispatchMouseEventType::MouseWheel)
+            .x(cx)
+            .y(cy)
+            .delta_y(delta_y);
+        match wheel.build() {
+            Ok(params) => {
+                if page.execute(params).await.is_ok() {
+                    return Ok(());
+                }
+            }
+            Err(e) => tracing::debug!(error = %e, "wheel event build failed"),
+        }
+        // Fallback: synthetic scroll on the main document.
         let js = format!("(function(){{ window.scrollBy(0, {delta_y}); return true; }})()");
         page.evaluate(js)
             .await
             .map(|_| ())
             .map_err(|e| format!("scroll: {e}"))
+    }
+
+    /// Viewport center as `(x, y)` CSS pixels, for dispatching input
+    /// events where a pointer would plausibly be.
+    async fn viewport_center(page: &Page) -> Result<(f64, f64), String> {
+        let result = page
+            .evaluate("(function(){ return JSON.stringify({w: window.innerWidth, h: window.innerHeight}); })()")
+            .await
+            .map_err(|e| format!("viewport query: {e}"))?;
+        let payload = result
+            .value()
+            .and_then(|v| v.as_str().map(String::from))
+            .ok_or_else(|| "viewport query returned no payload".to_string())?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload).map_err(|e| format!("viewport payload: {e}"))?;
+        Ok((
+            parsed["w"].as_f64().unwrap_or(800.0) / 2.0,
+            parsed["h"].as_f64().unwrap_or(600.0) / 2.0,
+        ))
+    }
+
+    /// Dispatch a real `mouseMoved` event at `x, y` — drives CSS
+    /// `:hover`/mouseover menus that element-`.click()` shortcuts skip.
+    pub async fn hover_at(page: &Page, x: f64, y: f64) -> Result<(), String> {
+        use chromiumoxide_cdp::cdp::browser_protocol::input::{
+            DispatchMouseEventParams, DispatchMouseEventType,
+        };
+        let params = DispatchMouseEventParams::builder()
+            .r#type(DispatchMouseEventType::MouseMoved)
+            .x(x)
+            .y(y)
+            .build()
+            .map_err(|e| format!("hover event build: {e}"))?;
+        page.execute(params)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("hover({x},{y}): {e}"))
+    }
+
+    /// Select an `<option>` inside the `<select>` at `reference` (from
+    /// [`element_snapshot`]): matches by value first, then exact visible
+    /// label, then case-insensitive label. Fires input+change so reactive
+    /// frameworks see the new value.
+    pub async fn select_option(page: &Page, reference: &str, value: &str) -> Result<(), String> {
+        let escaped = value
+            .replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace('\n', "\\n")
+            .replace('\r', "");
+        let js = format!(
+            r#"(function(){{
+                const sel = {sel};
+                const nodes = Array.from(document.querySelectorAll(sel)).filter(el => {{
+                    const r = el.getBoundingClientRect();
+                    if (r.width <= 0 || r.height <= 0) return false;
+                    const st = getComputedStyle(el);
+                    return st.visibility !== 'hidden' && st.display !== 'none';
+                }});
+                const el = nodes[{idx}];
+                if (!el) return 'missing';
+                if (el.tagName !== 'SELECT') return 'not-select';
+                const wanted = '{value}';
+                let match = Array.from(el.options).find(o => o.value === wanted)
+                    || Array.from(el.options).find(o => o.label === wanted)
+                    || Array.from(el.options).find(o => o.label.toLowerCase() === wanted.toLowerCase());
+                if (!match) return 'no-option';
+                el.value = match.value;
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                return 'selected:' + match.label;
+            }})()"#,
+            sel = element_selector_js(),
+            idx = ref_index(reference)?,
+            value = escaped,
+        );
+        let result = page
+            .evaluate(js)
+            .await
+            .map_err(|e| format!("select: {e}"))?;
+        match result
+            .value()
+            .and_then(|v| v.as_str().map(String::from))
+            .as_deref()
+        {
+            Some(s) if s.starts_with("selected:") => Ok(()),
+            Some("missing") => Err(format!(
+                "no element for ref {reference} (DOM changed? re-run browser_snapshot)"
+            )),
+            Some("not-select") => Err(format!(
+                "element {reference} is not a <select>; use browser_click + browser_click on its options instead"
+            )),
+            Some("no-option") => Err(format!(
+                "no <option> in {reference} matches {value:?} (by value or label)"
+            )),
+            _ => Err("select failed with unexpected payload".into()),
+        }
+    }
+
+    /// Hover the element at `reference` (real mouse move at its viewport
+    /// center, after scrolling it into view).
+    pub async fn hover_element(page: &Page, reference: &str) -> Result<(), String> {
+        let (x, y) = element_center(page, reference).await?;
+        hover_at(page, x, y).await
+    }
+
+    /// Scroll `reference` into view and return its viewport-center
+    /// coordinates. Shared by click/hover paths. Two measurements: the
+    /// first move of the real mouse can flip CSS `:hover` rules whose
+    /// display changes shift the layout (menus, dropdown panels), so the
+    /// rect is re-measured AFTER the pointer arrives — clicking at the
+    /// pre-move coordinates would land on whatever the collapse exposed.
+    async fn element_center(page: &Page, reference: &str) -> Result<(f64, f64), String> {
+        // Validate the ref up front — falling back to index 0 here would
+        // turn a typo'd ref into a silent click on the wrong element.
+        let idx = ref_index(reference)?;
+        let measure_js = |with_scroll: bool| {
+            let scroll = if with_scroll {
+                "el.scrollIntoView({block: 'center'});"
+            } else {
+                ""
+            };
+            format!(
+                r#"(function(){{
+                    const sel = {sel};
+                    const nodes = Array.from(document.querySelectorAll(sel)).filter(el => {{
+                        const r = el.getBoundingClientRect();
+                        if (r.width <= 0 || r.height <= 0) return false;
+                        // Same visibility filter as ELEMENT_INDEX_JS: a
+                        // visibility:hidden element keeps a nonzero rect, so
+                        // skipping this filter would shift every later ref.
+                        const st = getComputedStyle(el);
+                        return st.visibility !== 'hidden' && st.display !== 'none';
+                    }});
+                    const el = nodes[{idx}];
+                    if (!el) return null;
+                    {scroll}
+                    const r = el.getBoundingClientRect();
+                    return JSON.stringify({{x: r.x + r.width/2, y: r.y + r.height/2}});
+                }})()"#,
+                // Mirrors ELEMENT_INDEX_JS's selector so refs line up.
+                sel = element_selector_js(),
+                idx = idx,
+            )
+        };
+        let parse = |payload: &str| -> Result<(f64, f64), String> {
+            let parsed: serde_json::Value =
+                serde_json::from_str(payload).map_err(|e| format!("element payload: {e}"))?;
+            Ok((
+                parsed["x"].as_f64().unwrap_or(0.0),
+                parsed["y"].as_f64().unwrap_or(0.0),
+            ))
+        };
+
+        let result = page
+            .evaluate(measure_js(true))
+            .await
+            .map_err(|e| format!("element lookup: {e}"))?;
+        let payload = result
+            .value()
+            .and_then(|v| v.as_str().map(String::from))
+            .ok_or_else(|| {
+                format!("no element for ref {reference} (DOM changed? re-run browser_snapshot)")
+            })?;
+        let (mut x, mut y) = parse(&payload)?;
+
+        // Park the pointer on the target, then re-measure: this is the
+        // layout the press will actually see. Best-effort hover — a failed
+        // mousemove leaves the first measurement in place.
+        if hover_at(page, x, y).await.is_ok() {
+            if let Ok(result) = page.evaluate(measure_js(false)).await {
+                if let Some(payload) = result.value().and_then(|v| v.as_str().map(String::from)) {
+                    if let Ok((rx, ry)) = parse(&payload) {
+                        x = rx;
+                        y = ry;
+                    }
+                }
+            }
+        }
+        Ok((x, y))
+    }
+
+    /// Poll the page until `text` appears in `document.body.innerText` or
+    /// `timeout` elapses. The remote/mobile loop's substitute for
+    /// Playwright's actionability waits: navigation spinners and lazy
+    /// content otherwise burn screenshot round-trips. Transient evaluate
+    /// failures ("execution context was destroyed" mid-navigation) count as
+    /// not-found-yet — only the deadline produces an error, because the
+    /// whole point is to wait *through* a navigation.
+    pub async fn wait_for_text(
+        page: &Page,
+        text: &str,
+        timeout: std::time::Duration,
+    ) -> Result<(), String> {
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace('\n', "\\n")
+            .replace('\r', "");
+        let js = format!(
+            "(function(){{ var b = document.body ? document.body.innerText : ''; \
+             return b.indexOf('{escaped}') !== -1; }})()"
+        );
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let found = match page.evaluate(js.clone()).await {
+                Ok(result) => result.value().and_then(|v| v.as_bool()).unwrap_or(false),
+                // Navigation tore down the context we polled — keep polling
+                // against whatever page loads next.
+                Err(e) => {
+                    tracing::debug!(error = %e, "wait_for poll failed mid-navigation");
+                    false
+                }
+            };
+            if found {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "text {text:?} did not appear within {:.1}s",
+                    timeout.as_secs_f64()
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
+
+    /// Screenshot with an explicit format — `png` lossless, `jpeg` at
+    /// `quality` (0-100) for bandwidth-constrained consumers (remote/mobile
+    /// progress streams: a 1280x800 JPEG at q60 is ~10x smaller than PNG).
+    pub async fn screenshot_with_format(
+        page: &Page,
+        full_page: bool,
+        format: &str,
+        quality: i64,
+    ) -> Result<Vec<u8>, String> {
+        use chromiumoxide_cdp::cdp::browser_protocol::page::CaptureScreenshotFormat;
+        let mut builder = chromiumoxide::page::ScreenshotParams::builder().full_page(full_page);
+        match format.to_lowercase().as_str() {
+            "jpeg" | "jpg" => {
+                builder = builder
+                    .format(CaptureScreenshotFormat::Jpeg)
+                    .quality(quality.clamp(0, 100));
+            }
+            "png" | "" => builder = builder.format(CaptureScreenshotFormat::Png),
+            other => {
+                return Err(format!(
+                    "unsupported screenshot format {other:?} (png|jpeg)"
+                ));
+            }
+        }
+        let png = page
+            .screenshot(builder.build())
+            .await
+            .map_err(|e| format!("screenshot: {e}"))?;
+        Ok(png)
+    }
+
+    /// Print the page to PDF bytes (CDP `Page.printToPDF`) — the delivery
+    /// format for receipts, confirmations, and reports a mobile user
+    /// downloads from the agent workspace.
+    pub async fn pdf_bytes(page: &Page) -> Result<Vec<u8>, String> {
+        use chromiumoxide_cdp::cdp::browser_protocol::page::PrintToPdfParams;
+        page.pdf(PrintToPdfParams::default())
+            .await
+            .map_err(|e| format!("pdf: {e}"))
+    }
+
+    /// Attach local `files` (name + bytes) to the `input_index`-th
+    /// `<input type=file>` on the page — including the hidden ones pages
+    /// style invisibly behind custom dropzones. Files are materialized
+    /// in-page via DataTransfer so the site's own change handlers fire.
+    pub async fn upload_files(
+        page: &Page,
+        input_index: usize,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<(), String> {
+        if files.is_empty() {
+            return Err("upload_files: no files given".into());
+        }
+        const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
+        let total: usize = files.iter().map(|(_, b)| b.len()).sum();
+        if total > MAX_UPLOAD_BYTES {
+            return Err(format!(
+                "upload too large: {total} bytes (limit {MAX_UPLOAD_BYTES})"
+            ));
+        }
+        use base64::Engine as _;
+        let payloads: Vec<serde_json::Value> = files
+            .iter()
+            .map(|(name, bytes)| {
+                serde_json::json!({
+                    "name": name,
+                    "b64": base64::engine::general_purpose::STANDARD.encode(bytes),
+                })
+            })
+            .collect();
+        let files_json =
+            serde_json::to_string(&payloads).map_err(|e| format!("serialize files: {e}"))?;
+        let js = format!(
+            r#"(async function(){{
+                const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+                const el = inputs[{input_index}];
+                if (!el) return 'missing';
+                const files = {files_json};
+                const dT = new DataTransfer();
+                for (const f of files) {{
+                    const res = await fetch('data:application/octet-stream;base64,' + f.b64);
+                    dT.items.add(new File([await res.blob()], f.name));
+                }}
+                el.files = dT.files;
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                return 'uploaded:' + el.files.length;
+            }})()"#,
+        );
+        use chromiumoxide_cdp::cdp::js_protocol::runtime::EvaluateParams;
+        let params = EvaluateParams::builder()
+            .expression(js)
+            .await_promise(true)
+            .build()
+            .map_err(|e| format!("upload eval build: {e}"))?;
+        let result = page
+            .evaluate_expression(params)
+            .await
+            .map_err(|e| format!("upload: {e}"))?;
+        match result
+            .value()
+            .and_then(|v| v.as_str().map(String::from))
+            .as_deref()
+        {
+            Some(s) if s.starts_with("uploaded:") => Ok(()),
+            Some("missing") => Err(format!(
+                "no file input at index {input_index} (hidden inputs included)"
+            )),
+            _ => Err("upload failed with unexpected payload".into()),
+        }
     }
 
     pub async fn page_text(page: &Page) -> Result<String, String> {
@@ -725,39 +1221,7 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
     /// events at its viewport center (hover handlers, focus, form
     /// semantics all fire — unlike a bare `el.click()`).
     pub async fn click_element(page: &Page, reference: &str) -> Result<(), String> {
-        let js = format!(
-            r#"(function(){{
-                const sel = {sel};
-                const nodes = Array.from(document.querySelectorAll(sel)).filter(el => {{
-                    const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
-                }});
-                const el = nodes[{idx}];
-                if (!el) return null;
-                el.scrollIntoView({{block: 'center'}});
-                const r = el.getBoundingClientRect();
-                return JSON.stringify({{x: r.x + r.width/2, y: r.y + r.height/2}});
-            }})()"#,
-            // Mirrors ELEMENT_INDEX_JS's selector so refs line up.
-            sel = element_selector_js(),
-            idx = ref_index(reference)?,
-        );
-        let result = page
-            .evaluate(js)
-            .await
-            .map_err(|e| format!("element lookup: {e}"))?;
-        let payload = result
-            .value()
-            .and_then(|v| v.as_str().map(String::from))
-            .ok_or_else(|| {
-                format!("no element for ref {reference} (DOM changed? re-run browser_snapshot)")
-            })?;
-        let parsed: serde_json::Value =
-            serde_json::from_str(&payload).map_err(|e| format!("element payload: {e}"))?;
-        let (x, y) = (
-            parsed["x"].as_f64().unwrap_or(0.0),
-            parsed["y"].as_f64().unwrap_or(0.0),
-        );
+        let (x, y) = element_center(page, reference).await?;
         click_at(page, x, y).await
     }
 
@@ -776,7 +1240,9 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
                 const sel = {sel};
                 const nodes = Array.from(document.querySelectorAll(sel)).filter(el => {{
                     const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
+                    if (r.width <= 0 || r.height <= 0) return false;
+                    const st = getComputedStyle(el);
+                    return st.visibility !== 'hidden' && st.display !== 'none';
                 }});
                 const el = nodes[{idx}];
                 if (!el) return 'missing';
@@ -959,20 +1425,56 @@ Rebuild with `--features local-browser` to use the built-in browser tools."
     pub async fn screenshot_png(_p: &Page, _full_page: bool) -> Result<Vec<u8>, String> {
         Err(BROWSER_DISABLED.to_string())
     }
+    pub async fn screenshot_with_format(
+        _p: &Page,
+        _full_page: bool,
+        _format: &str,
+        _quality: i64,
+    ) -> Result<Vec<u8>, String> {
+        Err(BROWSER_DISABLED.to_string())
+    }
+    pub async fn pdf_bytes(_p: &Page) -> Result<Vec<u8>, String> {
+        Err(BROWSER_DISABLED.to_string())
+    }
+    pub async fn hover_at(_p: &Page, _x: f64, _y: f64) -> Result<(), String> {
+        Err(BROWSER_DISABLED.to_string())
+    }
+    pub async fn hover_element(_p: &Page, _reference: &str) -> Result<(), String> {
+        Err(BROWSER_DISABLED.to_string())
+    }
+    pub async fn select_option(_p: &Page, _reference: &str, _value: &str) -> Result<(), String> {
+        Err(BROWSER_DISABLED.to_string())
+    }
+    pub async fn wait_for_text(
+        _p: &Page,
+        _text: &str,
+        _timeout: std::time::Duration,
+    ) -> Result<(), String> {
+        Err(BROWSER_DISABLED.to_string())
+    }
+    pub async fn upload_files(
+        _p: &Page,
+        _input_index: usize,
+        _files: &[(String, Vec<u8>)],
+    ) -> Result<(), String> {
+        Err(BROWSER_DISABLED.to_string())
+    }
 }
 
 #[cfg(feature = "local-browser")]
 pub use live::{
     AttachMode, ChromeSession, Page, TabId, attach_summary, cdp_endpoint, click_at, click_element,
-    detect_system_browser, element_snapshot, evaluate_js, fill_element, install_hint, navigate,
-    page_text, press_key, screenshot_png, scroll_at, type_text,
+    detect_system_browser, element_snapshot, evaluate_js, fill_element, hover_at, hover_element,
+    install_hint, navigate, page_text, pdf_bytes, press_key, screenshot_png,
+    screenshot_with_format, scroll_at, select_option, type_text, upload_files, wait_for_text,
 };
 
 #[cfg(not(feature = "local-browser"))]
 pub use stub::{
     ChromeSession, Page, StubPage, TabId, attach_summary, cdp_endpoint, click_at, click_element,
-    detect_system_browser, element_snapshot, evaluate_js, fill_element, install_hint, navigate,
-    page_text, press_key, screenshot_png, scroll_at, type_text,
+    detect_system_browser, element_snapshot, evaluate_js, fill_element, hover_at, hover_element,
+    install_hint, navigate, page_text, pdf_bytes, press_key, screenshot_png,
+    screenshot_with_format, scroll_at, select_option, type_text, upload_files, wait_for_text,
 };
 
 #[cfg(test)]
@@ -1001,6 +1503,61 @@ mod tests {
             format!("{mode:?}"),
             r#"Cdp("http://127.0.0.1:9222")"#.to_string()
         );
+    }
+
+    // ── Key parsing (live module) ───────────────────────────────────────
+
+    #[cfg(feature = "local-browser")]
+    #[test]
+    fn parse_key_parts_splits_combos_and_plus_key() {
+        use super::live::parse_key_parts;
+        assert_eq!(parse_key_parts("ctrl+a"), vec!["ctrl", "a"]);
+        assert_eq!(
+            parse_key_parts("Control+Shift+Tab"),
+            vec!["Control", "Shift", "Tab"]
+        );
+        // The plus key written with a repeated plus collapses to one "+".
+        assert_eq!(parse_key_parts("ctrl++"), vec!["ctrl", "+"]);
+        assert_eq!(parse_key_parts("++"), vec!["+"]);
+        assert_eq!(parse_key_parts("Enter"), vec!["Enter"]);
+    }
+
+    #[cfg(feature = "local-browser")]
+    #[test]
+    fn modifier_bits_match_cdp_layout() {
+        use super::live::modifier_bit;
+        // CDP Input.modifiers: Alt=1, Ctrl=2, Meta=4, Shift=8.
+        assert_eq!(modifier_bit("alt"), Some(1));
+        assert_eq!(modifier_bit("ctrl"), Some(2));
+        assert_eq!(modifier_bit("meta"), Some(4));
+        assert_eq!(modifier_bit("shift"), Some(8));
+        // Friendly aliases resolve to the same bits.
+        assert_eq!(modifier_bit("option"), Some(1));
+        assert_eq!(modifier_bit("cmd"), Some(4));
+        assert_eq!(modifier_bit("control"), Some(2));
+        // Non-modifiers have no bit.
+        assert_eq!(modifier_bit("a"), None);
+        assert_eq!(modifier_bit("enter"), None);
+    }
+
+    #[cfg(feature = "local-browser")]
+    #[test]
+    fn normalize_key_maps_names_and_rejects_unknown() {
+        use super::live::normalize_key;
+        let (name, _code, vk, text) = normalize_key("Enter").unwrap();
+        assert_eq!((name.as_str(), vk), ("Enter", 0x0D));
+        assert_eq!(text.as_deref(), Some("\r"));
+        // Friendly aliases map onto CDP names.
+        assert_eq!(normalize_key("esc").unwrap().0, "Escape");
+        assert_eq!(normalize_key("down").unwrap().0, "ArrowDown");
+        // Single printable characters keep their text payload.
+        assert_eq!(normalize_key("a").unwrap().3.as_deref(), Some("a"));
+        // The plus key is explicit, not a combo artifact.
+        assert_eq!(normalize_key("+").unwrap().3.as_deref(), Some("+"));
+        // Unknown multi-char names are rejected, not first-char guessed.
+        assert!(normalize_key("broadca").is_err());
+        assert!(normalize_key("VolumeUp").is_err());
+        assert!(normalize_key("").is_err());
     }
 
     // ── Temp-profile cleanup (review §P3-7) ─────────────────────────────

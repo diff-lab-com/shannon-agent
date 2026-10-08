@@ -109,6 +109,16 @@ export interface NormalizedInbound {
   timestamp: number;
   /** True for a 1:1 direct message (eligible for DM pairing); false/absent for group channels. */
   isDirect?: boolean;
+  /**
+   * Mobile §K only: the engine session id this turn must run under — the
+   * dispatched task's own UUID (the §K3 conversation key). The engine's WS
+   * gate rejects every non-UUID session_id query frame, and the per-device
+   * lane default (`mobile:<deviceId>`) is exactly that, so the dispatch hub
+   * pins the task id here and the §K3 task turn handler passes it to
+   * `runQuery`. Absent on every other platform — IM turns keep the lane's
+   * stable session key (behavior unchanged).
+   */
+  engineSessionId?: string;
   /** The platform-native event, for adapter-specific fallback. */
   raw?: unknown;
 }
@@ -144,6 +154,10 @@ export interface MessageReceipt {
 /**
  * A tool-use approval to render in-channel. Mirrors the engine's
  * ApprovalRequest (engine wire: snake_case) in gateway-internal camelCase.
+ *
+ * B1b (v2.3 additive): the engine's rich fields ride through when supplied —
+ * older engines (and older call sites) keep the legacy six-key shape, and no
+ * consumer may invent values for absent keys.
  */
 export interface ApprovalReq {
   requestId: string;
@@ -152,6 +166,19 @@ export interface ApprovalReq {
   description: string;
   isDestructive: boolean;
   diffPreview: string | null;
+  /** §L1 (additive): engine-side epoch-ms timestamp of the ask. */
+  ts?: number;
+  /** §L1 (additive): the requesting agent, when the engine supplies it. */
+  agent?: { id: string | null; name: string | null };
+  /**
+   * §L1 (additive): the engine's three-dimensional risk, when present — same
+   * normalized shape `mapEngineEvent` emits on the mobile wire.
+   */
+  risk?: {
+    destructive?: boolean;
+    scope: "local" | "repo" | "system";
+    reversible: boolean;
+  };
 }
 
 /** User's decision on a rendered approval. Maps to the engine's PermissionChoice. */

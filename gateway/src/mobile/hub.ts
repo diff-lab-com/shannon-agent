@@ -26,6 +26,14 @@
  *    `task.progress` per engine text delta / usage frame, then the terminal
  *    `task.message` (final reply) or `query.failed` — never the IM lifecycle
  *    stamps (🚀/✅/❌), which stay an IM-channel-only concern.
+ *  - P2-9 roster live status: a task accepted WITH an `agent_id` pushes a
+ *    `shannon/agent.state` notification (`{agent: {…, status: "running",
+ *    currentTask}}`) to that device at acceptance and `{…, status: "idle",
+ *    currentTask: null}` at the task's first terminal — the mobile roster's
+ *    agents stop being perpetually idle. Un-attributed tasks push nothing
+ *    (no roster row owns them — "无归属归 host"); the push is the full
+ *    roster map (the phone REPLACES the entry) and deliberately seq-free /
+ *    outside the replay ring (see `AgentStateNotification` in protocol.ts).
  *
  * Security: nothing here accepts inbound text from an unpaired device — the
  * `shannon/task.*` handlers gate on the bound session (PAIRING_REQUIRED), and
@@ -58,14 +66,16 @@ import {
   type NormalizedInbound,
 } from "../adapters/types.js";
 import { TASK_FAILED_STAMP_PREFIX, titleFromText } from "../router/lifecycle.js";
+import { type RosterAgent } from "./agentRoster.js";
 import {
   JSONRPC_VERSION,
+  type MobileAgentState,
   type MobileTaskRecord,
   type ShannonEvent,
   type UsageFrame,
 } from "./protocol.js";
 import type { MethodContext } from "./server.js";
-import type { ApprovalRegistry } from "./approvalRegistry.js";
+import { engineAgent, engineRisk, type ApprovalRegistry } from "./approvalRegistry.js";
 
 /** How long a pushed approval waits for the device's Y/N before denying. */
 const APPROVAL_TIMEOUT_MS = 300_000;
@@ -86,23 +96,50 @@ export interface TaskRecord {
   started_at: number;
   finished_at: number | null;
   error: string | null;
+  /**
+   * B0: the roster agent this task was dispatched under — the `id` of a
+   * `~/.shannon/agents/*.toml` definition, validated by `shannon/task.dispatch`
+   * at accept time. Gateway-side ATTRIBUTION only (the engine has no per-agent
+   * routing face and still executes the turn as the default engine); null when
+   * the dispatch carried no usable agent_id.
+   */
+  agent_id: string | null;
 }
 
 /**
  * §K wire projection of one journal record: `id` = task id (also the task
  * thread's session key), `prompt` = the dispatched text, `created_at` =
- * ISO-8601 UTC of `started_at`. `agent_id` is always null — this host has no
- * agent roster. The legacy P2-1 keys (device_id/title/text/started_at/…)
- * deliberately do NOT appear (spec §K2).
+ * ISO-8601 UTC of `started_at`. B0: `agent_id` is the roster agent the task
+ * was dispatched under (validated against `shannon/agent.list` at accept
+ * time), or null when the dispatch carried none — attribution, not engine
+ * routing (the engine still executes as the default engine).
+ *
+ * §K2 revision (B1a, v2.3 additive): the legacy P2-1 keys (device_id/text/
+ * started_at/…) stay off the wire, but three additive keys return — `title`
+ * (the internal task title, whenever non-empty), `finished_at` (ISO-8601 UTC,
+ * only once the record reached a terminal state) and `error` (only on
+ * status=failed with a non-null error). All three are optional on the wire:
+ * mobile mappers tolerate their absence, and a consumer of the old five-key
+ * shape keeps working untouched.
  */
 export function wireTask(record: TaskRecord): MobileTaskRecord {
-  return {
+  const wire: MobileTaskRecord = {
     id: record.task_id,
     prompt: record.text,
     status: record.status,
-    agent_id: null,
+    agent_id: record.agent_id,
     created_at: new Date(record.started_at).toISOString(),
+    // B1a: the internal title rides when non-empty (titleFromText guarantees
+    // one today; an empty string stays omitted rather than shipped as "").
+    ...(record.title.trim().length > 0 ? { title: record.title } : {}),
   };
+  if (record.finished_at !== null) {
+    wire.finished_at = new Date(record.finished_at).toISOString();
+  }
+  if (record.status === "failed" && record.error !== null) {
+    wire.error = record.error;
+  }
+  return wire;
 }
 
 interface PendingApproval {
@@ -160,6 +197,23 @@ export interface MobileDispatchHubOptions {
    * Absent (today: no relay) → inert.
    */
   wake?: PushWakeSink;
+  /**
+   * P2-9: roster lookup for the `shannon/agent.state` push — resolves a
+   * dispatched task's `agent_id` to its `shannon/agent.list` entry so the
+   * push carries the FULL roster map (`id`/`name`/`role`/`model`): the phone
+   * REPLACES the matching roster entry with the pushed map, so a minimal
+   * `{id, status}` would visibly degrade `name`/`role`/`model` on the Fleet
+   * screen. Called per push (not cached) so a roster edit takes effect
+   * without a restart — the same read-per-use philosophy the dispatch
+   * handler's agent_id validation follows. A `null`/absent resolution while
+   * a resolver IS wired means the agent left the roster mid-task: the push
+   * is SKIPPED (the phone ADDS unknown ids — pushing would fabricate a ghost
+   * roster entry; the next `agent.list` converges the screen instead).
+   * Without any resolver the push degrades to the minimal map
+   * (`{id, name: id, status, activity: [], currentTask}`) — dev wirings
+   * only; the bootstrap always wires the resolver.
+   */
+  rosterEntry?: (agentId: string) => RosterAgent | null;
 }
 
 export class MobileDispatchHub {
@@ -173,6 +227,8 @@ export class MobileDispatchHub {
   private readonly replay: PushReplayBuffer | null;
   /** Mutable: the relay leg late-binds this (see `setWake`). */
   private wake: PushWakeSink | null;
+  /** P2-9: roster resolver for the agent.state push (see the option doc). */
+  private readonly rosterEntry: ((agentId: string) => RosterAgent | null) | null;
 
   /** deviceId → open, session-bound contexts. */
   private readonly byDevice = new Map<string, Set<MethodContext>>();
@@ -199,6 +255,7 @@ export class MobileDispatchHub {
     this.approvals = opts.approvals ?? null;
     this.replay = opts.replay ?? null;
     this.wake = opts.wake ?? null;
+    this.rosterEntry = opts.rosterEntry ?? null;
   }
 
   /** Current push seq head — feeds `shannon/snapshot` / `shannon/resume`. */
@@ -343,6 +400,99 @@ export class MobileDispatchHub {
       this.pushEvent(deviceId, event);
     }
   }
+
+  /**
+   * P2-9: push one `shannon/agent.state` notification to every open socket
+   * of the device — the roster live-status face the phone's Fleet screen
+   * consumes (shannon-mobile `LiveAgentsNotifier._onAgentState`). A dedicated
+   * notification METHOD, not a `shannon/event` type: the consumer filters
+   * `n.method == Notifications.agentState` and reads `params.agent`. No seq,
+   * no replay-ring record — see `AgentStateNotification` (protocol.ts).
+   */
+  private pushAgentState(deviceId: string, agent: MobileAgentState): boolean {
+    const sockets = this.byDevice.get(deviceId);
+    if (!sockets || sockets.size === 0) return false;
+    const frame = JSON.stringify({
+      jsonrpc: JSONRPC_VERSION,
+      method: "shannon/agent.state",
+      params: { agent },
+    });
+    let delivered = false;
+    for (const ctx of sockets) {
+      if (ctx.socket.readyState !== WebSocket.OPEN) continue;
+      ctx.socket.send(frame);
+      delivered = true;
+    }
+    return delivered;
+  }
+
+  /**
+   * P2-9: the `shannon/agent.state` push for one agent-attributed task —
+   * `running` with the task text at acceptance, `idle` with `currentTask:
+   * null` at a terminal. Resolves the roster entry per push (see the
+   * `rosterEntry` option for the miss/absent degradations); no-ops when the
+   * task carries no `agent_id` — an un-attributed task belongs to the host,
+   * and the phone's roster has no row whose status could honestly move.
+   */
+  private pushTaskAgentState(
+    deviceId: string,
+    task: TaskRecord,
+    status: "running" | "idle",
+  ): void {
+    if (task.agent_id === null) return;
+    const currentTask = status === "running" ? task.text : null;
+    let agent: MobileAgentState;
+    if (this.rosterEntry) {
+      const entry = this.rosterEntry(task.agent_id);
+      if (!entry) {
+        // Resolver wired but the agent left the roster mid-task — skip
+        // rather than ghost-add an unknown id on the phone (the phone's
+        // consumer ADDS unknown ids; the next agent.list converges instead).
+        return;
+      }
+      agent = {
+        id: entry.id,
+        name: entry.name,
+        ...(entry.role !== undefined && entry.role.length > 0 ? { role: entry.role } : {}),
+        ...(entry.model !== undefined && entry.model.length > 0 ? { model: entry.model } : {}),
+        status,
+        activity: [],
+        currentTask,
+      };
+    } else {
+      // No resolver wired (dev wirings): minimal honest map. `name: id` is
+      // exactly what `agent.list` serves for the name.
+      agent = { id: task.agent_id, name: task.agent_id, status, activity: [], currentTask };
+    }
+    this.pushAgentState(deviceId, agent);
+  }
+
+  /**
+   * P2-9: the settle-side agent.state push, called once per agent-attributed
+   * task at its FIRST terminal flip. The roster goes back to idle — unless
+   * the device still has another running task under the SAME agent (the
+   * device's lane queues them FIFO), in which case the oldest such queued
+   * task is that agent's new `currentTask` and the roster stays `running`
+   * instead of blinking idle between queue drains.
+   */
+  private settleTaskAgentState(task: TaskRecord): void {
+    if (task.agent_id === null) return;
+    const next = [...this.journal]
+      .reverse() // journal is newest-first; the lane drains oldest-first
+      .find(
+        (t) =>
+          t.device_id === task.device_id &&
+          t.agent_id === task.agent_id &&
+          t.status === "running" &&
+          t.task_id !== task.task_id,
+      );
+    if (next) {
+      this.pushTaskAgentState(task.device_id, next, "running");
+    } else {
+      this.pushTaskAgentState(task.device_id, task, "idle");
+    }
+  }
+
   // ── approvals (phone decides via Y/N text) ─────────────────────────────────
 
   /**
@@ -350,8 +500,21 @@ export class MobileDispatchHub {
    * timeout → deny). Called by the "mobile" adapter from inside the turn, so
    * the approval turn handler forwards the decision to the engine exactly as
    * it does for the IM adapters.
+   *
+   * B1b: when the engine event carried the §L1 rich fields, the pushed event
+   * AND the registry record carry them too — `agent`/`risk` are normalized
+   * through the same `engineAgent`/`engineRisk` helpers the direct-query path
+   * uses. The push carries `ts` only when the engine supplied it (the phone
+   * stamps arrival time itself — no invention), while the record's `ts`
+   * (required by the restore face) prefers `req.ts` and falls back to the hub
+   * clock. Unusable values omit the key, so the push stays byte-identical to
+   * the legacy shape on old engines.
    */
   requestApproval(deviceId: string, req: ApprovalReq): Promise<"allow" | "deny"> {
+    const engineTs =
+      typeof req.ts === "number" && Number.isFinite(req.ts) ? req.ts : null;
+    const agent = engineAgent(req.agent);
+    const risk = engineRisk(req.risk);
     this.pushEvent(deviceId, {
       type: "approval.request",
       request_id: req.requestId,
@@ -360,6 +523,9 @@ export class MobileDispatchHub {
       description: req.description,
       is_destructive: req.isDestructive,
       diff_preview: req.diffPreview,
+      ...(engineTs !== null ? { ts: engineTs } : {}),
+      ...(agent ? { agent } : {}),
+      ...(risk ? { risk } : {}),
     });
     // §L2: the ask is now visible to the restore face until a settle resolves it.
     this.approvals?.record({
@@ -369,7 +535,9 @@ export class MobileDispatchHub {
       description: req.description,
       isDestructive: req.isDestructive,
       diffPreview: req.diffPreview,
-      ts: this.now(),
+      ts: engineTs ?? this.now(),
+      agent,
+      risk,
     });
     return new Promise<"allow" | "deny">((resolve) => {
       let timer: NodeJS.Timeout | undefined;
@@ -554,6 +722,9 @@ export class MobileDispatchHub {
     task.finished_at = this.now();
     task.error = error || null;
     this.removeRunningTask(deviceId, task.task_id);
+    // P2-9: the out-of-band ❌ stamp is a terminal too — the roster must not
+    // stay running on a task the journal just failed.
+    this.settleTaskAgentState(task);
   }
 
   private finishTask(taskId: string, status: "completed" | "failed", error?: string): void {
@@ -563,9 +734,25 @@ export class MobileDispatchHub {
     task.finished_at = this.now();
     if (status === "failed") task.error = error ?? null;
     this.removeRunningTask(task.device_id, taskId);
+    // P2-9: first-terminal only (the early return above guards the dispatch
+    // resolution's second finishTask pass) — idle, or the next queued task
+    // of the same agent (see settleTaskAgentState).
+    this.settleTaskAgentState(task);
   }
 
   // ── dispatch (phone → gateway → engine) ────────────────────────────────────
+
+  /**
+   * B0: the roster agent a task session belongs to — journal-derived
+   * (`session_id` IS the task id on the §K3 stream and the engine session).
+   * Feeds `shannon/session.list` attribution: task threads carry the agent
+   * they were dispatched under. Null when the id is unknown (not dispatched
+   * here / journal rolled over / gateway restarted) — the caller omits the
+   * enrichment rather than inventing an owner.
+   */
+  agentForSession(sessionId: string): string | null {
+    return this.journal.find((t) => t.task_id === sessionId)?.agent_id ?? null;
+  }
 
   /**
    * Handle one prompt from a paired device: journal a task, announce
@@ -574,6 +761,11 @@ export class MobileDispatchHub {
    * lane through the same inbound pipeline the IM adapters use. The returned
    * record resolves immediately; the structured task stream and the journal
    * transition land asynchronously.
+   *
+   * B0 `agentId` (already roster-validated by the dispatch handler) is
+   * recorded as ATTRIBUTION on the journal record — it rides the wire task
+   * object and `agentForSession`; it is not engine routing (the turn still
+   * executes as the default engine).
    *
    * §K1 ordering: the RPC response (the task object the phone keys its thread
    * by) must reach the wire BEFORE the event stream — the phone creates the
@@ -584,11 +776,17 @@ export class MobileDispatchHub {
    * the turn starts, and every engine delta is written after it (the turn
    * handler's pushes run inside the submission's call tree).
    *
+   * B0 engine-session fix: the turn's inbound carries `engineSessionId` =
+   * the task's own UUID. The lane's default session key (`mobile:<deviceId>`)
+   * is not a UUID and the engine's WS gate rejects every non-UUID session_id
+   * query frame — pinning the task id keeps the dispatched turn's transcript
+   * addressable (and `shannon/session.list` consistent with `agentForSession`).
+   *
    * §K: there is deliberately no Y/N-text approval branch here anymore — the
    * dispatch action ALWAYS creates a task; approvals are answered via the
    * signed `shannon/approval/decide` (see `settleApproval`).
    */
-  dispatch(deviceId: string, text: string): DispatchOutcome {
+  dispatch(deviceId: string, text: string, agentId: string | null = null): DispatchOutcome {
     const record: TaskRecord = {
       task_id: this.newTaskId(),
       device_id: deviceId,
@@ -598,6 +796,7 @@ export class MobileDispatchHub {
       started_at: this.now(),
       finished_at: null,
       error: null,
+      agent_id: agentId,
     };
     this.journal.unshift(record);
     if (this.journal.length > JOURNAL_CAP) this.journal.length = JOURNAL_CAP;
@@ -616,6 +815,10 @@ export class MobileDispatchHub {
         turn_id: this.newTurnId(),
         session_id: record.task_id,
       });
+      // P2-9 受理即推: the roster agent this task is attributed to flips to
+      // `running` on acceptance (never for un-attributed tasks — no roster
+      // row owns them, the "无归属归 host" semantics stand).
+      this.pushTaskAgentState(deviceId, record, "running");
 
       if (!this.submit) {
         // Wiring bug, not a runtime condition — fail loudly in the journal.
@@ -632,6 +835,8 @@ export class MobileDispatchHub {
         timestamp: this.now(),
         // The dispatch action is the trigger — no IM mention/prefix gating.
         isDirect: true,
+        // B0: the turn's engine session IS the task (UUID) — see the doc above.
+        engineSessionId: record.task_id,
       };
       this.submit(inbound).then(
         () => this.finishTask(record.task_id, "completed"),

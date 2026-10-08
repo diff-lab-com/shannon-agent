@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Spinner } from '@/components/ui/loading-state'
-import { useOutletContext } from "react-router-dom";
+import { useOutletContext, useNavigate } from "react-router-dom";
 import { useIntl } from 'react-intl'
 import {
   listFeaturedVendors,
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { cn } from "@/lib/utils";
 import InstalledIconRow from '@/components/extensions/InstalledIconRow'
+import { SecurityBadge } from '@/components/extensions/SecurityBadge'
 
 // Batch E4/B3 P1-21 contract: any successful install from this page must
 // dispatch `shannon:extension-installed` (same shape InstallDialog uses) so
@@ -33,11 +34,16 @@ function announceInstalled(name: string) {
  *
  * Wire-up:
  * - Loads the static featured list from `list_featured_vendors` Rust command.
- * - OAuth vendors get a one-click "Connect" button → `install_mcp_oauth_loopback`
+ * - OAuth vendors get a one-click "Add" button → `install_mcp_oauth_loopback`
  *   binds an ephemeral loopback port, opens the browser, accepts the OAuth
  *   callback, exchanges the code (PKCE), and writes the MCP server config.
  *   The await resolves only after the whole flow finishes.
  * - stdio vendors (e.g. filesystem) install directly via `install_mcp_stdio`.
+ * - F-11 unified card anatomy: foot = security badge + ONE primary action —
+ *   「添加」 when the vendor is not installed (matched against
+ *   list_installed_addons), 「管理」 (→ /extensions/mcp-servers) when it is.
+ *   No connected/needs-auth claim is ever rendered: the backend exposes no
+ *   MCP connection-state API, and honesty beats decoration.
  *
  * Manual token paste is kept as a fallback for headless / browser-blocked
  * environments: if the loopback flow throws, the catch handler reveals the
@@ -45,6 +51,7 @@ function announceInstalled(name: string) {
  */
 export default function Featured() {
   const intl = useIntl()
+  const navigate = useNavigate()
   const t = (id: string) => intl.formatMessage({ id })
 
   const { search } = useOutletContext<{ search: string }>();
@@ -160,6 +167,14 @@ export default function Featured() {
           v.slug.toLowerCase().includes(search.toLowerCase())
       )
     : vendors;
+
+  // F-11: the honest per-card state bit. The aggregator names MCP rows after
+  // their config key and installs use `server_name: vendor.slug`, so a slug
+  // hit means this exact vendor is on the machine (refreshes via the
+  // `shannon:extension-installed` listener above).
+  const installedMcpNames = new Set(
+    installed.filter((a) => a.kind === 'mcp').map((a) => a.name),
+  );
 
   if (loading) {
     // Audit §P3-3 (round 6): align loading affordance with Triage's
@@ -281,6 +296,14 @@ export default function Featured() {
           const feedbackForVendor = feedback?.slug === vendor.slug ? feedback : null;
           const showTokenPrompt = tokenPrompt === vendor.slug;
           const accent = ACCENT_BY_SLUG[vendor.slug] ?? ACCENT_DEFAULT;
+          // F-11 (honest states): the only per-vendor bit the backend gives us
+          // beyond the catalog row itself is "installed" — MCP rows in
+          // list_installed_addons carry the server name, and every featured
+          // install uses `server_name: vendor.slug`. There is NO
+          // connected/needs-auth API, so the card never claims 已连接/去认证;
+          // an uninstalled OAuth vendor simply shows 「添加」 (the install IS
+          // the auth flow).
+          const isInstalled = installedMcpNames.has(vendor.slug);
           return (
             <div
               key={vendor.slug}
@@ -290,12 +313,13 @@ export default function Featured() {
               <div className={cn("h-1.5 w-full bg-gradient-to-r", accent.bar)} />
 
               <div className="p-lg flex flex-col flex-1">
-                <div className="flex items-start justify-between mb-md">
+                <div className="flex items-start justify-between mb-md gap-sm">
                   <div className={cn("relative w-14 h-14 rounded-2xl bg-gradient-to-br flex items-center justify-center shadow-e2", accent.icon)}>
                     <span className="material-symbols-outlined text-white icon-xl drop-shadow-e1 max-w-full overflow-hidden">
                       {vendor.icon}
                     </span>
                   </div>
+                  {/* Status badge slot (F-11 top row): real trust level only. */}
                   <TrustBadge trust={vendor.trust} />
                 </div>
 
@@ -305,23 +329,6 @@ export default function Featured() {
                 <p className="text-label-sm text-on-surface-variant flex-1 mb-sm leading-relaxed min-h-[40px]">
                   {vendor.description}
                 </p>
-
-                {/* Shannon installs every connector through the prompt-injection
-                    scanner + signature verifier — surface it as a visible
-                    differentiator (audit §3.6: the capability existed but was
-                    never shown). */}
-                <p className="text-label-xs text-on-surface-variant/90 mb-lg inline-flex items-center gap-xs">
-                  <span className="material-symbols-outlined icon-sm text-success" aria-hidden="true">verified_user</span>
-                  {t('extensions.featured.securityBadge')}
-                </p>
-
-                {showTokenPrompt && (
-                  <TokenPasteForm
-                    onSubmit={(token) => handleSubmitToken(vendor, token)}
-                    onCancel={() => setTokenPrompt(null)}
-                    disabled={isBusy}
-                  />
-                )}
 
                 {feedbackForVendor && (
                   <div
@@ -339,41 +346,77 @@ export default function Featured() {
                   </div>
                 )}
 
-                {!showTokenPrompt && (
-                  // 2026-09 axe-ci: bypass <Button> + cva here. shadcn base's
-                  // `disabled:opacity-50` lingers in the cascade even after
-                  // we stripped it (variant classList ordering keeps the
-                  // muted look on primary bg in some themes). A native
-                  // <button> with className composed inline gives us full
-                  // control over the disabled style, and axe verifies the
-                  // final computed style.
-                  <button
-                    type="button"
-                    onClick={() => handleConnect(vendor)}
+                {showTokenPrompt && (
+                  <TokenPasteForm
+                    onSubmit={(token) => handleSubmitToken(vendor, token)}
+                    onCancel={() => setTokenPrompt(null)}
                     disabled={isBusy}
-                    aria-busy={isBusy || undefined}
-                    className="group/button inline-flex shrink-0 items-center justify-center rounded-xl border border-transparent bg-primary text-on-primary text-label-md font-bold shadow-e1 hover:shadow-e2 w-full px-md py-sm transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-surface-container disabled:text-on-surface disabled:shadow-none"
-                  >
-                    {isBusy ? (
-                      <>
-                        <Spinner className="icon-sm" />
-                        {vendor.install_kind.type === "oauth_remote"
-                          ? t('extensions.featured.authorizing')
-                          : t('extensions.featured.installing')}
-                      </>
-                    ) : vendor.install_kind.type === "oauth_remote" ? (
-                      <>
-                        <span className="material-symbols-outlined icon-md">link</span>
-                        {t('extensions.featured.connect')}
-                      </>
-                    ) : (
-                      <>
-                        <span className="material-symbols-outlined icon-md">download</span>
-                        {t('extensions.featured.install')}
-                      </>
-                    )}
-                  </button>
+                  />
                 )}
+
+                {/* F-11 unified card foot: security badge left, ONE primary
+                    action right. The SecurityBadge shows the scan's verdict —
+                    when it has nothing to warn about the card's standing
+                    "secured" line fills the same slot, so every card carries a
+                    visible security indicator (design 07-connectors foot). */}
+                <div className="mt-auto pt-sm flex items-center gap-sm min-w-0">
+                  <SecurityBadge
+                    text={vendor.description}
+                    trust={vendor.trust}
+                    fallback={
+                      <span
+                        className="text-label-xs text-on-surface-variant/90 inline-flex items-center gap-xs min-w-0"
+                        title={t('extensions.featured.securityBadge')}
+                      >
+                        <span className="material-symbols-outlined icon-sm text-success shrink-0" aria-hidden="true">verified_user</span>
+                        <span className="truncate">{t('extensions.featured.securityBadge')}</span>
+                      </span>
+                    }
+                  />
+                  <span className="flex-1" aria-hidden="true" />
+                  {!showTokenPrompt && (
+                    // 2026-09 axe-ci: bypass <Button> + cva here. shadcn base's
+                    // `disabled:opacity-50` lingers in the cascade even after
+                    // we stripped it (variant classList ordering keeps the
+                    // muted look on primary bg in some themes). A native
+                    // <button> with className composed inline gives us full
+                    // control over the disabled style, and axe verifies the
+                    // final computed style.
+                    // B4 (F-11): unified soft-primary form (design `.btn.soft`)
+                    // for both states — 未安装→添加, 已安装→管理.
+                    <button
+                      type="button"
+                      onClick={() =>
+                        isInstalled
+                          ? navigate('/extensions/mcp-servers')
+                          : handleConnect(vendor)
+                      }
+                      disabled={isBusy}
+                      aria-busy={isBusy || undefined}
+                      data-testid={`featured-action-${vendor.slug}`}
+                      className="group/button inline-flex shrink-0 items-center justify-center gap-xs rounded-xl border border-primary/30 bg-primary-container text-on-primary-container text-label-md font-bold px-md py-xs transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-surface-container disabled:text-on-surface disabled:border-transparent"
+                    >
+                      {isBusy ? (
+                        <>
+                          <Spinner className="icon-sm" />
+                          {vendor.install_kind.type === "oauth_remote"
+                            ? t('extensions.featured.authorizing')
+                            : t('extensions.featured.installing')}
+                        </>
+                      ) : isInstalled ? (
+                        <>
+                          <span className="material-symbols-outlined icon-md" aria-hidden="true">arrow_forward</span>
+                          {t('extensions.featured.manage')}
+                        </>
+                      ) : (
+                        <>
+                          <span className="material-symbols-outlined icon-md" aria-hidden="true">add</span>
+                          {t('extensions.featured.add')}
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           );

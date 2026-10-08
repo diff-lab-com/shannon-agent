@@ -1,9 +1,18 @@
 // Step 3 — final summary + workspace picker + shortcuts + dev mode opt-in
 // + documents-capabilities card. Extracted from Welcome.tsx (T3.1).
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { WelcomeCard } from './components'
-import { PROVIDERS, SHORTCUT_ROWS, TASKS, type TaskId } from './constants'
+import {
+  PROVIDERS,
+  SHORTCUT_ROWS,
+  TASKS,
+  TOOL_ICONS,
+  TOOL_LABEL_KEYS,
+  TOOL_REASON_KEYS,
+  type TaskId,
+} from './constants'
 import { DocumentsSkillsList } from './DocumentsSkillsList'
 
 interface DoneStepProps {
@@ -37,7 +46,19 @@ export function DoneStep({
   onOpenMigration,
 }: DoneStepProps) {
   const intl = useIntl()
+  const navigate = useNavigate()
   const currentTask = TASKS.find(t => t.id === task)!
+  // Per-tool chip data (01b): display name falls back to the raw id when a
+  // tool id has no `welcome.tool.*` label yet; the reason key mirrors the id.
+  // Reasons are {task}-templated (01b:156-175) — they anchor to the chosen
+  // template's name instead of generic copy.
+  const taskLabel = intl.formatMessage({ id: currentTask.labelKey })
+  const recommendedTools = currentTask.tools.map(id => ({
+    id,
+    label: TOOL_LABEL_KEYS[id] ? intl.formatMessage({ id: TOOL_LABEL_KEYS[id] }) : id,
+    reasonKey: TOOL_REASON_KEYS[id] ?? `welcome.done.reason.${id}`,
+    icon: TOOL_ICONS[id] ?? 'extension',
+  }))
   return (
     <WelcomeCard
       title={intl.formatMessage({ id: 'welcome.done.title' })}
@@ -73,6 +94,36 @@ export function DoneStep({
             <span>{intl.formatMessage({ id: 'welcome.done.setup.tools' }, { count: recommendedToolCount })}</span>
           </li>
         </ul>
+        {/* 01b — the recommended tools, itemized. Each chip is the tool's
+            display name plus its template-driven one-line reason, and doubles
+            as a deep link into Settings → Connections. Navigation only —
+            Welcome still never mutates tool config (decision 4-B: enabling
+            happens in Settings, which is exactly where the chip lands). */}
+        {recommendedTools.length > 0 && (
+          <div className="flex flex-wrap gap-xs mt-sm" data-testid="welcome-done-tools">
+            {recommendedTools.map(tool => (
+              <button
+                key={tool.id}
+                type="button"
+                data-testid="welcome-done-tool-chip"
+                onClick={() => navigate('/settings/connections')}
+                title={intl.formatMessage({ id: 'welcome.done.viewInSettings' })}
+                className="inline-flex items-center gap-xs px-sm py-xs rounded-full border border-outline-variant/30 bg-surface-container-lowest font-label-xs text-on-surface cursor-pointer transition-colors hover:border-primary/60 hover:bg-surface-container-high focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              >
+                <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">
+                  {tool.icon}
+                </span>
+                <span className="font-medium">{tool.label}</span>
+                <span className="text-on-surface-variant">
+                  {intl.formatMessage({ id: tool.reasonKey }, { task: taskLabel })}
+                </span>
+                <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">
+                  chevron_right
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Optional workspace picker */}

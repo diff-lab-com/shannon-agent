@@ -21,11 +21,15 @@ import {
   deleteMemory,
   getMemoryGraph,
   getMemoryStats,
+  getSessionMemoryBypass,
   listMemories,
   listMemoryProjects,
+  memoryInjectionPreview,
+  setSessionMemoryBypass,
   updateMemory,
   type MemoryEntry,
   type MemoryGraph,
+  type MemoryInjectionPreview,
   type MemoryStats,
 } from '@/lib/tauri-api'
 import { CATEGORIES, type CategoryFilter } from './constants'
@@ -34,7 +38,9 @@ import { MemoryEditor, type MemorySaveInput } from './MemoryEditor'
 import { MemoryGraphView } from './MemoryGraphView'
 import DreamPanel from './DreamPanel'
 import StatCard from '@/components/ui/stat-card'
+import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
+import { toastError } from '@/lib/errorToast'
 
 type MemoryView = 'list' | 'graph'
 
@@ -76,6 +82,37 @@ export default function MemoryPanel({
   // double click used to fire two deletes and toast a bogus "not found".
   const [deleting, setDeleting] = useState(false)
 
+  // ── 注入预览横幅 (audit §08 P1 / C9) ────────────────────────────────────
+  // Same backend commands the chat composer uses (getSessionMemoryBypass /
+  // setSessionMemoryBypass with `null` = the ACTIVE session). The 「将携带
+  // N 条」 count rides on the real pre-read command (缓期项 #6,
+  // memory_injection_preview) — same injected-entries pipeline the next
+  // turn's prompt builds from. Tri-state: `undefined` = fetching (render
+  // nothing, no flash of placeholder), `null` = unavailable (no memory
+  // store in this deployment / command failed) → the amber honest
+  // placeholder stays; otherwise the real count.
+  const [bypassed, setBypassed] = useState(false)
+  const [injectionPreview, setInjectionPreview] = useState<
+    MemoryInjectionPreview | null | undefined
+  >(undefined)
+  useEffect(() => {
+    let cancelled = false
+    getSessionMemoryBypass(null)
+      .then(disabled => { if (!cancelled) setBypassed(Boolean(disabled)) })
+      .catch(() => { if (!cancelled) setBypassed(false) })
+    return () => { cancelled = true }
+  }, [])
+  const handleBypassToggle = async (next: boolean) => {
+    setBypassed(next)
+    try {
+      await setSessionMemoryBypass(null, next)
+    } catch (err) {
+      // Optimistic flip rolled back — the backend state stays authoritative.
+      setBypassed(!next)
+      toastError(intl.formatMessage({ id: 'memory.injection.failed' }), err)
+    }
+  }
+
   useEffect(() => {
     const id = window.setTimeout(() => setDebouncedQuery(query), 250)
     return () => window.clearTimeout(id)
@@ -90,6 +127,13 @@ export default function MemoryPanel({
   const fetchAll = useCallback(async () => {
     setLoading(true)
     setErrorMsg(null)
+    // 缓期项 #6: the banner pre-read rides along with the list fetches —
+    // same project filter (null lets the backend resolve the engine-default
+    // scope), but deliberately OUTSIDE the Promise.all so a preview failure
+    // degrades to the amber placeholder without touching the list below.
+    memoryInjectionPreview(projectFilter === 'all' ? null : projectFilter)
+      .then((p) => setInjectionPreview(p))
+      .catch(() => setInjectionPreview(null))
     try {
       const [rows, projs, s] = await Promise.all([
         listMemories({
@@ -198,6 +242,80 @@ export default function MemoryPanel({
         <p className="text-body-md text-on-surface-variant mb-xl">
           {t('memory.subtitle')}
         </p>
+
+        {/* 注入预览横幅 (design 08:146-156) — injection state + the
+            per-session bypass switch. NOT aurora-line: the memory page is
+            not one of the four aurora surfaces. The 「将携带 N 条」 count is
+            the real pre-read (缓期项 #6); it degrades to the honest amber
+            placeholder when no memory store backs this deployment. */}
+        <div
+          data-testid="memory-injection-banner"
+          className="flex flex-wrap items-center gap-sm px-md py-sm rounded-2xl bg-surface-container-lowest/80 border border-outline-variant/30 shadow-e1 mb-xl"
+        >
+          <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">visibility</span>
+          <div className="min-w-0">
+            <p className="font-label-md text-label-md font-bold text-on-surface">
+              {t('memory.injection.title')}
+            </p>
+            <p className="font-label-sm text-label-sm text-on-surface-variant">
+              {t('memory.injection.desc')}
+            </p>
+          </div>
+          {bypassed ? (
+            <span
+              data-testid="memory-injection-state"
+              className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-surface-container-high font-label-sm text-label-sm text-on-surface-variant"
+            >
+              <span className="material-symbols-outlined icon-sm" aria-hidden="true">psychology_alt</span>
+              {t('memory.injection.bypassOn')}
+            </span>
+          ) : (
+            <>
+              <span
+                data-testid="memory-injection-state"
+                className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-primary-container/50 font-label-sm text-label-sm text-on-surface"
+              >
+                <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">check_circle</span>
+                {t('memory.injection.enabled')}
+              </span>
+              {/* C9 诚实降级 kept for the degraded path: no store / command
+                  failure → amber dashed placeholder, never an invented
+                  count. `undefined` (still fetching) renders nothing so the
+                  placeholder never flashes on a healthy deployment. */}
+              {injectionPreview === undefined ? null : injectionPreview === null ? (
+                <span
+                  data-testid="memory-injection-preview-pending"
+                  className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-dashed border-warning/50 font-label-sm text-label-sm text-warning"
+                >
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">hourglass_top</span>
+                  {t('memory.injection.previewPending')}
+                </span>
+              ) : (
+                <span
+                  data-testid="memory-injection-preview-count"
+                  className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-surface-container-high font-label-sm text-label-sm text-on-surface"
+                >
+                  <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">layers</span>
+                  {intl.formatMessage({ id: 'memory.preview.count' }, { count: injectionPreview.count })}
+                </span>
+              )}
+            </>
+          )}
+          <div className="ml-auto flex items-center gap-sm">
+            <span className="font-label-sm text-label-sm text-on-surface-variant">
+              {t('memory.injection.bypassLabel')}
+            </span>
+            <Switch
+              data-testid="memory-injection-bypass"
+              checked={bypassed}
+              onCheckedChange={checked => void handleBypassToggle(checked)}
+              aria-label={t('memory.injection.bypassAria')}
+            />
+            <span className="hidden lg:inline font-label-xs text-xs text-on-surface-variant">
+              {t('memory.injection.bypassHint')}
+            </span>
+          </div>
+        </div>
 
         {/* Dream distillation (梦境提炼) — run / review-gated proposals /
             report. Sits above the memory browser: it is the only surface

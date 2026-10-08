@@ -41,7 +41,8 @@ import TasksHeader from '@/components/tasks/TasksHeader'
 import RoutineTemplatesBrowser from '@/components/routines/RoutineTemplatesBrowser'
 import TasksFilters from '@/components/tasks/TasksFilters'
 import NewTaskForm from '@/components/tasks/NewTaskForm'
-import ScheduleForm from '@/components/tasks/ScheduleForm'
+import ScheduleForm, { type ScheduleFormInitial } from '@/components/tasks/ScheduleForm'
+import NlRoutineQuickCreate, { type NlRoutinePrefill } from '@/components/tasks/NlRoutineQuickCreate'
 import TaskList from '@/components/tasks/TaskList'
 import TaskCalendarView from '@/components/tasks/TaskCalendarView'
 import TaskDAGView from '@/components/tasks/TaskDAGView'
@@ -73,6 +74,37 @@ import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 type Tab = 'active' | 'history' | 'routines' | 'pipelines' | 'worktrees'
 const SIMPLE_TABS: readonly Tab[] = ['active', 'history']
 const DEV_TABS: readonly Tab[] = ['active', 'history', 'routines', 'pipelines', 'worktrees']
+
+// B4 裁决 (audit R1): the Simple-mode entry card for the Mission Control.
+// Honest-superset copy only — it names what the surface actually does
+// (parallel multi-agent runs, replayable global state) and opens /opc; the
+// card itself is not a control, the button is.
+function OpcEntryCard({ onOpen }: { onOpen: () => void }) {
+  const { formatMessage: fm } = useIntl()
+  return (
+    <section
+      data-testid="tasks-opc-entry"
+      aria-label={fm({ id: 'tasks.opcEntry.title' })}
+      className="mb-lg flex items-center gap-md px-lg py-md rounded-2xl border border-outline-variant/30 bg-surface-container-low"
+    >
+      <div className="w-10 h-10 rounded-xl bg-primary-container text-on-primary-container flex items-center justify-center shrink-0">
+        <span className="material-symbols-outlined icon-lg" aria-hidden="true">auto_awesome</span>
+      </div>
+      <div className="min-w-0 flex-1">
+        <h2 className="font-label-lg font-bold text-on-surface">{fm({ id: 'tasks.opcEntry.title' })}</h2>
+        <p className="font-body-sm text-on-surface-variant">{fm({ id: 'tasks.opcEntry.body' })}</p>
+      </div>
+      <Button
+        variant="outline"
+        className="shrink-0 rounded-xl font-label-md cursor-pointer"
+        onClick={onOpen}
+      >
+        <span className="material-symbols-outlined icon-md" aria-hidden="true">open_in_new</span>
+        {fm({ id: 'tasks.opcEntry.cta' })}
+      </Button>
+    </section>
+  )
+}
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useCatalog()
@@ -122,6 +154,10 @@ export default function Tasks() {
   // P1-2: best-of-N batch creation form + its data panel (live cards below).
   const [showBatchForm, setShowBatchForm] = useState(false)
   const [showSchedule, setShowSchedule] = useState(false)
+  // B2 NL quick create: the routines tab's one-line card hands its parsed
+  // values here for the 调整 path — ScheduleForm re-seeds from it on every
+  // mount (the form renders conditionally). null = plain create form.
+  const [nlPrefill, setNlPrefill] = useState<ScheduleFormInitial | null>(null)
   const [newTaskPrompt, setNewTaskPrompt] = useState('')
   const [taskPage, setTaskPage] = useState(1)
   const [cancelTarget, setCancelTarget] = useState<string | null>(null)
@@ -166,6 +202,17 @@ export default function Tasks() {
     for (const t of tasks) if (t.team) set.add(t.team)
     return Array.from(set).sort()
   }, [tasks])
+
+  // Design 04 (audit R1): routines the SYSTEM paused surface their pause
+  // reason on the task rows — id → machine reason, joined by the routine id
+  // the catalog card shares. Manual pauses carry no reason and stay absent.
+  const autoPausedReasons = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const r of scheduledTasks) {
+      if (!r.enabled && r.pause_reason) m.set(r.id, r.pause_reason)
+    }
+    return m
+  }, [scheduledTasks])
 
   // P-U3: routines scoped to the deep-linked project (working_dir matches the
   // normalized project key). Routines with no working_dir drop out while the
@@ -215,6 +262,7 @@ export default function Tasks() {
   // I2: 新建例行 marker → open the create form, drain the marker param.
   useEffect(() => {
     if (!newRoutineMarker) return
+    setNlPrefill(null)
     setShowSchedule(true)
     const next = new URLSearchParams(searchParams)
     next.delete('new')
@@ -241,6 +289,38 @@ export default function Tasks() {
         setShowSchedule(false)
       }
     } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.createRoutine')); toastError(t('tasks.toast.failed.createRoutine'), e) }
+  }
+
+  // B2 NL quick create — 激活 path: create straight from the one-line card.
+  // The hook owns the failure toast + list refresh (createScheduled resolves
+  // null on failure); the success announcement mirrors handleCreateSchedule.
+  // A deep-linked project houses the routine, same as the form path.
+  const handleNlActivate = async (payload: CreateTaskPayload): Promise<boolean> => {
+    const created = await createScheduled({
+      ...payload,
+      working_dir: payload.working_dir ?? projectKey ?? undefined,
+    })
+    if (!created) return false
+    if (created.trigger_type === 'webhook') {
+      toast.success(t('tasks.toast.webhookReady'))
+    } else {
+      toast.success(intl.formatMessage({ id: 'tasks.toast.routineScheduled' }, { name: created.name }))
+    }
+    return true
+  }
+
+  // 调整 path: the parsed values move into the full ScheduleForm, which
+  // re-seeds from `initial` on mount.
+  const handleNlAdjust = (prefill: NlRoutinePrefill) => {
+    setNlPrefill(prefill)
+    setShowSchedule(true)
+  }
+
+  // Plain create entry (header CTA, NL parse-failure guidance): never inherit
+  // a stale NL prefill.
+  const openScheduleForm = () => {
+    setNlPrefill(null)
+    setShowSchedule(true)
   }
 
   const handleCancelTask = async (id: string) => {
@@ -315,7 +395,12 @@ export default function Tasks() {
           onToggleDag={() => { setDagView(!dagView); if (!dagView) setCalendarView(false) }}
           onToggleNewTask={() => setShowNewTask(!showNewTask)}
           onToggleBatch={() => setShowBatchForm(!showBatchForm)}
-          onToggleSchedule={() => setShowSchedule(!showSchedule)}
+          onToggleSchedule={() => {
+            // Keep the CTA's toggle semantics; a fresh open just never
+            // inherits a stale NL prefill.
+            if (!showSchedule) setNlPrefill(null)
+            setShowSchedule(!showSchedule)
+          }}
           teams={teams}
           teamFilter={teamFilter}
           onTeamFilterChange={setTeamFilter}
@@ -327,6 +412,12 @@ export default function Tasks() {
         {projectKey && projectLabel && (
           <ProjectFilterChip label={projectLabel} onRemove={clearProject} />
         )}
+
+        {/* B4 裁决 (audit R1 §09 / R3-V-12): Simple mode has no sidebar entry
+            for the Mission Control (/opc), so the tasks page carries the
+            promised entry card. Dev mode already has the sidebar nav row —
+            the card stays out to avoid a duplicate entry. */}
+        {mode === 'simple' && <OpcEntryCard onOpen={() => navigate('/opc')} />}
 
         {/* P2.2: Active / History / Worktrees tab switcher — Simple mode
             only shows the two universal tabs; the dev-only surfaces move
@@ -377,6 +468,13 @@ export default function Tasks() {
           <WorktreePanel />
         ) : tab === 'routines' ? (
           <div className="space-y-gutter">
+            {/* B2: NL quick create sits at the top of the automation tab —
+                preview → 调整 (full form) or 激活 (direct create). */}
+            <NlRoutineQuickCreate
+              onActivate={handleNlActivate}
+              onAdjust={handleNlAdjust}
+              onOpenForm={openScheduleForm}
+            />
             <ScheduleDAGView routines={scopedRoutines} onSelectRoutine={setSelectedRoutineId} queuedTaskIds={queuedRoutineIds} />
             <WebhookTriggerCard routines={scopedRoutines} />
             <RoutineTemplatesBrowser onInstantiated={() => void refreshScheduled()} />
@@ -391,6 +489,14 @@ export default function Tasks() {
         {/* 操作员视图（§5-1 裁决）— the panels below (batch cards, goal runs,
             subagent inventory) are the operator surfaces; stay out of scope
             for the nav/IA redesign unless the proposal says otherwise. */}
+        {/* B2/审查修复: NL quick create 也挂在默认 active 视图顶部 ——
+            routines 是 dev tab,简单模式用户从设计稿 04 页预期的入口在这里。 */}
+        <NlRoutineQuickCreate
+          onActivate={handleNlActivate}
+          onAdjust={handleNlAdjust}
+          onOpenForm={openScheduleForm}
+        />
+
         {/* P1-2: best-of-N batch cards (live per-branch chips) + form. */}
         <BatchRunPanel />
 
@@ -439,8 +545,9 @@ export default function Tasks() {
 
         {showSchedule && (
           <ScheduleForm
+            initial={nlPrefill ?? undefined}
             onSubmit={handleCreateSchedule}
-            onCancel={() => setShowSchedule(false)}
+            onCancel={() => { setNlPrefill(null); setShowSchedule(false) }}
           />
         )}
 
@@ -476,6 +583,7 @@ export default function Tasks() {
               onPageChange={setTaskPage}
               runningId={running}
               runnableIds={routineIds}
+              autoPausedReasons={autoPausedReasons}
               onSelectTask={setSelectedTaskId}
               onRunNow={handleRunNow}
               onCancelTask={setCancelTarget}

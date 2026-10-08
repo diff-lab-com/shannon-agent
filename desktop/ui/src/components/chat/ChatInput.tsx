@@ -33,7 +33,9 @@ import { cn } from '@/lib/utils'
 import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow'
 import { modelWhyFor, type ModelWhyContext } from '@/lib/modelWhy'
 import { writeGlobalModelDefault } from '@/lib/modelSwitch'
-import { APPROVAL_MODES, approvalModeOption } from '@/lib/approvalModes'
+import { APPROVAL_MODES, PLAN_OPTION, approvalModeOption } from '@/lib/approvalModes'
+import { ExecutionModeSwitcher } from '@/components/chat/ExecutionModeSwitcher'
+import { PhaseTierSwitcher } from '@/components/chat/PhaseTierSwitcher'
 import { VISION_IMAGE_EXTENSIONS as IMAGE_EXTENSIONS } from '@/lib/fileRefs'
 
 /**
@@ -69,6 +71,47 @@ export function pathExtension(path: string): string {
   const name = path.replace(/\\/g, '/').split('/').pop() ?? ''
   const dot = name.lastIndexOf('.')
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+}
+
+/**
+ * Aurora redesign 2026-10 (02 页 P1, 裁决 B1) — the composer's execution-mode
+ * control is a FOUR-STOP segmented control (逐项确认 ask / 自动编辑 auto-edit /
+ * 计划 plan / 完全访问 full-auto). Engine support verified: `plan` is a legal
+ * `approval_mode` value (crates/shannon-engine permissions.rs ApprovalMode::Plan;
+ * desktop/src/commands.rs parse_approval_mode maps "plan" → Plan, unit-tested at
+ * commands.rs:4411), so plan takes its design-mandated seat in the ladder
+ * instead of living behind a separate toggle. The expert modes
+ * (readonly/dontAsk/bypassPermissions) stay Settings-only (lib/approvalModes).
+ */
+const APPROVAL_SEGMENTS = [
+  { value: 'ask', labelKey: 'settings.general.approvalMode.ask.label', icon: 'shield' },
+  { value: 'auto-edit', labelKey: 'settings.general.approvalMode.autoEdit.label', icon: 'flash_auto' },
+  { value: 'plan', labelKey: 'chat.input.mode.plan', icon: 'route' },
+  { value: 'full-auto', labelKey: 'settings.general.approvalMode.full.label', icon: 'bolt' },
+] as const
+
+/** Design 02 规格标注: <1200px the segmented control folds back into the
+ *  current-mode chip (the compact Select). Simple breakpoint switch. */
+const SEGMENTED_MODE_MIN_WIDTH_PX = 1200
+
+/** MatchMedia subscription for the segmented-control breakpoint. Defaults to
+ *  WIDE when matchMedia is unavailable (jsdom/unit tests exercise the
+ *  segmented form; the Select fallback is an e2e/visual-matrix surface). */
+function useMinWindowWidth(px: number): boolean {
+  const query = `(min-width: ${px}px)`
+  const [wide, setWide] = useState<boolean>(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+    return window.matchMedia(query).matches
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mql = window.matchMedia(query)
+    const onChange = (e: MediaQueryListEvent) => setWide(e.matches)
+    setWide(mql.matches)
+    mql.addEventListener('change', onChange)
+    return () => mql.removeEventListener('change', onChange)
+  }, [query])
+  return wide
 }
 
 /** Last path segment, no extension — used by the contextual placeholder so a
@@ -949,6 +992,9 @@ export default function ChatInput({
   // Settings → General). Values outside the table (engine-only aliases)
   // render honestly via the fallback instead of masquerading as Suggest.
   const selectedMode = approvalModeOption(currentMode)
+  // Aurora 2026-10 (02 页 P1): ≥1200px renders the four-stop segmented
+  // control; below it the legacy current-mode chip Select.
+  const segmentedModeWide = useMinWindowWidth(SEGMENTED_MODE_MIN_WIDTH_PX)
 
   // The composer owns ONE mode surface (the unified pill below); the
   // keyboard shortcut and the plan banner's exit button both funnel here.
@@ -1436,6 +1482,63 @@ export default function ChatInput({
               )}
             </span>
 
+            {/* Aurora redesign 2026-10 (02 页 P1, 裁决 B1): the approval
+                ladder is a FOUR-stop segmented control (ask / auto-edit /
+                plan / full-auto — `plan` is a legal engine approval_mode,
+                see APPROVAL_SEGMENTS). Below the 1200px breakpoint it folds
+                back into the current-mode chip Select (设计稿响应式降级).
+                The testid stays `approval-mode-pill` on BOTH forms so e2e
+                anchors survive; segments add their own
+                `approval-mode-segment-*` ids. Out-of-ladder engine values
+                (expert modes, CLI aliases) never masquerade: an honest
+                current-value badge rides inside the group. */}
+            {segmentedModeWide ? (
+              <div
+                data-testid="approval-mode-pill"
+                role="radiogroup"
+                aria-label={t('chat.input.mode.label')}
+                title={`${selectedMode.rawLabel ? selectedMode.rawLabel : t(selectedMode.descriptionKey)} · ${t('chat.input.mode.highRiskNote')}`}
+                className="inline-flex items-center rounded-lg border border-outline-variant/30 bg-surface-container/60 p-[2px] gap-[2px] shrink-0 max-w-full overflow-x-auto"
+              >
+                {APPROVAL_SEGMENTS.map(seg => {
+                  const active = selectedMode.value === seg.value
+                  return (
+                    <button
+                      key={seg.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      data-testid={`approval-mode-segment-${seg.value}`}
+                      aria-label={t(seg.labelKey)}
+                      title={t(seg.labelKey)}
+                      onClick={() => void handleModeChange(seg.value)}
+                      className={cn(
+                        'inline-flex items-center gap-[4px] px-sm py-[3px] rounded-md font-label-sm whitespace-nowrap cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                        active
+                          ? 'bg-primary-container text-on-primary-container font-bold'
+                          : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface',
+                      )}
+                    >
+                      <span className="material-symbols-outlined icon-sm" aria-hidden="true">{seg.icon}</span>
+                      {t(seg.labelKey)}
+                    </button>
+                  )
+                })}
+                {!APPROVAL_SEGMENTS.some(s => s.value === selectedMode.value) && (
+                  /* Engine-only / expert value (readonly, dontAsk, bypass,
+                      CLI aliases): shown verbatim as the current state —
+                      the group must never claim a ladder stop it is not in. */
+                  <span
+                    data-testid="approval-mode-offladder-badge"
+                    title={`${selectedMode.rawLabel ?? t(selectedMode.descriptionKey)} · ${t('chat.input.mode.highRiskNote')}`}
+                    className="inline-flex items-center gap-[4px] px-sm py-[3px] rounded-md font-label-sm whitespace-nowrap bg-surface-container-high text-on-surface-variant"
+                  >
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">{selectedMode.icon}</span>
+                    {selectedMode.rawLabel ?? t(selectedMode.labelKey)}
+                  </span>
+                )}
+              </div>
+            ) : (
             <Select value={selectedMode.value} onValueChange={handleModeChange}>
               <SelectTrigger
                 size="sm"
@@ -1453,8 +1556,17 @@ export default function ChatInput({
                   {() => <span className="truncate">{selectedMode.rawLabel ?? t(selectedMode.labelKey)}</span>}
                 </SelectValue>
               </SelectTrigger>
-              <SelectContent>
-                {APPROVAL_MODES.map(mode => (
+              {/* The composer sits on the window's bottom edge, and the
+                  default trigger-aligned popup opens DOWNWARD from the
+                  selected item — the ladder + high-risk note then overflow
+                  the viewport and the popup scrolls internally (bug:
+                  权限模式弹出框显示不全面). Open upward with standard
+                  popover positioning instead: the whole ladder and the note
+                  fit in the ~550px between the composer and the header.
+                  min-w-56 stops the two-line descriptions wrapping three
+                  deep (the trigger-aligned w-(--anchor-width) was pill-width). */}
+              <SelectContent side="top" alignItemWithTrigger={false} className="min-w-56">
+                {[...APPROVAL_MODES, PLAN_OPTION].map(mode => (
                   <SelectItem key={mode.value} value={mode.value}>
                     <div className="flex items-start gap-xs py-0.5">
                       <span className="material-symbols-outlined icon-sm mt-0.5" aria-hidden="true">{mode.icon}</span>
@@ -1476,6 +1588,7 @@ export default function ChatInput({
                 </div>
               </SelectContent>
             </Select>
+            )}
 
             {/* 会话用量入口 — 模型 chip 旁一次点击(2026-09 三项 UX 修复 #3)。
                 弹框点击后才挂载,composer 首屏零开销。 */}
@@ -1697,6 +1810,14 @@ export default function ChatInput({
                 {currentEffortLabel}
               </span>
             )}
+            {/* Aurora redesign 2026-10 (02-chat.html 三要素归位): the
+                execution-mode + plan/act tier switchers live in the composer
+                now — moved out of the chat Header. Compact variants, same
+                testids/aria/IPC as the old header form (e2e anchors by
+                testid, not container). They render before the right-cluster
+                controls so the row wraps, never squeezes the send button. */}
+            <ExecutionModeSwitcher compact />
+            <PhaseTierSwitcher compact />
           </div>
 
           <div className="flex items-center gap-xs shrink-0">

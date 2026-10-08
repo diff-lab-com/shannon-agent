@@ -250,9 +250,14 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
         GoalAction::Pause => match repl.state.goal.as_mut() {
             Some(goal) if goal.status == GoalStatus::Active => {
                 goal.status = GoalStatus::Paused;
+                let max = goal.max_iterations;
                 save_goal_sidecar(repl);
-                repl.chat
-                    .add_message(ChatRole::System, t!("commands.goal.paused_max").to_string());
+                // Pass the placeholder: the locale string renders "%{max}"
+                // literally without it.
+                repl.chat.add_message(
+                    ChatRole::System,
+                    t!("commands.goal.paused_max", max = max).to_string(),
+                );
             }
             _ => {
                 repl.chat.add_message(

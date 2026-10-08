@@ -26,6 +26,11 @@
 //      CHIP_COMPOSITES models it). Use the MD3 container pair instead
 //      (bg-primary-container + text-on-primary-container; migrated repo-wide
 //      by scripts/codemods/migrate-accent-chips.mjs).
+//   7. Outline-as-text (audit 2026-10-08 C) — `text-outline(-variant)` is a
+//      BORDER token; as text color it goes unreadable on light themes.
+//      Allowed only on decorative material-symbol icon rows, single-glyph
+//      separators (· |), and the diff gutter sign-color map. Informational
+//      text → text-on-surface-variant.
 // Exit 1 on any error so CI can gate on it; warnings print only.
 // Scope: desktop/ui/src only; tests may reference retired strings on purpose
 // (they assert the change).
@@ -186,6 +191,20 @@ for (const file of walk(ROOT)) {
       } else {
         console.warn(`[type] ${rel(file)}:${i + 1}: non-token font size "${line.match(TEXT_PX)[0]}" — use a --text-* role (off-scale values need a deliberate decision)`)
         warnings++
+      }
+    }
+
+    // ── Rule 7 (2026-10-08 audit C): outline-as-text ──
+    const outlineText = line.match(/(?<![\w./:-])text-outline(?:-variant)?(?:\/\d+)?(?![\w-])/)
+    if (outlineText) {
+      const isVariant = outlineText[0].includes('-variant')
+      const decorative =
+        line.includes(ICON_MARKER) ||
+        line.includes('signColor') || // diff gutter sign-color map (decorative +/-/space column)
+        (isVariant && /[·|]/.test(line)) // single-glyph separators
+      if (!decorative) {
+        console.error(`[outline-text] ${rel(file)}:${i + 1}: "${outlineText[0]}" as text color — outline is a border token and goes unreadable on light themes; use text-on-surface-variant (icons/separators stay exempt)`)
+        failures++
       }
     }
   })

@@ -214,6 +214,12 @@ function updatePerCrateTable(text, perCrate) {
 
 const fmt = n => n.toLocaleString('en-US')
 
+// The READMEs deliberately carry FLOOR claims for the test count, not exact
+// numbers ("over 12,000 automated tests") — a floor cannot drift on test
+// additions, so `--check` stays green between recounts (decision: PR #116,
+// see the NOTE in scripts/gen-metrics.sh). Round DOWN to the nearest 1,000.
+const testsFloor = tests => fmt(Math.floor(tests / 1000) * 1000)
+
 // One-line responsibility per crate, kept here (not in metrics.md — it is
 // prose, not a metric). Undescribed crates fall back to "—" until noted.
 const responsibility = {
@@ -283,16 +289,17 @@ function renderBlocks(lang, data) {
   }
 
   if (lang === 'en') {
+    const floor = testsFloor(data.tests)
     return {
       badge: `[![Crates](https://img.shields.io/badge/crates-${data.members}-blue.svg)](./docs/metrics.md)`,
-      intro: `Every line of code is auditable, and every behavior is verified by **${fmt(data.tests)} automated tests**.`,
-      diffrow: `| Test coverage | **${fmt(data.tests)}** tests across ${data.members} workspace members | n/a (closed source) | Varies |`,
+      intro: `Every line of code is auditable, and every behavior is verified by **over ${floor} automated tests**.`,
+      diffrow: `| Test coverage | **${floor}+** tests across ${data.members} workspace members | n/a (closed source) | Varies |`,
       table: [
         '| Metric | Value |',
         '|--------|-------|',
         `| Total Rust code | ${fmt(data.rustLoc)} lines |`,
         `| Source files | ${fmt(data.rustFiles)} |`,
-        `| Total tests (nextest, runnable) | **${fmt(data.tests)}** |`,
+        `| Total tests (nextest, runnable) | **${floor}+** |`,
         `| Crates (workspace members) | ${shape} |`,
         `| Crates with zero tests | ${zeroCell} |`,
         '| CI lint | `cargo clippy --workspace -- -D warnings` (zero warnings) |',
@@ -304,16 +311,17 @@ function renderBlocks(lang, data) {
       ].join('\n'),
     }
   }
+  const floor = testsFloor(data.tests)
   return {
     badge: `[![Crates](https://img.shields.io/badge/crates-${data.members}-blue.svg)](./docs/metrics.md)`,
-    intro: `每一行代码都可审计，每一个行为都经过 **${fmt(data.tests)}** 个自动化测试验证。`,
-    diffrow: `| 测试覆盖 | **${fmt(data.tests)}** 个测试，覆盖 ${data.members} 个 workspace 成员 | 不适用（闭源） | 各不相同 |`,
+    intro: `每一行代码都可审计，每一个行为都经过 **超过 ${floor}** 个自动化测试验证。`,
+    diffrow: `| 测试覆盖 | **超过 ${floor}** 个测试，覆盖 ${data.members} 个 workspace 成员 | 不适用（闭源） | 各不相同 |`,
     table: [
       '| 指标 | 数值 |',
       '|------|------|',
       `| Rust 代码总量 | ${fmt(data.rustLoc)} 行 |`,
       `| 源文件数 | ${fmt(data.rustFiles)} |`,
-      `| 总测试数（nextest 可运行） | **${fmt(data.tests)}** |`,
+      `| 总测试数（nextest 可运行） | **超过 ${floor}** |`,
       `| Crate 数（workspace 成员） | ${shapeZh} |`,
       `| 零测试 Crate 数 | ${zeroCell} |`,
       '| CI 代码检查 | `cargo clippy --workspace -- -D warnings`（零警告） |',
