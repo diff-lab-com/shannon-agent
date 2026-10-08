@@ -360,6 +360,11 @@ pub struct TimelineTurn {
 pub struct TimelineCumulativePoint {
     /// Sample time (`turn/end` ts), ns since epoch.
     pub ts_ns: u64,
+    /// Total input tokens across all closed turns so far (audit C6: the
+    /// cumulative curve gains the input leg; `default` keeps old exports
+    /// that predate the field deserializable).
+    #[serde(default)]
+    pub input_tokens_total: u64,
     /// Total output tokens across all closed turns so far.
     pub output_tokens_total: u64,
     /// Total USD cost so far; stays None until any value exists.
@@ -497,6 +502,7 @@ pub fn project_turn_timeline(events: &[SessionEvent]) -> TurnTimeline {
     out.ended_ts_ns = last_ts;
 
     let mut accs: Vec<(u64, TimelineTurnAcc)> = Vec::new();
+    let mut curve_input_total = 0u64;
     let mut curve_output_total = 0u64;
     let mut curve_cost_total = None::<f64>;
 
@@ -553,6 +559,7 @@ pub fn project_turn_timeline(events: &[SessionEvent]) -> TurnTimeline {
                 }
                 if let Some(u) = usage {
                     acc.add_usage(u);
+                    curve_input_total += u.input_tokens;
                     curve_output_total += u.output_tokens;
                     curve_cost_total = match (curve_cost_total, u.cost_usd) {
                         (Some(a), Some(b)) => Some(a + b),
@@ -562,6 +569,7 @@ pub fn project_turn_timeline(events: &[SessionEvent]) -> TurnTimeline {
                 }
                 out.cumulative.push(TimelineCumulativePoint {
                     ts_ns: event.ts_ns,
+                    input_tokens_total: curve_input_total,
                     output_tokens_total: curve_output_total,
                     cost_total_usd: curve_cost_total,
                 });
@@ -1173,7 +1181,9 @@ mod tests {
 
         // Curve samples once per closed turn with running totals.
         assert_eq!(tl.cumulative.len(), 2);
+        assert_eq!(tl.cumulative[0].input_tokens_total, 5);
         assert_eq!(tl.cumulative[0].output_tokens_total, 100);
+        assert_eq!(tl.cumulative[1].input_tokens_total, 10);
         assert_eq!(tl.cumulative[1].output_tokens_total, 140);
         assert_eq!(tl.cumulative[0].cost_total_usd, Some(0.10));
         // A None cost in a later turn must not erase the running total.
