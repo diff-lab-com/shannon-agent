@@ -140,7 +140,7 @@ export default function ContextBreakdownCard({ sessionId, usageTick }: ContextBr
                 <span className="font-mono text-label-sm text-on-surface tabular-nums">
                   {fmtTokens(c.tokens)}
                 </span>
-                <span className="font-mono text-label-sm text-outline-variant w-8 text-right tabular-nums">
+                <span className="font-mono text-label-sm text-on-surface-variant w-8 text-right tabular-nums">
                   {shareText}
                 </span>
               </li>

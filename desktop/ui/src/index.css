@@ -66,6 +66,14 @@
      `max-w-sm` and collapsed every default dialog to 8px wide. Pin the
      first-priority variable so `max-w-sm` keeps its shadcn meaning. */
   --max-width-sm: 24rem;
+  /* Scrims (audit 2026-10-08 B): fixed near-black overlays for the two
+     modal-blocking layers — bg-scrim = dialog/menu backdrops, bg-scrim-strong
+     = media lightboxes. Deliberately NOT per-theme: a scrim must darken
+     content identically in all 12 themes. Content VEILS (non-blocking
+     loading states, e.g. the session-switch overlay) are a different thing
+     and stay on surface tokens — see styles/README.md "Scrims and veils". */
+  --color-scrim: rgb(0 0 0 / 0.5);
+  --color-scrim-strong: rgb(0 0 0 / 0.72);
   /* GENERATED:THEME_BASE:START */
   --color-primary: #6b38d4;
   --color-link: #6b38d4;

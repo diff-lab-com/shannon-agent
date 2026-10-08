@@ -241,7 +241,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
         showCloseButton={false}
         title={attachment.name}
         closeLabel={t('chat.message.attachment.close')}
-        className="!bg-black/70 backdrop-blur-sm p-lg"
+        className="bg-scrim-strong! backdrop-blur-sm p-lg"
       >
         <img
           src={convertFileSrc(attachment.path)}

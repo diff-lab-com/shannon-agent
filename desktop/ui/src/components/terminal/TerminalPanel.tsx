@@ -828,7 +828,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
                     {tab.exited ? 'sleep' : 'terminal'}
                   </span>
                   {dirLabel(tab.info.projectDir || tab.info.shell || tab.info.terminalId.slice(0, 8))}
-                  {tab.exited && <span className="text-outline">· {t('terminal.exited')}</span>}
+                  {tab.exited && <span className="text-on-surface-variant">· {t('terminal.exited')}</span>}
                 </button>
                 <button
                   type="button"

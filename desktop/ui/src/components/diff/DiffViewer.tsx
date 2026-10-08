@@ -254,10 +254,10 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, currentHunkI
                     )}
                     <tr className={cn(bgClass, line.hunkId !== null && decisionBorderStyle(decision))}>
                       <td className={cn("w-[1ch] px-xs text-center select-none", style.signColor)}>{style.sign}</td>
-                      <td className="px-xs text-right text-outline select-none" style={{ width: `${gutterWidth + 1}ch` }}>
+                      <td className="px-xs text-right text-on-surface-variant/70 select-none" style={{ width: `${gutterWidth + 1}ch` }}>
                         {line.oldNo ?? ''}
                       </td>
-                      <td className="px-xs text-right text-outline select-none border-r border-outline-variant/20" style={{ width: `${gutterWidth + 1}ch` }}>
+                      <td className="px-xs text-right text-on-surface-variant/70 select-none border-r border-outline-variant/20" style={{ width: `${gutterWidth + 1}ch` }}>
                         {line.newNo ?? ''}
                       </td>
                       <td className="px-md whitespace-pre text-on-surface">

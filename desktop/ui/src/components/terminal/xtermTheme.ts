@@ -6,15 +6,22 @@
  * (one `[data-theme]` block per theme) + `THEME_REGISTRY`, which records
  * each theme's light/dark scheme (see `ThemeContext.themeModeOf`).
  *
- * Mapping strategy: read the *live* CSS custom properties the active theme
- * block defines (surface / on-surface / primary / secondary-container /
- * outline) so the terminal follows every registered theme for free, and
- * keep a dark/light base palette (ANSI-16) keyed by `themeModeOf()` from
- * the generated registry as the floor — used when computed styles are
- * unavailable (jsdom, SSR) and for the ANSI colors the tokens don't cover.
+ * Mapping strategy (audit 2026-10-08 A):
+ *  1. Identity themes carry a generated per-theme ANSI palette
+ *     (`XTERM_PALETTES`, from the source's `ansi` block — gruvbox renders
+ *     gruvbox colors, not tokyo-night's). The palette's background/
+ *     foreground are authoritative for these — no live-token override.
+ *  2. Themes WITHOUT a palette (material/ember/slate — deliberately no
+ *     identity ANSI) keep the dark/light base palette (ANSI-16) keyed by
+ *     `themeModeOf()` from the generated registry as the floor, with the
+ *     live CSS custom properties layered on so the surface still follows
+ *     the theme.
+ *  3. Cursor/selection always read the live tokens — they are UI chrome,
+ *     not terminal identity.
  */
 import type { ITheme } from '@xterm/xterm';
 import { themeModeOf } from '@/context/ThemeContext';
+import { XTERM_PALETTES } from '@/theme/generated/xterm-palettes';
 
 /** A concrete theme id (ThemeContext keeps `ResolvedTheme` module-local). */
 type ResolvedTheme = Parameters<typeof themeModeOf>[0];
@@ -25,7 +32,8 @@ function readVar(name: string): string | null {
   return value.length > 0 ? value : null;
 }
 
-/** Light-scheme base + ANSI palette (AA on light surfaces). */
+/** Light-scheme base + ANSI palette (AA on light surfaces) — the floor for
+ * themes without an identity `ansi` block (material/ember/slate). */
 const ANSI_LIGHT: Pick<
   ITheme,
   | 'background' | 'foreground'
@@ -63,8 +71,8 @@ const ANSI_DARK: typeof ANSI_LIGHT = {
 
 /**
  * Build the xterm theme for the resolved app theme (pure — jsdom/SSR safe;
- * the ANSI floor comes from the registry's light/dark mode, token-backed
- * colors are layered on top when the live stylesheet is readable).
+ * identity themes use their generated ANSI palette wholesale, the rest take
+ * the registry's light/dark floor with live tokens layered on top).
  *
  * `themeId` is the `<html data-theme>` value — a THEME_REGISTRY id in
  * practice, but unknown ids degrade to the light floor instead of lying
@@ -76,15 +84,24 @@ export function xtermThemeFor(
     themeModeOf(id as ResolvedTheme),
 ): ITheme {
   const mode = modeOf(themeId) ?? 'light';
-  const theme: ITheme = mode === 'dark' ? { ...ANSI_DARK } : { ...ANSI_LIGHT };
-  const background = readVar('--color-surface') ?? readVar('--background');
-  const foreground = readVar('--color-on-surface') ?? readVar('--foreground');
-  if (background) theme.background = background;
-  if (foreground) theme.foreground = foreground;
+  const palette = XTERM_PALETTES[themeId];
+  const theme: ITheme = palette
+    ? { ...palette }
+    : mode === 'dark'
+      ? { ...ANSI_DARK }
+      : { ...ANSI_LIGHT };
+  if (!palette) {
+    // No identity palette → keep following the live theme surface.
+    const background = readVar('--color-surface') ?? readVar('--background');
+    const foreground = readVar('--color-on-surface') ?? readVar('--foreground');
+    if (background) theme.background = background;
+    if (foreground) theme.foreground = foreground;
+  }
   const cursor = readVar('--color-primary');
   if (cursor) {
     theme.cursor = cursor;
-    theme.cursorAccent = readVar('--color-on-primary') ?? (mode === 'dark' ? '#1a1b26' : '#ffffff');
+    theme.cursorAccent =
+      readVar('--color-on-primary') ?? palette?.background ?? (mode === 'dark' ? '#1a1b26' : '#ffffff');
   }
   const selection = readVar('--color-secondary-container');
   if (selection) theme.selectionBackground = selection;
