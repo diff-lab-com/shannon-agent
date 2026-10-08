@@ -1001,6 +1001,15 @@
       }
     },
     {
+      "identifier": "allow-hide-companion-window",
+      "description": "Enables the hide_companion_window command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "hide_companion_window"
+        ]
+      }
+    },
+    {
       "identifier": "allow-detect-workspace-markers",
       "description": "Enables the detect_workspace_markers command without any pre-configured scope.",
       "commands": {
@@ -3381,6 +3390,7 @@
       "description": "Session multi-window lifecycle commands.",
       "permissions": [
         "allow-close-session-window",
+        "allow-hide-companion-window",
         "allow-list-session-windows",
         "allow-open-companion-window",
         "allow-open-session-window",

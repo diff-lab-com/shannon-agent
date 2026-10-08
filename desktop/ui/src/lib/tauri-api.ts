@@ -1146,6 +1146,14 @@ export async function setCompanionAlwaysOnTop(enabled: boolean): Promise<void> {
   await invoke('set_companion_always_on_top', { enabled })
 }
 
+/** Collapse (hide) the companion window — the Esc half of the
+ * 「失焦自动收起 · Esc 关闭」 contract (design 13). Rust-side like every
+ * other companion window operation, so the companion capability stays
+ * event-only. */
+export async function hideCompanionWindow(): Promise<void> {
+  await invoke('hide_companion_window')
+}
+
 export async function setSessionWorkingDir(id: string, path: string): Promise<void> {
   await invoke('set_session_working_dir', { id, path })
 }
