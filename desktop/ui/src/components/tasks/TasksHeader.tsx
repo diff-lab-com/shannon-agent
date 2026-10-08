@@ -61,7 +61,8 @@ export default function TasksHeader({
   const t = (id: string) => intl.formatMessage({ id })
   const [newMenuOpen, setNewMenuOpen] = useState(false)
 
-  // IA T4 (页面归位): one primary CTA —「新建自动化」(ScheduleForm). The
+  // IA T4 (页面归位): one primary CTA —「新建」(ScheduleForm; design 04
+  // unifies the page noun on 任务, so the CTA is the bare 新建). The
   // one-off background task and best-of-N batch entries fold into the
   // split-button dropdown (same pattern as the Sidebar「新建」split), so
   // the page reads a single hierarchy instead of sibling buttons.
@@ -82,17 +83,17 @@ export default function TasksHeader({
       : []),
   ]
 
-  // The create cluster is identical in both modes: primary「新建自动化」+
+  // The create cluster is identical in both modes: primary「新建」+
   // caret with the secondary entries.
   const createCluster = (
     <div className="flex items-stretch">
       <Button
-        aria-label={t('tasks.tasksHeader.newAutomation')}
+        aria-label={t('tasks.tasksHeader.new')}
         className="px-md py-sm bg-primary text-on-primary rounded-l-xl flex items-center gap-sm font-label-md cursor-pointer hover:shadow-e2 active:scale-95 transition-all"
         onClick={onToggleSchedule}
       >
         <span className="material-symbols-outlined icon-md">add</span>
-        {t('tasks.tasksHeader.newAutomation')}
+        {t('tasks.tasksHeader.new')}
       </Button>
       <span className="relative flex items-stretch">
         <button
@@ -115,7 +116,7 @@ export default function TasksHeader({
     </div>
   )
 
-  // Simple mode (default) — a one-line subtitle plus the「新建自动化」
+  // Simple mode (default) — a one-line subtitle plus the「新建」
   // split button. Anything else (team filter, view toggles) is dev-only;
   // first-run users shouldn't have to learn the task-ops taxonomy to find
   // the single primary action.
