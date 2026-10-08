@@ -15,6 +15,10 @@ interface FileDiffListProps {
   filter: FileFilter
   onSelectPath: (path: string) => void
   onFilterChange: (filter: FileFilter) => void
+  /** Aurora 2026-10: the dock's diff tab hosts this list in a ~340px panel
+   *  — pass e.g. `w-44` to slim the default w-64 modal sidebar (cn/tw-merge
+   *  lets the later width win). */
+  className?: string
 }
 
 interface FileStatus {
@@ -60,7 +64,7 @@ function fileStatus(
   let badgeStyle: string
   if (accepted === total && total > 0) {
     label = intl.formatMessage({ id: 'diff.multi.file.status.allAccepted' })
-    badgeStyle = 'bg-tertiary-container/60 text-tertiary'
+    badgeStyle = 'bg-success-container/60 text-on-success-container'
   } else if (rejected === total && total > 0) {
     label = intl.formatMessage({ id: 'diff.multi.file.status.allRejected' })
     badgeStyle = 'bg-error-container/60 text-error'
@@ -84,6 +88,7 @@ export default function FileDiffList({
   filter,
   onSelectPath,
   onFilterChange,
+  className,
 }: FileDiffListProps) {
   const intl = useIntl()
 
@@ -111,7 +116,7 @@ export default function FileDiffList({
   }, [files, filter, statuses])
 
   return (
-    <aside className="w-64 shrink-0 border-r border-outline-variant/30 bg-surface-container-low flex flex-col">
+    <aside className={cn('w-64 shrink-0 border-r border-outline-variant/30 bg-surface-container-low flex flex-col', className)}>
       <div className="px-md py-sm border-b border-outline-variant/30">
         <div className="flex items-center gap-xs overflow-x-auto">
           {FILTERS.map(f => (
@@ -166,7 +171,7 @@ export default function FileDiffList({
                   </div>
                   <div className="flex items-center gap-xs mt-xs ml-[24px]">
                     {diff && (
-                      <span className="font-label-sm text-tertiary shrink-0">+{adds}</span>
+                      <span className="font-label-sm text-success shrink-0">+{adds}</span>
                     )}
                     {diff && (
                       <span className="font-label-sm text-error shrink-0">−{dels}</span>
