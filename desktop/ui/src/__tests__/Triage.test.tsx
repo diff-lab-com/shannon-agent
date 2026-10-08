@@ -146,6 +146,7 @@ function makeItem(o: Partial<InboxItem> & { id: number }): InboxItem {
     updatedAtMs: 1_700_000_000_000,
     requestId: null,
     risk: null,
+    runId: null,
     ...o,
   }
   // Store invariant: a freshly appended row has updatedAtMs == createdAtMs
@@ -1039,5 +1040,17 @@ describe('Triage — inline approval closure (requestId cards)', () => {
     unmount()
     renderPageWithItem({ risk: 'unknown-tier' })
     expect(screen.queryByTestId('inbox-approval-risk')).not.toBeInTheDocument()
+  })
+})
+
+describe('Triage — 来源链 #N (design 05)', () => {
+  it('renders the mono run number for run-produced items', () => {
+    renderPageWithItem({ id: 1, source: 'routine', runId: 43, title: 'CI 巡检' })
+    expect(screen.getByTestId('inbox-run-number')).toHaveTextContent('#43')
+  })
+
+  it('hides the run number on non-run sources (honesty rule)', () => {
+    renderPageWithItem({ id: 2, source: 'session_approval', runId: null })
+    expect(screen.queryByTestId('inbox-run-number')).not.toBeInTheDocument()
   })
 })

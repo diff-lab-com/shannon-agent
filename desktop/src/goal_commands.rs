@@ -1910,6 +1910,7 @@ async fn finalize_goal_run<R: tauri::Runtime>(
             error: reason.clone().map(|r| truncate_chars(&r, 500)),
             request_id: None,
             risk: None,
+            run_id: None,
         });
         if let Err(e) = item {
             tracing::warn!(session = %dto.session_id, error = %e, "goal: failed to append inbox item");

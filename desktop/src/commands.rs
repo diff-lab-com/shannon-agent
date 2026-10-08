@@ -393,6 +393,7 @@ pub(crate) fn record_background_task_terminal(
         error: error_field,
         request_id: None,
         risk: None,
+        run_id: None,
     })?;
     Ok(true)
 }

@@ -153,6 +153,9 @@ pub struct InboxItem {
     /// before the column existed (those keep the honest 「去处理」 jump).
     #[serde(default)]
     pub request_id: Option<String>,
+    /// 2026-10-08 来源链 (设计 05): the routine run that produced this item —
+    /// the card renders 「来源 › 名称 › #N · 时间」. Null for non-run sources.
+    pub run_id: Option<i64>,
     /// Free-text risk tier of the approved-for tool (`critical` / `high` /
     /// `medium` / `low`), for the card's risk badge. `None` when unknown.
     #[serde(default)]
@@ -175,6 +178,9 @@ pub struct InboxItemNew {
     pub error: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
+    /// 2026-10-08 来源链 (设计 05): the routine run that produced this item —
+    /// the card renders 「来源 › 名称 › #N · 时间」. Null for non-run sources.
+    pub run_id: Option<i64>,
     #[serde(default)]
     pub risk: Option<String>,
 }
@@ -287,6 +293,7 @@ CREATE TABLE IF NOT EXISTS inbox_items (
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,
     request_id TEXT,
+    run_id INTEGER,
     risk TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_items_created ON inbox_items (created_at_ms DESC);
@@ -425,6 +432,9 @@ impl InboxStore {
         if !existing.contains("request_id") {
             conn.execute("ALTER TABLE inbox_items ADD COLUMN request_id TEXT", [])?;
         }
+        if !existing.contains("run_id") {
+            conn.execute("ALTER TABLE inbox_items ADD COLUMN run_id INTEGER", [])?;
+        }
         if !existing.contains("risk") {
             conn.execute("ALTER TABLE inbox_items ADD COLUMN risk TEXT", [])?;
         }
@@ -476,8 +486,8 @@ impl InboxStore {
         self.with_busy_retry(|| {
             conn.execute(
                 "INSERT INTO inbox_items
-                    (source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms, request_id, risk)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7, ?8, ?9)",
+                    (source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms, request_id, risk, run_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7, ?8, ?9, ?10)",
                 params![
                     item.source,
                     item.source_id,
@@ -487,7 +497,8 @@ impl InboxStore {
                     item.error,
                     now,
                     item.request_id,
-                    item.risk
+                    item.risk,
+                    item.run_id
                 ],
             )?;
             Ok(conn.last_insert_rowid())
@@ -505,6 +516,7 @@ impl InboxStore {
             updated_at_ms: now,
             request_id: item.request_id,
             risk: item.risk,
+            run_id: item.run_id,
         })
     }
 
@@ -975,7 +987,7 @@ impl std::fmt::Debug for InboxStore {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-const ITEM_COLUMNS: &str = "id, source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms, request_id, risk";
+const ITEM_COLUMNS: &str = "id, source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms, request_id, risk, run_id";
 const RUN_COLUMNS: &str = "id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id, cost_usd, token_usage, \"trigger\"";
 
 /// Shared list tail for [`InboxStore::list`]: newest first (created_at DESC,
@@ -1013,6 +1025,7 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxItem> {
         created_at_ms: row.get(8)?,
         updated_at_ms: row.get(9)?,
         request_id: row.get(10)?,
+        run_id: row.get(12)?,
         risk: row.get(11)?,
     })
 }
@@ -1084,6 +1097,7 @@ mod tests {
             error: None,
             request_id: None,
             risk: None,
+            run_id: None,
         }
     }
 
@@ -1228,6 +1242,7 @@ mod tests {
             error: None,
             request_id: None,
             risk: None,
+            run_id: None,
         }
     }
 
@@ -1919,6 +1934,7 @@ mod tests {
             updated_at_ms: 2,
             request_id: Some("perm-1".into()),
             risk: Some("high".into()),
+            run_id: None,
         };
         let json = serde_json::to_string(&item).unwrap();
         for key in [
@@ -1927,6 +1943,7 @@ mod tests {
             "createdAtMs",
             "updatedAtMs",
             "requestId",
+            "runId",
             "risk",
         ] {
             assert!(json.contains(key), "missing {key} in {json}");
@@ -1938,6 +1955,37 @@ mod tests {
     }
 
     // ── request_id / risk (design 05 收件箱审批闭环) ──────────────────────
+
+    /// 2026-10-08 来源链: a run-produced item carries its producing run id
+    /// through insert → get/list round-trips (the card's mono 「#N」).
+    #[test]
+    fn run_row_roundtrips_run_id() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let item = store
+            .append_item(InboxItemNew {
+                source: SOURCE_ROUTINE.to_string(),
+                source_id: Some("task-1".into()),
+                session_id: None,
+                title: "CI 巡检".into(),
+                summary: "run failed".into(),
+                error: Some("boom".into()),
+                request_id: None,
+                risk: None,
+                run_id: Some(43),
+            })
+            .unwrap();
+        assert_eq!(item.run_id, Some(43));
+
+        let got = store.get_item(item.id).unwrap().unwrap();
+        assert_eq!(got.run_id, Some(43));
+        assert!(
+            store
+                .list(None, None, 10)
+                .unwrap()
+                .iter()
+                .any(|i| i.id == item.id && i.run_id == Some(43))
+        );
+    }
 
     /// A `session_approval` row carries the live permission request id and
     /// the risk tier through insert → get/list/find round-trips.
@@ -1954,6 +2002,7 @@ mod tests {
                 error: None,
                 request_id: Some("perm-abc".into()),
                 risk: Some("critical".into()),
+                run_id: None,
             })
             .unwrap();
         assert_eq!(item.request_id.as_deref(), Some("perm-abc"));
@@ -2202,6 +2251,7 @@ mod tests {
                                 error: None,
                                 request_id: None,
                                 risk: None,
+                                run_id: None,
                             })
                             .unwrap();
                         // The fix under test: this call must not raise

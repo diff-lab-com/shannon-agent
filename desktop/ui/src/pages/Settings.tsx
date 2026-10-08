@@ -1,7 +1,8 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useIntl } from 'react-intl';
 import { cn } from '@/lib/utils';
 import { useSidebarMode } from '@/components/Sidebar';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // Review 2026-09-16 (UI-review §P1): the settings panes were reachable only
 // through the Sidebar's 设置 disclosure — users bouncing between e.g. Models
@@ -45,6 +46,13 @@ export default function Settings() {
   // this rail is the only section nav.
   const [mode] = useSidebarMode();
   const sections = mode === 'dev' ? SECTIONS : SECTIONS.filter(s => s.to !== '/settings/advanced');
+  // R3-V-01: the pane boundary lives HERE, around the Outlet — a sub-page's
+  // data failure must never replace the shell + this rail (the previous
+  // behavior bubbled to the app-level boundary and wiped the whole settings
+  // panel, raw English exception and all). Keyed by pathname so navigating
+  // to another section resets the boundary instead of showing the old
+  // section's error UI.
+  const location = useLocation();
   return (
     <div className="flex-1 h-full w-full bg-background flex flex-col md:flex-row min-h-0">
       {/* Section nav: horizontal scroll tabs on phones, left rail on desktop */}
@@ -79,7 +87,9 @@ export default function Settings() {
       </nav>
       <div className="flex-1 overflow-y-auto min-h-0 min-w-0">
         <div className="max-w-narrow mx-auto px-lg py-xl animate-in fade-in duration-(--duration-slower) pb-xl">
-          <Outlet />
+          <ErrorBoundary key={location.pathname} pane>
+            <Outlet />
+          </ErrorBoundary>
         </div>
       </div>
     </div>

@@ -115,6 +115,7 @@ pub(crate) fn record_session_approval<R: tauri::Runtime>(
             error: None,
             request_id: Some(request_id.to_string()),
             risk: Some(risk.to_string()),
+            run_id: None,
         })
         .map_err(|e| e.to_string());
     match item {
@@ -171,6 +172,7 @@ pub(crate) fn record_session_failure<R: tauri::Runtime>(
             error: Some(truncate_chars(error_trimmed, SUMMARY_MAX_CHARS)),
             request_id: None,
             risk: None,
+            run_id: None,
         })
         .map_err(|e| e.to_string());
     match item {
@@ -226,6 +228,7 @@ pub(crate) fn record_skill_candidate<R: tauri::Runtime>(
             error: None,
             request_id: None,
             risk: None,
+            run_id: None,
         })
         .map_err(|e| e.to_string());
     match item {
@@ -295,6 +298,7 @@ pub(crate) fn record_dream_report<R: tauri::Runtime>(
             error: None,
             request_id: None,
             risk: None,
+            run_id: None,
         })
         .map_err(|e| e.to_string());
     match item {

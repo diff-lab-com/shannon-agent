@@ -42,6 +42,12 @@ function RemotesSettings(): React.JSX.Element {
   const [targets, setTargets] = useState<RemoteTargetItem[]>([])
   const [defaultTarget, setDefaultTarget] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
+  // R3-V-01: a failed `remote_list_targets` used to toast and then fall
+  // through to the 「未配置」 empty state — a load failure was indistinguishable
+  // from "no targets saved" (and, before the null-shape guard below, a bare
+  // TypeError took the whole settings panel down with it). It now lands in an
+  // honest inline error state with a Retry affordance.
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<RemoteTargetItem | null>(null)
   const [health, setHealth] = useState<HealthByTarget>({})
@@ -61,11 +67,12 @@ function RemotesSettings(): React.JSX.Element {
       setTargets(list?.targets ?? [])
       setDefaultTarget(list?.defaultTarget ?? null)
       setLoaded(true)
+      setLoadError(null)
     } catch (e) {
-      toastError(t('settings.remotes.loadFailed'), e)
+      setLoadError(e instanceof Error ? e.message : String(e))
       setLoaded(true)
     }
-  }, [t])
+  }, [])
 
   useEffect(() => {
     void reload()
@@ -143,7 +150,39 @@ function RemotesSettings(): React.JSX.Element {
         </CardContent>
       </Card>
 
-      {loaded && targets.length === 0 && (
+      {/* R3-V-01: load failures render an honest section-level error state —
+          friendly copy + Retry + the raw message folded into 技术详情 — instead
+          of masquerading as the "no targets" empty state. Stale rows (a
+          refetch that failed after a successful load) stay visible below. */}
+      {loadError && (
+        <Card
+          className="border-error/30 bg-error-container/40"
+          data-testid="remotes-load-error"
+        >
+          <CardContent className="flex flex-col items-center gap-sm py-lg text-center">
+            <span className="material-symbols-outlined icon-2xl text-error" aria-hidden="true">
+              error
+            </span>
+            <p className="text-body-md font-medium">{t('settings.remotes.loadFailed')}</p>
+            <p className="text-body-sm text-on-surface-variant">
+              {t('errorBoundary.paneDescription')}
+            </p>
+            <Button variant="outline" onClick={() => void reload()} data-testid="remotes-retry">
+              {t('errorBoundary.paneRetry')}
+            </Button>
+            <details className="max-w-md text-left">
+              <summary className="cursor-pointer text-body-sm text-on-surface-variant">
+                {t('errorBoundary.technicalDetails')}
+              </summary>
+              <pre className="mt-xs px-md py-sm rounded-lg bg-surface-container-high text-body-xs text-on-surface-variant whitespace-pre-wrap break-words max-w-md">
+                {loadError}
+              </pre>
+            </details>
+          </CardContent>
+        </Card>
+      )}
+
+      {loaded && !loadError && targets.length === 0 && (
         <Card>
           <CardContent>
             <div

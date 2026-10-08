@@ -1206,6 +1206,7 @@ async fn finalize_branch<R: tauri::Runtime>(
                 error: None,
                 request_id: None,
                 risk: None,
+                run_id: None,
             }) {
                 Ok(item) => record.inbox_item_id = Some(item.id),
                 Err(e) => {
@@ -2801,6 +2802,7 @@ mod tests {
                 error: None,
                 request_id: None,
                 risk: None,
+                run_id: None,
             })
             .unwrap();
         set_inbox_item_id(&handle, item.id).await;
@@ -3027,6 +3029,7 @@ mod tests {
                 error: None,
                 request_id: None,
                 risk: None,
+                run_id: None,
             })
             .unwrap();
         set_inbox_item_id(&handle, item.id).await;

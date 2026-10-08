@@ -24,10 +24,12 @@ import {
   getSessionMemoryBypass,
   listMemories,
   listMemoryProjects,
+  memoryInjectionPreview,
   setSessionMemoryBypass,
   updateMemory,
   type MemoryEntry,
   type MemoryGraph,
+  type MemoryInjectionPreview,
   type MemoryStats,
 } from '@/lib/tauri-api'
 import { CATEGORIES, type CategoryFilter } from './constants'
@@ -82,11 +84,17 @@ export default function MemoryPanel({
 
   // ── 注入预览横幅 (audit §08 P1 / C9) ────────────────────────────────────
   // Same backend commands the chat composer uses (getSessionMemoryBypass /
-  // setSessionMemoryBypass with `null` = the ACTIVE session). The "N 条"
-  // preview needs a memory-retrieval pre-read command that does not exist
-  // yet (contract gap C9) — until then the banner shows the enabled state
-  // plus an honest amber "coming soon" placeholder, never a fake count.
+  // setSessionMemoryBypass with `null` = the ACTIVE session). The 「将携带
+  // N 条」 count rides on the real pre-read command (缓期项 #6,
+  // memory_injection_preview) — same injected-entries pipeline the next
+  // turn's prompt builds from. Tri-state: `undefined` = fetching (render
+  // nothing, no flash of placeholder), `null` = unavailable (no memory
+  // store in this deployment / command failed) → the amber honest
+  // placeholder stays; otherwise the real count.
   const [bypassed, setBypassed] = useState(false)
+  const [injectionPreview, setInjectionPreview] = useState<
+    MemoryInjectionPreview | null | undefined
+  >(undefined)
   useEffect(() => {
     let cancelled = false
     getSessionMemoryBypass(null)
@@ -119,6 +127,13 @@ export default function MemoryPanel({
   const fetchAll = useCallback(async () => {
     setLoading(true)
     setErrorMsg(null)
+    // 缓期项 #6: the banner pre-read rides along with the list fetches —
+    // same project filter (null lets the backend resolve the engine-default
+    // scope), but deliberately OUTSIDE the Promise.all so a preview failure
+    // degrades to the amber placeholder without touching the list below.
+    memoryInjectionPreview(projectFilter === 'all' ? null : projectFilter)
+      .then((p) => setInjectionPreview(p))
+      .catch(() => setInjectionPreview(null))
     try {
       const [rows, projs, s] = await Promise.all([
         listMemories({
@@ -230,9 +245,9 @@ export default function MemoryPanel({
 
         {/* 注入预览横幅 (design 08:146-156) — injection state + the
             per-session bypass switch. NOT aurora-line: the memory page is
-            not one of the four aurora surfaces. The "N 条" preview stays an
-            honest placeholder until the retrieval pre-read command lands
-            (contract gap C9). */}
+            not one of the four aurora surfaces. The 「将携带 N 条」 count is
+            the real pre-read (缓期项 #6); it degrades to the honest amber
+            placeholder when no memory store backs this deployment. */}
         <div
           data-testid="memory-injection-banner"
           className="flex flex-wrap items-center gap-sm px-md py-sm rounded-2xl bg-surface-container-lowest/80 border border-outline-variant/30 shadow-e1 mb-xl"
@@ -263,14 +278,27 @@ export default function MemoryPanel({
                 <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">check_circle</span>
                 {t('memory.injection.enabled')}
               </span>
-              {/* C9 诚实降级: no retrieval pre-read command yet → amber
-                  dashed placeholder instead of an invented count. */}
-              <span
-                className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-dashed border-warning/50 font-label-sm text-label-sm text-warning"
-              >
-                <span className="material-symbols-outlined icon-sm" aria-hidden="true">hourglass_top</span>
-                {t('memory.injection.previewPending')}
-              </span>
+              {/* C9 诚实降级 kept for the degraded path: no store / command
+                  failure → amber dashed placeholder, never an invented
+                  count. `undefined` (still fetching) renders nothing so the
+                  placeholder never flashes on a healthy deployment. */}
+              {injectionPreview === undefined ? null : injectionPreview === null ? (
+                <span
+                  data-testid="memory-injection-preview-pending"
+                  className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-dashed border-warning/50 font-label-sm text-label-sm text-warning"
+                >
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">hourglass_top</span>
+                  {t('memory.injection.previewPending')}
+                </span>
+              ) : (
+                <span
+                  data-testid="memory-injection-preview-count"
+                  className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-surface-container-high font-label-sm text-label-sm text-on-surface"
+                >
+                  <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">layers</span>
+                  {intl.formatMessage({ id: 'memory.preview.count' }, { count: injectionPreview.count })}
+                </span>
+              )}
             </>
           )}
           <div className="ml-auto flex items-center gap-sm">

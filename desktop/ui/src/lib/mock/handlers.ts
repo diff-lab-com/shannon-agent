@@ -1505,32 +1505,39 @@ export const handlers: Record<string, MockHandler> = {
   },
   async export_session() { await delay(120); return '# Exported session\n\n(mock content)' },
   // ── Remote targets (SSH hosts / Docker containers) ──
+  // R3-V-01 contract fix: the real `remote_list_targets` answers
+  // `{ targets, defaultTarget }` (RemoteTargetsList, P1-16) — this handler
+  // used to answer a bare array, so the demo pane read `list?.targets ?? []`
+  // into an always-empty list and the two demo rows never rendered.
   async remote_list_targets() {
     await delay()
-    return [
-      {
-        name: 'build-box',
-        kind: 'ssh',
-        host: 'build-box',
-        port: null,
-        user: null,
-        container: null,
-        shell: null,
-        sshTarget: null,
-        workspaceDir: '/home/ed/proj',
-      },
-      {
-        name: 'ci-runner',
-        kind: 'docker',
-        host: null,
-        port: null,
-        user: null,
-        container: 'shannon-ci',
-        shell: 'bash',
-        sshTarget: 'build-box',
-        workspaceDir: '/workspace',
-      },
-    ]
+    return {
+      targets: [
+        {
+          name: 'build-box',
+          kind: 'ssh',
+          host: 'build-box',
+          port: null,
+          user: null,
+          container: null,
+          shell: null,
+          sshTarget: null,
+          workspaceDir: '/home/ed/proj',
+        },
+        {
+          name: 'ci-runner',
+          kind: 'docker',
+          host: null,
+          port: null,
+          user: null,
+          container: 'shannon-ci',
+          shell: 'bash',
+          sshTarget: 'build-box',
+          workspaceDir: '/workspace',
+        },
+      ],
+      defaultTarget: 'build-box',
+    }
   },
   async remote_discover_ssh_hosts() {
     await delay()
@@ -2038,7 +2045,7 @@ export const handlers: Record<string, MockHandler> = {
         error: null,
         status: 'pending',
         requestId: null,
-        risk: null,
+        risk: null,        runId: item.runId,
         createdAtMs: Date.now(),
         updatedAtMs: Date.now(),
       })
@@ -2398,6 +2405,21 @@ export const handlers: Record<string, MockHandler> = {
       category: m.category,
       sourceSessionId: m.source_session_id ?? null,
     }))
+  },
+  // 缓期项 #6: the Memory banner's 「将携带 N 条」 pre-read. Demo answers
+  // from the same seeded demo memories the page already shows (capped at 3,
+  // mirroring get_session_injected_memories) — the count derives from real
+  // demo rows, it is not invented.
+  async memory_injection_preview(args?: { project?: string | null }) {
+    await delay()
+    const scoped = args?.project
+      ? MOCK_MEMORIES.filter((m) => m.project === args.project)
+      : MOCK_MEMORIES
+    const entries = scoped.slice(0, 3).map((m) => ({
+      id: m.id,
+      title: m.content.split('\n')[0].slice(0, 80),
+    }))
+    return { count: entries.length, entries }
   },
   async get_memory_graph(args?: { project?: string | null }) {
     await delay()
@@ -2934,7 +2956,11 @@ export const handlers: Record<string, MockHandler> = {
   // unarmed — byte-identical to the previous unconditional null).
   async detect_provider_from_env() {
     await delay();
-    return demoEnvProvider();
+    // armed → the demo entry wrapped in the array contract (2026-10-08
+    // multi-key); unarmed → null, byte-identical to the previous behavior
+    // (the e2e hook keys off that null).
+    const demo = demoEnvProvider();
+    return demo ? [demo] : null;
   },
 }
 
