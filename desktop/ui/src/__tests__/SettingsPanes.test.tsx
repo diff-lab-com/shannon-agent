@@ -56,6 +56,26 @@ describe('merged settings panes (IA 8-section merge)', () => {
     expect(screen.getByText(/Session data lives only on this machine/)).toBeInTheDocument()
   })
 
+  it('GeneralPane carries the 启动 card with both launch toggles (批 1)', async () => {
+    render(wrap(<GeneralPane />))
+    // The section sits between the session group and 数据.
+    expect(await screen.findByRole('heading', { name: 'Launch' })).toBeInTheDocument()
+    expect(screen.getByTestId('general-launch-card')).toBeInTheDocument()
+    // ① Session-window restore — default ON.
+    const restore = screen.getByTestId('general-launch-restore-switch')
+    expect(restore).toHaveAttribute('aria-checked', 'true')
+    expect(restore).toHaveAccessibleName('Restore session windows at launch')
+    // ② Check-only update check — default ON, and the copy keeps the
+    // product promise: notify only, never auto-install.
+    const check = screen.getByTestId('general-launch-update-check-switch')
+    expect(check).toHaveAttribute('aria-checked', 'true')
+    expect(check).toHaveAccessibleName('Check for updates at launch')
+    expect(screen.getByText('Notifies only — the app never installs updates automatically')).toBeInTheDocument()
+    // Both toggles write-once-at-launch semantics get the restart-app badge
+    // (getAllByText: the hw-accel card in GeneralSettings carries one too).
+    expect(screen.getAllByText('Restart required').length).toBeGreaterThanOrEqual(1)
+  })
+
   it('ConnectionsPane renders gateway, remote-targets and network groups', async () => {
     render(wrap(<ConnectionsPane />))
     // Group heading for the gateway group (settings.connections.title).

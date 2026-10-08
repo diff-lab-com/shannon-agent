@@ -809,6 +809,17 @@ export interface DesktopConfig {
    *  the backend never gates anything on it. Default true (missing key /
    *  old backend → shown). Written via `configure('suggestions.enabled')`. */
   suggestions_enabled?: boolean
+  /** 批 1: 启动时恢复会话窗口 — replay the persisted session-window set at
+   *  launch. Default true (missing key / old backend → current behavior);
+   *  read once at launch, so a flip lands on the NEXT launch. Written via
+   *  `configure('restore_session_windows_on_launch')`. */
+  restore_session_windows_on_launch?: boolean
+  /** 批 1: 启动时检查更新 — run ONE check-only GitHub Releases probe after
+   *  launch; an available update surfaces the About pane's「发现新版本」
+   *  toast. Notifies only — nothing is ever downloaded or installed
+   *  automatically. Default true; read once at launch. Written via
+   *  `configure('update_check_at_launch')`. */
+  update_check_at_launch?: boolean
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */

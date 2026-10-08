@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useT } from '@/i18n'
 import * as api from '@/lib/tauri-api'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Switch } from '@/components/ui/switch'
+import EffectBadge from '@/components/settings/EffectBadge'
+import { useCatalog } from '@/context/CatalogContext'
 import GeneralSettings from '@/components/settings/GeneralSettings'
 import SessionSettings from '@/components/settings/SessionSettings'
 
@@ -24,14 +27,47 @@ import SessionSettings from '@/components/settings/SessionSettings'
 //   - 「清除本地缓存」: moved here from the dev-gated 高级 page (the
 //     advanced Memory card), same clear_cache confirm flow;
 //   - the「会话数据仅存本机 ~/.shannon」note as designed.
-// The design's 启动 card is NOT implemented: the engine has no
-// restore-last-session-on-launch capability to honestly wire it to.
+// 批 1 (2026-10-08): the design's 启动 card NOW exists too — the engine
+// always had the restore capability (P1-1), it just had no switch. The card
+// sits between the session group and 数据, carrying the two launch-behavior
+// toggles (session-window restore + check-only update check), both default
+// ON and read once at launch → the EffectBadge is restart-app.
 export default function GeneralPane() {
   const t = useT()
+  const { config, refreshConfig } = useCatalog()
   // Copy of the advanced page's clear-cache flow (AdvancedSettings
   // handleClearCache + ConfirmDialog) — same config key, same dialog copy.
   const [clearing, setClearing] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
+  // 启动 card — both toggles follow the SessionSettings config-backed
+  // pattern: local state synced from the refreshed config, optimistic set,
+  // revert on failure (the config→state effect puts the switch back where
+  // the disk says). Both are read once at launch by the backend/UI, so a
+  // flip lands on the NEXT launch — hence the restart-app badge.
+  const [restoreSessions, setRestoreSessions] = useState(config?.restore_session_windows_on_launch ?? true)
+  const [checkUpdates, setCheckUpdates] = useState(config?.update_check_at_launch ?? true)
+  useEffect(() => {
+    setRestoreSessions(config?.restore_session_windows_on_launch ?? true)
+  }, [config?.restore_session_windows_on_launch])
+  useEffect(() => {
+    setCheckUpdates(config?.update_check_at_launch ?? true)
+  }, [config?.update_check_at_launch])
+
+  const handleLaunchToggle = async (
+    key: 'restore_session_windows_on_launch' | 'update_check_at_launch',
+    value: boolean,
+    setter: (v: boolean) => void,
+  ) => {
+    setter(value)
+    try {
+      await api.configure({ key, value: String(value) })
+      await refreshConfig()
+    } catch (e) {
+      toastError(t('settings.advanced.updateFailed'), e)
+      refreshConfig().catch(() => {})
+    }
+  }
+
   const handleClearCache = async () => {
     setClearing(true)
     try {
@@ -55,6 +91,54 @@ export default function GeneralPane() {
           {t('nav.session')}
         </h2>
         <SessionSettings />
+      </section>
+
+      {/* 启动 (design 12-settings-general 启动 card, 批 1) — the two
+          launch-behavior switches. Both default ON (no behavior change for
+          existing users) and are read ONCE at launch, so a flip lands on
+          the next start (restart-app badge, same semantics the hw-accel
+          card carries). Update checking is notify-only by contract: the
+          helper text spells out that nothing is ever installed
+          automatically. */}
+      <section className="space-y-md" aria-labelledby="general-pane-launch-heading">
+        <h2 id="general-pane-launch-heading" className="text-headline-sm font-medium">
+          {t('settings.general.launch.title')}
+        </h2>
+        <div
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 space-y-md"
+          data-testid="general-launch-card"
+        >
+          <div className="flex justify-between items-center gap-md">
+            <span className="material-symbols-outlined text-primary shrink-0" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">rocket_launch</span>
+            <EffectBadge kind="restart-app" />
+          </div>
+          <div className="flex justify-between items-center py-sm gap-md">
+            <span className="min-w-0">
+              <span className="font-label-md text-on-surface block">{t('settings.general.launch.restoreSessions')}</span>
+              <span className="font-label-sm text-on-surface-variant block">{t('settings.general.launch.restoreSessionsDesc')}</span>
+            </span>
+            <Switch
+              checked={restoreSessions}
+              onCheckedChange={v => void handleLaunchToggle('restore_session_windows_on_launch', v, setRestoreSessions)}
+              aria-label={t('settings.general.launch.restoreSessions')}
+              className="shrink-0"
+              data-testid="general-launch-restore-switch"
+            />
+          </div>
+          <div className="flex justify-between items-center py-sm gap-md">
+            <span className="min-w-0">
+              <span className="font-label-md text-on-surface block">{t('settings.general.launch.checkUpdates')}</span>
+              <span className="font-label-sm text-on-surface-variant block">{t('settings.general.launch.checkUpdatesDesc')}</span>
+            </span>
+            <Switch
+              checked={checkUpdates}
+              onCheckedChange={v => void handleLaunchToggle('update_check_at_launch', v, setCheckUpdates)}
+              aria-label={t('settings.general.launch.checkUpdates')}
+              className="shrink-0"
+              data-testid="general-launch-update-check-switch"
+            />
+          </div>
+        </div>
       </section>
 
       {/* 数据 (design 12-settings-general.html:236-243) — honest edition. */}
