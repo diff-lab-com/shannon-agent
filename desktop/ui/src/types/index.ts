@@ -2018,6 +2018,8 @@ export interface TimelineTurn {
 /** One cumulative sample on the token/cost curve (at each turn/end). */
 export interface TimelineCumulativePoint {
   ts_ns: number
+  /** C6: running input total across closed turns (0 on pre-field exports). */
+  input_tokens_total: number
   output_tokens_total: number
   cost_total_usd?: number | null
 }

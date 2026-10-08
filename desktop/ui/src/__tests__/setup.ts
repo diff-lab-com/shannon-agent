@@ -600,6 +600,13 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   discardDreamProposal: vi.fn().mockResolvedValue(undefined),
   // 卡C — cold-start read-back; null fields keep the 「上次提炼」 line off.
   readDreamState: vi.fn().mockResolvedValue({ last_dream_at: null, last_stats: null }),
+  // audit §08 P1 — memory injection banner: bypass defaults OFF so the
+  // banner's enabled state renders without per-test mocking.
+  getSessionMemoryBypass: vi.fn().mockResolvedValue(false),
+  setSessionMemoryBypass: vi.fn().mockResolvedValue(undefined),
+  // audit §10 P1 — timeline rewind chip probe: no checkpoints by default
+  // (rewind chips stay hidden in tests that don't opt in).
+  listCheckpoints: vi.fn().mockResolvedValue([]),
   detectSkillsSlash: vi.fn().mockResolvedValue(0),
   // P0-3 inbox — defaults so components consuming useInboxStats (e.g. the
   // sidebar badge) render sanely without per-test mocking.

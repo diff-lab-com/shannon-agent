@@ -7,9 +7,11 @@
 // itself and re-derives nothing.
 //
 // Layout:
-//   - sticky summary header (model · turns · tools · tokens · cost)
-//   - cumulative curve card (SVG polyline over `cumulative`)
-//   - one card per turn: reason badge, usage chips, tool waterfall rows
+//   - sticky summary header (duration · turns · tools · tokens in+out · cost)
+//   - cumulative curve card (SVG polylines over `cumulative`: output + input)
+//   - four-color tool legend (裁决 B7: coarse name-based kind bins)
+//   - one card per turn: reason badge, rewind chip, usage chips, tool
+//     waterfall rows tinted read/write/net/risk (failures stay red)
 //
 // Icons follow the Material Symbols policy (`<Icon>` wrapper); all
 // user-visible strings come from i18n (`timeline.*`, en + zh-CN together).
@@ -17,11 +19,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { getTraceTimeline, saveTextFileViaDialog } from '@/lib/tauri-api'
+import { getTraceTimeline, listCheckpoints, rewindSession, saveTextFileViaDialog, type CheckpointInfo } from '@/lib/tauri-api'
 import { timelineToHtml } from '@/lib/timelineExport'
 import type { TimelineCumulativePoint, TimelineTurn, TurnTimeline } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import ErrorState from '@/components/ui/error-state'
@@ -30,6 +33,8 @@ import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
 import { useT } from '@/i18n'
 import { useIntl } from 'react-intl'
+import { useChat } from '@/context/ChatContext'
+import { useApp } from '@/context/AppContext'
 
 /** Percentage span floor so sub-second calls stay clickable-looking. */
 const MIN_ROW_WIDTH_PCT = 2
@@ -60,6 +65,55 @@ function formatDuration(ms: number | null | undefined): string {
   return `${s.toFixed(s < 10 ? 1 : 0)}s`
 }
 
+/** KPI 总时长: wall-clock span humanized as `4m12s` / `1h05m` / `800ms`. */
+function formatWallDuration(ns: number): string {
+  if (!ns || ns <= 0) return '—'
+  const totalSeconds = Math.floor(ns / 1e9)
+  if (totalSeconds < 1) return `${ns / 1e6 | 0}ms`
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const m = Math.floor(totalSeconds / 60)
+  const s = totalSeconds % 60
+  if (m < 60) return s > 0 ? `${m}m${s}s` : `${m}m`
+  const h = Math.floor(m / 60)
+  const rm = m % 60
+  return `${h}h${String(rm).padStart(2, '0')}m`
+}
+
+// ── 裁决 B7: 四色瀑布(前端粗分先行) ──────────────────────────────────────
+// The projection contract carries no tool `kind` yet, so the panel bins
+// tools by NAME: read(读) / write(写) / net(网络) / risk(高风险), any
+// failure still overrides to the error red. 前端粗分,后端 kind 字段进契约
+// 后替换 (audit §10, decision B7).
+export type ToolKind = 'read' | 'write' | 'net' | 'risk' | 'other'
+
+export function toolKind(toolName: string): ToolKind {
+  const n = toolName.toLowerCase()
+  // Risk first — the safety signal must win over the verb inside
+  // ("terminal.run_tests" is risk, not read).
+  if (/(^|[^a-z])(bash|shell|terminal|zsh|powershell|cmd|exec|command)([^a-z]|$)/.test(n)) return 'risk'
+  if (/fetch|web|browser|http|curl|wget|request|download|upload/.test(n)) return 'net'
+  if (/edit|write|apply|patch|create|notebook|save|insert|replace/.test(n)) return 'write'
+  if (/read|grep|glob|^ls$|list|search|view|find|open/.test(n)) return 'read'
+  return 'other'
+}
+
+/** Bar tint classes per kind (semantic tokens only; failure overrides red). */
+const KIND_BAR_CLASS: Record<ToolKind, string> = {
+  read: 'bg-info/15 border border-info/40',
+  write: 'bg-primary/15 border border-primary/40',
+  net: 'bg-success/15 border border-success/40',
+  risk: 'bg-warning/15 border border-warning/40',
+  other: 'bg-secondary-container/70',
+}
+
+const KIND_LEGEND_DOT_CLASS: Record<ToolKind, string> = {
+  read: 'bg-info/60',
+  write: 'bg-primary/60',
+  net: 'bg-success/60',
+  risk: 'bg-warning/70',
+  other: 'bg-secondary-container',
+}
+
 // §7-28: timestamps format in the APP's locale (passed in by the render
 // tree), not whatever the OS happens to be set to.
 function formatTime(tsNs: number, locale: string): string {
@@ -85,6 +139,21 @@ const COST_FORMAT = new Intl.NumberFormat(undefined, {
 
 const nf = new Intl.NumberFormat()
 
+/** Compact token formatting in the APP's locale (`60.1K` / `1.1万`), built
+ *  per call so a locale switch re-renders with the right digits. */
+const tokenCompactCache = new Map<string, Intl.NumberFormat>()
+function tokenCompact(locale: string): Intl.NumberFormat {
+  let fmt = tokenCompactCache.get(locale)
+  if (!fmt) {
+    fmt = new Intl.NumberFormat(locale, {
+      notation: 'compact',
+      maximumFractionDigits: 1,
+    })
+    tokenCompactCache.set(locale, fmt)
+  }
+  return fmt
+}
+
 export interface TurnTimelineProps {
   /** Session id override (embeddable reuse); defaults to the route param. */
   sessionId?: string
@@ -92,11 +161,20 @@ export interface TurnTimelineProps {
 
 export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
   const t = useT()
+  const intl = useIntl()
   const navigate = useNavigate()
   const routeId = useParams().id ?? ''
   const id = sessionId ?? routeId
+  // 检查点还原 (audit §10 P1): ChatContext IS mounted above this route
+  // (ChatProvider wraps the whole Layout tree), so the rewind ACTION is
+  // reachable here. But the context action rewrites the CURRENT session's
+  // state — the timeline can show any session (Sidebar deep link), so a
+  // non-current session goes through the raw command + switchSession().
+  const { rewindSession: rewindCurrentSession } = useChat()
+  const { currentSessionId, switchSession } = useApp()
 
   const [timeline, setTimeline] = useState<TurnTimeline | null>(null)
+  const [checkpoints, setCheckpoints] = useState<CheckpointInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -120,10 +198,51 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
+    // Checkpoints gate the rewind chips (the backend refuses turns beyond
+    // the recorded checkpoint list). Best-effort: a failed probe simply
+    // hides the chips (same honesty rule as chat's MessageArea).
+    listCheckpoints(id)
+      .then(cps => { if (!cancelled) setCheckpoints(cps) })
+      .catch(() => { if (!cancelled) setCheckpoints([]) })
     return () => {
       cancelled = true
     }
   }, [id])
+
+  const checkpointTurns = useMemo(() => checkpoints.map(c => c.turn_index), [checkpoints])
+
+  // Pending-rewind turn index (null = idle); the confirm dialog fires the
+  // actual truncation — a rewind drops the turn's messages AND reverts the
+  // files those turns touched, so it must never run off a single mis-click.
+  const [pendingRewind, setPendingRewind] = useState<number | null>(null)
+  const [rewinding, setRewinding] = useState(false)
+
+  const confirmRewind = async () => {
+    const turnIndex = pendingRewind
+    if (turnIndex == null || rewinding) return
+    setRewinding(true)
+    try {
+      if (id && id !== currentSessionId) {
+        // Non-current session: the context action targets the CURRENT
+        // session, so call the command with the timeline's id directly and
+        // adopt the rewound session afterwards (chat then shows the
+        // surviving conversation).
+        await rewindSession(id, turnIndex)
+        await switchSession(id)
+      } else {
+        // Current session: the context action keeps AppContext's messages /
+        // checkpoints / streaming buckets in sync.
+        await rewindCurrentSession(turnIndex)
+      }
+      toast.success(t('timeline.rewind.done', { n: turnIndex }))
+      setPendingRewind(null)
+      navigate('/chat')
+    } catch (e) {
+      toastError(t('timeline.rewind.failed'), e)
+    } finally {
+      setRewinding(false)
+    }
+  }
 
   // Session-wide window: every bar position is relative to this range.
   const span = timeline && timeline.ended_ts_ns > timeline.started_ts_ns
@@ -134,6 +253,14 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
     () => timeline?.turns.reduce((acc, tu) => acc + tu.tools.length, 0) ?? 0,
     [timeline],
   )
+  // KPI 补齐 (audit §10 P2): input total rides the new projection field
+  // (C6); the per-turn sum stays the fallback for stale projections.
+  const totalInputTokens = useMemo(() => {
+    if (!timeline) return 0
+    const last = timeline.cumulative[timeline.cumulative.length - 1]
+    if (last != null && last.input_tokens_total > 0) return last.input_tokens_total
+    return timeline.turns.reduce((a, tu) => a + tu.input_tokens, 0)
+  }, [timeline])
   const totalOutputTokens = useMemo(
     () =>
       timeline?.cumulative[timeline.cumulative.length - 1]?.output_tokens_total ??
@@ -144,6 +271,9 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
   const totalCost = [...(timeline?.cumulative ?? [])]
     .reverse()
     .find(p => p.cost_total_usd != null)?.cost_total_usd
+  const wallDuration = timeline
+    ? formatWallDuration(Math.max(timeline.ended_ts_ns - timeline.started_ts_ns, 0))
+    : '—'
 
   // C6: export the loaded projection to a self-contained HTML file. G5 P0-8:
   // the BACKEND opens the native save dialog and writes the user-picked path
@@ -230,10 +360,24 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
           {/* role="list" wraps ONLY the chips: axe requires every child of a
               list to be a listitem (aria-required-parent/children gates in
               the walkthrough), so the export button stays outside it. */}
-          <div role="list" className="flex items-center gap-1.5">
+          <div role="list" aria-label={t('timeline.summary.aria')} className="flex items-center gap-1.5">
+            {/* KPI 补齐 (audit §10 P2): 总时长 + in/out token 合计 chips join
+                the turns/tools/cost row (10-timeline.html KPI strip). */}
+            <SummaryChip
+              icon="schedule"
+              label={wallDuration}
+              ariaLabel={t('timeline.stat.duration.aria', { value: wallDuration })}
+            />
             <SummaryChip icon="schema" label={t('timeline.stat.turns', { count: timeline.turns.length })} />
             <SummaryChip icon="build" label={t('timeline.stat.tools', { count: totalTools })} />
-            <SummaryChip icon="token" label={nf.format(totalOutputTokens)} />
+            <SummaryChip
+              icon="token"
+              label={`${tokenCompact(intl.locale).format(totalInputTokens)} ↓ · ${tokenCompact(intl.locale).format(totalOutputTokens)} ↑`}
+              ariaLabel={t('timeline.stat.tokens.aria', {
+                input: totalInputTokens,
+                output: totalOutputTokens,
+              })}
+            />
             {totalCost != null && (
               <SummaryChip icon="payments" label={COST_FORMAT.format(totalCost)} />
             )}
@@ -261,25 +405,70 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
           {timeline.turns.length === 0 ? (
             <EmptyTurns />
           ) : (
-            timeline.turns.map(turn => (
-              <TurnCard
-                key={`${turn.turn}-${turn.start_ts_ns}`}
-                turn={turn}
-                startedTs={timeline.started_ts_ns}
-                spanNs={span}
-              />
-            ))
+            <>
+              {/* 裁决 B7: 四色图例 (10-timeline.html 形态) — the waterfall
+                  tints each bar by its coarse tool kind; failures stay red. */}
+              <div
+                role="list"
+                aria-label={t('timeline.legend.aria')}
+                className="flex items-center gap-md px-sm font-label-xs text-xs text-on-surface-variant"
+              >
+                {(['read', 'write', 'net', 'risk'] as const).map(kind => (
+                  <span key={kind} role="listitem" className="inline-flex items-center gap-xs">
+                    <span
+                      aria-hidden="true"
+                      className={cn('inline-block size-2.5 rounded-full', KIND_LEGEND_DOT_CLASS[kind])}
+                    />
+                    {t(`timeline.legend.${kind}`)}
+                  </span>
+                ))}
+              </div>
+              {timeline.turns.map(turn => (
+                <TurnCard
+                  key={`${turn.turn}-${turn.start_ts_ns}`}
+                  turn={turn}
+                  startedTs={timeline.started_ts_ns}
+                  spanNs={span}
+                  rewindable={checkpointTurns.some(ct => ct >= turn.turn)}
+                  onRewind={() => setPendingRewind(turn.turn)}
+                  rewindBusy={rewinding}
+                />
+              ))}
+            </>
           )}
         </div>
       </ScrollArea>
+
+      {/* Rewind confirm — same destructive-action contract as chat's
+          per-message rewind (chat.message.rewind.confirm.*). */}
+      <ConfirmDialog
+        open={pendingRewind != null}
+        title={t('chat.message.rewind.confirm.title')}
+        message={t('chat.message.rewind.confirm.message')}
+        confirmLabel={t('chat.message.rewind.confirm.confirm')}
+        cancelLabel={t('chat.message.rewind.confirm.cancel')}
+        busy={rewinding}
+        onConfirm={() => void confirmRewind()}
+        onCancel={() => setPendingRewind(null)}
+      />
     </div>
   )
 }
 
-function SummaryChip({ icon, label }: { icon: string; label: string }) {
+function SummaryChip({
+  icon,
+  label,
+  ariaLabel,
+}: {
+  icon: string
+  label: string
+  /** Screen-reader text when the visual label is symbolic (↓/↑ etc). */
+  ariaLabel?: string
+}) {
   return (
     <span
       role="listitem"
+      aria-label={ariaLabel}
       className="inline-flex items-center gap-xs rounded-full bg-surface-container-low px-sm py-xs font-label-sm text-label-sm text-on-surface-variant border border-outline-variant/30"
     >
       <Icon name={icon} size="xs" />
@@ -302,8 +491,9 @@ function EmptyTurns() {
 }
 
 /**
- * SVG polyline over the token accumulation samples (and a faint cost line
- * when costs exist). X = sample ts across the session span, Y = value.
+ * SVG polylines over the cumulative samples: output tokens (primary), an
+ * input leg once the projection carries it (C6, info), and a faint cost
+ * line when costs exist. X = sample ts across the session span, Y = value.
  */
 function CumulativeCurve({
   cumulative,
@@ -317,13 +507,17 @@ function CumulativeCurve({
   const xs = cumulative.map(p => p.ts_ns)
   const x0 = Math.min(...xs)
   const x1 = Math.max(...xs)
-  const yMax = Math.max(...cumulative.map(p => p.output_tokens_total), 1)
+  const showInput = cumulative.some(p => p.input_tokens_total > 0)
+  const yMax = Math.max(...cumulative.map(p => Math.max(p.output_tokens_total, p.input_tokens_total)), 1)
   const point = (i: number, v: number, vMax: number): [number, number] => [
     ((xs[i] - x0) / Math.max(x1 - x0, 1)) * (W - 8) + 4,
     H - 6 - (v / vMax) * (H - 16),
   ]
   const tokenPath = cumulative
     .map((p, i) => point(i, p.output_tokens_total, yMax).join(','))
+    .join(' ')
+  const inputPath = cumulative
+    .map((p, i) => point(i, p.input_tokens_total, yMax).join(','))
     .join(' ')
   // Cost is plotted against its own 0..costMax scale — sharing the token
   // axis would flatten a few cents against tens of thousands of tokens,
@@ -346,6 +540,15 @@ function CumulativeCurve({
           strokeWidth={2}
           className="text-primary"
         />
+        {showInput && (
+          <polyline
+            points={inputPath}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            className="text-info"
+          />
+        )}
         {showCost && (
           <polyline
             points={cumulative
@@ -358,8 +561,20 @@ function CumulativeCurve({
           />
         )}
       </svg>
-      <figcaption className="mt-xs flex items-center justify-between font-label-xs text-xs text-on-surface-variant">
+      <figcaption className="mt-xs flex items-center justify-between gap-sm font-label-xs text-xs text-on-surface-variant">
         <span>{formatTime(cumulative[0]?.ts_ns ?? 0, intl.locale)}</span>
+        {showInput && (
+          <span className="inline-flex items-center gap-sm">
+            <span className="inline-flex items-center gap-xs">
+              <span aria-hidden="true" className="inline-block size-2 rounded-full bg-primary/70" />
+              {t('timeline.curve.output')}
+            </span>
+            <span className="inline-flex items-center gap-xs">
+              <span aria-hidden="true" className="inline-block size-2 rounded-full bg-info/70" />
+              {t('timeline.curve.input')}
+            </span>
+          </span>
+        )}
         <span>
           {t('timeline.curve.tokens', { count: yMax })}
           <span aria-hidden="true" className="mx-xs">·</span>
@@ -381,10 +596,18 @@ function TurnCard({
   turn,
   startedTs,
   spanNs,
+  rewindable,
+  onRewind,
+  rewindBusy,
 }: {
   turn: TimelineTurn
   startedTs: number
   spanNs: number
+  /** A checkpoint covers this turn (or a later one) — the chip renders only
+   *  then, mirroring chat's per-message rewind affordance. */
+  rewindable: boolean
+  onRewind: () => void
+  rewindBusy: boolean
 }) {
   const t = useT()
   const intl = useIntl()
@@ -417,6 +640,24 @@ function TurnCard({
             >
               {reasonLabel}
             </span>
+          )}
+          {/* 检查点还原 (audit §10 P1): restore the conversation to just
+              before this turn ran — same backend truncation + file revert
+              as chat's per-message rewind, gated on a recorded checkpoint. */}
+          {rewindable && (
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid={`timeline-rewind-${turn.turn}`}
+              disabled={rewindBusy}
+              aria-label={t('timeline.turn.rewind.aria', { n: turn.turn })}
+              title={t('timeline.turn.rewind.aria', { n: turn.turn })}
+              onClick={onRewind}
+              className="text-on-surface-variant hover:text-primary hover:bg-surface-container"
+            >
+              <Icon name="restore" size="sm" />
+              {t('timeline.turn.rewind')}
+            </Button>
           )}
           <span className="ml-auto font-label-xs text-xs text-on-surface-variant">
             {formatTime(turn.start_ts_ns, intl.locale)} → {formatTime(turn.end_ts_ns, intl.locale)}
@@ -452,6 +693,9 @@ function TurnCard({
               ((tool.start_ts_ns - startedTs) / spanNs) * 100
             const widthPct =
               Math.max(((tool.end_ts_ns - tool.start_ts_ns) / spanNs) * 100, MIN_ROW_WIDTH_PCT)
+            // 裁决 B7: coarse name-based kind binning; a failure still wins
+            // the red error treatment regardless of its kind.
+            const kind = toolKind(tool.tool_name)
             // A bar narrower than ~15% of the row cannot fit its label
             // ("Grep · 1.2s" ≈ 70px on a ~700px card) — overflow-hidden used
             // to clip it into an unreadable sliver. Short bars render the
@@ -470,7 +714,7 @@ function TurnCard({
                     'absolute top-1/2 -translate-y-1/2 h-5 rounded-md flex items-center gap-xs px-1.5 overflow-hidden whitespace-nowrap',
                     tool.is_error
                       ? 'bg-error/15 border border-error/40'
-                      : 'bg-secondary-container/70',
+                      : KIND_BAR_CLASS[kind],
                   )}
                   style={{ left: `${barLeft}%`, width: `${widthPct}%` }}
                   title={label}
