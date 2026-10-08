@@ -285,3 +285,48 @@ describe('MemoryPanel — dream distillation section', () => {
     })
   })
 })
+
+describe('MemoryPanel — memory injection banner (audit §08 P1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.getMemoryStats).mockResolvedValue({
+      total: 0, by_category: {}, by_project: {}, most_recent_at: null,
+    })
+    vi.mocked(api.listMemories).mockResolvedValue([])
+    vi.mocked(api.listMemoryProjects).mockResolvedValue([])
+  })
+
+  it('renders the enabled state with the honest preview placeholder', async () => {
+    vi.mocked(api.getSessionMemoryBypass).mockResolvedValue(false)
+    render(<MemoryPanel />)
+
+    const banner = await screen.findByTestId('memory-injection-banner')
+    expect(banner).toHaveTextContent('Memory injection')
+    expect(screen.getByTestId('memory-injection-state')).toHaveTextContent('Injection enabled')
+    // C9 诚实降级: no retrieval pre-read command → "coming soon" placeholder,
+    // never an invented "N memories" count.
+    expect(banner.textContent).toMatch(/coming soon/)
+    expect(banner.textContent).not.toMatch(/\d+ memories?/)
+  })
+
+  it('toggles the per-session bypass through the shared commands', async () => {
+    vi.mocked(api.getSessionMemoryBypass).mockResolvedValue(false)
+    render(<MemoryPanel />)
+    await screen.findByTestId('memory-injection-banner')
+
+    fireEvent.click(screen.getByTestId('memory-injection-bypass'))
+    await waitFor(() =>
+      expect(api.setSessionMemoryBypass).toHaveBeenCalledWith(null, true),
+    )
+  })
+
+  it('shows the bypassed state when the active session bypasses memory', async () => {
+    vi.mocked(api.getSessionMemoryBypass).mockResolvedValue(true)
+    render(<MemoryPanel />)
+
+    await screen.findByTestId('memory-injection-banner')
+    expect(screen.getByTestId('memory-injection-state')).toHaveTextContent('Session bypass on')
+    // The enabled-state placeholder disappears with the injection.
+    expect(screen.queryByText('Injection enabled')).not.toBeInTheDocument()
+  })
+})
