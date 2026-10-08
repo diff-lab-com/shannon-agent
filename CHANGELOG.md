@@ -2,6 +2,29 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
+## [Unreleased] — N3 per-kind 信任（v0.2 信任协议批，2026-10-08）
+
+**additive 批**：全部为新增变体/新方法/新路由，旧 peer 零破坏——不带 `scope` 的旧 decide 请求字节不变；旧 mobile 收到新枚举成员按既有诚实降级路径处理。对应 mobile 侧信任开关接线（cross-repo spec §Q）。
+
+### wire 变更
+
+- **engine（Rust）**：`ApprovalDecision` 增 `always_allow_kind`（外部标签结构变体，wire 形态 `{"always_allow_kind":{"kind":"<tool_name>"}}`，`Copy` 随之移除——所有消费方本就按值使用）；新 HTTP 面 `GET /api/trust/kinds`（活跃类别集，`{kinds:[{kind,granted_at}]}`，按 kind 排序）与 `POST /api/trust/revoke`（`{kind}` → `{kind,revoked}`，未知 kind 幂等返回 `revoked:false`，不 404）。`gen-ts` 生成器学会渲染混合 unit/struct 变体枚举（此前 struct 变体会被**静默丢弃**），`types.gen.ts` 已再生；同批补齐 P3-3 两个此前漏生成的类型（`ApprovalModeState`/`ApprovalModeRequest`）修复一个 main 上既有的 codegen drift 门失败。
+- **gateway（TS）**：`approval.decide` params `scope` 枚举扩 `"kind"` + 可选 `kind` 参数（必填校验：trimmed 1..=128）；`scope:"kind"` 映射引擎 `always_allow_kind` 透传。新方法 `shannon/trust.list`（params `{}`，返回 `{kinds:[{kind,grantedAt}]}`，camelCase 投影，坏载荷诚实降级空列表）与 `shannon/trust.revoke`（params `{kind}` → `{ok:true}`，幂等）——**不重载 `shannon/approval.state`**（那是 session token 语义）。协议 schema（`docs/protocol/shannon-mobile-protocol.schema.json`）方法枚举、decide 定义、trust 定义与 fixture 已同步再生。能力名 **`trust.kind`**：真实 gateway 无 capabilities 广播面，检测机制沿 `usage.budget`（§P）先例——旧 gateway 对 `shannon/trust.list` 答 METHOD_NOT_FOUND 即能力缺席，mobile 据此隐藏/禁用信任开关。
+
+### 边界（红线与语义，与 v2.3 拍板一致）
+
+- **只有类别级信任，无全局 always-allow**：kind = 审批 `kind` 字段（引擎侧即 `tool_name`）**精确匹配**（大小写敏感、无通配/前缀/子串语义，不发明 pattern）；kind 集合 = 引擎实产审批的工具名，开放集（随注册工具增长，如 MCP `mcp__*`），不做封闭清单。
+- **撤销即时生效**：allowlist 存 `~/.shannon/trust/kinds.toml`（engine 侧；`[kinds]` 表 kind → 授予时间 epoch-ms，写穿持久化：temp+rename，文件 0600/目录 0700 照 credential store 先例）。进程内单一共享 store（`shannon_engine::trust::shared_store`），权限门每次检查现读，revoke 路由同步改内存+落盘——下一个请求立即重新询问。
+- **授予与撤销都留审计痕迹**：授予走签名 decide（决策签名绑定 kind：v1 `${request_id}:${choice}:kind:<kind>`、v2 `${request_id}:${choice}:${timestamp}:kind:<kind>`，沿 P3-3 `:session` 后缀先例，防 once 决策重放成信任授予）；agent loop 的 `permission/decision` 审计行记录授予（"user granted kind trust"）与自动放行原因（`trusted_kind_allow` → "matched trusted kind \`X\`"）。kind 与待批请求的 tool 不符时**降级为 allow-once**（既不扩大信任也不否决人已批准的操作）并 warn 留痕。
+- **deny/ask 规则仍最高**：全局 deny 门（所有 mode 含 bypass）与 settings 显式 deny/ask 规则压过 kind 信任；Critical 风险提示路径不受影响。revoke 后同类请求重新询问（Rust 测试覆盖：持久化、精确匹配、revoke 即时、mismatch 降级、规则优先、无 store 降级、审计行）。
+
+### 旧 peer 兼容性
+
+- 旧 mobile → 新 gateway：不带 `scope` 的 decide 请求 wire 字节不变；`scope:"forever"` 等未知值照旧 BAD_PARAMS。
+- 新 mobile → 旧 gateway：`scope:"kind"` 被旧校验拒绝（BAD_PARAMS "once or session"）；`trust.list/revoke` METHOD_NOT_FOUND——两者都是 mobile 的诚实降级信号，绝不静默放行。
+- 新 gateway → 旧 engine：`always_allow_kind` 未知变体被旧引擎 serde 拒绝 → gateway 报 ENGINE_ERROR（诚实失败，不回落成 once 放行）。
+- mobile 离线排队（Z3）重放 kind 决策与 session 决策同路径（签名含 kind + timestamp 窗口 ±5min），hub 侧 settle 只讲 allow/deny，scope 留在引擎——无需新重放逻辑。
+
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 ## [Unreleased] — Approval transparency + mobile approval scope (2026-10-05 follow-up)
 

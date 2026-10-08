@@ -72,7 +72,8 @@ export type ApprovalDecision =
   | "allow_once"
   | "always_allow"
   | "always_allow_session"
-  | "deny";
+  | "deny"
+  | { always_allow_kind: { kind: string; } };
 
 export type SseEventName =
   | "completed"
@@ -124,6 +125,33 @@ export type RiskScope =
   | "local"
   | "repo"
   | "system";
+
+export interface TrustKindsResponse {
+  kinds: TrustedKindEntry[];
+}
+
+export interface TrustedKindEntry {
+  granted_at: number;
+  kind: string;
+}
+
+export interface TrustRevokeRequest {
+  kind: string;
+}
+
+export interface TrustRevokeResponse {
+  kind: string;
+  revoked: boolean;
+}
+
+export interface ApprovalModeState {
+  mode: string;
+}
+
+export interface ApprovalModeRequest {
+  mode: string;
+  session_id: string;
+}
 
 export interface WsClientMessageQuery {
   type: "query";

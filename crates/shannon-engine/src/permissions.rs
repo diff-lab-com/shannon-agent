@@ -90,6 +90,16 @@ pub enum PermissionChoice {
     /// in-session [`PermissionMemory`] but never persisted to settings
     /// (P3-3: the mobile "allow for session" scope).
     AlwaysAllowSession,
+    /// N3: always allow this CATEGORY (the wire kind = the tool name) from
+    /// now on — persisted to the shared kind-trust store with a grant
+    /// timestamp and auto-approving later checks on an exact kind match.
+    /// Never a global always-allow: deny rules and ask rules keep binding.
+    AlwaysAllowKind {
+        /// The kind to trust; validated against THIS prompt's tool name —
+        /// a mismatch degrades to an allow-once so a buggy client can
+        /// neither widen trust nor veto an operation the human approved.
+        kind: String,
+    },
     /// Open in editor to modify before running
     EditAndRun,
 }
@@ -954,6 +964,11 @@ impl PermissionMemory {
                     .or_default()
                     .insert(tool_name, choice);
             }
+            // N3: kind trust lives in the shared KindTrustStore, not in the
+            // per-session memory — `process_permission_choice` handles the
+            // grant (validation + persistence); remembering here would only
+            // duplicate it per-session.
+            PermissionChoice::AlwaysAllowKind { .. } => {}
             PermissionChoice::Deny => {
                 self.always_denied.insert(tool_name.clone());
                 self.session_choices
@@ -1127,6 +1142,11 @@ pub struct PermissionManager {
     /// Autonomy mode to restore when plan mode exits (design §5: entering
     /// plan snapshots the current ladder mode; exit restores it).
     plan_mode_snapshot: HashMap<uuid::Uuid, ApprovalMode>,
+    /// N3: the shared per-kind trust store (`~/.shannon/trust/kinds.toml`).
+    /// `None` (the `new()` default) disables kind trust entirely — embedded
+    /// hosts and tests opt in explicitly via [`Self::set_kind_trust`], so a
+    /// developer's personal trust file can never leak into unrelated tests.
+    kind_trust: Option<crate::trust::KindTrustStore>,
 }
 
 impl PermissionManager {
@@ -1149,12 +1169,63 @@ impl PermissionManager {
             max_auto_approvals: 0,
             auto_approval_count: std::sync::atomic::AtomicU32::new(0),
             plan_mode_snapshot: HashMap::new(),
+            kind_trust: None,
         };
 
         // Register default tool policies for common tools
         manager.register_default_policies();
 
         manager
+    }
+
+    /// N3: attach the shared per-kind trust store. Served sessions get the
+    /// process-global handle (`crate::trust::shared_store`); tests inject an
+    /// isolated store. Absent → kind trust is fully disabled.
+    pub fn set_kind_trust(&mut self, store: crate::trust::KindTrustStore) {
+        self.kind_trust = Some(store);
+    }
+
+    /// N3: the trusted-kind auto-allow verdict for a pending call —
+    /// `Some("matched trusted kind \`X\`")` when a persisted kind grant
+    /// covers this tool name.
+    ///
+    /// Self-contained on purpose: both the permission gate (for the audit
+    /// row's reason) and [`Self::classify_and_check`] (for the actual
+    /// auto-approval) call this, and it re-checks the head gates so a trust
+    /// grant can NEVER override them:
+    ///
+    /// - the global deny gate (always-denied tools) binds in every mode;
+    /// - an explicit settings `deny`/`ask` rule for the tool wins — a grant
+    ///   must not silence a rule the user configured to prompt.
+    ///
+    /// The store is consulted live on every call, which is what makes
+    /// revoke immediate.
+    pub fn trusted_kind_allow(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> Option<String> {
+        let store = self.kind_trust.as_ref()?;
+        if self.memory.is_always_denied(tool_name) {
+            return None;
+        }
+        if !self.rule_checker.is_empty() {
+            let command = tool_input
+                .get("command")
+                .or_else(|| tool_input.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match self.rule_checker.check_with_rule(tool_name, command).0 {
+                RuleCheckDecision::Denied | RuleCheckDecision::Ask => return None,
+                // Already allowed by rule — the rule path reports it; a kind
+                // grant adds nothing here.
+                RuleCheckDecision::Allowed => return None,
+                RuleCheckDecision::NoMatch => {}
+            }
+        }
+        store
+            .trusted_kind(tool_name)
+            .map(|kind| format!("matched trusted kind `{kind}`"))
     }
 
     /// Enable LLM-enhanced permission classification with the given client.
@@ -1833,6 +1904,53 @@ impl PermissionManager {
                 );
                 Ok(())
             }
+            PermissionChoice::AlwaysAllowKind { kind } => {
+                // N3: per-kind trust — persisted to the shared store with a
+                // grant timestamp; later checks with the SAME tool name
+                // auto-approve. The kind must describe the operation the
+                // human actually saw: a mismatch means a buggy (or hostile)
+                // client tried to bless a different category past the user —
+                // the decision degrades to allow-ONCE (the human did approve
+                // this operation; the bogus scope neither widens trust nor
+                // vetoes the approved op) and the audit trail says so.
+                if prompt.tool_name != kind {
+                    tracing::warn!(
+                        tool = %prompt.tool_name,
+                        requested_kind = %kind,
+                        "kind-trust scope mismatch — degrading to allow-once"
+                    );
+                    self.memory.remember_choice(
+                        session_id,
+                        prompt.tool_name.clone(),
+                        PermissionChoice::AllowOnce,
+                    );
+                    return Ok(());
+                }
+                match &self.kind_trust {
+                    Some(store) => {
+                        store.grant(&kind, crate::trust::now_epoch_ms());
+                        tracing::info!(
+                            kind = %kind,
+                            "kind trust granted (persisted to the trust store)"
+                        );
+                    }
+                    // No store attached (embedded/test host): degrade to the
+                    // session-scoped grant rather than silently dropping the
+                    // user's explicit intent.
+                    None => {
+                        tracing::warn!(
+                            kind = %kind,
+                            "no kind-trust store attached — degrading to session allow"
+                        );
+                        self.memory.remember_choice(
+                            session_id,
+                            prompt.tool_name.clone(),
+                            PermissionChoice::AlwaysAllow,
+                        );
+                    }
+                }
+                Ok(())
+            }
             PermissionChoice::EditAndRun => {
                 // User edited the command; treat as allow-once
                 self.memory
@@ -2028,6 +2146,16 @@ impl PermissionManager {
                     // Fall through to normal approval mode logic
                 }
             }
+        }
+
+        // --- N3 per-kind trust (mobile grant) ---
+        // An exact kind match auto-approves this call. Consulted AFTER the
+        // head gates above (which `trusted_kind_allow` re-checks anyway) so
+        // deny rules / ask rules / always-denied keep binding in every mode;
+        // the store is read live, so a revoke applies to the next request.
+        if self.trusted_kind_allow(tool_name, tool_input).is_some() {
+            tracing::info!(tool = %tool_name, "auto-approved by trusted kind");
+            return Ok(None);
         }
 
         // --- Approval mode overrides ---
@@ -2686,6 +2814,233 @@ mod tests {
             let parsed: PermissionChoice = serde_json::from_str(&json).unwrap();
             assert_eq!(choice, parsed);
         }
+        // N3: the data-carrying kind variant round-trips too.
+        let kind = PermissionChoice::AlwaysAllowKind {
+            kind: "Bash".to_string(),
+        };
+        let parsed: PermissionChoice =
+            serde_json::from_str(&serde_json::to_string(&kind).unwrap()).unwrap();
+        assert_eq!(kind, parsed);
+    }
+
+    // ── N3 per-kind trust ───────────────────────────────────────────────
+
+    /// Isolated trust store + manager wired to it (the harness every N3 test
+    /// shares). The store starts empty; the toml path sits in a temp dir.
+    fn trusted_manager(
+        tag: &str,
+    ) -> (
+        PermissionManager,
+        crate::trust::KindTrustStore,
+        std::path::PathBuf,
+    ) {
+        let dir =
+            std::env::temp_dir().join(format!("shannon-perm-trust-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::trust::KindTrustStore::open(dir.join("kinds.toml"));
+        let mut pm = PermissionManager::new();
+        pm.set_approval_mode(ApprovalMode::Ask);
+        pm.set_kind_trust(store.clone());
+        (pm, store, dir)
+    }
+
+    /// A prompt-worthy call in `ask` mode: Bash is not read-only, so without
+    /// trust `classify_and_check` returns a prompt.
+    fn bash_prompt_worthy(pm: &PermissionManager, sid: Uuid) -> bool {
+        matches!(
+            pm.classify_and_check(sid, "Bash", &serde_json::json!({"command": "ls"})),
+            Ok(Some(_))
+        )
+    }
+
+    #[test]
+    fn n3_kind_grant_persists_and_auto_allows_exact_kind() {
+        let (mut pm, store, dir) = trusted_manager("allow");
+        let sid = Uuid::new_v4();
+
+        // Before the grant: Bash prompts in ask mode.
+        assert!(bash_prompt_worthy(&pm, sid), "precondition: Bash prompts");
+
+        // The human approves a Bash ask with the kind scope.
+        let prompt = pm
+            .classify_and_check(sid, "Bash", &serde_json::json!({"command": "ls"}))
+            .unwrap()
+            .unwrap();
+        pm.process_permission_choice(
+            sid,
+            &prompt,
+            PermissionChoice::AlwaysAllowKind {
+                kind: "Bash".to_string(),
+            },
+        )
+        .unwrap();
+
+        // The grant landed in the store (with a timestamp).
+        let grants = store.list();
+        assert_eq!(grants.len(), 1, "exactly one grant: {grants:?}");
+        assert_eq!(grants[0].0, "Bash");
+        assert!(grants[0].1 > 0, "grant carries a real epoch-ms timestamp");
+
+        // A later Bash call auto-approves with the audit reason attached.
+        assert!(!bash_prompt_worthy(&pm, sid), "trusted kind auto-approves");
+        assert_eq!(
+            pm.trusted_kind_allow("Bash", &serde_json::json!({"command": "rm -rf /tmp/x"}))
+                .as_deref(),
+            Some("matched trusted kind `Bash`"),
+            "the audit reason names the trusted kind"
+        );
+
+        // Exact match only: lookalike tool names stay prompt-worthy.
+        assert!(
+            pm.trusted_kind_allow("BashTool", &serde_json::json!({}))
+                .is_none()
+        );
+        assert!(
+            pm.trusted_kind_allow("bash", &serde_json::json!({}))
+                .is_none()
+        );
+        assert!(
+            matches!(
+                pm.classify_and_check(sid, "Write", &serde_json::json!({"path": "/tmp/x"})),
+                Ok(Some(_))
+            ),
+            "a different tool must still prompt"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn n3_revoke_takes_effect_on_the_next_request() {
+        let (mut pm, store, dir) = trusted_manager("revoke");
+        let sid = Uuid::new_v4();
+        let prompt = pm
+            .classify_and_check(sid, "Bash", &serde_json::json!({"command": "ls"}))
+            .unwrap()
+            .unwrap();
+        pm.process_permission_choice(
+            sid,
+            &prompt,
+            PermissionChoice::AlwaysAllowKind {
+                kind: "Bash".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(!bash_prompt_worthy(&pm, sid));
+
+        // Revoke (the route's exact call) → the very next check prompts again.
+        assert!(store.revoke("Bash"));
+        assert!(bash_prompt_worthy(&pm, sid), "revoked kind prompts again");
+        assert!(
+            pm.trusted_kind_allow("Bash", &serde_json::json!({}))
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn n3_kind_mismatch_degrades_to_allow_once_without_widening_trust() {
+        let (mut pm, store, dir) = trusted_manager("mismatch");
+        let sid = Uuid::new_v4();
+        // The human saw and approved a WRITE ask; a buggy/hostile client
+        // rides the decision with kind "Bash".
+        let prompt = pm
+            .classify_and_check(sid, "Write", &serde_json::json!({"path": "/tmp/x"}))
+            .unwrap()
+            .unwrap();
+        pm.process_permission_choice(
+            sid,
+            &prompt,
+            PermissionChoice::AlwaysAllowKind {
+                kind: "Bash".to_string(),
+            },
+        )
+        .unwrap();
+
+        // No trust was widened, and Bash keeps prompting.
+        assert!(
+            store.list().is_empty(),
+            "a mismatched scope must never write a grant"
+        );
+        assert!(bash_prompt_worthy(&pm, sid), "Bash keeps prompting");
+        // No trust was widened, and Bash keeps prompting.
+        assert!(
+            store.list().is_empty(),
+            "a mismatched scope must never write a grant"
+        );
+        assert!(bash_prompt_worthy(&pm, sid), "Bash keeps prompting");
+        // The degradation matches a plain allow-once: nothing remembered in
+        // the per-session memory (allow-once choices are never recorded), so
+        // Write prompts again on its next use too.
+        let choices = pm.memory.session_choices.get(&sid);
+        assert!(
+            choices.is_none_or(|c| c.is_empty()),
+            "no widening may be remembered from a mismatched scope"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn n3_deny_and_ask_rules_bind_over_kind_trust() {
+        let (mut pm, store, dir) = trusted_manager("rules");
+        let sid = Uuid::new_v4();
+        store.grant("Bash", crate::trust::now_epoch_ms());
+
+        // Global always-denied: binds in every mode, trust included.
+        pm.memory.deny_tool("WebFetch");
+        assert!(
+            pm.trusted_kind_allow("WebFetch", &serde_json::json!({}))
+                .is_none(),
+            "always-denied tools never auto-allow via kind trust"
+        );
+
+        // An explicit settings ask-rule for Bash: trust must not silence it.
+        pm.rule_checker =
+            PermissionRuleChecker::from_rule_strings(&[], &["Bash(git *)".to_string()], &[]);
+        assert_eq!(
+            pm.trusted_kind_allow("Bash", &serde_json::json!({"command": "git push"})),
+            None,
+            "an explicit ask rule wins over the kind grant"
+        );
+        // …and classify_and_check still returns a PROMPT for a matching call
+        // (a non-matching call, e.g. `ls`, still auto-allows via the grant).
+        assert!(matches!(
+            pm.classify_and_check(sid, "Bash", &serde_json::json!({"command": "git push"})),
+            Ok(Some(_))
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn n3_no_store_attached_disables_kind_trust() {
+        // A bare manager (no store): trusted_kind_allow is None and a kind
+        // choice degrades to a session-scoped grant instead of vanishing.
+        let mut pm = PermissionManager::new();
+        pm.set_approval_mode(ApprovalMode::Ask);
+        let sid = Uuid::new_v4();
+        let prompt = pm
+            .classify_and_check(sid, "Write", &serde_json::json!({"path": "/tmp/x"}))
+            .unwrap()
+            .unwrap();
+        pm.process_permission_choice(
+            sid,
+            &prompt,
+            PermissionChoice::AlwaysAllowKind {
+                kind: "Write".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(
+            pm.trusted_kind_allow("Write", &serde_json::json!({}))
+                .is_none()
+        );
+        let choices = pm.memory.session_choices.get(&sid);
+        assert_eq!(
+            choices.and_then(|c| c.get("Write")),
+            Some(&PermissionChoice::AlwaysAllow),
+            "the explicit grant degrades to session scope, not silence"
+        );
     }
 
     #[test]

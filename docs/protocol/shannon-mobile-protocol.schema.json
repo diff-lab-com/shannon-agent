@@ -62,7 +62,9 @@
         "shannon/approval.set",
         "shannon/session.list",
         "shannon/session.history",
-        "shannon/push.register"
+        "shannon/push.register",
+        "shannon/trust.list",
+        "shannon/trust.revoke"
       ]
     },
     "errorCodes": {
@@ -214,7 +216,7 @@
         },
         "signature": {
           "type": "string",
-          "description": "Ed25519 over the decision message — \"${request_id}:${choice}\" (v1) or \"${request_id}:${choice}:${timestamp}\" (v2) — mandatory when requireSession is on"
+          "description": "Ed25519 over the decision message — \"${request_id}:${choice}\" (v1) or \"${request_id}:${choice}:${timestamp}\" (v2) — with the scope suffix appended: \":session\" (P3-3) or \":kind:<kind>\" (N3). Mandatory when requireSession is on."
         },
         "timestamp": {
           "type": "integer",
@@ -225,6 +227,18 @@
             "string",
             "null"
           ]
+        },
+        "scope": {
+          "description": "How far an allow reaches: \"once\" (default, engine allow_once), \"session\" (P3-3, in-session, never persisted) or \"kind\" (N3, PERSISTED per-kind trust). Bound into the decision signature; deny rejects any scope.",
+          "enum": [
+            "once",
+            "session",
+            "kind"
+          ]
+        },
+        "kind": {
+          "description": "N3: with scope=\"kind\" — the category to trust (the engine tool name, exact match). Required (trimmed, 1..=128 chars); the engine degrades a mismatch with the pending ask's own kind to a one-shot allow.",
+          "type": "string"
         }
       }
     },
@@ -469,8 +483,77 @@
               "message": "timestamp outside skew window"
             }
           }
+        ],
+        [
+          "trust.list",
+          {
+            "kinds": [
+              {
+                "kind": "Bash",
+                "grantedAt": "2026-10-08T03:24:00.000Z"
+              }
+            ]
+          }
         ]
       ]
+    },
+    "trustListParams": {
+      "type": "object",
+      "description": "shannon/trust.list takes no parameters (reserve-then-enable: future paging/history fields land additively)."
+    },
+    "trustListResult": {
+      "type": "object",
+      "required": [
+        "kinds"
+      ],
+      "properties": {
+        "kinds": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "grantedAt"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "The trusted kind — the engine tool name, matched EXACTLY on later approval requests (no globs, no prefix semantics; never a global always-allow)."
+              },
+              "grantedAt": {
+                "type": "string",
+                "description": "ISO-8601 UTC instant the grant was made."
+              }
+            }
+          }
+        }
+      },
+      "description": "shannon/trust.list success — active per-kind trust grants, sorted by kind. Old gateways answer METHOD_NOT_FOUND: that absence IS the capability signal (capability name `trust.kind`, the usage.budget degrade precedent) and the phone's trust switch hides/disables."
+    },
+    "trustRevokeParams": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "The kind to revoke. Idempotent: an unknown kind still answers ok (a retried revoke from the phone's offline queue cannot fail)."
+        }
+      },
+      "description": "shannon/trust.revoke request — removal takes effect immediately (the engine's permission gate consults the store live on every check)."
+    },
+    "trustRevokeResult": {
+      "type": "object",
+      "required": [
+        "ok"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        }
+      },
+      "description": "shannon/trust.revoke success."
     }
   },
   "type": "object",

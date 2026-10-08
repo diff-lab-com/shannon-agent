@@ -120,6 +120,15 @@ impl PermissionGateNode {
     /// keeps denial/prompt handling byte-identical to the pre-bus loop.
     pub async fn evaluate(&self, ctx: &mut ToolGuardContext) -> Flow {
         let started = Instant::now();
+        // N3: resolve the trusted-kind label BEFORE the classify pass. When
+        // the classify below auto-approves BECAUSE of a kind grant, this
+        // reason rides the audit row ("matched trusted kind `X`"); a revoke
+        // racing between the two reads can only drop the label, never widen
+        // the verdict (the classify pass re-checks the store itself).
+        let trust_reason = {
+            let guard = shannon_types::recover_lock(self.permissions.read());
+            guard.trusted_kind_allow(&ctx.tool_name, &ctx.input)
+        };
         let result = {
             let guard = shannon_types::recover_lock(self.permissions.read());
             guard.classify_and_check(self.session_id, &ctx.tool_name, &ctx.input)
@@ -148,7 +157,14 @@ impl PermissionGateNode {
             }
             Ok(None) => {
                 ctx.verdict = PermissionVerdict::Allowed;
-                emit_decision(&self.bus, &tool, "allow", None, &mode, elapsed_ms);
+                emit_decision(
+                    &self.bus,
+                    &tool,
+                    "allow",
+                    trust_reason.as_deref(),
+                    &mode,
+                    elapsed_ms,
+                );
             }
             Ok(Some(prompt)) => {
                 if prompt.risk_level == shannon_engine::permissions::RiskLevel::Critical {
@@ -515,6 +531,92 @@ mod tests {
         assert!(
             text.contains("always-allowed (12ms)"),
             "latency folded into reason, got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_gate_labels_trusted_kind_auto_allows_in_the_audit_row() {
+        // N3: a manager with a kind grant auto-approves the matching tool,
+        // and the durable decision row carries WHY ("matched trusted kind
+        // `Bash`") instead of an unexplained allow. The row is captured
+        // straight off the bus (same payload the L0 tee persists), so the
+        // assertion does not depend on writer flush timing.
+        fn decision_rows(bus: &EventBus) -> std::sync::Arc<std::sync::Mutex<Vec<Value>>> {
+            let captured: std::sync::Arc<std::sync::Mutex<Vec<Value>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let sink = captured.clone();
+            // Hold the guard for the caller (leaking it into the bus is fine
+            // for a test-local bus; dropping it would unsubscribe).
+            let guard = bus.subscribe_fn(TopicFilter::all(), move |input| {
+                if let crate::bus::BusInput::Event(event) = input {
+                    if matches!(
+                        event.body,
+                        shannon_types::session_event::SessionEventBody::PermissionDecision(_)
+                    ) {
+                        if let Ok(row) = serde_json::to_value(&event.body) {
+                            sink.lock().unwrap().push(row);
+                        }
+                    }
+                }
+            });
+            std::mem::forget(guard);
+            captured
+        }
+
+        let store = shannon_engine::trust::KindTrustStore::open(
+            std::env::temp_dir().join(format!("kinds-gate-test-{}.toml", std::process::id())),
+        );
+        store.grant("Bash", 1_760_000_000_000);
+        let mut pm = shannon_engine::permissions::PermissionManager::new();
+        pm.set_approval_mode(shannon_engine::permissions::ApprovalMode::Ask);
+        pm.set_kind_trust(store);
+        let bus = EventBus::new();
+        let rows = decision_rows(&bus);
+
+        let node = PermissionGateNode::new(
+            Arc::new(std::sync::RwLock::new(pm)),
+            uuid::Uuid::new_v4(),
+            bus.shared(),
+        );
+        let mut ctx = ToolGuardContext::new("Bash", serde_json::json!({"command": "ls"}));
+        node.evaluate(&mut ctx).await;
+
+        assert!(
+            matches!(ctx.verdict, PermissionVerdict::Allowed),
+            "trusted kind auto-approves without a prompt"
+        );
+        {
+            let rows = rows.lock().unwrap();
+            assert_eq!(rows.len(), 1, "exactly one decision row: {rows:?}");
+            assert_eq!(rows[0]["decision"], "allow");
+            assert_eq!(rows[0]["tool_name"], "Bash");
+            let reason = rows[0]["reason"].as_str().unwrap_or("");
+            assert!(
+                reason.contains("matched trusted kind `Bash`"),
+                "the audit row must name the trusted kind, got: {reason}"
+            );
+        } // guard dropped before the next await (clippy::await_holding_lock)
+
+        // And an untrusted tool in the same mode still raises the ask row —
+        // with no trust label on it.
+        let mut pm2 = shannon_engine::permissions::PermissionManager::new();
+        pm2.set_approval_mode(shannon_engine::permissions::ApprovalMode::Ask);
+        let bus2 = EventBus::new();
+        let rows2 = decision_rows(&bus2);
+        let node2 = PermissionGateNode::new(
+            Arc::new(std::sync::RwLock::new(pm2)),
+            uuid::Uuid::new_v4(),
+            bus2.shared(),
+        );
+        let mut ctx2 = ToolGuardContext::new("Write", serde_json::json!({"path": "/tmp/x"}));
+        node2.evaluate(&mut ctx2).await;
+        let rows2 = rows2.lock().unwrap();
+        assert_eq!(rows2.len(), 1, "exactly one decision row: {rows2:?}");
+        assert_eq!(rows2[0]["decision"], "ask");
+        let reason2 = rows2[0]["reason"].as_str().unwrap_or("");
+        assert!(
+            !reason2.contains("matched trusted kind"),
+            "no trust label without a grant, got: {reason2}"
         );
     }
 

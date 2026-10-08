@@ -61,3 +61,4 @@ pub mod permission_profile;
 pub mod permissions;
 pub mod state;
 pub mod testing;
+pub mod trust;

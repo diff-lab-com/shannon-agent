@@ -30,7 +30,7 @@
  * probes the bare device session id first, then that lane-key alias.
  */
 
-import { getApprovalMode, respondToApproval, setApprovalMode } from "../engine/httpClient.js";
+import { getApprovalMode, getTrustKinds, respondToApproval, revokeTrustKind, setApprovalMode } from "../engine/httpClient.js";
 import { EngineWsClient, type EngineWsClientOptions } from "../engine/wsClient.js";
 import { type EngineEvent } from "../engine/runtime.js";
 import { type Logger } from "../adapters/types.js";
@@ -59,6 +59,9 @@ import {
   type SessionHistoryParams,
   type SessionListResult,
   type ShannonEvent,
+  type TrustListResult,
+  type TrustRevokeParams,
+  type TrustRevokeResult,
 } from "./protocol.js";
 import type { HandlerOutcome, MethodContext, MethodHandlers } from "./server.js";
 
@@ -465,15 +468,33 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           message: 'params.choice must be "allow" or "deny"',
         };
       }
-      // P3-3: scope only rides on an allow — a deny settles regardless of
+      // P3-3/N3: scope only rides on an allow — a deny settles regardless of
       // scope, so an explicit scope on deny is a caller bug, not a no-op.
       const scope = params.scope ?? "once";
-      if (scope !== "once" && scope !== "session") {
+      if (scope !== "once" && scope !== "session" && scope !== "kind") {
         return {
           kind: "error",
           code: ShannonError.BAD_PARAMS,
-          message: 'params.scope must be "once" or "session"',
+          message: 'params.scope must be "once", "session" or "kind"',
         };
+      }
+      // N3: a kind scope MUST name the category, and the name must be a
+      // sane kind string (the engine matches it verbatim against the tool
+      // name; whitespace would never match anything).
+      const kind = params.kind;
+      if (scope === "kind") {
+        if (
+          typeof kind !== "string" ||
+          kind.trim().length === 0 ||
+          kind.length > 128 ||
+          kind.trim() !== kind
+        ) {
+          return {
+            kind: "error",
+            code: ShannonError.BAD_PARAMS,
+            message: 'params.kind (trimmed, 1..=128 chars) is required when scope is "kind"',
+          };
+        }
       }
       if (params.choice === "deny" && params.scope != null && params.scope !== "once") {
         return {
@@ -482,6 +503,10 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           message: 'params.scope is only valid with choice "allow"',
         };
       }
+      // The validated kind, present iff the scope is "kind" (the runtime
+      // checks above guarantee the string; the assertion only re-states what
+      // the early-return already enforced).
+      const kindForScope = scope === "kind" ? (kind as string) : undefined;
       // P1.2: every approval decision MUST be signed by the bound device.
       // Unsigned or invalid signatures are rejected before the engine is
       // touched, so a stolen/ungated connection can't auto-approve a
@@ -503,12 +528,13 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         let ok = false;
         if (sig.length > 0 && params.timestamp === undefined) {
           // v1 (legacy, no freshness binding) — byte-for-byte the pre-v2 path
-          // for once-decisions; a session scope is bound into the bytes
-          // (P3-3) so it cannot be forged from a captured once-decision.
+          // for once-decisions; a session (P3-3) or kind (N3) scope is bound
+          // into the bytes so it cannot be forged from a captured
+          // once-decision.
           ok =
             opts.verifyDeviceSignature?.(
               deviceId,
-              approvalMessage(params.request_id, params.choice, scope),
+              approvalMessage(params.request_id, params.choice, scope, kindForScope),
               sig,
             ) ?? false;
         } else if (sig.length > 0) {
@@ -537,7 +563,7 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           ok =
             opts.verifyDeviceSignature?.(
               deviceId,
-              approvalMessageV2(params.request_id, params.choice, ts, scope),
+              approvalMessageV2(params.request_id, params.choice, ts, scope, kindForScope),
               sig,
             ) ?? false;
         }
@@ -561,7 +587,12 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
               ? "deny"
               : scope === "session"
                 ? "allow_session"
-                : "allow",
+                : scope === "kind"
+                  ? // N3: the engine validates kind === the pending ask's
+                    // tool name and persists the grant (exact-match trust;
+                    // a mismatch degrades to a one-shot allow engine-side).
+                    { kind: kindForScope as string }
+                  : "allow",
           authToken: engineAuthToken,
           fetchImpl,
         });
@@ -641,6 +672,74 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           `shannon/approval.set: session ${ctx.sessionId} tightened to ${mode}`,
         );
         return { kind: "result", result: { mode } satisfies ApprovalStateResult };
+      } catch (err) {
+        return {
+          kind: "error",
+          code: ShannonError.ENGINE_ERROR,
+          message: (err as Error).message,
+        };
+      }
+    },
+
+    // ── N3 per-kind trust face (cross-repo spec §Q) ──────────────────────
+    // Both handlers proxy the ENGINE's kind-trust store (the same store the
+    // permission gate consults), so a revoke takes effect on the very next
+    // approval check — never a gateway-side copy. Gated like every
+    // session-scoped read/write: an unpaired device gets PAIRING_REQUIRED.
+    // Capability note: an old gateway answers METHOD_NOT_FOUND for both —
+    // that absence is the phone's honest degrade signal (capability name
+    // `trust.kind`, the usage.budget §P precedent).
+
+    "shannon/trust.list": async (_raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
+      try {
+        const body = await getTrustKinds({
+          engineBaseUrl: opts.engineHttpBaseUrl,
+          authToken: engineAuthToken,
+          fetchImpl,
+        });
+        // camelCase projection per the §J-family wire convention; a broken
+        // engine payload degrades to an honest empty list, never an error
+        // shape the phone would have to guess at.
+        const kinds = (Array.isArray(body?.kinds) ? body.kinds : [])
+          .filter((k): k is { kind: string; granted_at: number } =>
+            typeof k?.kind === "string" &&
+            k.kind.length > 0 &&
+            typeof k?.granted_at === "number" &&
+            Number.isFinite(k.granted_at))
+          .map((k) => ({ kind: k.kind, grantedAt: new Date(k.granted_at).toISOString() }));
+        return { kind: "result", result: { kinds } satisfies TrustListResult };
+      } catch (err) {
+        return {
+          kind: "error",
+          code: ShannonError.ENGINE_ERROR,
+          message: (err as Error).message,
+        };
+      }
+    },
+
+    "shannon/trust.revoke": async (raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
+      const params = (raw ?? {}) as Partial<TrustRevokeParams>;
+      if (typeof params.kind !== "string" || params.kind.length === 0) {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: "params.kind (non-empty string) is required",
+        };
+      }
+      try {
+        await revokeTrustKind({
+          engineBaseUrl: opts.engineHttpBaseUrl,
+          kind: params.kind,
+          authToken: engineAuthToken,
+          fetchImpl,
+        });
+        // Idempotent on the phone's side too: an unknown kind is still a
+        // successful revoke (the grant is gone either way).
+        return { kind: "result", result: { ok: true } satisfies TrustRevokeResult };
       } catch (err) {
         return {
           kind: "error",

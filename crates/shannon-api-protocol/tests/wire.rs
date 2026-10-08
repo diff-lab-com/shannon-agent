@@ -9,7 +9,8 @@ use serde_json::json;
 use shannon_api_protocol::{
     AgentRef, ApprovalDecision, ApprovalRespondRequest, HealthResponse, ModelInfo, ModelsResponse,
     PROTOCOL_VERSION, QueryRequest, QueryResponse, RiskInfo, RiskScope, SessionSummary,
-    SseEventName, ToolEntry, ToolsListResponse, TranscriptMessage, UsageInfo, WsClientMessage,
+    SseEventName, ToolEntry, ToolsListResponse, TranscriptMessage, TrustKindsResponse,
+    TrustRevokeRequest, TrustRevokeResponse, TrustedKindEntry, UsageInfo, WsClientMessage,
     WsServerMessage,
 };
 use uuid::Uuid;
@@ -208,6 +209,64 @@ fn approval_decision_serde_round_trip() {
 fn approval_decision_unknown_variant_is_rejected() {
     let res: Result<ApprovalDecision, _> = serde_json::from_str("\"oops\"");
     assert!(res.is_err());
+}
+
+// ── ApprovalDecision::AlwaysAllowKind (N3) ──────────────────────────────
+
+#[test]
+fn always_allow_kind_wire_shape_is_externally_tagged() {
+    // The frozen N3 wire form: {"always_allow_kind":{"kind":"Bash"}} —
+    // the mobile gateway and the generated TS union both pin this shape.
+    let decision = ApprovalDecision::AlwaysAllowKind {
+        kind: "Bash".to_string(),
+    };
+    let json = serde_json::to_string(&decision).unwrap();
+    assert_eq!(json, r#"{"always_allow_kind":{"kind":"Bash"}}"#);
+    let back: ApprovalDecision = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, decision);
+}
+
+#[test]
+fn always_allow_kind_requires_the_kind_payload() {
+    // Missing payload / missing kind field must not parse into the variant.
+    let res: Result<ApprovalDecision, _> = serde_json::from_str(r#"{"always_allow_kind":{}}"#);
+    assert!(res.is_err());
+    let res: Result<ApprovalDecision, _> = serde_json::from_str(r#"{"always_allow_kind":1}"#);
+    assert!(res.is_err());
+}
+
+// ── N3 per-kind trust face ──────────────────────────────────────────────
+
+#[test]
+fn trust_kinds_response_serialization() {
+    let body = TrustKindsResponse {
+        kinds: vec![TrustedKindEntry {
+            kind: "Bash".to_string(),
+            granted_at: 1_760_000_000_000,
+        }],
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&body).unwrap();
+    assert_eq!(parsed["kinds"][0]["kind"], "Bash");
+    assert_eq!(parsed["kinds"][0]["granted_at"], 1_760_000_000_000_u64);
+    let back: TrustKindsResponse = serde_json::from_value(parsed).unwrap();
+    assert_eq!(back, body);
+}
+
+#[test]
+fn trust_revoke_round_trip_and_idempotent_shape() {
+    let req = TrustRevokeRequest {
+        kind: "Write".to_string(),
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&req).unwrap();
+    assert_eq!(parsed["kind"], "Write");
+    let resp = TrustRevokeResponse {
+        kind: "Write".to_string(),
+        revoked: false,
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&resp).unwrap();
+    assert_eq!(parsed["revoked"], false);
+    let back: TrustRevokeResponse = serde_json::from_value(parsed).unwrap();
+    assert_eq!(back, resp);
 }
 
 // ── ApprovalRespondRequest ──────────────────────────────────────────────
