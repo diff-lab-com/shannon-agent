@@ -1923,7 +1923,10 @@ mod tests {
             ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
-        assert!(json.contains("\"restore_session_windows_on_launch\":false"), "{json}");
+        assert!(
+            json.contains("\"restore_session_windows_on_launch\":false"),
+            "{json}"
+        );
         assert!(json.contains("\"update_check_at_launch\":false"), "{json}");
         let back: DesktopConfig = serde_json::from_str(&json).unwrap();
         assert!(!back.restore_session_windows_on_launch);
