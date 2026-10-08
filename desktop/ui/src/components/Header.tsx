@@ -500,13 +500,15 @@ export function Header() {
                 <p className="text-body-sm text-on-surface-variant">{t('header.permRequest.subtitle')}</p>
               </div>
               {/* U3: four distinguishable risk tiers — critical=error,
-                  high=secondary, medium=tertiary, low=tertiary — with a
+                  high=secondary, medium=warning (Aurora 2026-10 语义色归位:
+                  amber is the high-risk signal), low=tertiary — with a
                   localized, screen-reader-visible label. */}
               <span
                 aria-label={t('header.permRequest.risk.aria', { level: t(`header.permRequest.risk.${permissionRequest.risk}`) })}
                 className={cn('px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider',
                   permissionRequest.risk === 'critical' ? 'bg-error-container text-on-error-container' :
                   permissionRequest.risk === 'high' ? 'bg-secondary-container text-on-secondary-container' :
+                  permissionRequest.risk === 'medium' ? 'bg-warning-container text-on-warning-container' :
                   'bg-tertiary-container text-on-tertiary-container'
                 )}>{t(`header.permRequest.risk.${permissionRequest.risk}`)}</span>
             </div>

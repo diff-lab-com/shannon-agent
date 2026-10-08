@@ -287,7 +287,8 @@ describe('Header component', () => {
   })
 
   // U3 — four distinguishable risk tiers: critical=error, high=secondary,
-  // medium=tertiary (was wrongly secondary), low=tertiary. Localized text,
+  // medium=warning, low=tertiary. Aurora 2026-10 语义色归位: amber/warning
+  // is the high-risk signal, so medium moved off tertiary. Localized text,
   // announced via aria-label. G7 2026-09-30: tier chips render the MD3
   // container pairs (bg-X-container + text-on-X-container), not accent
   // text on an accent/10 tint.
@@ -296,7 +297,7 @@ describe('Header component', () => {
     const tier = {
       critical: 'text-on-error-container',
       high: 'text-on-secondary-container',
-      medium: 'text-on-tertiary-container',
+      medium: 'text-on-warning-container',
       low: 'text-on-tertiary-container',
     }[risk]
 
