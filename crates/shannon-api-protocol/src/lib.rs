@@ -153,7 +153,9 @@ pub struct ToolEntry {
 /// Wire representation of a human's approval decision for `POST
 /// /api/approval/respond`. Decoupled from the engine's `PermissionChoice` so
 /// the HTTP contract stays stable when the engine enum grows new variants.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+/// N3 note: `Copy` was dropped when `AlwaysAllowKind` started carrying the
+/// `kind` payload — every consumer already worked by value or reference.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[schemars(rename_all = "snake_case")]
 pub enum ApprovalDecision {
     #[serde(rename = "allow_once")]
@@ -164,6 +166,15 @@ pub enum ApprovalDecision {
     /// "allow for this session" scope maps here.
     #[serde(rename = "always_allow_session")]
     AlwaysAllowSession,
+    /// N3: per-kind trust grant (the mobile "always allow this category"
+    /// scope). `kind` is the approval's tool name on the wire — the grant is
+    /// persisted to the engine's per-kind trust store (`~/.shannon/trust/
+    /// kinds.toml`) and auto-approves subsequent requests whose tool name
+    /// matches EXACTLY. Never a global always-allow: deny/ask rules and the
+    /// global deny gate keep binding. Wire form:
+    /// `{"always_allow_kind": {"kind": "Bash"}}`.
+    #[serde(rename = "always_allow_kind")]
+    AlwaysAllowKind { kind: String },
     #[serde(rename = "deny")]
     Deny,
 }
@@ -193,6 +204,44 @@ pub struct ApprovalModeRequest {
     pub session_id: String,
     /// Must be `readonly` (the mobile one-tap tighten).
     pub mode: String,
+}
+
+// ── N3 per-kind trust wire types ────────────────────────────────────────
+
+/// N3: response for `GET /api/trust/kinds` — the active per-kind trust
+/// grants, sorted by kind. Empty `kinds` when nothing is trusted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct TrustKindsResponse {
+    pub kinds: Vec<TrustedKindEntry>,
+}
+
+/// N3: one active per-kind trust grant.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct TrustedKindEntry {
+    /// The trusted kind — the engine tool name, matched exactly on later
+    /// approval requests (no globs, no prefix semantics).
+    pub kind: String,
+    /// When the grant was made, epoch milliseconds.
+    pub granted_at: u64,
+}
+
+/// N3: body for `POST /api/trust/revoke`. Revocation is idempotent and takes
+/// effect immediately — every subsequent permission check re-reads the live
+/// store, so the next matching request prompts again.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct TrustRevokeRequest {
+    /// The kind to revoke. Unknown kinds report `revoked: false` (idempotent).
+    pub kind: String,
+}
+
+/// N3: response for `POST /api/trust/revoke`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct TrustRevokeResponse {
+    /// Echo of the revoked kind.
+    pub kind: String,
+    /// True when a grant was actually removed; false when nothing was trusted
+    /// under this kind (idempotent replay).
+    pub revoked: bool,
 }
 
 // ── SSE event-name contract ─────────────────────────────────────────────
