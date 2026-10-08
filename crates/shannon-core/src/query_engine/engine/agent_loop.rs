@@ -3039,6 +3039,36 @@ impl QueryEngine {
                                                                         );
                                                                     }
                                                                     Ok(
+                                                                        shannon_engine::permissions::PermissionChoice::AlwaysAllowKind {
+                                                                            kind,
+                                                                        },
+                                                                    ) => {
+                                                                        // N3: per-kind trust grant
+                                                                        // (mobile scope) — the
+                                                                        // manager validates the
+                                                                        // kind against THIS prompt's
+                                                                        // tool (mismatch degrades to
+                                                                        // allow-once) and persists the
+                                                                        // grant to the shared trust
+                                                                        // store.
+                                                                        let _ = recover_lock(permissions.write())
+                                                                            .process_permission_choice(
+                                                                                session_id_for_permissions,
+                                                                                &prompt_for_choice,
+                                                                                shannon_engine::permissions::PermissionChoice::AlwaysAllowKind {
+                                                                                    kind,
+                                                                                },
+                                                                            );
+                                                                        crate::query_engine::guard_nodes::emit_decision(
+                                                                            &session_bus,
+                                                                            &tool_name,
+                                                                            "allow",
+                                                                            Some("user granted kind trust"),
+                                                                            "USER",
+                                                                            0,
+                                                                        );
+                                                                    }
+                                                                    Ok(
                                                                         shannon_engine::permissions::PermissionChoice::EditAndRun,
                                                                     ) => {
                                                                         // User edited the command; treat as allow-once

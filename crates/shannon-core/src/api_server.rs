@@ -60,7 +60,8 @@ use uuid::Uuid;
 pub use shannon_api_protocol::{
     ApprovalDecision, ApprovalRespondRequest, HealthResponse, MessageAttachment, ModelInfo,
     ModelsResponse, PROTOCOL_VERSION, QueryRequest, QueryResponse, SseEventName, ToolEntry,
-    ToolsListResponse, UsageInfo, WsClientMessage, WsServerMessage,
+    ToolsListResponse, TrustKindsResponse, TrustRevokeRequest, TrustRevokeResponse,
+    TrustedKindEntry, UsageInfo, WsClientMessage, WsServerMessage,
 };
 
 /// Generic error returned by all API endpoints.
@@ -90,6 +91,7 @@ fn approval_decision_to_choice(d: ApprovalDecision) -> PermissionChoice {
         ApprovalDecision::AllowOnce => PermissionChoice::AllowOnce,
         ApprovalDecision::AlwaysAllow => PermissionChoice::AlwaysAllow,
         ApprovalDecision::AlwaysAllowSession => PermissionChoice::AlwaysAllowSession,
+        ApprovalDecision::AlwaysAllowKind { kind } => PermissionChoice::AlwaysAllowKind { kind },
         ApprovalDecision::Deny => PermissionChoice::Deny,
     }
 }
@@ -305,7 +307,9 @@ impl ShannonApiServer {
             .route(
                 "/api/approval/mode",
                 get(approval_mode_get_handler).post(approval_mode_post_handler),
-            );
+            )
+            .route("/api/trust/kinds", get(trust_kinds_handler))
+            .route("/api/trust/revoke", post(trust_revoke_handler));
         for extra in &self.extra_routes {
             // `with_state(())` re-types an already state-applied router so it
             // can merge with the (not yet state-applied) core router.
@@ -571,6 +575,10 @@ async fn models_handler(State(state): State<AppState>) -> Json<ModelsResponse> {
 /// bare engine-default manager.
 fn server_permissions() -> shannon_engine::permissions::PermissionManager {
     let mut pm = shannon_engine::permissions::PermissionManager::new();
+    // N3: every served session shares the process-global kind-trust store —
+    // the same handle the trust routes below serve, so a phone-side grant or
+    // revoke lands in every current and future session without a restart.
+    pm.set_kind_trust(shannon_engine::trust::shared_store());
     if let Some(profile) = crate::unified_config::ShannonConfig::configured_permission_profile() {
         shannon_engine::permissions::apply_configured_profile(&mut pm, &profile);
     }
@@ -1049,6 +1057,39 @@ async fn approval_respond_handler(
 // shannon-mobile docs/cross-repo-adaptation-spec.md §G (G4); reference
 // behavior + test: relayHost.test.ts "re-pairs after phone reconnects
 // (recv counter resets)".
+
+// ── N3 per-kind trust routes ─────────────────────────────────────────────
+//
+// The gateway's `shannon/trust.list` / `shannon/trust.revoke` proxy these.
+// All state lives in the shared kind-trust store (one handle per process —
+// the same one every served session's permission manager holds), so a
+// revoke takes effect on the very next permission check.
+
+/// `GET /api/trust/kinds` — the active per-kind trust grants, sorted by
+/// kind. Empty `kinds` when nothing is trusted.
+async fn trust_kinds_handler() -> axum::Json<TrustKindsResponse> {
+    let kinds = shannon_engine::trust::shared_store()
+        .list()
+        .into_iter()
+        .map(|(kind, granted_at)| TrustedKindEntry { kind, granted_at })
+        .collect();
+    axum::Json(TrustKindsResponse { kinds })
+}
+
+/// `POST /api/trust/revoke` — remove one kind from the trust store.
+/// Idempotent: an unknown kind answers `revoked: false` rather than 404, so
+/// a retried revoke (mobile offline queue) can't fail.
+async fn trust_revoke_handler(
+    axum::Json(body): axum::Json<TrustRevokeRequest>,
+) -> axum::Json<TrustRevokeResponse> {
+    let revoked = shannon_engine::trust::shared_store().revoke(&body.kind);
+    tracing::info!(kind = %body.kind, revoked, "kind trust revoked via api");
+    axum::Json(TrustRevokeResponse {
+        kind: body.kind,
+        revoked,
+    })
+}
+
 /// P3-3: `GET /api/approval/mode?session_id=<uuid>` — the approval token
 /// currently in effect for a WS-backed session (server default when the
 /// session has none stored).

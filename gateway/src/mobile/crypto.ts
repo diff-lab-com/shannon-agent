@@ -103,13 +103,23 @@ export function resumeMessage(deviceId: string, timestampMs: number, nonce?: str
 /** `shannon/approval/decide`: mandatory per-decision device signature (v1).
  *  P3-3: a `session` scope is bound into the signed bytes (suffix `:session`)
  *  so a captured once-decision cannot be replayed as a session grant; the
- *  no-scope shape is byte-identical to the pre-P3-3 contract. */
+ *  no-scope shape is byte-identical to the pre-P3-3 contract.
+ *  N3: a `kind` scope binds the trusted category the same way — suffix
+ *  `:kind:<kind>` — so a captured once-decision cannot be replayed as a
+ *  per-kind trust grant and a captured kind grant cannot be re-aimed at a
+ *  different category. */
 export function approvalMessage(
   requestId: string,
   choice: "allow" | "deny",
-  scope?: "once" | "session",
+  scope?: "once" | "session" | "kind",
+  kind?: string,
 ): string {
-  const suffix = scope === "session" ? ":session" : "";
+  const suffix =
+    scope === "session"
+      ? ":session"
+      : scope === "kind" && kind !== undefined
+        ? `:kind:${kind}`
+        : "";
   return `${requestId}:${choice}${suffix}`;
 }
 
@@ -132,8 +142,14 @@ export function approvalMessageV2(
   requestId: string,
   choice: "allow" | "deny",
   timestampMs: number,
-  scope?: "once" | "session",
+  scope?: "once" | "session" | "kind",
+  kind?: string,
 ): string {
-  const suffix = scope === "session" ? ":session" : "";
+  const suffix =
+    scope === "session"
+      ? ":session"
+      : scope === "kind" && kind !== undefined
+        ? `:kind:${kind}`
+        : "";
   return `${requestId}:${choice}:${timestampMs}${suffix}`;
 }

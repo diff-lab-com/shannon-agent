@@ -24,7 +24,8 @@ use shannon_api_protocol::{
     AgentRef, ApprovalDecision, ApprovalModeRequest, ApprovalModeState, ApprovalRespondRequest,
     HealthResponse, MessageAttachment, ModelInfo, ModelsResponse, PROTOCOL_VERSION, QueryRequest,
     QueryResponse, RiskInfo, RiskScope, SessionSummary, SseEventName, ToolEntry, ToolsListResponse,
-    TranscriptMessage, UsageInfo, WsClientMessage, WsServerMessage,
+    TranscriptMessage, TrustKindsResponse, TrustRevokeRequest, TrustRevokeResponse,
+    TrustedKindEntry, UsageInfo, WsClientMessage, WsServerMessage,
 };
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -106,6 +107,16 @@ fn collect_entries() -> Vec<TypeEntry> {
         entry_struct::<AgentRef>("AgentRef"),
         entry_struct::<RiskInfo>("RiskInfo"),
         entry_enum_simple::<RiskScope>("RiskScope"),
+        // N3 per-kind trust face (GET /api/trust/kinds, POST /api/trust/revoke).
+        entry_struct::<TrustKindsResponse>("TrustKindsResponse"),
+        entry_struct::<TrustedKindEntry>("TrustedKindEntry"),
+        entry_struct::<TrustRevokeRequest>("TrustRevokeRequest"),
+        entry_struct::<TrustRevokeResponse>("TrustRevokeResponse"),
+        // P3-3 approval-mode face (GET/POST /api/approval/mode) — these landed
+        // without ever being emitted (a pre-existing drift-guard failure on
+        // main); emitted here so the guard is green again.
+        entry_struct::<ApprovalModeState>("ApprovalModeState"),
+        entry_struct::<ApprovalModeRequest>("ApprovalModeRequest"),
         entry_tagged_enum::<WsClientMessage>("WsClientMessage"),
         entry_tagged_enum::<WsServerMessage>("WsServerMessage"),
     ]
@@ -332,27 +343,77 @@ fn render_tagged_enum(
     Ok(())
 }
 
-/// Render a plain unit-only enum that arrives as a `oneOf` whose each variant
-/// is just `{"type": "string", "enum": ["..."]}`.
+/// Render a unit-only enum that arrives as a `oneOf` whose each variant
+/// is just `{"type": "string", "enum": ["..."]}` — and, since the N3
+/// `always_allow_kind` variant, enums that MIX unit variants with data
+/// variants: an externally-tagged struct variant renders as an object
+/// schema, materialised as an inline `{ tag: payload }` union member so the
+/// union mirrors the serde wire shape 1:1 (dropping it would silently hide
+/// the variant from gateway clients). Unit (string) members are sorted
+/// first for diff-stability; object members follow in declaration order.
 fn render_string_enum_from_one_of(
     out: &mut String,
     name: &str,
     variants: &[Schema],
 ) -> Result<(), GenError> {
-    let mut values: Vec<String> = Vec::new();
+    let mut string_members: Vec<String> = Vec::new();
+    let mut object_members: Vec<String> = Vec::new();
     for v in variants {
         let vobj =
             schema_obj(v).ok_or_else(|| GenError::new("string enum variant is not an object"))?;
         if let Some(enum_vals) = &vobj.enum_values {
             for ev in enum_vals {
                 if let Some(s) = ev.as_str() {
-                    values.push(format!("\"{s}\""));
+                    string_members.push(format!("  | \"{s}\""));
                 }
             }
+        } else if vobj.object.as_ref().is_some() {
+            object_members.push(format!("  | {}", inline_struct_tagged(vobj, name)?));
         }
     }
-    render_string_enum_values(out, name, &mut values);
+    if !object_members.is_empty() && string_members.is_empty() {
+        return Err(GenError::new(
+            "enum oneOf carries only object variants; use entry_tagged_enum instead",
+        ));
+    }
+    string_members.sort();
+    string_members.dedup();
+    string_members.extend(object_members);
+    let union = string_members.join("\n");
+    let _ = writeln!(out, "export type {name} =\n{union};");
     Ok(())
+}
+
+/// Render one externally-tagged struct variant of a mixed enum as a single
+/// union member: `{"always_allow_kind": { kind: string }}`. Serde's external
+/// tagging wraps the payload under the renamed variant tag.
+fn inline_struct_tagged(vobj: &SchemaObject, enum_name: &str) -> Result<String, GenError> {
+    let object = vobj
+        .object
+        .as_ref()
+        .ok_or_else(|| GenError::new("object variant has no properties"))?;
+    if object.properties.len() != 1 {
+        return Err(GenError::new(format!(
+            "externally-tagged variant of {enum_name} must carry exactly one tag property"
+        )));
+    }
+    let (tag, payload) = object
+        .properties
+        .iter()
+        .next()
+        .ok_or_else(|| GenError::new("object variant has no tag property"))?;
+    let payload_obj = schema_obj(payload)
+        .and_then(|o| o.object.clone())
+        .ok_or_else(|| GenError::new("object variant payload is not an inline object"))?;
+    Ok(format!(
+        "{{ {tag}: {} }}",
+        inline_struct(
+            &payload_obj,
+            &Ctx {
+                defs: &std::collections::BTreeMap::new(),
+            }
+        )
+    ))
 }
 
 /// Render a plain unit-only enum that arrives as a single object with

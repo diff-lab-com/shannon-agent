@@ -49,6 +49,8 @@ export type ShannonMethod =
   | "shannon/approval.list"
   | "shannon/approval.state"
   | "shannon/approval.set"
+  | "shannon/trust.list"
+  | "shannon/trust.revoke"
   | "shannon/session.list"
   | "shannon/session.history"
   | "shannon/push.register"
@@ -81,6 +83,8 @@ export const SHANNON_METHODS = [
   "shannon/approval.list",
   "shannon/approval.state",
   "shannon/approval.set",
+  "shannon/trust.list",
+  "shannon/trust.revoke",
   "shannon/session.list",
   "shannon/session.history",
   "shannon/push.register",
@@ -120,11 +124,20 @@ export interface ApprovalDecideParams {
   /**
    * P3-3: with `choice: "allow"` — how far the grant reaches. `"once"`
    * (default) maps to the engine `allow_once`; `"session"` maps to
-   * `always_allow_session` (in-session always-allow, never persisted). A
-   * `session` scope is bound into the decision signature; `deny` rejects any
-   * scope.
+   * `always_allow_session` (in-session always-allow, never persisted). N3:
+   * `"kind"` maps to `always_allow_kind` — a PERSISTED per-kind trust grant
+   * (`params.kind` is required, exact-match against the approval's tool
+   * name; there is no global always-allow). A scope is bound into the
+   * decision signature; `deny` rejects any scope.
    */
-  scope?: "once" | "session";
+  scope?: "once" | "session" | "kind";
+  /**
+   * N3: with `scope: "kind"` — the category to trust. Must equal the
+   * approval's own kind (the engine tool name) verbatim; the engine
+   * degrades a mismatch to a one-shot allow so a buggy scope can neither
+   * widen trust nor veto the operation the human approved.
+   */
+  kind?: string;
   /**
    * Ed25519 signature over the decision message — v2 also binds `timestamp`
    * (see below). Required at runtime whenever the gateway runs with
@@ -537,6 +550,43 @@ export interface ApprovalSetParams {
 
 export interface ApprovalListResult {
   pendingApprovals: MobileApprovalItem[];
+}
+
+// ── N3 per-kind trust shapes (cross-repo spec §Q) ──────────────────────────
+
+/**
+ * One active per-kind trust grant as served by `shannon/trust.list`. The
+ * kind is the engine tool name, matched EXACTLY on later approval requests —
+ * there is no global always-allow and no cross-kind semantics. `grantedAt`
+ * is ISO-8601 UTC (the phone renders it or hides it — never invents one).
+ */
+export interface TrustedKindItem {
+  kind: string;
+  grantedAt: string;
+}
+
+/**
+ * `shannon/trust.list` success — the active grants, sorted by kind. An old
+ * gateway answers METHOD_NOT_FOUND: that absence IS the capability signal
+ * (the `shannon/usage.budget` degrade precedent — the capability name is
+ * `trust.kind`), and the phone's trust switch hides/disables accordingly.
+ */
+export interface TrustListResult {
+  kinds: TrustedKindItem[];
+}
+
+/**
+ * `shannon/trust.revoke` params — the kind to revoke. Idempotent: an unknown
+ * kind still answers ok (the grant is gone either way), so a retried revoke
+ * (the phone's offline queue) cannot fail.
+ */
+export interface TrustRevokeParams {
+  kind: string;
+}
+
+/** `shannon/trust.revoke` success — revocation takes effect immediately. */
+export interface TrustRevokeResult {
+  ok: true;
 }
 
 /** One session summary as served by `shannon/session.list` (spec §J1). */
