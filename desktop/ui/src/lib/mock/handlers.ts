@@ -1505,32 +1505,39 @@ export const handlers: Record<string, MockHandler> = {
   },
   async export_session() { await delay(120); return '# Exported session\n\n(mock content)' },
   // ── Remote targets (SSH hosts / Docker containers) ──
+  // R3-V-01 contract fix: the real `remote_list_targets` answers
+  // `{ targets, defaultTarget }` (RemoteTargetsList, P1-16) — this handler
+  // used to answer a bare array, so the demo pane read `list?.targets ?? []`
+  // into an always-empty list and the two demo rows never rendered.
   async remote_list_targets() {
     await delay()
-    return [
-      {
-        name: 'build-box',
-        kind: 'ssh',
-        host: 'build-box',
-        port: null,
-        user: null,
-        container: null,
-        shell: null,
-        sshTarget: null,
-        workspaceDir: '/home/ed/proj',
-      },
-      {
-        name: 'ci-runner',
-        kind: 'docker',
-        host: null,
-        port: null,
-        user: null,
-        container: 'shannon-ci',
-        shell: 'bash',
-        sshTarget: 'build-box',
-        workspaceDir: '/workspace',
-      },
-    ]
+    return {
+      targets: [
+        {
+          name: 'build-box',
+          kind: 'ssh',
+          host: 'build-box',
+          port: null,
+          user: null,
+          container: null,
+          shell: null,
+          sshTarget: null,
+          workspaceDir: '/home/ed/proj',
+        },
+        {
+          name: 'ci-runner',
+          kind: 'docker',
+          host: null,
+          port: null,
+          user: null,
+          container: 'shannon-ci',
+          shell: 'bash',
+          sshTarget: 'build-box',
+          workspaceDir: '/workspace',
+        },
+      ],
+      defaultTarget: 'build-box',
+    }
   },
   async remote_discover_ssh_hosts() {
     await delay()

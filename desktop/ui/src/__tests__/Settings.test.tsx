@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import Settings from '@/pages/Settings'
@@ -125,6 +125,87 @@ describe('Settings', () => {
       localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
       renderAdvancedRoute()
       expect(screen.getByText('advanced pane')).toBeInTheDocument()
+    })
+  })
+
+  // R3-V-01 — the pane boundary lives around the Outlet, inside the shell.
+  // A sub-page that throws (pane data failure) used to bubble to the
+  // app-level boundary and replace the ENTIRE settings panel — rail
+  // included — with a bare English exception string.
+  describe('pane-level error boundary (sub-page crash)', () => {
+    const originalError = console.error
+    beforeEach(() => {
+      localStorage.removeItem(SIDEBAR_MODE_KEY)
+      console.error = vi.fn() // React logs caught boundary errors
+    })
+    afterEach(() => {
+      console.error = originalError
+    })
+
+    function renderWithPane(element: React.ReactElement) {
+      return render(
+        <I18nProvider>
+          <MemoryRouter initialEntries={['/settings/general']}>
+            <Routes>
+              <Route path="/settings" element={<Settings />}>
+                <Route path="general" element={element} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </I18nProvider>,
+      )
+    }
+
+    it('a crashing pane leaves the shell + section rail intact', () => {
+      function Crash(): React.JSX.Element {
+        throw new Error('pane data failed to load')
+      }
+      renderWithPane(<Crash />)
+
+      // The rail survives — every section entry is still navigable.
+      expect(screen.getByRole('link', { name: /General/ })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /Appearance/ })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /Models/ })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /Connections/ })).toBeInTheDocument()
+      // …and the pane area shows the friendly i18n error UI, not the raw
+      // exception string as a headline.
+      expect(screen.getByTestId('pane-error')).toBeInTheDocument()
+      expect(screen.getByText('This section failed to load')).toBeInTheDocument()
+      // The raw string only exists inside the collapsed details block.
+      const paneText = screen.getByTestId('pane-error').textContent ?? ''
+      expect(paneText).toContain('pane data failed to load')
+      const outsideDetails =
+        (screen.getByTestId('pane-error').cloneNode(true) as HTMLElement)
+      outsideDetails.querySelector('details')?.remove()
+      expect(outsideDetails.textContent).not.toContain('pane data failed to load')
+    })
+
+    it('retry remounts the pane once its data loads', () => {
+      let shouldThrow = true
+      function CrashOnce(): React.JSX.Element {
+        if (shouldThrow) throw new Error('transient pane failure')
+        return <div data-testid="pane-content">general pane content</div>
+      }
+      renderWithPane(<CrashOnce />)
+      expect(screen.getByTestId('pane-error')).toBeInTheDocument()
+
+      shouldThrow = false
+      fireEvent.click(screen.getByTestId('pane-error-retry'))
+      expect(screen.getByTestId('pane-content')).toBeInTheDocument()
+      expect(screen.queryByTestId('pane-error')).not.toBeInTheDocument()
+      // The technical details block is gone with the error state.
+      expect(screen.queryByTestId('pane-error-details')).not.toBeInTheDocument()
+    })
+
+    it('folds the raw message into a collapsed technical-details block', () => {
+      function Crash(): React.JSX.Element {
+        throw new Error('raw backend trace')
+      }
+      renderWithPane(<Crash />)
+      const details = screen.getByTestId('pane-error-details')
+      expect(details).not.toHaveAttribute('open')
+      expect(details).toHaveTextContent('Technical details')
+      expect(details).toHaveTextContent('raw backend trace')
     })
   })
 })
