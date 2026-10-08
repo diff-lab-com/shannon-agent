@@ -1378,6 +1378,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                         cost_usd: event_cost,
                         cache_creation_tokens,
                         cache_read_tokens,
+                        context_window_tokens,
                         ..
                     } => {
                         observation.cost_usd += event_cost;
@@ -1409,6 +1410,9 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                                     cache_read_tokens as f64
                                         / (input_tokens + cache_read_tokens) as f64
                                 }),
+                                // 上下文峰值: engine-resolved real window;
+                                // None stays None (诚实规则 — UI hides the %).
+                                context_total: context_window_tokens,
                             },
                         );
                     }

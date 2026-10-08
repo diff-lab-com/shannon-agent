@@ -230,7 +230,27 @@ async fn session_wire_info(state: &AppState, s: &SessionMeta) -> events::Session
         running,
         updated_at: session_log_mtime(state, &s.id),
         pinned,
+        max_context_tokens: session_context_peak(state, &s.id),
     }
+}
+
+/// Context peak (上下文峰值) for the rail row: the L0 session index's
+/// running max over logged turns (the same number `UsagePayload
+/// .context_total` streams live), so a reopened session still renders a
+/// context percentage. Per-row `index.json` read, the same shape the pinned
+/// join already pays. `None` when no logged turn knew its window (the UI
+/// hides the percentage — honesty rule) or the index is missing/stale (the
+/// next `SessionStore::list` pass rebuilds it).
+fn session_context_peak(state: &AppState, id: &str) -> Option<u64> {
+    let uuid = uuid::Uuid::parse_str(id).ok()?;
+    let events_path = state
+        .l0_store()
+        .container()
+        .join(uuid.to_string())
+        .join("events.jsonl");
+    let index_path = shannon_core::session_log::session_index::index_path_for(&events_path);
+    shannon_core::session_log::SessionIndex::load_if_valid(&events_path, &index_path)
+        .and_then(|index| index.max_context_tokens)
 }
 
 /// Last-activity epoch ms for a session, taken from its L0 log's mtime.
@@ -1877,6 +1897,7 @@ pub async fn duplicate_session(
         updated_at: None,
         // A fresh duplicate starts unpinned — the pin belongs to the
         // original conversation, not its copy.
+        max_context_tokens: None,
         pinned: false,
     })
 }
@@ -1967,6 +1988,7 @@ pub(crate) async fn branch_session_internal(
         updated_at: None,
         // Same contract as duplicate: a brand-new branch starts unpinned.
         pinned: false,
+        max_context_tokens: None,
     })
 }
 

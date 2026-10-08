@@ -2353,6 +2353,7 @@ pub async fn send_message(
                         cost_usd,
                         cache_creation_tokens,
                         cache_read_tokens,
+                        context_window_tokens,
                         ..
                     } => {
                         // P1-⑤ telemetry: attribute this usage frame to the
@@ -2388,6 +2389,11 @@ pub async fn send_message(
                             cache_hit_rate: (input_tokens + cache_read_tokens > 0)
                                 .then(|| cache_read_tokens as f64
                                     / (input_tokens + cache_read_tokens) as f64),
+                            // 上下文峰值: the engine resolves the serving
+                            // model's real context window per query; None
+                            // (unknown) stays None — the UI hides the
+                            // percentage instead of fabricating a window.
+                            context_total: context_window_tokens,
                         };
                         let _ = app.emit(event_names::QUERY_USAGE, payload);
 
