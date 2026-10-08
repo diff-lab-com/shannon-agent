@@ -12,6 +12,12 @@ homepage = "https://github.com/diff-lab-com/shannon-agent"
 [features]
 default = ["tauri", "preview-capture"]
 tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-opener", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
+# Production embed: plain `cargo build --release` must enable this or the
+# binary embeds NO frontend and loads build.devUrl (tauri.conf.json) — a
+# release app run without a dev server on :1420 shows WebKit's "Could not
+# connect to localhost". The tauri CLI passes it automatically for
+# `tauri build`; direct cargo callers opt in here (just build-desktop does).
+custom-protocol = ["tauri/custom-protocol"]
 # P1-5 C-1 — native window/monitor screenshot capture backing
 # `preview_capture` / the `preview_screenshot` engine tool (xcap, the same
 # capture path the computer-use tool uses). Opt-out for CI matrices that

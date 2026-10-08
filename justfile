@@ -35,8 +35,11 @@ build-code:
     cargo build --release -p shannon-cli
 
 # shannon-desktop product: Tauri desktop app (member `desktop`).
+# --features custom-protocol: bakes ui/dist into the binary. Without it a
+# release binary loads build.devUrl and shows "Connection refused" without a
+# dev server (the tauri CLI adds this flag itself; plain cargo must be told).
 build-desktop:
-    cargo build --release -p shannon-desktop
+    cargo build --release -p shannon-desktop --features custom-protocol
 
 # shannon-gateway product: TS platform bridge, compiled to a standalone binary.
 build-gateway:

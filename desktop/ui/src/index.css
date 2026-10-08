@@ -57,6 +57,10 @@
   --container-narrow: 48rem;
   --container-medium: 75rem;
   --container-wide: 100rem;
+  /* Reading column (ui-redesign-2026-10 02-chat): the chat message flow and
+     its composer share one 792px measure, so long replies never detach from
+     the input that produced them. */
+  --container-reading: 792px;
   /* v4 resolves `max-w-sm` through --max-width → --spacing → --container, in
      that order. Our MD3 scale defines `--spacing-sm: 8px`, which hijacked
      `max-w-sm` and collapsed every default dialog to 8px wide. Pin the

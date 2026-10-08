@@ -45,7 +45,9 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
   // leaving the composer unreachable (audit P0: composer always visible).
   return (
     <div className="shrink-0 w-full px-lg md:px-xl pb-md pt-xs">
-      <div className="max-w-4xl mx-auto">
+      {/* Same reading measure as the message flow (ui-redesign-2026-10
+          02-chat) — the status bar rides this container too. */}
+      <div className="max-w-reading mx-auto">
         {/* Aurora signature (ui-redesign-2026-10 §1): the composer is one of
             the four surfaces allowed to carry the aurora-line — a 1px
             violet→cyan hairline on the glass top edge. Pure paint (no
