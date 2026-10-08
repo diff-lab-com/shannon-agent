@@ -20,6 +20,19 @@ vi.mock('@/lib/tauri-api', async importOriginal => {
   }
 })
 
+// Welcome's hero-composer submit needs useSessions (design 01「开始 →」
+// mirrors Sidebar.startWithPrompt) — stub it like the catalog above.
+vi.mock('@/context/SessionContext', async importOriginal => {
+  const actual = await importOriginal<Record<string, unknown>>()
+  return {
+    ...actual,
+    useSessions: () => ({
+      currentSessionId: null,
+      createSession: vi.fn().mockResolvedValue(undefined),
+    }),
+  }
+})
+
 vi.mock('@/context/CatalogContext', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>()
   return {
@@ -353,7 +366,7 @@ describe('MigrationWizard entry points', () => {
       </MemoryRouter>,
     )
     // Walk the flow: general task → model (env key pre-detected) → done.
-    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Refactor a legacy module/ }))
     fireEvent.click(screen.getAllByRole('button', { name: /Continue/ })[0])
     await waitFor(() => {
       const modelContinue = screen
