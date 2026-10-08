@@ -15,6 +15,10 @@ import {
   useCompanionPromptListener,
 } from './lib/companionBridge';
 import { pushComposerDraft } from './lib/composerBridge';
+// 批 1 启动时检查更新: one-shot, check-only GitHub Releases probe after
+// launch (notify-only — never installs). The module owns the once-per-run
+// guard; StartupUpdateCheckHost below is just its mount point.
+import { runStartupUpdateCheck } from './lib/startupUpdateCheck';
 
 const Welcome = lazy(() => import('./pages/Welcome'));
 const Chat = lazy(() => import('./pages/Chat'));
@@ -131,6 +135,19 @@ export function CompanionPromptBridge() {
 }
 
 /**
+ * 批 1 启动时检查更新 — mount-point host for the one-shot launch update
+ * check (see lib/startupUpdateCheck). Non-intrusive by contract: at most
+ * the About pane's「发现新版本」toast, silence otherwise. Exported named
+ * for tests.
+ */
+export function StartupUpdateCheckHost() {
+  useEffect(() => {
+    void runStartupUpdateCheck();
+  }, []);
+  return null;
+}
+
+/**
  * W10 audit §6-F — the `/` redirect must carry the query string along.
  * A session window boots on `/?windowSession=<uuid>`; this redirect used to
  * drop the query (`to="/chat"` resolves with an empty search), so a reload
@@ -158,6 +175,8 @@ export default function App() {
           <ArtifactLinkHost />
           {/* Office Wave 3 C3: companion Quick Capture prompts → composer drafts. */}
           <CompanionPromptBridge />
+          {/* 批 1: 启动时检查更新 (check-only, notify-only, once per run). */}
+          <StartupUpdateCheckHost />
           {/* B1-16: the route-level Suspense lives in Layout (around the
               Outlet) so lazy chunks no longer unmount the whole shell; this
               top-level boundary only exists for /welcome and stays null. */}
