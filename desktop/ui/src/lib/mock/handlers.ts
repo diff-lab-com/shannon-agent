@@ -1689,6 +1689,12 @@ export const handlers: Record<string, MockHandler> = {
     }
   },
 
+  // --- Workspace info (2026-10-08 status bar) ---
+  // Demo working dirs are not git work trees — the honest answer is null and
+  // the status bar hides the branch segment (nothing is mocked up to fill
+  // the line).
+  async current_git_branch() { await delay(20); return null },
+
   // --- Ask user (Settings R3 T8) — demo ask-user-request events come from
   // the scripted player; answers are accepted and discarded. ---
   async respond_ask_user() { await delay(20) },

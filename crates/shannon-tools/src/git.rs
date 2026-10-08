@@ -139,6 +139,17 @@ fn current_branch(cwd: Option<&str>) -> Result<String, ToolError> {
     current_branch_with(crate::defaults::process().as_ref(), cwd)
 }
 
+/// Current branch of `cwd`'s repository, default world — the desktop
+/// status-bar segment (设计 02-chat 六段: 分支) is the one consumer outside
+/// the tool registry. `None` when `cwd` is not inside a git work tree
+/// (the caller hides the segment — honesty rule) or git is unavailable.
+pub fn current_branch_of(cwd: Option<&str>) -> Option<String> {
+    current_branch_with(crate::defaults::process().as_ref(), cwd)
+        .ok()
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
+}
+
 /// Check whether the working directory has uncommitted changes.
 fn is_working_dir_dirty_with(
     process: &dyn shannon_tool_interface::ProcessProvider,

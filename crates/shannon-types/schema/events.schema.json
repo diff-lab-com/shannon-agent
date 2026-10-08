@@ -830,6 +830,14 @@
   "UsagePayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {
+      "cache_hit_rate": {
+        "description": "2026-10-08 status bar (设计 02-chat 六段): cache-hit fraction for this frame — cache_read / (cache_read + input); `None` when the frame has no measurable input. Additive — must mirror src/events.rs exactly.",
+        "format": "double",
+        "type": [
+          "number",
+          "null"
+        ]
+      },
       "cost_usd": {
         "format": "double",
         "type": "number"

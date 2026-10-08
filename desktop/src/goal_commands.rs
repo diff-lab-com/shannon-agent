@@ -1405,6 +1405,10 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                                 output_tokens,
                                 cost_usd: event_cost,
                                 session_id: Some(self.session_id.to_string()),
+                                cache_hit_rate: (input_tokens + cache_read_tokens > 0).then(|| {
+                                    cache_read_tokens as f64
+                                        / (input_tokens + cache_read_tokens) as f64
+                                }),
                             },
                         );
                     }

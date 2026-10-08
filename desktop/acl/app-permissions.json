@@ -290,6 +290,15 @@
       }
     },
     {
+      "identifier": "allow-current-git-branch",
+      "description": "Enables the current_git_branch command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "current_git_branch"
+        ]
+      }
+    },
+    {
       "identifier": "allow-delete-agent-definition",
       "description": "Enables the delete_agent_definition command without any pre-configured scope.",
       "commands": {
@@ -3046,6 +3055,7 @@
         "allow-check-vision-send",
         "allow-clear-session-model",
         "allow-count-session-model-overrides",
+        "allow-current-git-branch",
         "allow-estimate-send-cost",
         "allow-get-active-session-id",
         "allow-get-background-tasks",

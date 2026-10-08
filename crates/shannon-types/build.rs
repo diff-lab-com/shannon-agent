@@ -270,6 +270,12 @@ pub struct UsagePayload {
     /// must mirror src/events.rs exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+
+    /// 2026-10-08 status bar (设计 02-chat 六段): cache-hit fraction for this
+    /// frame — cache_read / (cache_read + input); `None` when the frame has
+    /// no measurable input. Additive — must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_rate: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

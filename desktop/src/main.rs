@@ -545,6 +545,7 @@ fn main() {
             // Design 13「Esc 关闭」— the Esc path hides through this command
             // (keeps the companion capability event-only, like the toggle).
             companion_window_commands::hide_companion_window,
+            shannon_desktop::commands_workspace_info::current_git_branch,
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,

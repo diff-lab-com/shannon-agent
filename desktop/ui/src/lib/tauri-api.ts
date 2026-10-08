@@ -1135,6 +1135,12 @@ export async function revealSessionInMain(sessionId: string): Promise<void> {
   await invoke('reveal_session_in_main', { sessionId })
 }
 
+/** Current git branch of `workingDir` — null when it is not a git work tree
+ *  (the status bar hides the branch segment, honesty rule). */
+export async function currentGitBranch(workingDir: string): Promise<string | null> {
+  return invoke<string | null>('current_git_branch', { workingDir })
+}
+
 // --- Office Wave 3 C3 companion Quick Capture window (frozen backend contract) ---
 
 /** Create (or focus) the always-on-top-capable `companion` window. */
