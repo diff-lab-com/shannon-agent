@@ -1235,6 +1235,15 @@ pub enum QueryEvent {
         cache_creation_tokens: u64,
         /// Tokens read from prompt cache this request
         cache_read_tokens: u64,
+        /// Context peak (上下文峰值): the context window the serving model
+        /// resolved to for this query (config override > live Ollama
+        /// `num_ctx` > declared providers.toml window > model registry;
+        /// `resolved_context_window_opt`). `None` when genuinely unknown —
+        /// consumers render no context percentage rather than a fabricated
+        /// window (honesty rule). serde-defaulted so JSON/SSE producers
+        /// written before the field stay parseable.
+        #[serde(default)]
+        context_window_tokens: Option<u64>,
     },
 
     /// Cost summary event

@@ -49,7 +49,12 @@ export interface UsagePayload {
   output_tokens: number
   cost_usd: number
   cache_hit_rate?: number
-  max_tokens?: number
+  /** 上下文峰值: the serving model's resolved context window for this frame
+   *  (config override > live num_ctx > providers.toml > model registry).
+   *  Absent when genuinely unknown — the UI hides any percentage rather
+   *  than fabricate a window (honesty contract). This replaces the old
+   *  `max_tokens?` field, which no Rust producer ever sent. */
+  context_total?: number
   /** P1-1: owner session for multi-window event filtering. */
   session_id?: string
 }
@@ -297,6 +302,11 @@ export interface SessionInfo {
   /** Settings R3 T7: user-pinned flag, joined from the curation sidecar.
    *  Absent on older engines — treat as false (unpinned). */
   pinned?: boolean
+  /** 上下文峰值: the session's running max known context window (L0
+   *  session-index peak, joined at `list_sessions` time) so the rail can
+   *  show the window a reopened session peaked at. Absent when no logged
+   *  turn knew its window — the UI hides the chip (honesty contract). */
+  max_context_tokens?: number
 }
 
 /** Session archive (卡A): one archived session as the sidebar's 已归档
@@ -809,6 +819,17 @@ export interface DesktopConfig {
    *  the backend never gates anything on it. Default true (missing key /
    *  old backend → shown). Written via `configure('suggestions.enabled')`. */
   suggestions_enabled?: boolean
+  /** 批 1: 启动时恢复会话窗口 — replay the persisted session-window set at
+   *  launch. Default true (missing key / old backend → current behavior);
+   *  read once at launch, so a flip lands on the NEXT launch. Written via
+   *  `configure('restore_session_windows_on_launch')`. */
+  restore_session_windows_on_launch?: boolean
+  /** 批 1: 启动时检查更新 — run ONE check-only GitHub Releases probe after
+   *  launch; an available update surfaces the About pane's「发现新版本」
+   *  toast. Notifies only — nothing is ever downloaded or installed
+   *  automatically. Default true; read once at launch. Written via
+   *  `configure('update_check_at_launch')`. */
+  update_check_at_launch?: boolean
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
@@ -1136,6 +1157,11 @@ export interface TaskItem {
   execution_mode?: 'serial' | 'parallel' | null
   /** Team / session subdir name the task file lives in. */
   team?: string | null
+  /** 看板金额: ledger-attributed spend (USD) of the producing agent session,
+   *  joined at `list_tasks` time when `team` is a real session uuid the
+   *  usage ledger has records for (possibly 0). Absent — never an estimate
+   *  — for hand-built/adhoc tasks; the card renders nothing when absent. */
+  cost_usd?: number
 }
 
 /// Payload for `update_task`. All fields optional except `id`.

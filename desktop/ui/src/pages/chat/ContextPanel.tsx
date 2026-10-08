@@ -48,7 +48,11 @@ export function ContextPanelContent({ usage, activeToolCalls }: { usage: UsagePa
             </div>
             {(() => {
               const total = usage.input_tokens + usage.output_tokens
-              const max = usage.max_tokens
+              // 批 1 上下文峰值: the denominator is the engine-resolved
+              // context window (`context_total`) — the old `max_tokens` read
+              // here never had a Rust producer, so the bar could not render.
+              // Absent → no bar (honesty contract, same as the status bar).
+              const max = usage.context_total
               if (!max) return null
               const pct = Math.min(100, (total / max) * 100)
               const barColor = pct > 80 ? 'bg-error' : pct > 50 ? 'bg-secondary' : 'bg-primary'

@@ -158,6 +158,15 @@ pub struct UsagePayload {
     /// but was never populated until now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_hit_rate: Option<f64>,
+    /// Context peak (上下文峰值): the serving model's resolved context
+    /// window for this frame (config override > live Ollama `num_ctx` >
+    /// declared providers.toml window > model registry), so the UI can
+    /// render input/context as a percentage. `None` when genuinely unknown
+    /// — the UI hides the percentage rather than showing a fabricated
+    /// window (honesty rule). Additive like `session_id`: older payloads
+    /// keep parsing, older consumers ignore the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_total: Option<u64>,
 }
 
 /// Query completed successfully.
@@ -261,6 +270,14 @@ pub struct SessionInfo {
     /// (and older desktops sending to newer UIs) unchanged — unpinned.
     #[serde(default)]
     pub pinned: bool,
+    /// Context peak (上下文峰值): the session's max known context window
+    /// (L0 session-index running peak, joined at list time) so the UI can
+    /// render a context percentage after a restart, not only live off
+    /// `UsagePayload.context_total`. `None` when no logged turn knew its
+    /// window — the UI hides the percentage (honesty rule). `serde(default)`
+    /// + `skip_serializing_if` keep the wire shape unchanged when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_tokens: Option<u64>,
 }
 
 /// Session loaded event with messages.
@@ -537,6 +554,41 @@ mod tests {
     }
 
     #[test]
+    fn usage_payload_context_total_is_additive_snake_case() {
+        // 上下文峰值 (context peak): the field is additive — a payload from
+        // before it existed keeps parsing as `None`, and when absent it is
+        // skipped so the historical wire shape is unchanged. The name is
+        // snake_case, matching how the struct's other fields serialize.
+        let legacy = r#"{"query_id":"q1","input_tokens":100,"output_tokens":20,"cost_usd":0.01}"#;
+        let p: UsagePayload = serde_json::from_str(legacy).unwrap();
+        assert_eq!(
+            p.context_total, None,
+            "missing context_total defaults to None"
+        );
+
+        let with_peak = UsagePayload {
+            query_id: "q1".into(),
+            input_tokens: 100,
+            output_tokens: 20,
+            cost_usd: 0.01,
+            session_id: None,
+            cache_hit_rate: None,
+            context_total: Some(200_000),
+        };
+        let json = serde_json::to_string(&with_peak).unwrap();
+        assert!(json.contains("\"context_total\":200000"), "{json}");
+        let back: UsagePayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.context_total, Some(200_000));
+
+        let without_peak = UsagePayload {
+            context_total: None,
+            ..with_peak
+        };
+        let json = serde_json::to_string(&without_peak).unwrap();
+        assert!(!json.contains("context_total"), "{json}");
+    }
+
+    #[test]
     fn legacy_permission_request_without_reason_parses() {
         // P1-3 backward compat: payloads emitted before the `reason` field
         // existed must keep deserializing (serde default), and `reason` must
@@ -650,6 +702,7 @@ mod tests {
             running: None,
             updated_at: None,
             pinned: false,
+            max_context_tokens: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(!json.contains("working_dir"));
@@ -659,6 +712,7 @@ mod tests {
         // the wire shape stays byte-identical for older consumers.
         assert!(!json.contains("running"));
         assert!(!json.contains("updated_at"));
+        assert!(!json.contains("max_context_tokens"));
         // Older payloads without the optional fields still parse; the T7 pin
         // flag serde-defaults to unpinned.
         let legacy: SessionInfo =

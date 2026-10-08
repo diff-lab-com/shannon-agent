@@ -61,6 +61,11 @@ pub struct ConversationProjection {
     pub total_cache_read_tokens: u64,
     /// Summed USD cost when every contributing event carried one.
     pub total_cost_usd: Option<f64>,
+    /// Context peak (上下文峰值): the max context window seen on any
+    /// `turn/end` usage payload; `None` while no event carried one (never a
+    /// fabricated value). Mirrors the session-index accumulator so the
+    /// rebuild path answers identically to the incremental one.
+    pub max_context_tokens: Option<u64>,
     /// Number of `tool/call` events.
     pub tool_call_count: usize,
     /// Number of `tool/result` events flagged as errors.
@@ -80,6 +85,7 @@ impl Default for ConversationProjection {
             total_cache_creation_tokens: 0,
             total_cache_read_tokens: 0,
             total_cost_usd: None,
+            max_context_tokens: None,
             tool_call_count: 0,
             tool_error_count: 0,
         }
@@ -94,6 +100,12 @@ impl ConversationProjection {
         self.total_cache_read_tokens += usage.cache_read_tokens;
         self.total_cost_usd = match (self.total_cost_usd, usage.cost_usd) {
             (Some(a), Some(b)) => Some(a + b),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
+        // Peak, not sum: the window is a per-turn constant.
+        self.max_context_tokens = match (self.max_context_tokens, usage.context_window_tokens) {
+            (Some(a), Some(b)) => Some(a.max(b)),
             (Some(a), None) | (None, Some(a)) => Some(a),
             (None, None) => None,
         };
@@ -1122,6 +1134,7 @@ mod tests {
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
                     cost_usd: cost,
+                    context_window_tokens: None,
                 }),
                 error: None,
             }),
@@ -1230,6 +1243,7 @@ mod tests {
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
                     cost_usd: Some(0.01),
+                    context_window_tokens: None,
                 }),
             ),
         ];
@@ -1275,6 +1289,7 @@ mod tests {
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
                     cost_usd: Some(0.02),
+                    context_window_tokens: None,
                 }),
             ),
         ];
@@ -1565,6 +1580,7 @@ mod tests {
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
                     cost_usd: None,
+                    context_window_tokens: None,
                 }),
             ),
             ev(

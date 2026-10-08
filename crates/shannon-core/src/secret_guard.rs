@@ -902,16 +902,29 @@ pub fn init_from_env_or_config() -> Option<SecretGuardMode> {
     }
     let env_raw = std::env::var("SHANNON_SECRET_GUARD").ok();
     let section_mode = crate::unified_config::SecretGuardSection::load().mode;
+    resolve_install_mode(env_raw.as_deref(), section_mode.as_deref()).and_then(install_mode)
+}
+
+/// The mode [`init_from_env_or_config`] installs for the given env/config
+/// inputs, decided without touching the install latch: an explicit decision
+/// from either source wins; when both are unset, the built-in guard fills
+/// the vacuum with the release default (`redact` since v0.13.0) only when no
+/// context transform is already installed. Split out so the unset-default
+/// contract is pin-able — the one-shot init itself reads real env and config
+/// files and cannot be tested hermetically.
+fn resolve_install_mode(
+    env_raw: Option<&str>,
+    section_mode: Option<&str>,
+) -> Option<SecretGuardMode> {
     if env_raw.is_some() || section_mode.is_some() {
         // Explicit decision from env or config — install/replace as decided.
-        return resolve_mode_with_default(env_raw.as_deref(), section_mode.as_deref())
-            .and_then(install_mode);
+        return resolve_mode_with_default(env_raw, section_mode);
     }
     // Implicit default: only fill the vacuum.
     if context_transform().is_some() {
         return None;
     }
-    install_mode(SecretGuardMode::Audit)
+    Some(SecretGuardMode::Redact)
 }
 
 #[cfg(test)]
@@ -1621,6 +1634,69 @@ mod tests {
             resolve_mode_with_default(Some("bogus"), Some("redact")),
             None
         );
+    }
+
+    // ---- R-0: the unset default really is redact at the install site -------
+    //
+    // `resolve_mode_with_default` pins the pure default, but the one-shot
+    // init used to short-circuit a completely unset decision into an Audit
+    // install before the default was consulted (the D1 "half-flip" that PR
+    // #342's CHANGELOG announcement contradicts). Pin the full install
+    // decision here: unset ⇒ redact, vacuum-only semantics preserved,
+    // explicit values untouched.
+
+    #[test]
+    fn install_decision_unset_defaults_to_redact_not_audit() {
+        let _g = global_lock();
+        reset_redaction_suggestion();
+
+        // Completely unset (no env, no config) ⇒ release default redact.
+        set_context_transform(None);
+        assert_eq!(
+            resolve_install_mode(None, None),
+            Some(SecretGuardMode::Redact),
+            "unset must install redact, not audit"
+        );
+
+        // The decision is redact mode active: the guard it installs rewrites
+        // secret-shaped values (audit's observe-only posture never would).
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], true);
+        let secret = "sk-split-test-secret-value";
+        let mut block = shannon_plugin_api::IngestBlock {
+            source: IngestSource::UserMessage,
+            text: format!("k={secret}"),
+        };
+        let _ = ContextTransform::transform_ingest(&guard, &mut block);
+        assert!(
+            block.text.starts_with("k=SG1:"),
+            "unset default must redact, got: {}",
+            block.text
+        );
+
+        // Vacuum-only semantics: an already-installed transform is not
+        // replaced by the built-in guard when nothing was configured.
+        set_context_transform(Some(Arc::new(RoundTrip)));
+        assert_eq!(
+            resolve_install_mode(None, None),
+            None,
+            "unset must not replace an existing transform"
+        );
+
+        // Explicit decisions pass through unchanged — audit is the opt-back,
+        // off disables, env redact enables.
+        set_context_transform(None);
+        assert_eq!(
+            resolve_install_mode(None, Some("audit")),
+            Some(SecretGuardMode::Audit)
+        );
+        assert_eq!(resolve_install_mode(None, Some("off")), None);
+        assert_eq!(
+            resolve_install_mode(Some("redact"), None),
+            Some(SecretGuardMode::Redact)
+        );
+
+        set_context_transform(None);
+        reset_redaction_suggestion();
     }
 
     // ---- T5: one-time mode notice latch --------------------------------------

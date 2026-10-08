@@ -550,6 +550,7 @@ fn build_summary(
         cache_creation_tokens: 0,
         cache_read_tokens: 0,
         cost_usd: None,
+        context_window_tokens: None,
     };
     let mut turns = 0usize;
     for event in events {
@@ -641,6 +642,7 @@ mod tests {
                 cache_creation_tokens: 0,
                 cache_read_tokens: 0,
                 cost_usd: Some(0.01),
+                context_window_tokens: None,
             }),
             error: None,
             llm_steps: None,

@@ -423,6 +423,7 @@ mod tests {
             parent_session_id: None,
             branch_point_message_index: None,
             project_path: None,
+            max_context_tokens: None,
         };
         let row = format_session_picker_row(&info);
         assert!(row.contains("How do I parse JSON?"), "row = {row}");
@@ -451,6 +452,7 @@ mod tests {
             parent_session_id: Some(uuid::Uuid::new_v4()),
             branch_point_message_index: Some(3),
             project_path: None,
+            max_context_tokens: None,
         };
         let row = format_session_picker_row(&info);
         assert!(row.starts_with("⤵ "), "row = {row}");
@@ -473,6 +475,7 @@ mod tests {
             parent_session_id: None,
             branch_point_message_index: None,
             project_path: None,
+            max_context_tokens: None,
         };
         let row = format_session_picker_row(&info);
         assert!(row.contains("(no prompt)"), "row = {row}");

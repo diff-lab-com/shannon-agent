@@ -129,6 +129,7 @@ fn test_save_and_restore_session_roundtrips_through_l0() {
             cost_usd: 0.01,
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
+            context_window_tokens: None,
         });
         tee.record_query_event(&QueryEvent::Completed {
             query_id: Uuid::new_v4(),

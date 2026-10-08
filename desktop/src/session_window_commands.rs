@@ -374,8 +374,22 @@ pub fn handle_main_window_destroyed(app: &tauri::AppHandle) {
 /// on disk elsewhere, hand-edited config) must not block app start. The
 /// persisted list is rewritten with the successfully restored ids so it
 /// self-heals.
+///
+/// 批 1: honors the「启动时恢复会话窗口」switch
+/// (`DesktopConfig::restore_session_windows_on_launch`, default on). When
+/// the user opted out, the persisted list stays on disk untouched (flipping
+/// the switch back on restores the same set next launch) — only the
+/// replay is skipped.
 pub fn restore_session_windows(app: &tauri::AppHandle) {
-    let persisted = sanitize_persisted_session_windows(&config::load_config().open_session_windows);
+    let config = config::load_config();
+    if !config.restore_session_windows_on_launch {
+        tracing::info!(
+            count = config.open_session_windows.len(),
+            "session-window restore disabled by config (restore_session_windows_on_launch = false)"
+        );
+        return;
+    }
+    let persisted = sanitize_persisted_session_windows(&config.open_session_windows);
     if persisted.is_empty() {
         return;
     }

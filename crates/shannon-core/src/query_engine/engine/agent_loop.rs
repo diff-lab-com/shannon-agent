@@ -613,6 +613,13 @@ impl QueryEngine {
         let context_injector = self.context_injector.clone();
         let plan_mode_active = self.plan_mode_active.clone();
         let effective_max_context_tokens = self.effective_max_context_tokens;
+        // Context peak (上下文峰值): the serving model's context window,
+        // resolved once per query (override > Ollama num_ctx > declared
+        // providers.toml window > registry). Rides every Usage event so the
+        // status bar can render a context percentage and the L0 turn/end
+        // records the session's running peak; `None` (genuinely unknown)
+        // stays `None` downstream — never a fabricated window.
+        let context_window_tokens = self.resolved_context_window_opt().map(|v| v as u64);
         // S3-3 utility tier slot: the host-resolved background-compaction
         // client (providers.toml v2 `auxiliary.compression`), or `None` for
         // the historical behavior (compaction rides the session client). The
@@ -2499,6 +2506,7 @@ impl QueryEngine {
                                                     cost_usd,
                                                     cache_creation_tokens,
                                                     cache_read_tokens,
+                                                    context_window_tokens,
                                                 }
                                             );
 
@@ -3818,6 +3826,7 @@ impl QueryEngine {
                                                                 cache_read_tokens: trailing
                                                                     .cache_read_input_tokens
                                                                     as u64,
+                                                                context_window_tokens,
                                                             }
                                                         );
                                                         break;

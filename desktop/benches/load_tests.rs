@@ -50,6 +50,7 @@ fn synthetic_tasks(n: usize) -> Vec<TaskInfo> {
             active_form: None,
             execution_mode: None,
             team: None,
+            cost_usd: None,
         })
         .collect()
 }

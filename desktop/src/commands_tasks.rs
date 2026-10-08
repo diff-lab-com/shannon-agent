@@ -44,6 +44,13 @@ pub struct TaskInfo {
     /// lives at the top level of `.claude/tasks/`.
     #[serde(default)]
     pub team: Option<String>,
+    /// 看板金额: ledger spend of the producing session, joined at list time
+    /// from the usage ledger when `team` is a real session uuid the ledger
+    /// has records for (possibly `Some(0.0)`). `None` — never an estimate —
+    /// for hand-built tasks (`<adhoc>`, top-level) and sessions the ledger
+    /// never saw. Additive + skipped when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 /// Payload for `update_task`. All fields optional except `id`.
@@ -96,7 +103,35 @@ pub(crate) async fn configured_working_dir(state: &State<'_, AppState>) -> Optio
 #[tracing::instrument(skip_all)]
 pub async fn list_tasks(state: State<'_, AppState>) -> Result<Vec<TaskInfo>, String> {
     let tasks_dir = anchored_tasks_dir_base(configured_working_dir(&state).await.as_deref())?;
-    list_tasks_in(&tasks_dir.join(".claude").join("tasks"))
+    let mut tasks = list_tasks_in(&tasks_dir.join(".claude").join("tasks"))?;
+    // 看板金额: agent-session tasks are named by their session uuid, so the
+    // cost joins for free from the usage ledger — a session with ledger
+    // rows answers its exact spend (Some, possibly 0.0); anything else
+    // (hand-built `<adhoc>`/top-level tasks, sessions the ledger never saw)
+    // stays None. No estimates.
+    let usage_store = state.usage_store.clone();
+    attach_session_costs(&mut tasks, |session_id| {
+        usage_store.session_ledger_cost(session_id)
+    });
+    Ok(tasks)
+}
+
+/// Join each session-owned task with its ledger spend. `spend_for` answers
+/// `None` for sessions without ledger association; the join also requires
+/// the task's `team` to parse as a session uuid, so hand-built tasks
+/// (`<adhoc>`, top-level) never receive a cost.
+fn attach_session_costs(tasks: &mut [TaskInfo], spend_for: impl Fn(&str) -> Option<f64>) {
+    for task in tasks {
+        let Some(team) = task.team.as_deref() else {
+            continue;
+        };
+        if uuid::Uuid::parse_str(team).is_err() {
+            continue;
+        }
+        if let Some(cost) = spend_for(team) {
+            task.cost_usd = Some(cost);
+        }
+    }
 }
 
 /// List tasks under an explicit tasks root. Path-parameterised core of
@@ -242,6 +277,8 @@ fn parse_task_value(task: &serde_json::Value, team: Option<String>) -> Option<Ta
         active_form,
         execution_mode,
         team,
+        // Never persisted on disk — joined at list time from the ledger.
+        cost_usd: None,
     })
 }
 
@@ -478,5 +515,118 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let listed = list_tasks_in(&tmp.path().join("nope")).expect("list");
         assert!(listed.is_empty());
+    }
+
+    // ---- 看板金额: task-board cost join ---------------------------------
+    //
+    // Agent-session tasks are directory-named by their session uuid, so the
+    // cost joins from the usage ledger. A session the ledger has records
+    // for answers its exact spend (possibly Some(0.0)); hand-built tasks
+    // (`<adhoc>`, top-level) and unassociated sessions stay None — never an
+    // estimate.
+
+    fn write_task(root: &std::path::Path, team: Option<&str>, id: &str) {
+        let dir = match team {
+            Some(team) => root.join(team),
+            None => root.to_path_buf(),
+        };
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{id}.json")),
+            format!(r#"{{"id":"{id}","subject":"T {id}","status":"pending"}}"#),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn attach_session_costs_joins_ledger_spend_for_session_tasks_only() {
+        let session = uuid::Uuid::new_v4();
+        let other_session = uuid::Uuid::new_v4();
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join(".claude/tasks");
+        write_task(&root, Some(&session.to_string()), "1");
+        write_task(&root, Some("<adhoc>"), "2");
+        write_task(&root, None, "3");
+        write_task(&root, Some(&other_session.to_string()), "4");
+
+        let store = crate::commands_usage::UsageStore::with_path(tmp.path().join("usage.jsonl"));
+        store
+            .append(&crate::commands_usage::UsageRecord {
+                timestamp_ms: 1,
+                model: "m".into(),
+                provider: "p".into(),
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+                cost_usd: 0.25,
+                session_id: Some(session.to_string()),
+            })
+            .unwrap();
+
+        let mut tasks = list_tasks_in(&root).expect("list");
+        attach_session_costs(&mut tasks, |sid| store.session_ledger_cost(sid));
+        let by_id = |id: &str| tasks.iter().find(|t| t.id == id).unwrap();
+
+        assert_eq!(
+            by_id("1").cost_usd,
+            Some(0.25),
+            "session task joins its ledger spend"
+        );
+        assert_eq!(
+            by_id("2").cost_usd,
+            None,
+            "adhoc (hand-built) task gets no cost"
+        );
+        assert_eq!(
+            by_id("3").cost_usd,
+            None,
+            "top-level hand-built task gets no cost"
+        );
+        assert_eq!(
+            by_id("4").cost_usd,
+            None,
+            "session the ledger never saw gets no cost (no estimate)"
+        );
+    }
+
+    #[test]
+    fn attach_session_costs_zero_spend_session_reports_some_zero() {
+        // A session the ledger HAS records for answers Some(sum) even when
+        // the records carry zero cost — distinguishable from no association.
+        let session = uuid::Uuid::new_v4();
+        let tmp = TempDir::new().unwrap();
+        let store = crate::commands_usage::UsageStore::with_path(tmp.path().join("usage.jsonl"));
+        store
+            .append(&crate::commands_usage::UsageRecord {
+                timestamp_ms: 1,
+                model: "m".into(),
+                provider: "p".into(),
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+                cost_usd: 0.0,
+                session_id: Some(session.to_string()),
+            })
+            .unwrap();
+
+        let mut tasks = vec![TaskInfo {
+            id: "1".into(),
+            title: "T".into(),
+            status: "pending".into(),
+            assignee: None,
+            priority: None,
+            description: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            due_date: None,
+            active_form: None,
+            execution_mode: None,
+            team: Some(session.to_string()),
+            cost_usd: None,
+        }];
+        attach_session_costs(&mut tasks, |sid| store.session_ledger_cost(sid));
+        assert_eq!(tasks[0].cost_usd, Some(0.0));
     }
 }

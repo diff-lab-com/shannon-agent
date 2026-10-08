@@ -276,6 +276,12 @@ pub struct UsagePayload {
     /// no measurable input. Additive — must mirror src/events.rs exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_hit_rate: Option<f64>,
+
+    /// Context peak (上下文峰值): the serving model's resolved context
+    /// window for this frame; `None` when genuinely unknown. Additive —
+    /// must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_total: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -356,6 +362,10 @@ pub struct SessionInfo {
     /// Settings R3 T7 mirror — must mirror src/events.rs exactly.
     #[serde(default)]
     pub pinned: bool,
+    /// Context peak (上下文峰值): the session's max known context window;
+    /// `None` when unknown. Additive — must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

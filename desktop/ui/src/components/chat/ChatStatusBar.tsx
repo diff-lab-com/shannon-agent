@@ -13,8 +13,10 @@
 //     segment hides until the session ledger reports a cost, the budget
 //     segment only exists while a > 0 cap is configured;
 //   * context occupancy % — computed from the streaming UsagePayload's
-//     `max_tokens` exactly like the Context tab's window bar (ContextPanel).
-//     No `max_tokens` on the wire → no percentage (never a guessed window).
+//     `context_total` (the engine-resolved context window) exactly like the
+//     Context tab's window bar (ContextPanel). No `context_total` on the
+//     wire → no percentage (never a guessed window); the session rail's
+//     峰值 chip carries the persisted window peak instead.
 //
 // Design shows a git-branch segment and a cache-hit segment — both wired
 // now (2026-10-08 status-bar round): branch = `current_git_branch` IPC on
@@ -49,14 +51,17 @@ export function ChatStatusBar({ workingDir, usage, sessionId, onChangeWorkingDir
   const { budget, usage: sessionUsage } = useSessionBudget(sessionId)
 
   // Context occupancy — same math as the Context tab's window bar: sent+
-  // received tokens over the reported window, clamped, integer percent.
-  // Aurora 2026-10 (02 状态条): the segment also spells out the raw
-  // "used/total" token counts (设计稿: 上下文 38% · 74k/200k) — both numbers
-  // come from the same UsagePayload, so the detail is always real when the
-  // percent renders.
+  // received tokens over the frame's resolved context window
+  // (`context_total`), clamped, integer percent. 上下文峰值 (批 1): the
+  // denominator is the ENGINE-RESOLVED window — absent → the segment hides
+  // (never a guessed window; the rail row shows the persisted session peak
+  // instead). Aurora 2026-10 (02 状态条): the segment also spells out the
+  // raw "used/total" token counts (设计稿: 上下文 38% · 74k/200k) — both
+  // numbers come from the same UsagePayload, so the detail is always real
+  // when the percent renders.
   const contextPct = (() => {
     const total = (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0)
-    const max = usage?.max_tokens
+    const max = usage?.context_total
     if (!max || total <= 0) return null
     return Math.min(100, Math.round((total / max) * 100))
   })()
@@ -70,7 +75,7 @@ export function ChatStatusBar({ workingDir, usage, sessionId, onChangeWorkingDir
   const contextUsed = contextPct != null
     ? fmtCompact((usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0))
     : ''
-  const contextTotal = contextPct != null && usage?.max_tokens ? fmtCompact(usage.max_tokens) : ''
+  const contextTotal = contextPct != null && usage?.context_total ? fmtCompact(usage.context_total) : ''
 
   // Session spend — only once the session ledger has observed something.
   const sessionCost = sessionUsage?.cost_usd

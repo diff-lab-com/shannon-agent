@@ -261,6 +261,7 @@ pub fn query_event_to_session_body(event: &QueryEvent) -> Option<SessionEventBod
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
                     cost_usd: None,
+                    context_window_tokens: None,
                 }),
                 error: None,
             })
@@ -310,6 +311,7 @@ pub fn token_usage_from_event(event: &QueryEvent) -> Option<TokenUsage> {
             cost_usd,
             cache_creation_tokens,
             cache_read_tokens,
+            context_window_tokens,
             ..
         } => TokenUsage {
             input_tokens: *input_tokens,
@@ -317,6 +319,7 @@ pub fn token_usage_from_event(event: &QueryEvent) -> Option<TokenUsage> {
             cache_creation_tokens: *cache_creation_tokens,
             cache_read_tokens: *cache_read_tokens,
             cost_usd: Some(*cost_usd),
+            context_window_tokens: *context_window_tokens,
         },
         QueryEvent::Cost {
             total_cost_usd,
@@ -329,6 +332,7 @@ pub fn token_usage_from_event(event: &QueryEvent) -> Option<TokenUsage> {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             cost_usd: Some(*total_cost_usd),
+            context_window_tokens: None,
         },
         QueryEvent::TurnCompleted { tokens_used, .. } => TokenUsage {
             input_tokens: 0,
@@ -336,6 +340,7 @@ pub fn token_usage_from_event(event: &QueryEvent) -> Option<TokenUsage> {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             cost_usd: None,
+            context_window_tokens: None,
         },
         _ => return None,
     };
@@ -624,6 +629,7 @@ mod tests {
             cost_usd: 0.5,
             cache_creation_tokens: 10,
             cache_read_tokens: 20,
+            context_window_tokens: Some(200_000),
         })
         .unwrap();
         assert_eq!(usage.input_tokens, 100);
@@ -631,6 +637,8 @@ mod tests {
         assert_eq!(usage.cache_creation_tokens, 10);
         assert_eq!(usage.cache_read_tokens, 20);
         assert_eq!(usage.cost_usd, Some(0.5));
+        // Context peak rides the mapping into the L0 turn/end usage.
+        assert_eq!(usage.context_window_tokens, Some(200_000));
     }
 
     #[test]
