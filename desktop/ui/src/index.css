@@ -453,9 +453,20 @@
   }
 }
 
-/* Users who disable transparency (or low-power windows) get solid fills. */
-@media (prefers-reduced-transparency: reduce) {
-  .glass-surface, .glass-overlay {
+/* Solid fills for glass surfaces — ONE recipe, TWO triggers (parity R1
+   2026-10-08, 材质卡): the OS-level prefers-reduced-transparency signal, and
+   the in-app 材质「减弱」opt-in (html.reduce-glass, persisted at localStorage
+   'shannon.reduceGlass', Settings → 外观 → 材质). Native nesting keeps the
+   declarations single-sourced; the rule stays UNLAYERED so it still beats
+   the @layer utilities glass-surface/glass-overlay emit. */
+.glass-surface, .glass-overlay {
+  @media (prefers-reduced-transparency: reduce) {
+    background: var(--color-surface-container-lowest);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  html.reduce-glass & {
     background: var(--color-surface-container-lowest);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;

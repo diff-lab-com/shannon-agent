@@ -216,7 +216,10 @@ export default function App() {
                 <Route path="/memory" element={<Memory />} />
                 <Route path="/timeline/:id" element={<TurnTimeline />} />
                 <Route path="/settings" element={<Settings />}>
-                  <Route index element={<Navigate to="general" replace />} />
+                  {/* Design 12-settings (parity R1 2026-10-08): the index
+                      lands on 模型 — BYOK is the app's core differentiator,
+                      so first visits meet provider keys, not generic prefs. */}
+                  <Route index element={<Navigate to="models" replace />} />
                   {/* IA 2026-10 (ADVERSARIAL-REVIEW §2): 通用 absorbs 会话,
                       连接 absorbs 远程执行 + 网络 — the panes stack the
                       original components under group headings. */}

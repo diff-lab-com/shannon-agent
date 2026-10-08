@@ -43,4 +43,15 @@ test.describe('Settings pages', () => {
     await page.waitForURL(/\/settings\/general/, { timeout: 15000 })
     expect(page.url()).toContain('/settings/general')
   })
+
+  // Design 12-settings (parity R1 2026-10-08): /settings lands on 模型 —
+  // BYOK is the core differentiator. Pins the index redirect so the landing
+  // section can't silently drift back.
+  test('settings index redirects to the models pane', async ({ page }) => {
+    await page.goto('/settings')
+    await page.waitForURL(/\/settings\/models/, { timeout: 15000 })
+    await expect(page.getByRole('heading', { name: /Performance Strategy/i })).toBeVisible({
+      timeout: 15000,
+    })
+  })
 })

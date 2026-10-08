@@ -38,10 +38,30 @@ describe('merged settings panes (IA 8-section merge)', () => {
     expect(screen.getByText('Session lifecycle and storage')).toBeInTheDocument()
   })
 
+  it('GeneralPane closes with the honest 数据 card (design 12-settings-general:236-243)', async () => {
+    render(wrap(<GeneralPane />))
+    expect(await screen.findByText('Approval Mode')).toBeInTheDocument()
+    // Group heading + card marker.
+    expect(screen.getByRole('heading', { name: 'Data' })).toBeInTheDocument()
+    // Full export is an amber honest badge, NOT a fake button.
+    expect(screen.getByTestId('data-export-full-badge')).toHaveTextContent(
+      'Full export · coming soon on desktop',
+    )
+    expect(
+      screen.queryByRole('button', { name: /Export all session data/i }),
+    ).not.toBeInTheDocument()
+    // Clear-cache moved here from the dev-gated advanced page.
+    expect(screen.getByTestId('data-clear-cache-button')).toHaveTextContent('Clear Chat Cache')
+    // The on-device note.
+    expect(screen.getByText(/Session data lives only on this machine/)).toBeInTheDocument()
+  })
+
   it('ConnectionsPane renders gateway, remote-targets and network groups', async () => {
     render(wrap(<ConnectionsPane />))
     // Group heading for the gateway group (settings.connections.title).
-    expect(screen.getByRole('heading', { name: 'Gateway' })).toBeInTheDocument()
+    // Design-parity R1: converged with the rail's nav.connections — one term
+    // (连接/Connections), no more pane saying Gateway under a Connections rail.
+    expect(screen.getByRole('heading', { name: 'Connections' })).toBeInTheDocument()
     // RemotesSettings self-titles with its own h2.
     expect(screen.getByRole('heading', { name: 'Remote targets' })).toBeInTheDocument()
     // Group heading for the network group (nav.network).
