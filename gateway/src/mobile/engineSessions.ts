@@ -233,7 +233,15 @@ export function mapSessionSummary(summary: EngineSessionSummary): MobileSessionS
 
 export interface MobileTranscriptWire {
   sessionId: string;
-  messages: { role: string; content: string; ts?: string; artifacts?: unknown[] }[];
+  messages: {
+    role: string;
+    content: string;
+    ts?: string;
+    artifacts?: unknown[];
+    /** §S5: group-transcript attribution (group keys only; absent elsewhere). */
+    kind?: "user" | "member" | "system";
+    member?: { memberId: string; label: string; title: string };
+  }[];
   hasMore: boolean;
 }
 

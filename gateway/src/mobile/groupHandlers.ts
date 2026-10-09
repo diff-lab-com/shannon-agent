@@ -1116,6 +1116,9 @@ export function groupHistoryLookup(
           content: e.content,
           ...(e.ts ? { ts: e.ts } : {}),
         };
+        // §S5 attribution keys: absent entries keep the exact §J2 shape.
+        if (e.kind) message.kind = e.kind;
+        if (e.member) message.member = e.member;
         return message;
       }),
       hasMore: page.hasMore,
