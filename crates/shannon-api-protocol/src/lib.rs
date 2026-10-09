@@ -60,6 +60,12 @@ pub const PROTOCOL_VERSION: &str = "0.8.0";
 // drop, now forwarded), and the optional `artifacts` fold on
 // `TranscriptMessage` (L0-derived, empty-absent). No key changed meaning; the
 // version stays at 0.8.0.
+//
+// B6.0-4 approval-TTL batch (2026-10-09 ruling): optional `approval_ttl_ms` on
+// the `query` client frame — a per-request override of the approval resolver's
+// wait window. Absent/zero keeps the legacy 300s behavior byte-for-byte; the
+// server clamps the override at 24h. Additive `Option`, so the version stays
+// at 0.8.0.
 
 // ── HTTP request / response types ───────────────────────────────────────
 
@@ -369,6 +375,16 @@ pub enum WsClientMessage {
         /// the query exactly like the REST paths.
         #[serde(default)]
         attachments: Option<Vec<MessageAttachment>>,
+        /// B6.0-4 TTL (2026-10-09 ruling): optional per-request approval
+        /// window override, in milliseconds. When absent or zero the server
+        /// keeps the legacy resolver behavior (300s → Deny); a supplied value
+        /// is honored up to a 24h ceiling (86_400_000 ms, server-clamped).
+        /// `skip_serializing_if` keeps the emitted frame byte-identical to
+        /// the pre-TTL shape whenever the override is not requested. Old
+        /// servers ignore the unknown key; a server that predates the field
+        /// simply keeps timing out at 300s.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval_ttl_ms: Option<u64>,
     },
     /// Clear conversation history for this session.
     #[serde(rename = "clear")]

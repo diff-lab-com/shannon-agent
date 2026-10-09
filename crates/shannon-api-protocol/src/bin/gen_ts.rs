@@ -25,8 +25,7 @@ use shannon_api_protocol::{
     HealthResponse, MessageAttachment, ModelInfo, ModelsResponse, PROTOCOL_VERSION, QueryRequest,
     QueryResponse, RiskInfo, RiskScope, SessionSummary, SseEventName, ToolEntry, ToolsListResponse,
     TranscriptArtifact, TranscriptMessage, TrustKindsResponse, TrustRevokeRequest,
-    TrustRevokeResponse,
-    TrustedKindEntry, UsageInfo, WsClientMessage, WsServerMessage,
+    TrustRevokeResponse, TrustedKindEntry, UsageInfo, WsClientMessage, WsServerMessage,
 };
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

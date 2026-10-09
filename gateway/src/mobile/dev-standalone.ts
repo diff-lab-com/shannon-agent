@@ -64,6 +64,7 @@ import { createMobileDispatchPipeline } from "./dispatchPipeline.js";
 import { MobileDispatchHub } from "./hub.js";
 import { loadAgentRoster } from "./agentRoster.js";
 import { createTaskHandlers } from "./taskHandlers.js";
+import { createGroupHandlers, groupHistoryLookup } from "./groupHandlers.js";
 import { fakeHistoryPage, type FakeHistoryMessage } from "./fakeEngineHistory.js";
 
 const bindHost = process.env.SHANNON_MOBILE_HOST ?? "127.0.0.1";
@@ -410,6 +411,16 @@ const pipeline = createMobileDispatchPipeline({
 });
 hub.setSubmit(pipeline.submit);
 
+// §S B6.0/B6.2: the group face + the daily-report tick — the bundle's stop()
+// rides the shutdown chain below (bootstrap parity).
+const groupFacet = createGroupHandlers({
+  hub,
+  logger,
+  engineWsUrl,
+  engineHttpBaseUrl: engineHttpBase,
+  defaultModel: DEFAULT_MODEL,
+});
+
 const handlers = createMobileHandlers({
   engine: {
     engineWsUrl,
@@ -417,6 +428,9 @@ const handlers = createMobileHandlers({
     defaultModel: DEFAULT_MODEL,
     version: GATEWAY_VERSION,
     logger,
+    // §S B6.0 (bootstrap parity): grp-* history keys answer from the
+    // host-side group store before the engine is consulted.
+    groupHistoryLookup: groupHistoryLookup(undefined),
     // §K: a signed shannon/approval/decide unblocks a dispatched task's
     // parked approval lane (same wiring as the bootstrap).
     approvalDecisionSink: (requestId, choice) => hub.settleApproval(requestId, choice),
@@ -444,6 +458,10 @@ const handlers = createMobileHandlers({
     // are in-memory, but the check mirrors the live wiring exactly).
     isDeviceTrusted: (deviceId) => registry.has(deviceId),
   }),
+  // §S B6.0: the group face (bootstrap parity — same §K-pipeline member
+  // turns, same approval round-trip, default ~/.shannon/groups store).
+  // B6.2: also arms the daily-report tick; groupFacet.stop() clears it.
+  groups: groupFacet.handlers,
   // `access` (shannon/pairing.pending / .approve) intentionally NOT mounted —
   // no IM allowlist / pairing store exists in this host (see header).
 });
@@ -490,6 +508,7 @@ const shutdown = (): void => {
   if (stopping) return;
   stopping = true;
   void (async () => {
+    groupFacet.stop(); // B6.2: clear the daily-report tick chain
     await server.stop().catch(() => {});
     await pipeline.stop().catch(() => {});
     await engine?.stop().catch(() => {});

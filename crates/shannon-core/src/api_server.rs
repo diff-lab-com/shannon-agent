@@ -610,6 +610,29 @@ fn resolve_session_id(hint: Option<&str>, fallback: Uuid) -> Uuid {
         .unwrap_or(fallback)
 }
 
+// ── B6.0-4 approval-TTL (2026-10-09 ruling) ─────────────────────────────
+
+/// Legacy approval-resolver window: the value every pre-TTL query ran with
+/// (and what an absent/zero `approval_ttl_ms` still maps to — the default
+/// path must stay byte-for-byte identical).
+const APPROVAL_WINDOW_DEFAULT_MS: u64 = 300_000;
+/// Clamp ceiling for a client-supplied `approval_ttl_ms` (24h). A quote
+/// window may be long, but it must stay finite and bounded — an unclamped
+/// value would let one frame park approval resolvers (and their registry
+/// entries) indefinitely.
+const APPROVAL_WINDOW_MAX_MS: u64 = 86_400_000;
+
+/// Resolve the approval-resolver wait window for one `query` frame (the
+/// B6.0-4 per-request TTL). `None`/`0` → the legacy 300s default; any other
+/// value is honored, clamped down to [`APPROVAL_WINDOW_MAX_MS`]. There is
+/// deliberately no lower clamp: the asker may shorten its own window.
+fn approval_window(approval_ttl_ms: Option<u64>) -> Duration {
+    match approval_ttl_ms {
+        Some(ms) if ms > 0 => Duration::from_millis(ms.min(APPROVAL_WINDOW_MAX_MS)),
+        _ => Duration::from_millis(APPROVAL_WINDOW_DEFAULT_MS),
+    }
+}
+
 /// Attribute `engine` to the caller's session and restore any prior history.
 ///
 /// The engine auto-saves the conversation to disk after each query under
@@ -1390,17 +1413,16 @@ fn transcript_messages(events: &[SessionEvent]) -> Vec<TranscriptMessage> {
         .iter()
         .map(|event| (event.seq, event.ts_ns))
         .collect();
-    let seq_turn: HashMap<u64, u64> = events
-        .iter()
-        .map(|event| (event.seq, event.turn))
-        .collect();
+    let seq_turn: HashMap<u64, u64> = events.iter().map(|event| (event.seq, event.turn)).collect();
     // Turn → tool-result artifacts, in log order (L0 is the authoritative
     // source: `duration_ms`/`meta` live here, not on the live WS face).
     let mut artifacts_by_turn: HashMap<u64, Vec<TranscriptArtifact>> = HashMap::new();
     for event in events {
         if let SessionEventBody::ToolResult(payload) = &event.body {
-            artifacts_by_turn.entry(event.turn).or_default().push(
-                TranscriptArtifact {
+            artifacts_by_turn
+                .entry(event.turn)
+                .or_default()
+                .push(TranscriptArtifact {
                     kind: "tool_result".to_string(),
                     tool: payload.tool_name.clone(),
                     // title/summary are reserved (never engine-derived in v1 —
@@ -1417,8 +1439,7 @@ fn transcript_messages(events: &[SessionEvent]) -> Vec<TranscriptMessage> {
                     } else {
                         Some(payload.meta.clone())
                     },
-                },
-            );
+                });
         }
     }
     let mut out: Vec<TranscriptMessage> = Vec::with_capacity(proj.messages.len());
@@ -1445,9 +1466,12 @@ fn transcript_messages(events: &[SessionEvent]) -> Vec<TranscriptMessage> {
                     }),
                 }
             }
-            fold_artifacts = Vec::new();
+            // `fold_artifacts` is empty here either way (take() emptied it,
+            // or nothing was pending) — the reassignment below seeds the
+            // next turn's fold state directly.
             fold_host = None;
             fold_turn = turn;
+            // `unwrap_or_default` replaces the vec wholesale — no stale reset.
             fold_artifacts = turn
                 .and_then(|t| artifacts_by_turn.remove(&t))
                 .unwrap_or_default();
@@ -1571,6 +1595,7 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                 model,
                 session_id: query_session_hint,
                 attachments,
+                approval_ttl_ms,
             } => {
                 // review §P3-3: parse session_id eagerly. The previous
                 // `Uuid::parse_str(...).unwrap_or_default()` silently
@@ -1680,8 +1705,10 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                 // Wire the engine's approval channel so tool calls requiring
                 // human approval emit `ApprovalRequest` to the client. The
                 // client responds via `POST /api/approval/respond`; a resolver
-                // task (300s timeout → Deny) forwards the choice back to the
-                // engine. See `claudedocs/social-connection-architecture.md` P0-b.
+                // task (the frame's approval window — 300s by default, the
+                // B6.0-4 `approval_ttl_ms` overridable per query — elapsed →
+                // Deny) forwards the choice back to the engine. See
+                // `claudedocs/social-connection-architecture.md` P0-b.
                 // Bounded permission-request channel (review §P3-6): prompts
                 // are strictly sequential (the engine awaits each response),
                 // so this small bound only guards against a handler that
@@ -1689,6 +1716,10 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                 // keeps it drained while the query is live.
                 let (perm_tx, mut perm_rx) =
                     mpsc::channel::<PermissionRequest>(PERMISSION_REQUEST_CHANNEL_CAPACITY);
+                // B6.0-4 TTL: resolve this frame's approval window once, up
+                // front — the resolver task below parks exactly this long
+                // (legacy frames keep the 300s default; see `approval_window`).
+                let approval_window = approval_window(approval_ttl_ms);
                 // `process_query` returns a stream whose drop aborts the engine's
                 // producer task — so dropping `stream` (on cancel, or when the
                 // socket closes mid-query) actually interrupts the LLM/tool loop
@@ -1821,13 +1852,15 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                             if !send_msg(&mut sender, areq).await {
                                 break 'outer;
                             }
-                            // Resolver: await the HTTP decision (300s), forward
-                            // the choice to the engine, then clean up the entry.
+                            // Resolver: await the HTTP decision (the frame's
+                            // approval window — 300s by default, B6.0-4 TTL
+                            // overridable per query), forward the choice to
+                            // the engine, then clean up the entry.
                             let registry = state.approval_registry.clone();
                             let rid = request_id.clone();
                             tokio::spawn(async move {
                                 let choice = match tokio::time::timeout(
-                                    Duration::from_secs(300),
+                                    approval_window,
                                     decision_rx,
                                 ).await {
                                     Ok(Ok(c)) => c,
@@ -3102,6 +3135,111 @@ mod tests {
     }
 
     // ══════════════════════════════════════════════════════════════════════
+    // B6.0-4 approval-TTL (per-request approval window override)
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_ws_query_approval_ttl_ms_absent_parses_none_and_keeps_legacy_window() {
+        // A pre-TTL frame must parse unchanged and keep the exact 300s
+        // resolver window (the default path stays byte-for-byte identical).
+        let msg: WsClientMessage =
+            serde_json::from_str(r#"{"type": "query", "prompt": "hi"}"#).unwrap();
+        match msg {
+            WsClientMessage::Query {
+                approval_ttl_ms, ..
+            } => {
+                assert_eq!(approval_ttl_ms, None);
+                assert_eq!(approval_window(approval_ttl_ms), Duration::from_secs(300),);
+            }
+            other => panic!("expected Query, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ws_query_approval_ttl_ms_zero_maps_to_legacy_default() {
+        // 0 is "no override" (the wire has no meaningful 0ms window).
+        let msg: WsClientMessage =
+            serde_json::from_str(r#"{"type": "query", "prompt": "hi", "approval_ttl_ms": 0}"#)
+                .unwrap();
+        match msg {
+            WsClientMessage::Query {
+                approval_ttl_ms, ..
+            } => {
+                assert_eq!(approval_ttl_ms, Some(0));
+                assert_eq!(approval_window(approval_ttl_ms), Duration::from_secs(300),);
+            }
+            other => panic!("expected Query, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ws_query_approval_ttl_ms_custom_window_is_honored() {
+        // The whole point of B6.0-4: a quote-window ask widens (or narrows)
+        // the resolver wait — the gateway and the engine must agree on it.
+        let msg: WsClientMessage = serde_json::from_str(
+            r#"{"type": "query", "prompt": "hi", "approval_ttl_ms": 1800000}"#,
+        )
+        .unwrap();
+        match msg {
+            WsClientMessage::Query {
+                approval_ttl_ms, ..
+            } => {
+                assert_eq!(approval_ttl_ms, Some(1_800_000));
+                assert_eq!(
+                    approval_window(approval_ttl_ms),
+                    Duration::from_millis(1_800_000),
+                );
+            }
+            other => panic!("expected Query, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ws_query_approval_ttl_ms_clamped_at_24h() {
+        let msg: WsClientMessage = serde_json::from_str(
+            r#"{"type": "query", "prompt": "hi", "approval_ttl_ms": 999999999}"#,
+        )
+        .unwrap();
+        match msg {
+            WsClientMessage::Query {
+                approval_ttl_ms, ..
+            } => {
+                assert_eq!(
+                    approval_window(approval_ttl_ms),
+                    Duration::from_millis(86_400_000),
+                    "a client-supplied window must clamp at the 24h ceiling"
+                );
+            }
+            other => panic!("expected Query, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ws_query_approval_ttl_ms_omitted_when_absent_on_the_wire() {
+        // `skip_serializing_if` keeps the emitted frame byte-identical to the
+        // pre-TTL shape whenever the override is not requested.
+        let msg = WsClientMessage::Query {
+            prompt: "hi".to_string(),
+            model: None,
+            session_id: None,
+            attachments: None,
+            approval_ttl_ms: None,
+        };
+        let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
+        assert!(parsed.get("approval_ttl_ms").is_none());
+        // And the key rides when set.
+        let msg = WsClientMessage::Query {
+            prompt: "hi".to_string(),
+            model: None,
+            session_id: None,
+            attachments: None,
+            approval_ttl_ms: Some(60_000),
+        };
+        let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
+        assert_eq!(parsed["approval_ttl_ms"], 60_000);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
     // session history persistence (P0-e)
     // ══════════════════════════════════════════════════════════════════════
 
@@ -3687,6 +3825,7 @@ mod tests {
             model: Some("gpt-4o".to_string()),
             session_id: None,
             attachments: None,
+            approval_ttl_ms: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -3702,6 +3841,7 @@ mod tests {
             model: None,
             session_id: None,
             attachments: None,
+            approval_ttl_ms: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -3739,6 +3879,7 @@ mod tests {
                 model: Some("llama3".to_string()),
                 session_id: None,
                 attachments: None,
+                approval_ttl_ms: None,
             },
             WsClientMessage::Clear,
             WsClientMessage::Info,

@@ -51,6 +51,29 @@ describe("ApprovalRegistry", () => {
     expect(reg.listPending()).toEqual([]);
   });
 
+  // ── §S B6.0-4: entry-level expiry (per-ask deadlines) ────────────────────
+
+  it("an entry with its own expiry dies at ITS deadline, not the registry default", () => {
+    let t = 1_000_000;
+    const reg = new ApprovalRegistry({ now: () => t, maxAgeMs: 330_000 });
+    // A quoteWindow ask: recorded "now", but its window outlives the default
+    // retention many times over — the registry must NOT prune it at 330s.
+    reg.record(rec({ requestId: "quote", ts: t, expiresAtMs: t + 1_800_000 }));
+    reg.record(rec({ requestId: "plain", ts: t }));
+    t += 330_001;
+    expect(reg.listPending().map((r) => r.requestId)).toEqual(["quote"]);
+    t += 1_800_000;
+    expect(reg.listPending()).toEqual([]);
+  });
+
+  it("an entry-level deadline EARLIER than the default retention prunes earlier too", () => {
+    let t = 1_000_000;
+    const reg = new ApprovalRegistry({ now: () => t, maxAgeMs: 330_000 });
+    reg.record(rec({ requestId: "short", ts: t, expiresAtMs: t + 5_000 }));
+    t += 5_001;
+    expect(reg.listPending()).toEqual([]);
+  });
+
   it("caps the ring by dropping the oldest entry", () => {
     const reg = new ApprovalRegistry({ maxEntries: 2 });
     reg.record(rec({ requestId: "a" }));

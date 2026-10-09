@@ -584,6 +584,82 @@ describe("mobile dispatch — approval registry integration", () => {
     expect(hub.cancelPendingApprovals("dev-1")).toBe(0);
     expect(approvals.size).toBe(0);
   });
+
+  // ── §S B6.0-4 / B6.1: per-ask deadlines, settle meta, the group-expired
+  // card sink ──────────────────────────────────────────────────────────────
+
+  const groupKey = {
+    groupId: "grp-00000000-0000-0000-0000-000000000001",
+    member: { memberId: "mem-01", label: "A", title: "订机票", source: "ephemeral" as const },
+  };
+
+  it("B6.0-4: a per-ask deadlineMs overrides the hub-wide approvalTimeoutMs (and back-fills the registry retention)", async () => {
+    const approvals = new ApprovalRegistry();
+    // Hub-wide window is LONG; the ask carries its own SHORT deadline.
+    const hub = new MobileDispatchHub({ logger, approvals, approvalTimeoutMs: 10_000 });
+    hub.registerConnection(fakeCtx("dev-1"));
+
+    const pending = hub.requestApproval("dev-1", { ...req, deadlineMs: 25 });
+    const recorded = approvals.listPending()[0]!;
+    expect(typeof recorded.expiresAtMs).toBe("number"); // entry-level expiry mirrors the timer
+    await vi.waitFor(() => expect(approvals.listPending()).toEqual([])); // pruned at ITS deadline, long before 10s
+    await expect(pending).resolves.toBe("deny");
+  });
+
+  it("B6.0-4: an ask without deadlineMs keeps the default path byte-identical (no expiresAtMs invented)", async () => {
+    const approvals = new ApprovalRegistry();
+    const hub = new MobileDispatchHub({ logger, approvals, approvalTimeoutMs: 25 });
+    hub.registerConnection(fakeCtx("dev-1"));
+    void hub.requestApproval("dev-1", req);
+    expect(approvals.listPending()[0]).not.toHaveProperty("expiresAtMs");
+    await vi.waitFor(() => expect(approvals.listPending()).toEqual([]));
+  });
+
+  it("B6.1: requestApprovalWithMeta reports WHO decided; the timeout reports nobody", async () => {
+    const hub = new MobileDispatchHub({ logger, approvalTimeoutMs: 25 });
+    hub.registerConnection(fakeCtx("dev-1"));
+
+    const decided = hub.requestApprovalWithMeta("dev-1", { ...req, requestId: "req-meta-1" });
+    expect(hub.settleApproval("req-meta-1", "allow")).toBe(true);
+    await expect(decided).resolves.toEqual({ choice: "allow", decidedBy: "dev-1" });
+
+    const expired = hub.requestApprovalWithMeta("dev-1", { ...req, requestId: "req-meta-2" });
+    await expect(expired).resolves.toEqual({ choice: "deny", decidedBy: null });
+    // The legacy-shaped wrapper still resolves to the bare choice.
+    const legacy = hub.requestApproval("dev-1", { ...req, requestId: "req-meta-3" });
+    expect(hub.settleApproval("req-meta-3", "deny")).toBe(true);
+    await expect(legacy).resolves.toBe("deny");
+  });
+
+  it("B6.0-4: the group-expired sink fires ONLY for group asks at timeout — never for plain asks, never on a device decide", async () => {
+    const hub = new MobileDispatchHub({ logger, approvalTimeoutMs: 25 });
+    const seen: string[] = [];
+    hub.setGroupApprovalExpired((r) => seen.push(r.requestId));
+    hub.registerConnection(fakeCtx("dev-1"));
+
+    // A group ask expires → the sink hears about it (the quote-expired card).
+    void hub.requestApprovalWithMeta("dev-1", { ...req, requestId: "req-g-1", group: groupKey });
+    await vi.waitFor(() => expect(seen).toEqual(["req-g-1"]));
+
+    // A plain ask expires → silence (the legacy behavior, no new cards).
+    void hub.requestApproval("dev-1", { ...req, requestId: "req-g-2" });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(seen).toEqual(["req-g-1"]);
+
+    // A group ask DECIDED by a device is not an expiry → the sink stays quiet.
+    const p = hub.requestApprovalWithMeta("dev-1", { ...req, requestId: "req-g-3", group: groupKey });
+    expect(hub.settleApproval("req-g-3", "deny")).toBe(true);
+    await p;
+    await new Promise((r) => setTimeout(r, 60));
+    expect(seen).toEqual(["req-g-1"]);
+
+    // A broken sink must never fail the deny.
+    hub.setGroupApprovalExpired(() => {
+      throw new Error("sink exploded");
+    });
+    const boom = hub.requestApproval("dev-1", { ...req, requestId: "req-g-4", group: groupKey });
+    await expect(boom).resolves.toBe("deny");
+  });
 });
 
 // ── B0: session.list attribution (hub journal → engineBridge) ────────────────

@@ -613,7 +613,10 @@ mod tests {
     #[test]
     fn tier_label_for_id_honors_declared_capabilities() {
         // R2-4: an openai-compatible model absent from the catalog can only
-        // be classified through its declared capabilities.
+        // be classified through its declared capabilities. Hold the
+        // declared-models test lock: the registry is process-global and
+        // plain `cargo test` runs tests on parallel threads.
+        let _guard = crate::declared_models::test_support::registry_guard();
         let mut spec = ModelSpec {
             id: "shannon-declared-tier-model".to_string(),
             display_name: None,
@@ -1904,9 +1907,11 @@ mod tests {
 
     #[test]
     fn tier_lookup_follows_the_variant_rule() {
-        // Declared models stay authoritative ahead of the catalog; make
-        // sure no declaration from a sibling test is visible here.
-        crate::declared_models::clear();
+        // Declared models stay authoritative ahead of the catalog; hold the
+        // declared-models test lock so no sibling test's declarations are
+        // visible here (the registry is process-global and plain
+        // `cargo test` runs tests on parallel threads).
+        let _guard = crate::declared_models::test_support::registry_guard();
 
         // Acceptance (a): the dated variant of claude-sonnet-4-6 inherits
         // its tier (forward-compat for real-world dated ids).
