@@ -374,6 +374,18 @@ jobs:
             Write-Host "NSIS toolchain pre-cached at $nsis"
           }
 
+      # The floating @tauri-apps/cli@v2 (installed by tauri-action below)
+      # changed where beforeBuildCommand hooks execute — observed 2026-10-09:
+      # the hook ran from desktop/ui instead of desktop/, so `pnpm --dir ui
+      # build` lstat'ed desktop/ui/ui and all six platform jobs died (v0.11/
+      # v0.12 never shipped, so this sat undiscovered). Build the UI here
+      # with a fixed working-directory instead; beforeBuildCommand in
+      # tauri.conf.json is neutralized and frontendDist (./ui/dist) reads
+      # the output.
+      - name: Build UI dist (fixed cwd; replaces beforeBuildCommand)
+        working-directory: desktop
+        run: pnpm --dir ui build
+
       # productName is `shannon-desktop`, so bundles are shannon-desktop_*.
       # releaseDraft:true only creates if missing — the draft from
       # create-release already exists, so this just uploads into it.
