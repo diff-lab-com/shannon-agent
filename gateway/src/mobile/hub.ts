@@ -527,6 +527,7 @@ export class MobileDispatchHub {
       ...(engineTs !== null ? { ts: engineTs } : {}),
       ...(agent ? { agent } : {}),
       ...(risk ? { risk } : {}),
+      ...(req.group ? { group: req.group } : {}),
     });
     // §L2: the ask is now visible to the restore face until a settle resolves it.
     this.approvals?.record({
@@ -539,6 +540,7 @@ export class MobileDispatchHub {
       ts: engineTs ?? this.now(),
       agent,
       risk,
+      ...(req.group ? { group: req.group } : {}),
     });
     return new Promise<"allow" | "deny">((resolve) => {
       let timer: NodeJS.Timeout | undefined;

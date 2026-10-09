@@ -1,0 +1,771 @@
+/**
+ * §S group orchestration (B6.0 起步, cross-repo spec) — the `shannon/group.*`
+ * method face + the deterministic member-turn orchestrator.
+ *
+ * Wire posture (B-batch discipline): everything here is ADDITIVE — an old
+ * gateway answers METHOD_NOT_FOUND for all four methods (the phone's honest
+ * "预研能力" degrade), and every EVENT/key introduced here is optional on the
+ * `shannon/event` channel. Rulings live in
+ * `docs/reviews/2026-10-09-mobile-proposals-rulings.md`; the contract lands
+ * in the mobile repo's spec as §S when the mono PR merges.
+ *
+ * What v1 honestly is:
+ *  - Members are ATTRIBUTION + accounting labels, not engine personas (the
+ *    B0 归属非路由 precedent): a member turn executes as the default engine
+ *    under a one-shot UUID session (the engine WS gate rejects non-UUID
+ *    session ids), re-keyed onto the group thread by the orchestrator.
+ *  - Handoffs are DETERMINISTIC orchestrator steps (plan order + completion
+ *    events), not member-initiated agency; the red line (R5) rides along as
+ *    a one-shot `handoff-first` flag feeding the next approval's
+ *    `group.ruleTrigger`.
+ *  - Payments-ask-first is stored and locked at create, but v1 has no
+ *    payment-class tool producer, so no `payments-ask-first` trigger is ever
+ *    emitted (宁缺勿造); pool enforcement is B6.1.
+ *
+ * Events fan out to EVERY connected device (`hub.broadcastEvent`): a group is
+ * a host-level entity, not a device-private task thread — deliberately
+ * different from §K3's initiating-device-only task streams.
+ */
+
+import { randomUUID } from "node:crypto";
+
+import { respondToApproval } from "../engine/httpClient.js";
+import { type EngineEvent } from "../engine/runtime.js";
+import { EngineWsClient } from "../engine/wsClient.js";
+import { type Logger } from "../adapters/types.js";
+import { loadAgentRoster } from "./agentRoster.js";
+import {
+  appendTranscript,
+  listGroups,
+  loadGroup,
+  newGroupId,
+  pageTranscript,
+  readTranscript,
+  saveGroup,
+  type GroupMember,
+  type GroupRecord,
+  type GroupRules,
+  type GroupTranscriptEntry,
+} from "./groupStore.js";
+import { ShannonError,
+  type GroupArchiveParams,
+  type GroupArchiveResult,
+  type GroupCreateParams,
+  type GroupCreateResult,
+  type GroupListItem,
+  type GroupListResult,
+  type GroupMessageParams,
+  type GroupMessageResult,
+  type GroupObject,
+  type GroupMemberInfo,
+} from "./protocol.js";
+import type { MethodContext, MethodHandlers } from "./server.js";
+import type { MobileTranscriptWire } from "./engineSessions.js";
+import type { MobileDispatchHub } from "./hub.js";
+
+const PAIRING_REQUIRED = {
+  kind: "error" as const,
+  code: ShannonError.PAIRING_REQUIRED,
+  message: "pair a device first (shannon/pair or shannon/device.resume)",
+};
+
+const GROUP_ID_RE = /^grp-[0-9a-fA-F-]{36}$/;
+
+export interface GroupHandlersOptions {
+  hub: MobileDispatchHub;
+  logger: Logger;
+  /**
+   * Group storage roots (default `~/.shannon/groups`). Tests inject a tmp
+   * dir; array-shaped to mirror the agentRosterDirs seam.
+   */
+  groupsDirs?: string[];
+  /** Roster validation targets for the create path (same seam as task.dispatch). */
+  agentRosterDirs?: string[];
+  /** Member-turn engine connection (the §K pipeline's construction). */
+  engineWsUrl: string;
+  /** Approval POST target (§P1-13 token posture). */
+  engineHttpBaseUrl: string;
+  engineAuthToken?: string | null;
+  defaultModel?: string | null;
+  /** Test seams (mirror dispatchPipeline). */
+  fetchImpl?: typeof fetch;
+  engineClientFactory?: (sessionKey: string) => EngineWsClient;
+  now?: () => number;
+}
+
+/** CNY money on the wire is 元 with two decimals (§S 总则 7). */
+function cny(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return null;
+  return Math.round(v * 100) / 100;
+}
+
+function isoNow(opts: { now?: () => number }): string {
+  return new Date(opts.now?.() ?? Date.now()).toISOString();
+}
+
+/** The deterministic v1 "planning query" stand-in: the generic 3-slot crew. */
+function templateMembers(): Array<Pick<GroupMember, "slot" | "label" | "title"> & { permissions: string[] }> {
+  return [
+    { slot: "plan", label: "A", title: "规划分工", permissions: ["read.only"] },
+    { slot: "do", label: "M", title: "执行", permissions: ["read.only"] },
+    { slot: "verify", label: "S", title: "核对交付", permissions: ["read.only"] },
+  ];
+}
+
+function memberWire(m: GroupMember): GroupMemberInfo {
+  return {
+    memberId: m.memberId,
+    slot: m.slot,
+    label: m.label,
+    title: m.title,
+    source: m.source,
+    agentId: m.agentId,
+    shareCny: m.shareCny,
+    spentCny: m.spentCny,
+    status: m.status,
+    statusNote: m.statusNote,
+    permissions: m.permissions,
+  };
+}
+
+function groupWire(record: GroupRecord): GroupObject {
+  return {
+    groupId: record.groupId,
+    title: record.title,
+    goal: record.goal,
+    status: record.status,
+    createdAt: record.createdAt,
+    members: record.members.map(memberWire),
+    pool: { ...record.pool },
+    rules: { ...record.rules },
+  };
+}
+
+export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers {
+  const hub = opts.hub;
+  const dirs = opts.groupsDirs ?? [];
+  const now = () => opts.now?.() ?? Date.now();
+  /** Per-group turn-chain mutex — a group runs one deterministic chain at a
+   *  time; a second message while a chain runs queues behind it. */
+  const chains = new Map<string, Promise<void>>();
+
+  function broadcast(event: Parameters<MobileDispatchHub["broadcastEvent"]>[0]): void {
+    hub.broadcastEvent(event);
+  }
+
+  function persist(record: GroupRecord): void {
+    record.lastActivityAt = new Date(now()).toISOString();
+    saveGroup(dirs, record);
+  }
+
+  function transcriptAdd(record: GroupRecord, entry: Omit<GroupTranscriptEntry, "ts">): void {
+    appendTranscript(dirs, record.groupId, { ...entry, ts: new Date(now()).toISOString() });
+    record.lastActivityAt = new Date(now()).toISOString();
+  }
+
+  function memberStatusEvent(record: GroupRecord, member: GroupMember): void {
+    broadcast({
+      type: "group.member",
+      session_id: record.groupId,
+      member: {
+        memberId: member.memberId,
+        status: member.status,
+        statusNote: member.statusNote,
+      },
+    });
+  }
+
+  function systemEvent(record: GroupRecord, kind: string, text: string): void {
+    broadcast({
+      type: "group.system",
+      session_id: record.groupId,
+      system: { kind, text, ts: new Date(now()).toISOString() },
+    });
+    transcriptAdd(record, { role: "assistant", content: text, kind: "system" });
+    persist(record);
+  }
+
+  // ── member turn execution (the §K pipeline posture, re-keyed) ────────────
+
+  function engineClientFor(sessionKey: string): EngineWsClient {
+    return (
+      opts.engineClientFactory ??
+      ((key: string) =>
+        // Same construction the dispatch pipeline's lane client performs.
+        new EngineWsClient({
+          url: opts.engineWsUrl,
+          model: opts.defaultModel ?? null,
+          sessionId: key,
+          headers: opts.engineAuthToken
+            ? { authorization: `Bearer ${opts.engineAuthToken}` }
+            : undefined,
+        }))
+    )(sessionKey);
+  }
+
+  function composePrompt(record: GroupRecord, member: GroupMember, userText: string | null, handoffNote: string | null): string {
+    const lines = [
+      `[群] 目标：${record.goal}`,
+      `[你的分工] ${member.title}（${member.slot}）· 信息边界（${record.rules.infoBoundary}）：只使用完成该分工所需的信息`,
+    ];
+    if (handoffNote) lines.push(`[上一棒交接] ${handoffNote}`);
+    if (userText) lines.push(`[用户消息] ${userText}`);
+    return lines.join("\n");
+  }
+
+  /** One member turn: engine query under a one-shot UUID session, streamed
+   *  onto the group thread (session_id = groupId), approvals through the
+   *  shared hub round-trip (with §S attribution), transcript + status kept
+   *  honest. Returns the final text (or null on failure). */
+  async function runMemberTurn(
+    record: GroupRecord,
+    member: GroupMember,
+    userText: string | null,
+    handoffNote: string | null,
+    initiatorDeviceId: string,
+  ): Promise<string | null> {
+    member.status = "working";
+    member.statusNote = `正在完成分工：${member.title}`;
+    memberStatusEvent(record, member);
+    persist(record);
+
+    const client = engineClientFor(`group:${record.groupId}:${member.memberId}:${randomUUID()}`);
+    const engineSessionId = randomUUID(); // one-shot; never a group key (engine UUID gate)
+    const acc: { chunks: string[]; failed: string | null; cancelled: boolean } = {
+      chunks: [],
+      failed: null,
+      cancelled: false,
+    };
+    try {
+      await client.connect();
+      const query = client.runQuery(composePrompt(record, member, userText, handoffNote), {
+        sessionId: engineSessionId,
+      }) as AsyncIterable<EngineEvent>;
+      for await (const ev of query) {
+        switch (ev.type) {
+          case "text":
+            broadcast({ type: "task.progress", session_id: record.groupId, content: ev.content });
+            acc.chunks.push(ev.content);
+            break;
+          case "usage":
+            broadcast({
+              type: "task.progress",
+              session_id: record.groupId,
+              usage: {
+                input_tokens: ev.input_tokens,
+                output_tokens: ev.output_tokens,
+                cost_usd: ev.cost_usd,
+              },
+            });
+            break;
+          case "tool_use":
+          case "tool_result": {
+            const frame =
+              ev.type === "tool_use"
+                ? {
+                    kind: "use" as const,
+                    name: ev.name,
+                    input: ev.input,
+                    ...(typeof ev.tool_use_id === "string" && ev.tool_use_id.length > 0
+                      ? { tool_use_id: ev.tool_use_id }
+                      : {}),
+                    ...(typeof ev.ts === "number" && Number.isFinite(ev.ts) ? { ts: ev.ts } : {}),
+                  }
+                : {
+                    kind: "result" as const,
+                    name: ev.name,
+                    output: ev.output,
+                    ...(typeof ev.tool_use_id === "string" && ev.tool_use_id.length > 0
+                      ? { tool_use_id: ev.tool_use_id }
+                      : {}),
+                    ...(typeof ev.is_error === "boolean" ? { is_error: ev.is_error } : {}),
+                    ...(ev.meta != null ? { meta: ev.meta } : {}),
+                    ...(typeof ev.ts === "number" && Number.isFinite(ev.ts) ? { ts: ev.ts } : {}),
+                  };
+            broadcast({ type: "task.progress", session_id: record.groupId, tool: frame });
+            break;
+          }
+          case "approval_request": {
+            member.status = "waiting-approval";
+            memberStatusEvent(record, member);
+            persist(record);
+            // The R5 one-shot: after a handoff, this member's next ask names
+            // the trigger, then the flag clears (the red line fires once).
+            const ruleTrigger =
+              member.handoffFirstPending === true ? ("handoff-first" as const) : undefined;
+            member.handoffFirstPending = false;
+            const choice = await hub.requestApproval(initiatorDeviceId, {
+              requestId: ev.request_id,
+              toolName: ev.tool_name,
+              toolInput: ev.tool_input,
+              description: ev.description,
+              isDestructive: ev.is_destructive,
+              diffPreview: ev.diff_preview ?? null,
+              ...(typeof ev.ts === "number" && ev.ts !== null ? { ts: ev.ts } : {}),
+              ...(ev.agent ? { agent: ev.agent } : {}),
+              ...(ev.risk ? { risk: ev.risk } : {}),
+              group: {
+                groupId: record.groupId,
+                member: {
+                  memberId: member.memberId,
+                  label: member.label,
+                  title: member.title,
+                  source: member.source,
+                },
+                ...(ruleTrigger ? { ruleTrigger } : {}),
+              },
+            });
+            // Forward the decision so the engine resumes (mirror the IM/task
+            // handler; a failed POST degrades to the engine's own timeout-deny).
+            await respondToApproval({
+              engineBaseUrl: opts.engineHttpBaseUrl,
+              requestId: ev.request_id,
+              choice,
+              authToken: opts.engineAuthToken ?? null,
+              fetchImpl: opts.fetchImpl,
+            }).catch((err) => {
+              opts.logger.warn(
+                `group turn: approval POST failed (engine will deny at its window): ${(err as Error).message}`,
+              );
+            });
+            member.status = "working";
+            member.statusNote = `正在完成分工：${member.title}`;
+            memberStatusEvent(record, member);
+            break;
+          }
+          case "failed":
+            acc.failed = ev.error;
+            break;
+          case "cancelled":
+            acc.cancelled = true;
+            break;
+          default:
+            break;
+        }
+      }
+    } catch (err) {
+      acc.failed = (err as Error).message;
+    } finally {
+      await client.close().catch(() => {});
+    }
+
+    const finalText = acc.chunks.join("");
+    if (acc.failed !== null || acc.cancelled || finalText.length === 0) {
+      member.status = "failed";
+      member.statusNote = acc.failed ?? "任务取消";
+      memberStatusEvent(record, member);
+      persist(record);
+      systemEvent(
+        record,
+        acc.cancelled ? "member-failed" : "member-failed",
+        `成员「${member.title}（${member.label}）」的任务未完成${acc.failed ? `：${acc.failed}` : "。"}`
+      );
+      return null;
+    }
+    member.status = "done";
+    member.statusNote = null;
+    memberStatusEvent(record, member);
+    transcriptAdd(record, {
+      role: "assistant",
+      content: finalText,
+      kind: "member",
+      member: { memberId: member.memberId, label: member.label, title: member.title },
+    });
+    // §K3 terminal parity: the member turn closes its streaming phase with
+    // `task.message {session_id: groupId}` so the phone's existing routing
+    // chain seals the bubble with the final full text, zero changes.
+    broadcast({ type: "task.message", session_id: record.groupId, text: finalText });
+    persist(record);
+    return finalText;
+  }
+
+  /** The deterministic handoff chain: run `start`, then walk plan order
+   *  handing off to the next non-finished member until the plan exhausts
+   *  (group-completed) or a member fails (chain stops, honestly). */
+  async function runChain(
+    record: GroupRecord,
+    start: GroupMember,
+    userText: string | null,
+    initiatorDeviceId: string,
+  ): Promise<void> {
+    let current = start;
+    let text: string | null = null;
+    let note: string | null = null;
+    let first = true;
+    for (;;) {
+      const produced = await runMemberTurn(record, current, first ? userText : null, note, initiatorDeviceId);
+      first = false;
+      if (produced === null) return; // member-failed card already out; chain stops
+      text = produced;
+      const next = record.members.find(
+        (m) => m.status !== "done" && m.status !== "archived" && m.status !== "failed",
+      );
+      if (!next) {
+        record.status = "completed";
+        persist(record);
+        systemEvent(
+          record,
+          "group-completed",
+          `群目标已由全体成员完成，共 ${record.members.length} 个分工。`
+        );
+        return;
+      }
+      // Handoff (R5): confirmation-free by the locked rule, but the receiver
+      // owes one explicit ask before its first outward payment — modeled as
+      // the one-shot handoff-first flag.
+      next.handoffFirstPending = true;
+      next.status = "queued";
+      const handoffText = `「${current.title}（${current.label}）」已交接给「${next.title}（${next.label}）」：${clip(text, 280)}`;
+      broadcast({
+        type: "group.handoff",
+        session_id: record.groupId,
+        handoff: {
+          id: `ho-${randomUUID().slice(0, 8)}`,
+          from: current.memberId,
+          to: next.memberId,
+          ts: new Date(now()).toISOString(),
+          note: clip(text, 280),
+        },
+      });
+      systemEvent(record, "handoff", handoffText);
+      current = next;
+      note = clip(text, 280);
+    }
+  }
+
+  function clip(text: string, max: number): string {
+    return text.length <= max ? text : `${text.slice(0, max)}…`;
+  }
+
+  function runExclusive(groupId: string, task: () => Promise<void>): Promise<void> {
+    const prev = chains.get(groupId) ?? Promise.resolve();
+    const nextTask = prev.then(task, task);
+    chains.set(
+      groupId,
+      nextTask.catch(() => {}),
+    );
+    return nextTask;
+  }
+
+  // ── method handlers ──────────────────────────────────────────────────────
+
+  const groupGate = (ctx: MethodContext) => {
+    if (ctx.sessionId == null) return PAIRING_REQUIRED;
+    return null;
+  };
+
+  const handlers: MethodHandlers = {
+    // ── §S B6.0-1: group list (the 02 "团队" projection; double source with
+    // session.list — the two never mix). Capability note: an old gateway
+    // answers METHOD_NOT_FOUND, which is exactly the phone's honest signal.
+    "shannon/group.list": async (_raw, ctx) => {
+      const gate = groupGate(ctx);
+      if (gate) return gate;
+      const groups: GroupListItem[] = listGroups(dirs)
+        .sort((a, b) => (a.lastActivityAt < b.lastActivityAt ? 1 : -1))
+        .map((record) => ({
+          groupId: record.groupId,
+          title: record.title,
+          goalSummary: record.goal.length > 0 ? clip(record.goal, 60) : undefined,
+          status: record.status,
+          memberCount: record.members.filter((m) => m.status !== "archived").length,
+          pool: {
+            totalCny: record.pool.totalCny,
+            spentCny: record.pool.spentCny,
+            pendingCny: record.pool.pendingCny,
+          },
+          lastActivityAt: record.lastActivityAt,
+        }));
+      return { kind: "result", result: { groups } satisfies GroupListResult };
+    },
+
+    // ── §S B6.0-2: dual-path create. R12's step-2 confirm sheet is PHONE-
+    // LOCAL — one round trip here; the user's tap on 「建群，出发」 is what
+    // produces this call (no half-created groups: validation precedes any
+    // filesystem write).
+    "shannon/group.create": async (raw, ctx) => {
+      const gate = groupGate(ctx);
+      if (gate) return gate;
+      const params = (raw ?? {}) as Partial<GroupCreateParams>;
+      if (typeof params.goal !== "string" || params.goal.trim().length === 0) {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: "params.goal (non-empty string) is required",
+        };
+      }
+      const path = params.path ?? "ephemeral";
+      if (path !== "ephemeral" && path !== "roster") {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: 'params.path must be "ephemeral" or "roster"',
+        };
+      }
+      // The locked rule (14): payments always ask. Absent = true; an explicit
+      // false is rejected, never silently stored.
+      const rules: GroupRules = {
+        paymentsAskFirst: true,
+        infoBoundary:
+          typeof params.rules?.infoBoundary === "string" && params.rules.infoBoundary.length > 0
+            ? params.rules.infoBoundary
+            : "need-only",
+        handoffFree: params.rules?.handoffFree !== false,
+        dailyReportAt:
+          typeof params.rules?.dailyReportAt === "string" && /^\d{2}:\d{2}$/.test(params.rules.dailyReportAt)
+            ? params.rules.dailyReportAt
+            : null,
+      };
+      // Runtime check regardless of the wire type's `true` literal — the
+      // locked rule must REJECT an explicit false, never store it.
+      if ((params.rules as { paymentsAskFirst?: unknown } | undefined)?.paymentsAskFirst === false) {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: "rules.paymentsAskFirst is locked to true (payments always ask first)",
+        };
+      }
+      const totalCny = params.pool?.totalCny == null ? 0 : cny(params.pool.totalCny);
+      if (totalCny === null) {
+        return { kind: "error", code: ShannonError.BAD_PARAMS, message: "pool.totalCny must be a non-negative number (元)" };
+      }
+      const requested: NonNullable<GroupCreateParams["members"]> =
+        params.members ?? templateMembers().map((m) => ({ ...m }));
+      if (!Array.isArray(requested) || requested.length === 0 || requested.length > 8) {
+        return { kind: "error", code: ShannonError.BAD_PARAMS, message: "members must be a non-empty array (≤8)" };
+      }
+      const seenSlots = new Set<string>();
+      const seenLabels = new Set<string>();
+      let shares = 0;
+      const members: GroupMember[] = [];
+      for (const m of requested) {
+        if (
+          typeof m?.slot !== "string" || m.slot.length === 0 ||
+          typeof m?.label !== "string" || m.label.length === 0 ||
+          typeof m?.title !== "string" || m.title.length === 0
+        ) {
+          return { kind: "error", code: ShannonError.BAD_PARAMS, message: "each member needs non-empty slot/label/title" };
+        }
+        if (seenSlots.has(m.slot) || seenLabels.has(m.label)) {
+          return { kind: "error", code: ShannonError.BAD_PARAMS, message: "member slot/label must be unique" };
+        }
+        seenSlots.add(m.slot);
+        seenLabels.add(m.label);
+        const shareCny = m.shareCny == null ? 0 : cny(m.shareCny);
+        if (shareCny === null) {
+          return { kind: "error", code: ShannonError.BAD_PARAMS, message: "shareCny must be a non-negative number (元)" };
+        }
+        shares += shareCny;
+        let agentId: string | null = null;
+        if (path === "roster") {
+          // §K1 posture: an unknown roster id is INVALID_PARAMS, never a
+          // silent re-route (attribution is the contract, not a hint).
+          if (typeof m.agentId !== "string" || m.agentId.length === 0) {
+            return { kind: "error", code: ShannonError.BAD_PARAMS, message: "roster path: every member needs an agentId" };
+          }
+          const roster = loadAgentRoster(opts.agentRosterDirs);
+          if (!roster.some((a) => a.id === m.agentId)) {
+            return {
+              kind: "error",
+              code: ShannonError.BAD_PARAMS,
+              message: "unknown agentId — not in this host's agent roster (shannon/agent.list)",
+              data: { agentId: m.agentId },
+            };
+          }
+          agentId = m.agentId;
+        } else if (typeof m.agentId === "string" && m.agentId.length > 0) {
+          return { kind: "error", code: ShannonError.BAD_PARAMS, message: "ephemeral members cannot carry an agentId" };
+        }
+        members.push({
+          memberId: `mem-${String(members.length + 1).padStart(2, "0")}`,
+          slot: m.slot,
+          label: m.label,
+          title: m.title,
+          source: path === "roster" ? "roster" : "ephemeral",
+          agentId,
+          shareCny,
+          spentCny: 0,
+          status: "queued",
+          statusNote: null,
+          permissions: Array.isArray(m.permissions)
+            ? m.permissions.filter((p): p is string => typeof p === "string")
+            : ["read.only"],
+        });
+      }
+      if (shares > totalCny) {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: "Σ shareCny exceeds pool.totalCny (the reserve is total − Σ shares)",
+        };
+      }
+      const record: GroupRecord = {
+        groupId: newGroupId(),
+        title: clip(params.goal.trim(), 24),
+        goal: params.goal.trim(),
+        status: "active",
+        createdAt: isoNow(opts),
+        lastActivityAt: isoNow(opts),
+        path,
+        rules,
+        pool: {
+          totalCny,
+          spentCny: 0,
+          pendingCny: 0,
+          reserveCny: Math.round((totalCny - shares) * 100) / 100,
+        },
+        members,
+      };
+      saveGroup(dirs, record);
+      transcriptAdd(record, {
+        role: "assistant",
+        content: `群已建立 · 目标：${record.goal} · 池 ¥${record.pool.totalCny.toFixed(2)}（备用 ¥${record.pool.reserveCny.toFixed(2)}）· ${members.length} 个成员分工已就绪`,
+        kind: "system",
+      });
+      opts.logger.info(
+        `shannon/group.create: ${record.groupId} (${path}, ${members.length} members) by ${ctx.sessionId}`,
+      );
+      return { kind: "result", result: { group: groupWire(record) } satisfies GroupCreateResult };
+    },
+
+    // ── §S B6.0-2/3: speak into the group → deterministic member turn(s).
+    // Response is synchronous ({messageId, ts}); the member stream flows as
+    // events with session_id = groupId.
+    "shannon/group.message": async (raw, ctx) => {
+      const gate = groupGate(ctx);
+      if (gate) return gate;
+      const params = (raw ?? {}) as Partial<GroupMessageParams>;
+      if (typeof params.groupId !== "string" || !GROUP_ID_RE.test(params.groupId)) {
+        return { kind: "error", code: ShannonError.BAD_PARAMS, message: "params.groupId (grp-<uuid>) is required" };
+      }
+      if (typeof params.text !== "string" || params.text.trim().length === 0) {
+        return { kind: "error", code: ShannonError.BAD_PARAMS, message: "params.text (non-empty string) is required" };
+      }
+      const record = loadGroup(dirs, params.groupId);
+      if (!record) {
+        // §J2 posture for unknown group keys: an honest miss the phone can
+        // render, not a fabricated thread.
+        return { kind: "error", code: ShannonError.BAD_PARAMS, message: "unknown groupId" };
+      }
+      if (record.status !== "active") {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: `group is ${record.status} — messaging needs an active group`,
+        };
+      }
+      const text = params.text.trim();
+      const ts = new Date(now()).toISOString();
+      transcriptAdd(record, { role: "user", content: text, kind: "user" });
+      persist(record);
+
+      // Routing: mention wins; otherwise the first member still owed work in
+      // plan order. Nothing is invented — an exhausted plan answers with the
+      // honest system card instead of a phantom turn.
+      let target: GroupMember | undefined;
+      if (typeof params.mentionMemberId === "string" && params.mentionMemberId.length > 0) {
+        target = record.members.find((m) => m.memberId === params.mentionMemberId);
+        if (!target) {
+          return { kind: "error", code: ShannonError.BAD_PARAMS, message: "unknown mentionMemberId" };
+        }
+        if (target.status === "archived") {
+          return { kind: "error", code: ShannonError.BAD_PARAMS, message: "mentioned member is archived" };
+        }
+      } else {
+        target = record.members.find(
+          (m) => m.status !== "done" && m.status !== "archived" && m.status !== "failed",
+        );
+        if (!target) {
+          systemEvent(record, "group-completed", "全体成员的分工已完成——没有待办的成员任务。");
+          return { kind: "result", result: { messageId: `msg-${randomUUID().slice(0, 8)}`, ts } satisfies GroupMessageResult };
+        }
+      }
+
+      const initiator = ctx.sessionId as string;
+      const started = target;
+      const userText = text;
+      void runExclusive(record.groupId, async () => {
+        try {
+          await runChain(record, started, userText, initiator);
+        } catch (err) {
+          opts.logger.warn(`group chain crashed: ${(err as Error).message}`);
+          systemEvent(record, "member-failed", `群编排异常：${(err as Error).message}`);
+        }
+      });
+      return {
+        kind: "result",
+        result: { messageId: `msg-${randomUUID().slice(0, 8)}`, ts } satisfies GroupMessageResult,
+      };
+    },
+
+    // ── §S B6.0-5: archive/dissolve (15/16). Transcript is kept for replay.
+    "shannon/group.archive": async (raw, ctx) => {
+      const gate = groupGate(ctx);
+      if (gate) return gate;
+      const params = (raw ?? {}) as Partial<GroupArchiveParams>;
+      if (typeof params.groupId !== "string" || !GROUP_ID_RE.test(params.groupId)) {
+        return { kind: "error", code: ShannonError.BAD_PARAMS, message: "params.groupId (grp-<uuid>) is required" };
+      }
+      if (params.reason !== "completed" && params.reason !== "disbanded") {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: 'params.reason must be "completed" or "disbanded"',
+        };
+      }
+      const record = loadGroup(dirs, params.groupId);
+      if (!record) {
+        return { kind: "error", code: ShannonError.BAD_PARAMS, message: "unknown groupId" };
+      }
+      record.status = params.reason === "completed" ? "completed" : "archived";
+      for (const m of record.members) {
+        if (m.status !== "failed") m.status = "archived";
+        m.statusNote = null;
+      }
+      persist(record);
+      systemEvent(
+        record,
+        "group-archived",
+        params.reason === "completed"
+          ? "群已归档：已完成的部分保留在转录里，可随时回看。"
+          : "群已解散：已完成的部分先归档，转录保留可回看。"
+      );
+      opts.logger.info(`shannon/group.archive: ${record.groupId} → ${record.status}`);
+      return { kind: "result", result: { ok: true } satisfies GroupArchiveResult };
+    },
+  };
+
+  return handlers;
+}
+
+// ── §J2 interception helper (wired into shannon/session.history) ────────────
+
+/**
+ * The `session.history` interception for group keys (B6.0-1): a `grp-*`
+ * sessionId answers from the group transcript store in the exact §J2 wire
+ * shape; anything else (or a miss) returns null so the caller falls through
+ * to the engine unchanged. Injected via `EngineBridgeOptions.groupHistoryLookup`.
+ */
+export function groupHistoryLookup(
+  groupsDirs: string[] | undefined,
+): (sessionId: string, paging: { before?: string; limit?: number }) => MobileTranscriptWire | null {
+  const dirs = groupsDirs ?? [];
+  return (sessionId, paging) => {
+    if (!sessionId.startsWith("grp-")) return null;
+    const record = loadGroup(dirs, sessionId);
+    if (!record) return null;
+    const page = pageTranscript(readTranscript(dirs, sessionId), paging);
+    return {
+      sessionId,
+      messages: page.entries.map((e) => {
+        const message: MobileTranscriptWire["messages"][number] = {
+          role: e.role,
+          content: e.content,
+          ...(e.ts ? { ts: e.ts } : {}),
+        };
+        return message;
+      }),
+      hasMore: page.hasMore,
+    };
+  };
+}

@@ -64,6 +64,7 @@ import { createMobileDispatchPipeline } from "./dispatchPipeline.js";
 import { MobileDispatchHub } from "./hub.js";
 import { loadAgentRoster } from "./agentRoster.js";
 import { createTaskHandlers } from "./taskHandlers.js";
+import { createGroupHandlers, groupHistoryLookup } from "./groupHandlers.js";
 import { fakeHistoryPage, type FakeHistoryMessage } from "./fakeEngineHistory.js";
 
 const bindHost = process.env.SHANNON_MOBILE_HOST ?? "127.0.0.1";
@@ -417,6 +418,9 @@ const handlers = createMobileHandlers({
     defaultModel: DEFAULT_MODEL,
     version: GATEWAY_VERSION,
     logger,
+    // §S B6.0 (bootstrap parity): grp-* history keys answer from the
+    // host-side group store before the engine is consulted.
+    groupHistoryLookup: groupHistoryLookup(undefined),
     // §K: a signed shannon/approval/decide unblocks a dispatched task's
     // parked approval lane (same wiring as the bootstrap).
     approvalDecisionSink: (requestId, choice) => hub.settleApproval(requestId, choice),
@@ -443,6 +447,15 @@ const handlers = createMobileHandlers({
     // review §P1-13 parity: revoked devices can't dispatch (dev registries
     // are in-memory, but the check mirrors the live wiring exactly).
     isDeviceTrusted: (deviceId) => registry.has(deviceId),
+  }),
+  // §S B6.0: the group face (bootstrap parity — same §K-pipeline member
+  // turns, same approval round-trip, default ~/.shannon/groups store).
+  groups: createGroupHandlers({
+    hub,
+    logger,
+    engineWsUrl,
+    engineHttpBaseUrl: engineHttpBase,
+    defaultModel: DEFAULT_MODEL,
   }),
   // `access` (shannon/pairing.pending / .approve) intentionally NOT mounted —
   // no IM allowlist / pairing store exists in this host (see header).

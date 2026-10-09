@@ -50,6 +50,12 @@ export interface PendingApprovalRecord {
   /** Engine attribution when present; absent keys are omitted on the wire. */
   agent?: EngineAgentInfo | null;
   risk?: EngineRiskInfo | null;
+  /** §S (additive): group attribution; absent on plain approvals. */
+  group?: {
+    groupId: string;
+    member: { memberId: string; label: string; title: string; source: "ephemeral" | "roster" };
+    ruleTrigger?: "handoff-first";
+  } | null;
 }
 
 export interface ApprovalRegistryOptions {
@@ -171,6 +177,9 @@ export function approvalWireItem(rec: PendingApprovalRecord): MobileApprovalItem
   if (rec.agent?.id) item.agentId = rec.agent.id;
   if (rec.agent?.name) item.agentName = rec.agent.name;
   if (rec.risk) item.scope = [rec.risk.scope];
+  // §S: group attribution rides both the restore face (approval.list /
+  // snapshot) and the live event — plain approvals never carry the key.
+  if (rec.group) item.group = rec.group;
   const path = toolInputPath(rec.toolInput);
   if (path !== undefined) item.diffTitle = path;
   return item;

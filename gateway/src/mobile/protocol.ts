@@ -54,7 +54,11 @@ export type ShannonMethod =
   | "shannon/session.list"
   | "shannon/session.history"
   | "shannon/push.register"
-  | "shannon/usage.budget";
+  | "shannon/usage.budget"
+  | "shannon/group.list"
+  | "shannon/group.create"
+  | "shannon/group.message"
+  | "shannon/group.archive";
 
 /**
  * Runtime mirror of [ShannonMethod] — the SINGLE SOURCE both the type above
@@ -89,6 +93,10 @@ export const SHANNON_METHODS = [
   "shannon/session.history",
   "shannon/push.register",
   "shannon/usage.budget",
+  "shannon/group.list",
+  "shannon/group.create",
+  "shannon/group.message",
+  "shannon/group.archive",
 ] as const satisfies readonly ShannonMethod[];
 
 // Compile-time guard: every member of the union is present in the runtime
@@ -336,6 +344,50 @@ export type ShannonEvent =
         scope: "local" | "repo" | "system";
         reversible: boolean;
       };
+      /**
+       * §S (additive, B6.0): group-approval attribution — absent on plain
+       * approvals, whose rendering stays byte-identical. `ruleTrigger` is
+       * emitted only when the orchestrator knows it deterministically (v1:
+       * `handoff-first` only); payment/pool triggers have no producer yet.
+       */
+      group?: ApprovalGroupInfo;
+    }
+  | {
+      /**
+       * §S (B6.0-3, additive): a handoff card — deterministic orchestrator
+       * step (v1), `session_id` = groupId. `note` is the machine-composed
+       * context transfer (truncated prior member output), not authored prose.
+       */
+      type: "group.handoff";
+      session_id: string;
+      handoff: {
+        id: string;
+        from: string;
+        to: string;
+        ts: string;
+        note: string;
+      };
+    }
+  | {
+      /** §S (B6.0-3, additive): member status progression on the group. */
+      type: "group.member";
+      session_id: string;
+      member: {
+        memberId: string;
+        status: "idle" | "queued" | "working" | "waiting-approval" | "done" | "failed" | "archived";
+        statusNote: string | null;
+      };
+    }
+  | {
+      /**
+       * §S (B6.0-3, additive): the system status card (quote-expired /
+       * member-failed / reassigned / member-archived / group-completed…).
+       * `text` is host-composed human prose; `kind` selects the card style.
+       * Unknown kinds render the generic system card (mobile degrade).
+       */
+      type: "group.system";
+      session_id: string;
+      system: { kind: string; text: string; ts: string };
     }
   | {
       /**
@@ -526,6 +578,116 @@ export interface TaskListResult {
  * map 1:1 onto the phone's `approvalFromMap` (shannon-mobile
  * `lib/src/live/protocol_mapper.dart`) — these keys ARE the contract.
  */
+// ── §S group orchestration (B6.0; cross-repo spec) ──────────────────────────
+
+/** Group member attribution on approvals / group events (camelCase wire). */
+export interface ApprovalGroupMemberInfo {
+  memberId: string;
+  label: string;
+  title: string;
+  source: "ephemeral" | "roster";
+}
+
+/**
+ * The `group` key on `approval.request` events and `approval.list` /
+ * `snapshot.pendingApprovals` items. v1 emits `ruleTrigger: "handoff-first"`
+ * only (the one-shot flag the orchestrator sets after a handoff); the
+ * payment/pool triggers have no deterministic producer yet and stay absent.
+ */
+export interface ApprovalGroupInfo {
+  groupId: string;
+  member: ApprovalGroupMemberInfo;
+  ruleTrigger?: "handoff-first";
+}
+
+/** `shannon/group.list` item (B6.0-1 projection; optional keys degrade). */
+export interface GroupListItem {
+  groupId: string;
+  title: string;
+  goalSummary?: string;
+  status: "active" | "completed" | "archived";
+  memberCount?: number;
+  pool?: { totalCny: number; spentCny: number; pendingCny: number };
+  lastActivityAt?: string;
+}
+
+export interface GroupListResult {
+  groups: GroupListItem[];
+}
+
+/** One member in a `group` object (create response / transcript entries). */
+export interface GroupMemberInfo extends ApprovalGroupMemberInfo {
+  slot: string;
+  agentId: string | null;
+  shareCny: number;
+  spentCny: number;
+  status: "idle" | "queued" | "working" | "waiting-approval" | "done" | "failed" | "archived";
+  statusNote: string | null;
+  permissions: string[];
+}
+
+export interface GroupRulesInfo {
+  /** Locked: `false` is rejected at create (the "payments always ask" red line). */
+  paymentsAskFirst: true;
+  infoBoundary: string;
+  handoffFree: boolean;
+  /** Local-timezone HH:mm, or null = off (B6.2 stores it today, enacts later). */
+  dailyReportAt: string | null;
+}
+
+export interface GroupObject {
+  groupId: string;
+  title: string;
+  goal: string;
+  status: "active" | "completed" | "archived";
+  createdAt: string;
+  members: GroupMemberInfo[];
+  pool: { totalCny: number; spentCny: number; pendingCny: number; reserveCny: number };
+  rules: GroupRulesInfo;
+}
+
+export interface GroupCreateParams {
+  goal: string;
+  /** "ephemeral" (default) | "roster". */
+  path?: "ephemeral" | "roster";
+  /** Roster path: required, every member needs a roster agentId. Ephemeral:
+   *  optional — omitted = orchestrator plans (v1: the generic 3-slot template). */
+  members?: Array<{
+    slot: string;
+    label: string;
+    title: string;
+    agentId?: string | null;
+    shareCny?: number;
+    permissions?: string[];
+  }>;
+  pool?: { totalCny?: number; reserveCny?: number };
+  rules?: Partial<GroupRulesInfo>;
+}
+
+export interface GroupCreateResult {
+  group: GroupObject;
+}
+
+export interface GroupMessageParams {
+  groupId: string;
+  text: string;
+  mentionMemberId?: string;
+}
+
+export interface GroupMessageResult {
+  messageId: string;
+  ts: string;
+}
+
+export interface GroupArchiveParams {
+  groupId: string;
+  reason: "completed" | "disbanded";
+}
+
+export interface GroupArchiveResult {
+  ok: true;
+}
+
 export interface MobileApprovalItem {
   /** The engine's request id (`request_id` on `approval.request` events). */
   approvalId: string;
@@ -546,6 +708,8 @@ export interface MobileApprovalItem {
   scope?: string[];
   /** `tool_input.path` when it is a string (diff header for the phone). */
   diffTitle?: string;
+  /** §S (additive): group attribution — absent on plain approvals. */
+  group?: ApprovalGroupInfo;
 }
 
 /** `shannon/approval.list` success — verbatim envelope key per the contract. */

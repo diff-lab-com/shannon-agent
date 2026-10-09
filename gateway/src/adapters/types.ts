@@ -179,6 +179,16 @@ export interface ApprovalReq {
     scope: "local" | "repo" | "system";
     reversible: boolean;
   };
+  /**
+   * §S (additive, B6.0): group attribution set by the group orchestrator for
+   * member-turn asks. Plain (non-group) turns never set it, so their wire
+   * shape stays byte-identical.
+   */
+  group?: {
+    groupId: string;
+    member: { memberId: string; label: string; title: string; source: "ephemeral" | "roster" };
+    ruleTrigger?: "handoff-first";
+  };
 }
 
 /** User's decision on a rendered approval. Maps to the engine's PermissionChoice. */
