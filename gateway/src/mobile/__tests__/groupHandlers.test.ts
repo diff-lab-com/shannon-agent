@@ -324,6 +324,13 @@ describe("shannon/group.message + the deterministic chain (§S B6.0-2/3)", () =>
     expect(contents).toContain("A 的产出");
     expect(contents).toContain("M 的产出");
     expect(contents.some((c) => c.includes("已交接"))).toBe(true);
+    // §S5 attribution keys ride the §J2 entries (mobile renders the member
+    // row from them); the plain user entry stays attribution-free.
+    const memberEntry = history!.messages.find((m) => m.kind === "member");
+    expect(memberEntry).toBeDefined();
+    expect(memberEntry!.member).toMatchObject({ memberId: "mem-01", label: "A" });
+    expect(history!.messages[0]!.kind).toBe("system");
+    expect(history!.messages.find((m) => m.role === "user")!.kind).toBe("user");
   });
 
   it("member failure stops the chain (no phantom handoff), failed status is honest", async () => {
