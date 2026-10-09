@@ -43,13 +43,11 @@ describe('merged settings panes (IA 8-section merge)', () => {
     expect(await screen.findByText('Approval Mode')).toBeInTheDocument()
     // Group heading + card marker.
     expect(screen.getByRole('heading', { name: 'Data' })).toBeInTheDocument()
-    // Full export is an amber honest badge, NOT a fake button.
-    expect(screen.getByTestId('data-export-full-badge')).toHaveTextContent(
-      'Full export · coming soon on desktop',
-    )
-    expect(
-      screen.queryByRole('button', { name: /Export all session data/i }),
-    ).not.toBeInTheDocument()
+    // 缓期批 2: the engine ships export_all_sessions, so the IA redesign's
+    // amber「即将支持」honest placeholder became a REAL button (the export
+    // flow itself is pinned by GeneralPaneDataExport.test.tsx).
+    expect(screen.getByTestId('export-all-sessions')).toHaveTextContent('Export all sessions')
+    expect(screen.queryByTestId('data-export-full-badge')).not.toBeInTheDocument()
     // Clear-cache moved here from the dev-gated advanced page.
     expect(screen.getByTestId('data-clear-cache-button')).toHaveTextContent('Clear Chat Cache')
     // The on-device note.
