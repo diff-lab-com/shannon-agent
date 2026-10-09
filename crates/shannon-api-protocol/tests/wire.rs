@@ -307,6 +307,7 @@ fn ws_client_message_query_serialization() {
         model: Some("gpt-4o".to_string()),
         session_id: None,
         attachments: None,
+        approval_ttl_ms: None,
     };
     let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
     assert_eq!(parsed["type"], "query");
@@ -321,6 +322,7 @@ fn ws_client_message_query_without_model_emits_null() {
         model: None,
         session_id: None,
         attachments: None,
+        approval_ttl_ms: None,
     };
     let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
     assert_eq!(parsed["type"], "query");
@@ -412,6 +414,7 @@ fn ws_client_message_roundtrip_all_variants() {
             model: Some("llama3".to_string()),
             session_id: None,
             attachments: None,
+            approval_ttl_ms: None,
         },
         WsClientMessage::Clear,
         WsClientMessage::Info,
@@ -429,6 +432,69 @@ fn ws_client_message_roundtrip_all_variants() {
         let json2 = serde_json::to_string(&roundtrip).unwrap();
         assert_eq!(json, json2);
     }
+}
+
+// ── B6.0-4: the per-request approval window (`approval_ttl_ms`) ─────────
+
+#[test]
+fn ws_client_message_query_approval_ttl_ms_absent_keeps_legacy_bytes() {
+    // The pre-TTL frame shape must (a) parse unchanged and (b) serialize to
+    // the same bytes — `skip_serializing_if` keeps the key off the wire when
+    // no override is requested, so a legacy gateway/client pair never sees
+    // a new key at all.
+    let json = r#"{"type": "query", "prompt": "hi"}"#;
+    let msg: WsClientMessage = serde_json::from_str(json).unwrap();
+    match &msg {
+        WsClientMessage::Query {
+            approval_ttl_ms, ..
+        } => {
+            assert_eq!(
+                *approval_ttl_ms, None,
+                "absent → None (legacy 300s semantics)"
+            )
+        }
+        other => panic!("expected Query, got {other:?}"),
+    }
+    let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
+    assert!(parsed.get("approval_ttl_ms").is_none());
+    // The exact legacy bytes: the TTL key's absence leaves the frame shaped
+    // exactly as the pre-B6.0-4 servers and clients wrote it.
+    assert_eq!(
+        serde_json::to_string(&msg).unwrap(),
+        r#"{"type":"query","prompt":"hi","model":null,"session_id":null,"attachments":null}"#
+    );
+}
+
+#[test]
+fn ws_client_message_query_approval_ttl_ms_round_trips() {
+    let msg = WsClientMessage::Query {
+        prompt: "hi".to_string(),
+        model: None,
+        session_id: None,
+        attachments: None,
+        approval_ttl_ms: Some(1_800_000),
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
+    assert_eq!(parsed["approval_ttl_ms"], 1_800_000);
+    let roundtrip: WsClientMessage =
+        serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+    assert_eq!(roundtrip, msg);
+}
+
+#[test]
+fn ws_client_message_query_approval_ttl_ms_accepts_zero_and_rejects_wrong_type() {
+    // 0 parses (server maps it to the legacy default); a non-integer does not.
+    let msg: WsClientMessage =
+        serde_json::from_str(r#"{"type": "query", "prompt": "hi", "approval_ttl_ms": 0}"#).unwrap();
+    match msg {
+        WsClientMessage::Query {
+            approval_ttl_ms, ..
+        } => assert_eq!(approval_ttl_ms, Some(0)),
+        other => panic!("expected Query, got {other:?}"),
+    }
+    let bad: Result<WsClientMessage, _> =
+        serde_json::from_str(r#"{"type": "query", "prompt": "hi", "approval_ttl_ms": "soon"}"#);
+    assert!(bad.is_err());
 }
 
 #[test]

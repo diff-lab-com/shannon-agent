@@ -391,6 +391,19 @@ export type ShannonEvent =
     }
   | {
       /**
+       * §S (B6.1, additive): one settled pool spend — an approval carrying a
+       * parseable amount was ALLOWED and the group ledger took the entry.
+       * `poolSpend` mirrors that ledger line verbatim (see `PoolSpendInfo`);
+       * denials and expiry never emit this (拒绝不记账). The phone renders
+       * it as the group thread's spend receipt and reconciles its pool
+       * numbers from `poolAfterCny`.
+       */
+      type: "group.pool-spend";
+      session_id: string;
+      poolSpend: PoolSpendInfo;
+    }
+  | {
+      /**
        * §K3: a dispatched task's terminal reply — the final complete text. The
        * `session_id` IS the task's own id (the phone's thread key), and its
        * presence makes this the task stream's closing event (the P2-1 IM
@@ -580,6 +593,24 @@ export interface TaskListResult {
  */
 // ── §S group orchestration (B6.0; cross-repo spec) ──────────────────────────
 
+/**
+ * One settled pool spend (§S B6.1, `group.pool-spend` events) — the wire
+ * mirror of the host-side `ledger.jsonl` entry (groupStore): 元 with two
+ * decimals, `poolAfterCny` the group pool's `spentCny` AFTER this entry
+ * landed. Broadcast to every connected device; it is a projection of the
+ * ledger, never a second authority.
+ */
+export interface PoolSpendInfo {
+  id: string;
+  memberId: string;
+  amountCny: number;
+  kind: string;
+  approvalId: string;
+  decidedBy: string;
+  poolAfterCny: number;
+  ts: string;
+}
+
 /** Group member attribution on approvals / group events (camelCase wire). */
 export interface ApprovalGroupMemberInfo {
   memberId: string;
@@ -590,14 +621,24 @@ export interface ApprovalGroupMemberInfo {
 
 /**
  * The `group` key on `approval.request` events and `approval.list` /
- * `snapshot.pendingApprovals` items. v1 emits `ruleTrigger: "handoff-first"`
- * only (the one-shot flag the orchestrator sets after a handoff); the
- * payment/pool triggers have no deterministic producer yet and stay absent.
+ * `snapshot.pendingApprovals` items. `ruleTrigger` is emitted only when the
+ * orchestrator knows it deterministically, one key per ask: v1 has the R5
+ * one-shot `handoff-first`, and B6.1 adds the pool-ledger escalations
+ * `over-pool` / `over-share` (computed only when the ask carries a parseable
+ * amount; `handoff-first` wins the key when both hit — the over-* verdict is
+ * still enforced, just not double-labeled). `payments-ask-first` stays
+ * unproduced (no payment-class tool classifier — 宁缺勿造).
+ *
+ * `poolAfter` rides B6.1 asks whose amount was resolvable from the tool
+ * input: `poolCny` is the group pool's total (元), `remainingAfterCny` is
+ * `total − spent − pending − amount` if this ask were allowed — honest even
+ * when negative (an over-pool ask shows the hole it would dig).
  */
 export interface ApprovalGroupInfo {
   groupId: string;
   member: ApprovalGroupMemberInfo;
-  ruleTrigger?: "handoff-first";
+  ruleTrigger?: "handoff-first" | "over-pool" | "over-share";
+  poolAfter?: { poolCny: number; remainingAfterCny: number };
 }
 
 /** `shannon/group.list` item (B6.0-1 projection; optional keys degrade). */

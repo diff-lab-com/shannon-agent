@@ -177,6 +177,7 @@ export interface ApprovalModeRequest {
 
 export interface WsClientMessageQuery {
   type: "query";
+  approval_ttl_ms?: number | null;
   attachments?: MessageAttachment[] | null;
   model?: string | null;
   prompt: string;
