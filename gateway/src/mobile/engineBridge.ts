@@ -1044,14 +1044,35 @@ export function mapEngineEvent(ev: EngineEvent): ShannonEvent | null {
       // the important property is that it no longer pollutes `text`.
       return null;
     case "tool_use":
+      // §R: forward the recovered pairing id + stamp when the engine sent
+      // them; absent keys stay absent (legacy engines keep the exact old
+      // frame shape — the phone degrades per field).
       return {
         type: "task.progress",
-        tool: { kind: "use", name: ev.name, input: ev.input },
+        tool: {
+          kind: "use",
+          name: ev.name,
+          input: ev.input,
+          ...(typeof ev.tool_use_id === "string" && ev.tool_use_id.length > 0
+            ? { tool_use_id: ev.tool_use_id }
+            : {}),
+          ...(typeof ev.ts === "number" && Number.isFinite(ev.ts) ? { ts: ev.ts } : {}),
+        },
       };
     case "tool_result":
       return {
         type: "task.progress",
-        tool: { kind: "result", name: ev.name, output: ev.output },
+        tool: {
+          kind: "result",
+          name: ev.name,
+          output: ev.output,
+          ...(typeof ev.tool_use_id === "string" && ev.tool_use_id.length > 0
+            ? { tool_use_id: ev.tool_use_id }
+            : {}),
+          ...(typeof ev.is_error === "boolean" ? { is_error: ev.is_error } : {}),
+          ...(ev.meta != null ? { meta: ev.meta } : {}),
+          ...(typeof ev.ts === "number" && Number.isFinite(ev.ts) ? { ts: ev.ts } : {}),
+        },
       };
     case "usage":
       return {

@@ -9,9 +9,9 @@ use serde_json::json;
 use shannon_api_protocol::{
     AgentRef, ApprovalDecision, ApprovalRespondRequest, HealthResponse, ModelInfo, ModelsResponse,
     PROTOCOL_VERSION, QueryRequest, QueryResponse, RiskInfo, RiskScope, SessionSummary,
-    SseEventName, ToolEntry, ToolsListResponse, TranscriptMessage, TrustKindsResponse,
-    TrustRevokeRequest, TrustRevokeResponse, TrustedKindEntry, UsageInfo, WsClientMessage,
-    WsServerMessage,
+    SseEventName, ToolEntry, ToolsListResponse, TranscriptArtifact, TranscriptMessage,
+    TrustKindsResponse, TrustRevokeRequest, TrustRevokeResponse, TrustedKindEntry, UsageInfo,
+    WsClientMessage, WsServerMessage,
 };
 use uuid::Uuid;
 
@@ -460,11 +460,25 @@ fn ws_server_message_tool_use() {
     let msg = WsServerMessage::ToolUse {
         name: "bash".to_string(),
         input: json!({"command": "ls"}),
+        tool_use_id: Some("toolu_1".to_string()),
+        ts: Some(1_767_868_800_000u64),
     };
     let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
     assert_eq!(parsed["type"], "tool_use");
     assert_eq!(parsed["name"], "bash");
     assert_eq!(parsed["input"]["command"], "ls");
+    // §R additive keys: present when set, absent when None (old shape intact).
+    assert_eq!(parsed["tool_use_id"], "toolu_1");
+    assert_eq!(parsed["ts"], 1_767_868_800_000u64);
+    let bare = WsServerMessage::ToolUse {
+        name: "bash".to_string(),
+        input: json!({"command": "ls"}),
+        tool_use_id: None,
+        ts: None,
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&bare).unwrap();
+    assert!(parsed.get("tool_use_id").is_none());
+    assert!(parsed.get("ts").is_none());
 }
 
 #[test]
@@ -472,11 +486,33 @@ fn ws_server_message_tool_result() {
     let msg = WsServerMessage::ToolResult {
         name: "bash".to_string(),
         output: "file1.txt\nfile2.txt".to_string(),
+        tool_use_id: Some("toolu_1".to_string()),
+        is_error: Some(false),
+        meta: Some(json!({"classification": "sandbox_denied"})),
+        ts: Some(1_767_868_800_000u64),
     };
     let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
     assert_eq!(parsed["type"], "tool_result");
     assert_eq!(parsed["name"], "bash");
     assert_eq!(parsed["output"], "file1.txt\nfile2.txt");
+    // §R additive keys: each present when set, absent when None.
+    assert_eq!(parsed["tool_use_id"], "toolu_1");
+    assert_eq!(parsed["is_error"], false);
+    assert_eq!(parsed["meta"]["classification"], "sandbox_denied");
+    assert_eq!(parsed["ts"], 1_767_868_800_000u64);
+    let bare = WsServerMessage::ToolResult {
+        name: "bash".to_string(),
+        output: "file1.txt\nfile2.txt".to_string(),
+        tool_use_id: None,
+        is_error: None,
+        meta: None,
+        ts: None,
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&bare).unwrap();
+    assert!(parsed.get("tool_use_id").is_none());
+    assert!(parsed.get("is_error").is_none());
+    assert!(parsed.get("meta").is_none());
+    assert!(parsed.get("ts").is_none());
 }
 
 #[test]
@@ -639,6 +675,62 @@ fn ws_server_message_sessions_snapshot_round_trips() {
 }
 
 #[test]
+fn ws_server_message_session_transcript_artifacts() {
+    // §R: a turn's folded tool products ride the host message; the empty
+    // `artifacts` vec is omitted on the wire (pre-§R shape, byte-identical).
+    let no_artifacts = WsServerMessage::SessionTranscript {
+        session_id: "sess-1".to_string(),
+        messages: vec![TranscriptMessage {
+            role: "assistant".to_string(),
+            content: "all green.".to_string(),
+            ts: "2026-10-08T12:00:00+00:00".to_string(),
+            artifacts: Vec::new(),
+        }],
+        has_more: false,
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&no_artifacts).unwrap();
+    assert!(parsed["messages"][0].get("artifacts").is_none());
+
+    let msg = WsServerMessage::SessionTranscript {
+        session_id: "sess-1".to_string(),
+        messages: vec![TranscriptMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            ts: "2026-10-08T12:00:00+00:00".to_string(),
+            artifacts: vec![TranscriptArtifact {
+                kind: "tool_result".to_string(),
+                tool: "Bash".to_string(),
+                title: None,
+                summary: None,
+                body: "test result: ok. 42 passed".to_string(),
+                is_error: false,
+                duration_ms: Some(1234),
+                ts: Some("2026-10-08T11:59:58+00:00".to_string()),
+                meta: Some(json!({"files_changed": ["a.rs"]})),
+            }],
+        }],
+        has_more: false,
+    };
+    let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
+    // camelCase projection (the §J face convention).
+    let artifact = &parsed["messages"][0]["artifacts"][0];
+    assert_eq!(artifact["kind"], "tool_result");
+    assert_eq!(artifact["tool"], "Bash");
+    assert_eq!(artifact["body"], "test result: ok. 42 passed");
+    assert_eq!(artifact["isError"], false);
+    assert_eq!(artifact["durationMs"], 1234);
+    assert_eq!(artifact["ts"], "2026-10-08T11:59:58+00:00");
+    assert_eq!(artifact["meta"]["files_changed"][0], "a.rs");
+    // Reserved v1 keys never serialize.
+    assert!(artifact.get("title").is_none());
+    assert!(artifact.get("summary").is_none());
+
+    let roundtrip: WsServerMessage =
+        serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+    assert_eq!(roundtrip, msg);
+}
+
+#[test]
 fn ws_server_message_session_transcript_round_trips() {
     let msg = WsServerMessage::SessionTranscript {
         session_id: "sess-1".to_string(),
@@ -647,11 +739,13 @@ fn ws_server_message_session_transcript_round_trips() {
                 role: "user".to_string(),
                 content: "open example.com".to_string(),
                 ts: "2026-06-01T10:00:00+00:00".to_string(),
+                artifacts: Vec::new(),
             },
             TranscriptMessage {
                 role: "assistant".to_string(),
                 content: "Done — the page is loaded.".to_string(),
                 ts: "2026-06-01T10:00:05+00:00".to_string(),
+                artifacts: Vec::new(),
             },
         ],
         has_more: true,
@@ -742,10 +836,16 @@ fn ws_server_message_roundtrip_all_variants() {
         WsServerMessage::ToolUse {
             name: "read".to_string(),
             input: json!({"path": "/tmp"}),
+            tool_use_id: Some("toolu_r1".to_string()),
+            ts: Some(1),
         },
         WsServerMessage::ToolResult {
             name: "read".to_string(),
             output: "contents".to_string(),
+            tool_use_id: Some("toolu_r1".to_string()),
+            is_error: Some(false),
+            meta: None,
+            ts: Some(2u64),
         },
         WsServerMessage::Usage {
             input_tokens: 10,

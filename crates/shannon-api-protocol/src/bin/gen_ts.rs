@@ -24,7 +24,8 @@ use shannon_api_protocol::{
     AgentRef, ApprovalDecision, ApprovalModeRequest, ApprovalModeState, ApprovalRespondRequest,
     HealthResponse, MessageAttachment, ModelInfo, ModelsResponse, PROTOCOL_VERSION, QueryRequest,
     QueryResponse, RiskInfo, RiskScope, SessionSummary, SseEventName, ToolEntry, ToolsListResponse,
-    TranscriptMessage, TrustKindsResponse, TrustRevokeRequest, TrustRevokeResponse,
+    TranscriptArtifact, TranscriptMessage, TrustKindsResponse, TrustRevokeRequest,
+    TrustRevokeResponse,
     TrustedKindEntry, UsageInfo, WsClientMessage, WsServerMessage,
 };
 use std::collections::BTreeMap;
@@ -104,6 +105,9 @@ fn collect_entries() -> Vec<TypeEntry> {
         // R2-W2 session-enumeration + approval-enrichment payload types.
         entry_struct::<SessionSummary>("SessionSummary"),
         entry_struct::<TranscriptMessage>("TranscriptMessage"),
+        // §R tool-result cards: the per-turn tool products folded into a
+        // transcript message (camelCase projection, field-level degrade).
+        entry_struct::<TranscriptArtifact>("TranscriptArtifact"),
         entry_struct::<AgentRef>("AgentRef"),
         entry_struct::<RiskInfo>("RiskInfo"),
         entry_enum_simple::<RiskScope>("RiskScope"),

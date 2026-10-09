@@ -144,6 +144,59 @@ describe("mobile dispatch pipeline (the dev-standalone §K assembly)", () => {
     });
   });
 
+  it("§R (§K3 revised): engine tool frames stream as task.progress(tool) on the task thread", async () => {
+    const { hub, handlers } = buildHarness([
+      textEvent("running…"),
+      { type: "tool_use", name: "Bash", input: { command: "ls" }, tool_use_id: "t1", ts: 1000 } as EngineEvent,
+      {
+        type: "tool_result",
+        name: "Bash",
+        output: "ok",
+        tool_use_id: "t1",
+        is_error: false,
+        meta: { files_changed: ["a.rs"] },
+        ts: 1020,
+      } as EngineEvent,
+      textEvent("done"),
+      { type: "completed", model: "m" } as EngineEvent,
+    ]);
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "deploy" }, ctx);
+    expect(res.kind).toBe("result");
+    const taskId = res.result.task.id as string;
+    await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]?.status).toBe("completed"));
+
+    const events = eventsOf(ctx);
+    const toolFrames = events
+      .filter((e) => e.type === "task.progress" && e.tool != null)
+      .map((e) => e.tool);
+    expect(toolFrames).toEqual([
+      { kind: "use", name: "Bash", input: { command: "ls" }, tool_use_id: "t1", ts: 1000 },
+      {
+        kind: "result",
+        name: "Bash",
+        output: "ok",
+        tool_use_id: "t1",
+        is_error: false,
+        meta: { files_changed: ["a.rs"] },
+        ts: 1020,
+      },
+    ]);
+    // Tool frames ride the same §K3 thread key and never disturb the
+    // text/terminal sequence.
+    expect(events.map((e) => e.type)).toEqual([
+      "query.started",
+      "task.progress",
+      "task.progress",
+      "task.progress",
+      "task.progress",
+      "task.message",
+    ]);
+    expect(events.at(-1)).toMatchObject({ session_id: taskId, text: "running…done" });
+  });
+
   it("the per-lane engine client is pinned to the router's mobile session key; stop() closes it", async () => {
     const { hub, handlers, clientFactory, clients, stop } = buildHarness([
       textEvent("done"),

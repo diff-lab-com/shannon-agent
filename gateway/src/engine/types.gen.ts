@@ -115,9 +115,22 @@ export interface SessionSummary {
 }
 
 export interface TranscriptMessage {
+  artifacts?: TranscriptArtifact[] | null;
   content: string;
   role: string;
   ts: string;
+}
+
+export interface TranscriptArtifact {
+  body: string;
+  durationMs?: number | null;
+  isError: boolean;
+  kind: string;
+  meta?: unknown | null;
+  summary?: string | null;
+  title?: string | null;
+  tool: string;
+  ts?: string | null;
 }
 
 export interface AgentRef {
@@ -213,11 +226,17 @@ export interface WsServerMessageToolUse {
   type: "tool_use";
   input: unknown;
   name: string;
+  tool_use_id?: string | null;
+  ts?: number | null;
 }
 export interface WsServerMessageToolResult {
   type: "tool_result";
+  is_error?: boolean | null;
+  meta?: unknown;
   name: string;
   output: string;
+  tool_use_id?: string | null;
+  ts?: number | null;
 }
 export interface WsServerMessageUsage {
   type: "usage";

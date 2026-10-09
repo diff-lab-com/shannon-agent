@@ -53,6 +53,13 @@ pub const PROTOCOL_VERSION: &str = "0.8.0";
 // variant (old servers never emit it) or an `Option` with `#[serde(default)]`
 // (old payloads keep parsing) — backward compatible per the policy above, so
 // the version deliberately stays at 0.8.0.
+//
+// Tool-result cards batch (cross-repo spec §R, 2026-10): the same policy —
+// optional `tool_use_id` / `ts` on `ToolUse`, optional `tool_use_id` /
+// `is_error` / `meta` / `ts` on `ToolResult` (fields the WS projection used to
+// drop, now forwarded), and the optional `artifacts` fold on
+// `TranscriptMessage` (L0-derived, empty-absent). No key changed meaning; the
+// version stays at 0.8.0.
 
 // ── HTTP request / response types ───────────────────────────────────────
 
@@ -431,14 +438,41 @@ pub enum WsServerMessage {
     #[serde(rename = "thinking")]
     Thinking { content: String },
     /// Tool use event.
+    ///
+    /// Additive fields (tool-result cards, cross-repo spec §R): `tool_use_id`
+    /// lets clients pair use→result frames into one card; `ts` is the
+    /// forward-time stamp (epoch ms, the §L1 approval `ts` precedent). Both
+    /// stay absent on legacy servers, and clients ignore unknown keys.
     #[serde(rename = "tool_use")]
     ToolUse {
         name: String,
         input: serde_json::Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_use_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ts: Option<u64>,
     },
     /// Tool result event.
+    ///
+    /// Additive fields (§R): `tool_use_id`/`is_error` recover engine state the
+    /// WS projection used to drop, `meta` passes the §4.12 tool-private
+    /// metadata through uninterpreted, `ts` is the forward-time stamp. There
+    /// is deliberately NO `duration_ms` here — the live `QueryEvent` does not
+    /// carry one and the hosts do not synthesize timings; wall-clock duration
+    /// is served only by the L0-derived `TranscriptMessage` artifacts.
     #[serde(rename = "tool_result")]
-    ToolResult { name: String, output: String },
+    ToolResult {
+        name: String,
+        output: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_use_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        meta: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ts: Option<u64>,
+    },
     /// Token usage update.
     #[serde(rename = "usage")]
     Usage {
@@ -563,9 +597,13 @@ pub struct SessionSummary {
 /// One chat-visible message in a [`WsServerMessage::SessionTranscript`] (R2-W2).
 ///
 /// Only messages with real text content are projected — tool-call bookkeeping
-/// (tool_use-only assistant steps, tool_result user messages) stays out, so
-/// `role` is exactly `"user"` (a prompt) or `"assistant"` (a reply).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+/// (tool_use-only assistant steps, tool_result user messages) stays out of
+/// `content`, so `role` is exactly `"user"` (a prompt) or `"assistant"` (a
+/// reply). A turn's tool products ride alongside as `artifacts` (below): a
+/// turn with tool results but no final assistant text projects as an empty
+/// `content` entry carrying them, so offline replays keep the cards the live
+/// stream showed (§O4: artifacts are content, not transients).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct TranscriptMessage {
     /// `"user"` or `"assistant"`.
     pub role: String,
@@ -574,6 +612,47 @@ pub struct TranscriptMessage {
     /// Message timestamp, RFC3339 UTC — also the pagination cursor (clients
     /// echo the page's first `ts` back as `before`).
     pub ts: String,
+    /// Tool products folded in from the enclosing turn (§R). Empty (and
+    /// omitted on the wire) whenever the turn ran no tools — pre-§R peers
+    /// never see the key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<TranscriptArtifact>,
+}
+
+/// One folded tool product in a [`TranscriptMessage`] (§R, camelCase — the
+/// §J projection face convention). v1 projects `tool_result` entries only
+/// (a completed turn's durable outputs); `title`/`summary` are reserved for
+/// a future engine-side derivation and are never sent in v1 — clients fall
+/// back to `tool`. Field-level degrade: every key except `kind`/`tool` may
+/// be absent, and an unusable key is treated as absent, never an error.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptArtifact {
+    /// `"tool_use" | "tool_result"` (v1 emits `"tool_result"`).
+    pub kind: String,
+    /// Engine tool name (an open set — render the raw string, never map).
+    pub tool: String,
+    /// Reserved: human-readable one-liner. Not sent in v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Reserved: ≤2-line digest. Not sent in v1 (clients slice `body`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Full tool output, within the engine's existing retention.
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub is_error: bool,
+    /// Wall-clock execution duration from the L0 payload (absent when the
+    /// engine did not measure one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// The artifact's own moment, RFC3339 UTC (≠ the host message's `ts`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts: Option<String>,
+    /// §4.12 tool-private metadata, passthrough — clients must not interpret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
 }
 
 /// The agent/profile context an approval request was issued under (R2-W2).

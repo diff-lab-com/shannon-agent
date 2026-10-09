@@ -101,6 +101,42 @@ export function createMobileTaskTurnHandler(
           case "approval_request":
             await resolveApprovalInChannel(opts, adapter, replyTarget, logger, ev);
             break;
+          case "tool_use":
+          case "tool_result": {
+            // §K3 revised (2026-10-09, tool-result cards §R): the stream now
+            // forwards tool frames — the original "no tool frames" ruling was
+            // a no-consumer cutoff, and the phone's ArtifactCard is the
+            // consumer. All keys optional; the terminal semantics below are
+            // unchanged. Fall through to one mapping site.
+            const frame =
+              ev.type === "tool_use"
+                ? {
+                    kind: "use" as const,
+                    name: ev.name,
+                    input: ev.input,
+                    ...(typeof ev.tool_use_id === "string" && ev.tool_use_id.length > 0
+                      ? { tool_use_id: ev.tool_use_id }
+                      : {}),
+                    ...(typeof ev.ts === "number" && Number.isFinite(ev.ts)
+                      ? { ts: ev.ts }
+                      : {}),
+                  }
+                : {
+                    kind: "result" as const,
+                    name: ev.name,
+                    output: ev.output,
+                    ...(typeof ev.tool_use_id === "string" && ev.tool_use_id.length > 0
+                      ? { tool_use_id: ev.tool_use_id }
+                      : {}),
+                    ...(typeof ev.is_error === "boolean" ? { is_error: ev.is_error } : {}),
+                    ...(ev.meta != null ? { meta: ev.meta } : {}),
+                    ...(typeof ev.ts === "number" && Number.isFinite(ev.ts)
+                      ? { ts: ev.ts }
+                      : {}),
+                  };
+            hub.pushTaskToolFrame(inbound.chatId, frame);
+            break;
+          }
           case "failed":
             acc.failed = ev.error;
             break;
@@ -108,8 +144,8 @@ export function createMobileTaskTurnHandler(
             acc.cancelled = true;
             break;
           default:
-            // tool_use / tool_result / completed / session_info — the §K3
-            // stream carries no query.completed and no tool frames.
+            // completed / session_info — the §K3 stream still carries no
+            // query.completed (task.message is the terminal).
             break;
         }
       }
