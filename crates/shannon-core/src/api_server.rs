@@ -40,12 +40,12 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use futures::{SinkExt, StreamExt};
 use shannon_api_protocol::{
-    ApprovalModeRequest, ApprovalModeState, SessionSummary, TranscriptMessage,
+    ApprovalModeRequest, ApprovalModeState, SessionSummary, TranscriptArtifact, TranscriptMessage,
 };
 use shannon_engine::api::{ContentBlock, LlmClient, LlmClientConfig, Message, MessageContent};
 use shannon_engine::permissions::PermissionChoice;
 use shannon_engine::state::StateManager;
-use shannon_types::session_event::SessionEvent;
+use shannon_types::session_event::{SessionEvent, SessionEventBody};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -1374,6 +1374,14 @@ fn history_anchor(transcript: &[TranscriptMessage], before: Option<&str>) -> usi
 /// bookkeeping: tool_use-only assistant steps, tool_result user messages)
 /// are left out — a transcript entry is chat text, and `role` stays exactly
 /// "user" (a prompt) or "assistant" (a reply).
+///
+/// §R tool-result cards: each turn's `tool/result` events fold onto that
+/// turn's FINAL assistant text message as `artifacts` (the phone renders them
+/// as product cards; the live stream showed the same frames). A turn whose
+/// tools produced no assistant text still keeps its artifacts as a
+/// standalone `content: ""` entry — cards are content, not transients, and
+/// a live-then-replay conversation must not lose them (the empty bubble is
+/// cosmetic noise on pre-§R peers, healed on upgrade).
 fn transcript_messages(events: &[SessionEvent]) -> Vec<TranscriptMessage> {
     let proj = project_conversation(events);
     // Dense seq → ts table: every projected message cites the inclusive
@@ -1382,8 +1390,68 @@ fn transcript_messages(events: &[SessionEvent]) -> Vec<TranscriptMessage> {
         .iter()
         .map(|event| (event.seq, event.ts_ns))
         .collect();
-    let mut out = Vec::with_capacity(proj.messages.len());
+    let seq_turn: HashMap<u64, u64> = events
+        .iter()
+        .map(|event| (event.seq, event.turn))
+        .collect();
+    // Turn → tool-result artifacts, in log order (L0 is the authoritative
+    // source: `duration_ms`/`meta` live here, not on the live WS face).
+    let mut artifacts_by_turn: HashMap<u64, Vec<TranscriptArtifact>> = HashMap::new();
+    for event in events {
+        if let SessionEventBody::ToolResult(payload) = &event.body {
+            artifacts_by_turn.entry(event.turn).or_default().push(
+                TranscriptArtifact {
+                    kind: "tool_result".to_string(),
+                    tool: payload.tool_name.clone(),
+                    // title/summary are reserved (never engine-derived in v1 —
+                    // an open tool set gets no closed-set heuristics); the
+                    // phone falls back to `tool` and slices `body` itself.
+                    title: None,
+                    summary: None,
+                    body: payload.output.clone(),
+                    is_error: payload.is_error,
+                    duration_ms: payload.duration_ms,
+                    ts: Some(rfc3339_from_ns(event.ts_ns)),
+                    meta: if payload.meta.is_null() {
+                        None
+                    } else {
+                        Some(payload.meta.clone())
+                    },
+                },
+            );
+        }
+    }
+    let mut out: Vec<TranscriptMessage> = Vec::with_capacity(proj.messages.len());
+    // Fold state for the turn currently being walked: pending artifacts and
+    // the `out` index of the turn's latest assistant text message (the fold
+    // host), flushed when the walk crosses into the next turn.
+    let mut fold_turn: Option<u64> = None;
+    let mut fold_artifacts: Vec<TranscriptArtifact> = Vec::new();
+    let mut fold_host: Option<usize> = None;
     for (message, (first_seq, _)) in proj.messages.iter().zip(&proj.message_origin_seqs) {
+        let turn = seq_turn.get(first_seq).copied();
+        if turn != fold_turn {
+            if !fold_artifacts.is_empty() {
+                match fold_host {
+                    // Attach to the turn's final assistant text message.
+                    Some(i) => out[i].artifacts = std::mem::take(&mut fold_artifacts),
+                    // No text host: a standalone card-only entry, ts = the
+                    // first artifact's own moment.
+                    None => out.push(TranscriptMessage {
+                        role: "assistant".to_string(),
+                        content: String::new(),
+                        ts: fold_artifacts[0].ts.clone().unwrap_or_default(),
+                        artifacts: std::mem::take(&mut fold_artifacts),
+                    }),
+                }
+            }
+            fold_artifacts = Vec::new();
+            fold_host = None;
+            fold_turn = turn;
+            fold_artifacts = turn
+                .and_then(|t| artifacts_by_turn.remove(&t))
+                .unwrap_or_default();
+        }
         let content = message_text(&message.content);
         if content.is_empty() {
             continue;
@@ -1393,7 +1461,22 @@ fn transcript_messages(events: &[SessionEvent]) -> Vec<TranscriptMessage> {
             role: message.role.clone(),
             content,
             ts: rfc3339_from_ns(ts_ns),
+            artifacts: Vec::new(),
         });
+        if message.role == "assistant" {
+            fold_host = Some(out.len() - 1);
+        }
+    }
+    if !fold_artifacts.is_empty() {
+        match fold_host {
+            Some(i) => out[i].artifacts = fold_artifacts,
+            None => out.push(TranscriptMessage {
+                role: "assistant".to_string(),
+                content: String::new(),
+                ts: fold_artifacts[0].ts.clone().unwrap_or_default(),
+                artifacts: fold_artifacts,
+            }),
+        }
     }
     out
 }
@@ -1630,18 +1713,39 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                                     Some(WsServerMessage::Thinking { content })
                                 }
                                 Ok(QueryEvent::ToolUseRequest {
+                                    tool_use_id,
                                     tool_name,
                                     tool_input,
                                     ..
                                 }) => Some(WsServerMessage::ToolUse {
                                     name: tool_name,
                                     input: tool_input,
+                                    // §R tool-result cards: forward the pairing
+                                    // id the event always carried; `ts` stamps
+                                    // the forward moment (§L1 approval `ts`
+                                    // precedent — wall clock at the WS edge).
+                                    tool_use_id: Some(tool_use_id),
+                                    ts: epoch_millis_now(),
                                 }),
                                 Ok(QueryEvent::ToolUseResult {
-                                    tool_name, result, ..
+                                    tool_use_id,
+                                    tool_name,
+                                    result,
+                                    is_error,
+                                    meta,
+                                    ..
                                 }) => Some(WsServerMessage::ToolResult {
                                     name: tool_name,
                                     output: result,
+                                    // §R: `tool_use_id`/`is_error`/`meta` were
+                                    // persisted all along (L0) — the WS face
+                                    // just dropped them. Forward verbatim; a
+                                    // Null meta stays absent (the historical
+                                    // shape), never an invented `{}`.
+                                    tool_use_id: Some(tool_use_id),
+                                    is_error: Some(is_error),
+                                    meta: if meta.is_null() { None } else { Some(*meta) },
+                                    ts: epoch_millis_now(),
                                 }),
                                 Ok(QueryEvent::Usage {
                                     input_tokens,
@@ -3675,15 +3779,30 @@ mod tests {
 
     #[test]
     fn test_ws_server_message_tool_use() {
+        // §R additive keys serialize when set and stay absent when None.
         let msg = WsServerMessage::ToolUse {
             name: "bash".to_string(),
             input: serde_json::json!({"command": "ls"}),
+            tool_use_id: Some("toolu_1".to_string()),
+            ts: Some(1_767_868_800_000),
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["type"], "tool_use");
         assert_eq!(parsed["name"], "bash");
         assert_eq!(parsed["input"]["command"], "ls");
+        assert_eq!(parsed["tool_use_id"], "toolu_1");
+        assert_eq!(parsed["ts"], 1_767_868_800_000u64);
+        let bare = WsServerMessage::ToolUse {
+            name: "bash".to_string(),
+            input: serde_json::json!({"command": "ls"}),
+            tool_use_id: None,
+            ts: None,
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&bare).unwrap()).unwrap();
+        assert!(parsed.get("tool_use_id").is_none());
+        assert!(parsed.get("ts").is_none());
     }
 
     #[test]
@@ -3691,11 +3810,32 @@ mod tests {
         let msg = WsServerMessage::ToolResult {
             name: "bash".to_string(),
             output: "file1.txt\nfile2.txt".to_string(),
+            tool_use_id: Some("toolu_1".to_string()),
+            is_error: Some(true),
+            meta: Some(serde_json::json!({"classification": "sandbox_denied"})),
+            ts: Some(1_767_868_800_000),
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["type"], "tool_result");
         assert_eq!(parsed["output"], "file1.txt\nfile2.txt");
+        assert_eq!(parsed["tool_use_id"], "toolu_1");
+        assert_eq!(parsed["is_error"], true);
+        assert_eq!(parsed["meta"]["classification"], "sandbox_denied");
+        let bare = WsServerMessage::ToolResult {
+            name: "bash".to_string(),
+            output: "file1.txt\nfile2.txt".to_string(),
+            tool_use_id: None,
+            is_error: None,
+            meta: None,
+            ts: None,
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&bare).unwrap()).unwrap();
+        assert!(parsed.get("tool_use_id").is_none());
+        assert!(parsed.get("is_error").is_none());
+        assert!(parsed.get("meta").is_none());
+        assert!(parsed.get("ts").is_none());
     }
 
     #[test]
@@ -3773,10 +3913,16 @@ mod tests {
             WsServerMessage::ToolUse {
                 name: "read".to_string(),
                 input: serde_json::json!({"path": "/tmp"}),
+                tool_use_id: Some("toolu_r1".to_string()),
+                ts: Some(1),
             },
             WsServerMessage::ToolResult {
                 name: "read".to_string(),
                 output: "contents".to_string(),
+                tool_use_id: Some("toolu_r1".to_string()),
+                is_error: Some(false),
+                meta: None,
+                ts: Some(2),
             },
             WsServerMessage::Usage {
                 input_tokens: 10,
@@ -4688,6 +4834,7 @@ mod tests {
             role: "user".into(),
             content: "hi".into(),
             ts: "2026-06-01T10:00:00+00:00".into(),
+            artifacts: Vec::new(),
         }];
         assert_eq!(history_anchor(&transcript, None), 1);
         // Unparseable cursor = latest page (§J2 reference behavior).
@@ -4741,6 +4888,92 @@ mod tests {
             transcript
                 .iter()
                 .all(|m| matches!(m.role.as_str(), "user" | "assistant"))
+        );
+        // §R: the turn's tool result folds onto the turn's final assistant
+        // text message with the L0 truth (duration/meta), camelCase on wire.
+        let host = &transcript[1];
+        assert_eq!(host.artifacts.len(), 1);
+        let artifact = &host.artifacts[0];
+        assert_eq!(artifact.kind, "tool_result");
+        assert_eq!(artifact.tool, "Bash");
+        assert_eq!(artifact.body, "ok");
+        assert!(!artifact.is_error);
+        assert_eq!(artifact.duration_ms, Some(1));
+        assert!(artifact.meta.is_none(), "Null meta stays absent");
+        assert!(artifact.title.is_none() && artifact.summary.is_none());
+        let rendered = serde_json::to_value(host).unwrap();
+        assert_eq!(rendered["artifacts"][0]["isError"], false);
+        assert_eq!(rendered["artifacts"][0]["durationMs"], 1);
+    }
+
+    #[test]
+    fn transcript_folds_artifacts_only_when_turn_has_tools() {
+        let sid = Uuid::new_v4().to_string();
+        let start_ns = 1_760_000_000_000_000_000u64;
+        let events = vec![
+            user_msg(&sid, 0, start_ns, "plain question"),
+            assistant_chunk(&sid, 1, start_ns + 1, "plain answer"),
+        ];
+        let transcript = transcript_messages(&events);
+        // No tools → no artifacts key on the wire (pre-§R shape, byte-tight).
+        let rendered = serde_json::to_value(&transcript).unwrap();
+        assert!(rendered[0].get("artifacts").is_none());
+        assert!(rendered[1].get("artifacts").is_none());
+    }
+
+    #[test]
+    fn transcript_textless_tool_turn_keeps_standalone_artifacts() {
+        let sid = Uuid::new_v4().to_string();
+        let start_ns = 1_760_000_000_000_000_000u64;
+        // A turn that runs a tool and dies before any assistant text: the
+        // card survives replay as a content:"" host (§O4 — content, not
+        // transient), at the artifact's own ts.
+        let events = vec![
+            user_msg(&sid, 0, start_ns, "deploy it"),
+            event(
+                &sid,
+                1,
+                start_ns + 1,
+                SessionEventBody::ToolCall(shannon_types::session_event::ToolCallPayload {
+                    tool_use_id: "t9".into(),
+                    tool_name: "Bash".into(),
+                    arguments: "{}".into(),
+                }),
+            ),
+            event(
+                &sid,
+                2,
+                start_ns + 2,
+                SessionEventBody::ToolResult(shannon_types::session_event::ToolResultPayload {
+                    tool_use_id: "t9".into(),
+                    tool_name: "Bash".into(),
+                    output: "deployed".into(),
+                    is_error: false,
+                    duration_ms: None,
+                    meta: serde_json::json!({"files_changed": ["x.rs"]}),
+                }),
+            ),
+        ];
+        let transcript = transcript_messages(&events);
+        assert_eq!(transcript.len(), 2);
+        let prompt = &transcript[0];
+        assert_eq!(prompt.content, "deploy it");
+        assert!(prompt.artifacts.is_empty());
+        let card = &transcript[1];
+        assert_eq!(card.role, "assistant");
+        assert_eq!(card.content, "");
+        assert_eq!(card.artifacts.len(), 1);
+        assert_eq!(card.artifacts[0].body, "deployed");
+        assert_eq!(
+            card.artifacts[0].meta.as_ref().unwrap()["files_changed"][0],
+            "x.rs"
+        );
+        // The standalone host carries the artifact's own ts (≠ envelope of
+        // the prompt), keeping §J2 pagination ordering sane.
+        assert_eq!(
+            card.ts,
+            rfc3339_from_ns(start_ns + 2),
+            "standalone ts = first artifact's own moment"
         );
     }
 

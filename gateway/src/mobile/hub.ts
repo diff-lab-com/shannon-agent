@@ -72,6 +72,7 @@ import {
   type MobileAgentState,
   type MobileTaskRecord,
   type ShannonEvent,
+  type ToolFrame,
   type UsageFrame,
 } from "./protocol.js";
 import type { MethodContext } from "./server.js";
@@ -670,6 +671,20 @@ export class MobileDispatchHub {
     const taskId = this.frontRunningTask(deviceId);
     if (!taskId) return;
     this.pushEvent(deviceId, { type: "task.progress", session_id: taskId, content });
+  }
+
+  /**
+   * §K3 (revised 2026-10-09, tool-result cards §R): one engine tool frame of
+   * the device's in-flight task stream → `task.progress {session_id, tool}`.
+   * The original ruling ("the §K3 stream carries no tool frames") dates from
+   * when nothing consumed them — the phone's ArtifactCard now does, and the
+   * frame keys are all optional (old gateways never send, old phones ignore).
+   * No-op when the device has no running task (stale event after a terminal).
+   */
+  pushTaskToolFrame(deviceId: string, tool: ToolFrame): void {
+    const taskId = this.frontRunningTask(deviceId);
+    if (!taskId) return;
+    this.pushEvent(deviceId, { type: "task.progress", session_id: taskId, tool });
   }
 
   /**

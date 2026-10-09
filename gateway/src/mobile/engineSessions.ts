@@ -47,6 +47,9 @@ export interface EngineTranscriptMessage {
   role: string;
   content: string;
   ts?: string | number | null;
+  /** §R: the turn's folded tool products. Passthrough — the phone degrades
+   * per field; the gateway validates the envelope, not the item shapes. */
+  artifacts?: unknown[] | null;
 }
 
 /** Engine response to `session.history`. */
@@ -230,7 +233,7 @@ export function mapSessionSummary(summary: EngineSessionSummary): MobileSessionS
 
 export interface MobileTranscriptWire {
   sessionId: string;
-  messages: { role: string; content: string; ts?: string }[];
+  messages: { role: string; content: string; ts?: string; artifacts?: unknown[] }[];
   hasMore: boolean;
 }
 
@@ -248,12 +251,19 @@ export function mapSessionTranscript(
   for (const m of transcript.messages ?? []) {
     const content = typeof m.content === "string" ? m.content : null;
     if (content === null) continue;
-    const message: { role: string; content: string; ts?: string } = {
+    const message: { role: string; content: string; ts?: string; artifacts?: unknown[] } = {
       role: typeof m.role === "string" && m.role.length > 0 ? m.role : "assistant",
       content,
     };
     const ts = toIsoTimestamp(m.ts);
     if (ts) message.ts = ts;
+    // §R tool-result cards: a turn's tool products ride the host message
+    // (or a content:"" standalone host the engine emits when the turn had
+    // no final text). Verbatim passthrough — absent/empty stays absent, so
+    // pre-§R engines keep the byte-identical three-key entry shape.
+    if (Array.isArray(m.artifacts) && m.artifacts.length > 0) {
+      message.artifacts = m.artifacts;
+    }
     messages.push(message);
   }
   return {

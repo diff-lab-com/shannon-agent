@@ -364,6 +364,20 @@ export interface ToolFrame {
   name: string;
   input?: unknown;
   output?: string;
+  /**
+   * §R additive keys (tool-result cards): recovered engine fields the WS
+   * face used to drop. `tool_use_id` pairs a use→result frame into one
+   * card, `is_error` drives the failure ribbon, `meta` is §4.12
+   * tool-private metadata passed through uninterpreted, `ts` is the
+   * engine's epoch-ms forward stamp (§L1 precedent). Every key is optional:
+   * old engines never send them and the phone hides the missing pieces
+   * per-field (no duration exists on the live face by ruling — L0 history
+   * artifacts are the only duration source).
+   */
+  tool_use_id?: string;
+  is_error?: boolean;
+  meta?: unknown;
+  ts?: number;
 }
 
 export interface UsageFrame {
