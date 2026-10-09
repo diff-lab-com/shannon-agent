@@ -488,6 +488,15 @@
       }
     },
     {
+      "identifier": "allow-export-all-sessions",
+      "description": "Enables the export_all_sessions command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "export_all_sessions"
+        ]
+      }
+    },
+    {
       "identifier": "allow-export-session",
       "description": "Enables the export_session command without any pre-configured scope.",
       "commands": {
@@ -3205,6 +3214,7 @@
         "allow-detect-slash",
         "allow-dream-slash",
         "allow-duplicate-session",
+        "allow-export-all-sessions",
         "allow-export-session",
         "allow-get-session-context-stats",
         "allow-get-session-git-diff",

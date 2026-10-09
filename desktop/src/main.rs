@@ -320,6 +320,8 @@ fn main() {
             commands_sessions::get_session_plan,
             commands_sessions::load_session,
             commands_sessions::export_session,
+            // 全量会话导出 (缓期批 2) — whole-container zip export.
+            commands_sessions::export_all_sessions,
             commands_sessions::switch_session,
             commands_sessions::set_session_working_dir,
             commands_sessions::create_session_worktree,
