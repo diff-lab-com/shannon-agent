@@ -95,3 +95,13 @@ PR #342 宣称并已在 CHANGELOG 向用户宣告"unset 默认 redact",但实际
 | D-2 trust WIP | 未提交 +1105/−42、15 文件 | 真实脏 WIP 仅 **2 文件 +9/−2**(desktop/Cargo.toml 给 tauri 可选依赖加 `protocol-asset` feature + Cargo.lock 相应 7 行);+1105/−42 是分支 HEAD(18be45c50)对 dev 的差异——trust 机制内容**已提交**在 `feat/trust-kind-scope` 上,无丢失风险 |
 | D-3 stash@{0} | protocol-asset 实验改动 | **已不存在**(`git stash list` 为空);内容疑即 D-2 的 2 个文件(曾被 pop 进 trust worktree),此项可关闭 |
 | D-4 untracked | 12 项 | 实为 13 项(含本文档自身)。建议删 4:`0`(0 字节空文件)、`task_plan.md`、`findings-journey.md`(均为 2026-10-01 走查的根目录草稿/索引,正本已在 docs/research)、`gateway/cross-repo-check.mts`(一次性 O3 live-check 脚本,绝对路径导入、不可移植);建议入库 9:docs/research ×5、docs/plans ×2、docs/reviews/本文档、`.zcodeignore`(仓库级工具配置,性质同 .gitignore) |
+
+## 执行记录(二)(2026-10-09,K 组决策 + 缓期批 1 落地)
+
+- **D-1 ✅**:main 发现已被 PR #351(N3 类别信任)直合(dev 侧缺),D-1 由「指针刷新」升级为三步:#352 批 1 合并 → #354 回灌(冲突并集解:CHANGELOG/gen_ts/协议 schema/engineBridge,本地 5585 nextest + clippy + gateway 677 vitest 实测)→ #355 dev→main 刷新。现 main @ 7b1396394 ⊇ dev,恢复「dev 集成、main 发版」单向流。发版仍 tag 驱动,未触发。
+- **D-2 ✅**:worktree 脏 WIP(2 文件 +9/−2,protocol-asset feature)以 `a6a8ea3ca` 提交到 `feat/trust-kind-scope` 后移除 worktree;其 trust 主体已随 #351 进 main、随 #354 进 dev,分支仅多这一个 feature 开关提交,留待 trust 后续工作圈定。
+- **D-3 ✅(关闭)**:stash 确认为空,内容即 D-2 的 2 文件。
+- **D-4 ✅**:PR #350 合并——9 项入库(docs/research ×5、docs/plans ×2、本文档、.zcodeignore),4 项删除(空文件 `0`、task_plan.md、findings-journey.md、gateway/cross-repo-check.mts)。
+- **缓期批 1 ✅**:PR #352 合并——R-0 secret_guard unset→redact 安装位收口、启动恢复/启动检查更新双开关(设置→通用→启动)、上下文峰值(QUERY_USAGE `context_total` + SessionIndex `max_context_tokens`,真实来源=resolved context window)、任务看板金额(`list_tasks.cost_usd` 台账 join)。CI 二轮全绿(首轮:config.rs fmt + E2E mock 模式下启动探针 console.error 触发 watchdog,均修)。
+- **本地部署 ✅**:dev @ 88235d821 构建(custom-protocol,前端 dist 已重建),DISPLAY=:1 运行中。
+- **待圈选**:批 2(使命实体 config 键版 + 注入/签名诚实徽章 + 全量导出)、批 3(执行模式收敛 + 开机自启)、R4 复审时机。
