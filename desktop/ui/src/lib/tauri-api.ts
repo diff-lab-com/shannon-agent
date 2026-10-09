@@ -59,6 +59,7 @@ import type {
   ProviderStatus,
   FileIndexEntry,
   SendCostEstimate,
+  MissionProgress,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -220,6 +221,16 @@ export async function getConfig(): Promise<DesktopConfig> {
 
 export async function configure(update: ConfigUpdate): Promise<void> {
   await invoke('configure', { update })
+}
+
+/**
+ * 缓期批 2 使命进度 projection (commands_tasks.rs `mission_progress`):
+ * the configured mission plus per-linked-task rows and budget usage.
+ * Returns `null` when no mission is configured — the UI hides the whole
+ * card rather than showing an empty shell.
+ */
+export async function missionProgress(): Promise<MissionProgress | null> {
+  return invoke('mission_progress')
 }
 
 // --- Gateway social connections (T5) — OS keyring + gateway config.json ---

@@ -830,6 +830,51 @@ export interface DesktopConfig {
    *  automatically. Default true; read once at launch. Written via
    *  `configure('update_check_at_launch')`. */
   update_check_at_launch?: boolean
+  /** 缓期批 2: 使命实体 (single-mission v1) — the one pinned mission, when
+   *  configured. Absent = no mission; every mission surface hides. Wire
+   *  keys are the struct's own snake_case (no rename_all), optional keys
+   *  omitted when unset. Written via `configure('mission',
+   *  JSON.stringify(MissionConfig))`; an empty value clears the mission. */
+  mission?: MissionConfig
+}
+
+/** 缓期批 2: 使命实体 wire shape (desktop/src/config.rs `MissionConfig`).
+ *  snake_case keys verbatim; `budget_usd` / `deadline_ts` (epoch **ms**)
+ *  are absent when unset. */
+export interface MissionConfig {
+  /** Non-empty, trimmed, ≤200 chars (configure rejects anything else). */
+  name: string
+  /** Optional spending budget in USD; ≥ 0 and finite. */
+  budget_usd?: number
+  /** Optional deadline as epoch milliseconds (plausible range enforced
+   *  by configure). */
+  deadline_ts?: number
+  /** Linked task-board ids, deduped by the backend (first wins). */
+  task_ids: string[]
+}
+
+/** 缓期批 2: one linked task's row of the `mission_progress` projection
+ *  (desktop/src/commands_tasks.rs `MissionTaskProgress`). Absent data
+ *  stays absent — `found:false` means the board no longer knows the id
+ *  and every optional field is missing; a missing `cost_usd` is "no
+ *  honest ledger association", never an estimated zero. */
+export interface MissionTaskProgress {
+  task_id: string
+  found: boolean
+  title?: string
+  status?: string
+  cost_usd?: number
+}
+
+/** 缓期批 2: `mission_progress` read model. `budget_used_usd` is absent
+ *  when NO linked task has a ledger association at all (deliberately not
+ *  0 — that would claim measured spend where none was recorded). */
+export interface MissionProgress {
+  name: string
+  budget_usd?: number
+  deadline_ts?: number
+  budget_used_usd?: number
+  tasks: MissionTaskProgress[]
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
