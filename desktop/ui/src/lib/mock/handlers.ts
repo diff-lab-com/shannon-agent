@@ -726,6 +726,16 @@ export const handlers: Record<string, MockHandler> = {
     }
     return config
   },
+  // 缓期批 3: honest launch-on-login read. A browser demo cannot query the
+  // OS login items (no tauri-plugin-autostart state behind it), so it
+  // answers the backend's own fallback branch: the persisted
+  // `launch_on_login` config value (remembered intent), defaulting off.
+  // The toggle state never comes from get_config directly — the Settings
+  // switch calls THIS command, exactly like the real backend read path.
+  async get_launch_on_login() {
+    await delay()
+    return demoConfig.launch_on_login === true
+  },
   // Wire shape note: the desktop command takes `{ update: { key, value } }`
   // (tauri-api configure wraps it); the flat shape is accepted too so older
   // callers keep working. Before this was fixed, EVERY configure in demo
@@ -796,6 +806,15 @@ export const handlers: Record<string, MockHandler> = {
     } else if (key === 'power.block_sleep_during_tasks') {
       // Settings R3 T3: run-time sleep blocker.
       demoConfig.power_block_sleep_during_tasks = String(value) === 'true'
+    } else if (key === 'launch_on_login') {
+      // 缓期批 3: autostart toggle — a dedicated demo arm (not a generic
+      // fall-through) mirroring the backend's dedicated configure arm. The
+      // browser demo has no OS to register login items with, so it answers
+      // exactly what the backend's honest read falls back to when the
+      // plugin state is absent: the persisted config value. A real OS
+      // refusal is exercised in the component tests via the mocked api
+      // layer (the optimistic toggle reverts on rejection).
+      demoConfig.launch_on_login = String(value) === 'true'
     } else if (key === 'context.auto_compact') {
       // Settings R3 T6: engine-level auto-compaction switch (a flip lands on
       // the next message).

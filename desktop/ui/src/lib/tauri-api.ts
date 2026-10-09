@@ -224,6 +224,22 @@ export async function configure(update: ConfigUpdate): Promise<void> {
 }
 
 /**
+ * 缓期批 3 — honest launch-on-login read for the Settings toggle: the OS
+ * autostart state (LaunchAgent / registry Run key / XDG desktop file) is the
+ * source of truth, so a login item flipped OUTSIDE the app (macOS Login
+ * Items, Task Manager, DE settings) is reported as-is. The persisted
+ * `launch_on_login` config field only remembers user intent and serves as
+ * the backend's fallback when the OS state cannot be queried — do NOT read
+ * `get_config().launch_on_login` for the switch state. Writes ride
+ * `configure({ key: 'launch_on_login', value })`; the backend applies the OS
+ * change FIRST and persists only on success, so a rejection means the OS
+ * registration was refused and the toggle must revert.
+ */
+export async function getLaunchOnLogin(): Promise<boolean> {
+  return invoke('get_launch_on_login')
+}
+
+/**
  * 缓期批 2 使命进度 projection (commands_tasks.rs `mission_progress`):
  * the configured mission plus per-linked-task rows and budget usage.
  * Returns `null` when no mission is configured — the UI hides the whole
@@ -2449,8 +2465,11 @@ export async function listPermissionProfiles(): Promise<ProfilesList> {
 /**
  * P1-3: activate (or deactivate) the session-wide permission profile.
  * Frozen contract: `activate_permission_profile(name: string|null)`.
- * Passing `null` clears the active profile; builtin ids and custom profile
- * names sync `approval_mode` per the mode-switcher mapping.
+ * Passing `null` clears the active profile. 缓期批 3 (backend 8803a519d):
+ * activation changes ONLY `active_permission_profile` — `approval_mode` is
+ * left untouched (the response's `approval_mode` reports the value in
+ * effect, not a synced one), so the presets can never silently move the
+ * user's execution mode.
  */
 export async function activatePermissionProfile(
   name: string | null,
