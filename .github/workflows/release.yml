@@ -656,7 +656,11 @@ jobs:
             "shannon-desktop_${CORE}_x64.dmg" \
             "shannon-desktop_${CORE}_aarch64.dmg" \
             "shannon-desktop_${CORE}_x64-setup.exe" \
-            install.sh install.ps1 SHA256SUMS; do
+            # SHA256SUMS is generated two steps below in THIS job — listing
+            # it here only ever passed on re-runs where a prior attempt had
+            # left the asset in the draft (v0.13.0 first clean run failed on
+            # exactly that).
+            install.sh install.ps1; do
             [ -f "release-assets/$a" ] || { echo "::error::missing expected asset: $a"; exit 1; }
           done
           echo "asset presence: OK"
