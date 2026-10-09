@@ -150,6 +150,16 @@ fn main() {
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        // 缓期批 3 — launch-on-login (opt-in, config `launch_on_login`, default
+        // off). Registration only: the OS entry is created/removed on demand
+        // by `configure('launch_on_login')` (see commands_config). No launch
+        // args: the app has no minimized-start handling (no single-instance /
+        // argv processing — the main window always shows), so a `--minimized`
+        // marker would be dead weight on the autostart entry.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![
             commands::send_message,
             commands_chat::get_conversation,
@@ -192,6 +202,10 @@ fn main() {
             commands_chat::estimate_send_cost,
             commands_config::configure,
             commands_config::get_config,
+            // 缓期批 3 — launch-on-login honest read: the OS autostart state
+            // (plugin-managed LaunchAgent / registry Run / XDG desktop file)
+            // is the source of truth; config only remembers user intent.
+            commands_config::get_launch_on_login,
             commands_config::detect_provider_from_env,
             commands_config::test_provider_connection,
             commands_config::test_all_providers,

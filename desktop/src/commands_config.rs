@@ -7,6 +7,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
+use tauri::Manager as _;
 
 use crate::commands::AppState;
 use crate::config::{self, DesktopConfig, MissionConfig, ProviderConnection, ProvidersFile};
@@ -538,11 +539,101 @@ where
     Ok(())
 }
 
+// === Launch-on-login (缓期批 3) ===
+//
+// `configure('launch_on_login')` — a dedicated arm (never the grouped
+// boolean applier) because flipping it has an immediate OS side effect:
+// create/remove the login item through tauri-plugin-autostart (macOS
+// LaunchAgent, Windows registry Run key, Linux XDG autostart desktop
+// file). Same shape as `power.keep_awake`.
+//
+// Honesty contract: the OS registration — not the config field — is the
+// source of truth for the Settings toggle. The arm applies the OS change
+// FIRST and persists `launch_on_login` only on success, so the field can
+// never claim a registration the OS refused; on failure the error
+// surfaces to the UI and the optimistic toggle reverts. The field itself
+// only remembers user intent — `get_launch_on_login` reads the OS state
+// back, falling back to the config field when the plugin state is absent
+// or the OS query errors (e.g. unsupported platform).
+
+/// Apply the OS autostart change through the plugin's managed
+/// [`tauri_plugin_autostart::AutoLaunchManager`]. `try_state` (rather
+/// than the plugin's `autolaunch()` helper, which panics on a missing
+/// state) keeps this total: a build without the plugin degrades to an
+/// error instead of aborting the command.
+fn autostart_os_apply<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    enabled: bool,
+) -> Result<(), String> {
+    match app.try_state::<tauri_plugin_autostart::AutoLaunchManager>() {
+        Some(mgr) => {
+            let outcome = if enabled { mgr.enable() } else { mgr.disable() };
+            outcome.map_err(|e| {
+                format!(
+                    "autostart {} failed: {e}",
+                    if enabled { "enable" } else { "disable" }
+                )
+            })
+        }
+        None => Err("autostart unavailable: plugin is not registered".into()),
+    }
+}
+
+/// Honest launch-on-login read: the plugin's `is_enabled()` (the actual
+/// OS state — the user may have flipped the login item outside the app)
+/// with the persisted config field as the fallback when the OS state
+/// cannot be queried (plugin absent / unsupported platform). `pub(crate)`
+/// so tests can drive both branches with a mock runtime.
+pub(crate) fn read_launch_on_login<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    config_value: bool,
+) -> bool {
+    match app.try_state::<tauri_plugin_autostart::AutoLaunchManager>() {
+        Some(mgr) => mgr.is_enabled().unwrap_or(config_value),
+        None => config_value,
+    }
+}
+
+/// Body of the `launch_on_login` arm of [`configure`] (缓期批 3), with the
+/// OS autostart step and the disk persist injected — same testability
+/// shape as [`apply_boolean_toggle_arm`]: tests capture the OS call and
+/// the snapshot instead of touching the real login items or
+/// `~/.shannon/desktop/config.json`. Order is load-bearing: OS first,
+/// persist only on success (see the honesty contract above).
+async fn apply_launch_on_login_arm<R, P, O>(
+    state: &AppState,
+    app_handle: &tauri::AppHandle<R>,
+    enabled: bool,
+    persist: P,
+    os_apply: O,
+) -> Result<(), String>
+where
+    R: tauri::Runtime,
+    P: FnOnce(DesktopConfig) -> Result<(), String>,
+    O: FnOnce() -> Result<(), String>,
+{
+    os_apply()?;
+    {
+        let mut desktop_cfg = state.desktop_config.write().await;
+        desktop_cfg.launch_on_login = enabled;
+    }
+    persist(state.desktop_config.read().await.clone())?;
+
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: "launch_on_login".into(),
+            value: enabled.to_string(),
+        },
+    );
+
+    Ok(())
+}
+
 /// Largest mission-name length accepted by `configure('mission')`. Long
 /// enough for any honest title; short enough that a paste accident cannot
 /// turn the OPC mission card into a document.
 const MISSION_NAME_MAX_CHARS: usize = 200;
-
 /// Largest number of distinct linked task ids a mission may carry. The task
 /// board itself is the source of truth; a mission linking more than this is
 /// almost certainly a mis-serialized payload, so it is rejected (not
@@ -1184,6 +1275,33 @@ pub async fn configure(
             );
             Ok(())
         }
+        // 缓期批 3 — 开机自启 (opt-in, default off). A dedicated arm (not
+        // the grouped toggle) because flipping it has an immediate OS side
+        // effect: register/remove the login item via tauri-plugin-autostart.
+        // OS first, persist only on success — see `apply_launch_on_login_arm`
+        // for the honesty contract. The honest toggle state is NOT this
+        // config field: the UI reads `get_launch_on_login` (OS state) for
+        // what the switch should show.
+        "launch_on_login" => {
+            let enabled = match update.value.to_ascii_lowercase().as_str() {
+                "true" => true,
+                "false" => false,
+                _ => {
+                    return Err(format!(
+                        "Invalid boolean for {}: {}",
+                        update.key, update.value
+                    ));
+                }
+            };
+            apply_launch_on_login_arm(
+                state.inner(),
+                &app_handle,
+                enabled,
+                |cfg| config::save_config(&cfg),
+                || autostart_os_apply(&app_handle, enabled),
+            )
+            .await
+        }
         // Grouped boolean toggles (the Settings switches). The guard routes
         // on `is_boolean_toggle_key`, so the arm and `set_boolean_toggle`
         // share one key list — a recognized key (`dream_enabled`,
@@ -1447,6 +1565,25 @@ pub async fn get_config(state: tauri::State<'_, AppState>) -> Result<DesktopConf
         }
     }
     Ok(display)
+}
+
+/// 缓期批 3 — honest launch-on-login read for the Settings toggle: the OS
+/// autostart state (the plugin's `is_enabled()` — LaunchAgent file,
+/// registry Run key, XDG desktop file) is the source of truth, so a login
+/// item flipped outside the app (macOS Login Items, Task Manager, DE
+/// settings) is reported as-is. The persisted `launch_on_login` config
+/// field is only the fallback for when the OS state cannot be queried
+/// (plugin unavailable / unsupported platform) — it remembers user
+/// intent, never overrides what the OS says. `get_config`'s
+/// `launch_on_login` field stays the raw persisted value and must NOT be
+/// used for the toggle state.
+#[tauri::command]
+pub async fn get_launch_on_login(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<bool, String> {
+    let config_value = state.desktop_config.read().await.launch_on_login;
+    Ok(read_launch_on_login(&app_handle, config_value))
 }
 
 /// Result of scanning the process environment for a pre-configured provider.
@@ -3028,6 +3165,9 @@ mod tests {
         // arm (immediate start/stop side effect) — it must never route
         // through the grouped boolean applier.
         assert!(!is_boolean_toggle_key("power.keep_awake"));
+        // 缓期批 3: launch-on-login has a dedicated arm (immediate OS
+        // autostart side effect) — same rule as `power.keep_awake`.
+        assert!(!is_boolean_toggle_key("launch_on_login"));
         for key in TOGGLE_KEYS {
             assert!(is_boolean_toggle_key(key), "{key} must be routed");
         }
@@ -3149,6 +3289,87 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("disk full"), "{err}");
+    }
+
+    // === Launch-on-login (缓期批 3) ===
+    //
+    // The OS call itself cannot run in CI tests (it would write real login
+    // items), so the arm is driven with the OS step and the disk persist
+    // injected — the exact body `configure` runs.
+
+    #[tokio::test]
+    async fn launch_on_login_arm_applies_os_then_persists_on_success() {
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::new()), "AppState managed once");
+        let tauri_state = app.state::<AppState>();
+        // Deterministic start: opt-in off.
+        tauri_state.desktop_config.write().await.launch_on_login = false;
+
+        let os_calls: std::sync::Mutex<Vec<bool>> = std::sync::Mutex::new(Vec::new());
+        let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());
+        for enabled in [true, false] {
+            apply_launch_on_login_arm(
+                tauri_state.inner(),
+                app.handle(),
+                enabled,
+                |cfg| {
+                    persisted.lock().unwrap().push(cfg);
+                    Ok(())
+                },
+                || {
+                    os_calls.lock().unwrap().push(enabled);
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap_or_else(|e| panic!("toggle {enabled} failed: {e}"));
+
+            // The command's read-back path: `get_config` shows the value the
+            // toggle just persisted (the remembered intent).
+            let shown = get_config(app.state::<AppState>()).await.unwrap();
+            assert_eq!(shown.launch_on_login, enabled, "intent {enabled} persisted");
+            assert_eq!(os_calls.lock().unwrap().last(), Some(&enabled));
+            let snapshot = persisted.lock().unwrap().last().unwrap().clone();
+            assert_eq!(snapshot.launch_on_login, enabled);
+        }
+        assert_eq!(os_calls.lock().unwrap().len(), 2, "OS applied per toggle");
+    }
+
+    #[tokio::test]
+    async fn launch_on_login_arm_refused_by_os_leaves_config_untouched() {
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::new()), "AppState managed once");
+        let tauri_state = app.state::<AppState>();
+        let before = tauri_state.desktop_config.read().await.clone();
+
+        // The OS refuses the registration: the whole update fails and the
+        // config must NOT record an intent the OS did not honor.
+        let err = apply_launch_on_login_arm(
+            tauri_state.inner(),
+            app.handle(),
+            true,
+            |_| panic!("persist must not run when the OS step failed"),
+            || Err("launchctl: permission denied".into()),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("permission denied"), "{err}");
+        assert_eq!(
+            tauri_state.desktop_config.read().await.launch_on_login,
+            before.launch_on_login,
+            "config untouched on OS refusal"
+        );
+    }
+
+    #[test]
+    fn read_launch_on_login_falls_back_to_config_without_the_plugin() {
+        // A mock runtime never registers the autostart plugin, so
+        // `try_state` misses — the honest read degrades to the persisted
+        // config value instead of panicking (the `ManagerExt::autolaunch`
+        // helper would `state()`-panic here).
+        let app = tauri::test::mock_app();
+        assert!(!read_launch_on_login(app.handle(), false));
+        assert!(read_launch_on_login(app.handle(), true));
     }
 
     #[test]

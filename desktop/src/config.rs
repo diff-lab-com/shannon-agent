@@ -178,6 +178,21 @@ pub struct DesktopConfig {
     /// `check_app_update` command, so this field is a plain read.
     #[serde(default = "default_true")]
     pub update_check_at_launch: bool,
+    /// 开机自启 (缓期批 3) — launch-on-login, **opt-in** (default false: an
+    /// honest default for a dev tool — nothing registers itself with the OS
+    /// until the user asks). When true, `configure('launch_on_login')` has
+    /// asked the autostart plugin (tauri-plugin-autostart: macOS LaunchAgent,
+    /// Windows registry Run, Linux XDG autostart desktop file) to register
+    /// the app at login. This field only *remembers user intent*: the
+    /// Settings toggle's source of truth is the OS state via
+    /// `get_launch_on_login` (the plugin's `is_enabled()`), which falls back
+    /// to this field when the OS state cannot be queried (unsupported
+    /// platform / plugin unavailable). The user can also flip the OS entry
+    /// outside the app (login items, Task Manager, DE settings) — the read
+    /// reflects that; this field then simply lags until the next in-app
+    /// toggle.
+    #[serde(default)]
+    pub launch_on_login: bool,
     /// Provider allowlist — restricts the model catalog to the listed kinds
     /// (`anthropic` / `openai` / `ollama` / `gemini` / `deepseek` /
     /// `openai-compatible`). Drives the desktop Settings' "Provider
@@ -986,6 +1001,7 @@ impl Default for DesktopConfig {
             open_session_windows: Vec::new(),
             restore_session_windows_on_launch: default_true(),
             update_check_at_launch: default_true(),
+            launch_on_login: false,
             enabled_providers: None,
             active_permission_profile: None,
             sandbox: None,
@@ -1965,6 +1981,30 @@ mod tests {
         let back: DesktopConfig = serde_json::from_str(&json).unwrap();
         assert!(!back.restore_session_windows_on_launch);
         assert!(!back.update_check_at_launch);
+    }
+
+    /// 缓期批 3 launch-on-login: a pre-batch `config.json` (no such key)
+    /// loads with the opt-in OFF — nothing may register itself with the OS
+    /// login items just because the field shipped — and the field
+    /// round-trips once written (including an explicit `true`, which must
+    /// not snap back to the false default).
+    #[test]
+    fn test_launch_on_login_defaults_off_and_round_trips() {
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(!legacy.launch_on_login, "launch-on-login defaults OFF");
+        assert!(!DesktopConfig::default().launch_on_login);
+
+        let config = DesktopConfig {
+            launch_on_login: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"launch_on_login\":true"), "{json}");
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert!(back.launch_on_login);
     }
 
     /// Settings R3 T3: the three power/hardware keys must default correctly
