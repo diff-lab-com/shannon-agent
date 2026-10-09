@@ -744,6 +744,44 @@ export class MobileDispatchHub {
   }
 
   /**
+   * trust.changed push: a per-kind trust grant was REVOKED through this
+   * gateway (`shannon/trust.revoke` → engine, `revoked: true` — wired from
+   * the engine bridge's revoke handler via the bootstrap). Broadcast to EVERY
+   * connected device: the kind-trust store (`~/.shannon/trust/kinds.toml`) is
+   * a host-level entity, not device-private — the same host-entity reasoning
+   * as the §S group fan-out ruling, and deliberately unlike the §K3 task
+   * stream's initiating-device-only attribution. The revoking device's own
+   * consumer treats the push idempotently (it already saw the revoke
+   * response; the push just re-converges any second socket).
+   *
+   * Dedicated notification method, NOT a `shannon/event` type: no seq, no
+   * replay-ring record (mirror of `pushAgentState`) — the store is the truth
+   * and the push is a live-sync hint, so a device that misses it falls back
+   * to the §Q5 v1 behavior: re-probe `shannon/trust.list` when the trust
+   * ledger is next opened. Idempotent revokes (`revoked: false`) never reach
+   * here — nothing changed, so nothing is announced.
+   *
+   * Returns the number of sockets the frame actually reached (diagnostics /
+   * tests; 0 is normal — the push is best-effort by design).
+   */
+  pushTrustChanged(kind: string, revokedAt: string): number {
+    const frame = JSON.stringify({
+      jsonrpc: JSONRPC_VERSION,
+      method: "shannon/trust.changed",
+      params: { kind, revokedAt },
+    });
+    let delivered = 0;
+    for (const sockets of this.byDevice.values()) {
+      for (const ctx of sockets) {
+        if (ctx.socket.readyState !== WebSocket.OPEN) continue;
+        ctx.socket.send(frame);
+        delivered++;
+      }
+    }
+    return delivered;
+  }
+
+  /**
    * §K3: one engine text delta of the device's in-flight task stream →
    * `task.progress {session_id, content}` to the initiating device. No-op
    * when the device has no running task (stale event after a terminal).

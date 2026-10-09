@@ -263,6 +263,18 @@ export interface EngineBridgeOptions {
    * shape: agentId only when the engine itself supplies one).
    */
   taskAgentLookup?: (sessionId: string) => string | null;
+  /**
+   * trust.changed push seam: called when a `shannon/trust.revoke` lands on
+   * the engine AND the engine answers `revoked: true` (a grant actually
+   * removed — an idempotent replay answers `revoked: false` and pushes
+   * nothing). The composer wires this to `MobileDispatchHub.pushTrustChanged`
+   * (broadcast, seq-free, outside the §O4 replay ring — the store is the
+   * truth, the push is a live-sync hint; a device that misses it re-probes
+   * `shannon/trust.list` per the §Q5 v1 degrade). Grants never fire this —
+   * the deciding device learns of a grant from its signed decide response.
+   * Absent (tests / dev wirings) → revokes still work, just without the push.
+   */
+  onTrustChanged?: (kind: string, revokedAt: string) => void;
 }
 
 /** Sentinel key for queries without a session_id (P1.2 replaces it with a device id). */
@@ -769,7 +781,7 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         };
       }
       try {
-        await revokeTrustKind({
+        const body = await revokeTrustKind({
           engineBaseUrl: opts.engineHttpBaseUrl,
           kind: params.kind,
           authToken: engineAuthToken,
@@ -777,6 +789,19 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         });
         // Idempotent on the phone's side too: an unknown kind is still a
         // successful revoke (the grant is gone either way).
+        // trust.changed push: ONLY on an actual removal (`revoked: true`) —
+        // an idempotent replay changed no state, so nothing is announced.
+        // The timestamp is the gateway's forward wall clock in ISO-8601 (the
+        // engine response carries none; the §L1 stamping posture). A broken
+        // push sink must never fail the revoke itself (same posture as the
+        // hub's wake sink).
+        if (body?.revoked === true) {
+          try {
+            opts.onTrustChanged?.(params.kind, new Date().toISOString());
+          } catch (err) {
+            opts.logger.warn(`trust.changed push failed: ${(err as Error).message}`);
+          }
+        }
         return { kind: "result", result: { ok: true } satisfies TrustRevokeResult };
       } catch (err) {
         return {
