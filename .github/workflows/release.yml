@@ -243,17 +243,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # 24.04, not 22.04: libspa-sys bindgens against the system pipewire
+          # headers at build time, and pipewire-rs 0.10 (via xcap, the
+          # preview-capture default feature) needs symbols absent from
+          # 22.04's pipewire 0.3.48 headers (spa_meta_region_is_valid et
+          # al.) — the deb/rpm glibc floor therefore rises to 24.04. The
+          # CLI matrix above stays on 22.04: it does not compile the
+          # desktop capture stack.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
+            os: ubuntu-24.04
             ext: deb
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
+            os: ubuntu-24.04
             ext: rpm
           # Universal Linux artifact: bundles webkit2gtk/pipewire etc., runs
           # on any glibc >= 2.35 distro (Arch/Fedora/non-deb derivatives) —
           # the distro-agnostic counterpart to the deb/rpm pair.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
+            os: ubuntu-24.04
             ext: appimage
           - target: x86_64-apple-darwin
             os: macos-14
