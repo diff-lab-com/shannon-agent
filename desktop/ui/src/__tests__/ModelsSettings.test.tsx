@@ -32,10 +32,12 @@ describe('ModelsSettings', () => {
     expect(screen.getByText(/BYOK direct connection/)).toBeInTheDocument()
   })
 
-  it('renders the execution-mode guidance card that jumps to Permissions & safety', () => {
+  it('renders the rule-presets guidance card that jumps to Permissions & safety', () => {
     render(wrap(<ModelsSettings />))
+    // 缓期批 3 收敛: the card sells the presets honestly — no composer
+    // switcher exists anymore, and presets never change the execution mode.
     expect(screen.getByTestId('models-exec-mode-card')).toHaveTextContent(
-      'Execution mode (Strict / Balanced / Permissive)',
+      'Rule presets (Strict / Balanced / Permissive)',
     )
     expect(screen.getByTestId('models-to-permissions-link')).toHaveTextContent(
       'Open Permissions & safety',

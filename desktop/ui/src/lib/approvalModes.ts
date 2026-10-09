@@ -132,6 +132,62 @@ export const PLAN_OPTION: ApprovalModeOption = {
   tone: 'border-success/50',
 }
 
+// ─── 规则预设 (rule presets) — the permission-profile vocabulary ────────────
+//
+// 缓期批 3 convergence (docs/reviews/2026-10-09-cleanup-plan-and-deferred-
+// research.md §执行模式收敛, M 级表): a true merge of the two controls is
+// impossible — profile → approval_mode is not injective (strict AND balanced
+// both mean `ask`), so any combined control would lose information. Backend
+// 8803a519d settled the conflict: `activate_permission_profile` changes ONLY
+// `active_permission_profile` and never touches `approval_mode`. The UI
+// contract that follows: the composer owns the approval ladder above (the
+// four-stop pill), while the presets below are presented as RULE PRESETS in
+// Settings → 权限与安全 — switching a preset never changes the execution
+// mode. Every user-visible preset label comes from THIS table, the same
+// single-source discipline as the tiers (the composer switcher's competing
+// `execMode.tier.*` vocabulary was retired with it).
+
+export interface PermissionPresetOption {
+  id: 'strict' | 'balanced' | 'permissive'
+  /** react-intl id for the preset name (严格 / 平衡 / 宽松). */
+  labelKey: string
+  /** react-intl id for the one-line description of what the rules approve. */
+  descriptionKey: string
+  /** Material symbol name for the card icon. */
+  icon: string
+}
+
+export const PERMISSION_PRESETS: readonly PermissionPresetOption[] = [
+  {
+    id: 'strict',
+    labelKey: 'settings.permissions.builtin.name.strict',
+    descriptionKey: 'settings.permissions.builtin.desc.strict',
+    icon: 'shield_lock',
+  },
+  {
+    id: 'balanced',
+    labelKey: 'settings.permissions.builtin.name.balanced',
+    descriptionKey: 'settings.permissions.builtin.desc.balanced',
+    icon: 'balance',
+  },
+  {
+    id: 'permissive',
+    labelKey: 'settings.permissions.builtin.name.permissive',
+    descriptionKey: 'settings.permissions.builtin.desc.permissive',
+    icon: 'speed',
+  },
+]
+
+/**
+ * Resolve a builtin profile id to its preset vocabulary. Case-insensitive
+ * (the backend normalizes builtin ids on activation); `undefined` for an
+ * unknown id so future engine profiles fall back to the engine-provided
+ * strings instead of a wrong label.
+ */
+export function permissionPresetOption(id: string): PermissionPresetOption | undefined {
+  return PERMISSION_PRESETS.find((p) => p.id === id.toLowerCase())
+}
+
 /**
  * Resolve the config's `approval_mode` to a displayable option. Legacy
  * values normalize to their canonical tier; `plan` renders its own option;

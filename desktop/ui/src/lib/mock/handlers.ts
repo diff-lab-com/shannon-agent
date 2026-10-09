@@ -726,6 +726,16 @@ export const handlers: Record<string, MockHandler> = {
     }
     return config
   },
+  // 缓期批 3: honest launch-on-login read. A browser demo cannot query the
+  // OS login items (no tauri-plugin-autostart state behind it), so it
+  // answers the backend's own fallback branch: the persisted
+  // `launch_on_login` config value (remembered intent), defaulting off.
+  // The toggle state never comes from get_config directly — the Settings
+  // switch calls THIS command, exactly like the real backend read path.
+  async get_launch_on_login() {
+    await delay()
+    return demoConfig.launch_on_login === true
+  },
   // Wire shape note: the desktop command takes `{ update: { key, value } }`
   // (tauri-api configure wraps it); the flat shape is accepted too so older
   // callers keep working. Before this was fixed, EVERY configure in demo
@@ -796,6 +806,15 @@ export const handlers: Record<string, MockHandler> = {
     } else if (key === 'power.block_sleep_during_tasks') {
       // Settings R3 T3: run-time sleep blocker.
       demoConfig.power_block_sleep_during_tasks = String(value) === 'true'
+    } else if (key === 'launch_on_login') {
+      // 缓期批 3: autostart toggle — a dedicated demo arm (not a generic
+      // fall-through) mirroring the backend's dedicated configure arm. The
+      // browser demo has no OS to register login items with, so it answers
+      // exactly what the backend's honest read falls back to when the
+      // plugin state is absent: the persisted config value. A real OS
+      // refusal is exercised in the component tests via the mocked api
+      // layer (the optimistic toggle reverts on rejection).
+      demoConfig.launch_on_login = String(value) === 'true'
     } else if (key === 'context.auto_compact') {
       // Settings R3 T6: engine-level auto-compaction switch (a flip lands on
       // the next message).
@@ -2287,6 +2306,11 @@ export const handlers: Record<string, MockHandler> = {
   async list_hook_events() { await delay(); return clone(MOCK_HOOK_EVENTS) },
   async list_permission_profiles() { await delay(); return clone(MOCK_PROFILES) },
   // P1-3: frozen contract — activate_permission_profile(name: string|null).
+  // 缓期批 3 (mirrors backend 8803a519d): activation changes ONLY
+  // `active_permission_profile` — approval_mode is NOT written anymore (the
+  // old silent overwrite made profile → approval_mode non-injective and
+  // fought the composer's approval-mode pill). The response reports the
+  // approval_mode value in effect, exactly like the backend.
   async activate_permission_profile(args: { name: string | null }) {
     await delay(60)
     const name = (args?.name ?? '').trim()
@@ -2295,10 +2319,7 @@ export const handlers: Record<string, MockHandler> = {
       throw new Error(`unknown permission profile \`${name}\``)
     }
     demoConfig.active_permission_profile = name === '' ? null : name
-    // Mirror the backend's mode mapping so the demo header reflects it.
-    if (name === 'strict' || name === 'balanced') demoConfig.approval_mode = 'ask'
-    else if (name === 'permissive') demoConfig.approval_mode = 'auto-edit'
-    return { active: name === '' ? null : name, approval_mode: demoConfig.approval_mode }
+    return { active: name === '' ? null : name, approval_mode: demoConfig.approval_mode ?? null }
   },
   async save_custom_profile(args: { name: string; description?: string; auto_approve: string[]; confirm: string[]; deny: string[] }) {
     await delay(100)

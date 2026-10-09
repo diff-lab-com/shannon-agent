@@ -11,7 +11,7 @@ homepage = "https://github.com/diff-lab-com/shannon-agent"
 
 [features]
 default = ["tauri", "preview-capture"]
-tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-opener", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
+tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-opener", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification", "dep:tauri-plugin-autostart"]
 # Production embed: plain `cargo build --release` must enable this or the
 # binary embeds NO frontend and loads build.devUrl (tauri.conf.json) — a
 # release app run without a dev server on :1420 shows WebKit's "Could not
@@ -133,6 +133,17 @@ tauri-plugin-global-shortcut = { version = "2", optional = true }
 tauri-plugin-window-state = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
+# 缓期批 3 — launch-on-login (opt-in). The OS registration (macOS LaunchAgent /
+# Windows registry Run / Linux XDG autostart desktop file) lives entirely
+# inside the plugin; the desktop only calls its manager Rust-side
+# (`configure('launch_on_login')` + `get_launch_on_login`), so no plugin JS
+# permission is needed in the capability files.
+# Bounded below 2.6: tauri-plugin-autostart 2.6.0+ requires Rust 1.90 (and
+# 2.7.0 pulls a tauri ≥2.12 stack whose tray-icon needs rustc 1.90 too),
+# while the workspace toolchain / tauri resolution is pinned at 1.88 /
+# tauri 2.11.5 (see rust-toolchain.toml + Cargo.lock). 2.5.1 is the newest
+# release that resolves against the locked tauri 2.11.5 tree.
+tauri-plugin-autostart = { version = "2, <2.6", optional = true }
 
 # Local STT (P2-5e). whisper-rs 0.13 ships whisper.cpp 1.5.x as a vendored
 # git submodule and compiles it via its own build.rs — adding it here pulls
