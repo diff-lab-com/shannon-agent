@@ -415,9 +415,18 @@ mod declared_scan_tests {
     use super::*;
     use shannon_types::provider_config::{ModelCapability, ModelSpec};
 
-    /// Serializes global-registry mutations across tests in one process
-    /// (plain `cargo test` shares the process; nextest isolates anyway).
-    fn with_registry<T>(provider: &LlmProvider, specs: &[ModelSpec], f: impl FnOnce() -> T) -> T {
+    /// Replace the provider-bound registry with `specs` for the duration of
+    /// `f`. The `RegistryGuard` argument is the serialization seam: the
+    /// declared-models registry is process-global and plain `cargo test`
+    /// runs these tests on parallel threads, so callers must hold the
+    /// crate-wide test lock (acquired via
+    /// `crate::declared_models::test_support::registry_guard`).
+    fn with_registry<T>(
+        _guard: &crate::declared_models::test_support::RegistryGuard,
+        provider: &LlmProvider,
+        specs: &[ModelSpec],
+        f: impl FnOnce() -> T,
+    ) -> T {
         crate::declared_models::replace_for_provider(provider, specs);
         let out = f();
         crate::declared_models::clear();
@@ -441,6 +450,7 @@ mod declared_scan_tests {
     /// tier-classifiable. Explicit `tiers` pins still win (unchanged step 1).
     #[test]
     fn fully_declared_proxy_model_resolves_into_the_right_tier() {
+        let guard = crate::declared_models::test_support::registry_guard();
         let mut pro = spec("proxy-flagship");
         pro.context_window = Some(200_000);
         pro.max_output = Some(32_768);
@@ -457,7 +467,7 @@ mod declared_scan_tests {
 
         // Ollama has no static catalog entries — every resolution below is
         // declaration-driven.
-        with_registry(&LlmProvider::Ollama, &[pro, fast, standard], || {
+        with_registry(&guard, &LlmProvider::Ollama, &[pro, fast, standard], || {
             let empty = ProviderTiers::default();
             assert_eq!(
                 resolve_tier("pro", &LlmProvider::Ollama, &empty).as_deref(),
@@ -493,10 +503,11 @@ mod declared_scan_tests {
     /// come first in the merge).
     #[test]
     fn declared_candidates_are_provider_bound_and_catalog_wins_ties() {
+        let guard = crate::declared_models::test_support::registry_guard();
         let mut openai_declared = spec("openai-only-declared");
         openai_declared.capabilities = vec![ModelCapability::Reasoning];
 
-        with_registry(&LlmProvider::OpenAI, &[openai_declared], || {
+        with_registry(&guard, &LlmProvider::OpenAI, &[openai_declared], || {
             let empty = ProviderTiers::default();
             // Ollama (no catalog, no declarations) still resolves to None.
             assert_eq!(resolve_tier("pro", &LlmProvider::Ollama, &empty), None);

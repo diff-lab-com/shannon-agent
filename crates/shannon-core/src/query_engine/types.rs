@@ -1299,6 +1299,9 @@ mod tests {
     #[test]
     fn declared_model_pricing_beats_substring_collision() {
         use shannon_types::provider_config::ModelSpec;
+        // Declared-models test lock: the registry is process-global and
+        // plain `cargo test` runs tests on parallel threads.
+        let _guard = crate::declared_models::test_support::registry_guard();
         let spec = ModelSpec {
             id: "shannon-test-gpt-4o-mini".to_string(),
             display_name: None,
@@ -1335,6 +1338,9 @@ mod tests {
     #[test]
     fn half_declared_pricing_falls_through() {
         use shannon_types::provider_config::ModelSpec;
+        // Declared-models test lock: the registry is process-global and
+        // plain `cargo test` runs tests on parallel threads.
+        let _guard = crate::declared_models::test_support::registry_guard();
         let spec = ModelSpec {
             id: "shannon-test-collides-gpt-4o".to_string(),
             display_name: None,
