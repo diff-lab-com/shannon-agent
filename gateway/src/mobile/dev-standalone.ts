@@ -411,6 +411,16 @@ const pipeline = createMobileDispatchPipeline({
 });
 hub.setSubmit(pipeline.submit);
 
+// §S B6.0/B6.2: the group face + the daily-report tick — the bundle's stop()
+// rides the shutdown chain below (bootstrap parity).
+const groupFacet = createGroupHandlers({
+  hub,
+  logger,
+  engineWsUrl,
+  engineHttpBaseUrl: engineHttpBase,
+  defaultModel: DEFAULT_MODEL,
+});
+
 const handlers = createMobileHandlers({
   engine: {
     engineWsUrl,
@@ -450,13 +460,8 @@ const handlers = createMobileHandlers({
   }),
   // §S B6.0: the group face (bootstrap parity — same §K-pipeline member
   // turns, same approval round-trip, default ~/.shannon/groups store).
-  groups: createGroupHandlers({
-    hub,
-    logger,
-    engineWsUrl,
-    engineHttpBaseUrl: engineHttpBase,
-    defaultModel: DEFAULT_MODEL,
-  }),
+  // B6.2: also arms the daily-report tick; groupFacet.stop() clears it.
+  groups: groupFacet.handlers,
   // `access` (shannon/pairing.pending / .approve) intentionally NOT mounted —
   // no IM allowlist / pairing store exists in this host (see header).
 });
@@ -503,6 +508,7 @@ const shutdown = (): void => {
   if (stopping) return;
   stopping = true;
   void (async () => {
+    groupFacet.stop(); // B6.2: clear the daily-report tick chain
     await server.stop().catch(() => {});
     await pipeline.stop().catch(() => {});
     await engine?.stop().catch(() => {});

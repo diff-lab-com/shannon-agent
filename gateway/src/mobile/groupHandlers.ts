@@ -1,9 +1,9 @@
 /**
- * §S group orchestration (B6.0 起步, cross-repo spec) — the `shannon/group.*`
- * method face + the deterministic member-turn orchestrator.
+ * §S group orchestration (B6.0 起步 + B6.2 收尾, cross-repo spec) — the
+ * `shannon/group.*` method face + the deterministic member-turn orchestrator.
  *
  * Wire posture (B-batch discipline): everything here is ADDITIVE — an old
- * gateway answers METHOD_NOT_FOUND for all four methods (the phone's honest
+ * gateway answers METHOD_NOT_FOUND for all five methods (the phone's honest
  * "预研能力" degrade), and every EVENT/key introduced here is optional on the
  * `shannon/event` channel. Rulings live in
  * `docs/reviews/2026-10-09-mobile-proposals-rulings.md`; the contract lands
@@ -30,6 +30,11 @@
  *    per-ask deadline, registry entry-level retention, quote-expired card)
  *    but has NO quoteWindow producer yet: group asks keep the exact legacy
  *    300s window on every side until a payments connector exists.
+ *  - B6.2 收尾: `group.get` serves the entity + the persisted review (16 屏);
+ *    `group.archive {reason:"completed"}` aggregates + persists that review;
+ *    the R11 daily report rides the per-minute tick in `groupReview.ts`; and
+ *    an ephemeral create without members runs ONE engine planning query,
+ *    degrading to the generic 3-slot template on any failure (诚实降级).
  *
  * Events fan out to EVERY connected device (`hub.broadcastEvent`): a group is
  * a host-level entity, not a device-private task thread — deliberately
@@ -61,17 +66,25 @@ import {
   type GroupTranscriptEntry,
   type PoolSpendEntry,
 } from "./groupStore.js";
+import {
+  aggregateGroupReview,
+  createDailyReportTimer,
+  type DailyReportTimer,
+} from "./groupReview.js";
 import { ShannonError,
   type GroupArchiveParams,
   type GroupArchiveResult,
   type GroupCreateParams,
   type GroupCreateResult,
+  type GroupGetParams,
+  type GroupGetResult,
   type GroupListItem,
   type GroupListResult,
   type GroupMessageParams,
   type GroupMessageResult,
   type GroupObject,
   type GroupMemberInfo,
+  type GroupReview,
 } from "./protocol.js";
 import type { MethodContext, MethodHandlers } from "./server.js";
 import type { MobileTranscriptWire } from "./engineSessions.js";
@@ -84,6 +97,9 @@ const PAIRING_REQUIRED = {
 };
 
 const GROUP_ID_RE = /^grp-[0-9a-fA-F-]{36}$/;
+
+/** Budget for the one-shot crew-planning query (open question #3 收尾). */
+const DEFAULT_PLANNING_TIMEOUT_MS = 30_000;
 
 export interface GroupHandlersOptions {
   hub: MobileDispatchHub;
@@ -105,6 +121,22 @@ export interface GroupHandlersOptions {
   fetchImpl?: typeof fetch;
   engineClientFactory?: (sessionKey: string) => EngineWsClient;
   now?: () => number;
+  /** B6.2: budget for the create-time crew-planning query (default 30s). */
+  planningTimeoutMs?: number;
+  /** B6.2 test seams for the daily-report tick (see groupReview.ts). */
+  reportScheduleNext?: (fn: () => void, delayMs: number) => () => void;
+  reportTickIntervalMs?: number;
+}
+
+/** What `createGroupHandlers` hands back: the method face + the shutdown hook. */
+export interface GroupHandlersBundle {
+  /** The `shannon/group.*` methods — merged into the mobile handler map. */
+  handlers: MethodHandlers;
+  /**
+   * Host-shutdown hook: clears the B6.2 daily-report tick chain. NOT a wire
+   * method — bootstrap/dev-standalone call it from their stop path.
+   */
+  stop(): void;
 }
 
 /** CNY money on the wire is 元 with two decimals (§S 总则 7). */
@@ -152,16 +184,31 @@ function groupWire(record: GroupRecord): GroupObject {
     members: record.members.map(memberWire),
     pool: { ...record.pool },
     rules: { ...record.rules },
+    // B6.2: rides ONLY where the contract carries it (group.get, and the
+    // archive response's own key) — a fresh create/list never has one.
+    ...(record.review ? { review: record.review } : {}),
   };
 }
 
-export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers {
+export function createGroupHandlers(opts: GroupHandlersOptions): GroupHandlersBundle {
   const hub = opts.hub;
   const dirs = opts.groupsDirs ?? [];
   const now = () => opts.now?.() ?? Date.now();
   /** Per-group turn-chain mutex — a group runs one deterministic chain at a
    *  time; a second message while a chain runs queues behind it. */
   const chains = new Map<string, Promise<void>>();
+  /** B6.2: the daily-report tick (R11). Armed lazily — it runs only while an
+   *  active group has `rules.dailyReportAt` configured — and stopped via the
+   *  bundle's stop() from the host shutdown chain. */
+  const reports: DailyReportTimer = createDailyReportTimer({
+    hub,
+    logger: opts.logger,
+    groupsDirs: opts.groupsDirs,
+    now,
+    scheduleNext: opts.reportScheduleNext,
+    tickIntervalMs: opts.reportTickIntervalMs,
+  });
+  reports.arm();
 
   function broadcast(event: Parameters<MobileDispatchHub["broadcastEvent"]>[0]): void {
     hub.broadcastEvent(event);
@@ -170,6 +217,19 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
   function persist(record: GroupRecord): void {
     record.lastActivityAt = new Date(now()).toISOString();
     saveGroup(dirs, record);
+  }
+
+  /** B6.2: the review aggregate for a completing group — null (absent) when
+   *  the transcript can't be read, never a fabricated one. */
+  function buildReview(record: GroupRecord): GroupReview | null {
+    try {
+      return aggregateGroupReview(record, readTranscript(dirs, record.groupId));
+    } catch (err) {
+      opts.logger.warn(
+        `group.archive: review aggregation failed (review omitted): ${(err as Error).message}`,
+      );
+      return null;
+    }
   }
 
   function transcriptAdd(record: GroupRecord, entry: Omit<GroupTranscriptEntry, "ts">): void {
@@ -195,7 +255,10 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
       session_id: record.groupId,
       system: { kind, text, ts: new Date(now()).toISOString() },
     });
-    transcriptAdd(record, { role: "assistant", content: text, kind: "system" });
+    // `systemKind` is the host-local aggregation marker (B6.2): the review /
+    // daily-report aggregators count REAL card kinds (e.g. handoff) instead
+    // of pattern-matching prose. Never mapped onto the §J2 wire.
+    transcriptAdd(record, { role: "assistant", content: text, kind: "system", systemKind: kind });
     persist(record);
   }
 
@@ -310,6 +373,93 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
             : undefined,
         }))
     )(sessionKey);
+  }
+
+  // ── B6.2: the create-time crew planning query (提案开放问题 3 收尾) ────────
+  // One engine query, host-initiated (gateway 自调用): no phone session in the
+  // loop, no tool turns, no approval face. Any failure — transport, timeout
+  // (default 30s), unparseable/illegal output — degrades honestly to the
+  // generic 3-slot template and the create response returns the template
+  // members verbatim (what you see is what was planned).
+
+  function planningPrompt(goal: string): string {
+    return [
+      `[群] 目标：${goal}`,
+      "推荐 2-4 人分工阵容，输出严格 JSON 数组 [{slot,label,title}]，不要输出数组以外的任何文字。",
+    ].join("\n");
+  }
+
+  /** Strict parse of the planned crew: a JSON array of 2–4 unique
+   *  slot/label/title triples. Anything else → null (template fallback). */
+  function parseCrewJson(text: string): Array<Pick<GroupMember, "slot" | "label" | "title">> | null {
+    const start = text.indexOf("[");
+    const end = text.lastIndexOf("]");
+    if (start < 0 || end <= start) return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(parsed) || parsed.length < 2 || parsed.length > 4) return null;
+    const slots = new Set<string>();
+    const labels = new Set<string>();
+    const crew: Array<Pick<GroupMember, "slot" | "label" | "title">> = [];
+    for (const item of parsed) {
+      const rec = (item ?? {}) as Record<string, unknown>;
+      const slot = typeof rec.slot === "string" ? rec.slot.trim() : "";
+      const label = typeof rec.label === "string" ? rec.label.trim() : "";
+      const title = typeof rec.title === "string" ? rec.title.trim() : "";
+      if (!slot || !label || !title || slots.has(slot) || labels.has(label)) return null;
+      slots.add(slot);
+      labels.add(label);
+      crew.push({ slot, label, title });
+    }
+    return crew;
+  }
+
+  /** One planning query under a one-shot UUID session. Returns the parsed
+   *  crew, or null on ANY failure (the caller falls back to the template). */
+  async function planCrewFromEngine(
+    goal: string,
+  ): Promise<Array<Pick<GroupMember, "slot" | "label" | "title">> | null> {
+    const client = engineClientFor(`group:plan:${randomUUID()}`);
+    const chunks: string[] = [];
+    const consume = async (): Promise<string> => {
+      await client.connect();
+      // One-shot UUID session: the engine WS gate rejects non-UUID ids, and
+      // no phone-visible session key ever enters the prompt.
+      const query = client.runQuery(planningPrompt(goal), {
+        sessionId: randomUUID(),
+      }) as AsyncIterable<EngineEvent>;
+      for await (const ev of query) {
+        if (ev.type === "text") chunks.push(ev.content);
+        else if (ev.type === "failed") throw new Error(ev.error);
+      }
+      return chunks.join("");
+    };
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const text = await Promise.race([
+        consume(),
+        new Promise<never>((_, reject) => {
+          timeoutTimer = setTimeout(
+            () => reject(new Error("crew planning query timed out")),
+            opts.planningTimeoutMs ?? DEFAULT_PLANNING_TIMEOUT_MS,
+          );
+          timeoutTimer.unref?.();
+        }),
+      ]);
+      const crew = parseCrewJson(text);
+      if (!crew) opts.logger.warn("group.create: crew planning output unusable → template fallback");
+      return crew;
+    } catch (err) {
+      opts.logger.warn(`group.create: crew planning failed → template fallback: ${(err as Error).message}`);
+      return null;
+    } finally {
+      if (timeoutTimer !== null) clearTimeout(timeoutTimer);
+      await client.close().catch(() => {});
+    }
   }
 
   function composePrompt(record: GroupRecord, member: GroupMember, userText: string | null, handoffNote: string | null): string {
@@ -636,6 +786,24 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
       return { kind: "result", result: { groups } satisfies GroupListResult };
     },
 
+    // ── §S B6.2 收尾面: one group entity by id. Unknown groupId is
+    // INVALID_PARAMS (the §J2 honest miss). Archived/completed groups carry
+    // the persisted `review` when one exists (honest absence otherwise —
+    // see [GroupObject.review]).
+    "shannon/group.get": async (raw, ctx) => {
+      const gate = groupGate(ctx);
+      if (gate) return gate;
+      const params = (raw ?? {}) as Partial<GroupGetParams>;
+      if (typeof params.groupId !== "string" || !GROUP_ID_RE.test(params.groupId)) {
+        return { kind: "error", code: ShannonError.BAD_PARAMS, message: "params.groupId (grp-<uuid>) is required" };
+      }
+      const record = loadGroup(dirs, params.groupId);
+      if (!record) {
+        return { kind: "error", code: ShannonError.BAD_PARAMS, message: "unknown groupId" };
+      }
+      return { kind: "result", result: { group: groupWire(record) } satisfies GroupGetResult };
+    },
+
     // ── §S B6.0-2: dual-path create. R12's step-2 confirm sheet is PHONE-
     // LOCAL — one round trip here; the user's tap on 「建群，出发」 is what
     // produces this call (no half-created groups: validation precedes any
@@ -686,8 +854,16 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
       if (totalCny === null) {
         return { kind: "error", code: ShannonError.BAD_PARAMS, message: "pool.totalCny must be a non-negative number (元)" };
       }
+      // B6.2: an ephemeral create WITHOUT members runs the one-shot engine
+      // planning query first (roster path never plans — its members must
+      // carry agentIds, which the template cannot). Failure degrades to the
+      // template; either way the response returns the actual members.
+      const planned =
+        params.members == null && path === "ephemeral"
+          ? await planCrewFromEngine(params.goal.trim())
+          : null;
       const requested: NonNullable<GroupCreateParams["members"]> =
-        params.members ?? templateMembers().map((m) => ({ ...m }));
+        planned ?? (params.members ?? templateMembers().map((m) => ({ ...m })));
       if (!Array.isArray(requested) || requested.length === 0 || requested.length > 8) {
         return { kind: "error", code: ShannonError.BAD_PARAMS, message: "members must be a non-empty array (≤8)" };
       }
@@ -778,9 +954,13 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
         role: "assistant",
         content: `群已建立 · 目标：${record.goal} · 池 ¥${record.pool.totalCny.toFixed(2)}（备用 ¥${record.pool.reserveCny.toFixed(2)}）· ${members.length} 个成员分工已就绪`,
         kind: "system",
+        systemKind: "group-created",
       });
+      // B6.2: a newly configured dailyReportAt must start being served
+      // without a restart (arm() no-ops when nothing is eligible).
+      reports.arm();
       opts.logger.info(
-        `shannon/group.create: ${record.groupId} (${path}, ${members.length} members) by ${ctx.sessionId}`,
+        `shannon/group.create: ${record.groupId} (${path}, ${members.length} members${planned ? ", planned crew" : ""}) by ${ctx.sessionId}`,
       );
       return { kind: "result", result: { group: groupWire(record) } satisfies GroupCreateResult };
     },
@@ -874,11 +1054,17 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
       if (!record) {
         return { kind: "error", code: ShannonError.BAD_PARAMS, message: "unknown groupId" };
       }
+      // B6.2: aggregate the 16-screen review from the AS-LIVED state BEFORE
+      // the flips below (goals.done counts members that actually finished).
+      // Aggregation failure degrades to review-absent — the archive itself
+      // never fails on it (honest absence, not a broken close).
+      const review = params.reason === "completed" ? buildReview(record) : null;
       record.status = params.reason === "completed" ? "completed" : "archived";
       for (const m of record.members) {
         if (m.status !== "failed") m.status = "archived";
         m.statusNote = null;
       }
+      if (review) record.review = review;
       persist(record);
       systemEvent(
         record,
@@ -888,11 +1074,21 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
           : "群已解散：已完成的部分先归档，转录保留可回看。"
       );
       opts.logger.info(`shannon/group.archive: ${record.groupId} → ${record.status}`);
-      return { kind: "result", result: { ok: true } satisfies GroupArchiveResult };
+      // B6.2: the tick chain may need to stand down (no eligible group left).
+      reports.arm();
+      return {
+        kind: "result",
+        result: { ok: true, ...(review ? { review } : {}) } satisfies GroupArchiveResult,
+      };
     },
   };
 
-  return handlers;
+  return {
+    handlers,
+    stop() {
+      reports.stop();
+    },
+  };
 }
 
 // ── §J2 interception helper (wired into shannon/session.history) ────────────

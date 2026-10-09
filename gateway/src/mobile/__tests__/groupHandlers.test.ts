@@ -1,10 +1,12 @@
 /**
- * §S group orchestration (B6.0 起步) — the `shannon/group.*` face + the
- * deterministic member-turn orchestrator, against a real MobileDispatchHub,
- * a tmp group store and a seam-routed fake engine. Pins:
+ * §S group orchestration (B6.0 起步 + B6.2 收尾) — the `shannon/group.*` face
+ * + the deterministic member-turn orchestrator, against a real
+ * MobileDispatchHub, a tmp group store and a seam-routed fake engine. Pins:
  *
  *  - create validation matrix (locked payments rule / roster attribution /
  *    share-over-pool / ephemeral agentId ban) — no half-created groups;
+ *  - the B6.2 crew planning query (ephemeral default members → one engine
+ *    query; failure/timeout/unusable output → the honest template degrade);
  *  - the group-thread event stream (session_id = groupId, broadcast to ALL
  *    connected devices — a group is host-level, unlike §K3 task streams);
  *  - the deterministic handoff chain (plan order → handoff card → next
@@ -12,7 +14,11 @@
  *  - the approval round-trip with §S attribution (group key, one-shot
  *    handoff-first trigger) riding the shared hub settle;
  *  - §J2 interception (groupHistoryLookup) incl. paging + engine fallback;
- *  - archive lifecycle (archived group rejects messages, transcript kept).
+ *  - archive lifecycle (archived group rejects messages, transcript kept);
+ *  - B6.2 收尾: `group.get` + the persisted review aggregate (16 屏, honest
+ *    0s where v1 has no counting face) and the daily-report tick (R11 —
+ *    fires at the local HH:mm, dedupes per day, stands down after archive,
+ *    stops with the host).
  */
 
 import { EventEmitter } from "node:events";
@@ -28,8 +34,13 @@ import type { EngineEvent } from "../../engine/runtime.js";
 import type { EngineWsClient } from "../../engine/wsClient.js";
 import { createConsoleLogger } from "../../logger.js";
 import { MobileDispatchHub } from "../hub.js";
-import { createGroupHandlers, groupHistoryLookup } from "../groupHandlers.js";
-import { loadGroup, readPoolLedger } from "../groupStore.js";
+import {
+  createGroupHandlers,
+  groupHistoryLookup,
+  type GroupHandlersBundle,
+} from "../groupHandlers.js";
+import { loadGroup, readPoolLedger, readTranscript, saveGroup } from "../groupStore.js";
+import { localDateKey } from "../groupReview.js";
 import type { MethodContext } from "../server.js";
 
 const logger: Logger = createConsoleLogger("error");
@@ -64,13 +75,28 @@ function mockEngineClient(events: EngineEvent[]): EngineWsClient {
   } as unknown as EngineWsClient;
 }
 
+/** A client whose query never yields (the planning-timeout degrade fixture). */
+function hangingEngineClient(): EngineWsClient {
+  return {
+    connect: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    cancel: vi.fn(() => {}),
+    runQuery: vi.fn(() =>
+      (async function* (): AsyncGenerator<EngineEvent> {
+        await new Promise<never>(() => {});
+      })(),
+    ),
+  } as unknown as EngineWsClient;
+}
+
 function textEvent(content: string): EngineEvent {
   return { type: "text", content } as EngineEvent;
 }
 
 interface Harness {
   hub: MobileDispatchHub;
-  handlers: ReturnType<typeof createGroupHandlers>;
+  facet: GroupHandlersBundle;
+  handlers: GroupHandlersBundle["handlers"];
   groupsDirs: string[];
   clients: EngineWsClient[];
   initiator: MethodContext;
@@ -78,13 +104,16 @@ interface Harness {
 }
 
 function buildHarness(opts: {
-  /** One script PER member turn (each turn builds its own engine client). */
+  /** One script PER engine client — planning and member turns each build one. */
   turnScripts?: EngineEvent[][];
   /** One roster dir injected as the create-path validation target. */
   agentRoster?: string;
   fetchImpl?: typeof fetch;
   /** Hub-wide approval parking window (default 300s; tests shrink it). */
   approvalTimeoutMs?: number;
+  now?: () => number;
+  planningTimeoutMs?: number;
+  reportScheduleNext?: (fn: () => void, delayMs: number) => () => void;
 } = {}): Harness {
   const groupsDirs = [mkdtempSync(join(tmpdir(), "shannon-groups-test-"))];
   const hub = new MobileDispatchHub({
@@ -96,14 +125,16 @@ function buildHarness(opts: {
   // A tick clock: distinct ms per mutation so §J2 same-ts pagination groups
   // never fuse entries inside a fast test.
   let tick = 1_770_000_000_000;
-  const handlers = createGroupHandlers({
+  const facet = createGroupHandlers({
     hub,
     logger,
-    now: () => (tick += 1000),
+    now: opts.now ?? (() => (tick += 1000)),
     groupsDirs,
     agentRosterDirs: opts.agentRoster ? [opts.agentRoster] : [],
     engineWsUrl: "ws://engine:33420/api/ws",
     engineHttpBaseUrl: "http://engine:33420",
+    planningTimeoutMs: opts.planningTimeoutMs,
+    reportScheduleNext: opts.reportScheduleNext,
     engineClientFactory: () => {
       const client = mockEngineClient(turnScripts.shift() ?? []);
       clients.push(client);
@@ -117,7 +148,8 @@ function buildHarness(opts: {
   hub.registerConnection(bystander);
   return {
     hub,
-    handlers,
+    facet,
+    handlers: facet.handlers,
     groupsDirs,
     clients,
     initiator,
@@ -453,7 +485,9 @@ describe("group store persistence (§S ruling: host-side files)", () => {
       { groupId, reason: "completed" },
       h.initiator,
     );
-    expect(arch.result).toEqual({ ok: true });
+    expect(arch.result.ok).toBe(true);
+    // A finished; B's empty script failed — the aggregate is as-lived (1/2).
+    expect(arch.result.review).toMatchObject({ goals: { done: 1, total: 2 }, decisionCount: 0 });
     const list: any = await h.handlers["shannon/group.list"]!({}, h.initiator);
     expect(list.result.groups[0]).toMatchObject({ groupId, status: "completed" });
     // Transcript survives the archive (回看口径).
@@ -483,13 +517,15 @@ describe("§S B6.1 pool ledger (member-turn approvals with amounts)", () => {
   it("allow: pending → ledger line + group.pool-spend broadcast + pool/member numbers agree (decidedBy = the deciding device)", async () => {
     const posts: Array<{ url: string; body: unknown }> = [];
     const h = buildHarness({
+      // B6.2 note: an explicit crew keeps the planning query out of the way —
+      // omitted members would run it and consume this test's first script.
       turnScripts: [[approvalEvent("req-pay-1", { amountCny: 120.5 }), textEvent("付好了")]],
       fetchImpl: (async (url: any, init?: any) => {
         posts.push({ url: String(url), body: JSON.parse(init.body) });
         return new Response("{}", { status: 200 });
       }) as typeof fetch,
     });
-    const created = await createGroup(h);
+    const created = await createGroup(h, TWO_MEMBER_PLAN);
     const groupId = created.result.group.groupId as string;
     await h.handlers["shannon/group.message"]!({ groupId, text: "订机票" }, h.initiator);
     await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
@@ -539,7 +575,7 @@ describe("§S B6.1 pool ledger (member-turn approvals with amounts)", () => {
     const h = buildHarness({
       turnScripts: [[approvalEvent("req-deny-1", { amountCny: 88 }), textEvent("换方案继续")]],
     });
-    const created = await createGroup(h);
+    const created = await createGroup(h, TWO_MEMBER_PLAN);
     const groupId = created.result.group.groupId as string;
     await h.handlers["shannon/group.message"]!({ groupId, text: "试试" }, h.initiator);
     await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
@@ -557,7 +593,9 @@ describe("§S B6.1 pool ledger (member-turn approvals with amounts)", () => {
     const h = buildHarness({
       turnScripts: [[approvalEvent("req-plain-1", { command: "ls -la" }), textEvent("做完了")]],
     });
-    const created = await createGroup(h);
+    // Same slot/label/title as the generic template's head, spelled out so the
+    // B6.2 planning query stays out of this pool-path test.
+    const created = await createGroup(h, [{ slot: "plan", label: "A", title: "规划分工" }]);
     const groupId = created.result.group.groupId as string;
     await h.handlers["shannon/group.message"]!({ groupId, text: "看看" }, h.initiator);
     await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
@@ -630,7 +668,9 @@ describe("§S B6.1 pool ledger (member-turn approvals with amounts)", () => {
         [approvalEvent("req-hf-1", { amountCny: 9000 }), textEvent("B 完成")],
       ],
     });
-    const created = await createGroup(h);
+    // Explicit two-member crew: the ask under test is the POST-handoff one
+    // (script #1), so the B6.2 planning query must not consume it.
+    const created = await createGroup(h, TWO_MEMBER_PLAN);
     const groupId = created.result.group.groupId as string;
     await h.handlers["shannon/group.message"]!({ groupId, text: "开工" }, h.initiator);
     await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
@@ -657,7 +697,7 @@ describe("§S B6.1 pool ledger (member-turn approvals with amounts)", () => {
         return new Response("{}", { status: 200 });
       }) as typeof fetch,
     });
-    const created = await createGroup(h);
+    const created = await createGroup(h, TWO_MEMBER_PLAN);
     const groupId = created.result.group.groupId as string;
     await h.handlers["shannon/group.message"]!({ groupId, text: "订" }, h.initiator);
     await vi.waitFor(() => {
@@ -682,6 +722,284 @@ describe("§S B6.1 pool ledger (member-turn approvals with amounts)", () => {
     // The card is in the transcript for replay.
     const history = groupHistoryLookup(h.groupsDirs)(groupId, {});
     expect(history!.messages.some((m) => m.content.includes("已自动放弃"))).toBe(true);
+  });
+});
+
+describe("shannon/group.get + the review aggregate (§S B6.2)", () => {
+  it("serves the entity; unknown / malformed groupId are INVALID_PARAMS; the pairing gate holds", async () => {
+    const h = buildHarness();
+    const created = await createGroup(h, TWO_MEMBER_PLAN);
+    const groupId = created.result.group.groupId as string;
+
+    const got: any = await h.handlers["shannon/group.get"]!({ groupId }, h.initiator);
+    expect(got.kind).toBe("result");
+    expect(got.result.group).toMatchObject({ groupId, status: "active" });
+    // An active group honestly has no review yet.
+    expect(got.result.group.review).toBeUndefined();
+
+    const unknown: any = await h.handlers["shannon/group.get"]!(
+      { groupId: "grp-00000000-0000-0000-0000-000000000000" },
+      h.initiator,
+    );
+    expect(unknown.kind).toBe("error");
+    expect(unknown.code).toBe(-32001);
+
+    const malformed: any = await h.handlers["shannon/group.get"]!({ groupId: "not-a-group" }, h.initiator);
+    expect(malformed.kind).toBe("error");
+    expect(malformed.code).toBe(-32001);
+
+    const unpaired: any = await h.handlers["shannon/group.get"]!({ groupId }, fakeCtx(null));
+    expect(unpaired.kind).toBe("error");
+    expect(unpaired.code).toBe(-32000);
+  });
+
+  it("archive(completed) aggregates the review from as-lived state, persists it, and get serves it", async () => {
+    const h = buildHarness({
+      turnScripts: [[textEvent("A 的产出")], [textEvent("M 的产出")]],
+    });
+    const created = await createGroup(h, TWO_MEMBER_PLAN);
+    const groupId = created.result.group.groupId as string;
+    await h.handlers["shannon/group.message"]!({ groupId, text: "开工" }, h.initiator);
+    await vi.waitFor(() => {
+      expect(readTranscript(h.groupsDirs, groupId).some((e) => e.systemKind === "handoff")).toBe(true);
+    });
+
+    // The pool rows come from group.json alone (B6.1's ledger will feed the
+    // same fields later) — simulate one member having spent, honestly.
+    const record = loadGroup(h.groupsDirs, groupId)!;
+    record.members[0]!.spentCny = 123.456;
+    record.pool.spentCny = 123.456;
+    saveGroup(h.groupsDirs, record);
+
+    const arch: any = await h.handlers["shannon/group.archive"]!(
+      { groupId, reason: "completed" },
+      h.initiator,
+    );
+    expect(arch.kind).toBe("result");
+    const review = arch.result.review;
+    expect(review).toBeDefined();
+    // 2/2 done (both members finished before the flip), one marked handoff
+    // card, decisionCount an honest 0 (no approval-attribution face in v1).
+    expect(review.goals).toEqual({ done: 2, total: 2 });
+    expect(review.handoffCount).toBe(1);
+    expect(review.decisionCount).toBe(0);
+    expect(typeof review.durationMinutes).toBe("number");
+    expect(review.pool).toEqual({
+      totalCny: 8000,
+      spentCny: 123.456,
+      perMember: [
+        { memberId: "mem-01", label: "A", title: "订机票", amountCny: 123.46 },
+      ],
+    });
+    expect(review.deliverables).toEqual([
+      {
+        memberId: "mem-01",
+        title: "订机票",
+        status: "已完成",
+        lines: [{ k: "产出摘要", v: "A 的产出" }],
+        artifact: null,
+      },
+      {
+        memberId: "mem-02",
+        title: "订酒店",
+        status: "已完成",
+        lines: [{ k: "产出摘要", v: "M 的产出" }],
+        artifact: null,
+      },
+    ]);
+
+    // Persisted into group.json and served by group.get.
+    expect(loadGroup(h.groupsDirs, groupId)!.review).toEqual(review);
+    const got: any = await h.handlers["shannon/group.get"]!({ groupId }, h.initiator);
+    expect(got.result.group.review).toEqual(review);
+    // group.list never carries it.
+    const list: any = await h.handlers["shannon/group.list"]!({}, h.initiator);
+    expect(list.result.groups[0].review).toBeUndefined();
+  });
+
+  it("archive(disbanded) honestly omits the review — response and store both", async () => {
+    const h = buildHarness({ turnScripts: [[textEvent("产出")]] });
+    const created = await createGroup(h, TWO_MEMBER_PLAN);
+    const groupId = created.result.group.groupId as string;
+    const arch: any = await h.handlers["shannon/group.archive"]!(
+      { groupId, reason: "disbanded" },
+      h.initiator,
+    );
+    expect(arch.result).toEqual({ ok: true });
+    expect(loadGroup(h.groupsDirs, groupId)!.review).toBeUndefined();
+    const got: any = await h.handlers["shannon/group.get"]!({ groupId }, h.initiator);
+    expect(got.result.group.review).toBeUndefined();
+  });
+});
+
+describe("the daily report tick (§S B6.2, R11)", () => {
+  /** Local wall-clock timestamp at HH:mm, `dayOffset` days from today — the
+   *  report contract is LOCAL timezone. */
+  function localAt(hours: number, minutes: number, dayOffset = 0): number {
+    const d = new Date();
+    d.setDate(d.getDate() + dayOffset);
+    d.setHours(hours, minutes, 0, 0);
+    return d.getTime();
+  }
+
+  function reportsOf(ctx: MethodContext): any[] {
+    return eventsOf(ctx).filter((e) => e.type === "group.report");
+  }
+
+  it("fires at the configured local HH:mm, enters the transcript, dedupes per day, and stands down after archive", async () => {
+    let current = localAt(10, 0);
+    const scheduled: Array<() => void> = [];
+    const h = buildHarness({
+      now: () => current,
+      reportScheduleNext: (fn) => {
+        scheduled.push(fn);
+        return () => {};
+      },
+    });
+    const created = await createGroup(h, TWO_MEMBER_PLAN, {
+      rules: { dailyReportAt: "23:00" },
+    });
+    const groupId = created.result.group.groupId as string;
+    // The create armed the tick (one eligible group now exists).
+    expect(scheduled).toHaveLength(1);
+
+    // A tick away from the report minute: nothing.
+    current = localAt(22, 59);
+    scheduled.shift()!();
+    expect(reportsOf(h.initiator)).toHaveLength(0);
+
+    // 23:00 → one report on the group thread, broadcast to BOTH devices.
+    current = localAt(23, 0);
+    scheduled.shift()!();
+    const reports = reportsOf(h.initiator);
+    expect(reports).toHaveLength(1);
+    expect(reports[0].session_id).toBe(groupId);
+    expect(reports[0].report).toMatchObject({
+      date: localDateKey(new Date(current)),
+      kind: "daily",
+      goalProgress: { done: 0, total: 2 },
+      todaySpentCny: 0,
+    });
+    // Honest text: the 0 spend is declared a lower bound, never silent.
+    expect(reports[0].report.text).toContain("目标进度：0/2");
+    expect(reports[0].report.text).toContain("如实下界");
+    expect(reportsOf(h.bystander)).toHaveLength(1);
+    // The thread keeps a replay copy.
+    expect(readTranscript(h.groupsDirs, groupId).some((e) => e.content.includes("群日报"))).toBe(true);
+
+    // The re-armed tick (same day, any minute) never duplicates the report.
+    current = localAt(23, 1);
+    scheduled.shift()!();
+    expect(reportsOf(h.initiator)).toHaveLength(1);
+
+    // Next day 23:00 → the day's report fires again.
+    current = localAt(23, 0, 1);
+    scheduled.shift()!();
+    expect(reportsOf(h.initiator)).toHaveLength(2);
+
+    // Archive the group → the chain stands down (no further reports, and the
+    // tick found nothing eligible so it did NOT re-arm itself).
+    await h.handlers["shannon/group.archive"]!({ groupId, reason: "completed" }, h.initiator);
+    current = localAt(23, 0, 2);
+    scheduled.shift()!();
+    expect(reportsOf(h.initiator)).toHaveLength(2);
+    expect(scheduled).toHaveLength(0);
+  });
+
+  it("stops with the host (bundle.stop clears the chain) and never arms without an eligible group", async () => {
+    const scheduled: Array<() => void> = [];
+    const h = buildHarness({
+      reportScheduleNext: (fn) => {
+        scheduled.push(fn);
+        return () => {};
+      },
+    });
+    // No group exists → construction armed nothing.
+    expect(scheduled).toHaveLength(0);
+    h.facet.stop();
+    const created = await createGroup(h, TWO_MEMBER_PLAN, {
+      rules: { dailyReportAt: "08:30" },
+    });
+    expect(created.kind).toBe("result");
+    // A stopped timer stays stopped even when a group becomes eligible.
+    expect(scheduled).toHaveLength(0);
+  });
+});
+
+describe("the crew planning query (§S B6.2, 提案开放问题 3 收尾)", () => {
+  it("plans the crew from one engine query; the prompt carries no phone-visible session key", async () => {
+    const h = buildHarness({
+      turnScripts: [
+        [
+          textEvent(
+            '好的：[{"slot":"flights","label":"A","title":"订机票"},{"slot":"hotels","label":"M","title":"订酒店"}]',
+          ),
+        ],
+      ],
+    });
+    const res = await createGroup(h, undefined);
+    expect(res.kind).toBe("result");
+    expect(res.result.group.members).toHaveLength(2);
+    expect(res.result.group.members[0]).toMatchObject({
+      slot: "flights",
+      label: "A",
+      title: "订机票",
+      source: "ephemeral",
+      agentId: null,
+    });
+    // Exactly one planning client was built and its prompt is the goal + the
+    // JSON-array ask — never the device session id or a group key.
+    expect(h.clients).toHaveLength(1);
+    const prompt = (h.clients[0]!.runQuery as any).mock.calls[0][0] as string;
+    expect(prompt).toContain("东京行程筹备");
+    expect(prompt).toContain("推荐 2-4 人分工阵容");
+    expect(prompt).not.toContain("dev-1");
+    expect(prompt).not.toContain("grp-");
+    expect(prompt).not.toContain("sess-");
+  });
+
+  it("falls back to the generic template on unusable output, engine failure, or timeout (诚实降级)", async () => {
+    // Unparseable text → template.
+    const garbage = buildHarness({ turnScripts: [[textEvent("我觉得三个人不错")]] });
+    const g = await createGroup(garbage, undefined);
+    expect(g.result.group.members).toHaveLength(3);
+    expect(g.result.group.members.map((m: any) => m.slot)).toEqual(["plan", "do", "verify"]);
+
+    // Engine-side failure frame → template.
+    const failed = buildHarness({
+      turnScripts: [[{ type: "failed", error: "boom" } as EngineEvent]],
+    });
+    const f = await createGroup(failed, undefined);
+    expect(f.result.group.members).toHaveLength(3);
+
+    // A hung engine burns the budget, then degrades — create never wedges.
+    const hungDirs = [mkdtempSync(join(tmpdir(), "shannon-groups-test-"))];
+    const hungHub = new MobileDispatchHub({ logger });
+    const hungFacet = createGroupHandlers({
+      hub: hungHub,
+      logger,
+      now: () => 1_770_000_000_000,
+      groupsDirs: hungDirs,
+      engineWsUrl: "ws://engine:33420/api/ws",
+      engineHttpBaseUrl: "http://engine:33420",
+      planningTimeoutMs: 25,
+      engineClientFactory: () => hangingEngineClient(),
+    });
+    const hung: any = await hungFacet.handlers["shannon/group.create"]!(
+      { goal: "x" },
+      fakeCtx("dev-1"),
+    );
+    expect(hung.kind).toBe("result");
+    expect(hung.result.group.members).toHaveLength(3);
+    hungFacet.stop();
+  });
+
+  it("roster path never plans — omitted members still fail validation with the agentId error", async () => {
+    const h = buildHarness();
+    const res: any = await createGroup(h, undefined, { path: "roster" });
+    expect(res.kind).toBe("error");
+    expect(res.message).toContain("agentId");
+    expect(h.clients).toHaveLength(0);
   });
 });
 
