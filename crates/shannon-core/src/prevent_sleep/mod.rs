@@ -143,17 +143,23 @@ mod tests {
     // Mutex to serialize tests that share the global atomic state
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+    /// Poison-tolerant: one panicking test must not cascade PoisonErrors
+    /// into every sibling (the guard has no cross-call invariant to break).
     fn lock() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Shared serialization point for the platform smoke tests (the
-    /// `macos` / `windows` test modules): their acquire/release calls run
-    /// this module's platform transitions, so under plain `cargo test`
-    /// (one process, many threads) they must not interleave with these
-    /// refcount assertions. Gated to the platforms that have a smoke test
-    /// so it never becomes dead code on Linux.
-    #[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+    /// THE serialization point for every test that touches the module's
+    /// global statics (`PREVENT_SLEEP_REF_COUNT`, the platform backends'
+    /// stored child/override state) — the `macos`/`windows` smoke modules
+    /// AND the `linux` backend tests. Two per-module locks do NOT compose:
+    /// the linux spawn tests reset the refcount while these refcount
+    /// assertions run, and the interleaving is exactly the flake that
+    /// motivated this fix (same disease as the declared_models registry).
+    #[cfg(test)]
     pub(super) fn shared_test_lock() -> std::sync::MutexGuard<'static, ()> {
         lock()
     }
