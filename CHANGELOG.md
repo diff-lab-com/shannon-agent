@@ -23,6 +23,11 @@ Waves queued for the next release, newest first:
 
 - **`secret-guard` defaults to `redact` (was `audit`)**: with no `$SHANNON_SECRET_GUARD` and no `[secret_guard] mode` configured, secret-shaped content in outbound requests is now replaced with deterministic surrogates before it reaches the provider (restored locally for tool execution and display; byte-stable, so prompt caching is unaffected). Opt out with `SHANNON_SECRET_GUARD=audit` (observe-only), `SHANNON_SECRET_GUARD=off`, or `[secret_guard] mode` in config — env beats config, and an explicit `off` always wins. A one-time notice after the first hit explains what happened and names these switches.
 
+### 缓期批 3（2026-10-10）
+
+- **开机自启（opt-in）**：新 `launch_on_login` 配置（默认关）+ `tauri-plugin-autostart 2.5.1`（锁版保 Rust 1.88 MSRV，Cargo.lock 纯增量）。写入语义：**OS 注册先行，成功才持久化**——配置永远不虚报 OS 拒绝过的注册，失败即拒绝并回弹 UI；读取以 OS 为准（`get_launch_on_login`，能反映系统设置侧的改动），配置字段仅是记忆意图。设置 → 通用 → 启动卡第三行开关。
+- **执行模式收敛（缓期 #11）**：profile→approval_mode 非单射（strict/balanced 同映 ask），真合并必失信息——按既定方案收敛而非合并：**激活预设不再静默覆写 approval_mode**（`activate_permission_profile` 只改 `active_permission_profile`，引擎在 send 时另行应用配置的 approval_mode，下游零依赖已验证）；composer 退役"ExecutionModeSwitcher"（其本体是预设激活器，与 composer 真正持有的 approval-mode pill 职责混淆）；预设以「**规则预设**」名义落位 设置 → 权限与安全，带诚实定义行（切换预设绝不动执行模式）；词表收口 `approvalModes.ts`（`PERMISSION_PRESETS` 单源），连带修正 Models 页已失真的交叉引用文案。model-mode e2e 重写为驱动设置页预设卡并断言 approval_mode 恒定。
+
 ### 发版工程（2026-10-09，v0.13.0 tag 首跑暴露）
 
 发版流水线首跑暴露的三类「只有发版才编译/运行得到」的缺陷，全部修复：
