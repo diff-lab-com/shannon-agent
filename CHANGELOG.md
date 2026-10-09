@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 跨仓 mobile 双批 · tool-result 产物卡 §R wire 面 + 群编排 §S B6.0 起步（2026-10-09）
 - 发版工程 · v0.13.0 tag 首跑暴露的三平台阻断修复（2026-10-09）
 - 缓期批 2 · 使命实体（config 键版）+ 全量会话导出 + 扩展安全徽章诚实化（2026-10-09）
 - 缓期批 1 · secret-guard unset 默认收口（R-0）+ 启动行为双开关 + 上下文峰值 + 看板金额（2026-10-09）
@@ -29,6 +30,15 @@ Waves queued for the next release, newest first:
 - **Linux 桌面**：release.yml 缺 `libgbm-dev libdrm-dev libpipewire-0.3-dev`（ci.yml 有、release.yml 漏）——`libspa-sys` pkg-config 失败。
 - **macOS 桌面（编译错）**：`prevent_sleep::systemd_inhibit_available` 仅在 linux cfg 下导出，而 `commands_surface.rs` 用运行时宏 `cfg!(target_os = "linux")` 门控调用——代码仍会在 macOS 编译（E0425）。修法：模块内补 `#[cfg(not(target_os = "linux"))]` 恒 false 惰性桩（与模块既有 inert-fallback 哲学一致）。同类潜伏问题一并清出：`sandbox::detect_sandbox_provider` 在 Windows 上存在不可达代码（`-D warnings` 下致命），拆为 cfg 门控的平台桩。
 - **Windows 桌面（UI 构建）**：`contrast.mjs` 的 `chipCompositesInUse` 用平台原生分隔符切片路径、与 `/` 风格跳过名单比对——Windows 上跳过名单静默失效，`SidebarSessions.tsx` 被误扫、激活休眠的 `color-warning/15` 复合对，暗色主题 AA 审计失败（solarized 2.99:1 等）。修法：`rel` 归一化 `.split(sep).join('/')`（本地 win32 模拟逐字节复现审计失败、修复后与 Linux 基线一致；4.5:1 契约与主题值零改动）。
+
+### 跨仓 mobile 双批（2026-10-09）
+
+mobile 仓两份跨仓提案评审落地（裁决全文 `docs/reviews/2026-10-09-mobile-proposals-rulings.md`；定稿契约已回写 mobile 仓 spec 新增 §R/§S）：
+
+- **§R tool-result 产物卡 wire 面（分支 `feat/tool-result-wire`）**：引擎 WS 面恢复透传 `tool_use_id/is_error/meta/ts`（additive，0.8.0 不 bump；live 面 v1 无 `duration_ms`——引擎 `QueryEvent` 不携带，不合成，时长仅历史 artifacts 从 L0 取真值）；§K3 Ruling 修订——任务流经 `hub.pushTaskToolFrame` 增发 tool 帧（原「无 tool 帧」裁决系无消费方时代的一刀切）；会话历史 `transcript_messages` 折叠 turn 级 artifacts（挂靠最终 assistant 文本消息，无文本 turn 落 `content:""` 独立条目保产物进 replay 环；`title/summary` 预留恒不发；wire 无截断上限，手机自限）。gateway `mapEngineEvent`/`session.history` 逐字透传，缺键/错型逐字段降级。
+- **§S 群编排 B6.0 起步（分支 `feat/group-orchestration-b6`）**：新方法面 `shannon/group.list|create|message|archive`（旧 gateway METHOD_NOT_FOUND 即能力缺席；schema 枚举同步）；群注册表与转录为宿主侧文件（`~/.shannon/groups/<groupId>/`，裁决 2），`session.history` 对 `grp-*` 键截获应答（§J2 形状+分页，未知键回落引擎）；成员 turn v1 = §K 管线 + B0 归属（一次性 UUID 引擎会话，编排器重键 `session_id=groupId`，流式/tool 帧/`task.message` 终态沿 §K3，广播全部在线设备）；确定性交接链（计划序 handoff 卡 + R5 红线一次性 `handoff-first` 标志；失败即止 member-failed 卡；全员完成 group-completed）；审批 `group` 归因键最小面（`approval.request`/`approval.list`/`snapshot` 条目增 optional `group{groupId,member,ruleTrigger?}`，经既有 hub 审批往返，decide 签名管道零改动；`ruleTrigger` v1 仅产 `handoff-first`，payments/pool 触发无生产者不造）。锁定校验：`paymentsAskFirst:false` / roster 未知 `agentId`（§K1 不静默转投）/ Σ份额>池 一律 INVALID_PARAMS。TTL 裁决钉定（实施随 B6.0-4）：`quoteWindow` 走引擎侧 per-request `approval_ttl_ms`（query 帧可选键，缺省 300s 不变），否决窗口缩水路线。
+- **测试**：shannon-api-protocol wire 序列化矩阵 + transcript 折叠三态；gateway vitest 691 全绿（新增 tool 帧流/历史 artifacts 透传/群编排 11 例）。`declared_models` 3 例失败为存量（基线 `e67596a4c` 同样失败，环境相关）。
+
 
 ### 缓期批 2（2026-10-09）
 
