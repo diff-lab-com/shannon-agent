@@ -79,7 +79,7 @@ interface Harness {
 function buildHarness(opts: {
   /** One script PER member turn (each turn builds its own engine client). */
   turnScripts?: EngineEvent[][];
-  agentRoster?: string[];
+  agentRoster?: string;
   fetchImpl?: typeof fetch;
 } = {}): Harness {
   const groupsDirs = [mkdtempSync(join(tmpdir(), "shannon-groups-test-"))];
@@ -94,7 +94,7 @@ function buildHarness(opts: {
     logger,
     now: () => (tick += 1000),
     groupsDirs,
-    agentRosterDirs: opts.agentRoster ? [opts.agentRoster] : [[]],
+    agentRosterDirs: opts.agentRoster ? [opts.agentRoster] : [],
     engineWsUrl: "ws://engine:33420/api/ws",
     engineHttpBaseUrl: "http://engine:33420",
     engineClientFactory: () => {

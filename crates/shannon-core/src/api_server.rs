@@ -1390,17 +1390,16 @@ fn transcript_messages(events: &[SessionEvent]) -> Vec<TranscriptMessage> {
         .iter()
         .map(|event| (event.seq, event.ts_ns))
         .collect();
-    let seq_turn: HashMap<u64, u64> = events
-        .iter()
-        .map(|event| (event.seq, event.turn))
-        .collect();
+    let seq_turn: HashMap<u64, u64> = events.iter().map(|event| (event.seq, event.turn)).collect();
     // Turn → tool-result artifacts, in log order (L0 is the authoritative
     // source: `duration_ms`/`meta` live here, not on the live WS face).
     let mut artifacts_by_turn: HashMap<u64, Vec<TranscriptArtifact>> = HashMap::new();
     for event in events {
         if let SessionEventBody::ToolResult(payload) = &event.body {
-            artifacts_by_turn.entry(event.turn).or_default().push(
-                TranscriptArtifact {
+            artifacts_by_turn
+                .entry(event.turn)
+                .or_default()
+                .push(TranscriptArtifact {
                     kind: "tool_result".to_string(),
                     tool: payload.tool_name.clone(),
                     // title/summary are reserved (never engine-derived in v1 —
@@ -1417,8 +1416,7 @@ fn transcript_messages(events: &[SessionEvent]) -> Vec<TranscriptMessage> {
                     } else {
                         Some(payload.meta.clone())
                     },
-                },
-            );
+                });
         }
     }
     let mut out: Vec<TranscriptMessage> = Vec::with_capacity(proj.messages.len());
@@ -1445,9 +1443,9 @@ fn transcript_messages(events: &[SessionEvent]) -> Vec<TranscriptMessage> {
                     }),
                 }
             }
-            fold_artifacts = Vec::new();
             fold_host = None;
             fold_turn = turn;
+            // `unwrap_or_default` replaces the vec wholesale — no stale reset.
             fold_artifacts = turn
                 .and_then(|t| artifacts_by_turn.remove(&t))
                 .unwrap_or_default();
