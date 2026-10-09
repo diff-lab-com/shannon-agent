@@ -227,6 +227,13 @@ export class EngineWsClient {
       sessionId?: string | null;
       /** B4: multimodal attachments (engine validates MIME/size). */
       attachments?: MessageAttachment[];
+      /**
+       * §S B6.0-4: per-query approval window override, ms — rides the frame
+       * as `approval_ttl_ms`. The engine clamps it at 24h and keeps its
+       * 300s resolver default when omitted; today nothing in the gateway
+       * sets it (no quoteWindow producer — the mechanism lands first).
+       */
+      approvalTtlMs?: number | null;
     } = {},
   ): AsyncGenerator<EngineEvent> {
     const socket = this.socket;
@@ -247,6 +254,9 @@ export class EngineWsClient {
       ...(opts.attachments && opts.attachments.length > 0
         ? { attachments: opts.attachments }
         : {}),
+      // §S B6.0-4: omitted unless the turn carries a window override — the
+      // generated type marks the key optional, so legacy engines never see it.
+      ...(opts.approvalTtlMs != null ? { approval_ttl_ms: opts.approvalTtlMs } : {}),
     };
 
     const queue = new PushQueue<EngineEvent>();

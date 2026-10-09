@@ -1030,6 +1030,11 @@ mod tests {
     #[test]
     fn build_client_from_resolved_registers_declared_models() {
         use shannon_types::provider_config::ModelSpec;
+        // Declared-models test lock: `build_client_from_resolved`
+        // unconditionally (re)registers the process-global registry, so
+        // every test that builds a client must serialize against the other
+        // registry users under plain `cargo test`.
+        let _guard = crate::declared_models::test_support::registry_guard();
         let mut profile = anthropic_profile("K");
         profile.models.push(ModelSpec {
             id: "shannon-binding-test-model".to_string(),
@@ -1068,6 +1073,10 @@ mod tests {
     #[test]
     fn build_client_from_resolved_clamps_max_tokens_to_declared_max_output() {
         use shannon_types::provider_config::ModelSpec;
+        // Declared-models test lock (see
+        // build_client_from_resolved_registers_declared_models): client
+        // construction rewrites the process-global registry.
+        let _guard = crate::declared_models::test_support::registry_guard();
 
         let declared = |max_output: Option<u32>| {
             let mut profile = anthropic_profile("K");
@@ -1126,6 +1135,10 @@ mod tests {
     fn build_client_from_resolved_binds_declarations_to_the_provider() {
         use shannon_engine::api::LlmProvider;
         use shannon_types::provider_config::ModelSpec;
+        // Declared-models test lock (see
+        // build_client_from_resolved_registers_declared_models): client
+        // construction rewrites the process-global registry.
+        let _guard = crate::declared_models::test_support::registry_guard();
 
         let mut profile = anthropic_profile("K");
         profile.models.push(ModelSpec {
@@ -1328,6 +1341,11 @@ mod tests {
     /// exact `RetryConfig::default()` (failover stays opt-in).
     #[test]
     fn build_client_from_resolved_wires_failover_chain() {
+        // Declared-models test lock (see
+        // build_client_from_resolved_registers_declared_models): client
+        // construction rewrites the process-global registry even when the
+        // profile declares no models.
+        let _guard = crate::declared_models::test_support::registry_guard();
         let active =
             profile_with_fallbacks(anthropic_profile("K"), &["deepseek/deepseek-v4-flash"]);
         let ds = deepseek_profile();

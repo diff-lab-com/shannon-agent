@@ -5695,10 +5695,17 @@ mod vision_gate_tests {
         }
     }
 
-    /// Serializes the process-global declared-models registry across the
-    /// tests that register declarations (same pattern as
-    /// `declared_models::tests::with_registry`).
-    fn with_declarations<T>(specs: &[ModelSpec], f: impl FnOnce() -> T) -> T {
+    /// Register `specs` (provider-less) for the duration of `f`. The
+    /// `RegistryGuard` argument is the serialization seam: the
+    /// declared-models registry is process-global and plain `cargo test`
+    /// runs these tests on parallel threads, so callers must hold the
+    /// crate-wide test lock (acquired via
+    /// `crate::declared_models::test_support::registry_guard`).
+    fn with_declarations<T>(
+        _guard: &crate::declared_models::test_support::RegistryGuard,
+        specs: &[ModelSpec],
+        f: impl FnOnce() -> T,
+    ) -> T {
         crate::declared_models::clear();
         crate::declared_models::replace_from_specs(specs);
         let out = f();
@@ -5765,6 +5772,7 @@ mod vision_gate_tests {
 
     #[test]
     fn declared_capabilities_are_authoritative() {
+        let guard = crate::declared_models::test_support::registry_guard();
         let mut with_vision = ModelSpec {
             id: "shannon-gate-declared-seer".to_string(),
             display_name: None,
@@ -5778,7 +5786,7 @@ mod vision_gate_tests {
         without_vision.id = "shannon-gate-declared-blind".to_string();
         without_vision.capabilities = vec![ModelCapability::Coding];
 
-        with_declarations(&[with_vision.clone(), without_vision], || {
+        with_declarations(&guard, &[with_vision.clone(), without_vision], || {
             assert_eq!(
                 model_supports_vision("shannon-gate-declared-seer"),
                 Some(true),
@@ -5797,7 +5805,7 @@ mod vision_gate_tests {
 
         // A capability-LESS declaration defers to the catalog (none here).
         with_vision.capabilities = Vec::new();
-        with_declarations(&[with_vision], || {
+        with_declarations(&guard, &[with_vision], || {
             assert_eq!(
                 model_supports_vision("shannon-gate-declared-seer"),
                 None,

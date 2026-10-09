@@ -33,6 +33,7 @@ import { MobileDispatchHub } from "./mobile/hub.js";
 import { loadAgentRoster } from "./mobile/agentRoster.js";
 import { createMobileChannelAdapter } from "./mobile/channel.js";
 import { createTaskHandlers } from "./mobile/taskHandlers.js";
+import { createGroupHandlers, groupHistoryLookup } from "./mobile/groupHandlers.js";
 import { createMobileTaskTurnHandler } from "./mobile/taskTurnHandler.js";
 import {
   deriveRelayAuthTag,
@@ -89,6 +90,11 @@ export interface BootstrapOptions {
    */
   mobileEngineClientFactory?: MobileEngineClientFactory;
   mobileFetchImpl?: typeof fetch;
+  /**
+   * §S (B6.0): override the group store root (default `~/.shannon/groups`).
+   * Tests inject a tmpdir so a test boot never touches the host's groups.
+   */
+  groupStoreDirs?: string[];
   /**
    * Override the directory holding the direct-link E2E identity (default
    * `~/.shannon/mobile-direct-e2e/`). Tests inject a tmpdir so a test boot
@@ -502,6 +508,26 @@ async function startMobileServer(
   );
   const directLinkKeys = new Map<string, Buffer>(); // kid → K0, filled on sealed pairs
 
+  // §S B6.0/B6.2: the group orchestration facet — the `shannon/group.*`
+  // methods plus the daily-report tick, whose stop() hooks into the shutdown
+  // chain below (the timer only runs while an active group has
+  // `rules.dailyReportAt` configured).
+  const groupFacet = createGroupHandlers({
+    hub: dispatchHub,
+    logger,
+    groupsDirs: opts.groupStoreDirs,
+    engineWsUrl: config.engine.wsUrl,
+    engineHttpBaseUrl: config.engine.httpBaseUrl,
+    defaultModel: config.engine.model ?? null,
+    engineAuthToken,
+    fetchImpl: opts.mobileFetchImpl,
+    // The SAME per-session default the §K router lanes use (one
+    // EngineWsClient per turn; the group runner pins a fresh UUID session
+    // per turn via runQuery opts).
+    engineClientFactory: (sessionKey: string) =>
+      createEngineClient(config, sessionKey, engineAuthToken),
+  });
+
   const handlers = createMobileHandlers({
     engine: {
       engineWsUrl: config.engine.wsUrl,
@@ -510,6 +536,9 @@ async function startMobileServer(
       version: GATEWAY_VERSION,
       logger,
       engineClientFactory: opts.mobileEngineClientFactory,
+      // §S B6.0: grp-* history keys answer from the host-side group store
+      // before the engine is consulted (ruling: groups are host entities).
+      groupHistoryLookup: groupHistoryLookup(opts.groupStoreDirs),
       fetchImpl: opts.mobileFetchImpl,
       engineAuthToken,
       approvalRegistry: approvals,
@@ -561,6 +590,13 @@ async function startMobileServer(
       // shannon/* RPC (engineBridge) and shannon/task.* alike.
       isDeviceTrusted: (deviceId: string) => registry.has(deviceId),
     }),
+    // §S B6.0 (cross-repo spec): the group orchestration face — list/get/
+    // create/message/archive + the deterministic member-turn orchestrator.
+    // Member turns run the §K posture (one-shot UUID engine sessions
+    // re-keyed onto the group thread); approvals ride the same hub
+    // round-trip as tasks. B6.2 adds the persisted review aggregate and the
+    // daily-report tick (stopped via groupFacet.stop() in the shutdown chain).
+    groups: groupFacet.handlers,
     access: pairingAccess.handlers,
   });
 
@@ -605,6 +641,7 @@ async function startMobileServer(
     mdns = advertiseMobileServer({ port: handle.port, version: GATEWAY_VERSION, logger });
   }
   const stopServerAndMdns = async (): Promise<void> => {
+    groupFacet.stop(); // B6.2: clear the daily-report tick chain
     await mdns?.stop().catch(() => {});
     await handle.stop();
   };

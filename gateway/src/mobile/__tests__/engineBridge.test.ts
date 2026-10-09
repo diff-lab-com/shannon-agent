@@ -165,6 +165,64 @@ describe("mapEngineEvent", () => {
     });
   });
 
+  it("§R: forwards the recovered tool_use_id/is_error/meta/ts keys when present", () => {
+    expect(
+      mapEngineEvent({
+        type: "tool_use",
+        name: "bash",
+        input: { cmd: "ls" },
+        tool_use_id: "toolu_1",
+        ts: 1767868800000,
+      }),
+    ).toEqual({
+      type: "task.progress",
+      tool: {
+        kind: "use",
+        name: "bash",
+        input: { cmd: "ls" },
+        tool_use_id: "toolu_1",
+        ts: 1767868800000,
+      },
+    });
+    expect(
+      mapEngineEvent({
+        type: "tool_result",
+        name: "bash",
+        output: "ok",
+        tool_use_id: "toolu_1",
+        is_error: true,
+        meta: { classification: "sandbox_denied" },
+        ts: 1767868800001,
+      }),
+    ).toEqual({
+      type: "task.progress",
+      tool: {
+        kind: "result",
+        name: "bash",
+        output: "ok",
+        tool_use_id: "toolu_1",
+        is_error: true,
+        meta: { classification: "sandbox_denied" },
+        ts: 1767868800001,
+      } as never,
+    });
+    // Unusable values degrade to absent keys — never invented.
+    expect(
+      mapEngineEvent({
+        type: "tool_result",
+        name: "bash",
+        output: "ok",
+        tool_use_id: "",
+        is_error: undefined,
+        meta: null,
+        ts: Number.NaN,
+      } as never),
+    ).toEqual({
+      type: "task.progress",
+      tool: { kind: "result", name: "bash", output: "ok" } as never,
+    });
+  });
+
   it("maps usage → task.progress(usage)", () => {
     expect(
       mapEngineEvent({ type: "usage", input_tokens: 10, output_tokens: 5, cost_usd: 0.01 }),
@@ -724,6 +782,61 @@ describe("shannon/session.list + session.history (§J)", () => {
         { role: "assistant", content: "no role but string content stays" },
       ],
     });
+    socket.close();
+  });
+
+  it("§R: history artifacts ride the host message verbatim; empty/absent stays absent", async () => {
+    const engine = new SessionFakeEngine(() => ({
+      type: "session.transcript",
+      session_id: "sess-1",
+      has_more: false,
+      messages: [
+        {
+          role: "assistant",
+          content: "all green.",
+          ts: "2026-10-08T12:00:00Z",
+          artifacts: [
+            {
+              kind: "tool_result",
+              tool: "Bash",
+              body: "test result: ok. 42 passed",
+              isError: false,
+              durationMs: 1234,
+              ts: "2026-10-08T11:59:58Z",
+              meta: { files_changed: ["a.rs"] },
+            },
+          ],
+        },
+        { role: "assistant", content: "", ts: "2026-10-08T12:01:00Z", artifacts: [] },
+        {
+          role: "assistant",
+          content: "",
+          ts: "2026-10-08T12:02:00Z",
+          artifacts: [{ kind: "tool_result", tool: "Bash", body: "deployed" }],
+        },
+      ],
+    }));
+    const { port } = await start(sessionHandlers(engine));
+    const socket = await connect(port);
+    const res = await rpc(socket, "shannon/session.history", { sessionId: "sess-1" });
+    const messages = res.result.messages as any[];
+    // Full artifact rides verbatim (camelCase keys untouched).
+    expect(messages[0].artifacts).toEqual([
+      {
+        kind: "tool_result",
+        tool: "Bash",
+        body: "test result: ok. 42 passed",
+        isError: false,
+        durationMs: 1234,
+        ts: "2026-10-08T11:59:58Z",
+        meta: { files_changed: ["a.rs"] },
+      },
+    ]);
+    // Empty artifact vec → key omitted (pre-§R byte shape).
+    expect(messages[1].artifacts).toBeUndefined();
+    // Standalone card-only host (content "") passes through with its cards.
+    expect(messages[2].content).toBe("");
+    expect(messages[2].artifacts).toEqual([{ kind: "tool_result", tool: "Bash", body: "deployed" }]);
     socket.close();
   });
 

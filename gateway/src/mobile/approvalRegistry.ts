@@ -50,6 +50,21 @@ export interface PendingApprovalRecord {
   /** Engine attribution when present; absent keys are omitted on the wire. */
   agent?: EngineAgentInfo | null;
   risk?: EngineRiskInfo | null;
+  /** §S (additive): group attribution; absent on plain approvals. `poolAfter`
+   *  rides B6.1 asks with a parseable amount (see ApprovalGroupInfo). */
+  group?: {
+    groupId: string;
+    member: { memberId: string; label: string; title: string; source: "ephemeral" | "roster" };
+    ruleTrigger?: "handoff-first" | "over-pool" | "over-share";
+    poolAfter?: { poolCny: number; remainingAfterCny: number };
+  } | null;
+  /**
+   * §S B6.0-4 (additive): entry-level expiry, epoch ms — when this ask's own
+   * window ends (the per-ask `deadlineMs` the hub computed at push time).
+   * Absent on legacy asks, which keep the registry-wide `maxAgeMs` retention
+   * (default 330s) unchanged.
+   */
+  expiresAtMs?: number;
 }
 
 export interface ApprovalRegistryOptions {
@@ -111,9 +126,14 @@ export class ApprovalRegistry {
   }
 
   private sweep(): void {
-    const cutoff = this.now() - this.maxAgeMs;
+    const now = this.now();
     for (const [id, rec] of this.entries) {
-      if (rec.ts < cutoff) this.entries.delete(id);
+      // §S B6.0-4: an entry with its own deadline dies at ITS window (the
+      // ask's per-ask TTL, aligned with the hub's parking timer) and the
+      // registry-wide retention does NOT additionally prune it earlier;
+      // legacy entries keep exactly the old `ts + maxAgeMs` retention.
+      const deadline = typeof rec.expiresAtMs === "number" ? rec.expiresAtMs : rec.ts + this.maxAgeMs;
+      if (deadline < now) this.entries.delete(id);
     }
   }
 }
@@ -171,6 +191,9 @@ export function approvalWireItem(rec: PendingApprovalRecord): MobileApprovalItem
   if (rec.agent?.id) item.agentId = rec.agent.id;
   if (rec.agent?.name) item.agentName = rec.agent.name;
   if (rec.risk) item.scope = [rec.risk.scope];
+  // §S: group attribution rides both the restore face (approval.list /
+  // snapshot) and the live event — plain approvals never carry the key.
+  if (rec.group) item.group = rec.group;
   const path = toolInputPath(rec.toolInput);
   if (path !== undefined) item.diffTitle = path;
   return item;
