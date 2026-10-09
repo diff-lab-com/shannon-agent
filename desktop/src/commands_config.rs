@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use tauri::Emitter;
 
 use crate::commands::AppState;
-use crate::config::{self, DesktopConfig, ProviderConnection, ProvidersFile};
+use crate::config::{self, DesktopConfig, MissionConfig, ProviderConnection, ProvidersFile};
 use crate::events;
 use crate::events::event_names;
 use crate::provider_read_snapshot::ProviderReadSnapshot;
@@ -538,6 +538,145 @@ where
     Ok(())
 }
 
+/// Largest mission-name length accepted by `configure('mission')`. Long
+/// enough for any honest title; short enough that a paste accident cannot
+/// turn the OPC mission card into a document.
+const MISSION_NAME_MAX_CHARS: usize = 200;
+
+/// Largest number of distinct linked task ids a mission may carry. The task
+/// board itself is the source of truth; a mission linking more than this is
+/// almost certainly a mis-serialized payload, so it is rejected (not
+/// truncated) — the caller must see the error, never a silent crop.
+const MISSION_TASK_IDS_MAX: usize = 200;
+
+/// Plausible epoch-millisecond upper bound for `MissionConfig::deadline_ts`:
+/// 2100-01-01T00:00:00Z. Anything above is a seconds/ms unit mix-up (or
+/// worse); anything ≤ 0 is not a timestamp at all. Deadlines in the past
+/// stay valid — an overdue mission is a real state, not an input error.
+const MISSION_DEADLINE_MAX_EPOCH_MS: i64 = 4_102_444_800_000;
+
+/// Validate a `configure('mission')` value into the [`MissionConfig`] to
+/// persist. Returns `Ok(None)` when the value clears the mission (empty or
+/// whitespace-only — same trim-to-clear convention as the network arms).
+///
+/// Validation is honest per the project-wide contract: the entity is stored
+/// exactly as validated (name trimmed, `task_ids` trimmed + deduplicated in
+/// first-occurrence order) or the whole update is rejected — no silent
+/// clamping, no invented defaults:
+///
+/// - `value` must be a JSON object matching [`MissionConfig`];
+/// - `name` non-empty after trim, capped at [`MISSION_NAME_MAX_CHARS`];
+/// - `budget_usd`, when present, must be finite and `>= 0`;
+/// - `deadline_ts`, when present, must sit in the plausible epoch-ms range
+///   `(0, 2100-01-01Z]`;
+/// - `task_ids`, after trim, must not contain empty entries, must not
+///   exceed [`MISSION_TASK_IDS_MAX`] distinct ids.
+pub(crate) fn parse_mission_value(value: &str) -> Result<Option<MissionConfig>, String> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    let raw: MissionConfig = serde_json::from_str(value)
+        .map_err(|e| format!("Invalid mission: value must be a mission JSON object ({e})"))?;
+
+    let name = raw.name.trim();
+    if name.is_empty() {
+        return Err("Invalid mission: name must not be empty".to_string());
+    }
+    if name.chars().count() > MISSION_NAME_MAX_CHARS {
+        return Err(format!(
+            "Invalid mission: name must be at most {MISSION_NAME_MAX_CHARS} characters"
+        ));
+    }
+    if let Some(budget) = raw.budget_usd {
+        if !budget.is_finite() {
+            return Err("Invalid mission: budget_usd must be a finite number".to_string());
+        }
+        if budget < 0.0 {
+            return Err("Invalid mission: budget_usd must not be negative".to_string());
+        }
+    }
+    if let Some(deadline) = raw.deadline_ts {
+        if deadline <= 0 || deadline > MISSION_DEADLINE_MAX_EPOCH_MS {
+            return Err(format!(
+                "Invalid mission: deadline_ts must be a plausible epoch-millisecond timestamp (0, {MISSION_DEADLINE_MAX_EPOCH_MS}]"
+            ));
+        }
+    }
+    let mut task_ids: Vec<String> = Vec::new();
+    for id in &raw.task_ids {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err("Invalid mission: task_ids must not contain empty entries".to_string());
+        }
+        if !task_ids.iter().any(|seen| seen == id) {
+            task_ids.push(id.to_string());
+        }
+    }
+    if task_ids.len() > MISSION_TASK_IDS_MAX {
+        return Err(format!(
+            "Invalid mission: at most {MISSION_TASK_IDS_MAX} distinct task_ids are supported"
+        ));
+    }
+
+    Ok(Some(MissionConfig {
+        name: name.to_string(),
+        budget_usd: raw.budget_usd,
+        deadline_ts: raw.deadline_ts,
+        task_ids,
+    }))
+}
+
+/// Body of the mission arm of [`configure`] (缓期批 2, single-mission v1),
+/// with the disk persist step injected — same testability shape as
+/// [`apply_boolean_toggle_arm`]: tests capture the snapshot instead of
+/// writing the real `~/.shannon/desktop/config.json`. Validates via
+/// [`parse_mission_value`], applies to the in-memory config (what
+/// [`get_config`] reads back), persists, then emits `CONFIG_UPDATED` with
+/// the canonical JSON of the stored mission (`""` when cleared).
+async fn apply_mission_arm<R, P>(
+    state: &AppState,
+    app_handle: &tauri::AppHandle<R>,
+    update: &ConfigUpdate,
+    persist: P,
+) -> Result<(), String>
+where
+    R: tauri::Runtime,
+    P: FnOnce(DesktopConfig) -> Result<(), String>,
+{
+    let Some(mission) = parse_mission_value(&update.value)? else {
+        let mut desktop_cfg = state.desktop_config.write().await;
+        desktop_cfg.mission = None;
+        drop(desktop_cfg);
+        persist(state.desktop_config.read().await.clone())?;
+        let _ = app_handle.emit(
+            event_names::CONFIG_UPDATED,
+            events::ConfigUpdatedPayload {
+                key: update.key.clone(),
+                value: String::new(),
+            },
+        );
+        return Ok(());
+    };
+
+    let stored_json =
+        serde_json::to_string(&mission).map_err(|e| format!("serialize mission: {e}"))?;
+    {
+        let mut desktop_cfg = state.desktop_config.write().await;
+        desktop_cfg.mission = Some(mission);
+    }
+    persist(state.desktop_config.read().await.clone())?;
+
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: update.key.clone(),
+            value: stored_json,
+        },
+    );
+
+    Ok(())
+}
+
 /// B1-8 [R1-4] (review decision 1): normalize a `configure('model')` value
 /// to the canonical catalog id for the given provider.
 ///
@@ -942,6 +1081,19 @@ pub async fn configure(
             );
 
             Ok(())
+        }
+        // 使命实体 (缓期批 2, single-mission v1): the mission config key.
+        // Same family as `strategic_focus` above, but the payload is a JSON
+        // object (validated by [`parse_mission_value`], applied by
+        // [`apply_mission_arm`]): an empty/whitespace value clears the
+        // mission; anything else must be a full `MissionConfig`. Emits the
+        // same `config-updated` event, carrying the canonical JSON of the
+        // stored mission (or `""` when cleared).
+        "mission" => {
+            apply_mission_arm(state.inner(), &app_handle, &update, |cfg| {
+                config::save_config(&cfg)
+            })
+            .await
         }
         "performance_strategy" => {
             let strategy = update.value.clone();
@@ -4454,5 +4606,214 @@ mod tests {
                 "quick-fill chip `{chip}`: model `{model}` must exist in MODEL_CATALOG (it is what new users see prefilled)"
             );
         }
+    }
+    // === 使命实体 (缓期批 2): the mission config key ===
+
+    fn mission_json(
+        name: &str,
+        budget: Option<f64>,
+        deadline: Option<i64>,
+        ids: &[&str],
+    ) -> String {
+        let m = MissionConfig {
+            name: name.to_string(),
+            budget_usd: budget,
+            deadline_ts: deadline,
+            task_ids: ids.iter().map(|s| s.to_string()).collect(),
+        };
+        serde_json::to_string(&m).unwrap()
+    }
+
+    #[test]
+    fn parse_mission_value_happy_path_normalizes() {
+        // Full payload round-trips through validation with the name trimmed
+        // and duplicate task ids deduplicated (first occurrence wins).
+        let parsed = parse_mission_value(&mission_json(
+            "  Ship v1  ",
+            Some(42.5),
+            Some(1_800_000_000_000),
+            &["b", "a", "b", " a "],
+        ))
+        .unwrap()
+        .expect("mission present");
+        assert_eq!(parsed.name, "Ship v1");
+        assert_eq!(parsed.budget_usd, Some(42.5));
+        assert_eq!(parsed.deadline_ts, Some(1_800_000_000_000));
+        assert_eq!(parsed.task_ids, vec!["b".to_string(), "a".to_string()]);
+
+        // Optionals stay absent when the payload omits them.
+        let bare = serde_json::from_str::<MissionConfig>(r#"{"name":"x","task_ids":[]}"#).unwrap();
+        assert_eq!(bare.budget_usd, None);
+        assert_eq!(bare.deadline_ts, None);
+
+        // Zero is a valid budget; a past deadline is a valid (overdue)
+        // deadline — neither is an input error.
+        let ok = parse_mission_value(&mission_json("m", Some(0.0), Some(1), &[]))
+            .unwrap()
+            .expect("present");
+        assert_eq!(ok.budget_usd, Some(0.0));
+        assert_eq!(ok.deadline_ts, Some(1));
+    }
+
+    #[test]
+    fn parse_mission_value_empty_string_clears() {
+        assert_eq!(parse_mission_value("").unwrap(), None);
+        assert_eq!(parse_mission_value("   ").unwrap(), None);
+    }
+
+    #[test]
+    fn parse_mission_value_rejects_each_bad_input() {
+        // Non-JSON / wrong shape.
+        assert!(parse_mission_value("not json").is_err());
+        assert!(parse_mission_value("[1,2]").is_err());
+        // Name rules.
+        assert!(parse_mission_value(&mission_json("", None, None, &[])).is_err());
+        assert!(parse_mission_value(&mission_json("   ", None, None, &[])).is_err());
+        assert!(parse_mission_value(&mission_json(&"x".repeat(201), None, None, &[])).is_err());
+        // Budget rules.
+        assert!(parse_mission_value(&mission_json("m", Some(-0.01), None, &[])).is_err());
+        assert!(parse_mission_value(&mission_json("m", Some(-100.0), None, &[])).is_err());
+        // Deadline rules: zero, negative, and past the plausible epoch-ms
+        // ceiling (a seconds-vs-ms mix-up) are all rejected.
+        assert!(parse_mission_value(&mission_json("m", None, Some(0), &[])).is_err());
+        assert!(parse_mission_value(&mission_json("m", None, Some(-1), &[])).is_err());
+        assert!(
+            parse_mission_value(&mission_json("m", None, Some(4_102_444_800_001), &[])).is_err()
+        );
+        // task_ids rules.
+        assert!(parse_mission_value(&mission_json("m", None, None, &["a", " "])).is_err());
+        let too_many: Vec<String> = (0..201).map(|i| i.to_string()).collect();
+        let payload = MissionConfig {
+            name: "m".into(),
+            budget_usd: None,
+            deadline_ts: None,
+            task_ids: too_many,
+        };
+        assert!(parse_mission_value(&serde_json::to_string(&payload).unwrap()).is_err());
+        // Rejections never return a half-normalized entity.
+        assert!(
+            parse_mission_value(&mission_json("m", Some(-1.0), None, &[]))
+                .unwrap_err()
+                .contains("budget_usd")
+        );
+    }
+
+    #[tokio::test]
+    async fn configure_mission_round_trips_into_get_config() {
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::new()), "AppState managed once");
+        let tauri_state = app.state::<AppState>();
+
+        let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());
+        let persist = |cfg: DesktopConfig| {
+            persisted.lock().unwrap().push(cfg);
+            Ok(())
+        };
+
+        // Happy path: the payload the arm stores is exactly what get_config
+        // reads back, and each write persisted exactly one snapshot.
+        let value = mission_json("Ship it", Some(12.5), Some(1_800_000_000_000), &["1", "2"]);
+        apply_mission_arm(
+            tauri_state.inner(),
+            app.handle(),
+            &ConfigUpdate {
+                key: "mission".to_string(),
+                value: value.clone(),
+            },
+            persist,
+        )
+        .await
+        .expect("configure mission");
+        let shown = get_config(app.state::<AppState>()).await.unwrap();
+        let mission = shown.mission.clone().expect("mission configured");
+        assert_eq!(mission.name, "Ship it");
+        assert_eq!(mission.budget_usd, Some(12.5));
+        assert_eq!(mission.deadline_ts, Some(1_800_000_000_000));
+        assert_eq!(mission.task_ids, vec!["1".to_string(), "2".to_string()]);
+        assert_eq!(persisted.lock().unwrap().len(), 1);
+        assert_eq!(
+            persisted.lock().unwrap()[0].mission,
+            shown.mission,
+            "persisted snapshot carries the mission"
+        );
+
+        // Trim-to-clear: an empty value removes the mission again.
+        apply_mission_arm(
+            tauri_state.inner(),
+            app.handle(),
+            &ConfigUpdate {
+                key: "mission".to_string(),
+                value: "   ".to_string(),
+            },
+            persist,
+        )
+        .await
+        .expect("clear mission");
+        let shown = get_config(app.state::<AppState>()).await.unwrap();
+        assert!(shown.mission.is_none(), "cleared mission stays cleared");
+        assert_eq!(persisted.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn configure_mission_rejects_invalid_and_persists_nothing() {
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::new()), "AppState managed once");
+        let tauri_state = app.state::<AppState>();
+
+        let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());
+        let persist = |cfg: DesktopConfig| {
+            persisted.lock().unwrap().push(cfg);
+            Ok(())
+        };
+
+        for bad in [
+            "not json".to_string(),
+            mission_json("", None, None, &[]),
+            mission_json("m", Some(-1.0), None, &[]),
+            mission_json("m", None, Some(-5), &[]),
+            mission_json("m", None, None, &["a", ""]),
+        ] {
+            let result = apply_mission_arm(
+                tauri_state.inner(),
+                app.handle(),
+                &ConfigUpdate {
+                    key: "mission".to_string(),
+                    value: bad,
+                },
+                persist,
+            )
+            .await;
+            assert!(result.is_err(), "bad payload must be rejected");
+        }
+        assert!(
+            persisted.lock().unwrap().is_empty(),
+            "rejected updates never persist"
+        );
+        // A previously configured mission survives a rejected update.
+        let value = mission_json("Keep me", None, None, &[]);
+        apply_mission_arm(
+            tauri_state.inner(),
+            app.handle(),
+            &ConfigUpdate {
+                key: "mission".to_string(),
+                value,
+            },
+            persist,
+        )
+        .await
+        .expect("configure mission");
+        let result = apply_mission_arm(
+            tauri_state.inner(),
+            app.handle(),
+            &ConfigUpdate {
+                key: "mission".to_string(),
+                value: mission_json("m", Some(-1.0), None, &[]),
+            },
+            persist,
+        )
+        .await;
+        assert!(result.is_err());
+        let shown = get_config(app.state::<AppState>()).await.unwrap();
+        assert_eq!(shown.mission.expect("mission survives").name, "Keep me");
     }
 }

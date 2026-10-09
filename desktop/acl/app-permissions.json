@@ -1748,6 +1748,15 @@
       }
     },
     {
+      "identifier": "allow-mission-progress",
+      "description": "Enables the mission_progress command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "mission_progress"
+        ]
+      }
+    },
+    {
       "identifier": "allow-new-session",
       "description": "Enables the new_session command without any pre-configured scope.",
       "commands": {
@@ -3096,6 +3105,7 @@
         "allow-list-provider-keys",
         "allow-list-provider-profiles",
         "allow-list-providers",
+        "allow-mission-progress",
         "allow-refresh-model-catalog",
         "allow-remove-provider-key",
         "allow-rename-provider-profile",
