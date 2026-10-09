@@ -4,7 +4,7 @@
 // Ratios: 4.5 = AA normal text, 3.0 = AA large text / UI components.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import ts from 'typescript'
 
 export function luminance(hex) {
@@ -203,7 +203,12 @@ export function chipCompositesInUse(srcDir) {
       const p = join(dir, name)
       if (statSync(p).isDirectory()) { walk(p); continue }
       if (!/\.(tsx?|css)$/.test(name)) continue
-      const rel = p.slice(srcDir.length + 1)
+      // path.sep is `\` on Windows — without this normalization the
+      // forward-slash skip entries never match, the skip silently no-ops,
+      // and dormant CHIP_COMPOSITES re-activate on Windows only (the
+      // v0.13.0 nsis job failed the AA audit there while Linux stayed
+      // green: `warning/15` lives only in the skipped SidebarSessions.tsx).
+      const rel = p.slice(srcDir.length + 1).split(sep).join('/')
       if (CHIP_PATTERN_SKIP_FILES.some(s => rel === s || rel.endsWith(s))) continue
       scan(readFileSync(p, 'utf8'))
     }

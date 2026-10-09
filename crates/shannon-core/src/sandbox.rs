@@ -1603,19 +1603,35 @@ impl SandboxExecutor {
 // Auto-detect Provider
 // ============================================================================
 
+/// The platform-mandated provider, or `None` to fall through to the generic
+/// detection below. Windows: the Job Object baseline is always present (no
+/// external binary). Checked before Docker, matching `detect_sandboxer` —
+/// the Docker command template is bash-based and cannot run on stock
+/// Windows anyway.
+///
+/// Split into a cfg-gated pair (same pattern as `prevent_sleep`'s inert
+/// fallbacks) because `WindowsJobSandbox` only exists on Windows targets: a
+/// runtime `cfg!` at the call site would break the linux/macos builds
+/// (E0425), and an inline `#[cfg]`-return block renders the rest of the
+/// factory unreachable on Windows (`unreachable_code` — fatal under
+/// `-D warnings`). The stub keeps the factory body cfg-free.
+#[cfg(target_os = "windows")]
+fn platform_mandated_provider() -> Option<Box<dyn SandboxProvider>> {
+    Some(Box::new(WindowsJobSandbox))
+}
+
+/// Off-Windows stub: never `Some`, so the factory always runs the generic
+/// detection — identical behavior to the previous `#[cfg]` block's absence.
+#[cfg(not(target_os = "windows"))]
+fn platform_mandated_provider() -> Option<Box<dyn SandboxProvider>> {
+    None
+}
+
 /// Detect the best available sandbox provider for the current platform.
 pub fn detect_sandbox_provider() -> Box<dyn SandboxProvider> {
-    // Windows: the Job Object baseline is always present (no external
-    // binary). Checked before Docker, matching `detect_sandboxer` — the
-    // Docker command template is bash-based and cannot run on stock
-    // Windows anyway. Compile-time gated: `WindowsJobSandbox` only exists
-    // on Windows targets, so a runtime `cfg!` here would break the
-    // linux/macos builds (E0425) — the exact class of defect the
-    // cross-platform CI gate exists for.
-    #[cfg(target_os = "windows")]
-    {
+    if let Some(provider) = platform_mandated_provider() {
         tracing::info!("Sandbox: using windows-job (kill-on-close lifecycle confinement)");
-        return Box::new(WindowsJobSandbox);
+        return provider;
     }
     if DockerSandbox::docker_available() {
         tracing::info!("Sandbox: using Docker");
