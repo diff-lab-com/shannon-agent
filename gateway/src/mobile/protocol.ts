@@ -56,6 +56,7 @@ export type ShannonMethod =
   | "shannon/push.register"
   | "shannon/usage.budget"
   | "shannon/group.list"
+  | "shannon/group.get"
   | "shannon/group.create"
   | "shannon/group.message"
   | "shannon/group.archive";
@@ -94,6 +95,7 @@ export const SHANNON_METHODS = [
   "shannon/push.register",
   "shannon/usage.budget",
   "shannon/group.list",
+  "shannon/group.get",
   "shannon/group.create",
   "shannon/group.message",
   "shannon/group.archive",
@@ -404,6 +406,35 @@ export type ShannonEvent =
     }
   | {
       /**
+       * §S (B6.2, additive): the host-composed group daily report (R11) —
+       * aggregated deterministically from the group store (transcript +
+       * group.json pool/member fields) at the group's configured local
+       * `rules.dailyReportAt`. `text` is the human summary; the structured
+       * keys are the render fallback when text is missing. Host offline at
+       * the report minute → the day's report is skipped (never backfilled);
+       * `todaySpentCny` stays an honest 0 — the per-day ledger face is not
+       * built yet (B6.1 supplies the pool CUMULATIVE, see
+       * `review.pool.spentCny`), never a fabricated number. Deliberately
+       * NOT in the §O3 wake whitelist — a daily report is non-interactive
+       * (no ring, notification-tier rendering only).
+       */
+      type: "group.report";
+      session_id: string;
+      report: {
+        /** Local-calendar day key, `YYYY-MM-DD`. */
+        date: string;
+        kind: "daily";
+        /** Host-aggregated human prose (never fabricated numbers). */
+        text: string;
+        goalProgress: { done: number; total: number };
+        /** Honest 0 — per-day ledger face not built; pool cumulative lives
+         *  in review.pool.spentCny (B6.1). */
+        todaySpentCny: number;
+        ts: string;
+      };
+    }
+  | {
+      /**
        * §K3: a dispatched task's terminal reply — the final complete text. The
        * `session_id` IS the task's own id (the phone's thread key), and its
        * presence makes this the task stream's closing event (the P2-1 IM
@@ -685,6 +716,73 @@ export interface GroupObject {
   members: GroupMemberInfo[];
   pool: { totalCny: number; spentCny: number; pendingCny: number; reserveCny: number };
   rules: GroupRulesInfo;
+  /**
+   * §S (B6.2, additive): the 16-screen review aggregate — present ONLY on
+   * archived/completed groups that were closed with
+   * `group.archive {reason: "completed"}` on a B6.2-capable gateway (it is
+   * computed once at archive time and persisted in group.json; it never
+   * appears on group.list/group.create). Groups archived before B6.2 — or
+   * disbanded — honestly omit the key.
+   */
+  review?: GroupReview;
+}
+
+// ── §S B6.2: the review aggregate (16 复盘面) + the daily report ────────────
+
+/** One human key-value row of a deliverable (rendered verbatim by the phone). */
+export interface GroupReviewLine {
+  k: string;
+  v: string;
+}
+
+/**
+ * One done member's deliverable row. v1 posture (宁缺勿造): `title` is the
+ * member's own 分工 title, `status` is the fixed 「已完成」, `lines` is a
+ * first-line summary of the member's last produced transcript entry (empty
+ * when none exists), and `artifact` is ALWAYS null — the R14 desktop deep
+ * link has no protocol yet (the phone renders a 「桌面深链 · 待协议」 note).
+ */
+export interface GroupReviewDeliverable {
+  memberId: string;
+  title: string;
+  status: string;
+  lines: GroupReviewLine[];
+  artifact: null;
+}
+
+/** One member's pool-spend row (16 「钱花在哪」) — spentCny > 0 members only. */
+export interface GroupReviewPoolMember {
+  memberId: string;
+  label: string;
+  title: string;
+  amountCny: number;
+}
+
+/**
+ * The deterministic, host-side review aggregate for a closed group (16).
+ * Every number is read from the group store's single sources (group.json
+ * member/pool fields + the transcript) — nothing is invented:
+ *  - `goals.done/total` = members whose status was "done" at archive time /
+ *    total members;
+ *  - `durationMinutes` = createdAt → last transcript entry ts (floored);
+ *  - `handoffCount` = handoff system-card entries in the transcript
+ *    (pre-B6.2 transcripts carry no marker → an honest 0 lower bound);
+ *  - `decisionCount` = member-approval 拍板 count — v1 has NO approval
+ *    attribution counting face, so this is HONESTLY 0 (never estimated);
+ *  - `pool` comes verbatim from group.json (B6.1's settle chain feeds
+ *    spentCny/perMember from the ledger).
+ */
+export interface GroupReview {
+  goals: { done: number; total: number };
+  durationMinutes: number;
+  handoffCount: number;
+  decisionCount: number;
+  pool: {
+    totalCny: number;
+    spentCny: number;
+    perMember: GroupReviewPoolMember[];
+  };
+  deliverables: GroupReviewDeliverable[];
 }
 
 export interface GroupCreateParams {
@@ -720,13 +818,33 @@ export interface GroupMessageResult {
   ts: string;
 }
 
+/**
+ * `shannon/group.get` (§S B6.2 收尾面) — one group entity by id. Unknown
+ * ids are INVALID_PARAMS (the §J2-for-groups honest miss), never an empty
+ * object. Archived/completed groups additionally carry `review` when one
+ * was persisted at archive time (see [GroupObject.review]).
+ */
+export interface GroupGetParams {
+  groupId: string;
+}
+
+export interface GroupGetResult {
+  group: GroupObject;
+}
+
 export interface GroupArchiveParams {
   groupId: string;
   reason: "completed" | "disbanded";
 }
 
+/**
+ * B6.2 (additive): `reason: "completed"` also aggregates and returns the
+ * 16-screen `review` (and persists it into group.json for `group.get`);
+ * `reason: "disbanded"` honestly omits it (可缺席).
+ */
 export interface GroupArchiveResult {
   ok: true;
+  review?: GroupReview;
 }
 
 export interface MobileApprovalItem {

@@ -67,6 +67,7 @@
         "shannon/trust.revoke",
         "shannon/usage.budget",
         "shannon/group.list",
+        "shannon/group.get",
         "shannon/group.create",
         "shannon/group.message",
         "shannon/group.archive"

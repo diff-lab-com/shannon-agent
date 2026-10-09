@@ -37,6 +37,8 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { GroupReview } from "./protocol.js";
+
 /** Group + member status vocabulary (the §S B6.0-2 response contract). */
 export type GroupStatus = "active" | "completed" | "archived";
 export type GroupMemberStatus =
@@ -101,9 +103,23 @@ export interface GroupRecord {
   rules: GroupRules;
   pool: GroupPool;
   members: GroupMember[];
+  /**
+   * B6.2 (additive, persisted once at `group.archive {reason:"completed"}`):
+   * the 16-screen review aggregate. Never served on group.list/group.create —
+   * only `group.get` (and the archive response) carry it on the wire. Groups
+   * archived before B6.2 (or disbanded) honestly have no review.
+   */
+  review?: GroupReview;
 }
 
-/** One transcript entry (the §J2 entry shape + group attribution keys). */
+/**
+ * One transcript entry (the §J2 entry shape + group attribution keys).
+ * `systemKind` is a HOST-LOCAL aggregation marker (never mapped onto the §J2
+ * wire — `groupHistoryLookup` serves role/content/ts only): it records which
+ * system card a line came from so the B6.2 review/report aggregates can count
+ * real events (e.g. `handoff`) instead of pattern-matching prose. Entries
+ * written before B6.2 carry no marker — aggregates honestly undercount them.
+ */
 export interface GroupTranscriptEntry {
   role: "user" | "assistant";
   content: string;
@@ -112,6 +128,8 @@ export interface GroupTranscriptEntry {
   kind?: "user" | "member" | "system";
   /** Member attribution for kind:"member" entries (avatar + title row). */
   member?: { memberId: string; label: string; title: string };
+  /** B6.2 (host-local): the emitting system card's kind, when kind:"system". */
+  systemKind?: string;
 }
 
 // ── §S B6.1: the pool ledger (amounts, entries, jsonl) ──────────────────────
