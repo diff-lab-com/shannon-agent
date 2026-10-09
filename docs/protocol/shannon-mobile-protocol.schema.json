@@ -276,7 +276,46 @@
           "type": "string"
         },
         "tool": {
-          "type": "object"
+          "type": "object",
+          "description": "§R (tool-result cards, 2026-10-09): live tool frame on task.progress. kind \"use\" carries input; kind \"result\" carries output. The §R additive keys (tool_use_id/is_error/meta/ts) are recovered engine fields the WS face used to drop — all optional, old gateways never send them and old phones ignore them (§J4). No duration on the live face by ruling (QueryEvent carries none); wall-clock duration exists only on the shannon/session.history artifacts fold. ts is the forward epoch-ms stamp (§L1 precedent).",
+          "required": [
+            "kind",
+            "name"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "use",
+                "result"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "description": "engine tool name — an open set (mcp__* included); render the raw string, never map (§Q1 convention)"
+            },
+            "input": {
+              "description": "kind \"use\": the tool arguments as the engine supplied them"
+            },
+            "output": {
+              "type": "string",
+              "description": "kind \"result\": the tool output. No wire truncation limit by ruling — the phone self-limits rendering (collapsed by default, expand, full copy)"
+            },
+            "tool_use_id": {
+              "type": "string",
+              "description": "§R additive: pairs a use→result frame into one card; absent on old engines — phones may fall back to name+order pairing (honest degrade)"
+            },
+            "is_error": {
+              "type": "boolean",
+              "description": "§R additive: drives the failure ribbon; absent = unknown, treat as not-an-error (per-field degrade)"
+            },
+            "meta": {
+              "description": "§R additive: §4.12 tool-private metadata passed through uninterpreted (e.g. {\"classification\":\"sandbox_denied\"}) — clients must not interpret in v1"
+            },
+            "ts": {
+              "type": "number",
+              "description": "§R additive: forward epoch-ms stamp at the WS/gateway edge (§L1 approval ts precedent)"
+            }
+          }
         },
         "usage": {
           "type": "object"
@@ -548,6 +587,25 @@
               "type": "task.progress",
               "content": "hello",
               "turn_id": "turn-1"
+            }
+          }
+        ],
+        [
+          "task.progress tool frame (§R)",
+          {
+            "type": "task.progress",
+            "session_id": "task-uuid",
+            "seq": 41,
+            "tool": {
+              "kind": "result",
+              "name": "Bash",
+              "output": "test result: ok. 42 passed",
+              "tool_use_id": "toolu_1",
+              "is_error": false,
+              "meta": {
+                "classification": "sandbox_allowed"
+              },
+              "ts": 1767868800000
             }
           }
         ],
