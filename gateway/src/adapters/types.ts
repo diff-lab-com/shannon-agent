@@ -184,21 +184,29 @@ export interface ApprovalReq {
    * member-turn asks. Plain (non-group) turns never set it, so their wire
    * shape stays byte-identical. `ruleTrigger` carries AT MOST ONE trigger per
    * ask (`handoff-first` wins when a pool escalation also hits); `poolAfter`
-   * rides asks whose amount was parseable (B6.1).
+   * rides asks whose amount was parseable (B6.1); `quoteWindow` (B6.0-4, R4)
+   * rides the same amount-bearing asks — the 锁价 countdown the phone
+   * renders, mirroring this ask's `deadlineMs` on the wire.
    */
   group?: {
     groupId: string;
     member: { memberId: string; label: string; title: string; source: "ephemeral" | "roster" };
     ruleTrigger?: "handoff-first" | "over-pool" | "over-share";
     poolAfter?: { poolCny: number; remainingAfterCny: number };
+    quoteWindow?: {
+      expiresAt: string;
+      windowMinutes: number;
+      onExpire: "requote-next";
+    };
   };
   /**
    * §S B6.0-4 (additive): per-ask deadline override in ms — how long THIS ask
    * parks before the hub denies it (and the registry drops it), instead of
-   * the gateway's default 300s. A quoteWindow producer (payments connector,
-   * future batch) sets it so the ask outlives the default window; without it
-   * the ask keeps the exact legacy behavior. The engine side of the same
-   * window rides the query frame's `approval_ttl_ms` (shannon-api-protocol).
+   * the gateway's default 300s. The group orchestrator sets it for
+   * amount-bearing asks (the R4 quote window) so the ask outlives the
+   * default window; without it the ask keeps the exact legacy behavior. The
+   * engine side of the same window rides the query frame's
+   * `approval_ttl_ms` (shannon-api-protocol, hard-capped at 60 minutes).
    */
   deadlineMs?: number;
 }

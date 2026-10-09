@@ -694,12 +694,35 @@ export interface ApprovalGroupMemberInfo {
  * input: `poolCny` is the group pool's total (元), `remainingAfterCny` is
  * `total − spent − pending − amount` if this ask were allowed — honest even
  * when negative (an over-pool ask shows the hole it would dig).
+ *
+ * `quoteWindow` (B6.0-4, R3/R4) rides the SAME amount-bearing asks: the
+ * 锁价/拍板 window the phone renders as 「HH:MM 前有效」+ countdown. Its
+ * presence is also the TTL contract: the ask parks at the gateway (and the
+ * engine's approval resolver waits) until `expiresAt`, not the legacy 300s —
+ * the engine clamps any per-request window at a hard 60 minutes, and v1
+ * produces only the 30-minute design window (`windowMinutes: 30`).
+ * `onExpire` is constant `"requote-next"` in v1: the window dying at the
+ * gateway auto-abandons the ask (deny + pending refund + the
+ * `group.system {kind: "quote-expired"}` card); when no second candidate
+ * exists the turn then fails into the member-failed reassignment叙事 — no
+ * fabricated requote action. Plain (groupless) asks and no-amount group asks
+ * never carry the key: they keep the exact legacy 300s window everywhere.
  */
+export interface ApprovalQuoteWindow {
+  /** ISO-8601 UTC — the instant the ask auto-abandons (R4 「14:41 前有效」). */
+  expiresAt: string;
+  /** Whole minutes; v1 producer emits only 30. */
+  windowMinutes: number;
+  /** Constant `"requote-next"` in v1 (提案 §B6.0-4). */
+  onExpire: "requote-next";
+}
+
 export interface ApprovalGroupInfo {
   groupId: string;
   member: ApprovalGroupMemberInfo;
   ruleTrigger?: "handoff-first" | "over-pool" | "over-share";
   poolAfter?: { poolCny: number; remainingAfterCny: number };
+  quoteWindow?: ApprovalQuoteWindow;
 }
 
 /** `shannon/group.list` item (B6.0-1 projection; optional keys degrade). */

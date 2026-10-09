@@ -26,10 +26,13 @@
  *    per ask, handoff-first first), and on an ALLOW settle into the group
  *    ledger (`ledger.jsonl` + a `group.pool-spend` broadcast). Deny/expiry
  *    refund the pending and leave the ledger untouched.
- *  - The B6.0-4 TTL mechanism is fully live (engine `approval_ttl_ms`, hub
- *    per-ask deadline, registry entry-level retention, quote-expired card)
- *    but has NO quoteWindow producer yet: group asks keep the exact legacy
- *    300s window on every side until a payments connector exists.
+ *  - The B6.0-4 TTL is live END TO END (engine `approval_ttl_ms` clamped at
+ *    a hard 60 minutes, hub per-ask deadline, registry entry-level retention,
+ *    the `group.quoteWindow` wire key, quote-expired card): an amount-bearing
+ *    group ask — the v1 拍板/锁价 ask — gets the R4 30-minute window on every
+ *    side at once. No-amount group asks and plain (groupless) approvals keep
+ *    the exact legacy 300s window (普通审批 300s 不变; the quote-window
+ *    override only ever rides group 拍板 context).
  *  - B6.2 收尾: `group.get` serves the entity + the persisted review (16 屏);
  *    `group.archive {reason:"completed"}` aggregates + persists that review;
  *    the R11 daily report rides the per-minute tick in `groupReview.ts`; and
@@ -101,6 +104,14 @@ const GROUP_ID_RE = /^grp-[0-9a-fA-F-]{36}$/;
 /** Budget for the one-shot crew-planning query (open question #3 收尾). */
 const DEFAULT_PLANNING_TIMEOUT_MS = 30_000;
 
+/**
+ * §S B6.0-4: the R4 quote lock (锁价窗口) — the design's 30-minute decision
+ * window on an amount-bearing group ask (12 「14:41 前有效 · 剩 26 分」).
+ * The engine hard-caps any per-request approval window at 60 minutes; this
+ * producer never asks for more than the design window.
+ */
+const DEFAULT_QUOTE_WINDOW_MS = 30 * 60 * 1000;
+
 export interface GroupHandlersOptions {
   hub: MobileDispatchHub;
   logger: Logger;
@@ -123,6 +134,13 @@ export interface GroupHandlersOptions {
   now?: () => number;
   /** B6.2: budget for the create-time crew-planning query (default 30s). */
   planningTimeoutMs?: number;
+  /**
+   * §S B6.0-4 test seam: the group quote window in ms (default 30min, R4).
+   * Rides amount-bearing group asks as the hub parking deadline, the
+   * registry retention, the engine `approval_ttl_ms`, and the wire
+   * `group.quoteWindow` key — one window, four clocks.
+   */
+  quoteWindowMs?: number;
   /** B6.2 test seams for the daily-report tick (see groupReview.ts). */
   reportScheduleNext?: (fn: () => void, delayMs: number) => () => void;
   reportTickIntervalMs?: number;
@@ -194,6 +212,13 @@ export function createGroupHandlers(opts: GroupHandlersOptions): GroupHandlersBu
   const hub = opts.hub;
   const dirs = opts.groupsDirs ?? [];
   const now = () => opts.now?.() ?? Date.now();
+  /**
+   * §S B6.0-4: the resolved quote window (R4 30-minute 锁价窗口; the engine
+   * hard cap is 60m and this producer never asks for more). Rides
+   * amount-bearing group asks only — no-amount asks and plain approvals
+   * keep the exact legacy 300s window everywhere.
+   */
+  const quoteWindowMs = opts.quoteWindowMs ?? DEFAULT_QUOTE_WINDOW_MS;
   /** Per-group turn-chain mutex — a group runs one deterministic chain at a
    *  time; a second message while a chain runs queues behind it. */
   const chains = new Map<string, Promise<void>>();
@@ -499,6 +524,14 @@ export function createGroupHandlers(opts: GroupHandlersOptions): GroupHandlersBu
       await client.connect();
       const query = client.runQuery(composePrompt(record, member, userText, handoffNote), {
         sessionId: engineSessionId,
+        // §S B6.0-4: every group member turn runs under the quote window —
+        // the engine-side backstop bound for any approval the turn raises.
+        // The hub's per-ask deadline stays the primary timer (a no-amount
+        // ask settles at the legacy 300s via the hub deny POST); the engine
+        // key only matters when the gateway itself cannot answer, and the
+        // engine clamps it at a hard 60m. Plain (non-group) queries never
+        // carry the key — 普通审批 300s 不变.
+        approvalTtlMs: quoteWindowMs,
       }) as AsyncIterable<EngineEvent>;
       for await (const ev of query) {
         switch (ev.type) {
@@ -563,15 +596,16 @@ export function createGroupHandlers(opts: GroupHandlersOptions): GroupHandlersBu
             const ruleTrigger =
               member.handoffFirstPending === true ? ("handoff-first" as const) : over;
             member.handoffFirstPending = false;
-            // §S B6.0-4 quoteWindow seat: a payments-connector quote would
-            // set BOTH the ask's per-ask gateway deadline (`deadlineMs`) AND
-            // the engine query's `approval_ttl_ms` to the same window so the
-            // two sides never disagree. v1 has NO quoteWindow producer (no
-            // payment-class tool — 裁决), so both stay absent and the group
-            // ask keeps the exact legacy 300s window everywhere. The
-            // mechanism (hub deadline + registry retention + engine frame
-            // key) is live underneath this seam.
-            const quoteWindowMs: number | null = null;
+            // §S B6.0-4 quoteWindow producer (live): an amount-bearing ask IS
+            // the v1 拍板/锁价 ask (出票/订酒店 with a real number on it), so
+            // it gets the R4 30-minute window on every side at once — the
+            // hub's per-ask parking deadline (`deadlineMs`), the registry
+            // entry's retention, the wire `group.quoteWindow` key the phone
+            // renders its countdown from, and the engine query's
+            // `approval_ttl_ms` (set once per turn above). A no-amount ask
+            // keeps the exact legacy 300s window everywhere, and plain
+            // (groupless) approvals are untouched — 普通审批 300s 不变.
+            const windowMs = amountCny !== null ? quoteWindowMs : null;
             // An amount-bearing ask enters the pool's pending column the
             // moment it goes out (persisted) — allow converts it into
             // ledger + spent, deny/expiry refunds it.
@@ -589,7 +623,7 @@ export function createGroupHandlers(opts: GroupHandlersOptions): GroupHandlersBu
               ...(typeof ev.ts === "number" && ev.ts !== null ? { ts: ev.ts } : {}),
               ...(ev.agent ? { agent: ev.agent } : {}),
               ...(ev.risk ? { risk: ev.risk } : {}),
-              ...(quoteWindowMs != null ? { deadlineMs: quoteWindowMs } : {}),
+              ...(windowMs != null ? { deadlineMs: windowMs } : {}),
               group: {
                 groupId: record.groupId,
                 member: {
@@ -611,6 +645,23 @@ export function createGroupHandlers(opts: GroupHandlersOptions): GroupHandlersBu
                         remainingAfterCny: round2Cny(
                           record.pool.totalCny - record.pool.spentCny - record.pool.pendingCny,
                         ),
+                      },
+                    }
+                  : {}),
+                // §S B6.0-4 (R3/R4): the 锁价 countdown contract — expiresAt
+                // is the exact instant the hub will auto-abandon the ask
+                // (deny + pending refund + the quote-expired card), so the
+                // phone's countdown and the gateway's parking timer cannot
+                // disagree. `onExpire` is constant "requote-next" in v1; the
+                // honest expiry叙事 is the quote-expired card (no fabricated
+                // second-candidate requote — member-failed follows instead
+                // when no next candidate exists).
+                ...(windowMs != null
+                  ? {
+                      quoteWindow: {
+                        expiresAt: new Date(now() + windowMs).toISOString(),
+                        windowMinutes: Math.round(windowMs / 60_000),
+                        onExpire: "requote-next" as const,
                       },
                     }
                   : {}),
