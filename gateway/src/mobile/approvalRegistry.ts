@@ -51,12 +51,14 @@ export interface PendingApprovalRecord {
   agent?: EngineAgentInfo | null;
   risk?: EngineRiskInfo | null;
   /** §S (additive): group attribution; absent on plain approvals. `poolAfter`
-   *  rides B6.1 asks with a parseable amount (see ApprovalGroupInfo). */
+   *  rides B6.1 asks with a parseable amount, `quoteWindow` the same asks'
+   *  R4 countdown (both see ApprovalGroupInfo). */
   group?: {
     groupId: string;
     member: { memberId: string; label: string; title: string; source: "ephemeral" | "roster" };
     ruleTrigger?: "handoff-first" | "over-pool" | "over-share";
     poolAfter?: { poolCny: number; remainingAfterCny: number };
+    quoteWindow?: { expiresAt: string; windowMinutes: number; onExpire: "requote-next" };
   } | null;
   /**
    * §S B6.0-4 (additive): entry-level expiry, epoch ms — when this ask's own

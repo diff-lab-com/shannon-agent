@@ -229,9 +229,10 @@ export class EngineWsClient {
       attachments?: MessageAttachment[];
       /**
        * §S B6.0-4: per-query approval window override, ms — rides the frame
-       * as `approval_ttl_ms`. The engine clamps it at 24h and keeps its
-       * 300s resolver default when omitted; today nothing in the gateway
-       * sets it (no quoteWindow producer — the mechanism lands first).
+       * as `approval_ttl_ms`. The engine clamps it at a hard 60 minutes and
+       * keeps its 300s resolver default when omitted. Only the group
+       * orchestrator sets it (group member turns run under the R4 quote
+       * window); plain queries never carry the key — 普通审批 300s 不变.
        */
       approvalTtlMs?: number | null;
     } = {},

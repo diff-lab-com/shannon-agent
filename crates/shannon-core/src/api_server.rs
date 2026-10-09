@@ -610,17 +610,22 @@ fn resolve_session_id(hint: Option<&str>, fallback: Uuid) -> Uuid {
         .unwrap_or(fallback)
 }
 
-// ── B6.0-4 approval-TTL (2026-10-09 ruling) ─────────────────────────────
+// ── B6.0-4 approval-TTL (2026-10-09 ruling; ceiling tightened to 60m by
+// the quoteWindow-producer batch — see the `APPROVAL_WINDOW_MAX_MS` doc) ──
 
 /// Legacy approval-resolver window: the value every pre-TTL query ran with
 /// (and what an absent/zero `approval_ttl_ms` still maps to — the default
 /// path must stay byte-for-byte identical).
 const APPROVAL_WINDOW_DEFAULT_MS: u64 = 300_000;
-/// Clamp ceiling for a client-supplied `approval_ttl_ms` (24h). A quote
-/// window may be long, but it must stay finite and bounded — an unclamped
-/// value would let one frame park approval resolvers (and their registry
-/// entries) indefinitely.
-const APPROVAL_WINDOW_MAX_MS: u64 = 86_400_000;
+/// Clamp ceiling for a client-supplied `approval_ttl_ms` — a **hard 60
+/// minutes**. The longest legitimate design window is the R4 quote lock
+/// (30 minutes, `quoteWindow.windowMinutes: 30`); the ceiling is 2× that,
+/// and anything beyond it is not a quote window — it is a parked approval
+/// resolver (and a stale registry entry) held open for no design reason.
+/// Over-ceiling values are refused their excess (clamped down to the cap,
+/// never honored as asked); plain approvals are untouched (absent/0 keeps
+/// the exact 300s behavior).
+const APPROVAL_WINDOW_MAX_MS: u64 = 3_600_000;
 
 /// Resolve the approval-resolver wait window for one `query` frame (the
 /// B6.0-4 per-request TTL). `None`/`0` → the legacy 300s default; any other
@@ -3195,9 +3200,34 @@ mod tests {
     }
 
     #[test]
-    fn test_ws_query_approval_ttl_ms_clamped_at_24h() {
+    fn test_ws_query_approval_ttl_ms_boundary_60m_is_honored_unclamped() {
+        // Exactly at the hard ceiling: the R4 quote lock's 2× headroom is a
+        // legitimate ask — the value must be honored as-is, not nudged.
         let msg: WsClientMessage = serde_json::from_str(
-            r#"{"type": "query", "prompt": "hi", "approval_ttl_ms": 999999999}"#,
+            r#"{"type": "query", "prompt": "hi", "approval_ttl_ms": 3600000}"#,
+        )
+        .unwrap();
+        match msg {
+            WsClientMessage::Query {
+                approval_ttl_ms, ..
+            } => {
+                assert_eq!(approval_ttl_ms, Some(3_600_000));
+                assert_eq!(
+                    approval_window(approval_ttl_ms),
+                    Duration::from_millis(3_600_000),
+                );
+            }
+            other => panic!("expected Query, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ws_query_approval_ttl_ms_clamped_at_60m_hard_cap() {
+        // Over the ceiling: the excess is refused — the resolver parks at
+        // most 60 minutes, never as long as the caller asked. A 24h ask (the
+        // old ceiling) now clamps to the 60m hard cap.
+        let msg: WsClientMessage = serde_json::from_str(
+            r#"{"type": "query", "prompt": "hi", "approval_ttl_ms": 86400000}"#,
         )
         .unwrap();
         match msg {
@@ -3206,8 +3236,25 @@ mod tests {
             } => {
                 assert_eq!(
                     approval_window(approval_ttl_ms),
-                    Duration::from_millis(86_400_000),
-                    "a client-supplied window must clamp at the 24h ceiling"
+                    Duration::from_millis(3_600_000),
+                    "a client-supplied window must clamp at the 60m hard cap"
+                );
+            }
+            other => panic!("expected Query, got {other:?}"),
+        }
+        // And one millisecond over the cap clamps identically (the boundary
+        // above is the exact last honored value).
+        let msg: WsClientMessage = serde_json::from_str(
+            r#"{"type": "query", "prompt": "hi", "approval_ttl_ms": 3600001}"#,
+        )
+        .unwrap();
+        match msg {
+            WsClientMessage::Query {
+                approval_ttl_ms, ..
+            } => {
+                assert_eq!(
+                    approval_window(approval_ttl_ms),
+                    Duration::from_millis(3_600_000)
                 );
             }
             other => panic!("expected Query, got {other:?}"),

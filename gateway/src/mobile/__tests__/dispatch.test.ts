@@ -1206,6 +1206,23 @@ describe("mobile dispatch — §K3 structured task stream", () => {
     expect(taskId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  it("B6.0-4: a plain task query never carries approvalTtlMs — the quote-window override stays on the group face", async () => {
+    // 普通审批 300s 不变: only the group orchestrator's member turns ride
+    // the R4 quote window (see groupHandlers.test.ts); the §K task pipeline
+    // and every other query path must keep the key off the wire entirely.
+    const client = mockEngineClient([textEvent("done"), { type: "completed", model: "m" } as EngineEvent]);
+    const { hub } = buildPipeline({ client });
+    const ctx = fakeCtx("dev-1");
+    hub.registerConnection(ctx);
+    const handlers = createTaskHandlers({ hub });
+
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "hi" }, ctx);
+    await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]?.status).toBe("completed"));
+    expect(res.kind).toBe("result");
+    const opts = (client.runQuery as any).mock.calls[0]?.[1] ?? {};
+    expect(opts).not.toHaveProperty("approvalTtlMs");
+  });
+
   it("an engine failure closes the stream with query.failed(session_id) and flips the journal — no ❌ bubble", async () => {
     const client = mockEngineClient([
       textEvent("partial"),

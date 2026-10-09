@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 跨仓 mobile 群拍板窗口批 · §S B6.0-4 quoteWindow 生产者 + TTL 硬顶收紧 60 分钟（2026-10-08）
 - 跨仓 mobile 续批 · §S B6.0-4 审批窗口 + B6.1 池记账 + B6.2 日报复盘 + declared_models 测试密闭化（2026-10-09）
 - 跨仓 mobile 双批 · tool-result 产物卡 §R wire 面 + 群编排 §S B6.0 起步（2026-10-09）
 - 发版工程 · v0.13.0 tag 首跑暴露的三平台阻断修复（2026-10-09）
@@ -22,6 +23,29 @@ Waves queued for the next release, newest first:
 ### Breaking / behavior changes
 
 - **`secret-guard` defaults to `redact` (was `audit`)**: with no `$SHANNON_SECRET_GUARD` and no `[secret_guard] mode` configured, secret-shaped content in outbound requests is now replaced with deterministic surrogates before it reaches the provider (restored locally for tool execution and display; byte-stable, so prompt caching is unaffected). Opt out with `SHANNON_SECRET_GUARD=audit` (observe-only), `SHANNON_SECRET_GUARD=off`, or `[secret_guard] mode` in config — env beats config, and an explicit `off` always wins. A one-time notice after the first hit explains what happened and names these switches.
+
+### 跨仓 mobile 群拍板窗口批（2026-10-08）
+
+B6.0-4 TTL 的收尾批：#371 落了机制面、生产者留空（群审批与普通审批当时完全同窗）。
+本批补齐 quoteWindow 生产者并把引擎硬顶从 24h 收紧到 60 分钟（裁决增补见
+`docs/reviews/2026-10-09-mobile-proposals-rulings.md` §三）：
+
+- **引擎 TTL 硬顶 60 分钟**：`approval_ttl_ms` 钳制顶 86_400_000 → 3_600_000 ms——设计上
+  最长合法窗口是 R4 锁价 30 分钟，60 分钟即 2× 余量；更长的请求值不是锁价窗口，只是
+  空占审批 resolver 与注册表条目的暴露面。超顶值钳制拒还其超额（绝不按原值放行），
+  边界 60 分钟整如实放行，缺省/0 的 300s 路径逐字节不变（旧帧零感知）。
+- **quoteWindow 生产者（gateway 群编排）**：金额可解析的群审批即 v1 拍板/锁价 ask，
+  一个窗口四处同时生效——hub per-ask `deadlineMs`、注册表条目 `expiresAtMs`、成员 turn
+  引擎帧 `approval_ttl_ms`（30 分钟）、wire `approval.*.group.quoteWindow
+  {expiresAt, windowMinutes: 30, onExpire: "requote-next"}`（`approval.request` push /
+  `approval.list` / `snapshot.pendingApprovals` 同键，手机「HH:MM 前有效」倒计时数据源）。
+  到期 = 自动放弃：hub deny + pending 回落 + `group.system(quote-expired)` 卡（#371 的
+  既有路径首次通电）；无金额群 ask 与普通审批零改动（300s 不变、`approval_ttl_ms`
+  不上车——TTL 覆盖只随群拍板上下文放行，普通查询面不含该键）。
+- **测试**：引擎 TTL 边界四态（缺省 300s / 0→300s / 30min 放行 / 60min 边界放行 +
+  超顶钳制）；gateway 四象限（带金额 ask 的 quoteWindow 键与引擎 TTL 同值且注册表
+  retention 对齐 / per-ask 窗越过 hub 默认窗后在自身窗口到期出 quote-expired 卡 /
+  无金额 ask 与建群规划查询不带窗口键 / 普通 task 查询不带 `approvalTtlMs`）。
 
 ### 发版工程（2026-10-09，v0.13.0 tag 首跑暴露）
 

@@ -33,6 +33,7 @@ import type { Logger } from "../../adapters/types.js";
 import type { EngineEvent } from "../../engine/runtime.js";
 import type { EngineWsClient } from "../../engine/wsClient.js";
 import { createConsoleLogger } from "../../logger.js";
+import { ApprovalRegistry } from "../approvalRegistry.js";
 import { MobileDispatchHub } from "../hub.js";
 import {
   createGroupHandlers,
@@ -99,6 +100,8 @@ interface Harness {
   handlers: GroupHandlersBundle["handlers"];
   groupsDirs: string[];
   clients: EngineWsClient[];
+  /** The hub's pending-approval registry (exposed for restore-face asserts). */
+  approvals: ApprovalRegistry;
   initiator: MethodContext;
   bystander: MethodContext;
 }
@@ -111,13 +114,17 @@ function buildHarness(opts: {
   fetchImpl?: typeof fetch;
   /** Hub-wide approval parking window (default 300s; tests shrink it). */
   approvalTimeoutMs?: number;
+  /** B6.0-4: the group quote window (default 30min; tests shrink it). */
+  quoteWindowMs?: number;
   now?: () => number;
   planningTimeoutMs?: number;
   reportScheduleNext?: (fn: () => void, delayMs: number) => () => void;
 } = {}): Harness {
   const groupsDirs = [mkdtempSync(join(tmpdir(), "shannon-groups-test-"))];
+  const approvals = new ApprovalRegistry();
   const hub = new MobileDispatchHub({
     logger,
+    approvals,
     ...(opts.approvalTimeoutMs !== undefined ? { approvalTimeoutMs: opts.approvalTimeoutMs } : {}),
   });
   const clients: EngineWsClient[] = [];
@@ -135,6 +142,7 @@ function buildHarness(opts: {
     engineHttpBaseUrl: "http://engine:33420",
     planningTimeoutMs: opts.planningTimeoutMs,
     reportScheduleNext: opts.reportScheduleNext,
+    ...(opts.quoteWindowMs !== undefined ? { quoteWindowMs: opts.quoteWindowMs } : {}),
     engineClientFactory: () => {
       const client = mockEngineClient(turnScripts.shift() ?? []);
       clients.push(client);
@@ -152,6 +160,7 @@ function buildHarness(opts: {
     handlers: facet.handlers,
     groupsDirs,
     clients,
+    approvals,
     initiator,
     bystander,
   };
@@ -694,11 +703,14 @@ describe("§S B6.1 pool ledger (member-turn approvals with amounts)", () => {
     expect(readPoolLedger(h.groupsDirs, groupId)).toHaveLength(1);
   });
 
-  it("window expiry: the hub deny triggers the quote-expired system card and refunds the pending (no ledger)", async () => {
+  it("quote-window expiry: the ask outlives the hub default, dies at ITS window, cards + refunds + denies", async () => {
     const posts: Array<{ url: string; body: unknown }> = [];
     const h = buildHarness({
       turnScripts: [[approvalEvent("req-exp-1", { amountCny: 66 }), textEvent("过期后继续")]],
+      // The amount ask carries its own quote window (200ms here): it must
+      // OUTLIVE the hub-wide default (40ms — TTL 生效) and die at ITS window.
       approvalTimeoutMs: 40,
+      quoteWindowMs: 200,
       fetchImpl: (async (url: any, init?: any) => {
         posts.push({ url: String(url), body: JSON.parse(init.body) });
         return new Response("{}", { status: 200 });
@@ -707,6 +719,12 @@ describe("§S B6.1 pool ledger (member-turn approvals with amounts)", () => {
     const created = await createGroup(h, TWO_MEMBER_PLAN);
     const groupId = created.result.group.groupId as string;
     await h.handlers["shannon/group.message"]!({ groupId, text: "订" }, h.initiator);
+    await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
+    // Well past the hub-wide default (40ms) the ask is STILL parked — the
+    // per-ask quote window overrode the default (plain asks would be gone).
+    await new Promise((r) => setTimeout(r, 140));
+    expect(h.hub.hasPendingApproval("dev-1")).toBe(true);
+    // …and at the quote window the honest expiry path fires.
     await vi.waitFor(() => {
       expect(
         eventsOf(h.initiator).some((e) => e.type === "group.system" && e.system.kind === "quote-expired"),
@@ -729,6 +747,48 @@ describe("§S B6.1 pool ledger (member-turn approvals with amounts)", () => {
     // The card is in the transcript for replay.
     const history = groupHistoryLookup(h.groupsDirs)(groupId, {});
     expect(history!.messages.some((m) => m.content.includes("已自动放弃"))).toBe(true);
+  });
+
+  it("an amount-bearing ask rides the R4 quote window on the wire and the engine TTL; expiresAt mirrors the parking timer", async () => {
+    const fixedNow = 1_770_000_000_000;
+    const h = buildHarness({
+      turnScripts: [[approvalEvent("req-qw-1", { amountCny: 3480 }), textEvent("窗口内成交")]],
+      now: () => fixedNow, // fixed clock → expiresAt is exact, not a moving tick
+    });
+    const created = await createGroup(h, [
+      { slot: "flights", label: "A", title: "订机票", shareCny: 3600 },
+    ]);
+    const groupId = created.result.group.groupId as string;
+    await h.handlers["shannon/group.message"]!({ groupId, text: "订" }, h.initiator);
+    await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
+    const ask = eventsOf(h.initiator).find((e) => e.type === "approval.request")!;
+    // The R4 countdown contract (12 「14:41 前有效」): 30 minutes, constant
+    // onExpire, expiresAt == the instant the hub will auto-abandon the ask.
+    expect(ask.group.quoteWindow).toEqual({
+      expiresAt: new Date(fixedNow + 30 * 60 * 1000).toISOString(),
+      windowMinutes: 30,
+      onExpire: "requote-next",
+    });
+    // The engine side of the same window: the member-turn query frame rides
+    // `approval_ttl_ms` = the quote window (engine hard cap: 60 minutes).
+    const queryOpts = (h.clients[0]!.runQuery as any).mock.calls[0]?.[1] ?? {};
+    expect(queryOpts.approvalTtlMs).toBe(1_800_000);
+    // The registry entry's retention mirrors the same window (not the 330s
+    // default) — approval.list / snapshot can render the countdown.
+    const pending = h.approvals.listPending();
+    expect(pending[0]!.group?.quoteWindow).toEqual(ask.group.quoteWindow);
+  });
+
+  it("the quote-window override never leaves the group face: plain queries carry no approvalTtlMs", async () => {
+    // The create-time crew PLANNING query is host-internal and non-amount:
+    // it must not run under the quote window (open question #3 收尾 path).
+    const h = buildHarness({
+      turnScripts: [[textEvent("推荐阵容")]],
+    });
+    await createGroup(h, undefined); // ephemeral, no members → planning query
+    await vi.waitFor(() => expect(h.clients.length).toBeGreaterThan(0));
+    const planningOpts = (h.clients[0]!.runQuery as any).mock.calls[0]?.[1] ?? {};
+    expect(planningOpts).not.toHaveProperty("approvalTtlMs");
   });
 });
 
