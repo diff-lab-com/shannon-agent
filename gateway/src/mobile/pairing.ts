@@ -868,6 +868,12 @@ export interface MobileHandlersOptions {
    */
   tasks?: MethodHandlers;
   /**
+   * §S (B6.0): the `shannon/group.*` face (`createGroupHandlers`) — merged
+   * after the bridge like `tasks`; self-gates on the bound session. An old
+   * gateway omits it, which is exactly the phone's METHOD_NOT_FOUND degrade.
+   */
+  groups?: MethodHandlers;
+  /**
    * T9: the pairing-access handlers (`shannon/pairing.pending` +
    * `shannon/pairing.approve`), built by bootstrap via `createPairingAccess`.
    * They self-gate on a trusted device session or a valid pair token.
@@ -923,5 +929,5 @@ export function createMobileHandlers(opts: MobileHandlersOptions): MethodHandler
     isDeviceTrusted: (deviceId) => opts.registry.has(deviceId),
     approvalRegistry: opts.approvalRegistry,
   });
-  return { ...engine, ...pairing, ...opts.tasks, ...opts.access };
+  return { ...engine, ...pairing, ...opts.tasks, ...opts.groups, ...opts.access };
 }

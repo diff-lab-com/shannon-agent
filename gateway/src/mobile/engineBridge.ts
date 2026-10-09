@@ -141,6 +141,18 @@ export type PushUnbindSink = (deviceId: string) => Promise<void>;
 export interface EngineBridgeOptions {
   /** Engine WS URL, e.g. `ws://127.0.0.1:33420/api/ws`. */
   engineWsUrl: string;
+  /**
+   * §S (B6.0): the group-transcript lookup for `shannon/session.history` —
+   * a `grp-*` sessionId answers from the host-side group store (§J2 wire
+   * shape) BEFORE the engine is consulted; null/miss falls through to the
+   * engine unchanged. Built by the host via the group module's
+   * `groupHistoryLookup` (ruling: groups are host-side entities, engine L0
+   * stays the single source for ENGINE sessions only).
+   */
+  groupHistoryLookup?: (
+    sessionId: string,
+    paging: { before?: string; limit?: number },
+  ) => import("./engineSessions.js").MobileTranscriptWire | null;
   /** Engine HTTP base URL, e.g. `http://127.0.0.1:33420` (approval POST + health). */
   engineHttpBaseUrl: string;
   /** Default model when neither the request nor a `model.switch` override sets one. */
@@ -911,6 +923,18 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       }
       const before =
         typeof params.before === "string" && params.before.length > 0 ? params.before : undefined;
+      // §S B6.0-1: group keys answer from the host-side group transcript
+      // (exact §J2 shape) without touching the engine; unknown/absent group
+      // ids fall through — the engine's unknown-id empty-transcript posture
+      // stays the last word either way.
+      const groupPage = opts.groupHistoryLookup?.(params.sessionId as string, {
+        before,
+        limit:
+          typeof params.limit === "number" && Number.isFinite(params.limit)
+            ? Math.floor(params.limit)
+            : undefined,
+      });
+      if (groupPage) return { kind: "result", result: groupPage };
       // §J4: the <1 → 1 clamp lives ENGINE-side — pass every finite number
       // through (0 and negatives included) so the clamp reaches the wire;
       // only a non-number/non-finite limit means "absent" (engine default 50).
