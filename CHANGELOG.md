@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 跨仓 mobile 信任续批 · `shannon/trust.changed` 撤销推送 + §R schema 键回填（2026-10-09）
 - 跨仓 mobile 续批 · §S B6.0-4 审批窗口 + B6.1 池记账 + B6.2 日报复盘 + declared_models 测试密闭化（2026-10-09）
 - 跨仓 mobile 双批 · tool-result 产物卡 §R wire 面 + 群编排 §S B6.0 起步（2026-10-09）
 - 发版工程 · v0.13.0 tag 首跑暴露的三平台阻断修复（2026-10-09）
@@ -22,6 +23,14 @@ Waves queued for the next release, newest first:
 ### Breaking / behavior changes
 
 - **`secret-guard` defaults to `redact` (was `audit`)**: with no `$SHANNON_SECRET_GUARD` and no `[secret_guard] mode` configured, secret-shaped content in outbound requests is now replaced with deterministic surrogates before it reaches the provider (restored locally for tool execution and display; byte-stable, so prompt caching is unaffected). Opt out with `SHANNON_SECRET_GUARD=audit` (observe-only), `SHANNON_SECRET_GUARD=off`, or `[secret_guard] mode` in config — env beats config, and an explicit `off` always wins. A one-time notice after the first hit explains what happened and names these switches.
+
+### 跨仓 mobile 信任续批（2026-10-09）
+
+`shannon/trust.changed` 撤销推送（mobile N3 信任面的 live-sync 收尾）+ §R schema 键回填（分支 `feat/trust-changed-push`）：
+
+- **`shannon/trust.changed` 通知**：仅 revoke **实际移除**时广播（引擎 `/api/trust/revoke` 答 `revoked:true`；幂等重放 `revoked:false` 与引擎失败零推送——无状态变化就不宣布）。grant 不推——decide 应答即授予回执（§Q2），他设备沿 §Q5「重进台账重探」v1 行为。形状 `{kind, revokedAt}`（camelCase；`revokedAt` ISO-8601 UTC，gateway 前向时钟——引擎响应无时间戳，不造第二来源）。沿 `shannon/agent.state` 惯例：专用通知方法、无 seq、不进 §O4 重放环——错过即回退重探，引擎 trust 台账是唯一真值，推送只是 live-sync 提示，零丢失语义成立。广播**全部已连接设备**（`~/.shannon/trust/kinds.toml` 是宿主级实体，同 §S 群扇出裁决，有意区别于 §K3 任务流「仅推发起设备」）。引擎 Rust 零改动（N3 面已备）：gateway `hub.pushTrustChanged`（镜像 `pushAgentState`，返回送达 socket 数）+ bridge `onTrustChanged` 接缝（sink 抛错不伤 revoke 本体，wake sink 同款姿态）+ bootstrap 接线。mobile 消费端下轮接入（PR body 冻结契约）。
+- **§R schema 键回填（#360 残余）**：`docs/protocol/shannon-mobile-protocol.schema.json` 的 `shannonEvent.tool` 补出 §R 实形（`kind`/`name` 必填 + `input`/`output` + additive `tool_use_id`/`is_error`/`meta`/`ts`，含「live 面无 duration、wire 无截断上限」裁决注记）+ `trustChangedNotification` 定义 + 两条 wire fixture（task.progress tool 帧、trust.changed 通知）。`shannonMethods` 枚举不动——该枚举是请求方法面（`agent.state` 同款先例：通知方法以定义面钉定，不入请求枚举）。
+- **测试**：gateway vitest 729 全绿（基线 720，新增 9：hub 广播形状/无 seq/不进重放环/扇出计数 + 双设备端到端 `revoked:true` 双推/`revoked:false` 不推/引擎失败不推 + bridge 接缝三态含 sink 抛错）。
 
 ### 发版工程（2026-10-09，v0.13.0 tag 首跑暴露）
 

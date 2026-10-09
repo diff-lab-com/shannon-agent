@@ -546,6 +546,11 @@ async function startMobileServer(
       // dispatch hub's journal (task id → roster agent) — the same hub the
       // task handlers journal into.
       taskAgentLookup: (sessionId: string) => dispatchHub.agentForSession(sessionId),
+      // trust.changed: a revoke that actually removed a grant is broadcast to
+      // every connected device (host-level entity, seq-free, outside the §O4
+      // replay ring — a missed push degrades to the §Q5 re-probe behavior).
+      onTrustChanged: (kind: string, revokedAt: string) =>
+        dispatchHub.pushTrustChanged(kind, revokedAt),
       // §O2/§O3 + 修正1: forward push bindings to the relay over its control
       // side channel (late-bound — the relay host leg connects below), with
       // the expected-state store recording every intent for the link-reconnect

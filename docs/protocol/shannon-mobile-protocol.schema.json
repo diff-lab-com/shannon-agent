@@ -630,6 +630,17 @@
               }
             ]
           }
+        ],
+        [
+          "trust.changed notification",
+          {
+            "jsonrpc": "2.0",
+            "method": "shannon/trust.changed",
+            "params": {
+              "kind": "Bash",
+              "revokedAt": "2026-10-08T03:30:00.000Z"
+            }
+          }
         ]
       ]
     },
@@ -690,6 +701,40 @@
         }
       },
       "description": "shannon/trust.revoke success."
+    },
+    "trustChangedNotification": {
+      "type": "object",
+      "description": "trust.changed push (2026-10-08 batch): pushed ONLY when a per-kind trust grant is REVOKED through this gateway (shannon/trust.revoke → engine /api/trust/revoke answering revoked:true; an idempotent replay — revoked:false — pushes nothing). Grants push nothing: the deciding device learns of a grant from its signed decide response (§Q2), other devices re-probe trust.list per the §Q5 v1 degrade. Like agent.state (2026-10-08): a dedicated notification METHOD, seq-free, OUTSIDE the shannon/resume replay ring — the engine kind-trust store is the truth and the push is a live-sync hint; a device that misses it falls back to re-probing trust.list when the trust ledger is next opened, so nothing is lost and nothing needs replaying. Broadcast to EVERY connected device: the store (~/.shannon/trust/kinds.toml) is a host-level entity, not device-private.",
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "shannon/trust.changed"
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "kind",
+            "revokedAt"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "description": "the revoked kind — the engine tool name, exact-match semantics (§Q1)"
+            },
+            "revokedAt": {
+              "type": "string",
+              "description": "ISO-8601 UTC, stamped at the gateway at the revoke moment (the engine response carries no timestamp; nothing beyond the forward wall-clock moment is invented)"
+            }
+          }
+        }
+      }
     }
   },
   "type": "object",
