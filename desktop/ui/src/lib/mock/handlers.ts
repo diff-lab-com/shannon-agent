@@ -2133,6 +2133,26 @@ export const handlers: Record<string, MockHandler> = {
     await delay()
     return { hasHistory: true, runsCounted: 6, minUsd: 0.08, maxUsd: 0.41, avgUsd: 0.19, lastUsd: 0.14 }
   },
+  // --- 缓期批 2 使命进度 (mission_progress) — demo projection over the demo
+  // board, in the backend's honesty shape: found rows carry title/status and
+  // only real cost figures, the dead id renders 「任务不存在」 UI-side. The
+  // demo config pins no mission, so the OPC card stays hidden and this only
+  // answers if a scripted seed ever configures one.
+  async mission_progress() {
+    await delay()
+    const row = (id: string, cost_usd?: number) => {
+      const t = MOCK_TASKS.find(task => task.id === id)
+      return t
+        ? { task_id: id, found: true, title: t.title, status: t.status, ...(cost_usd != null ? { cost_usd } : {}) }
+        : { task_id: id, found: false }
+    }
+    return {
+      name: 'Ship the Q3 roadmap',
+      budget_usd: 25,
+      budget_used_usd: 0.27,
+      tasks: [row('task-001', 0.19), row('task-002'), row('task-deleted')],
+    }
+  },
   // --- Goal runs (P0-2 desktop goal runner) ---
   async list_goal_runs() {
     await delay()

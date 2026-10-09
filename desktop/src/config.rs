@@ -8,6 +8,34 @@ use shannon_types::provider_config::{ProviderQuirks, ProviderTiers};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// 使命实体 (single-mission v1, 缓期批 2): the one mission the user has
+/// currently pinned on the OPC surface. A config-keyed entity (same family
+/// as `strategic_focus`), not a store: absent (`None`) = no mission
+/// configured and every mission read model reports empty.
+///
+/// Serde is the struct's own convention (no `rename_all`): the wire keys
+/// are the snake_case field names — `budget_usd`, `deadline_ts`,
+/// `task_ids` — mirroring the desktop config file this lives inside.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MissionConfig {
+    /// Non-empty, trimmed mission name (configure rejects anything else).
+    pub name: String,
+    /// Optional spending budget for the mission in USD. `None` = no budget
+    /// tracked; a negative value is rejected at configure time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_usd: Option<f64>,
+    /// Optional deadline as epoch **milliseconds**. `None` = no deadline.
+    /// Configure rejects values outside the plausible epoch-ms range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_ts: Option<i64>,
+    /// Task-board ids (`TaskInfo::id`) linked to this mission. Deduplicated
+    /// at configure time (first occurrence wins); a linked id the board no
+    /// longer knows is reported as missing by the progress projection,
+    /// never invented.
+    #[serde(default)]
+    pub task_ids: Vec<String>,
+}
+
 /// Desktop app configuration persisted across sessions.
 ///
 /// P1.2-B (ADR-0005): the legacy singular `provider` / `api_key` /
@@ -26,6 +54,11 @@ pub struct DesktopConfig {
     pub approval_mode: Option<String>,
     /// OPC strategic focus statement.
     pub strategic_focus: Option<String>,
+    /// 使命 (single-mission v1, 缓期批 2): the pinned mission entity, when
+    /// one is configured. Absent = no mission (old config files load fine —
+    /// the field defaults to `None`).
+    #[serde(default)]
+    pub mission: Option<MissionConfig>,
     /// Model selection strategy: `speed` | `balanced` | `high-quality`.
     pub performance_strategy: Option<String>,
     /// Long-term memory toggle.
@@ -924,6 +957,7 @@ impl Default for DesktopConfig {
             mcp_servers: Vec::new(),
             approval_mode: Some("auto-edit".into()),
             strategic_focus: None,
+            mission: None,
             performance_strategy: None,
             memory_enabled: None,
             telemetry_enabled: None,
@@ -2240,6 +2274,7 @@ mod tests {
             mcp_servers: vec![],
             approval_mode: None,
             strategic_focus: None,
+            mission: None,
             performance_strategy: None,
             memory_enabled: None,
             telemetry_enabled: None,
@@ -2272,6 +2307,54 @@ mod tests {
         assert!(!config.skill_loop_enabled);
         assert_eq!(config.skill_loop_min_duration_secs, 30);
         assert_eq!(config.skill_loop_min_tool_calls, 2);
+    }
+
+    #[test]
+    fn mission_config_absent_by_default_and_round_trips() {
+        // 使命 (缓期批 2): no mission configured is the standing default,
+        // and config.json files written before the field existed must keep
+        // loading (mission stays None).
+        assert!(DesktopConfig::default().mission.is_none());
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(legacy.mission.is_none());
+
+        // A configured mission round-trips with its own snake_case keys and
+        // omits the absent optionals (honesty contract: absent stays absent).
+        let cfg = DesktopConfig {
+            mission: Some(MissionConfig {
+                name: "Ship 缓期批 2".into(),
+                budget_usd: Some(12.5),
+                deadline_ts: Some(1_800_000_000_000),
+                task_ids: vec!["1".into(), "abc".into()],
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            json.contains("\"mission\":{\"name\":\"Ship 缓期批 2\",\"budget_usd\":12.5,\"deadline_ts\":1800000000000,\"task_ids\":[\"1\",\"abc\"]}"),
+            "mission wire shape drifted: {json}"
+        );
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.mission, cfg.mission);
+
+        // Optionals stay absent when unset — never written as null.
+        let bare = DesktopConfig {
+            mission: Some(MissionConfig {
+                name: "Only a name".into(),
+                budget_usd: None,
+                deadline_ts: None,
+                task_ids: vec![],
+            }),
+            ..Default::default()
+        };
+        let bare_json = serde_json::to_string(&bare).unwrap();
+        assert!(
+            bare_json.contains("\"mission\":{\"name\":\"Only a name\",\"task_ids\":[]}"),
+            "absent optionals must be omitted, not null: {bare_json}"
+        );
     }
 
     #[test]
@@ -2355,6 +2438,7 @@ mod tests {
             mcp_servers: vec![],
             approval_mode: Some("auto".into()),
             strategic_focus: None,
+            mission: None,
             performance_strategy: None,
             memory_enabled: None,
             telemetry_enabled: None,
@@ -2389,6 +2473,7 @@ mod tests {
             mcp_servers: vec![],
             approval_mode: Some("full_auto".into()),
             strategic_focus: None,
+            mission: None,
             performance_strategy: None,
             memory_enabled: None,
             telemetry_enabled: None,

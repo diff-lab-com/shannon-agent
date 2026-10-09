@@ -144,6 +144,10 @@ const UNMOCKED_ALLOWLIST: Record<string, string> = {
   install_cli_to_path: 'OS/updater/file surface — browser cannot perform it',
   get_surface_info: 'OS/updater/file surface — browser cannot perform it',
   export_diagnostics: 'OS/updater/file surface — browser cannot perform it',
+  // 缓期批 2: same class as export_diagnostics — writes a real zip to a
+  // user-picked path, which a browser demo cannot do. The Settings data
+  // card button surfaces the honest demo-mode error toast when clicked.
+  export_all_sessions: 'OS/updater/file surface — browser cannot perform it',
   gateway_get_secret: 'OS/updater/file surface — browser cannot perform it',
   open_external: 'OS/updater/file surface — browser cannot perform it',
   open_with_default_app: 'OS/updater/file surface — browser cannot perform it',

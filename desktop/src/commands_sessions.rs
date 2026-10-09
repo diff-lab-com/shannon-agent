@@ -16,8 +16,9 @@ use crate::session_registry::{SessionKey, SessionRegistry};
 use crate::session_window_commands;
 use crate::{config, events, events::event_names};
 use serde::Serialize;
-use shannon_core::session_log::SessionCuration;
+use shannon_core::session_log::{SessionCuration, SessionStore};
 use std::collections::HashSet;
+use std::io::Write as _;
 use std::path::Path;
 use tauri::Emitter;
 
@@ -1403,6 +1404,212 @@ pub async fn export_session(
             "Unsupported format: {format}. Use 'markdown' or 'json'."
         )),
     }
+}
+
+// ---------------------------------------------------------------------------
+// 全量会话导出 (缓期批 2): export_all_sessions
+// ---------------------------------------------------------------------------
+
+/// Summary returned by [`export_all_sessions`] after a successful export.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportAllSessionsSummary {
+    /// Absolute path of the written zip.
+    pub path: String,
+    /// Session directories packaged (== `manifest.session_count`).
+    pub session_count: usize,
+}
+
+/// One `manifest.json` row: only fields the session store genuinely has.
+/// Absent data stays absent (`skip_serializing_if`) — never estimated.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionExportManifestEntry {
+    /// Session uuid (the container directory name).
+    pub id: String,
+    /// Curated title from `meta.json`, when the user set one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// RFC3339 first-logged-event time (store projection `created_at`).
+    /// Skipped for a session dir whose log does not project (the field
+    /// would be an invention — absent stays absent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// RFC3339 latest-logged-event time (store projection `updated_at`).
+    /// Deliberately NOT named `ended_at`: an in-progress session's last
+    /// event is not an end, and the manifest must not claim one. Skipped
+    /// when the log does not project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_at: Option<String>,
+    /// Exact byte size of the packaged `events.jsonl` (filesystem stat).
+    /// Skipped when the session somehow has no log file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events_jsonl_bytes: Option<u64>,
+}
+
+/// Top-level `manifest.json` embedded in the export zip.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionExportManifest {
+    /// RFC3339 UTC time the export ran.
+    pub exported_at: String,
+    /// Desktop crate version (same accessor the diagnostics bundle uses).
+    pub app_version: String,
+    /// Number of packaged sessions (== `sessions.len()`).
+    pub session_count: usize,
+    /// One row per packaged session, container order (uuid-sorted).
+    pub sessions: Vec<SessionExportManifestEntry>,
+}
+
+/// Package the whole sessions container as a zip at `dest`.
+///
+/// Pure fn over explicit paths (unit-testable without Tauri). Contract:
+///
+/// - a session is a container subdirectory whose name parses as a uuid —
+///   the same notion `SessionStore` itself uses; foreign directories
+///   sharing the container are skipped, never packaged;
+/// - every file inside a session directory is copied **verbatim** (raw
+///   bytes of `events.jsonl` / `meta.json` / `index.json` / `curation.json`
+///   — exactly what the store wrote; no re-serialization);
+/// - the manifest only reports what the store projection genuinely knows;
+///   timestamps come from `SessionStore::list`, byte sizes from `stat`.
+///
+/// Safety shape matches the diagnostics export exactly: the dest parent
+/// must already exist (`File::create` is used for the zip — never
+/// `create_dir_all`), and an existing dest is silently overwritten.
+pub fn build_all_sessions_bundle(
+    container: &Path,
+    dest: &Path,
+) -> Result<ExportAllSessionsSummary, String> {
+    // Session dirs, uuid-named, sorted for a deterministic archive.
+    let mut session_dirs: Vec<String> = std::fs::read_dir(container)
+        .map_err(|e| {
+            format!(
+                "cannot read sessions container {}: {e}",
+                container.display()
+            )
+        })?
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .filter(|name| uuid::Uuid::parse_str(name).is_ok())
+        .collect();
+    session_dirs.sort();
+
+    // Store projection for the manifest (titles + real timestamps). A
+    // session dir missing from `list()` (e.g. an empty dir, or a log that
+    // fails to project) is still packaged — its manifest row just carries
+    // only what is genuinely known: the id and the raw byte size.
+    let listed = SessionStore::new(container.to_path_buf())
+        .list()
+        .map_err(|e| format!("cannot project sessions container: {e}"))?;
+
+    let mut manifest_sessions = Vec::with_capacity(session_dirs.len());
+    for id in &session_dirs {
+        let dir = container.join(id);
+        let events_path = dir.join("events.jsonl");
+        let info = listed.iter().find(|i| i.session_id.to_string() == *id);
+        manifest_sessions.push(SessionExportManifestEntry {
+            id: id.clone(),
+            title: info.and_then(|i| i.title.clone()),
+            started_at: info.map(|i| i.created_at.to_rfc3339()),
+            last_event_at: info.map(|i| i.updated_at.to_rfc3339()),
+            events_jsonl_bytes: events_path.metadata().ok().map(|m| m.len()),
+        });
+    }
+
+    let manifest = SessionExportManifest {
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        session_count: manifest_sessions.len(),
+        sessions: manifest_sessions,
+    };
+    let manifest_json = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| format!("serialize export manifest: {e}"))?;
+
+    // ── Write the zip (same writer shape as the diagnostics bundle) ──
+    let file = std::fs::File::create(dest)
+        .map_err(|e| format!("cannot create {}: {e}", dest.display()))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let zw = |r: Result<(), zip::result::ZipError>| r.map_err(|e| format!("zip write failed: {e}"));
+    zw(zip.add_directory("sessions/", options))?;
+    zw(zip.start_file("manifest.json", options))?;
+    zip.write_all(manifest_json.as_bytes())
+        .map_err(|e| format!("zip write failed: {e}"))?;
+
+    for id in &session_dirs {
+        let dir = container.join(id);
+        zw(zip.add_directory(format!("sessions/{id}"), options))?;
+        for (path, archive_name) in session_dir_files(&dir, id)? {
+            let bytes =
+                std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            zw(zip.start_file(archive_name.as_str(), options))?;
+            zip.write_all(&bytes)
+                .map_err(|e| format!("zip write failed: {e}"))?;
+        }
+    }
+    zw(zip.finish().map(|_| ()))?;
+
+    Ok(ExportAllSessionsSummary {
+        path: dest.display().to_string(),
+        session_count: session_dirs.len(),
+    })
+}
+
+/// Collect every regular file under one session directory (recursively —
+/// the store writes a flat dir today, but a nested layout must survive a
+/// round-trip too), as `(absolute path, archive path)` pairs sorted by
+/// archive path for byte-stable archives.
+fn session_dir_files(
+    dir: &Path,
+    session_id: &str,
+) -> Result<Vec<(std::path::PathBuf, String)>, String> {
+    let mut out = Vec::new();
+    fn walk(
+        dir: &Path,
+        rel: &str,
+        out: &mut Vec<(std::path::PathBuf, String)>,
+    ) -> Result<(), String> {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .map_err(|e| format!("cannot read session dir {}: {e}", dir.display()))?
+            .flatten()
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let name = entry
+                .file_name()
+                .to_str()
+                .ok_or_else(|| format!("non-UTF-8 file name in {}", dir.display()))?
+                .to_string();
+            let child_rel = format!("{rel}/{name}");
+            if path.is_dir() {
+                walk(&path, &child_rel, out)?;
+            } else if path.is_file() {
+                out.push((path, child_rel));
+            }
+        }
+        Ok(())
+    }
+    walk(dir, &format!("sessions/{session_id}"), &mut out)?;
+    Ok(out)
+}
+
+/// 全量会话导出 (缓期批 2): package the app's whole sessions container
+/// (`<sessions_dir>/<uuid>/…`, exactly what the store wrote) into a zip at
+/// `dest`, plus a top-level `manifest.json`. The heavy lifting runs on the
+/// blocking pool like every other fs command; see
+/// [`build_all_sessions_bundle`] for the full contract (dest parent must
+/// exist; existing dest is overwritten — the diagnostics-export shape).
+#[tauri::command]
+pub async fn export_all_sessions(
+    state: tauri::State<'_, AppState>,
+    dest: String,
+) -> Result<ExportAllSessionsSummary, String> {
+    let container = state.l0_store().container().to_path_buf();
+    let dest_path = std::path::PathBuf::from(dest);
+    tokio::task::spawn_blocking(move || build_all_sessions_bundle(&container, &dest_path))
+        .await
+        .map_err(|e| format!("export all sessions task failed: {e}"))?
 }
 
 /// Switch to a different session, saving the current one first.
@@ -3343,5 +3550,136 @@ mod pin_and_auto_archive_tests {
             ..config::DesktopConfig::default()
         };
         assert_eq!(effective_auto_archive_days(&big), Some(365));
+    }
+
+    // === 全量会话导出 (缓期批 2): export_all_sessions ===
+
+    /// Read all (name, bytes) entries back out of a written zip.
+    fn zip_entries(path: &Path) -> Vec<(String, Vec<u8>)> {
+        let file = std::fs::File::open(path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let mut out = Vec::new();
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).unwrap();
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+            out.push((entry.name().to_string(), bytes));
+        }
+        out
+    }
+
+    #[test]
+    fn export_bundle_packages_session_files_verbatim_with_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        let store = SessionStore::new(container.clone());
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Alpha"));
+        seed_session(&store, &b, None);
+
+        let dest = tmp.path().join("export.zip");
+        let summary = build_all_sessions_bundle(&container, &dest).expect("export");
+        assert_eq!(summary.session_count, 2);
+        assert_eq!(summary.path, dest.display().to_string());
+
+        let entries = zip_entries(&dest);
+        let find = |name: &str| {
+            entries
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, b)| b.clone())
+        };
+        // The store's own bytes land in the archive byte-identical.
+        for id in [&a, &b] {
+            let log = std::fs::read(container.join(id.to_string()).join("events.jsonl")).unwrap();
+            assert_eq!(
+                find(&format!("sessions/{id}/events.jsonl")),
+                Some(log),
+                "events.jsonl must be byte-identical"
+            );
+        }
+        // manifest.json parses and reports exactly what the store knows.
+        let manifest = find("manifest.json").expect("manifest.json present");
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(manifest["session_count"], 2);
+        assert_eq!(
+            manifest["app_version"],
+            serde_json::json!(env!("CARGO_PKG_VERSION"))
+        );
+        assert!(manifest["exported_at"].as_str().is_some());
+        let sessions = manifest["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 2);
+        let alpha = sessions
+            .iter()
+            .find(|s| s["id"] == a.to_string())
+            .expect("alpha row");
+        assert_eq!(alpha["title"], "Alpha");
+        assert!(alpha["started_at"].as_str().is_some());
+        assert!(alpha["last_event_at"].as_str().is_some());
+        assert_eq!(
+            alpha["events_jsonl_bytes"].as_u64(),
+            Some(
+                std::fs::metadata(container.join(a.to_string()).join("events.jsonl"))
+                    .unwrap()
+                    .len()
+            )
+        );
+        let beta = sessions
+            .iter()
+            .find(|s| s["id"] == b.to_string())
+            .expect("beta row");
+        // Untitled session: the title key is omitted entirely, never null.
+        assert!(beta.get("title").is_none(), "{}", beta);
+    }
+
+    #[test]
+    fn export_bundle_of_empty_container_is_a_valid_zip_with_empty_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        std::fs::create_dir_all(&container).unwrap();
+        let dest = tmp.path().join("empty.zip");
+        let summary = build_all_sessions_bundle(&container, &dest).expect("export");
+        assert_eq!(summary.session_count, 0);
+        let entries = zip_entries(&dest);
+        let manifest = entries
+            .iter()
+            .find(|(n, _)| n == "manifest.json")
+            .map(|(_, b)| b.clone())
+            .expect("manifest present");
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(manifest["session_count"], 0);
+        assert_eq!(manifest["sessions"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn export_bundle_skips_foreign_dirs_and_reports_bad_dest_honestly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        let store = SessionStore::new(container.clone());
+        seed_session(&store, &uuid::Uuid::new_v4(), Some("Real"));
+        // Foreign directory sharing the container (not a session).
+        std::fs::create_dir_all(container.join("not-a-uuid")).unwrap();
+        // Stray file at the container root.
+        std::fs::write(container.join("stray.txt"), b"junk").unwrap();
+
+        let dest = tmp.path().join("missing-dir").join("export.zip");
+        let err = build_all_sessions_bundle(&container, &dest).expect_err("parent must exist");
+        assert!(err.contains("cannot create"), "{err}");
+
+        // With an existing parent the export packages only the uuid dir.
+        let dest = tmp.path().join("export.zip");
+        let summary = build_all_sessions_bundle(&container, &dest).expect("export");
+        assert_eq!(summary.session_count, 1, "foreign dirs are not sessions");
+        let names: Vec<_> = zip_entries(&dest).into_iter().map(|(n, _)| n).collect();
+        assert!(
+            names
+                .iter()
+                .all(|n| !n.contains("not-a-uuid") && !n.contains("stray")),
+            "foreign entries must not be packaged: {names:?}"
+        );
+        // Existing dest is silently overwritten (diagnostics precedent).
+        let again = build_all_sessions_bundle(&container, &dest).expect("re-export");
+        assert_eq!(again.path, dest.display().to_string());
     }
 }

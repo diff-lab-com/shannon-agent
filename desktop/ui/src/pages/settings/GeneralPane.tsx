@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useT } from '@/i18n'
+import { save as saveDialog } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
@@ -19,11 +20,13 @@ import SessionSettings from '@/components/settings/SessionSettings'
 // /settings/session deep link redirects here (App.tsx) — nothing is lost.
 //
 // Design 12-settings-general.html:236-243 (parity R1 2026-10-08): the pane
-// closes with the 数据 card, in an honest form (audit §3 Wave A-13):
-//   - 「导出全部会话数据」: the engine only ships per-session export
-//     (export_session, commands_sessions.rs:1301 — the sidebar session
-//     menu's 导出 Markdown), no bulk command, so the full-export button is
-//     an amber dashed「即将支持」badge instead of a dead control;
+// closes with the 数据 card:
+//   - 「导出全部会话」: a REAL button since 缓期批 2 — the engine shipped
+//     `export_all_sessions` (zip of the sessions container + manifest), so
+//     the IA redesign's amber「即将支持」honest placeholder (audit §3
+//     Wave A-13) retired in its favor. Destination via the same native save
+//     dialog the diagnostics export uses; failures (e.g. missing parent
+//     dir) surface verbatim in the error toast;
 //   - 「清除本地缓存」: moved here from the dev-gated 高级 page (the
 //     advanced Memory card), same clear_cache confirm flow;
 //   - the「会话数据仅存本机 ~/.shannon」note as designed.
@@ -77,6 +80,38 @@ export default function GeneralPane() {
       toastError(t('settings.advanced.clearCacheFailed'), e)
     }
     setClearing(false)
+  }
+
+  // 缓期批 2: 全量会话导出 — same dest-picker flow as the diagnostics
+  // export (native save dialog, zip filter, date-stamped default name).
+  // The backend overwrites an existing dest and requires the parent dir to
+  // exist; any rejection surfaces verbatim in the error toast.
+  const [exportingAll, setExportingAll] = useState(false)
+  const handleExportAllSessions = async () => {
+    let target: string | null = null
+    try {
+      target = await saveDialog({
+        defaultPath: `shannon-sessions-${new Date().toISOString().slice(0, 10)}.zip`,
+        filters: [{ name: 'Zip', extensions: ['zip'] }],
+      })
+    } catch (e) {
+      toastError(t('settings.general.data.exportAllSessionsFailed'), e)
+      return
+    }
+    if (!target) return // user cancelled
+    setExportingAll(true)
+    try {
+      const result = await api.exportAllSessions(target)
+      toast.success(
+        t('settings.general.data.exportAllSessionsDone', {
+          count: result.session_count,
+          path: result.path,
+        }),
+      )
+    } catch (e) {
+      toastError(t('settings.general.data.exportAllSessionsFailed'), e)
+    }
+    setExportingAll(false)
   }
   return (
     <div className="space-y-xl">
@@ -150,16 +185,23 @@ export default function GeneralPane() {
           className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 space-y-md"
           data-testid="general-data-card"
         >
-          {/* Bulk export has no engine command yet — honesty beats a dead
-              button (README §3.5: 不支持的能力用琥珀虚线徽章明说). */}
+          {/* 缓期批 2: the engine ships export_all_sessions — the IA
+              redesign's honest「即将支持」placeholder became a real
+              button. Still no cloud anything: the zip is written locally
+              to the path the user picks. */}
           <div>
-            <span
-              className="inline-flex items-center gap-xs rounded-full border border-dashed border-warning/50 bg-warning-container text-on-warning-container px-sm py-xs font-label-md"
-              data-testid="data-export-full-badge"
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={exportingAll}
+              onClick={() => void handleExportAllSessions()}
+              data-testid="export-all-sessions"
             >
               <span className="material-symbols-outlined icon-sm" aria-hidden="true">download</span>
-              {t('settings.general.data.exportFullSoon')}
-            </span>
+              {exportingAll
+                ? t('settings.general.data.exportAllSessionsWorking')
+                : t('settings.general.data.exportAllSessions')}
+            </Button>
             <p className="text-body-sm text-on-surface-variant mt-sm max-w-prose">
               {t('settings.general.data.exportSingleHint')}
             </p>

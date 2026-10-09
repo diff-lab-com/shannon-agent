@@ -59,6 +59,7 @@ import type {
   ProviderStatus,
   FileIndexEntry,
   SendCostEstimate,
+  MissionProgress,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -222,6 +223,16 @@ export async function configure(update: ConfigUpdate): Promise<void> {
   await invoke('configure', { update })
 }
 
+/**
+ * 缓期批 2 使命进度 projection (commands_tasks.rs `mission_progress`):
+ * the configured mission plus per-linked-task rows and budget usage.
+ * Returns `null` when no mission is configured — the UI hides the whole
+ * card rather than showing an empty shell.
+ */
+export async function missionProgress(): Promise<MissionProgress | null> {
+  return invoke('mission_progress')
+}
+
 // --- Gateway social connections (T5) — OS keyring + gateway config.json ---
 
 /** Store a credential in the OS keyring under `<service>/<account>`. */
@@ -352,6 +363,24 @@ export interface ExportDiagnosticsResult {
  */
 export async function exportDiagnostics(dest: string): Promise<ExportDiagnosticsResult> {
   return invoke('export_diagnostics', { dest })
+}
+
+// ── 缓期批 2 — export ALL sessions ────────────────────────────────────
+
+/** Summary of a written all-sessions zip (sessions container + manifest). */
+export interface ExportAllSessionsSummary {
+  path: string
+  session_count: number
+}
+
+/**
+ * 缓期批 2 (commands_sessions.rs `export_all_sessions`): package the whole
+ * sessions container verbatim — every session dir + `manifest.json` — into
+ * the zip at `dest` (an absolute path from the save dialog). Overwrites an
+ * existing file; the parent directory must already exist.
+ */
+export async function exportAllSessions(dest: string): Promise<ExportAllSessionsSummary> {
+  return invoke('export_all_sessions', { dest })
 }
 
 

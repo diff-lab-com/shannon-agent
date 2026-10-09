@@ -313,7 +313,7 @@ describe('Featured card security indicator (F-11 foot)', () => {
     listFeaturedVendors.mockResolvedValue([oauthVendor])
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('Injection-scanned · Signed')).toBeInTheDocument()
+      expect(screen.getByText('Install-time scan · Self-declared publisher')).toBeInTheDocument()
     })
     expect(scanPromptInjectionWithReadme).not.toHaveBeenCalled()
   })
@@ -328,7 +328,7 @@ describe('Featured card security indicator (F-11 foot)', () => {
       expect(scanPromptInjectionWithReadme).toHaveBeenCalled()
     })
     await waitFor(() => {
-      expect(screen.getByText('Injection-scanned · Signed')).toBeInTheDocument()
+      expect(screen.getByText('Install-time scan · Self-declared publisher')).toBeInTheDocument()
     })
     expect(screen.queryByText('Injection risk')).not.toBeInTheDocument()
     expect(screen.queryByText('Review')).not.toBeInTheDocument()
@@ -345,6 +345,6 @@ describe('Featured card security indicator (F-11 foot)', () => {
     await waitFor(() => {
       expect(screen.getByText('Injection risk')).toBeInTheDocument()
     })
-    expect(screen.queryByText('Injection-scanned · Signed')).not.toBeInTheDocument()
+    expect(screen.queryByText('Install-time scan · Self-declared publisher')).not.toBeInTheDocument()
   })
 })
