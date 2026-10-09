@@ -1,6 +1,6 @@
 {
   "name": "model-mode-switch",
-  "description": "模型/模式切换 — session override 后缀 → Set as default → Reset 回继承；effort/执行模式/相位档位；strict 审批弹窗（G4）；sends 快照的 model 字段钉死下一 turn 生效",
+  "description": "模型/模式切换 — session override 后缀 → Set as default → Reset 回继承；effort/规则预设(不动 approval_mode)/审批 pill/相位档位；ask 审批弹窗（G4）；sends 快照的 model 字段钉死下一 turn 生效",
   "seed": {
     "config": {
       "hasKey": true

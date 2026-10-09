@@ -2287,6 +2287,11 @@ export const handlers: Record<string, MockHandler> = {
   async list_hook_events() { await delay(); return clone(MOCK_HOOK_EVENTS) },
   async list_permission_profiles() { await delay(); return clone(MOCK_PROFILES) },
   // P1-3: frozen contract — activate_permission_profile(name: string|null).
+  // 缓期批 3 (mirrors backend 8803a519d): activation changes ONLY
+  // `active_permission_profile` — approval_mode is NOT written anymore (the
+  // old silent overwrite made profile → approval_mode non-injective and
+  // fought the composer's approval-mode pill). The response reports the
+  // approval_mode value in effect, exactly like the backend.
   async activate_permission_profile(args: { name: string | null }) {
     await delay(60)
     const name = (args?.name ?? '').trim()
@@ -2295,10 +2300,7 @@ export const handlers: Record<string, MockHandler> = {
       throw new Error(`unknown permission profile \`${name}\``)
     }
     demoConfig.active_permission_profile = name === '' ? null : name
-    // Mirror the backend's mode mapping so the demo header reflects it.
-    if (name === 'strict' || name === 'balanced') demoConfig.approval_mode = 'ask'
-    else if (name === 'permissive') demoConfig.approval_mode = 'auto-edit'
-    return { active: name === '' ? null : name, approval_mode: demoConfig.approval_mode }
+    return { active: name === '' ? null : name, approval_mode: demoConfig.approval_mode ?? null }
   },
   async save_custom_profile(args: { name: string; description?: string; auto_approve: string[]; confirm: string[]; deny: string[] }) {
     await delay(100)
