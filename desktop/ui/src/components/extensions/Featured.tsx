@@ -357,8 +357,17 @@ export default function Featured() {
                 {/* F-11 unified card foot: security badge left, ONE primary
                     action right. The SecurityBadge shows the scan's verdict —
                     when it has nothing to warn about the card's standing
-                    "secured" line fills the same slot, so every card carries a
-                    visible security indicator (design 07-connectors foot). */}
+                    indicator line fills the same slot, so every card carries a
+                    visible security marker (design 07-connectors foot).
+                    缓期批 2 honesty fix: the line used to read「Injection-
+                    scanned · Signed」, overstating the machinery on both
+                    counts — the scan is an install-time advisory pass over
+                    the directory and README (~22 static patterns; runtime
+                    outbound content is never scanned), and "signed" is a
+                    self-declared manifest label, not cryptographic
+                    verification (extensions/security.rs says so itself).
+                    Same slot, same tone; the copy + hover helper text now
+                    say what actually exists. */}
                 <div className="mt-auto pt-sm flex items-center gap-sm min-w-0">
                   <SecurityBadge
                     text={vendor.description}
@@ -366,7 +375,7 @@ export default function Featured() {
                     fallback={
                       <span
                         className="text-label-xs text-on-surface-variant/90 inline-flex items-center gap-xs min-w-0"
-                        title={t('extensions.featured.securityBadge')}
+                        title={`${t('extensions.featured.securityBadgeScanHelp')} ${t('extensions.featured.securityBadgePublisherHelp')}`}
                       >
                         <span className="material-symbols-outlined icon-sm text-success shrink-0" aria-hidden="true">verified_user</span>
                         <span className="truncate">{t('extensions.featured.securityBadge')}</span>
