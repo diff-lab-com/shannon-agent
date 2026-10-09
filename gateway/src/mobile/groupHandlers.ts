@@ -20,7 +20,16 @@
  *    `group.ruleTrigger`.
  *  - Payments-ask-first is stored and locked at create, but v1 has no
  *    payment-class tool producer, so no `payments-ask-first` trigger is ever
- *    emitted (宁缺勿造); pool enforcement is B6.1.
+ *    emitted (宁缺勿造). B6.1 pool accounting rides the SAME approval face:
+ *    asks whose tool input carries a parseable amount enter the pool's
+ *    pending column, escalate as `over-pool`/`over-share` (one trigger key
+ *    per ask, handoff-first first), and on an ALLOW settle into the group
+ *    ledger (`ledger.jsonl` + a `group.pool-spend` broadcast). Deny/expiry
+ *    refund the pending and leave the ledger untouched.
+ *  - The B6.0-4 TTL mechanism is fully live (engine `approval_ttl_ms`, hub
+ *    per-ask deadline, registry entry-level retention, quote-expired card)
+ *    but has NO quoteWindow producer yet: group asks keep the exact legacy
+ *    300s window on every side until a payments connector exists.
  *
  * Events fan out to EVERY connected device (`hub.broadcastEvent`): a group is
  * a host-level entity, not a device-private task thread — deliberately
@@ -35,17 +44,22 @@ import { EngineWsClient } from "../engine/wsClient.js";
 import { type Logger } from "../adapters/types.js";
 import { loadAgentRoster } from "./agentRoster.js";
 import {
+  appendPoolSpend,
   appendTranscript,
   listGroups,
   loadGroup,
   newGroupId,
+  newPoolSpendId,
   pageTranscript,
   readTranscript,
+  resolvePoolSpendAmountCny,
+  round2Cny,
   saveGroup,
   type GroupMember,
   type GroupRecord,
   type GroupRules,
   type GroupTranscriptEntry,
+  type PoolSpendEntry,
 } from "./groupStore.js";
 import { ShannonError,
   type GroupArchiveParams,
@@ -185,6 +199,101 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
     persist(record);
   }
 
+  // ── §S B6.0-4: the group-expired card ───────────────────────────────────
+  // When a GROUP approval's window expires at the hub, the hub denies and
+  // hands the ask back here (minimal intrusion: the hub owns no group
+  // context, the orchestrator does — same late-binding posture as setWake).
+  // The card is broadcast + transcribed like every system card. Plain
+  // (groupless) approvals never invoke the sink: their expiry stays
+  // invisible, the legacy behavior — no new cards on ordinary asks.
+  hub.setGroupApprovalExpired((req) => {
+    const group = req.group;
+    if (!group) return;
+    const record = loadGroup(dirs, group.groupId);
+    if (!record) return; // group gone — nothing honest left to announce on
+    const member = record.members.find((m) => m.memberId === group.member.memberId);
+    const who = member ? `${member.title}（${member.label}）` : group.member.title;
+    systemEvent(
+      record,
+      "quote-expired",
+      `成员「${who}」的审批「${req.description}」在窗口内未决定，已自动放弃。`,
+    );
+  });
+
+  // ── §S B6.1: pool ledger helpers (the honest-money path) ────────────────
+
+  /**
+   * The B6.1 escalation verdict for one ask, computed BEFORE the ask goes
+   * out and only when its amount is resolvable (an unresolvable ask is
+   * pool-invisible and can escalate nothing):
+   *  - `over-pool` — spent + pending + this ask would pass the pool total;
+   *  - `over-share` — this ask passes the member's remaining share
+   *    (shareCny − spentCny).
+   * Both hitting → `over-pool` carries the key (the host-level limit is the
+   * louder alarm); the single-trigger-key rule stands either way. Neither
+   * verdict BLOCKS the ask — approvals are the user's decision; the trigger
+   * is the honest label on it (v1 enforcement is visibility, per §S).
+   */
+  function overRuleTrigger(
+    record: GroupRecord,
+    member: GroupMember,
+    amountCny: number | null,
+  ): "over-pool" | "over-share" | undefined {
+    if (amountCny === null) return undefined;
+    const cents = (v: number): number => Math.round(v * 100);
+    const amount = cents(amountCny);
+    const overPool =
+      cents(record.pool.spentCny) + cents(record.pool.pendingCny) + amount >
+      cents(record.pool.totalCny);
+    const overShare = cents(member.shareCny) - cents(member.spentCny) < amount;
+    if (overPool) return "over-pool";
+    if (overShare) return "over-share";
+    return undefined;
+  }
+
+  /**
+   * B6.1 settlement for one amount-bearing ask, after the hub resolves it.
+   * deny/expiry → the pending column refunds and the ledger takes nothing
+   * (拒绝不记账); allow → ledger line first (the money book is the truth),
+   * then the pool/member numbers move together and persist — the group.list
+   * projection's `spentCny` always equals the ledger's running sum.
+   * `decidedBy` records the settling device; the initiator fallback exists
+   * only because the type allows a null decide (an allow always arrives via
+   * a signed decide in practice — timeouts settle as deny and never reach
+   * this branch).
+   */
+  function settlePoolSpend(
+    record: GroupRecord,
+    member: GroupMember,
+    ev: { request_id: string; tool_name: string },
+    settled: { choice: "allow" | "deny"; decidedBy: string | null },
+    amountCny: number,
+    initiatorDeviceId: string,
+  ): void {
+    if (settled.choice !== "allow") {
+      record.pool.pendingCny = round2Cny(record.pool.pendingCny - amountCny);
+      persist(record);
+      return;
+    }
+    const poolAfter = round2Cny(record.pool.spentCny + amountCny);
+    const entry: PoolSpendEntry = {
+      id: newPoolSpendId(),
+      memberId: member.memberId,
+      amountCny,
+      kind: ev.tool_name,
+      approvalId: ev.request_id,
+      decidedBy: settled.decidedBy ?? initiatorDeviceId,
+      poolAfterCny: poolAfter,
+      ts: new Date(now()).toISOString(),
+    };
+    appendPoolSpend(dirs, record.groupId, entry);
+    record.pool.pendingCny = round2Cny(record.pool.pendingCny - amountCny);
+    record.pool.spentCny = poolAfter;
+    member.spentCny = round2Cny(member.spentCny + amountCny);
+    persist(record);
+    broadcast({ type: "group.pool-spend", session_id: record.groupId, poolSpend: entry });
+  }
+
   // ── member turn execution (the §K pipeline posture, re-keyed) ────────────
 
   function engineClientFor(sessionKey: string): EngineWsClient {
@@ -289,12 +398,38 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
             member.status = "waiting-approval";
             memberStatusEvent(record, member);
             persist(record);
+            // ── §S B6.1: the honest amount 口径, computed BEFORE the ask.
+            // An unresolvable amount (no amountCny/value in the tool input)
+            // bypasses the entire pool path: no pending, no ledger, no
+            // escalation — 宁缺勿造.
+            const amountCny = resolvePoolSpendAmountCny(ev.tool_input);
             // The R5 one-shot: after a handoff, this member's next ask names
             // the trigger, then the flag clears (the red line fires once).
+            // A pool escalation names its own trigger when the amount is
+            // resolvable — but AT MOST ONE key rides per ask: handoff-first
+            // wins when both hit (the over-* verdict is still settled below,
+            // only the label stays single).
+            const over = overRuleTrigger(record, member, amountCny);
             const ruleTrigger =
-              member.handoffFirstPending === true ? ("handoff-first" as const) : undefined;
+              member.handoffFirstPending === true ? ("handoff-first" as const) : over;
             member.handoffFirstPending = false;
-            const choice = await hub.requestApproval(initiatorDeviceId, {
+            // §S B6.0-4 quoteWindow seat: a payments-connector quote would
+            // set BOTH the ask's per-ask gateway deadline (`deadlineMs`) AND
+            // the engine query's `approval_ttl_ms` to the same window so the
+            // two sides never disagree. v1 has NO quoteWindow producer (no
+            // payment-class tool — 裁决), so both stay absent and the group
+            // ask keeps the exact legacy 300s window everywhere. The
+            // mechanism (hub deadline + registry retention + engine frame
+            // key) is live underneath this seam.
+            const quoteWindowMs: number | null = null;
+            // An amount-bearing ask enters the pool's pending column the
+            // moment it goes out (persisted) — allow converts it into
+            // ledger + spent, deny/expiry refunds it.
+            if (amountCny !== null) {
+              record.pool.pendingCny = round2Cny(record.pool.pendingCny + amountCny);
+              persist(record);
+            }
+            const settled = await hub.requestApprovalWithMeta(initiatorDeviceId, {
               requestId: ev.request_id,
               toolName: ev.tool_name,
               toolInput: ev.tool_input,
@@ -304,6 +439,7 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
               ...(typeof ev.ts === "number" && ev.ts !== null ? { ts: ev.ts } : {}),
               ...(ev.agent ? { agent: ev.agent } : {}),
               ...(ev.risk ? { risk: ev.risk } : {}),
+              ...(quoteWindowMs != null ? { deadlineMs: quoteWindowMs } : {}),
               group: {
                 groupId: record.groupId,
                 member: {
@@ -313,14 +449,35 @@ export function createGroupHandlers(opts: GroupHandlersOptions): MethodHandlers 
                   source: member.source,
                 },
                 ...(ruleTrigger ? { ruleTrigger } : {}),
+                // §S B6.1: rides only when the amount resolved. With the
+                // pending bump already applied above, `total − spent −
+                // pending` IS `total − spent − pendingBefore − amount`
+                // (remainingAfter), negative when the ask would overdraw —
+                // shipped as-is, never clamped.
+                ...(amountCny !== null
+                  ? {
+                      poolAfter: {
+                        poolCny: record.pool.totalCny,
+                        remainingAfterCny: round2Cny(
+                          record.pool.totalCny - record.pool.spentCny - record.pool.pendingCny,
+                        ),
+                      },
+                    }
+                  : {}),
               },
             });
+            // B6.1 settlement: allow → ledger + broadcast + pool/member
+            // numbers; deny/expiry → pending refunds, ledger untouched. A
+            // no-amount ask bypasses the pool entirely (default path).
+            if (amountCny !== null) {
+              settlePoolSpend(record, member, ev, settled, amountCny, initiatorDeviceId);
+            }
             // Forward the decision so the engine resumes (mirror the IM/task
             // handler; a failed POST degrades to the engine's own timeout-deny).
             await respondToApproval({
               engineBaseUrl: opts.engineHttpBaseUrl,
               requestId: ev.request_id,
-              choice,
+              choice: settled.choice,
               authToken: opts.engineAuthToken ?? null,
               fetchImpl: opts.fetchImpl,
             }).catch((err) => {

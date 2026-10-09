@@ -145,7 +145,20 @@ export function wireTask(record: TaskRecord): MobileTaskRecord {
 
 interface PendingApproval {
   requestId: string;
-  settle: (choice: "allow" | "deny") => void;
+  /** `decidedBy` is the settling device's id, or null on a timeout deny. */
+  settle: (choice: "allow" | "deny", decidedBy: string | null) => void;
+}
+
+/**
+ * §S B6.1: how one parked approval settled — the choice plus WHO decided
+ * (the device id whose signed `shannon/approval/decide` landed), which the
+ * group ledger records as `decidedBy`. `decidedBy` is null only on a
+ * timeout deny (no device ever answered; deny-by-expiry never reaches the
+ * ledger anyway).
+ */
+export interface ApprovalSettle {
+  choice: "allow" | "deny";
+  decidedBy: string | null;
 }
 
 /** Result of `MobileDispatchHub.dispatch` — the freshly created journal record. */
@@ -217,6 +230,16 @@ export interface MobileDispatchHubOptions {
   rosterEntry?: (agentId: string) => RosterAgent | null;
 }
 
+/**
+ * §S B6.0-4: called when a GROUP approval's window expires at the hub (the
+ * parking timer deny). The hub itself owns no group context — the group
+ * orchestrator late-binds this sink (see `setGroupApprovalExpired`) and
+ * emits the honest `group.system {kind: "quote-expired"}` card. Plain
+ * (non-group) approvals never invoke it: their expiry stays invisible, the
+ * legacy behavior.
+ */
+export type GroupApprovalExpiredSink = (req: ApprovalReq) => void;
+
 export class MobileDispatchHub {
   private readonly logger: Logger;
   private readonly approvalTimeoutMs: number;
@@ -230,6 +253,13 @@ export class MobileDispatchHub {
   private wake: PushWakeSink | null;
   /** P2-9: roster resolver for the agent.state push (see the option doc). */
   private readonly rosterEntry: ((agentId: string) => RosterAgent | null) | null;
+  /**
+   * §S B6.0-4: the group-expired card sink, late-bound by the group
+   * orchestrator (see `setGroupApprovalExpired`). Null → group asks that
+   * expire still deny, just without the extra card (and plain asks never
+   * consult it).
+   */
+  private groupApprovalExpired: GroupApprovalExpiredSink | null;
 
   /** deviceId → open, session-bound contexts. */
   private readonly byDevice = new Map<string, Set<MethodContext>>();
@@ -257,6 +287,7 @@ export class MobileDispatchHub {
     this.replay = opts.replay ?? null;
     this.wake = opts.wake ?? null;
     this.rosterEntry = opts.rosterEntry ?? null;
+    this.groupApprovalExpired = null;
   }
 
   /** Current push seq head — feeds `shannon/snapshot` / `shannon/resume`. */
@@ -276,6 +307,19 @@ export class MobileDispatchHub {
    */
   setWake(fn: PushWakeSink): void {
     this.wake = fn;
+  }
+
+  /**
+   * §S B6.0-4: late-bind the group-expired card sink (see
+   * `GroupApprovalExpiredSink`). The group orchestrator owns the group
+   * context the card needs, so it registers this when its handlers are
+   * created; a re-registration replaces the previous sink (one group face
+   * per gateway). Fires ONLY for asks carrying a `group` key and ONLY on
+   * the parking-timer expiry — never on a device decide (allowed or denied
+   * by a human is not an expiry).
+   */
+  setGroupApprovalExpired(fn: GroupApprovalExpiredSink): void {
+    this.groupApprovalExpired = fn;
   }
 
   // ── connections ────────────────────────────────────────────────────────────
@@ -497,10 +541,26 @@ export class MobileDispatchHub {
   // ── approvals (phone decides via Y/N text) ─────────────────────────────────
 
   /**
-   * Push an approval request to the device and wait for its Y/N reply (or the
-   * timeout → deny). Called by the "mobile" adapter from inside the turn, so
-   * the approval turn handler forwards the decision to the engine exactly as
-   * it does for the IM adapters.
+   * Push an approval request to the device and wait for its Y/N reply (or
+   * the timeout → deny). Legacy-shaped wrapper around
+   * `requestApprovalWithMeta` (the §S B6.1 callers need the deciding
+   * device for the ledger; every existing caller keeps this exact
+   * `Promise<"allow" | "deny">` contract).
+   */
+  requestApproval(deviceId: string, req: ApprovalReq): Promise<"allow" | "deny"> {
+    return this.requestApprovalWithMeta(deviceId, req).then((s) => s.choice);
+  }
+
+  /**
+   * §S B6.1: `requestApproval` plus WHO settled it (`ApprovalSettle`).
+   *
+   * B6.0-4: the ask's parking deadline is per-ask — `req.deadlineMs`
+   * (finite, > 0) overrides the gateway-wide `approvalTimeoutMs`; absent or
+   * unusable keeps the exact legacy 300s behavior (and the registry entry's
+   * default retention). A GROUP ask whose window expires calls the
+   * group-expired sink (the quote-expired card) before the deny settles;
+   * plain asks stay silent like before. The registry entry dies at the same
+   * instant via its entry-level `expiresAtMs`.
    *
    * B1b: when the engine event carried the §L1 rich fields, the pushed event
    * AND the registry record carry them too — `agent`/`risk` are normalized
@@ -511,11 +571,16 @@ export class MobileDispatchHub {
    * clock. Unusable values omit the key, so the push stays byte-identical to
    * the legacy shape on old engines.
    */
-  requestApproval(deviceId: string, req: ApprovalReq): Promise<"allow" | "deny"> {
+  requestApprovalWithMeta(deviceId: string, req: ApprovalReq): Promise<ApprovalSettle> {
     const engineTs =
       typeof req.ts === "number" && Number.isFinite(req.ts) ? req.ts : null;
     const agent = engineAgent(req.agent);
     const risk = engineRisk(req.risk);
+    // §S B6.0-4: per-ask deadline (default path = the legacy constant).
+    const deadlineMs =
+      typeof req.deadlineMs === "number" && Number.isFinite(req.deadlineMs) && req.deadlineMs > 0
+        ? req.deadlineMs
+        : null;
     this.pushEvent(deviceId, {
       type: "approval.request",
       request_id: req.requestId,
@@ -541,23 +606,37 @@ export class MobileDispatchHub {
       agent,
       risk,
       ...(req.group ? { group: req.group } : {}),
+      // The entry's own retention mirrors the parking timer when a per-ask
+      // deadline is in force; without one the registry default stands.
+      ...(deadlineMs !== null ? { expiresAtMs: this.now() + deadlineMs } : {}),
     });
-    return new Promise<"allow" | "deny">((resolve) => {
+    return new Promise<ApprovalSettle>((resolve) => {
       let timer: NodeJS.Timeout | undefined;
       const entry: PendingApproval = {
         requestId: req.requestId,
-        settle: (choice) => {
+        settle: (choice, decidedBy) => {
           if (timer) clearTimeout(timer);
-          resolve(choice);
+          resolve({ choice, decidedBy });
         },
       };
       timer = setTimeout(() => {
         this.removePending(deviceId, entry);
-        // The engine itself times the request out to deny at 300s; denying here
-        // keeps the reply loop unblocked when the phone never answers.
+        // The engine itself times the request out to deny at its window;
+        // denying here keeps the reply loop unblocked when the phone never
+        // answers.
         this.approvals?.resolve(entry.requestId);
-        entry.settle("deny");
-      }, this.approvalTimeoutMs);
+        // §S B6.0-4: a GROUP ask that dies at its window gets the honest
+        // quote-expired card (the sink composes and broadcasts it; a broken
+        // sink must never fail the deny — same posture as the wake sink).
+        if (req.group && this.groupApprovalExpired) {
+          try {
+            this.groupApprovalExpired(req);
+          } catch (err) {
+            this.logger.warn(`group-expired sink failed: ${(err as Error).message}`);
+          }
+        }
+        entry.settle("deny", null);
+      }, deadlineMs ?? this.approvalTimeoutMs);
       this.pendingFor(deviceId).push(entry);
     });
   }
@@ -598,7 +677,7 @@ export class MobileDispatchHub {
       if (!entry) continue;
       this.removePending(deviceId, entry);
       this.approvals?.resolve(requestId);
-      entry.settle(choice);
+      entry.settle(choice, deviceId);
       this.logger.info(`mobile hub: approval ${requestId} → ${choice} (device ${deviceId}, decide)`);
       return true;
     }

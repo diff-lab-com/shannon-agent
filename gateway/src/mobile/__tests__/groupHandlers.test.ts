@@ -29,6 +29,7 @@ import type { EngineWsClient } from "../../engine/wsClient.js";
 import { createConsoleLogger } from "../../logger.js";
 import { MobileDispatchHub } from "../hub.js";
 import { createGroupHandlers, groupHistoryLookup } from "../groupHandlers.js";
+import { loadGroup, readPoolLedger } from "../groupStore.js";
 import type { MethodContext } from "../server.js";
 
 const logger: Logger = createConsoleLogger("error");
@@ -79,11 +80,17 @@ interface Harness {
 function buildHarness(opts: {
   /** One script PER member turn (each turn builds its own engine client). */
   turnScripts?: EngineEvent[][];
+  /** One roster dir injected as the create-path validation target. */
   agentRoster?: string;
   fetchImpl?: typeof fetch;
+  /** Hub-wide approval parking window (default 300s; tests shrink it). */
+  approvalTimeoutMs?: number;
 } = {}): Harness {
   const groupsDirs = [mkdtempSync(join(tmpdir(), "shannon-groups-test-"))];
-  const hub = new MobileDispatchHub({ logger });
+  const hub = new MobileDispatchHub({
+    logger,
+    ...(opts.approvalTimeoutMs !== undefined ? { approvalTimeoutMs: opts.approvalTimeoutMs } : {}),
+  });
   const clients: EngineWsClient[] = [];
   const turnScripts = [...(opts.turnScripts ?? [])];
   // A tick clock: distinct ms per mutation so §J2 same-ts pagination groups
@@ -451,6 +458,230 @@ describe("group store persistence (§S ruling: host-side files)", () => {
     expect(list.result.groups[0]).toMatchObject({ groupId, status: "completed" });
     // Transcript survives the archive (回看口径).
     expect(groupHistoryLookup(h.groupsDirs)(groupId, {})).not.toBeNull();
+  });
+});
+
+// ── §S B6.1: the pool ledger chain (amount 口径 → escalation → settlement) ──
+
+function approvalEvent(
+  requestId: string,
+  toolInput: unknown,
+  over: { toolName?: string; description?: string } = {},
+): EngineEvent {
+  return {
+    type: "approval_request",
+    request_id: requestId,
+    tool_name: over.toolName ?? "payments.transfer",
+    tool_input: toolInput,
+    description: over.description ?? "支付一笔款项",
+    is_destructive: false,
+    diff_preview: null,
+  } as EngineEvent;
+}
+
+describe("§S B6.1 pool ledger (member-turn approvals with amounts)", () => {
+  it("allow: pending → ledger line + group.pool-spend broadcast + pool/member numbers agree (decidedBy = the deciding device)", async () => {
+    const posts: Array<{ url: string; body: unknown }> = [];
+    const h = buildHarness({
+      turnScripts: [[approvalEvent("req-pay-1", { amountCny: 120.5 }), textEvent("付好了")]],
+      fetchImpl: (async (url: any, init?: any) => {
+        posts.push({ url: String(url), body: JSON.parse(init.body) });
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+    });
+    const created = await createGroup(h);
+    const groupId = created.result.group.groupId as string;
+    await h.handlers["shannon/group.message"]!({ groupId, text: "订机票" }, h.initiator);
+    await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
+
+    // At ask time: the amount sits in pending, and the ask carries poolAfter
+    // (remainingAfter = total − spent − pending, honest arithmetic).
+    const ask = eventsOf(h.initiator).find((e) => e.type === "approval.request")!;
+    expect(ask.group.poolAfter).toEqual({ poolCny: 8000, remainingAfterCny: 7879.5 });
+    let list: any = await h.handlers["shannon/group.list"]!({}, h.initiator);
+    expect(list.result.groups[0].pool).toMatchObject({ spentCny: 0, pendingCny: 120.5 });
+
+    h.hub.settleApproval("req-pay-1", "allow");
+    await vi.waitFor(() => {
+      expect(eventsOf(h.bystander).some((e) => e.type === "group.pool-spend")).toBe(true);
+    });
+    // The wire mirror of the ledger line, on BOTH devices (host-level entity).
+    const spend = eventsOf(h.bystander).find((e) => e.type === "group.pool-spend")!.poolSpend;
+    expect(spend).toMatchObject({
+      memberId: "mem-01",
+      amountCny: 120.5,
+      kind: "payments.transfer",
+      approvalId: "req-pay-1",
+      decidedBy: "dev-1",
+      poolAfterCny: 120.5,
+    });
+    expect(spend.id).toMatch(/^ps-/);
+
+    // The ledger file took exactly one line; the group.list projection's
+    // spent equals the ledger's running sum (the two-books invariant).
+    const ledger = readPoolLedger(h.groupsDirs, groupId);
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]).toMatchObject({ amountCny: 120.5, approvalId: "req-pay-1", decidedBy: "dev-1" });
+    list = await h.handlers["shannon/group.list"]!({}, h.initiator);
+    expect(list.result.groups[0].pool).toMatchObject({ spentCny: 120.5, pendingCny: 0 });
+    expect(list.result.groups[0].pool.spentCny).toBe(
+      Math.round(ledger.reduce((s, e) => s + e.amountCny, 0) * 100) / 100,
+    );
+    // The member's own spentCny moved with the pool (persisted on the entity).
+    const stored = loadGroup(h.groupsDirs, groupId)!;
+    expect(stored.members[0]).toMatchObject({ spentCny: 120.5 });
+    expect(stored.pool.pendingCny).toBe(0);
+    // The engine got the allow.
+    expect(posts[0]!.body).toMatchObject({ request_id: "req-pay-1", choice: "allow_once" });
+  });
+
+  it("deny: the pending refunds and the ledger takes nothing (拒绝不记账)", async () => {
+    const h = buildHarness({
+      turnScripts: [[approvalEvent("req-deny-1", { amountCny: 88 }), textEvent("换方案继续")]],
+    });
+    const created = await createGroup(h);
+    const groupId = created.result.group.groupId as string;
+    await h.handlers["shannon/group.message"]!({ groupId, text: "试试" }, h.initiator);
+    await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
+    h.hub.settleApproval("req-deny-1", "deny");
+    await vi.waitFor(() => {
+      expect(eventsOf(h.initiator).some((e) => e.type === "task.message")).toBe(true);
+    });
+    expect(readPoolLedger(h.groupsDirs, groupId)).toEqual([]);
+    expect(eventsOf(h.initiator).some((e) => e.type === "group.pool-spend")).toBe(false);
+    const list: any = await h.handlers["shannon/group.list"]!({}, h.initiator);
+    expect(list.result.groups[0].pool).toMatchObject({ spentCny: 0, pendingCny: 0 });
+  });
+
+  it("no parseable amount → the entire pool path is bypassed (no poolAfter, no pending, no ledger)", async () => {
+    const h = buildHarness({
+      turnScripts: [[approvalEvent("req-plain-1", { command: "ls -la" }), textEvent("做完了")]],
+    });
+    const created = await createGroup(h);
+    const groupId = created.result.group.groupId as string;
+    await h.handlers["shannon/group.message"]!({ groupId, text: "看看" }, h.initiator);
+    await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
+    const ask = eventsOf(h.initiator).find((e) => e.type === "approval.request")!;
+    expect(ask.group).toEqual({
+      groupId,
+      member: { memberId: "mem-01", label: "A", title: "规划分工", source: "ephemeral" },
+    });
+    h.hub.settleApproval("req-plain-1", "allow");
+    await vi.waitFor(() => {
+      expect(eventsOf(h.initiator).some((e) => e.type === "task.message")).toBe(true);
+    });
+    expect(readPoolLedger(h.groupsDirs, groupId)).toEqual([]);
+    expect(eventsOf(h.initiator).some((e) => e.type === "group.pool-spend")).toBe(false);
+    const list: any = await h.handlers["shannon/group.list"]!({}, h.initiator);
+    expect(list.result.groups[0].pool).toMatchObject({ spentCny: 0, pendingCny: 0 });
+  });
+
+  it("value (分) converts ÷100 into the ledger; over-pool / over-share escalate with honest negative remainingAfter", async () => {
+    // over-pool: spent(0) + pending(0) + 9000 > 8000 → the ask is labeled,
+    // allowed anyway (approvals are the user's call), and remainingAfter
+    // ships NEGATIVE (-1000) as-is.
+    const posts: Array<{ url: string; body: unknown }> = [];
+    const h = buildHarness({
+      turnScripts: [[approvalEvent("req-over-1", { value: 900000 }), textEvent("超了但用户同意")]],
+      fetchImpl: (async (url: any, init?: any) => {
+        posts.push({ url: String(url), body: JSON.parse(init.body) });
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+    });
+    const created = await createGroup(h, [
+      { slot: "flights", label: "A", title: "订机票", shareCny: 100 },
+    ]);
+    const groupId = created.result.group.groupId as string;
+    await h.handlers["shannon/group.message"]!({ groupId, text: "订" }, h.initiator);
+    await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
+    const ask = eventsOf(h.initiator).find((e) => e.type === "approval.request")!;
+    expect(ask.group.ruleTrigger).toBe("over-pool"); // pool escalation before the share one
+    expect(ask.group.poolAfter).toEqual({ poolCny: 8000, remainingAfterCny: -1000 });
+    h.hub.settleApproval("req-over-1", "allow");
+    await vi.waitFor(() => {
+      expect(eventsOf(h.initiator).some((e) => e.type === "group.pool-spend")).toBe(true);
+    });
+    // value 900000 分 = 9000 元 in the ledger; member.spent (9000) > share (100).
+    const ledger = readPoolLedger(h.groupsDirs, groupId);
+    expect(ledger[0]).toMatchObject({ amountCny: 9000, poolAfterCny: 9000 });
+    const list: any = await h.handlers["shannon/group.list"]!({}, h.initiator);
+    expect(list.result.groups[0].pool).toMatchObject({ spentCny: 9000, pendingCny: 0 });
+  });
+
+  it("over-share fires when the ask passes the member's remaining share but stays inside the pool", async () => {
+    const h = buildHarness({
+      turnScripts: [[approvalEvent("req-share-1", { amountCny: 150 }), textEvent("好")]],
+    });
+    const created = await createGroup(h, [
+      { slot: "flights", label: "A", title: "订机票", shareCny: 100 },
+    ]);
+    const groupId = created.result.group.groupId as string;
+    await h.handlers["shannon/group.message"]!({ groupId, text: "订" }, h.initiator);
+    await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
+    const ask = eventsOf(h.initiator).find((e) => e.type === "approval.request")!;
+    expect(ask.group.ruleTrigger).toBe("over-share"); // 150 > 100 − 0, pool unbroken
+    expect(ask.group.poolAfter).toEqual({ poolCny: 8000, remainingAfterCny: 7850 });
+  });
+
+  it("handoff-first keeps the single trigger key; the over-* verdict is still enforced underneath", async () => {
+    const h = buildHarness({
+      turnScripts: [
+        [textEvent("A 的产出")],
+        [approvalEvent("req-hf-1", { amountCny: 9000 }), textEvent("B 完成")],
+      ],
+    });
+    const created = await createGroup(h);
+    const groupId = created.result.group.groupId as string;
+    await h.handlers["shannon/group.message"]!({ groupId, text: "开工" }, h.initiator);
+    await vi.waitFor(() => expect(h.hub.hasPendingApproval("dev-1")).toBe(true));
+    // B's ask (after the A→B handoff) would ALSO be over-pool — but only one
+    // key rides, and the red line wins the label.
+    const ask = eventsOf(h.initiator).filter((e) => e.type === "approval.request")[0]!;
+    expect(ask.group.ruleTrigger).toBe("handoff-first");
+    // The pool mechanics are NOT skipped — poolAfter still rides the ask.
+    expect(ask.group.poolAfter).toEqual({ poolCny: 8000, remainingAfterCny: -1000 });
+    h.hub.settleApproval("req-hf-1", "allow");
+    await vi.waitFor(() => {
+      expect(eventsOf(h.initiator).some((e) => e.type === "group.pool-spend")).toBe(true);
+    });
+    expect(readPoolLedger(h.groupsDirs, groupId)).toHaveLength(1);
+  });
+
+  it("window expiry: the hub deny triggers the quote-expired system card and refunds the pending (no ledger)", async () => {
+    const posts: Array<{ url: string; body: unknown }> = [];
+    const h = buildHarness({
+      turnScripts: [[approvalEvent("req-exp-1", { amountCny: 66 }), textEvent("过期后继续")]],
+      approvalTimeoutMs: 40,
+      fetchImpl: (async (url: any, init?: any) => {
+        posts.push({ url: String(url), body: JSON.parse(init.body) });
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+    });
+    const created = await createGroup(h);
+    const groupId = created.result.group.groupId as string;
+    await h.handlers["shannon/group.message"]!({ groupId, text: "订" }, h.initiator);
+    await vi.waitFor(() => {
+      expect(
+        eventsOf(h.initiator).some((e) => e.type === "group.system" && e.system.kind === "quote-expired"),
+      ).toBe(true);
+    });
+    const card = eventsOf(h.initiator).find((e) => e.system?.kind === "quote-expired")!;
+    expect(card.session_id).toBe(groupId);
+    expect(card.system.text).toContain("窗口内未决定");
+    expect(card.system.text).toContain("已自动放弃");
+    expect(typeof card.system.ts).toBe("string");
+    // The turn continued after the expiry-deny (engine forwards it).
+    await vi.waitFor(() => {
+      expect(eventsOf(h.initiator).some((e) => e.type === "task.message")).toBe(true);
+    });
+    // Pending refunded, ledger untouched, and the engine was told "deny".
+    const list: any = await h.handlers["shannon/group.list"]!({}, h.initiator);
+    expect(list.result.groups[0].pool).toMatchObject({ spentCny: 0, pendingCny: 0 });
+    expect(readPoolLedger(h.groupsDirs, groupId)).toEqual([]);
+    expect(posts[0]!.body).toMatchObject({ request_id: "req-exp-1", choice: "deny" });
+    // The card is in the transcript for replay.
+    const history = groupHistoryLookup(h.groupsDirs)(groupId, {});
+    expect(history!.messages.some((m) => m.content.includes("已自动放弃"))).toBe(true);
   });
 });
 

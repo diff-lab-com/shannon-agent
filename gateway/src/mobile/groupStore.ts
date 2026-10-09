@@ -6,10 +6,12 @@
  * open question #2): groups are HOST-side orchestration entities, deliberately
  * NOT engine L0 sessions — a member turn's engine session is a one-shot UUID
  * and the group transcript only exists at the orchestration layer. Layout
- * (one directory per group; B6.1's `ledger.jsonl` will sit alongside):
+ * (one directory per group):
  *
- *   ~/.shannon/groups/<groupId>/group.json      the entity (write-through)
+ *   ~/.shannon/groups/<groupId>/group.json        the entity (write-through)
  *   ~/.shannon/groups/<groupId>/transcript.jsonl  one JSON entry per line
+ *   ~/.shannon/groups/<groupId>/ledger.jsonl      B6.1 pool-spend book
+ *                                                 (append-only, host-internal)
  *
  * The phone replays a group thread through the §J2 face:
  * `shannon/session.history {sessionId: "grp-…"}` is intercepted by the
@@ -110,6 +112,89 @@ export interface GroupTranscriptEntry {
   kind?: "user" | "member" | "system";
   /** Member attribution for kind:"member" entries (avatar + title row). */
   member?: { memberId: string; label: string; title: string };
+}
+
+// ── §S B6.1: the pool ledger (amounts, entries, jsonl) ──────────────────────
+
+/**
+ * One pool-spend ledger line (B6.1): the group's money book. Append-only
+ * `ledger.jsonl` next to `group.json`/`transcript.jsonl` — a HOST-internal
+ * file, never on the wire and never in `usage.jsonl` (model-call spend keeps
+ * its own §P book; the two are never merged). `amountCny` is 元 with two
+ * decimals; `poolAfterCny` is the pool's `spentCny` AFTER this entry landed,
+ * so replaying the file reproduces the pool. `decidedBy` is the device id
+ * whose signed decide settled the approval (the hub's settle face); denials
+ * and expiry never write here (拒绝不记账).
+ */
+export interface PoolSpendEntry {
+  id: string;
+  memberId: string;
+  amountCny: number;
+  /** The tool that spent (= the approval's tool name; an open set). */
+  kind: string;
+  approvalId: string;
+  decidedBy: string;
+  poolAfterCny: number;
+  ts: string;
+}
+
+export function newPoolSpendId(): string {
+  return `ps-${randomUUID()}`;
+}
+
+/**
+ * The §S B6.1 HONEST amount 口径 for one approval's `tool_input`:
+ *
+ *  1. `amountCny` — 元, number ≥ 0 — wins outright when usable.
+ *  2. otherwise `value` — 分, number ≥ 0 (the DATA-LEDGER「引擎载荷原文」
+ *     convention) — is converted ÷100.
+ *  3. otherwise (or when a present field is non-finite / negative / wrong
+ *     type — treated as ABSENT, never as 0) the ask does no pool accounting
+ *     at all: 宁缺勿造, the ledger never records an estimate.
+ */
+export function resolvePoolSpendAmountCny(toolInput: unknown): number | null {
+  if (typeof toolInput !== "object" || toolInput === null) return null;
+  const raw = toolInput as { amountCny?: unknown; value?: unknown };
+  const usable = (v: unknown): v is number =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0;
+  if (usable(raw.amountCny)) return round2Cny(raw.amountCny);
+  if (usable(raw.value)) return round2Cny(raw.value / 100);
+  return null;
+}
+
+/** Round to the CNY wire precision (元, two decimals) without float drift. */
+export function round2Cny(v: number): number {
+  return Math.round(v * 100) / 100;
+}
+
+/** Append one settled spend to the group's ledger (write-through, one line). */
+export function appendPoolSpend(dirs: string[], groupId: string, entry: PoolSpendEntry): void {
+  assertGroupId(groupId);
+  const dir = groupDir(dirs, groupId);
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(join(dir, "ledger.jsonl"), `${JSON.stringify(entry)}\n`);
+}
+
+/**
+ * Read the group's pool ledger, oldest first. A torn tail line (crash
+ * mid-append) is skipped — the ledger is append-only, so everything before
+ * it is intact (the transcript convention).
+ */
+export function readPoolLedger(dirs: string[], groupId: string): PoolSpendEntry[] {
+  assertGroupId(groupId);
+  const path = join(groupDir(dirs, groupId), "ledger.jsonl");
+  if (!existsSync(path)) return [];
+  const out: PoolSpendEntry[] = [];
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    try {
+      out.push(JSON.parse(trimmed) as PoolSpendEntry);
+    } catch {
+      // Skip a torn tail line (crash mid-append).
+    }
+  }
+  return out;
 }
 
 /** Storage root override for tests; default `~/.shannon/groups`. */
