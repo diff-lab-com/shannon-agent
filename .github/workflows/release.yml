@@ -639,6 +639,9 @@ jobs:
           # natively on this runner. Names verified against the v0.10.0
           # release; extended to the full matrix (was 10, missing rpm,
           # AppImage, aarch64 dmg, arm64 CLI/gateway).
+          # SHA256SUMS is generated two steps below in THIS job — listing it in
+          # the for-list above only ever passed on re-runs where a prior attempt
+          # had left the asset in the draft (v0.13.0 first clean run failed there).
           for a in \
             shannon-x86_64-unknown-linux-gnu.tar.gz \
             shannon-aarch64-unknown-linux-gnu.tar.gz \
@@ -656,10 +659,6 @@ jobs:
             "shannon-desktop_${CORE}_x64.dmg" \
             "shannon-desktop_${CORE}_aarch64.dmg" \
             "shannon-desktop_${CORE}_x64-setup.exe" \
-            # SHA256SUMS is generated two steps below in THIS job — listing
-            # it here only ever passed on re-runs where a prior attempt had
-            # left the asset in the draft (v0.13.0 first clean run failed on
-            # exactly that).
             install.sh install.ps1; do
             [ -f "release-assets/$a" ] || { echo "::error::missing expected asset: $a"; exit 1; }
           done
