@@ -446,9 +446,10 @@ describe('Header — skill candidate badge', () => {
 })
 
 // ── P1-3: execution-mode switcher + approval-dialog decision reason ──
-// Aurora redesign 2026-10 (02-chat.html 三要素归位): the switchers moved
-// into the composer's compose row (see ComposerSwitchers.test.tsx for the
-// relocated activation/aria coverage). The Header half pins the ABSENCE.
+// Aurora redesign 2026-10 (02-chat.html 三要素归位): the switchers moved out
+// of the Header; 缓期批 3 收敛 then retired the execution-mode twin from the
+// composer entirely (profile activation = 规则预设 lives in Settings →
+// 权限与安全). The Header half still pins the ABSENCE — on every page.
 describe('Header — P1-3 execution mode + decision reason', () => {
   beforeEach(() => {
     // Top-level describe — the outer beforeEach does not run here, so
