@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 缓期批 2 · 使命实体（config 键版）+ 全量会话导出 + 扩展安全徽章诚实化（2026-10-09）
 - 缓期批 1 · secret-guard unset 默认收口（R-0）+ 启动行为双开关 + 上下文峰值 + 看板金额（2026-10-09）
 - N3 per-kind 类别信任（v0.2 信任协议批，2026-10-08）· 经 PR #351 直合 main，本批回灌 dev
 - mobile batch B · task 富化 + 真实 agent roster + 只读预算面（2026-10-07）
@@ -18,6 +19,14 @@ Waves queued for the next release, newest first:
 ### Breaking / behavior changes
 
 - **`secret-guard` defaults to `redact` (was `audit`)**: with no `$SHANNON_SECRET_GUARD` and no `[secret_guard] mode` configured, secret-shaped content in outbound requests is now replaced with deterministic surrogates before it reaches the provider (restored locally for tool execution and display; byte-stable, so prompt caching is unaffected). Opt out with `SHANNON_SECRET_GUARD=audit` (observe-only), `SHANNON_SECRET_GUARD=off`, or `[secret_guard] mode` in config — env beats config, and an explicit `off` always wins. A one-time notice after the first hit explains what happened and names these switches.
+
+### 缓期批 2（2026-10-09）
+
+缓期清单第二批落地（调研与圈选见 `docs/reviews/2026-10-09-cleanup-plan-and-deferred-research.md`）：
+
+- **使命实体（config 键版，单使命 v1）**：新 `DesktopConfig.mission = {name, budget_usd?, deadline_ts?, task_ids[]}`（serde default 兼容旧 config.json），沿 `strategic_focus` 先例走 `configure` 专用臂（校验：name 必填 ≤200、budget 有限非负、deadline 为合理 epoch-ms（过期合法——逾期是真实状态）、task_ids 去重 ≤200，拒绝即不落盘）+ `config-updated` 事件。新 `mission_progress` 投影：逐链接任务回 `{found, title?, status?, cost_usd?}`（批 1 台账 join 复用；任务已删报 `found:false` 不发明状态），`budget_used_usd` 仅在有任务真实关联台账时存在（绝不伪造 0）。UI：OPC 页 `OPCMissionFocus`（其注释明言等待使命实体）正下方新增使命卡——预算/截止 chip（缺省不渲染、逾期灰标）、链接任务行、用量行 `used / budget (pct)`（两值齐才显示），行内编辑器与后端校验镜像。
+- **全量会话导出**：新 `export_all_sessions(dest)`——会话目录原样字节打包（不重序列化）+ `manifest.json`（`exported_at`/`app_version`/`session_count`/逐会话仅真实存在字段：id、title、`started_at`、`last_event_at`（进行中的会话不说「结束时间」）、`events_jsonl_bytes`）；外目录/杂散文件跳过；安全形状同诊断导出（父目录须存在、spawn_blocking）。ACL 三件套齐。UI：通用 → 数据卡上等待多时的「即将支持」占位退役，真按钮就位（原生 save 对话框 + 日期戳默认名、导出中禁用、成功 toast 带数量与落盘路径、失败诚实透因）。
+- **扩展安全徽章诚实化**：精选页安全徽章「注入扫描 · 已签名」实为过度声明，就地改为「**安装时扫描 · 发布者自声明**」，并新增两条 helper 文案（×10 locale）：安装前对目录与 README 做建议性静态扫描、不扫描运行时出站内容；发布者标识为清单自声明、非密码学校验。视觉不动——纯文案诚实化。
 
 ### 缓期批 1（2026-10-09）
 

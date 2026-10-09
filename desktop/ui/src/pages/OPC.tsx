@@ -21,6 +21,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import { cn } from '@/lib/utils'
 import OpcAnalyticsDashboard from '@/components/opc/OpcAnalyticsDashboard'
 import OPCMissionFocus from '@/components/opc/OPCMissionFocus'
+import MissionCard from '@/components/opc/MissionCard'
 import OPCAgentSwarm from '@/components/opc/OPCAgentSwarm'
 import OPCKanbanBoard from '@/components/opc/OPCKanbanBoard'
 import OPCRunsTable from '@/components/opc/OPCRunsTable'
@@ -31,7 +32,7 @@ type OpcView = 'board' | 'runs'
 
 export default function OPC() {
   const intl = useIntl()
-  const { agents, tasks, config, loading, refreshTasks } = useCatalog()
+  const { agents, tasks, config, loading, refreshTasks, refreshConfig } = useCatalog()
   // P2-8 — view switch (tab): the board stays the landing view; the runs
   // table is one click away.
   const [view, setView] = useState<OpcView>('board')
@@ -63,6 +64,16 @@ export default function OPC() {
         </p>
 
         <OPCMissionFocus config={config} tasks={tasks} />
+
+        {/* 缓期批 2 使命卡 — the config-backed mission entity (configure
+            'mission'), rendered right under the focus hero it extends with
+            budget/deadline/linked-task progress. Hides itself entirely when
+            no mission is configured (absent stays absent). */}
+        <MissionCard
+          mission={config?.mission ?? null}
+          tasks={tasks}
+          refreshConfig={refreshConfig}
+        />
 
         {/* P2-8 — 看板 / 运行 view tabs. Radiogroup semantics: the two views
             are mutually exclusive page states, not links. */}

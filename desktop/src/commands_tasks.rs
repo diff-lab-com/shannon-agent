@@ -11,6 +11,7 @@
 //! the board that displays it.
 
 use crate::commands::AppState;
+use crate::config::MissionConfig;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -120,7 +121,10 @@ pub async fn list_tasks(state: State<'_, AppState>) -> Result<Vec<TaskInfo>, Str
 /// `None` for sessions without ledger association; the join also requires
 /// the task's `team` to parse as a session uuid, so hand-built tasks
 /// (`<adhoc>`, top-level) never receive a cost.
-fn attach_session_costs(tasks: &mut [TaskInfo], spend_for: impl Fn(&str) -> Option<f64>) {
+pub(crate) fn attach_session_costs(
+    tasks: &mut [TaskInfo],
+    spend_for: impl Fn(&str) -> Option<f64>,
+) {
     for task in tasks {
         let Some(team) = task.team.as_deref() else {
             continue;
@@ -132,6 +136,116 @@ fn attach_session_costs(tasks: &mut [TaskInfo], spend_for: impl Fn(&str) -> Opti
             task.cost_usd = Some(cost);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 使命进度 (缓期批 2): mission progress projection
+// ---------------------------------------------------------------------------
+
+/// One linked task's row in the mission progress projection. Absent data
+/// stays absent (honesty contract): an id the board no longer knows reports
+/// `found = false` with every optional field `None` — its state is never
+/// invented, and an unassociated cost is `None`, never an estimated zero.
+#[derive(Debug, Clone, Serialize)]
+pub struct MissionTaskProgress {
+    /// The linked task-board id (as stored in `MissionConfig::task_ids`).
+    pub task_id: String,
+    /// Whether [`list_tasks_in`] still knows a task with this id.
+    pub found: bool,
+    /// Board title (`subject`), `None` when the task is missing.
+    pub title: Option<String>,
+    /// Board status, `None` when the task is missing.
+    pub status: Option<String>,
+    /// Ledger spend via the 批 1 `cost_usd` join — only for tasks whose
+    /// `team` is a session uuid the usage ledger has records for (possibly
+    /// `Some(0.0)`). `None` = no honest association.
+    pub cost_usd: Option<f64>,
+}
+
+/// Read model behind the `mission_progress` command (缓期批 2): the pinned
+/// mission plus where each linked task stands and how much of the budget
+/// the linked tasks have spent.
+#[derive(Debug, Clone, Serialize)]
+pub struct MissionProgress {
+    pub name: String,
+    /// Budget from the mission config, verbatim (`None` = no budget).
+    pub budget_usd: Option<f64>,
+    /// Deadline from the mission config, verbatim epoch-ms (`None` = none).
+    pub deadline_ts: Option<i64>,
+    /// Sum of the linked tasks' ledger costs. `None` when **no** linked
+    /// task has a ledger association at all — deliberately not `Some(0.0)`,
+    /// which would claim measured spend where none was ever recorded. When
+    /// at least one linked task carries a cost (even `Some(0.0)`), the sum
+    /// covers every costed task and uncosted ones contribute nothing.
+    pub budget_used_usd: Option<f64>,
+    /// One row per distinct linked task id, in `task_ids` order.
+    pub tasks: Vec<MissionTaskProgress>,
+}
+
+/// Pure core of [`mission_progress`]: project a mission over the joined
+/// task list (`list_tasks_in` output + [`attach_session_costs`] already
+/// applied, so `cost_usd` carries the 批 1 ledger join semantics).
+///
+/// Duplicate ids across team directories resolve deterministically to the
+/// first match in the id-sorted board order, and a linked id is projected
+/// at most once (first occurrence in `task_ids`), so a duplicated link can
+/// never double-count toward `budget_used_usd`.
+pub(crate) fn build_mission_progress(
+    mission: &MissionConfig,
+    tasks: &[TaskInfo],
+) -> MissionProgress {
+    let mut rows: Vec<MissionTaskProgress> = Vec::new();
+    let mut any_cost = false;
+    let mut budget_used = 0.0;
+    for task_id in &mission.task_ids {
+        if rows.iter().any(|r| r.task_id == *task_id) {
+            continue;
+        }
+        let found = tasks.iter().find(|t| t.id == *task_id);
+        let cost = found.and_then(|t| t.cost_usd);
+        if let Some(cost) = cost {
+            any_cost = true;
+            budget_used += cost;
+        }
+        rows.push(MissionTaskProgress {
+            task_id: task_id.clone(),
+            found: found.is_some(),
+            title: found.map(|t| t.title.clone()),
+            status: found.map(|t| t.status.clone()),
+            cost_usd: cost,
+        });
+    }
+    MissionProgress {
+        name: mission.name.clone(),
+        budget_usd: mission.budget_usd,
+        deadline_ts: mission.deadline_ts,
+        budget_used_usd: any_cost.then_some(budget_used),
+        tasks: rows,
+    }
+}
+
+/// 使命进度 (缓期批 2): progress projection for the configured mission.
+///
+/// Returns `Ok(None)` when no mission is configured — the UI hides the
+/// card rather than showing an empty shell (absent stays absent). The task
+/// board is read from the same anchored `.claude/tasks` root
+/// [`list_tasks`] uses, and costs go through the same 批 1 ledger join, so
+/// this command can never disagree with the board it mirrors.
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn mission_progress(
+    state: State<'_, AppState>,
+) -> Result<Option<MissionProgress>, String> {
+    let Some(mission) = state.desktop_config.read().await.mission.clone() else {
+        return Ok(None);
+    };
+    let tasks_dir = anchored_tasks_dir_base(configured_working_dir(&state).await.as_deref())?;
+    let mut tasks = list_tasks_in(&tasks_dir.join(".claude").join("tasks"))?;
+    let usage_store = state.usage_store.clone();
+    attach_session_costs(&mut tasks, |session_id| {
+        usage_store.session_ledger_cost(session_id)
+    });
+    Ok(Some(build_mission_progress(&mission, &tasks)))
 }
 
 /// List tasks under an explicit tasks root. Path-parameterised core of
@@ -628,5 +742,114 @@ mod tests {
         }];
         attach_session_costs(&mut tasks, |sid| store.session_ledger_cost(sid));
         assert_eq!(tasks[0].cost_usd, Some(0.0));
+    }
+
+    // === 使命进度 (缓期批 2): mission progress projection ===
+
+    fn task(id: &str, status: &str, team: Option<String>, cost: Option<f64>) -> TaskInfo {
+        TaskInfo {
+            id: id.to_string(),
+            title: format!("Task {id}"),
+            status: status.to_string(),
+            assignee: None,
+            priority: None,
+            description: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            due_date: None,
+            active_form: None,
+            execution_mode: None,
+            team,
+            cost_usd: cost,
+        }
+    }
+
+    fn mission(task_ids: &[&str]) -> MissionConfig {
+        MissionConfig {
+            name: "Test mission".into(),
+            budget_usd: Some(10.0),
+            deadline_ts: Some(1_800_000_000_000),
+            task_ids: task_ids.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn mission_progress_reports_found_missing_and_cost_honestly() {
+        let session = uuid::Uuid::new_v4().to_string();
+        let tasks = vec![
+            task("1", "in_progress", Some(session.clone()), Some(1.25)),
+            // "2" is a hand-built task: found on the board, no cost
+            // association (never an estimated 0.0).
+            task("2", "pending", Some("<adhoc>".into()), None),
+            // "9" was deleted from the board: reported missing, not invented.
+        ];
+        let progress = build_mission_progress(&mission(&["1", "2", "9"]), &tasks);
+
+        assert_eq!(progress.name, "Test mission");
+        assert_eq!(progress.budget_usd, Some(10.0));
+        assert_eq!(progress.deadline_ts, Some(1_800_000_000_000));
+        assert_eq!(progress.tasks.len(), 3);
+
+        assert!(progress.tasks[0].found);
+        assert_eq!(progress.tasks[0].status.as_deref(), Some("in_progress"));
+        assert_eq!(progress.tasks[0].title.as_deref(), Some("Task 1"));
+        assert_eq!(progress.tasks[0].cost_usd, Some(1.25));
+
+        assert!(progress.tasks[1].found);
+        assert_eq!(progress.tasks[1].status.as_deref(), Some("pending"));
+        assert_eq!(progress.tasks[1].cost_usd, None);
+
+        assert!(!progress.tasks[2].found);
+        assert_eq!(progress.tasks[2].status, None);
+        assert_eq!(progress.tasks[2].title, None);
+        assert_eq!(progress.tasks[2].cost_usd, None);
+        assert_eq!(progress.tasks[2].task_id, "9");
+
+        // Only the associated cost counts toward the budget.
+        assert_eq!(progress.budget_used_usd, Some(1.25));
+    }
+
+    #[test]
+    fn mission_progress_no_associated_costs_leaves_budget_used_absent() {
+        // Honesty contract: zero associated costs must read as None —
+        // Some(0.0) would claim a measured spend that was never recorded.
+        let tasks = vec![task("1", "pending", Some("<adhoc>".into()), None)];
+        let progress = build_mission_progress(&mission(&["1"]), &tasks);
+        assert_eq!(progress.budget_used_usd, None);
+    }
+
+    #[test]
+    fn mission_progress_sums_all_associated_costs_including_zero() {
+        let tasks = vec![
+            task("1", "pending", None, Some(0.0)),
+            task("2", "done", None, Some(2.5)),
+        ];
+        let progress = build_mission_progress(&mission(&["1", "2"]), &tasks);
+        // Some(0.0) on a linked task IS an association — the sum is Some.
+        assert_eq!(progress.budget_used_usd, Some(2.5));
+    }
+
+    #[test]
+    fn mission_progress_dedupes_linked_ids_and_duplicate_board_ids_are_deterministic() {
+        // A duplicated link is projected once (first occurrence) so it can
+        // never double-count toward the budget.
+        let session = uuid::Uuid::new_v4().to_string();
+        let tasks = vec![
+            task("1", "a", Some(session.clone()), Some(1.0)),
+            task("1", "b", Some(session.clone()), Some(1.0)),
+        ];
+        let progress = build_mission_progress(&mission(&["1", "1"]), &tasks);
+        assert_eq!(progress.tasks.len(), 1);
+        // First match in the id-sorted board order wins.
+        assert_eq!(progress.tasks[0].status.as_deref(), Some("a"));
+        assert_eq!(progress.budget_used_usd, Some(1.0));
+    }
+
+    #[test]
+    fn mission_progress_empty_links_is_all_absent() {
+        let progress = build_mission_progress(&mission(&[]), &[]);
+        assert!(progress.tasks.is_empty());
+        assert_eq!(progress.budget_used_usd, None);
+        assert_eq!(progress.name, "Test mission");
     }
 }

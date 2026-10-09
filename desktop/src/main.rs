@@ -320,6 +320,8 @@ fn main() {
             commands_sessions::get_session_plan,
             commands_sessions::load_session,
             commands_sessions::export_session,
+            // 全量会话导出 (缓期批 2) — whole-container zip export.
+            commands_sessions::export_all_sessions,
             commands_sessions::switch_session,
             commands_sessions::set_session_working_dir,
             commands_sessions::create_session_worktree,
@@ -464,6 +466,8 @@ fn main() {
             commands_agents::list_agent_message_teams,
             commands_agents::record_agent_message,
             commands_tasks::list_tasks,
+            // 使命进度 (缓期批 2) — mission progress projection over the board.
+            commands_tasks::mission_progress,
             commands_tasks::update_task,
             commands_files::get_file_tree,
             commands_files::get_working_dir_info,

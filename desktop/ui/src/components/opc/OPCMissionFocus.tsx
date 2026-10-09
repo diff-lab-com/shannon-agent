@@ -10,8 +10,9 @@ import type { TaskItem } from '@/types'
 interface Props {
   config: { provider?: string; strategic_focus?: string } | null
   /** Board tasks — the hero aggregates 进行中/已完成 counts + progress from
-   *  them (design 09:169-181). 预算/截止 wait on the 「使命」 entity (audit
-   *  B3: 单独立项), so the chips row stays honest about what exists. */
+   *  them (design 09:169-181). 预算/截止 now live on the 使命卡 below
+   *  (缓期批 2 MissionCard, config `mission`), so the chips row stays a
+   *  pure board aggregate. */
   tasks: TaskItem[]
 }
 
