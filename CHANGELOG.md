@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 跨仓 mobile 续批 · §S B6.0-4 审批窗口 + B6.1 池记账 + B6.2 日报复盘 + declared_models 测试密闭化（2026-10-09）
 - 跨仓 mobile 双批 · tool-result 产物卡 §R wire 面 + 群编排 §S B6.0 起步（2026-10-09）
 - 发版工程 · v0.13.0 tag 首跑暴露的三平台阻断修复（2026-10-09）
 - 缓期批 2 · 使命实体（config 键版）+ 全量会话导出 + 扩展安全徽章诚实化（2026-10-09）
@@ -30,6 +31,15 @@ Waves queued for the next release, newest first:
 - **Linux 桌面**：release.yml 缺 `libgbm-dev libdrm-dev libpipewire-0.3-dev`（ci.yml 有、release.yml 漏）——`libspa-sys` pkg-config 失败。
 - **macOS 桌面（编译错）**：`prevent_sleep::systemd_inhibit_available` 仅在 linux cfg 下导出，而 `commands_surface.rs` 用运行时宏 `cfg!(target_os = "linux")` 门控调用——代码仍会在 macOS 编译（E0425）。修法：模块内补 `#[cfg(not(target_os = "linux"))]` 恒 false 惰性桩（与模块既有 inert-fallback 哲学一致）。同类潜伏问题一并清出：`sandbox::detect_sandbox_provider` 在 Windows 上存在不可达代码（`-D warnings` 下致命），拆为 cfg 门控的平台桩。
 - **Windows 桌面（UI 构建）**：`contrast.mjs` 的 `chipCompositesInUse` 用平台原生分隔符切片路径、与 `/` 风格跳过名单比对——Windows 上跳过名单静默失效，`SidebarSessions.tsx` 被误扫、激活休眠的 `color-warning/15` 复合对，暗色主题 AA 审计失败（solarized 2.99:1 等）。修法：`rel` 归一化 `.split(sep).join('/')`（本地 win32 模拟逐字节复现审计失败、修复后与 Linux 基线一致；4.5:1 契约与主题值零改动）。
+
+### 跨仓 mobile 续批（2026-10-09）
+
+§S 群编排的三个后续批次（#371/#373，裁决路线 `docs/reviews/2026-10-09-mobile-proposals-rulings.md`）+ 测试修复（#372）：
+
+- **B6.0-4 审批窗口机制**：`query` 帧增 optional `approval_ttl_ms`（缺省/旧 gateway → 300s 逐字节不变，正值钳制 ≤24h），引擎 resolver 按帧取窗；gateway `ApprovalReq.deadlineMs` per-ask parking + `approvalRegistry` 条目级 `expiresAtMs`（缺省条目 330s retention 不变）；群审批超时 → `group.system(quote-expired)` 卡。诚实空转：v1 无 quoteWindow 生产者（无支付连接器），群审批与普通审批今天完全同窗。
+- **B6.1 池记账**：`~/.shannon/groups/<id>/ledger.jsonl`（append-only，torn tail 跳过）；金额诚实口径——`toolInput.amountCny`（元）优先、`value`（分）÷100（DATA-LEDGER 原文）、双无不记账绝不估；`over-pool`/`over-share` 升级拍板（`ruleTrigger` 扩值 + `poolAfter` 携带，超池如实负数；触发优先级 handoff-first > over-pool > over-share 单键）；allow 结算链（账本 append + `group.pool-spend` 广播 + pool/member 数字联动，不变量 group.list == 账本合计）/ deny 到期 pending 回落无痕 / 无金额全链旁路；两本账不动（`usage.budget`/`usage.jsonl` 零改动）。
+- **B6.2 日报复盘**：新 `shannon/group.get`（archived/completed 群携 `review` 复盘对象：goals/durationMinutes/handoffCount/pool.perMember/deliverables，artifact 恒 null 待 R14 深链；as-lived 口径聚合失败则缺席）；`rules.dailyReportAt` 到期生成 `group.report` 事件 + 转录条目（可注入 scheduler，(群，日) 去重、失败当日不补发、不进 §O3 wake 白名单，stop 挂入 shutdown 链）；阵容生成规划查询——ephemeral 缺省成员时一次引擎规划查询（30s 超时、严格 JSON 校验），失败落回通用三 slot 模板。诚实下界：decisionCount/todaySpentCny 恒如实 0 并注记（宁缺勿造）。
+- **declared_models 测试密闭化**：根因是并行测试互踩进程级注册表单例（「串行化」helper 实际无锁、注册 API 整表替换），非宿主状态——新增 `cfg(test)` RAII `registry_guard()`，18 个写入方测试全持 guard，helper 强制传参（忘锁=编译错）；零生产代码改动，`cargo test -p shannon-core --lib` 3302 过 0 失败（此前随机 3–12 失败）。
 
 ### 跨仓 mobile 双批（2026-10-09）
 
