@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 发版工程 · v0.13.0 tag 首跑暴露的三平台阻断修复（2026-10-09）
 - 缓期批 2 · 使命实体（config 键版）+ 全量会话导出 + 扩展安全徽章诚实化（2026-10-09）
 - 缓期批 1 · secret-guard unset 默认收口（R-0）+ 启动行为双开关 + 上下文峰值 + 看板金额（2026-10-09）
 - N3 per-kind 类别信任（v0.2 信任协议批，2026-10-08）· 经 PR #351 直合 main，本批回灌 dev
@@ -19,6 +20,15 @@ Waves queued for the next release, newest first:
 ### Breaking / behavior changes
 
 - **`secret-guard` defaults to `redact` (was `audit`)**: with no `$SHANNON_SECRET_GUARD` and no `[secret_guard] mode` configured, secret-shaped content in outbound requests is now replaced with deterministic surrogates before it reaches the provider (restored locally for tool execution and display; byte-stable, so prompt caching is unaffected). Opt out with `SHANNON_SECRET_GUARD=audit` (observe-only), `SHANNON_SECRET_GUARD=off`, or `[secret_guard] mode` in config — env beats config, and an explicit `off` always wins. A one-time notice after the first hit explains what happened and names these switches.
+
+### 发版工程（2026-10-09，v0.13.0 tag 首跑暴露）
+
+发版流水线首跑暴露的三类「只有发版才编译/运行得到」的缺陷，全部修复：
+
+- **桌面打包（全平台）**：tauri-action 内部 `npm install -g @tauri-apps/cli@v2` 浮动取新版，新 2.x minor 把 `beforeBuildCommand` 的执行 cwd 从 `desktop/` 漂到 `desktop/ui`（`pnpm --dir ui build` 随之 lstat `desktop/ui/ui`）。修法：release.yml 显式以固定 cwd 构建 UI dist，`beforeBuildCommand` 置空；v0.11/v0.12 两班未发版，此断裂潜伏两个版本列车。
+- **Linux 桌面**：release.yml 缺 `libgbm-dev libdrm-dev libpipewire-0.3-dev`（ci.yml 有、release.yml 漏）——`libspa-sys` pkg-config 失败。
+- **macOS 桌面（编译错）**：`prevent_sleep::systemd_inhibit_available` 仅在 linux cfg 下导出，而 `commands_surface.rs` 用运行时宏 `cfg!(target_os = "linux")` 门控调用——代码仍会在 macOS 编译（E0425）。修法：模块内补 `#[cfg(not(target_os = "linux"))]` 恒 false 惰性桩（与模块既有 inert-fallback 哲学一致）。同类潜伏问题一并清出：`sandbox::detect_sandbox_provider` 在 Windows 上存在不可达代码（`-D warnings` 下致命），拆为 cfg 门控的平台桩。
+- **Windows 桌面（UI 构建）**：`contrast.mjs` 的 `chipCompositesInUse` 用平台原生分隔符切片路径、与 `/` 风格跳过名单比对——Windows 上跳过名单静默失效，`SidebarSessions.tsx` 被误扫、激活休眠的 `color-warning/15` 复合对，暗色主题 AA 审计失败（solarized 2.99:1 等）。修法：`rel` 归一化 `.split(sep).join('/')`（本地 win32 模拟逐字节复现审计失败、修复后与 Linux 基线一致；4.5:1 契约与主题值零改动）。
 
 ### 缓期批 2（2026-10-09）
 

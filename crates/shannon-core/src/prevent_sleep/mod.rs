@@ -41,6 +41,16 @@ use linux as platform;
 #[cfg(target_os = "linux")]
 pub use linux::systemd_inhibit_available;
 
+/// Inert fallback for the runtime capability probe on non-Linux targets:
+/// no `systemd-inhibit` backend exists there, so the answer is constant
+/// `false`. Keeping the function name on every target (same philosophy as
+/// [`other`] below) lets callers like the desktop's capability probe use
+/// one `cfg!`-dispatched call site instead of scattering `#[cfg]` blocks.
+#[cfg(not(target_os = "linux"))]
+pub fn systemd_inhibit_available() -> bool {
+    false
+}
+
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
