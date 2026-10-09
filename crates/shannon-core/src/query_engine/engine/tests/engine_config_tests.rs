@@ -411,6 +411,9 @@ fn test_resolve_max_context_unknown_model_fallback() {
 fn test_resolve_max_context_declared_metadata_wins_over_registry() {
     // R2-4: a declaration from the active providers.toml v2 profile beats the
     // catalog/registry value (and the 200K fallback) for the declared id.
+    // Declared-models test lock: the registry is process-global and plain
+    // `cargo test` runs tests on parallel threads.
+    let _guard = crate::declared_models::test_support::registry_guard();
     use shannon_types::provider_config::ModelSpec;
     let spec = ModelSpec {
         id: "shannon-ctx-test-model".to_string(),

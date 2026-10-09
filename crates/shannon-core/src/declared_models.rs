@@ -329,6 +329,55 @@ fn registry_mut() -> std::sync::RwLockWriteGuard<'static, BTreeMap<String, Regis
     DECLARED.write().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Test-only seam: serialization for the process-global registry.
+///
+/// The `DECLARED` map is a process-wide singleton, and every registration
+/// API here **replaces the whole map**. Plain `cargo test` runs a crate's
+/// unit tests on parallel threads of one process, so two tests that
+/// register and then assert race: the loser's registration is wiped between
+/// its write and its read and it observes `None`. That is exactly the
+/// "same commit fails 8/11 in one worktree, 3/11 in another" signature —
+/// not host state: the resolution paths (`resolve_active_target`,
+/// `llm_provider_from_slug`, `ModelSpec::validate`) are pure.
+///
+/// Every test that registers declarations — directly, or indirectly via
+/// `build_client_from_resolved` (the funnel unconditionally calls
+/// `replace_for_provider`) — must hold the returned
+/// [`test_support::RegistryGuard`] for its whole body. Acquire it once per
+/// test (the mutex is not reentrant); the registry is cleared on acquire
+/// and on drop, so a test always starts from a known-empty registry.
+/// nextest isolates per-process and does not need this; plain `cargo test`
+/// does.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::{Mutex, MutexGuard, PoisonError};
+
+    static REGISTRY_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Held for the whole body of a registry-using test. Clears the
+    /// registry on drop so state never leaks past the test that made it
+    /// (a panicking test included — the lock is deliberately
+    /// poison-tolerant, like the registry accessors above).
+    pub(crate) struct RegistryGuard(
+        // Only ever held, never read — the value is the critical section.
+        #[allow(dead_code)] MutexGuard<'static, ()>,
+    );
+
+    impl Drop for RegistryGuard {
+        fn drop(&mut self) {
+            super::clear();
+        }
+    }
+
+    /// Serialize against every other registry-using test in the process,
+    /// starting the critical section with an empty registry.
+    pub(crate) fn registry_guard() -> RegistryGuard {
+        let lock = REGISTRY_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        super::clear();
+        RegistryGuard(lock)
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -346,9 +395,16 @@ mod tests {
         }
     }
 
-    /// Serializes registry mutations across tests in one process
-    /// (plain `cargo test` shares the process; nextest isolates anyway).
-    fn with_registry<T>(specs: &[ModelSpec], f: impl FnOnce() -> T) -> T {
+    /// Replace the registry with `specs` for the duration of `f`. The
+    /// [`test_support::RegistryGuard`] argument is the serialization seam:
+    /// taking it by reference makes it impossible to call this without
+    /// holding the module's test lock (the registry is process-global and
+    /// plain `cargo test` runs these tests on parallel threads).
+    fn with_registry<T>(
+        _guard: &test_support::RegistryGuard,
+        specs: &[ModelSpec],
+        f: impl FnOnce() -> T,
+    ) -> T {
         replace_from_specs(specs);
         let out = f();
         clear();
@@ -357,9 +413,10 @@ mod tests {
 
     #[test]
     fn lookup_is_exact_id_match() {
+        let guard = test_support::registry_guard();
         let mut s = spec("glm-5.3-flash");
         s.context_window = Some(198_000);
-        with_registry(&[s], || {
+        with_registry(&guard, &[s], || {
             assert_eq!(context_window_for("glm-5.3-flash"), Some(198_000));
             // No substring matching — declared ids are exact by contract.
             assert_eq!(context_window_for("prefix-glm-5.3-flash"), None);
@@ -370,12 +427,13 @@ mod tests {
 
     #[test]
     fn pricing_requires_both_directions() {
+        let guard = test_support::registry_guard();
         let mut half = spec("half-priced");
         half.cost_per_m_input = Some(1.0);
         let mut full = spec("full-priced");
         full.cost_per_m_input = Some(0.5);
         full.cost_per_m_output = Some(2.0);
-        with_registry(&[half, full], || {
+        with_registry(&guard, &[half, full], || {
             assert!(pricing_for("half-priced").is_none());
             let p = pricing_for("full-priced").expect("both declared");
             assert_eq!(p.input_price_per_mtok, 0.5);
@@ -387,9 +445,10 @@ mod tests {
 
     #[test]
     fn tool_use_declaration_maps_to_the_catalog_bit_without_affecting_tier() {
+        let guard = test_support::registry_guard();
         let mut tool = spec("tool-model");
         tool.capabilities = vec![ModelCapability::ToolUse];
-        with_registry(&[tool], || {
+        with_registry(&guard, &[tool], || {
             let meta = lookup("tool-model").unwrap();
             assert!(meta.catalog_caps().has(ModelCapabilities::tool_use()));
             // tool_use contributes no tier signal (same as vision alone).
@@ -399,6 +458,7 @@ mod tests {
 
     #[test]
     fn tier_candidates_aggregate_cost_and_respect_provider_binding() {
+        let _guard = test_support::registry_guard();
         use shannon_engine::api::LlmProvider;
 
         let mut a = spec("bound-a");
@@ -435,12 +495,13 @@ mod tests {
 
     #[test]
     fn replace_drops_previous_registrations() {
+        let guard = test_support::registry_guard();
         let mut a = spec("old-model");
         a.context_window = Some(1_000);
         let mut b = spec("new-model");
         b.max_output = Some(4_096);
         replace_from_specs(&[a]);
-        with_registry(&[b], || {
+        with_registry(&guard, &[b], || {
             assert_eq!(lookup("old-model"), None, "stale entry must not survive");
             assert_eq!(max_output_for("new-model"), Some(4_096));
         });
@@ -448,10 +509,11 @@ mod tests {
 
     #[test]
     fn clear_empties_the_registry() {
+        let guard = test_support::registry_guard();
         let mut s = spec("m");
         s.cost_per_m_input = Some(1.0);
         s.cost_per_m_output = Some(1.0);
-        with_registry(&[s], || {
+        with_registry(&guard, &[s], || {
             assert!(pricing_for("m").is_some());
             clear();
             assert!(pricing_for("m").is_none());
@@ -460,6 +522,7 @@ mod tests {
 
     #[test]
     fn tier_label_maps_capabilities_like_the_catalog() {
+        let guard = test_support::registry_guard();
         let mut fast = spec("quick-mini");
         fast.capabilities = vec![ModelCapability::Cheap];
         let mut pro_by_id = spec("some-ultra-thing");
@@ -471,18 +534,22 @@ mod tests {
         let mut no_caps = spec("quiet");
         no_caps.context_window = Some(8_192);
 
-        with_registry(&[fast, pro_by_id, standard, vision_only, no_caps], || {
-            assert_eq!(tier_label_for("quick-mini"), Some(TierLabel::Fast));
-            // Reasoning + "ultra" in the id → Pro (catalog heuristic order:
-            // cheap/speed first, then id markers, then reasoning/coding).
-            assert_eq!(tier_label_for("some-ultra-thing"), Some(TierLabel::Pro));
-            assert_eq!(tier_label_for("workhorse"), Some(TierLabel::Standard));
-            // Vision alone matches nothing → Unknown (still Some: declared).
-            assert_eq!(tier_label_for("seer"), Some(TierLabel::Unknown));
-            // No capabilities → defer to the catalog (None).
-            assert_eq!(tier_label_for("quiet"), None);
-            assert_eq!(tier_label_for("undeclared"), None);
-        });
+        with_registry(
+            &guard,
+            &[fast, pro_by_id, standard, vision_only, no_caps],
+            || {
+                assert_eq!(tier_label_for("quick-mini"), Some(TierLabel::Fast));
+                // Reasoning + "ultra" in the id → Pro (catalog heuristic order:
+                // cheap/speed first, then id markers, then reasoning/coding).
+                assert_eq!(tier_label_for("some-ultra-thing"), Some(TierLabel::Pro));
+                assert_eq!(tier_label_for("workhorse"), Some(TierLabel::Standard));
+                // Vision alone matches nothing → Unknown (still Some: declared).
+                assert_eq!(tier_label_for("seer"), Some(TierLabel::Unknown));
+                // No capabilities → defer to the catalog (None).
+                assert_eq!(tier_label_for("quiet"), None);
+                assert_eq!(tier_label_for("undeclared"), None);
+            },
+        );
     }
 
     #[test]
@@ -542,7 +609,8 @@ mod tests {
             gateway: Default::default(),
         };
 
-        with_registry(&[], || {
+        let guard = test_support::registry_guard();
+        with_registry(&guard, &[], || {
             replace_from_config(&pm);
             // Active provider's declarations are registered...
             assert_eq!(context_window_for("declared-a"), Some(65_536));
@@ -614,7 +682,8 @@ mod tests {
             gateway: Default::default(),
         };
 
-        with_registry(&[], || {
+        let guard = test_support::registry_guard();
+        with_registry(&guard, &[], || {
             // Exact raw id wins.
             replace_for_provider_in("glm", &pm);
             assert_eq!(context_window_for("by-raw-id"), Some(1_000));
@@ -688,7 +757,8 @@ mod tests {
             gateway: Default::default(),
         };
 
-        with_registry(&[], || {
+        let guard = test_support::registry_guard();
+        with_registry(&guard, &[], || {
             // Unset pointer → default profile: the work-only declaration is
             // invisible and the default one wins.
             replace_for_provider_in("openai", &pm);
