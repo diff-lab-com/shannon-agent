@@ -2190,8 +2190,9 @@ export const handlers: Record<string, MockHandler> = {
   // --- 缓期批 2 使命进度 (mission_progress) — demo projection over the demo
   // board, in the backend's honesty shape: found rows carry title/status and
   // only real cost figures, the dead id renders 「任务不存在」 UI-side. The
-  // demo config pins no mission, so the OPC card stays hidden and this only
-  // answers if a scripted seed ever configures one.
+  // demo config pins no mission, so the MissionCard stays hidden (the always-
+  // on `opc-mission-progress` hero on /opc is a different component) and this
+  // only answers if a scripted seed ever configures one.
   async mission_progress() {
     await delay()
     const row = (id: string, cost_usd?: number) => {
