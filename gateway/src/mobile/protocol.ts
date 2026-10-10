@@ -566,6 +566,36 @@ export interface AgentStateNotification {
   params: { agent: MobileAgentState };
 }
 
+// ── trust.changed push (gateway → phone, per-kind trust ledger live-sync) ────
+
+/**
+ * The `shannon/trust.changed` notification — pushed when a per-kind trust
+ * grant is REVOKED through this gateway (`shannon/trust.revoke` → engine
+ * `/api/trust/revoke` answering `revoked: true`). Grants push nothing: the
+ * deciding device already learns of a grant from its signed decide response
+ * (§Q2), and other devices pick the grant up on their next `shannon/trust.list`
+ * probe — the §Q5 v1 degrade, unchanged.
+ *
+ * Like `shannon/agent.state`, this is a dedicated notification METHOD (not a
+ * `shannon/event` type) and deliberately seq-free / outside the §O4 replay
+ * ring: the engine's kind-trust store is the truth, the push is only a
+ * live-sync hint, and a device that misses it (offline, gateway restart)
+ * falls back to exactly the pre-push behavior — re-probe `shannon/trust.list`
+ * when the trust ledger is next opened. Nothing is lost, so nothing needs
+ * replaying. Broadcast to EVERY connected device: the store
+ * (`~/.shannon/trust/kinds.toml`) is a host-level entity, not device-private.
+ *
+ * `kind` is the revoked tool name (exact-match semantics, §Q1). `revokedAt`
+ * is ISO-8601 UTC stamped at the gateway at the revoke moment — the engine's
+ * revoke response carries no timestamp, and the gateway invents nothing
+ * beyond that forward wall-clock moment (the §L1 `ts` stamping posture).
+ */
+export interface TrustChangedNotification {
+  jsonrpc: typeof JSONRPC_VERSION;
+  method: "shannon/trust.changed";
+  params: { kind: string; revokedAt: string };
+}
+
 // ── Result shapes ──────────────────────────────────────────────────────────
 
 export interface HealthResult {
@@ -699,12 +729,35 @@ export interface ApprovalGroupMemberInfo {
  * input: `poolCny` is the group pool's total (元), `remainingAfterCny` is
  * `total − spent − pending − amount` if this ask were allowed — honest even
  * when negative (an over-pool ask shows the hole it would dig).
+ *
+ * `quoteWindow` (B6.0-4, R3/R4) rides the SAME amount-bearing asks: the
+ * 锁价/拍板 window the phone renders as 「HH:MM 前有效」+ countdown. Its
+ * presence is also the TTL contract: the ask parks at the gateway (and the
+ * engine's approval resolver waits) until `expiresAt`, not the legacy 300s —
+ * the engine clamps any per-request window at a hard 60 minutes, and v1
+ * produces only the 30-minute design window (`windowMinutes: 30`).
+ * `onExpire` is constant `"requote-next"` in v1: the window dying at the
+ * gateway auto-abandons the ask (deny + pending refund + the
+ * `group.system {kind: "quote-expired"}` card); when no second candidate
+ * exists the turn then fails into the member-failed reassignment叙事 — no
+ * fabricated requote action. Plain (groupless) asks and no-amount group asks
+ * never carry the key: they keep the exact legacy 300s window everywhere.
  */
+export interface ApprovalQuoteWindow {
+  /** ISO-8601 UTC — the instant the ask auto-abandons (R4 「14:41 前有效」). */
+  expiresAt: string;
+  /** Whole minutes; v1 producer emits only 30. */
+  windowMinutes: number;
+  /** Constant `"requote-next"` in v1 (提案 §B6.0-4). */
+  onExpire: "requote-next";
+}
+
 export interface ApprovalGroupInfo {
   groupId: string;
   member: ApprovalGroupMemberInfo;
   ruleTrigger?: "handoff-first" | "over-pool" | "over-share";
   poolAfter?: { poolCny: number; remainingAfterCny: number };
+  quoteWindow?: ApprovalQuoteWindow;
 }
 
 /** `shannon/group.list` item (B6.0-1 projection; optional keys degrade). */

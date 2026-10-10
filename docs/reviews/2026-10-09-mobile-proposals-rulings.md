@@ -95,3 +95,29 @@
 2. **成员 turn 的引擎会话**：引擎 WS 门拒绝非 UUID session_id——成员 turn 引擎会话 =
    每轮新生 UUID（用后即弃，不进 `session.list` 语义），wire 事件由编排器统一重键为
    `session_id = groupId`。
+
+---
+
+## 三、增补裁决（群拍板窗口批）：quoteWindow 生产者落地 + TTL 硬顶收紧 60 分钟
+
+裁决 1 的机制面（引擎 `approval_ttl_ms`、hub per-ask deadline、注册表条目 retention、
+quote-expired 卡）已随 B6.0-4 批（#371）先落，生产者当时留空（「随支付连接器另行
+批次」）。本批把生产者补齐，并据此收紧引擎硬顶，两条修订：
+
+1. **TTL 硬顶 24h → 60 分钟**：`APPROVAL_WINDOW_MAX_MS` 86_400_000 → 3_600_000 ms。
+   依据：设计上最长的合法窗口是 R4 锁价 30 分钟，60 分钟即 2× 余量；更长的请求值
+   不是锁价窗口，只是空占审批 resolver 与注册表条目的暴露面。超顶值**钳制拒还其
+   超额**（绝不按原值放行），边界值 60 分钟整如实放行；缺省/0 的 300s 路径逐字节
+   不变，旧帧零感知。
+2. **quoteWindow 生产者随本批落地**（推翻上文「随支付连接器另行批次」的推迟）：
+   v1 里金额可解析的群审批**就是**拍板/锁价 ask（出票/订酒店，带真实数字），一个
+   窗口四处同时生效——hub 停靠 `deadlineMs`、注册表条目 `expiresAtMs`、成员 turn
+   引擎帧 `approval_ttl_ms`（30 分钟）、wire
+   `approval.*.group.quoteWindow {expiresAt, windowMinutes: 30, onExpire: "requote-next"}`
+   （`approval.request` push / `approval.list` / `snapshot.pendingApprovals` 同键，
+   手机「HH:MM 前有效」倒计时的数据源；引擎对 `approval_ttl_ms` 的 60 分钟硬顶是
+   最外层安全边界）。无金额群 ask 与一切普通（无 `group` 键）审批零改动：300s 不变、
+   `approval_ttl_ms` 不上车——**TTL 覆盖只随群拍板上下文放行**。
+   `onExpire` 恒 `requote-next` 的 v1 诚实口径：到期 = 自动放弃（hub deny + pending
+   回落 + `group.system(quote-expired)` 卡，既有路径首次通电）；无第二候选时落入
+   member-failed 重派叙事，不发明询价动作。

@@ -61,11 +61,13 @@ pub const PROTOCOL_VERSION: &str = "0.8.0";
 // `TranscriptMessage` (L0-derived, empty-absent). No key changed meaning; the
 // version stays at 0.8.0.
 //
-// B6.0-4 approval-TTL batch (2026-10-09 ruling): optional `approval_ttl_ms` on
-// the `query` client frame — a per-request override of the approval resolver's
-// wait window. Absent/zero keeps the legacy 300s behavior byte-for-byte; the
-// server clamps the override at 24h. Additive `Option`, so the version stays
-// at 0.8.0.
+// B6.0-4 approval-TTL batch (2026-10-09 ruling; ceiling tightened to a hard
+// 60 minutes by the quoteWindow-producer batch): optional `approval_ttl_ms`
+// on the `query` client frame — a per-request override of the approval
+// resolver's wait window. Absent/zero keeps the legacy 300s behavior
+// byte-for-byte; the server clamps the override at 60m (the design's longest
+// legitimate window is the R4 30-minute quote lock). Additive `Option`, so
+// the version stays at 0.8.0.
 
 // ── HTTP request / response types ───────────────────────────────────────
 
@@ -375,10 +377,12 @@ pub enum WsClientMessage {
         /// the query exactly like the REST paths.
         #[serde(default)]
         attachments: Option<Vec<MessageAttachment>>,
-        /// B6.0-4 TTL (2026-10-09 ruling): optional per-request approval
+        /// B6.0-4 TTL (2026-10-09 ruling; 60m ceiling per the
+        /// quoteWindow-producer batch): optional per-request approval
         /// window override, in milliseconds. When absent or zero the server
         /// keeps the legacy resolver behavior (300s → Deny); a supplied value
-        /// is honored up to a 24h ceiling (86_400_000 ms, server-clamped).
+        /// is honored up to a hard 60-minute ceiling (3_600_000 ms,
+        /// server-clamped — over-ceiling values are refused their excess).
         /// `skip_serializing_if` keeps the emitted frame byte-identical to
         /// the pre-TTL shape whenever the override is not requested. Old
         /// servers ignore the unknown key; a server that predates the field
