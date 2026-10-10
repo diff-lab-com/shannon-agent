@@ -186,8 +186,11 @@ const UNMOCKED_ALLOWLIST: Record<string, string> = {
   verify_signature: 'engine/gateway probe demo never reaches',
   probe_url_frameable: 'engine/gateway probe demo never reaches',
   seed_sample_data: 'engine/gateway probe demo never reaches',
-  scan_prompt_injection: 'engine/gateway probe demo never reaches',
-  scan_prompt_injection_with_readme: 'engine/gateway probe demo never reaches',
+  // (scan_prompt_injection / _with_readme left the list: the Dangerous-install
+  // gate wave gave them a demo twin — src/lib/mock/data/security.ts — so the
+  // extensions SecurityBadges and the seeded Dangerous skill behave like the
+  // real backend in mock mode, and the e2e console watchdog stays clean on
+  // /extensions/skills.)
   get_webhook_config: 'engine/gateway probe demo never reaches',
   save_webhook_config: 'engine/gateway probe demo never reaches',
   clear_webhook_config: 'engine/gateway probe demo never reaches',
