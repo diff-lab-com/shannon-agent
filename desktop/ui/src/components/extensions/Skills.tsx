@@ -19,6 +19,7 @@ import LoadingState from "@/components/ui/loading-state";
 import ErrorState from "@/components/ui/error-state";
 import { usePagedVisible } from "@/hooks/usePagedVisible";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { useInstallGate } from "@/hooks/useInstallGate";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -97,6 +98,8 @@ export default function Skills() {
   const [feedback, setFeedback] = useState<{ id: string; msg: string; ok: boolean } | null>(null);
   const [detailEntry, setDetailEntry] = useState<SkillCatalogEntry | null>(null);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  // Dangerous-install gate: shared confirm drawer + retry plumbing.
+  const { installWithGate, gateDrawer } = useInstallGate();
 
   useEffect(() => {
     let cancelled = false;
@@ -183,19 +186,25 @@ export default function Skills() {
     setBusyId(entry.id);
     setFeedback(null);
     try {
+      // Dangerous-install gate: a rejection carrying the structured
+      // `confirmation_required` payload opens the shared confirm drawer and
+      // this promise stays pending until the user confirms (retry with the
+      // typed name) or cancels (resolves null — nothing installed).
+      let result: Awaited<ReturnType<typeof installWithGate>>;
       if (entry.source.type === 'native') {
         // Built-in skill — write a stub SKILL.md using its description.
         const description = singleLine(entry.description);
         const body = `---\nname: ${entry.name}\ndescription: ${description}\n---\n# ${entry.name}\n\n${entry.description}\n`;
-        await installNativeSkill(entry.name, body);
+        result = await installWithGate((confirmation) => installNativeSkill(entry.name, body, confirmation));
       } else if (entry.source.type === 'git_hub_repo') {
         const repo = entry.source.repo;
         const ref_ = entry.source.ref_ ?? 'main';
-        await installSkillFromRepo(entry.name, repo, ref_);
+        result = await installWithGate((confirmation) => installSkillFromRepo(entry.name, repo, ref_, confirmation));
       } else {
         setFeedback({ id: entry.id, msg: t('extensions.skills.unsupportedSource', { type: entry.source.type }), ok: false });
         return;
       }
+      if (result === null) return; // gate drawer cancelled — nothing installed
       setFeedback({ id: entry.id, msg: t('extensions.skills.installSuccess', { name: entry.name }), ok: true });
       refreshInstalled();
     } catch (err) {
@@ -427,6 +436,7 @@ export default function Skills() {
           if (detailEntry) handleInstall(detailEntry)
         }}
       />
+      {gateDrawer}
       <ConfirmDialog
         open={removeTarget !== null}
         title={t('extensions.skills.removeConfirm.title')}

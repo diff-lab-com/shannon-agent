@@ -23,6 +23,7 @@ import { toast } from 'sonner'
 import * as api from '@/lib/tauri-api'
 import { safeErrorMessage } from '@/lib/packageValidation'
 import { Modal, ModalBody } from '@/components/ui/modal'
+import { useInstallGate } from '@/hooks/useInstallGate'
 import type { CatalogEntry } from '@/types'
 import { FallbackBody } from './install-dialog/FallbackBody'
 import { GitHubBody } from './install-dialog/GitHubBody'
@@ -55,6 +56,10 @@ export default function InstallDialog({
   // SEC-1: flipped when the backend refuses a permissions-less remote
   // manifest — the body then offers the explicit "install unverified" opt-in.
   const [needsUnverifiedConsent, setNeedsUnverifiedConsent] = useState(false)
+  // Dangerous-install gate: shared confirm drawer + retry plumbing. Only the
+  // three gated commands route through it (plugin bundles / OAuth are not
+  // gated).
+  const { installWithGate, gateDrawer } = useInstallGate()
 
   // Reset local state each time the dialog opens.
   useEffect(() => {
@@ -80,19 +85,31 @@ export default function InstallDialog({
 
   const handleGitHubInstall = async () => {
     if (entry.source.type !== 'git_hub_repo') return
-    const ref_ = entry.source.ref_ || 'main'
+    // Capture the narrowed source — the confirm-retry closures run after the
+    // guard, and TS narrowing doesn't survive inside callbacks.
+    const source = entry.source
+    const ref_ = source.ref_ || 'main'
     setInstalling(true)
     try {
-      let result: api.InstallResult
+      // Dangerous-install gate: a `confirmation_required` rejection opens the
+      // shared confirm drawer and this promise stays pending until the user
+      // confirms (retry with the typed name) or cancels (resolves null —
+      // nothing installed).
+      let result: Awaited<ReturnType<typeof installWithGate>>
       if (entry.kind === 'skill') {
-        result = await api.installSkillFromRepo(entry.name, entry.source.repo, ref_)
+        result = await installWithGate((confirmation) =>
+          api.installSkillFromRepo(entry.name, source.repo, ref_, confirmation),
+        )
       } else if (entry.kind === 'agent') {
-        result = await api.installAgentFromRepo(entry.name, entry.source.repo, ref_)
+        result = await installWithGate((confirmation) =>
+          api.installAgentFromRepo(entry.name, source.repo, ref_, confirmation),
+        )
       } else {
         // Other GitHub kinds aren't backed by a dedicated installer yet.
         toast.error(t('extensions.plugins.installError', { error: entry.kind }))
         return
       }
+      if (result === null) return // gate drawer cancelled — nothing installed
       toast.success(
         intl.formatMessage(
           { id: 'extensions.plugins.installSuccess' },
@@ -161,12 +178,22 @@ export default function InstallDialog({
     if (!spec) return
     setInstalling(true)
     try {
-      const result = await api.installMcpStdio({
-        server_name: entry.name,
-        command: spec.command,
-        args: spec.args,
-        env: [],
-      })
+      // Dangerous-install gate: a `confirmation_required` rejection opens the
+      // shared confirm drawer and this promise stays pending until the user
+      // confirms (retry with the typed name) or cancels (resolves null —
+      // nothing installed).
+      const result = await installWithGate((confirmation) =>
+        api.installMcpStdio(
+          {
+            server_name: entry.name,
+            command: spec.command,
+            args: spec.args,
+            env: [],
+          },
+          confirmation,
+        ),
+      )
+      if (result === null) return // gate drawer cancelled — nothing installed
       toast.success(
         intl.formatMessage(
           { id: 'extensions.plugins.installSuccess' },
@@ -277,32 +304,36 @@ export default function InstallDialog({
   }
 
   return (
-    <Modal
-      open={open && !!entry}
-      onClose={onClose}
-      size="lg"
-      title={t('extensions.installDialog.title', { name: entry.name })}
-      closeLabel={t('extensions.installDialog.closeAria')}
-      busy={installing}
-      className="max-h-[90vh] overflow-y-auto"
-    >
-      <ModalBody className="flex flex-col gap-md">
-        {entry.description ? (
-          <p className="text-label-sm text-on-surface-variant">
-            {entry.description}
-          </p>
-        ) : null}
+    <>
+      <Modal
+        open={open && !!entry}
+        onClose={onClose}
+        size="lg"
+        title={t('extensions.installDialog.title', { name: entry.name })}
+        closeLabel={t('extensions.installDialog.closeAria')}
+        busy={installing}
+        className="max-h-[90vh] overflow-y-auto"
+      >
+        <ModalBody className="flex flex-col gap-md">
+          {entry.description ? (
+            <p className="text-label-sm text-on-surface-variant">
+              {entry.description}
+            </p>
+          ) : null}
 
-        {/* X2 安装时信任卡: what this install will enable, derived only from
-            data the catalog entry actually carries. The confirm buttons in
-            the bodies below carry authorization wording ("Install &
-            authorize") to match. */}
-        <TrustCard entry={entry} />
+          {/* X2 安装时信任卡: what this install will enable, derived only from
+              data the catalog entry actually carries. The confirm buttons in
+              the bodies below carry authorization wording ("Install &
+              authorize") to match. */}
+          <TrustCard entry={entry} />
 
-        {renderBody()}
+          {renderBody()}
 
-        <MetadataTable metadata={entry.metadata} />
-      </ModalBody>
-    </Modal>
+          <MetadataTable metadata={entry.metadata} />
+        </ModalBody>
+      </Modal>
+      {/* Dangerous-install gate drawer — portals above the dialog. */}
+      {gateDrawer}
+    </>
   )
 }

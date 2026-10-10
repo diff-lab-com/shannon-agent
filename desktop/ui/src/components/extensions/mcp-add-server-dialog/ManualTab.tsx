@@ -11,6 +11,7 @@ import {
   type StdioMcpSpecPayload,
 } from "@/lib/tauri-api";
 import { safeErrorMessage } from "@/lib/packageValidation";
+import { useInstallGate } from "@/hooks/useInstallGate";
 import { Button } from "@/components/ui/button";
 import { parseArgs, parseEnv } from "./utils";
 
@@ -18,6 +19,8 @@ export function ManualTab({ onInstalled }: { onInstalled: () => void }) {
   const intl = useIntl();
   const t = (id: string, values?: Record<string, string | number>) =>
     intl.formatMessage({ id }, values);
+  // Dangerous-install gate: shared confirm drawer + retry plumbing.
+  const { installWithGate, gateDrawer } = useInstallGate();
 
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
@@ -38,7 +41,14 @@ export function ManualTab({ onInstalled }: { onInstalled: () => void }) {
         args: parseArgs(argsText),
         env: parseEnv(envText),
       };
-      await installMcpStdio(spec);
+      // Dangerous-install gate: a `confirmation_required` rejection opens the
+      // shared confirm drawer and this promise stays pending until the user
+      // confirms (retry with the typed name) or cancels (resolves null —
+      // nothing installed).
+      const result = await installWithGate((confirmation) =>
+        installMcpStdio(spec, confirmation),
+      );
+      if (result === null) return; // gate drawer cancelled — nothing installed
       toast.success(
         t("extensions.mcp.oneClick.installSuccess", { name: name.trim() }),
       );
@@ -59,11 +69,12 @@ export function ManualTab({ onInstalled }: { onInstalled: () => void }) {
   }
 
   return (
-    <div
-      className="flex flex-col gap-sm"
-      role="tabpanel"
-      aria-label={t("extensions.mcp.addDialog.manual.aria")}
-    >
+    <>
+      <div
+        className="flex flex-col gap-sm"
+        role="tabpanel"
+        aria-label={t("extensions.mcp.addDialog.manual.aria")}
+      >
       <p className="text-label-sm text-on-surface-variant">
         {t("extensions.mcp.manualDesc")}
       </p>
@@ -132,6 +143,9 @@ export function ManualTab({ onInstalled }: { onInstalled: () => void }) {
           ? t("extensions.mcp.installing")
           : t("extensions.mcp.install")}
       </Button>
-    </div>
+      </div>
+      {/* Dangerous-install gate drawer — portals above the dialog. */}
+      {gateDrawer}
+    </>
   );
 }

@@ -9,6 +9,7 @@ import { useIntl } from "react-intl";
 import { toast } from "sonner";
 import { installMcpStdio } from "@/lib/tauri-api";
 import { safeErrorMessage } from "@/lib/packageValidation";
+import { useInstallGate } from "@/hooks/useInstallGate";
 import { Button } from "@/components/ui/button";
 import { parseMcpJson } from "./utils";
 import type { ParsedMcpServer } from "./types";
@@ -17,6 +18,10 @@ export function PasteJsonTab({ onInstalled }: { onInstalled: () => void }) {
   const intl = useIntl();
   const t = (id: string, values?: Record<string, string | number>) =>
     intl.formatMessage({ id }, values);
+  // Dangerous-install gate: shared confirm drawer + retry plumbing. Each
+  // gated server in the batch opens it in turn; a cancel skips that server
+  // (nothing installed for it) and the batch continues.
+  const { installWithGate, gateDrawer } = useInstallGate();
 
   const [text, setText] = useState("");
   const [parsed, setParsed] = useState<ParsedMcpServer[] | null>(null);
@@ -50,12 +55,23 @@ export function PasteJsonTab({ onInstalled }: { onInstalled: () => void }) {
     let failed = 0;
     for (const srv of parsed) {
       try {
-        await installMcpStdio({
-          server_name: srv.name,
-          command: srv.command,
-          args: srv.args,
-          env: srv.env,
-        });
+        // Dangerous-install gate: a `confirmation_required` rejection opens
+        // the shared confirm drawer and this promise stays pending until the
+        // user confirms (retry with the typed name) or cancels (resolves
+        // null — that entry stays uninstalled, honestly neither ok nor
+        // failed, and the batch moves on).
+        const result = await installWithGate((confirmation) =>
+          installMcpStdio(
+            {
+              server_name: srv.name,
+              command: srv.command,
+              args: srv.args,
+              env: srv.env,
+            },
+            confirmation,
+          ),
+        );
+        if (result === null) continue; // gate drawer cancelled for this entry
         ok++;
       } catch {
         failed++;
@@ -82,7 +98,8 @@ export function PasteJsonTab({ onInstalled }: { onInstalled: () => void }) {
   }
 
   return (
-    <div className="flex flex-col gap-sm" role="tabpanel">
+    <>
+      <div className="flex flex-col gap-sm" role="tabpanel">
       <textarea
         value={text}
         onChange={(e) => handleParse(e.target.value)}
@@ -124,6 +141,9 @@ export function PasteJsonTab({ onInstalled }: { onInstalled: () => void }) {
           </Button>
         </div>
       )}
-    </div>
+      </div>
+      {/* Dangerous-install gate drawer — portals above the dialog. */}
+      {gateDrawer}
+    </>
   );
 }
