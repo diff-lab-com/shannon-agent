@@ -105,3 +105,13 @@ PR #342 宣称并已在 CHANGELOG 向用户宣告"unset 默认 redact",但实际
 - **缓期批 1 ✅**:PR #352 合并——R-0 secret_guard unset→redact 安装位收口、启动恢复/启动检查更新双开关(设置→通用→启动)、上下文峰值(QUERY_USAGE `context_total` + SessionIndex `max_context_tokens`,真实来源=resolved context window)、任务看板金额(`list_tasks.cost_usd` 台账 join)。CI 二轮全绿(首轮:config.rs fmt + E2E mock 模式下启动探针 console.error 触发 watchdog,均修)。
 - **本地部署 ✅**:dev @ 88235d821 构建(custom-protocol,前端 dist 已重建),DISPLAY=:1 运行中。
 - **待圈选**:批 2(使命实体 config 键版 + 注入/签名诚实徽章 + 全量导出)、批 3(执行模式收敛 + 开机自启)、R4 复审时机。
+
+## 执行记录(三)(2026-10-10,疑似真 bug 修复 + 收尾清洁 + 文档注记)
+
+- **发现即修复 ✅(PR #388)**:执行记录(二)「留待圈定」的 `feat/trust-kind-scope` 停放提交 `a6a8ea3ca`(protocol-asset feature)经查证**不是废弃 WIP 而是真 bug 修复**——tauri 2.x 把 asset 协议处理器整体门在该 Cargo 特性后(`src/protocol/mod.rs` 顶格 `#[cfg(feature = "protocol-asset")]`),未开启时 `tauri.conf.json` 的 assetProtocol 配置被无视,UI 4 处 `convertFileSrc()`(MessageBubble 图片附件 ×2 / AttachmentChip 缩略图 / PdfPreview)在一切构建版(**含 v0.14.0 发布包**)全部加载失败。证据链:编译期(tauri 2.12.2 源码 cfg 门 + `cargo tree -e features` 零路径 + 修复前二进制 strings 检索 asset-protocol 字面量 0 命中)+ 运行时(隔离 Xvfb:99 + 临时 HOME + XTEST 驱动真实 UI 贴图流程:修复前 chip 渲染 webkit 破图问号图标,修复后蓝红渐变测试图真实渲染,并排对比图 `/tmp/asset-attach/zoom-before-after.png`)。cherry-pick 重走正式合并,原分支已删。
+- **零风险清洁 ✅**:发版链遗留 `/tmp/backfill-v14` + `/tmp/r4-walk` 两 worktree 移除;6 个已并入分支 `git branch -d` 删除(chore/backfill-v14、docs/dangerous-gate-design、feat/dangerous-install-gate、fix/autostart-i18n-keys、fix/release-smoke-syntax、feat/tool-result-wire);另一会话活跃 worktree(b6-zero / wire-batch)未触碰。dev 对齐历经 ff(至 #386 合并点)→ #388 合并后拓扑分叉 → 内容 diff 验证(仅 #388 增量)后 reset 对齐,零丢失。
+- **文档注记 ✅(PR #389)**:Linux 桌面包 PipeWire 版本要求落三处——README 安装段、website getting-started Linux 段、install.sh 桌面安装提示行。措辞以已验证事实为界(22.04 原版 libpipewire 0.3.48 过旧;本机 22.04 + backport 1.0.7 可用;24.04+ 开箱即用),不虚构精确版本下限。
+- **R4 非阻塞备忘 ✅**:handlers.ts mission_progress 注释明写 MissionCard 并标注与 /opc 常驻 `opc-mission-progress` hero 是不同组件(搭 #388 顺风车)。
+- **门禁**:desktop nextest 1780/1780 + clippy/fmt 干净;tsc 0 错;mock 相关 vitest 91/91;CI 全绿(#388:19 pass + website build 按 path 过滤跳过;#389:20 pass)。
+- **本地部署 ✅**:dev @ 981f42146(#388 合并点,含 #389 前端无关),二进制已含修复,DISPLAY=:1 运行中(pid 1993406)。前端 dist 沿用 v0.14.0 构建产物——与本轮 UI 源码差异仅 handlers.ts 注释(mock 专用,零渲染影响),故未重建。
+- **遗留建议**:① **v0.14.1 patch 发版待圈选**——修复仅在 dev,v0.14.0 发布包用户仍遇破图;② install.sh 可升级为 pipewire 版本探测(本轮仅提示行,逻辑探测属行为变更未纳入);③ 扩展安全专项(签名/出站扫描/自动更新)仍在决策后动清单。
