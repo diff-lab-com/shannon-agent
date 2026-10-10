@@ -190,6 +190,10 @@ fi
 install_desktop() {
   case "$OS" in
     Linux)
+      # Desktop bundles are built against Ubuntu 24.04-era libraries; stock
+      # 22.04's libpipewire-0.3 (0.3.48) is too old for the capture stack.
+      # CLI/gateway components are static musl builds and unaffected.
+      info "Desktop bundles need a recent PipeWire (Ubuntu 24.04+; stock 22.04's 0.3.48 is too old) — CLI/gateway unaffected."
       DEB="$(download_verify "$DESKTOP" 2>/dev/null || true)"
       RPM="$(download_verify "shannon-desktop-${VERSION}-1.x86_64.rpm" 2>/dev/null || true)"
       if [ -n "$DEB" ] && [ -f "$DEB" ]; then
