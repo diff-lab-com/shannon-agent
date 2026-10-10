@@ -35,7 +35,7 @@ pub enum InjectionRisk {
 }
 
 /// One match — pattern + where it fired.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InjectionMatch {
     pub pattern: String,
     pub matched_substring: String,
@@ -138,8 +138,9 @@ fn classify(categories: &BTreeSet<String>, match_count: usize) -> InjectionRisk 
 
 /// Maximum bytes of README to fetch. Larger READMEs are truncated — enough
 /// to catch injection patterns near the top without saturating the scanner
-/// or the cache.
-const README_MAX_BYTES: usize = 32 * 1024;
+/// or the cache. Shared with the `.mcpb` pre-extraction scan reader
+/// (`mcpb::read_mcpb_scan_content`) so both README sources use one budget.
+pub(crate) const README_MAX_BYTES: usize = 32 * 1024;
 
 /// Cache TTL — 24h. Matches catalog refresh cadence.
 const README_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
