@@ -211,8 +211,9 @@ pub fn default_shannon_home() -> Result<PathBuf, SessionLogError> {
 /// Best-effort /proc snapshot naming every holder of a flock on `path`
 /// (kernel flock-table entries on this inode, plus this process's own fds
 /// targeting the file). Test-only diagnostics for the session_log flake
-/// family — never compiled into product paths.
-#[cfg(test)]
+/// family — never compiled into product paths. /proc is a Unix surface, so
+/// the helper (and its callers' dump branches) are unix-gated.
+#[cfg(all(test, unix))]
 pub(crate) fn debug_flock_holders(path: &std::path::Path) -> String {
     use std::os::unix::fs::MetadataExt as _;
     let mut out = String::new();

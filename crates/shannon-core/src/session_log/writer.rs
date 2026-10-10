@@ -204,7 +204,7 @@ impl SessionLogWriter {
         }
         // Fail fast when another writer holds the log (plan §4.1 ④).
         FileExt::try_lock_exclusive(&file).map_err(|source| {
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             {
                 // Flake self-diagnosis: when an open sees the lock held,
                 // dump WHO holds it into the test log (2026-10-09 flake).

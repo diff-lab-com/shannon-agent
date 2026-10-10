@@ -1068,7 +1068,7 @@ impl ExclusiveLogLock {
             .open(path)?;
         use fs2::FileExt;
         file.try_lock_exclusive().map_err(|source| {
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             {
                 eprintln!(
                     "FLOCK-HELD-DIAG path={}\n{}",
@@ -2613,6 +2613,9 @@ mod tests {
         let id = Uuid::new_v4();
         seed_three_turn_session(&store, &id);
 
+        // The re-open failure dump is unix-only (/proc); windows degrades to
+        // the plain unwrap.
+        #[cfg(unix)]
         let live = SessionLogWriter::open_layout(store.container(), &id.to_string())
             .unwrap_or_else(|e| {
                 panic!(
@@ -2620,6 +2623,8 @@ mod tests {
                     super::super::debug_flock_holders(&store.log_path(&id))
                 );
             });
+        #[cfg(not(unix))]
+        let live = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
         let err = store.delete(&id).unwrap_err();
         assert!(
             matches!(
