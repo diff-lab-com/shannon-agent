@@ -40,12 +40,12 @@ pub use data_source_installers::{
     list_installed_data_sources, migrate_data_source_secrets, read_data_source_config,
     read_data_source_kind, remove_installed_data_source,
 };
-pub use installer::{AddonInstaller, InstallError};
+pub use installer::{AddonInstaller, InstallContentGate, InstallError};
 pub use mcp_installers::{
     McpbInstaller, OAuthRemoteMcpInstaller, ResolvedMcpInstaller, StdioMcpInstaller, StdioMcpSpec,
     remove_mcp_server_config, write_mcp_server_config,
 };
-pub use mcpb::{McpbManifest, McpbServer, extract_mcpb};
+pub use mcpb::{McpbManifest, McpbServer, extract_mcpb, read_mcpb_scan_content};
 pub use oauth::{OAuthError, PkceContext};
 pub use security::{
     CatalogReport, InjectionMatch, InjectionReport, InjectionRisk, ReportStore, SignatureReport,
@@ -60,6 +60,6 @@ pub use skill_installers::{
     list_installed_skills, remove_installed_skill,
 };
 pub use types::{
-    AddonKind, CatalogEntry, CatalogSource, ConfirmationLevel, InstallTarget, InstalledAddon,
-    ProgressEvent, ProgressSink, TrustLevel,
+    AddonKind, CatalogEntry, CatalogSource, ConfirmationLevel, InstallConfirmation, InstallTarget,
+    InstalledAddon, ProgressEvent, ProgressSink, TrustLevel,
 };

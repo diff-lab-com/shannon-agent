@@ -67,6 +67,83 @@ impl From<anyhow::Error> for InstallError {
     }
 }
 
+/// Install-time content gate (Dangerous-install gate design, 2026-10-10,
+/// decision D-B). The Tauri command layer hands every repo-based installer a
+/// callback that re-scans the exact content about to be persisted and refuses
+/// `Dangerous` verdicts unless the caller passed a valid
+/// [`super::types::InstallConfirmation`].
+///
+/// Installers whose content is fully available before any mutation (stdio
+/// spec, `.mcpb` manifest, native skill body) are gated directly in the
+/// command; installers that must FETCH content (git clone) call this gate at
+/// the last moment before promoting the fetch result to its final location —
+/// after the fetch is staged and validated, before any persistent
+/// registration. On `Err`, the installer must leave no trace (remove the
+/// staging area, write nothing to settings/config).
+pub type InstallContentGate = Box<dyn Fn(&str) -> Result<(), InstallError> + Send + Sync>;
+
+/// Unique staging directory name for a repo clone in flight (D-B gate).
+///
+/// The dot prefix keeps an in-flight (or crash-orphaned) staging clone out of
+/// the installed-addons listings — plugin slugs can never start with a dot
+/// (`safe_plugin_name`), so the namespace is unambiguous. Same-parent
+/// staging lets the post-gate promotion be a plain `fs::rename` (atomic, no
+/// copy, same filesystem).
+pub(crate) fn staging_dir_name(plugin: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    format!(".{plugin}.staging-{}-{nanos}", std::process::id())
+}
+
+/// Shared fixtures for the repo-installer gate tests (skill + agent): local
+/// git repos addressed via `file://` — no network, no GitHub.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::Path;
+
+    pub(crate) fn run_git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Build a local git repo containing `files` under `dir` and return a
+    /// `file://` URL the installer's `repo_url_override` can clone from.
+    pub(crate) fn local_repo_fixture(dir: &Path, files: &[(&str, &str)]) -> String {
+        for (name, body) in files {
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().expect("has parent")).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        run_git(dir, &["init", "-q"]);
+        run_git(dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        run_git(dir, &["add", "."]);
+        run_git(
+            dir,
+            &[
+                "-c",
+                "user.email=fixture@example.com",
+                "-c",
+                "user.name=fixture",
+                "commit",
+                "-q",
+                "-m",
+                "fixture",
+            ],
+        );
+        format!("file://{}", dir.display())
+    }
+}
+
 /// Sanitize a catalog-provided plugin name before it is joined onto an
 /// install root (B0 P0-6).
 ///
